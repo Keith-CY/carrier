@@ -161,6 +161,6 @@ describe("gateway runtime routes", () => {
     
     // Should get 404 because readFile rejects the path
     expect(response.status).toBe(404);
-    expect(capturedPath).toBe(maliciousPath);
+    expect(capturedPath as string | null).toBe(maliciousPath);
   });
 });
