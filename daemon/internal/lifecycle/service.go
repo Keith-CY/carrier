@@ -74,6 +74,10 @@ func WithLogLimit(limit int) Option {
 	}
 }
 
+// WithCrashLoopConfig overrides the default crash-loop detection parameters.
+//   - threshold: number of restarts within window that triggers cooldown (default: 3)
+//   - window:    sliding time window for counting restarts (default: 5m)
+//   - cooldown:  duration to block restarts after a crash loop is detected (default: 5m)
 func WithCrashLoopConfig(threshold int, window, cooldown time.Duration) Option {
 	return func(s *Service) {
 		if threshold > 0 {
