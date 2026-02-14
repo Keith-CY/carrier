@@ -263,6 +263,28 @@ Run ShellCheck locally before pushing:
 ```bash
 shellcheck scripts/*.sh
 ```
+### Missing Bun Type Definitions (TS2688)
+
+If `bun run check` fails with:
+
+```
+error TS2688: Cannot find type definition file for 'bun'.
+```
+
+This means `bun-types` is not installed. Fix it by running:
+
+```bash
+cd gateway
+bun install
+```
+
+Then verify:
+
+```bash
+bun run check   # should pass with no errors
+```
+
+If the error persists, ensure `bun-types` is listed in `devDependencies` in `gateway/package.json` and that your `tsconfig.json` includes `"bun-types"` in `compilerOptions.types`.
 ## Stale Follow-Up Detection
 
 To find stale `[review-followup]` issues whose referenced PR is already merged:
