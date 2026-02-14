@@ -114,6 +114,28 @@ describe("gateway runtime routes", () => {
     expect(payload.errorCode).toBe("E_DOWNLOAD_FILE_MISMATCH");
   });
 
+  test("download route escapes quotes in content-disposition filename", async () => {
+    const deps = makeDeps();
+    // Create a file with a name containing quotes and backslashes
+    const fileName = 'test"file\\name.txt';
+    const tmpDir = `/tmp/gateway-dl-test-${crypto.randomUUID()}`;
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(tmpDir, { recursive: true });
+    const filePath = `${tmpDir}/${fileName}`;
+    await Bun.write(filePath, "content");
+    const token = deps.downloads.issue(filePath, 300, false);
+    const runtime = createGatewayRuntime({ deps });
+
+    // Manually construct URL with proper encoding
+    const downloadUrl = `/downloads/${token.token}/${encodeURIComponent(fileName)}`;
+    const response = await runtime.fetch(new Request(`http://gateway.local${downloadUrl}`));
+    expect(response.status).toBe(200);
+    
+    const disposition = response.headers.get("content-disposition");
+    // Should escape backslashes and quotes: test\"file\\\\name.txt
+    expect(disposition).toBe('attachment; filename="test\\"file\\\\name.txt"');
+  });
+
   test("command route executes command pipeline", async () => {
     const deps = makeDeps();
     deps.sessions.registerPairCode("pair-ok", 300);
