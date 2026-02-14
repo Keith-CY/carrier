@@ -366,3 +366,38 @@ cd gateway && bun test src/index.test.ts
 ### When to run the full suite
 
 Before opening or updating a PR, run `./scripts/run-all-tests.sh` from the repo root at least once to ensure full CI parity. Selective runs are for iteration speed during development.
+## Conflict Resolution (DIRTY PRs)
+
+When `gh pr view --json mergeStateStatus` returns `DIRTY`, the PR has merge conflicts with `main`. Resolve them with the following flow:
+
+### Step-by-step
+
+```bash
+# 1. Switch to your PR branch
+git checkout codex/my-feature
+
+# 2. Fetch latest main
+git fetch origin main
+
+# 3. Rebase onto main (preferred) or merge
+git rebase origin/main
+# If you prefer merge: git merge origin/main
+
+# 4. Resolve conflicts in marked files
+#    Edit files, then:
+git add <resolved-files>
+git rebase --continue   # or git commit if using merge
+
+# 5. Run local checks before pushing
+cd daemon && go test ./...
+cd ../gateway && bun install && bun run check && bun test
+
+# 6. Force-push the rebased branch
+git push --force-with-lease origin codex/my-feature
+```
+
+### Important notes
+
+- **Never push directly to `main`** to resolve conflicts.
+- After force-push, verify CI checks pass on the updated PR before requesting re-review.
+- If conflicts are complex, consider asking the original author for help.
