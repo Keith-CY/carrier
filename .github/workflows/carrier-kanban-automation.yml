@@ -203,15 +203,16 @@ jobs:
             const normalizeOption = (value) => String(value || '').trim().toLowerCase();
 
             const resolveOption = (field, value) => {
-              if (!field?.options) {
+              const options = Array.isArray(field?.options) ? field.options : [];
+              if (!options.length) {
                 return null;
               }
               const target = normalizeOption(value);
-              const direct = field.options.find((option) => normalizeOption(option.name) === target);
+              const direct = options.find((option) => normalizeOption(option.name) === target);
               if (direct) {
                 return direct.id;
               }
-              const numeric = field.options.find((option) => option.name === value);
+              const numeric = options.find((option) => option.name === value);
               return numeric ? numeric.id : null;
             };
 
