@@ -8,8 +8,8 @@ Recommended flow:
 
 ```bash
 git fetch origin
-git worktree add -b codex/<topic> /tmp/carrier-<topic> origin/main
-cd /tmp/carrier-<topic>
+git worktree add -b codex/<topic> ../carrier-<topic> origin/main
+cd ../carrier-<topic>
 ```
 
 Branch naming:
