@@ -29,11 +29,14 @@ const (
 )
 
 type AgentState struct {
-	ID        string
-	Version   string
-	Install   InstallState
-	Runtime   RuntimeState
-	Health    HealthState
-	LastError string
-	UpdatedAt time.Time
+	ID                   string
+	Version              string
+	Install              InstallState
+	Runtime              RuntimeState
+	Health               HealthState
+	LastError            string
+	LastTriageSummary    string
+	NeedsRemoteDiagnosis bool
+	LastDiagnoseFile     string
+	UpdatedAt            time.Time
 }

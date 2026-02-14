@@ -15,6 +15,12 @@ Phase 1 scaffold for the Agent Installation Platform.
 - `catalog/`: OpenClaw manifest and candidate agent list
 - `docs/`: Product and delivery documentation
 
+## M2 daemon scaffold status
+- Runtime prerequisite checks are implemented for local host and WSL2 requirement detection.
+- Lifecycle service now executes install/start/stop commands through a runner abstraction.
+- Start path validates required env vars and port conflicts before execution.
+- Logs tail retrieval and diagnose zip artifact generation are available in the lifecycle service.
+
 ## Development flow
 - Start work from `origin/main` using a new `codex/*` branch and worktree.
 - Submit all feature updates via Pull Request.
