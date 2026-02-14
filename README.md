@@ -90,32 +90,46 @@ See `CONTRIBUTING.md` for command examples and required process.
 
 ### English
 
-1. Open the **Releases** page of this repository.
-2. Download the ZIP file for your OS/CPU (for example: `linux-x64`, `darwin-arm64`, `windows-x64`).
-3. (Optional but recommended) Download the matching `.sha256` file and verify checksum.
+1. Open [**Releases**](../../releases) for this repository.
+2. Download the ZIP package for your OS/CPU (for example: `linux-x64`, `darwin-arm64`, `windows-x64`).
+3. (Optional but recommended) Download the matching `.sha256` file and verify checksum:
+   - Linux/macOS: `sha256sum -c carrier-*.sha256`
+   - Windows PowerShell: `Get-FileHash .\carrier-*.zip -Algorithm SHA256`
 4. Extract the ZIP to a local folder.
-5. Start the daemon (`agentd`) from the extracted folder.
-6. Use your chat provider flow (Telegram/Discord/Feishu) to pair and run commands:
+5. Start the daemon from the extracted folder:
+   - macOS/Linux: `agentd`
+   - Windows: `agentd.exe`
+6. Get your pairing code from the daemon terminal output (it is generated when daemon/gateway pairing flow is ready).
+7. Use your chat provider flow (Telegram/Discord/Feishu) to pair and run commands:
    - `/pair <code>`
    - `/agents`
    - `/install openclaw`
+8. Configure required OpenClaw environment (for example `OPENAI_API_KEY`) before start.
+9. Start and verify:
    - `/start openclaw`
    - `/status openclaw`
 
-If install/start fails, run diagnose flow and use the generated artifact for support.
+If install/start fails, run `/diagnose openclaw` and use the generated artifact for support.
 
 ### 中文（简版）
 
-1. 打开本仓库 **Releases** 页面。
+1. 打开本仓库 [**Releases**](../../releases) 页面。
 2. 下载与你系统匹配的 ZIP（如 `linux-x64`、`darwin-arm64`、`windows-x64`）。
-3. （可选）下载同名 `.sha256` 文件做校验。
+3. （可选）下载同名 `.sha256` 文件做校验：
+   - Linux/macOS：`sha256sum -c carrier-*.sha256`
+   - Windows PowerShell：`Get-FileHash .\carrier-*.zip -Algorithm SHA256`
 4. 解压 ZIP 到本地目录。
-5. 运行解压目录里的 daemon（`agentd`）。
-6. 通过 Telegram/Discord/Feishu 配对后执行：
+5. 运行解压目录里的 daemon：
+   - macOS/Linux：`agentd`
+   - Windows：`agentd.exe`
+6. 从 daemon 终端输出里获取配对码（pair code）。
+7. 通过 Telegram/Discord/Feishu 配对后执行：
    - `/pair <code>`
    - `/agents`
    - `/install openclaw`
+8. 启动前先配置 OpenClaw 必需环境变量（如 `OPENAI_API_KEY`）。
+9. 启动并检查：
    - `/start openclaw`
    - `/status openclaw`
 
-如果安装或启动失败，请走 diagnose 流程并提交诊断产物。
+如果安装或启动失败，请执行 `/diagnose openclaw` 并提交诊断产物。
