@@ -9,7 +9,8 @@ export type CommandName =
   | "/status"
   | "/logs"
   | "/upgrade"
-  | "/diagnose";
+  | "/diagnose"
+  | "/diagnose-consent";
 
 export type GatewayCommand = {
   provider: Provider;
@@ -24,4 +25,6 @@ export type GatewayResponse = {
   result: "ok" | "error";
   message: string;
   downloadUrl?: string;
+  handoffId?: string;
+  handoffStatus?: "pending" | "declined";
 };
