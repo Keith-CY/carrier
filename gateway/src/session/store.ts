@@ -14,16 +14,13 @@ function sessionKey(provider: Provider, chatId: string): string {
 }
 
 export class SessionStore {
-  private nextCode = 0;
-  private nextToken = 0;
   private readonly pairCodes = new Map<string, PairingCodeRecord>();
   private readonly sessions = new Map<string, SessionRecord>();
 
   constructor(private readonly now: () => Date = () => new Date()) {}
 
   issuePairCode(ttlSeconds = 300): PairingCodeRecord {
-    this.nextCode += 1;
-    const code = `pair-${this.nextCode}`;
+    const code = `pair-${crypto.randomUUID()}`;
     const expiresAt = new Date(this.now().getTime() + ttlSeconds * 1000).toISOString();
     const record: PairingCodeRecord = { code, expiresAt };
     this.pairCodes.set(code, record);
@@ -99,7 +96,6 @@ export class SessionStore {
   }
 
   private issueSessionToken(): string {
-    this.nextToken += 1;
-    return `session-${this.nextToken}`;
+    return `session-${crypto.randomUUID()}`;
   }
 }
