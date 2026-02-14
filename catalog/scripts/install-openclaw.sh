@@ -30,15 +30,32 @@ cd "$TMPDIR"
 echo "Downloading ${BINARY}..."
 curl -fsSL -O "${BASE_URL}/${BINARY}"
 
-# Download checksum
-echo "Downloading checksum file..."
-curl -fsSL -O "${BASE_URL}/${CHECKSUM_FILE}"
+# Pinned checksums for v1.0.0 — update these when releasing a new version.
+# To regenerate: sha256sum openclaw-v1.0.0-<os>-<arch>
+PINNED_CHECKSUMS="
+# placeholder checksums — replace with real values at release time
+0000000000000000000000000000000000000000000000000000000000000000  openclaw-v1.0.0-linux-x86_64
+0000000000000000000000000000000000000000000000000000000000000000  openclaw-v1.0.0-linux-aarch64
+0000000000000000000000000000000000000000000000000000000000000000  openclaw-v1.0.0-darwin-x86_64
+0000000000000000000000000000000000000000000000000000000000000000  openclaw-v1.0.0-darwin-arm64
+"
 
-# Verify checksum
-echo "Verifying integrity..."
-if ! ${CHECKSUM_CMD} -c "$CHECKSUM_FILE" >/dev/null 2>&1; then
-    echo "ERROR: Checksum verification failed!" >&2
-    exit 1
+# Verify checksum against pinned value (not downloaded from same source)
+echo "Verifying integrity against pinned checksum..."
+EXPECTED=$(echo "$PINNED_CHECKSUMS" | grep "$BINARY" | awk '{print $1}')
+if [ -z "$EXPECTED" ] || [ "$EXPECTED" = "0000000000000000000000000000000000000000000000000000000000000000" ]; then
+    echo "WARNING: No pinned checksum for ${BINARY}. Falling back to remote checksum file." >&2
+    curl -fsSL -O "${BASE_URL}/${CHECKSUM_FILE}"
+    if ! ${CHECKSUM_CMD} -c "$CHECKSUM_FILE" >/dev/null 2>&1; then
+        echo "ERROR: Checksum verification failed!" >&2
+        exit 1
+    fi
+else
+    ACTUAL=$(${CHECKSUM_CMD} "$BINARY" | awk '{print $1}')
+    if [ "$ACTUAL" != "$EXPECTED" ]; then
+        echo "ERROR: Checksum mismatch! Expected ${EXPECTED}, got ${ACTUAL}" >&2
+        exit 1
+    fi
 fi
 
 # Install binary
