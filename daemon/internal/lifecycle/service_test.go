@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -600,7 +599,7 @@ func TestUpgradeResetsCrashLoopState(t *testing.T) {
 	// Stop and upgrade should reset crash-loop state
 	clock.Advance(defaultCrashLoopCooldown + time.Second)
 	// Force state to stopped for upgrade
-	svc.Stop(context.Background(), "openclaw")
+	_ = svc.Stop(context.Background(), "openclaw")
 
 	runner.results["upgrade-openclaw"] = runResult{result: commandexec.Result{ExitCode: 0}}
 	if _, err := svc.Upgrade(context.Background(), "openclaw"); err != nil {
@@ -930,13 +929,6 @@ func TestAuditLogsBoundedByConfiguredLimit(t *testing.T) {
 		t.Fatalf("expected latest retained request id r4, got %s", audits[2].RequestID)
 	}
 }
-
-// Wrappers to keep tests explicit and avoid importing extra packages in each assertion block.
-var (
-	netListen     = net.Listen
-	splitHostPort = net.SplitHostPort
-	atoi          = strconv.Atoi
-)
 
 func TestAuditBufferStatus(t *testing.T) {
 	svc := NewService(nil, WithAuditLogLimit(50))
