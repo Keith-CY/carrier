@@ -57,7 +57,10 @@ func TestMountUnmount(t *testing.T) {
 		t.Fatalf("expected rw, got %s", rec.AccessMode)
 	}
 
-	e, _ := s.Get("m1")
+	e, err := s.Get("m1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if e.State != StateMounted {
 		t.Fatalf("expected mounted, got %s", e.State)
 	}
@@ -72,7 +75,10 @@ func TestMountUnmount(t *testing.T) {
 	if err := s.Unmount("m1", "agent-a"); err != nil {
 		t.Fatal(err)
 	}
-	e, _ = s.Get("m1")
+	e, err = s.Get("m1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if e.State != StateDetached {
 		t.Fatalf("expected detached, got %s", e.State)
 	}
