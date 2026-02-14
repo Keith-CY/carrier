@@ -11,6 +11,7 @@ import (
 
 	"carrier/daemon/internal/baseagent"
 	"carrier/daemon/internal/catalog"
+	"carrier/daemon/internal/config"
 	"carrier/daemon/internal/lifecycle"
 	"carrier/daemon/internal/logging"
 )
@@ -21,14 +22,32 @@ func main() {
 	logger := logging.Init()
 	logger.Info("initializing agentd")
 
-	svc := lifecycle.NewService(baseagent.NoopTriager{})
+	cfg, err := config.Load("config.json")
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+
+	var opts []lifecycle.Option
+
+	window, err := cfg.CrashWindowDuration()
+	if err != nil {
+		log.Fatalf("invalid crash window %q: %v", cfg.Lifecycle.CrashWindow, err)
+	}
+	cooldown, err := cfg.CrashCooldownDuration()
+	if err != nil {
+		log.Fatalf("invalid crash cooldown %q: %v", cfg.Lifecycle.CrashCooldown, err)
+	}
+	opts = append(opts, lifecycle.WithCrashLoopConfig(cfg.Lifecycle.CrashThreshold, window, cooldown))
+
+	svc := lifecycle.NewService(baseagent.NoopTriager{}, opts...)
 
 	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
 		log.Fatalf("register openclaw manifest: %v", err)
 	}
 
 	logger.Info("agentd scaffold booted")
-	fmt.Println("agentd scaffold booted")
+	fmt.Printf("agentd scaffold booted (listen=%s:%d log=%s/%s)\n",
+		cfg.Server.Host, cfg.Server.Port, cfg.Log.Level, cfg.Log.Format)
 	fmt.Println("catalog:")
 	for _, entry := range catalog.DefaultEntries() {
 		fmt.Printf("- %s (%s): %s\n", entry.Name, entry.ID, entry.Status)
