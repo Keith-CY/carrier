@@ -87,6 +87,11 @@ Optional local flow from repo root:
 - This repository supports GitHub Merge Queue for `main`.
 - For merge operations, prefer queue-based merge from the GitHub UI.
 
+#### CI coverage note (E2E execution policy)
+- `End-to-End Tests` in `.github/workflows/ci.yml` run only on `push` to `main` (`github.event_name == 'push' && github.ref == 'refs/heads/main'`).
+- Pull requests do not run E2E in `ci.yml`.
+- Release flow also enforces mandatory end-to-end validation in `.github/workflows/release.yml` (`End-to-End Tests (Deployment)`).
+
 ## Local workflow notes
 
 - Before making changes, read the skill instructions under `skills/` (especially `skills/pr-review/SKILL.md` and `skills/review-followup/SKILL.md`) to follow repository-specific conventions.
