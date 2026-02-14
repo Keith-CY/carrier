@@ -87,10 +87,10 @@ Optional local flow from repo root:
 - This repository supports GitHub Merge Queue for `main`.
 - For merge operations, prefer queue-based merge from the GitHub UI.
 
-#### CI coverage note (why some workflow-only PRs skip E2E)
-- `End-to-End Tests` in `.github/workflows/ci.yml` intentionally skip when a PR only changes Kanban workflow files (see `paths-ignore` for `carrier-kanban-automation.yml` / `carrier-kanban-operations.yml`).
+#### CI coverage note (what `ci.yml` currently skips)
+- `End-to-End Tests` in `.github/workflows/ci.yml` skip only when a PR matches the current `paths-ignore` filters (`*.md`, `docs/**`, `.github/kanban-config.json`, and `.github/workflows/review-nbs-followup.yml`).
+- PRs that modify other workflow files (including Kanban workflow files) are not ignored by that rule and still run E2E in PR CI.
 - Mandatory end-to-end deployment validation is still enforced in `.github/workflows/release.yml` (`End-to-End Tests (Deployment)`) for release flow.
-- This keeps Project automation updates fast while preserving required E2E coverage at release gate.
 
 ## Local workflow notes
 
