@@ -162,11 +162,9 @@ jobs:
                         dataType
                       }
                       ... on ProjectV2SingleSelectField {
-                        options(first: 100) {
-                          nodes {
-                            id
-                            name
-                          }
+                        options {
+                          id
+                          name
                         }
                       }
                     }
@@ -205,15 +203,15 @@ jobs:
             const normalizeOption = (value) => String(value || '').trim().toLowerCase();
 
             const resolveOption = (field, value) => {
-              if (!field?.options?.nodes) {
+              if (!field?.options) {
                 return null;
               }
               const target = normalizeOption(value);
-              const direct = field.options.nodes.find((option) => normalizeOption(option.name) === target);
+              const direct = field.options.find((option) => normalizeOption(option.name) === target);
               if (direct) {
                 return direct.id;
               }
-              const numeric = field.options.nodes.find((option) => option.name === value);
+              const numeric = field.options.find((option) => option.name === value);
               return numeric ? numeric.id : null;
             };
 
