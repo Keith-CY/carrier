@@ -54,6 +54,7 @@ Key topics covered:
 - `/pair <code>` binds provider chat sessions and enforces session checks before non-pair commands.
 - Gateway forwards `provider`, `chat_id`, and `request_id` into daemon request context for command handling.
 - Logs/diagnose responses can issue short-lived read-only download tokens and URLs.
+- Telegram/Discord/Feishu payload parsers now normalize provider events/interactions into one gateway command DTO shape.
 
 ## Development flow
 - Start work from `origin/main` using a new `codex/*` branch and worktree.
