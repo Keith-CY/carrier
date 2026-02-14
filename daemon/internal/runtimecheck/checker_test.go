@@ -20,6 +20,17 @@ func TestWindowsRequiresWSL(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected missing WSL prerequisite error")
 	}
+
+	var preErr *PrerequisiteError
+	if !errors.As(err, &preErr) {
+		t.Fatalf("expected PrerequisiteError, got %T", err)
+	}
+	if len(preErr.Issues) != 1 {
+		t.Fatalf("expected 1 issue, got %d", len(preErr.Issues))
+	}
+	if preErr.Issues[0].Code != IssueCodeWSL2Missing {
+		t.Fatalf("expected issue code %s, got %s", IssueCodeWSL2Missing, preErr.Issues[0].Code)
+	}
 }
 
 func TestNpmRuntimeRequiresNpmOnMacLinux(t *testing.T) {

@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "bun run src/example.ts",
-    "check": "bunx tsc --noEmit"
+    "check": "bunx tsc --noEmit",
+    "test": "bun test"
   },
   "devDependencies": {
+    "@types/bun": "^1.2.19",
     "typescript": "^5.6.3"
   }
 }

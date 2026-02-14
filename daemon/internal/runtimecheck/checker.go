@@ -24,6 +24,13 @@ type Checker interface {
 	Check(m manifest.Manifest) error
 }
 
+const (
+	IssueCodeWSL2Missing      = "E_WSL2_MISSING"
+	IssueCodeNPMMissing       = "E_NPM_MISSING"
+	IssueCodeGoMissing        = "E_GO_MISSING"
+	IssueCodeRuntimeTypeUnknown = "E_RUNTIME_TYPE_UNKNOWN"
+)
+
 type Issue struct {
 	Code    string
 	Message string
@@ -76,7 +83,7 @@ func (c HostChecker) collectIssues(runtimeType manifest.RuntimeType) []Issue {
 	if c.GOOS == "windows" {
 		if !c.hasTool("wsl.exe") {
 			issues = append(issues, Issue{
-				Code:    "E_WSL2_MISSING",
+				Code:    IssueCodeWSL2Missing,
 				Message: "Windows runtime requires WSL2 (wsl.exe not found)",
 			})
 		}
@@ -91,7 +98,7 @@ func (c HostChecker) collectIssues(runtimeType manifest.RuntimeType) []Issue {
 				msg += " (WSL note: install npm in your Linux distro, not Windows)"
 			}
 			issues = append(issues, Issue{
-				Code:    "E_NPM_MISSING",
+				Code:    IssueCodeNPMMissing,
 				Message: msg,
 			})
 		}
@@ -102,7 +109,7 @@ func (c HostChecker) collectIssues(runtimeType manifest.RuntimeType) []Issue {
 				msg += " (WSL note: install Go in your Linux distro and ensure /usr/local/go/bin is on PATH)"
 			}
 			issues = append(issues, Issue{
-				Code:    "E_GO_MISSING",
+				Code:    IssueCodeGoMissing,
 				Message: msg,
 			})
 		}
@@ -110,7 +117,7 @@ func (c HostChecker) collectIssues(runtimeType manifest.RuntimeType) []Issue {
 		// No extra host tool requirement.
 	default:
 		issues = append(issues, Issue{
-			Code:    "E_RUNTIME_TYPE_UNKNOWN",
+			Code:    IssueCodeRuntimeTypeUnknown,
 			Message: fmt.Sprintf("unsupported runtime type: %s", runtimeType),
 		})
 	}

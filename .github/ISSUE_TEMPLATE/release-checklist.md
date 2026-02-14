@@ -20,3 +20,6 @@ assignees: ""
   - [ ] Validate Linux (ubuntu-latest) with Go toolchain from `daemon/go.mod`.
   - [ ] Validate gateway type check path with Bun 1.1.8.
   - [ ] Validate manifest parseability for `catalog/openclaw.manifest.json`.
+
+- [ ] Review follow-up tracking
+  - [ ] Confirm non-blocking review suggestions (`NBS:`) were extracted and follow-up issues are created/tracked.
