@@ -6,15 +6,8 @@ import (
 
 	"carrier/daemon/internal/baseagent"
 	"carrier/daemon/internal/catalog"
-	"carrier/daemon/internal/commandexec"
 	"carrier/daemon/internal/lifecycle"
 )
-
-type fakeRunner struct{}
-
-func (f fakeRunner) Run(_ interface{ Deadline() (time.Time, bool) }, command string) (commandexec.Result, error) {
-	return commandexec.Result{CombinedOutput: "ok", ExitCode: 0}, nil
-}
 
 func TestStopAllAgents_NoRunning(t *testing.T) {
 	svc := lifecycle.NewService(baseagent.NoopTriager{})
