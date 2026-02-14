@@ -21,6 +21,7 @@ import (
 	"carrier/daemon/internal/baseagent"
 	"carrier/daemon/internal/commandexec"
 	"carrier/daemon/internal/manifest"
+	"carrier/daemon/internal/memory"
 	"carrier/daemon/internal/redact"
 	"carrier/daemon/internal/runtimecheck"
 )
@@ -124,6 +125,14 @@ func WithHandoffRetention(ttl time.Duration) Option {
 	}
 }
 
+func WithMemoryStore(ms *memory.Store) Option {
+	return func(s *Service) {
+		if ms != nil {
+			s.memoryStore = ms
+		}
+	}
+}
+
 type Service struct {
 	mu                 sync.RWMutex
 	states             map[string]AgentState
@@ -147,6 +156,7 @@ type Service struct {
 	crashLoopThreshold int
 	crashLoopWindow    time.Duration
 	crashLoopCooldown  time.Duration
+	memoryStore        *memory.Store
 }
 
 func NewService(triager baseagent.Triager, opts ...Option) *Service {
@@ -320,6 +330,9 @@ func (s *Service) Start(agentID string) error {
 		return runErr
 	}
 
+	// Auto-mount memories linked to this agent.
+	s.autoMountMemories(agentID)
+
 	s.mu.Lock()
 	state = s.states[agentID]
 	state.Runtime = RuntimeStateRunning
@@ -444,6 +457,9 @@ func (s *Service) Stop(agentID string) error {
 		s.recordAudit("", "system", "stop", agentID, AuditResultFailure, "E_STOP_FAILED", runErr.Error())
 		return runErr
 	}
+
+	// Auto-unmount all memories for this agent.
+	s.autoUnmountMemories(agentID)
 
 	s.mu.Lock()
 	state = s.states[agentID]
@@ -917,6 +933,48 @@ func findProcessBySocketInode(inode string) (int, string, error) {
 		}
 	}
 	return 0, "", errors.New("process not found")
+}
+
+// MemoryStore returns the memory store, or nil if none was configured.
+func (s *Service) MemoryStore() *memory.Store { return s.memoryStore }
+
+// autoMountMemories mounts all memory links for an agent on start.
+func (s *Service) autoMountMemories(agentID string) {
+	if s.memoryStore == nil {
+		return
+	}
+	s.mu.RLock()
+	links := append([]string(nil), s.memoryLinks[agentID]...)
+	s.mu.RUnlock()
+
+	for _, memID := range links {
+		if _, err := s.memoryStore.Mount(memID, agentID, memory.AccessReadOnly); err != nil {
+			s.appendLog(agentID, fmt.Sprintf("memory auto-mount %s failed: %v", memID, err))
+		} else {
+			s.appendLog(agentID, fmt.Sprintf("memory auto-mounted %s", memID))
+		}
+	}
+}
+
+// autoUnmountMemories unmounts all memories for an agent on stop.
+func (s *Service) autoUnmountMemories(agentID string) {
+	if s.memoryStore == nil {
+		return
+	}
+	n := s.memoryStore.UnmountAll(agentID)
+	if n > 0 {
+		s.appendLog(agentID, fmt.Sprintf("memory auto-unmounted %d memories", n))
+	}
+}
+
+// SetMemoryAttachments sets the memory links for an agent (alias for setMemoryAttachments).
+func (s *Service) SetMemoryAttachments(agentID string, attachments []string) {
+	s.setMemoryAttachments(agentID, attachments)
+}
+
+// GetMemoryAttachments returns the memory links for an agent (alias for getMemoryAttachments).
+func (s *Service) GetMemoryAttachments(agentID string) []string {
+	return s.getMemoryAttachments(agentID)
 }
 
 func (s *Service) getManifestAndState(agentID string) (manifest.Manifest, AgentState, error) {
