@@ -438,3 +438,30 @@ gh pr comment <PR_NUMBER> --repo Keith-CY/carrier --body-file /tmp/review.md
 - Keeps `NBS:` formatting intact (one suggestion per line).
 - Easier to review/edit before submitting.
 - More reliable in scripts and CI automation.
+## PR Checks Status Interpretation Guide
+
+When reviewing a PR or running `gh pr checks`, you will see various status values. Here is what each means and what action to take:
+
+| Status | Meaning | Action |
+|--------|---------|--------|
+| `pass` | Check completed successfully | ✅ No action needed |
+| `pending` | Check is still running | ⏳ Wait for completion |
+| `fail` | Check failed | 🔴 Fix the failure before merge |
+| `skipping` | Check was skipped (e.g., path filter) | ✅ Non-blocking; does not prevent merge |
+| `cancelled` | Check was cancelled | 🔄 Re-run the check or investigate |
+
+### Quick check command
+
+```bash
+# View all checks for a PR
+gh pr checks <PR_NUMBER> --repo Keith-CY/carrier
+```
+
+### Merge readiness
+
+A PR is merge-ready when:
+- All **required** checks show `pass` (or `skipping` for path-filtered jobs).
+- No required check shows `fail` or `cancelled`.
+- `pending` checks must complete before merge.
+
+See the [Required CI Check Names](#required-ci-check-names-for-pr-readiness) section for the list of required checks in this repo.
