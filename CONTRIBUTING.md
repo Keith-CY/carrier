@@ -70,6 +70,7 @@ Before merging, the following required checks must be green:
 
 All required checks must pass before a PR can enter the merge queue.
 
+<<<<<<< HEAD
 ## Label Glossary
 
 The following labels are used for planning and priority triage:
@@ -104,6 +105,8 @@ Before opening or updating a PR, run the minimum local validation for your chang
 - **CI/workflow changes:** Test the workflow logic locally where possible. For GitHub Actions changes, verify YAML syntax with a linter (e.g., `actionlint`).
 
 These are minimum checks. The full local validation suite is available via `./scripts/run-all-tests.sh`.
+=======
+>>>>>>> f4803d7 (docs(contributing): add CI troubleshooting commands for required checks)
 ## CI Troubleshooting
 
 When a required CI check fails on your PR, reproduce the failure locally with the commands below.
