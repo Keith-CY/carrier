@@ -449,6 +449,16 @@ When reviewing a PR or running `gh pr checks`, you will see various status value
 | `fail` | Check failed | 🔴 Fix the failure before merge |
 | `skipping` | Check was skipped (e.g., path filter) | ✅ Non-blocking; does not prevent merge |
 | `cancelled` | Check was cancelled | 🔄 Re-run the check or investigate |
+## PR Merge State Quick Reference
+
+When checking merge readiness with `gh pr view --json mergeStateStatus`, you may see these values:
+
+| Status | Meaning | Typical cause | Suggested action |
+|--------|---------|---------------|------------------|
+| `CLEAN` | Ready to merge | All checks pass, no conflicts, reviews satisfied | Merge or enable auto-merge |
+| `BLOCKED` | Cannot merge yet | Missing required reviews or failing checks | Check `gh pr checks` and request reviews |
+| `DIRTY` | Has merge conflicts | Branch diverged from `main` | Rebase or merge `main` into your branch (see [Conflict Resolution](#conflict-resolution-dirty-prs)) |
+| `UNKNOWN` | State not yet computed | GitHub is still calculating | Wait a few seconds and re-check |
 
 ### Quick check command
 
@@ -519,3 +529,5 @@ Before creating a sub-issue, verify:
 - "Redesign the session store interface" — architectural, affects multiple consumers.
 
 When in doubt, ask: "Can someone implement this in ≤1 hour with no design ambiguity?" If not, decompose further.
+gh pr view <PR_NUMBER> --repo Keith-CY/carrier --json mergeStateStatus -q '.mergeStateStatus'
+```
