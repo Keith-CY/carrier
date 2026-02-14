@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "bun run src/example.ts",
     "check": "bunx tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "ci": "bun run check && bun test"
   },
   "devDependencies": {
     "@types/bun": "^1.2.19",

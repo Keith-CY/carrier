@@ -56,9 +56,9 @@ jobs:
         working-directory: gateway
         run: bun install --no-progress
 
-      - name: Type check gateway
+      - name: Gateway CI (type check + tests)
         working-directory: gateway
-        run: bun run check
+        run: bun run ci
 
   e2e-tests:
     name: End-to-End Tests
