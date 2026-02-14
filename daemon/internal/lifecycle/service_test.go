@@ -600,6 +600,40 @@ func TestUpgradeFailureReturnsBackupGuidanceAndAuditFailure(t *testing.T) {
 	}
 }
 
+func TestUpgradeBackupCreationFailureReturnsFocusedError(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	blockedPath := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blockedPath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write blocked path: %v", err)
+	}
+	svc.diagnoseDir = blockedPath
+
+	err := svc.Upgrade("openclaw")
+	if err == nil {
+		t.Fatal("expected upgrade error")
+	}
+	if !strings.Contains(err.Error(), "create diagnose dir") {
+		t.Fatalf("expected diagnose-dir creation error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "manual rollback guidance") || strings.Contains(err.Error(), "-pre-upgrade-") {
+		t.Fatalf("backup guidance should not be shown when backup creation fails, got %v", err)
+	}
+
+	for _, log := range svc.AuditLogs() {
+		if log.Action == "upgrade" && strings.Contains(log.Message, "upgrade_start") {
+			t.Fatalf("unexpected upgrade_start audit when backup creation failed: %+v", log)
+		}
+	}
+}
+
 func TestCreateRemoteDiagnosisHandoffRequiresNeedFlag(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	runner := &fakeRunner{}
