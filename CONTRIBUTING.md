@@ -143,6 +143,39 @@ bun test
 
 These are the same commands CI runs. Fix failures locally before pushing updates.
 
+## Changelog Maintenance
+
+This project maintains a [`CHANGELOG.md`](./CHANGELOG.md) following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+**When to add entries:** Add a changelog entry when your PR is opened (not at merge time). The reviewer may suggest wording changes.
+
+**Who updates release headings:** Maintainers move entries from `[Unreleased]` to a versioned heading during the release process.
+
+**Entry format:** Use the category headers already in `CHANGELOG.md` and follow this format:
+
+```markdown
+### <Category>
+
+- **Short description** — one-line summary of the change ([#PR](https://github.com/Keith-CY/carrier/pull/PR))
+```
+
+**Categories used in this repo:**
+- `Features` — new capabilities
+- `Bug Fixes` — corrections to existing behavior
+- `Security` — vulnerability fixes or hardening
+- `Refactor` — internal restructuring without behavior change
+- `Docs` — documentation additions or updates
+- `Tests` — new or improved test coverage
+- `CI` — build/CI pipeline changes
+
+**Example entry:**
+
+```markdown
+### Features
+
+- **WebSocket support** — add real-time event streaming to gateway ([#999](https://github.com/Keith-CY/carrier/pull/999))
+```
+
 ## Review Convention (Non-Blocking Suggestions)
 
 For review comments, use the fixed keyword `NBS:` for each non-blocking suggestion.
