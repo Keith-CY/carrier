@@ -8,6 +8,7 @@
 - Product codename: Agent Runtime Manager (Local)
 - Version: PRD v0.2
 - Owner modules: Daemon (Go), Gateway (TS), Memory Platform, Catalog
+- This PRD is the **single source of truth** for product scope/priority. If another document conflicts, PRD wins.
 
 ---
 
@@ -358,7 +359,18 @@ Memory criteria:
 
 ---
 
-## 9. Open Questions
+## 9. Terminology Reference
+- **Runtime**: the execution environment for agent processes (host on macOS/Linux, WSL2 on Windows).
+- **Diagnose**: generate a sanitized diagnostics artifact (logs/state/probe outputs without secret values).
+- **Per-Agent memory**: memory scoped to one agent instance.
+- **Shared memory**: reusable memory across local agents (default read-only mount).
+- **Public memory**: template or community-provided memory package (read-only).
+- **P0 / P1 / P2**:
+  - **P0** = must-have for Phase 1 acceptance
+  - **P1** = should-have after P0 stability
+  - **P2** = later backlog
+
+## 10. Open Questions
 1. Preferred runtime package format per OS for OpenClaw (`tar.gz`, installer script, package manager)
 2. WSL2 distro and shell assumptions for Windows support baseline
 3. Remote diagnosis handoff schema and privacy policy contract

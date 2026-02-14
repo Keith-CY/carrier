@@ -1,5 +1,8 @@
 # Agent Installation Platform — Implementation Plan (Phase 1)
 
+> Scope/priority source-of-truth: `docs/Agent_Installation_Platform_PRD.md`.
+> This document defines execution sequencing only; if conflicts exist, follow PRD.
+
 ## 1. Plan Goal
 Deliver an end-to-end, production-like OpenClaw workflow on local runtime (macOS/Linux) and WSL2 (Windows), with Telegram/Discord/Feishu control, Per-Agent/Shared/Public memory management, and Base Agent triage + diagnose escalation.
 
@@ -114,7 +117,13 @@ Acceptance:
 - Per-Agent/Shared/Public memory flows are functional
 - diagnose coverage target met for unresolved failures
 
-## 7. Phase 2 Entry Gate
+## 7. Terminology alignment
+- Runtime = host(macOS/Linux) or WSL2(Windows), no Docker path in Phase 1.
+- Diagnose = sanitized artifact generation + optional remote diagnosis consent flow.
+- Memory types = Per-Agent / Shared / Public (mount policy per PRD).
+- Priority semantics = P0 must-have, P1 should-have, P2 later.
+
+## 8. Phase 2 Entry Gate
 Start Pi Mono/NanoClaw/Pico Claw onboarding only when:
 - OpenClaw P0 acceptance passes consistently
 - no unresolved P0 reliability/security defects
