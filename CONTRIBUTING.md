@@ -75,3 +75,25 @@ NBS: Clarify fallback behavior in README.
 ```
 
 Post-merge automation parses `NBS:` lines and creates one follow-up issue per suggestion.
+
+### Review Wording: Blocking vs Non-Blocking
+
+Use consistent language to distinguish blocking feedback from non-blocking suggestions:
+
+- **BS (blocking suggestion):** The PR should not merge until this is addressed. Write it as a normal review comment or request-changes review.
+- **NBS (non-blocking suggestion):** A nice-to-have improvement that can be addressed in a follow-up. Prefix each line with `NBS:`.
+
+**Examples:**
+
+Blocking comment (normal review):
+```text
+This function can panic on nil input — add a nil guard before merge.
+```
+
+Non-blocking suggestions:
+```text
+NBS: Consider extracting the retry logic into a shared helper.
+NBS: The error message could include the agent ID for easier debugging.
+```
+
+Non-blocking suggestions tagged with `NBS:` are automatically converted to follow-up issues by the `review-nbs-followup` automation after the PR merges.
