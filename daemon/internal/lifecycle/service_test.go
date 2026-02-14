@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -972,7 +973,7 @@ func TestMemoryAttachmentsSetAndGet(t *testing.T) {
 	// Set and get
 	svc.setMemoryAttachments("openclaw", []string{"/mem/a.md", "/mem/b.md"})
 	got = svc.getMemoryAttachments("openclaw")
-	if len(got) != 2 || got[0] != "/mem/a.md" || got[1] != "/mem/b.md" {
+	if !reflect.DeepEqual(got, []string{"/mem/a.md", "/mem/b.md"}) {
 		t.Fatalf("unexpected attachments: %v", got)
 	}
 
@@ -1003,7 +1004,7 @@ func TestMemoryAttachmentsPreservedAcrossStartStop(t *testing.T) {
 	}
 
 	got := svc.getMemoryAttachments("openclaw")
-	if len(got) != 1 || got[0] != "/mem/persist.md" {
+	if !reflect.DeepEqual(got, []string{"/mem/persist.md"}) {
 		t.Fatalf("attachments lost after start/stop: %v", got)
 	}
 }
@@ -1026,7 +1027,7 @@ func TestMemoryAttachmentsPreservedAcrossUpgrade(t *testing.T) {
 	}
 
 	got := svc.getMemoryAttachments("openclaw")
-	if len(got) != 1 || got[0] != "/mem/keep.md" {
+	if !reflect.DeepEqual(got, []string{"/mem/keep.md"}) {
 		t.Fatalf("attachments lost after upgrade: %v", got)
 	}
 }
