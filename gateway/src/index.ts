@@ -190,10 +190,17 @@ export async function handleCommand(
           return usageError(cmd.requestId, "/upgrade <agent_id>");
         }
         const result = await deps.daemon.upgradeAgent(agentId, ctx);
+        let message = `upgrade completed for ${result.agentId}: ${result.fromVersion} -> ${result.toVersion}`;
+        if (result.backupPath) {
+          message += `. backup at ${result.backupPath}`;
+        }
+        if (result.rollbackHint) {
+          message += `. rollback: ${result.rollbackHint}`;
+        }
         return {
           requestId: cmd.requestId,
           result: "ok",
-          message: `upgrade completed for ${result.agentId}: ${result.fromVersion} -> ${result.toVersion}`,
+          message,
         };
       }
       case "/diagnose": {

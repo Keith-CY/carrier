@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -83,6 +84,10 @@ func sampleManifest() manifest.Manifest {
 			Supports:  []manifest.MemoryType{manifest.MemoryTypePerAgent, manifest.MemoryTypeShared, manifest.MemoryTypePublic},
 			MountPath: "./memory",
 		},
+		Upgrade: manifest.UpgradeSpec{
+			Channel:  "stable",
+			Strategy: manifest.UpgradeStrategyInPlaceOrReinstall,
+		},
 	}
 }
 
@@ -143,6 +148,146 @@ func TestLifecycleInstallStartStop(t *testing.T) {
 		if runner.calls[i] != wantCalls[i] {
 			t.Fatalf("runner call %d mismatch: want %q got %q", i, wantCalls[i], runner.calls[i])
 		}
+	}
+}
+
+func TestLifecycleUpgradeCreatesBackupAndBumpsVersion(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	result, err := svc.Upgrade("openclaw")
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+
+	if result.FromVersion != "1.0.0" {
+		t.Fatalf("unexpected from version: %s", result.FromVersion)
+	}
+	if result.ToVersion != "1.0.1" {
+		t.Fatalf("unexpected to version: %s", result.ToVersion)
+	}
+	if result.BackupPath == "" {
+		t.Fatal("expected backup path")
+	}
+	if _, err := os.Stat(result.BackupPath); err != nil {
+		t.Fatalf("expected backup path to exist: %v", err)
+	}
+	for _, name := range []string{"manifest.json", "state.json", "logs.txt"} {
+		if _, err := os.Stat(filepath.Join(result.BackupPath, name)); err != nil {
+			t.Fatalf("expected backup file %q, got: %v", name, err)
+		}
+	}
+
+	status, statusErr := svc.Status("openclaw")
+	if statusErr != nil {
+		t.Fatalf("status: %v", statusErr)
+	}
+	if status.Version != "1.0.1" {
+		t.Fatalf("expected upgraded version 1.0.1, got %q", status.Version)
+	}
+
+	wantCalls := []string{"install-openclaw", "install-openclaw"}
+	if len(runner.calls) != len(wantCalls) {
+		t.Fatalf("expected %d runner calls, got %d", len(wantCalls), len(runner.calls))
+	}
+	for i := range wantCalls {
+		if runner.calls[i] != wantCalls[i] {
+			t.Fatalf("runner call %d mismatch: want %q got %q", i, wantCalls[i], runner.calls[i])
+		}
+	}
+}
+
+func TestLifecycleUpgradeRequiresStoppedAgent(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if err := svc.Start("openclaw"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	if _, err := svc.Upgrade("openclaw"); !errors.Is(err, ErrAlreadyRunning) {
+		t.Fatalf("expected ErrAlreadyRunning, got %v", err)
+	}
+}
+
+func TestLifecycleUpgradeRejectsUnsupportedStrategy(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+	brokenManifest := sampleManifest()
+	brokenManifest.Upgrade = manifest.UpgradeSpec{
+		Channel:  "stable",
+		Strategy: "unsupported",
+	}
+	svc.mu.Lock()
+	svc.manifests["openclaw"] = brokenManifest
+	svc.mu.Unlock()
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	_, err := svc.Upgrade("openclaw")
+	if err == nil {
+		t.Fatal("expected upgrade strategy error")
+	}
+	if !errors.Is(err, ErrUpgradeStrategyUnsupported) {
+		t.Fatalf("expected ErrUpgradeStrategyUnsupported, got %v", err)
+	}
+}
+
+func TestLifecycleUpgradeFailureKeepsStateAndReturnsRollbackGuidance(t *testing.T) {
+	runner := &fakeRunner{
+		results: map[string]runResult{
+			"install-openclaw": {result: commandexec.Result{ExitCode: 0}},
+		},
+	}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	runner.results["install-openclaw"] = runResult{err: errors.New("upgrade command failed"), result: commandexec.Result{ExitCode: 1}}
+	result, err := svc.Upgrade("openclaw")
+	if err == nil {
+		t.Fatal("expected upgrade failure")
+	}
+	if result.FromVersion != "1.0.0" {
+		t.Fatalf("unexpected from version: %s", result.FromVersion)
+	}
+	if result.ToVersion != "1.0.0" {
+		t.Fatalf("expected to version unchanged on failure, got %s", result.ToVersion)
+	}
+	if !strings.Contains(err.Error(), "rollback") {
+		t.Fatalf("expected rollback guidance in error, got %q", err.Error())
+	}
+	if result.BackupPath == "" {
+		t.Fatal("expected backup path on upgrade failure")
+	}
+	if _, err := os.Stat(result.BackupPath); err != nil {
+		t.Fatalf("expected backup path to exist: %v", err)
+	}
+
+	status, statusErr := svc.Status("openclaw")
+	if statusErr != nil {
+		t.Fatalf("status: %v", statusErr)
+	}
+	if status.Version != "1.0.0" {
+		t.Fatalf("expected unchanged version after failed upgrade, got %q", status.Version)
+	}
+	if !strings.Contains(status.LastError, "backup captured at") {
+		t.Fatalf("expected state last error with rollback guidance, got %q", status.LastError)
 	}
 }
 

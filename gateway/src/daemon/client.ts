@@ -46,6 +46,8 @@ export type UpgradeResult = {
   agentId: string;
   fromVersion: string;
   toVersion: string;
+  backupPath?: string;
+  rollbackHint?: string;
 };
 
 export interface DaemonClient {
@@ -104,6 +106,7 @@ type DaemonAuditEvent = {
 export class InMemoryDaemonClient implements DaemonClient {
   private nextHandoffID = 0;
   private nextDiagnoseID = 0;
+  private nextUpgradeID = 0;
   private readonly agents = new Map<string, InMemoryAgentState>();
   private readonly logs = new Map<string, string[]>();
   private readonly auditEvents: DaemonAuditEvent[] = [];
@@ -222,17 +225,22 @@ export class InMemoryDaemonClient implements DaemonClient {
     const state = this.requireAgent(agentId);
     const fromVersion = state.version;
     const toVersion = bumpPatchVersion(fromVersion);
+    this.nextUpgradeID += 1;
+    const backupPath = `/tmp/${agentId}-upgrade-backup-${this.nextUpgradeID}.json`;
+    const rollbackHint = `rollback by restoring from ${backupPath} before retrying upgrade`;
     this.upsertAgent({
       ...state,
       version: toVersion,
       updatedAt: this.now().toISOString(),
     });
-    this.appendLog(agentId, `[upgrade] request=${ctx.requestId} actor=${ctx.actor} ${fromVersion} -> ${toVersion}`);
+    this.appendLog(agentId, `[upgrade] request=${ctx.requestId} actor=${ctx.actor} ${fromVersion} -> ${toVersion}; backup=${backupPath}`);
     this.recordAudit(ctx, "upgrade", agentId, `${fromVersion} -> ${toVersion}`);
     return {
       agentId,
       fromVersion,
       toVersion,
+      backupPath,
+      rollbackHint,
     };
   }
 

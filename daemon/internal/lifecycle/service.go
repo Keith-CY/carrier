@@ -35,6 +35,8 @@ var (
 	ErrPortConflict             = errors.New("port conflict detected")
 	ErrRuntimePrerequisites     = errors.New("runtime prerequisites failed")
 	ErrRemoteDiagnosisNotNeeded = errors.New("remote diagnosis is not required for this agent")
+	ErrUpgradeFailed            = errors.New("agent upgrade failed")
+	ErrUpgradeStrategyUnsupported = errors.New("upgrade strategy is not supported")
 )
 
 const (
@@ -314,6 +316,82 @@ func (s *Service) Start(agentID string) error {
 	return nil
 }
 
+func (s *Service) Upgrade(agentID string) (UpgradeResult, error) {
+	m, state, err := s.getManifestAndState(agentID)
+	if err != nil {
+		return UpgradeResult{}, err
+	}
+	fromVersion := state.Version
+	if state.Install != InstallStateInstalled {
+		return UpgradeResult{}, ErrNotInstalled
+	}
+	if state.Runtime == RuntimeStateRunning {
+		return UpgradeResult{}, ErrAlreadyRunning
+	}
+
+	strategy := strings.TrimSpace(m.Upgrade.Strategy)
+	if strategy == "" {
+		strategy = manifest.UpgradeStrategyInPlaceOrReinstall
+	}
+	if strategy != manifest.UpgradeStrategyInPlaceOrReinstall {
+		return UpgradeResult{}, fmt.Errorf("%w: unsupported strategy %q; supported: %q", ErrUpgradeStrategyUnsupported, strategy, manifest.UpgradeStrategyInPlaceOrReinstall)
+	}
+
+	toVersion, err := nextPatchVersion(fromVersion)
+	if err != nil {
+		s.updateStateOnUpgradeError(agentID, fmt.Errorf("upgrade target version calculation failed: %w", err))
+		s.recordAudit("", "system", "upgrade", agentID, AuditResultFailure, "E_UPGRADE_VERSION", err.Error())
+		return UpgradeResult{AgentID: agentID, FromVersion: fromVersion}, err
+	}
+
+	if err := s.checkRuntimePrerequisites(m); err != nil {
+		updateErr := fmt.Errorf("%w: %v", ErrUpgradeFailed, err)
+		s.updateStateOnUpgradeError(agentID, updateErr)
+		s.recordAudit("", "system", "upgrade", agentID, AuditResultFailure, "E_UPGRADE_PREREQUISITES", err.Error())
+		return UpgradeResult{AgentID: agentID, FromVersion: fromVersion}, updateErr
+	}
+
+	backupPath, backupErr := s.createUpgradeBackup(agentID, m, state)
+	if backupErr != nil {
+		updateErr := fmt.Errorf("%w: backup failed: %v", ErrUpgradeFailed, backupErr)
+		s.updateStateOnUpgradeError(agentID, updateErr)
+		s.recordAudit("", "system", "upgrade", agentID, AuditResultFailure, "E_UPGRADE_BACKUP", backupErr.Error())
+		return UpgradeResult{AgentID: agentID, FromVersion: fromVersion}, updateErr
+	}
+
+	result, runErr := s.runner.Run(context.Background(), m.Runtime.Install.Command)
+	s.appendCommandLog(agentID, "upgrade", m.Runtime.Install.Command, result, runErr)
+	if runErr != nil {
+		updateErr := s.formatUpgradeFailure(runErr, backupPath)
+		s.updateStateOnUpgradeError(agentID, updateErr)
+		s.recordAudit("", "system", "upgrade", agentID, AuditResultFailure, "E_UPGRADE_FAILED", fmt.Sprintf("%v", runErr))
+		return UpgradeResult{
+			AgentID:    agentID,
+			FromVersion: fromVersion,
+			ToVersion:   fromVersion,
+			BackupPath:  backupPath,
+		}, updateErr
+	}
+
+	s.mu.Lock()
+	state = s.states[agentID]
+	state.Version = toVersion
+	state.LastError = ""
+	state.Runtime = RuntimeStateStopped
+	state.Health = HealthStateUnknown
+	state.UpdatedAt = s.now()
+	s.states[agentID] = state
+	s.mu.Unlock()
+
+	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("from %s -> %s; backup=%s", fromVersion, toVersion, backupPath))
+	return UpgradeResult{
+		AgentID:    agentID,
+		FromVersion: fromVersion,
+		ToVersion:   toVersion,
+		BackupPath:  backupPath,
+	}, nil
+}
+
 func (s *Service) Stop(agentID string) error {
 	m, state, err := s.getManifestAndState(agentID)
 	if err != nil {
@@ -560,11 +638,96 @@ func (s *Service) updateStateOnStartError(agentID string, err error) {
 	s.states[agentID] = state
 }
 
+func (s *Service) updateStateOnUpgradeError(agentID string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.states[agentID]
+	if !ok {
+		return
+	}
+	state.Health = HealthStateUnhealthy
+	state.LastError = err.Error()
+	state.UpdatedAt = s.now()
+	s.states[agentID] = state
+}
+
 func (s *Service) checkRuntimePrerequisites(m manifest.Manifest) error {
 	if err := s.checker.Check(m); err != nil {
 		return fmt.Errorf("%w: %v", ErrRuntimePrerequisites, err)
 	}
 	return nil
+}
+
+func (s *Service) createUpgradeBackup(agentID string, m manifest.Manifest, state AgentState) (string, error) {
+	backupsRoot := filepath.Join(s.diagnoseDir, "upgrades")
+	if err := os.MkdirAll(backupsRoot, 0o755); err != nil {
+		return "", fmt.Errorf("create upgrade backup dir: %w", err)
+	}
+
+	backupPath := filepath.Join(backupsRoot, fmt.Sprintf("%s-%s", agentID, s.now().UTC().Format("20060102T150405Z")))
+	if err := os.MkdirAll(backupPath, 0o755); err != nil {
+		return "", fmt.Errorf("create backup directory: %w", err)
+	}
+
+	stateJSON, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		_ = os.RemoveAll(backupPath)
+		return "", fmt.Errorf("marshal state: %w", err)
+	}
+	manifestJSON, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		_ = os.RemoveAll(backupPath)
+		return "", fmt.Errorf("marshal manifest: %w", err)
+	}
+
+	s.mu.RLock()
+	logs := append([]string(nil), s.logs[agentID]...)
+	s.mu.RUnlock()
+
+	if err := os.WriteFile(filepath.Join(backupPath, "manifest.json"), []byte(redact.RedactText(string(manifestJSON))), 0o600); err != nil {
+		_ = os.RemoveAll(backupPath)
+		return "", fmt.Errorf("write manifest backup: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(backupPath, "state.json"), stateJSON, 0o600); err != nil {
+		_ = os.RemoveAll(backupPath)
+		return "", fmt.Errorf("write state backup: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(backupPath, "logs.txt"), []byte(redact.RedactText(strings.Join(logs, "\n"))), 0o600); err != nil {
+		_ = os.RemoveAll(backupPath)
+		return "", fmt.Errorf("write logs backup: %w", err)
+	}
+
+	return backupPath, nil
+}
+
+func (s *Service) formatUpgradeFailure(runErr error, backupPath string) error {
+	detail := fmt.Sprintf("upgrade failed: %v", runErr)
+	if backupPath != "" {
+		return fmt.Errorf("%s. backup captured at %s; to rollback, restore from this backup path before retrying", detail, backupPath)
+	}
+	return fmt.Errorf("%s. no backup was captured; rollback unavailable", detail)
+}
+
+func nextPatchVersion(version string) (string, error) {
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return "", fmt.Errorf("invalid version format %q, expected MAJOR.MINOR.PATCH", version)
+	}
+
+	patch, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return "", fmt.Errorf("invalid patch version %q: %w", parts[2], err)
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return "", fmt.Errorf("invalid major version %q: %w", parts[0], err)
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("invalid minor version %q: %w", parts[1], err)
+	}
+
+	return fmt.Sprintf("%d.%d.%d", major, minor, patch+1), nil
 }
 
 func (s *Service) validateRequiredEnv(m manifest.Manifest) error {
