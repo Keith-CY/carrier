@@ -253,3 +253,12 @@ gh run rerun <run-id>
 ```
 
 **Permissions note:** You need write access to the repository to trigger reruns. If the button is unavailable, ask a maintainer to rerun or push an update to your PR branch to trigger a fresh run.
+## PR Check Health Summary
+
+To get a quick overview of open PR check statuses:
+
+```bash
+bash scripts/pr-check-summary.sh
+```
+
+The script prints counts for green, pending, and failing PRs, and lists PR numbers for non-green entries. It uses `gh` JSON output and performs no write/mutation actions.
