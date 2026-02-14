@@ -28,6 +28,10 @@ git push -u origin codex/<topic>
 gh pr create --base main --head codex/<topic>
 ```
 
+For this repository we use Merge Queue:
+- Open the queue from the GitHub PR page after CI is green.
+- Do not use direct push-to-main flows except via merge queue/release process.
+
 ## Scope Policy
 
 Phase milestones define delivery scope and must be respected in all planning and review.
@@ -46,6 +50,11 @@ GitHub Actions is the source of truth for test status.
 
 - Required: CI must pass on PR before merge.
 - Local tests are optional for faster iteration, but merge decisions are based on CI.
+
+To reduce CI churn, we enforce pre-push tests locally:
+- Enable the repo hook path once per clone:
+  - `git config core.hooksPath .githooks`
+- The pre-push hook runs `./scripts/run-all-tests.sh`, which includes daemon tests, gateway tests/checks, and end-to-end hook.
 
 Current CI checks:
 - Daemon Go tests

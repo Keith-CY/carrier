@@ -60,8 +60,15 @@ See `CONTRIBUTING.md` for command examples and required process.
 - Gateway checks:
   - `cd gateway`
   - `bun run check`
-- Optional local flow from repo root:
+- Full local flow from repo root (mandatory before pushing):
+  - `./scripts/run-all-tests.sh`
+
+Optional local flow from repo root:
   - `cd gateway && bun install && bun run check && cd ../daemon && go test ./...`
+
+#### Merge Queue
+- This repository supports GitHub Merge Queue for `main`.
+- For merge operations, prefer queue-based merge from the GitHub UI.
 
 ## Local workflow notes
 
