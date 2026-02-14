@@ -62,6 +62,7 @@ type AuditResult string
 const (
 	AuditResultSuccess AuditResult = "success"
 	AuditResultFailure AuditResult = "failure"
+	AuditResultNeutral AuditResult = "neutral"
 )
 
 type AuditLog struct {
