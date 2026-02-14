@@ -28,6 +28,10 @@ jobs:
         working-directory: daemon
         run: go test ./...
 
+      - name: Validate catalog manifest parseability
+        working-directory: daemon
+        run: go test ./internal/manifest -run TestLoadFileAcceptsCatalogManifest -count=1
+
   gateway-check:
     name: Gateway Type Check
     runs-on: ubuntu-latest
