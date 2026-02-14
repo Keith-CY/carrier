@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { InMemoryDaemonClient } from "./daemon/client";
 import { HttpDaemonClient } from "./daemon/http_client";
 import { DownloadTokenStore } from "./downloads/token_store";
@@ -8,6 +8,7 @@ import {
   createGatewayRuntime,
   createRuntimeDependencies,
   requestIdMiddleware,
+  startGatewayServer,
   type GatewayRequestContext,
 } from "./server";
 
@@ -135,5 +136,44 @@ describe("gateway runtime routes", () => {
     const agentsPayload = await agentsResponse.json() as { result: string; message: string };
     expect(agentsPayload.result).toBe("ok");
     expect(agentsPayload.message).toContain("listed");
+  });
+});
+
+describe("port resolution fallback", () => {
+  const originalEnv = process.env.CARRIER_GATEWAY_PORT;
+  let srv: ReturnType<typeof startGatewayServer> | undefined;
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.CARRIER_GATEWAY_PORT;
+    } else {
+      process.env.CARRIER_GATEWAY_PORT = originalEnv;
+    }
+    srv?.stop(true);
+    srv = undefined;
+  });
+
+  test("config.port undefined + env unset -> DEFAULT_PORT (8787)", () => {
+    delete process.env.CARRIER_GATEWAY_PORT;
+    srv = startGatewayServer();
+    expect(srv.port).toBe(8787);
+  });
+
+  test("config.port undefined + env non-numeric -> DEFAULT_PORT (8787)", () => {
+    process.env.CARRIER_GATEWAY_PORT = "notanumber";
+    srv = startGatewayServer();
+    expect(srv.port).toBe(8787);
+  });
+
+  test("config.port undefined + env numeric string -> uses env value", () => {
+    process.env.CARRIER_GATEWAY_PORT = "9999";
+    srv = startGatewayServer();
+    expect(srv.port).toBe(9999);
+  });
+
+  test("config.port set to valid number -> config value wins", () => {
+    process.env.CARRIER_GATEWAY_PORT = "9999";
+    srv = startGatewayServer({ port: 8888 });
+    expect(srv.port).toBe(8888);
   });
 });
