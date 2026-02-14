@@ -394,3 +394,17 @@ func addZipFile(zw *zip.Writer, name string, content []byte) error {
 	}
 	return nil
 }
+
+// recordRestart records a process restart for crash-loop detection.
+// Must be called with lock held.
+func (s *Service) recordRestart(agentID string) {
+	now := s.now()
+	restarts := append(s.restarts[agentID], now)
+	restarts = trimRestartHistory(restarts, now.Add(-s.crashLoopWindow))
+	s.restarts[agentID] = restarts
+
+	if len(restarts) >= s.crashLoopThreshold {
+		cooldownUntil := now.Add(s.crashLoopCooldown)
+		s.cooldowns[agentID] = cooldownUntil
+	}
+}
