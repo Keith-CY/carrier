@@ -98,9 +98,7 @@ Optional local flow from repo root:
 
 ## Kanban workflow required secrets/env vars
 
-For `.github/workflows/carrier-kanban-operations.yml`, configure these repository-level secrets/variables before running the workflow.
-See `.github/workflows/carrier-kanban-operations.yml` for the exact runtime logic and field mappings.
-
+For `.github/workflows/carrier-kanban-operations.yml`, configure these repository-level secrets/variables before running the workflow (see workflow file: [`.github/workflows/carrier-kanban-operations.yml`](./.github/workflows/carrier-kanban-operations.yml)):
 
 - `CARRIER_PROJECT_ID` (required): GitHub Project (v2) ID used by the workflow.
 - `CARRIER_PROJECTS_TOKEN` (required): token with project read/write permissions for field/view operations.
