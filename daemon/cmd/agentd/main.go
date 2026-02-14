@@ -18,6 +18,7 @@ import (
 	"carrier/daemon/internal/config"
 	"carrier/daemon/internal/lifecycle"
 	"carrier/daemon/internal/logging"
+	"carrier/daemon/internal/pairing"
 )
 
 const shutdownTimeout = 30 * time.Second
@@ -57,8 +58,23 @@ func main() {
 		fmt.Printf("- %s (%s): %s\n", entry.Name, entry.ID, entry.Status)
 	}
 
+	// Generate pairing code
+	pairStore, err := pairing.NewStore()
+	if err != nil {
+		log.Fatalf("pairing store: %v", err)
+	}
+	pairCode, err := pairStore.Code()
+	if err != nil {
+		log.Fatalf("pairing code: %v", err)
+	}
+	fmt.Println("")
+	fmt.Println("╔══════════════════════════════════════╗")
+	fmt.Printf("║  PAIRING CODE:  %s            ║\n", pairCode)
+	fmt.Println("╚══════════════════════════════════════╝")
+	fmt.Println("")
+
 	// Build HTTP server
-	mux := buildHTTPMux(svc)
+	mux := buildHTTPMux(svc, pairStore)
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	httpServer := &http.Server{
 		Addr:    addr,
@@ -92,7 +108,7 @@ func main() {
 	fmt.Println("agentd stopped gracefully")
 }
 
-func buildHTTPMux(svc *lifecycle.Service) *http.ServeMux {
+func buildHTTPMux(svc *lifecycle.Service, pairStore *pairing.Store) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Health checks
@@ -103,6 +119,20 @@ func buildHTTPMux(svc *lifecycle.Service) *http.ServeMux {
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
+	})
+
+	// Pairing code
+	mux.HandleFunc("/api/pair-code", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		code, err := pairStore.Code()
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "failed to get pairing code")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"code": code})
 	})
 
 	// API routes
