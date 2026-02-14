@@ -327,3 +327,42 @@ gh repo view Keith-CY/carrier --json nameWithOwner -q '.nameWithOwner'
 - Wait for reset or authenticate with a different token.
 
 These checks apply to both PR review (`gh pr view`, `gh pr checks`) and issue triage (`gh issue list`, `gh issue view`) workflows.
+## Selective Test Runs (Quick Start)
+
+For faster local validation, run only the tests relevant to your change instead of the full suite.
+
+### Daemon (Go)
+
+```bash
+# Full suite
+cd daemon && go test ./...
+
+# Single package
+cd daemon && go test ./internal/lifecycle/...
+
+# Single test by name
+cd daemon && go test ./internal/memory -run TestXxx
+
+# With verbose output
+cd daemon && go test -v ./internal/manifest/...
+```
+
+### Gateway (TypeScript / Bun)
+
+```bash
+# Full type check + tests
+cd gateway && bun install && bun run check && bun test
+
+# Type check only (fast)
+cd gateway && bun run check
+
+# Run tests only
+cd gateway && bun test
+
+# Single test file
+cd gateway && bun test src/index.test.ts
+```
+
+### When to run the full suite
+
+Before opening or updating a PR, run `./scripts/run-all-tests.sh` from the repo root at least once to ensure full CI parity. Selective runs are for iteration speed during development.
