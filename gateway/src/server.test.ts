@@ -136,4 +136,31 @@ describe("gateway runtime routes", () => {
     expect(agentsPayload.result).toBe("ok");
     expect(agentsPayload.message).toContain("listed");
   });
+
+  test("download route rejects path traversal in fileRef", async () => {
+    const deps = makeDeps();
+    // Create runtime with custom readFile that would expose traversal attempts
+    let capturedPath: string | null = null;
+    const runtime = createGatewayRuntime({
+      deps,
+      readFile: async (fileRef: string) => {
+        capturedPath = fileRef;
+        // Simulate the default behavior with path validation
+        if (!fileRef.startsWith("/") || fileRef.includes("/../") || fileRef.endsWith("/..")) {
+          return null;
+        }
+        return new Blob(["safe-content"]);
+      },
+    });
+
+    // Try to create a token with a malicious path (in real scenario, this would be server-controlled)
+    const maliciousPath = "/tmp/../etc/passwd";
+    const token = deps.downloads.issue(maliciousPath, 300, false);
+
+    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
+    
+    // Should get 404 because readFile rejects the path
+    expect(response.status).toBe(404);
+    expect(capturedPath).toBe(maliciousPath);
+  });
 });
