@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { InMemoryDaemonClient } from "./daemon/client";
 import { HttpDaemonClient } from "./daemon/http_client";
 import { DownloadTokenStore } from "./downloads/token_store";
@@ -8,6 +8,7 @@ import {
   createGatewayRuntime,
   createRuntimeDependencies,
   requestIdMiddleware,
+  startGatewayServer,
   type GatewayRequestContext,
 } from "./server";
 
@@ -135,5 +136,70 @@ describe("gateway runtime routes", () => {
     const agentsPayload = await agentsResponse.json() as { result: string; message: string };
     expect(agentsPayload.result).toBe("ok");
     expect(agentsPayload.message).toContain("listed");
+  });
+});
+
+describe("HTTP method mismatch handling", () => {
+  let srv: ReturnType<typeof startGatewayServer> | undefined;
+
+  function setup() {
+    const downloads = new DownloadTokenStore();
+    srv = startGatewayServer({ port: 0, deps: { downloads } });
+    const base = `http://localhost:${srv.port}`;
+    return { base, downloads };
+  }
+
+  afterEach(() => {
+    srv?.stop(true);
+    srv = undefined;
+  });
+
+  test("GET on /webhook/telegram returns 404 (POST-only)", async () => {
+    const { base } = setup();
+    const res = await fetch(`${base}/webhook/telegram`);
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.errorCode).toBe("E_NOT_FOUND");
+  });
+
+  test("GET on /webhook/discord returns 404 (POST-only)", async () => {
+    const { base } = setup();
+    const res = await fetch(`${base}/webhook/discord`);
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.errorCode).toBe("E_NOT_FOUND");
+  });
+
+  test("GET on /webhook/feishu returns 404 (POST-only)", async () => {
+    const { base } = setup();
+    const res = await fetch(`${base}/webhook/feishu`);
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.errorCode).toBe("E_NOT_FOUND");
+  });
+
+  test("POST on /download/:token returns 404 (GET-only)", async () => {
+    const { base, downloads } = setup();
+    const token = downloads.issue("/tmp/test.zip");
+    const res = await fetch(`${base}/download/${token.token}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.errorCode).toBe("E_NOT_FOUND");
+  });
+
+  test("POST on /healthz returns 404 (GET-only)", async () => {
+    const { base } = setup();
+    const res = await fetch(`${base}/healthz`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.errorCode).toBe("E_NOT_FOUND");
   });
 });
