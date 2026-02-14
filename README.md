@@ -15,7 +15,9 @@ Phase 1 scaffold for the Agent Installation Platform.
 - `catalog/`: OpenClaw manifest and candidate agent list
 - `docs/`: Product and delivery documentation
 
-## Quick checks
-```bash
-cd daemon && go test ./...
-```
+## Development flow
+- Start work from `origin/main` using a new `codex/*` branch and worktree.
+- Submit all feature updates via Pull Request.
+- Use GitHub Actions as test source of truth.
+
+See `CONTRIBUTING.md` for command examples and required process.
