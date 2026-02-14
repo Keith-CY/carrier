@@ -34,6 +34,7 @@ jobs:
             const eventName = context.eventName;
             const payload = context.payload;
             const token = process.env.CARRIER_PROJECTS_TOKEN || process.env.GITHUB_TOKEN;
+            // Fallback `github` comes from @actions/github and uses the default GITHUB_TOKEN context.
             const octokit = token ? github.getOctokit(token) : github;
 
             const getStatusCandidates = (item, labels) => {

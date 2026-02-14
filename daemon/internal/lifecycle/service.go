@@ -487,7 +487,7 @@ func (s *Service) Logs(agentID string, tail int) ([]string, error) {
 }
 
 // AuditStatus returns the current audit buffer size and configured limit.
-// This is intended for operational inspection / debug endpoints.
+// This is primarily queried by operational inspection/debug endpoints.
 type AuditStatus struct {
 	BufferSize int `json:"buffer_size"`
 	Limit      int `json:"limit"`
