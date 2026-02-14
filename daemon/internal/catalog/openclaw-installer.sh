@@ -1,18 +1,17 @@
 #!/bin/sh
 # OpenClaw installer with pinned artifacts and checksum verification
-# No pipe-to-shell execution - downloads, verifies, then installs
+# Checksum MUST be provided as $2 (pinned in carrier manifest, not fetched remotely)
 
 set -e
 
-VERSION="${1:-1.0.0}"
-BASE_URL="https://github.com/openclaw/openclaw/releases/download/v${VERSION}"
-EXPECTED_CHECKSUM="${2:-}"
+VERSION="${1:?VERSION required}"
+EXPECTED_CHECKSUM="${2:?EXPECTED_CHECKSUM required (pinned in manifest)}"
 
 # Platform detection
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 ARTIFACT="openclaw-${OS}-${ARCH}.tar.gz"
-CHECKSUM_FILE="${ARTIFACT}.sha256"
+BASE_URL="https://github.com/openclaw/openclaw/releases/download/v${VERSION}"
 
 # Create temporary directory
 TMPDIR="$(mktemp -d)"
@@ -20,20 +19,20 @@ trap 'rm -rf "$TMPDIR"' EXIT
 
 cd "$TMPDIR"
 
-# Download artifact
+# Download artifact only (no remote checksum fetch)
 echo "Downloading ${ARTIFACT} from ${BASE_URL}..."
 curl -fsSL -o "$ARTIFACT" "${BASE_URL}/${ARTIFACT}"
 
-# Download checksum
-echo "Downloading checksum file..."
-curl -fsSL -o "$CHECKSUM_FILE" "${BASE_URL}/${CHECKSUM_FILE}"
-
-# Verify checksum
-echo "Verifying integrity..."
-if ! sha256sum -c "$CHECKSUM_FILE" 2>&1 | grep -q "OK"; then
-    echo "ERROR: Checksum verification failed!" >&2
+# Verify against pinned checksum from carrier manifest
+echo "Verifying integrity against pinned checksum..."
+ACTUAL_CHECKSUM="$(sha256sum "$ARTIFACT" | awk '{print $1}')"
+if [ "$ACTUAL_CHECKSUM" != "$EXPECTED_CHECKSUM" ]; then
+    echo "ERROR: Checksum mismatch!" >&2
+    echo "  Expected: $EXPECTED_CHECKSUM" >&2
+    echo "  Actual:   $ACTUAL_CHECKSUM" >&2
     exit 1
 fi
+echo "Checksum OK"
 
 # Extract
 echo "Extracting archive..."

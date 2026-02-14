@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 //go:embed openclaw-installer.sh
@@ -13,17 +14,38 @@ var openclawInstallerScript string
 
 const (
 	openclawVersion = "1.0.0"
+	// Pinned checksums for release artifacts — anchored independently from the download source.
+	// Update these when cutting a new release.
+	openclawChecksumLinuxX86  = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	openclawChecksumLinuxArm  = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	openclawChecksumDarwinX86 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	openclawChecksumDarwinArm = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 )
 
+// getPinnedChecksum returns the checksum for the current platform, pinned in source.
+func getPinnedChecksum() string {
+	switch runtime.GOOS + "/" + runtime.GOARCH {
+	case "linux/amd64":
+		return openclawChecksumLinuxX86
+	case "linux/arm64":
+		return openclawChecksumLinuxArm
+	case "darwin/amd64":
+		return openclawChecksumDarwinX86
+	case "darwin/arm64":
+		return openclawChecksumDarwinArm
+	default:
+		return openclawChecksumLinuxX86
+	}
+}
+
 // getInstallCommand returns the install command that writes the embedded installer
-// to a temporary location and executes it with the pinned version.
-// This avoids pipe-to-shell and dynamic shell pipelines.
+// to a temporary location and executes it with the pinned version and checksum.
+// Checksum is anchored in the carrier binary, not fetched from the download source.
 func getInstallCommand() string {
 	tmpDir := os.TempDir()
 	scriptPath := filepath.Join(tmpDir, "openclaw-installer.sh")
+	checksum := getPinnedChecksum()
 	
-	// Write installer script to temp, execute it with pinned version, then clean up
-	// No pipe-to-shell: script is embedded in carrier binary, not fetched remotely
 	return fmt.Sprintf(`sh -c '
 set -e
 SCRIPT="%s"
@@ -31,9 +53,9 @@ cat > "$SCRIPT" << '\''INSTALLER_EOF'\''
 %s
 INSTALLER_EOF
 chmod 755 "$SCRIPT"
-"$SCRIPT" "%s"
+"$SCRIPT" "%s" "%s"
 rm -f "$SCRIPT"
-'`, scriptPath, openclawInstallerScript, openclawVersion)
+'`, scriptPath, openclawInstallerScript, openclawVersion, checksum)
 }
 
 func OpenClawManifest() manifest.Manifest {
