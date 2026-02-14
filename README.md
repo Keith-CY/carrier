@@ -94,11 +94,29 @@ See `CONTRIBUTING.md` for command examples and required process. For security vu
 - Gateway checks:
   - `cd gateway`
   - `bun run check`
+  - `bun test`
 - Full local flow from repo root (mandatory before pushing):
   - `./scripts/run-all-tests.sh`
 
 Optional local flow from repo root:
   - `cd gateway && bun install && bun run check && cd ../daemon && go test ./...`
+
+### Gateway runtime server (Bun)
+
+- Start gateway runtime HTTP server:
+  - `cd gateway`
+  - `bun run dev`
+- Health route:
+  - `GET /healthz`
+- Command ingress route:
+  - `POST /command` with JSON body `{ "input": "<provider> <chat_id> <request_id> <command> [...args]" }`
+- Artifact download route:
+  - `GET /downloads/<token>/<filename>`
+
+Runtime environment variables:
+- `CARRIER_DAEMON_BASE_URL` (default: `http://127.0.0.1:9090`)
+- `CARRIER_GATEWAY_HOST` (default: `127.0.0.1`)
+- `CARRIER_GATEWAY_PORT` (default: `8787`)
 
 #### Merge Queue
 - This repository supports GitHub Merge Queue for `main`.
