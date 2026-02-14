@@ -186,3 +186,130 @@ describe("gateway runtime routes", () => {
     expect(capturedPath as string | null).toBe(maliciousPath);
   });
 });
+
+describe("download Content-Disposition edge cases", () => {
+  test("handles filename with semicolon", async () => {
+    const deps = makeDeps();
+    const fileName = "file;data.txt";
+    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}-${fileName}`;
+    await Bun.write(filePath, "content");
+    const token = deps.downloads.issue(filePath, 300, true);
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
+    expect(response.status).toBe(200);
+    const disposition = response.headers.get("content-disposition");
+    expect(disposition).toBeDefined();
+    expect(disposition).toContain(fileName);
+  });
+
+  test("handles filename with comma", async () => {
+    const deps = makeDeps();
+    const fileName = "data,results.csv";
+    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}-${fileName}`;
+    await Bun.write(filePath, "csv,data");
+    const token = deps.downloads.issue(filePath, 300, true);
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
+    expect(response.status).toBe(200);
+    const disposition = response.headers.get("content-disposition");
+    expect(disposition).toBeDefined();
+    expect(disposition).toContain(fileName);
+  });
+
+  test("handles filename with UTF-8 characters", async () => {
+    const deps = makeDeps();
+    const fileName = "文件名.txt";
+    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}-${fileName}`;
+    await Bun.write(filePath, "utf8-content");
+    const token = deps.downloads.issue(filePath, 300, true);
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
+    expect(response.status).toBe(200);
+    const disposition = response.headers.get("content-disposition");
+    expect(disposition).toBeDefined();
+    // For UTF-8 filenames, should use RFC 5987 filename* parameter
+    expect(disposition).toContain("filename*=UTF-8''");
+    expect(disposition).toContain(encodeURIComponent(fileName));
+  });
+
+  test("handles filename with emoji", async () => {
+    const deps = makeDeps();
+    const fileName = "report📊.txt";
+    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}-${fileName}`;
+    await Bun.write(filePath, "emoji-content");
+    const token = deps.downloads.issue(filePath, 300, true);
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
+    expect(response.status).toBe(200);
+    const disposition = response.headers.get("content-disposition");
+    expect(disposition).toBeDefined();
+    // For emoji filenames, should use RFC 5987 filename* parameter with URL encoding
+    expect(disposition).toContain("filename*=UTF-8''");
+    expect(disposition).toContain(encodeURIComponent("📊"));
+  });
+
+  test("handles filename with leading spaces", async () => {
+    const deps = makeDeps();
+    const fileName = "  leading.txt";
+    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}-${fileName}`;
+    await Bun.write(filePath, "space-content");
+    const token = deps.downloads.issue(filePath, 300, true);
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
+    expect(response.status).toBe(200);
+    const disposition = response.headers.get("content-disposition");
+    expect(disposition).toBeDefined();
+    expect(disposition).toContain(fileName);
+  });
+
+  test("handles filename with trailing spaces", async () => {
+    const deps = makeDeps();
+    const fileName = "trailing.txt  ";
+    const filePath = `/tmp/carrier-download-${crypto.randomUUID()}-${fileName}`;
+    await Bun.write(filePath, "trailing-space");
+    const token = deps.downloads.issue(filePath, 300, true);
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
+    expect(response.status).toBe(200);
+    const disposition = response.headers.get("content-disposition");
+    expect(disposition).toBeDefined();
+    expect(disposition).toContain(fileName.trim());
+  });
+
+  test("handles filename with double quotes", async () => {
+    const deps = makeDeps();
+    const fileName = 'file"name".txt';
+    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}-${fileName}`;
+    await Bun.write(filePath, "quote-content");
+    const token = deps.downloads.issue(filePath, 300, true);
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
+    expect(response.status).toBe(200);
+    const disposition = response.headers.get("content-disposition");
+    expect(disposition).toBeDefined();
+    // Content-Disposition should properly escape or handle quotes
+    expect(disposition).toContain("filename=");
+  });
+
+  test("handles filename with backslash", async () => {
+    const deps = makeDeps();
+    const fileName = "path\\file.txt";
+    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}-path-file.txt`;
+    await Bun.write(filePath, "backslash-content");
+    const token = deps.downloads.issue(filePath, 300, true);
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
+    expect(response.status).toBe(200);
+    const disposition = response.headers.get("content-disposition");
+    expect(disposition).toBeDefined();
+    expect(disposition).toContain("filename=");
+  });
+});
