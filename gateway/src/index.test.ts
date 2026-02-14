@@ -40,6 +40,10 @@ describe("gateway parseInput", () => {
     expect(cmd.name).toBe("/logs");
     expect(cmd.args).toEqual(["openclaw", "200"]);
   });
+
+  test("returns parse error for unknown command", () => {
+    expect(() => parseInput("telegram 100 req-1 /foobar")).toThrow("unknown command: /foobar");
+  });
 });
 
 describe("gateway diagnose-consent routing", () => {

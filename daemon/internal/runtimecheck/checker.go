@@ -25,10 +25,10 @@ type Checker interface {
 }
 
 const (
-	IssueCodeWSL2Missing      = "E_WSL2_MISSING"
-	IssueCodeNPMMissing       = "E_NPM_MISSING"
-	IssueCodeGoMissing        = "E_GO_MISSING"
-	IssueCodeRuntimeTypeUnknown = "E_RUNTIME_TYPE_UNKNOWN"
+	IssueCodeWSL2Missing    = "E_WSL2_MISSING"
+	IssueCodeNPMMissing     = "E_NPM_MISSING"
+	IssueCodeGoMissing      = "E_GO_MISSING"
+	IssueCodeUnknownRuntime = "E_RUNTIME_TYPE_UNKNOWN"
 )
 
 type Issue struct {
@@ -117,7 +117,7 @@ func (c HostChecker) collectIssues(runtimeType manifest.RuntimeType) []Issue {
 		// No extra host tool requirement.
 	default:
 		issues = append(issues, Issue{
-			Code:    IssueCodeRuntimeTypeUnknown,
+			Code:    IssueCodeUnknownRuntime,
 			Message: fmt.Sprintf("unsupported runtime type: %s", runtimeType),
 		})
 	}
