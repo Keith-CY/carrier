@@ -53,4 +53,13 @@ describe("DownloadTokenStore", () => {
 
     expect(url).toBe(`/downloads/${tok.token}/artifact.zip`);
   });
+
+  test("toDownloadURL() uses full fileRef as filename when no slash exists", () => {
+    const store = new DownloadTokenStore();
+    const tok = store.issue("artifact.zip");
+
+    const url = store.toDownloadURL(tok);
+
+    expect(url).toBe(`/downloads/${tok.token}/artifact.zip`);
+  });
 });
