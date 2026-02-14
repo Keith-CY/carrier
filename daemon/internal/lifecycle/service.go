@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"carrier/daemon/internal/baseagent"
@@ -21,13 +22,14 @@ import (
 )
 
 var (
-	ErrAgentNotFound        = errors.New("agent not found")
-	ErrNotInstalled         = errors.New("agent is not installed")
-	ErrAlreadyRunning       = errors.New("agent already running")
-	ErrAlreadyStopped       = errors.New("agent already stopped")
-	ErrMissingRequiredEnv   = errors.New("missing required environment variables")
-	ErrPortConflict         = errors.New("port conflict detected")
-	ErrRuntimePrerequisites = errors.New("runtime prerequisites failed")
+	ErrAgentNotFound            = errors.New("agent not found")
+	ErrNotInstalled             = errors.New("agent is not installed")
+	ErrAlreadyRunning           = errors.New("agent already running")
+	ErrAlreadyStopped           = errors.New("agent already stopped")
+	ErrMissingRequiredEnv       = errors.New("missing required environment variables")
+	ErrPortConflict             = errors.New("port conflict detected")
+	ErrRuntimePrerequisites     = errors.New("runtime prerequisites failed")
+	ErrRemoteDiagnosisNotNeeded = errors.New("remote diagnosis is not required for this agent")
 )
 
 type Option func(*Service)
@@ -60,17 +62,29 @@ func WithNow(now func() time.Time) Option {
 	}
 }
 
+func WithIDGenerator(gen func(prefix string) string) Option {
+	return func(s *Service) {
+		if gen != nil {
+			s.idGenerator = gen
+		}
+	}
+}
+
 type Service struct {
 	mu          sync.RWMutex
 	states      map[string]AgentState
 	manifests   map[string]manifest.Manifest
 	logs        map[string][]string
+	handoffs    map[string]DiagnosisHandoff
+	auditLogs   []AuditLog
 	triager     baseagent.Triager
 	checker     runtimecheck.Checker
 	runner      commandexec.Runner
 	diagnoseDir string
 	logLimit    int
 	now         func() time.Time
+	idCounter   uint64
+	idGenerator func(prefix string) string
 }
 
 func NewService(triager baseagent.Triager, opts ...Option) *Service {
@@ -82,12 +96,18 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		states:      make(map[string]AgentState),
 		manifests:   make(map[string]manifest.Manifest),
 		logs:        make(map[string][]string),
+		handoffs:    make(map[string]DiagnosisHandoff),
+		auditLogs:   make([]AuditLog, 0, 128),
 		triager:     triager,
 		checker:     runtimecheck.NewHostChecker(),
 		runner:      commandexec.NewShellRunner(),
 		diagnoseDir: filepath.Join(os.TempDir(), "agentd-diagnose"),
 		logLimit:    1000,
 		now:         time.Now,
+	}
+	svc.idGenerator = func(prefix string) string {
+		next := atomic.AddUint64(&svc.idCounter, 1)
+		return fmt.Sprintf("%s-%d", prefix, next)
 	}
 	for _, opt := range opts {
 		opt(svc)
@@ -143,18 +163,21 @@ func (s *Service) Install(agentID string) error {
 	}
 
 	if err := s.checkRuntimePrerequisites(m); err != nil {
-		s.updateStateOnInstallError(state, err)
+		s.updateStateOnInstallError(agentID, err)
+		s.recordAudit("", "system", "install", agentID, AuditResultFailure, "E_RUNTIME_PREREQUISITES", err.Error())
 		return err
 	}
 
 	result, runErr := s.runner.Run(context.Background(), m.Runtime.Install.Command)
 	s.appendCommandLog(agentID, "install", m.Runtime.Install.Command, result, runErr)
 	if runErr != nil {
-		s.updateStateOnInstallError(state, runErr)
+		s.updateStateOnInstallError(agentID, runErr)
+		s.recordAudit("", "system", "install", agentID, AuditResultFailure, "E_INSTALL_FAILED", runErr.Error())
 		return runErr
 	}
 
 	s.mu.Lock()
+	state = s.states[agentID]
 	state.Install = InstallStateInstalled
 	state.Runtime = RuntimeStateStopped
 	state.Health = HealthStateUnknown
@@ -164,6 +187,7 @@ func (s *Service) Install(agentID string) error {
 	state.UpdatedAt = s.now()
 	s.states[agentID] = state
 	s.mu.Unlock()
+	s.recordAudit("", "system", "install", agentID, AuditResultSuccess, "", "install completed")
 
 	return nil
 }
@@ -181,15 +205,18 @@ func (s *Service) Start(agentID string) error {
 	}
 
 	if err := s.checkRuntimePrerequisites(m); err != nil {
-		s.updateStateOnStartError(state, err)
+		s.updateStateOnStartError(agentID, err)
+		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_RUNTIME_PREREQUISITES", err.Error())
 		return err
 	}
 	if err := s.validateRequiredEnv(m); err != nil {
-		s.updateStateOnStartError(state, err)
+		s.updateStateOnStartError(agentID, err)
+		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_ENV_MISSING", err.Error())
 		return err
 	}
 	if err := s.ensurePortsAvailable(m.Network.Ports); err != nil {
-		s.updateStateOnStartError(state, err)
+		s.updateStateOnStartError(agentID, err)
+		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_PORT_CONFLICT", err.Error())
 		return err
 	}
 
@@ -200,10 +227,12 @@ func (s *Service) Start(agentID string) error {
 		if triageErr == nil {
 			s.appendLog(agentID, fmt.Sprintf("triage summary: %s", triage.Summary))
 		}
+		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_START_FAILED", runErr.Error())
 		return runErr
 	}
 
 	s.mu.Lock()
+	state = s.states[agentID]
 	state.Runtime = RuntimeStateRunning
 	state.Health = HealthStateHealthy
 	state.LastError = ""
@@ -212,6 +241,7 @@ func (s *Service) Start(agentID string) error {
 	state.UpdatedAt = s.now()
 	s.states[agentID] = state
 	s.mu.Unlock()
+	s.recordAudit("", "system", "start", agentID, AuditResultSuccess, "", "start completed")
 
 	return nil
 }
@@ -229,20 +259,24 @@ func (s *Service) Stop(agentID string) error {
 	s.appendCommandLog(agentID, "stop", m.Runtime.Stop.Command, result, runErr)
 	if runErr != nil {
 		s.mu.Lock()
+		state = s.states[agentID]
 		state.LastError = runErr.Error()
 		state.UpdatedAt = s.now()
 		s.states[agentID] = state
 		s.mu.Unlock()
+		s.recordAudit("", "system", "stop", agentID, AuditResultFailure, "E_STOP_FAILED", runErr.Error())
 		return runErr
 	}
 
 	s.mu.Lock()
+	state = s.states[agentID]
 	state.Runtime = RuntimeStateStopped
 	state.Health = HealthStateUnknown
 	state.LastError = ""
 	state.UpdatedAt = s.now()
 	s.states[agentID] = state
 	s.mu.Unlock()
+	s.recordAudit("", "system", "stop", agentID, AuditResultSuccess, "", "stop completed")
 
 	return nil
 }
@@ -275,6 +309,26 @@ func (s *Service) Logs(agentID string, tail int) ([]string, error) {
 	return append([]string(nil), logs[start:]...), nil
 }
 
+func (s *Service) AuditLogs() []AuditLog {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]AuditLog(nil), s.auditLogs...)
+}
+
+func (s *Service) DiagnosisHandoffs() []DiagnosisHandoff {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]DiagnosisHandoff, 0, len(s.handoffs))
+	for _, h := range s.handoffs {
+		out = append(out, h)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out
+}
+
 func (s *Service) Diagnose(agentID string) (string, error) {
 	m, state, err := s.getManifestAndState(agentID)
 	if err != nil {
@@ -286,22 +340,61 @@ func (s *Service) Diagnose(agentID string) (string, error) {
 	s.mu.RUnlock()
 
 	if err := os.MkdirAll(s.diagnoseDir, 0o755); err != nil {
+		s.recordAudit("", "system", "diagnose", agentID, AuditResultFailure, "E_DIAG_DIR", err.Error())
 		return "", fmt.Errorf("create diagnose dir: %w", err)
 	}
 
 	fileName := fmt.Sprintf("%s-diagnose-%s.zip", agentID, s.now().UTC().Format("2006-01-02T15-04-05Z"))
 	filePath := filepath.Join(s.diagnoseDir, fileName)
 	if err := s.writeDiagnoseZip(filePath, m, state, logs); err != nil {
+		s.recordAudit("", "system", "diagnose", agentID, AuditResultFailure, "E_DIAG_WRITE", err.Error())
 		return "", err
 	}
 
 	s.mu.Lock()
+	state = s.states[agentID]
 	state.LastDiagnoseFile = filePath
 	state.UpdatedAt = s.now()
 	s.states[agentID] = state
 	s.mu.Unlock()
+	s.recordAudit("", "system", "diagnose", agentID, AuditResultSuccess, "", filePath)
 
 	return filePath, nil
+}
+
+func (s *Service) CreateRemoteDiagnosisHandoff(agentID string, consent bool, actor, requestID string) (DiagnosisHandoff, error) {
+	_, state, err := s.getManifestAndState(agentID)
+	if err != nil {
+		return DiagnosisHandoff{}, err
+	}
+	if !state.NeedsRemoteDiagnosis {
+		s.recordAudit(requestID, actor, "remote_diagnosis_consent", agentID, AuditResultFailure, "E_REMOTE_DIAG_NOT_NEEDED", "remote diagnosis not required")
+		return DiagnosisHandoff{}, ErrRemoteDiagnosisNotNeeded
+	}
+
+	handoff := DiagnosisHandoff{
+		ID:          s.idGenerator("handoff"),
+		AgentID:     agentID,
+		Consent:     consent,
+		ArtifactRef: state.LastDiagnoseFile,
+		CreatedAt:   s.now(),
+	}
+	if consent {
+		handoff.Status = HandoffStatusPending
+	} else {
+		handoff.Status = HandoffStatusDeclined
+	}
+
+	s.mu.Lock()
+	s.handoffs[handoff.ID] = handoff
+	s.mu.Unlock()
+
+	result := AuditResultSuccess
+	if !consent {
+		result = AuditResultFailure
+	}
+	s.recordAudit(requestID, actor, "remote_diagnosis_consent", agentID, result, "", fmt.Sprintf("consent=%t handoff_id=%s", consent, handoff.ID))
+	return handoff, nil
 }
 
 func (s *Service) HandleFailure(ctx context.Context, agentID, lastError string) (baseagent.TriageResult, error) {
@@ -331,29 +424,38 @@ func (s *Service) HandleFailure(ctx context.Context, agentID, lastError string) 
 	state.UpdatedAt = s.now()
 	s.states[agentID] = state
 	s.mu.Unlock()
+	s.recordAudit("", "base-agent", "triage", agentID, AuditResultSuccess, "", triage.Summary)
 
 	return triage, nil
 }
 
-func (s *Service) updateStateOnInstallError(state AgentState, err error) {
+func (s *Service) updateStateOnInstallError(agentID string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	state, ok := s.states[agentID]
+	if !ok {
+		return
+	}
 	state.Install = InstallStateBroken
 	state.Runtime = RuntimeStateStopped
 	state.Health = HealthStateUnhealthy
 	state.LastError = err.Error()
 	state.UpdatedAt = s.now()
-	s.states[state.ID] = state
+	s.states[agentID] = state
 }
 
-func (s *Service) updateStateOnStartError(state AgentState, err error) {
+func (s *Service) updateStateOnStartError(agentID string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	state, ok := s.states[agentID]
+	if !ok {
+		return
+	}
 	state.Runtime = RuntimeStateCrashing
 	state.Health = HealthStateUnhealthy
 	state.LastError = err.Error()
 	state.UpdatedAt = s.now()
-	s.states[state.ID] = state
+	s.states[agentID] = state
 }
 
 func (s *Service) checkRuntimePrerequisites(m manifest.Manifest) error {
@@ -429,6 +531,25 @@ func (s *Service) appendLog(agentID, line string) {
 		entries = entries[len(entries)-s.logLimit:]
 	}
 	s.logs[agentID] = entries
+}
+
+func (s *Service) recordAudit(requestID, actor, action, target string, result AuditResult, errorCode, message string) {
+	if actor == "" {
+		actor = "system"
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.auditLogs = append(s.auditLogs, AuditLog{
+		RequestID: requestID,
+		Actor:     actor,
+		Action:    action,
+		Target:    target,
+		Result:    result,
+		ErrorCode: errorCode,
+		Message:   message,
+		Timestamp: s.now(),
+	})
 }
 
 func (s *Service) writeDiagnoseZip(path string, m manifest.Manifest, state AgentState, logs []string) error {
