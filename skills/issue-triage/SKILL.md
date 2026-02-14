@@ -32,5 +32,5 @@ Guide agents to periodically check open issues and pick up work that needs atten
 6. **Never push directly to main or develop**
 7. **Never self-merge** — wait for maintainer review
 
-## Auto-Triage Cadence
-A cron job runs every 15 minutes to scan issues and act on lightweight ones.
+## Automation Trigger
+This skill is intended to be executed by repository automation (for example cron-driven sweeps). Keep cadence details in the automation configuration/prompt as the source of truth.
