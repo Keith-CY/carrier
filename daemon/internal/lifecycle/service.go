@@ -26,17 +26,19 @@ import (
 )
 
 var (
-	ErrAgentNotFound            = errors.New("agent not found")
-	ErrNotInstalled             = errors.New("agent is not installed")
-	ErrAlreadyRunning           = errors.New("agent already running")
-	ErrAlreadyStopped           = errors.New("agent already stopped")
-	ErrCrashLoop                = errors.New("agent is in crash loop cooldown")
-	ErrAgentRunning             = errors.New("agent is running; stop it before upgrading")
-	ErrUpgradeNotSupported      = errors.New("agent manifest does not define an upgrade command")
-	ErrMissingRequiredEnv       = errors.New("missing required environment variables")
-	ErrPortConflict             = errors.New("port conflict detected")
-	ErrRuntimePrerequisites     = errors.New("runtime prerequisites failed")
-	ErrRemoteDiagnosisNotNeeded = errors.New("remote diagnosis is not required for this agent")
+	ErrAgentNotFound              = errors.New("agent not found")
+	ErrNotInstalled               = errors.New("agent is not installed")
+	ErrAlreadyRunning             = errors.New("agent already running")
+	ErrAlreadyStopped             = errors.New("agent already stopped")
+	ErrCrashLoop                  = errors.New("agent is in crash loop cooldown")
+	ErrAgentRunning               = errors.New("agent is running; stop it before upgrading")
+	ErrUpgradeNotSupported        = errors.New("agent manifest does not define an upgrade command")
+	ErrMissingRequiredEnv         = errors.New("missing required environment variables")
+	ErrPortConflict               = errors.New("port conflict detected")
+	ErrRuntimePrerequisites       = errors.New("runtime prerequisites failed")
+	ErrRemoteDiagnosisNotNeeded   = errors.New("remote diagnosis is not required for this agent")
+	ErrUpgradeFailed              = errors.New("agent upgrade failed")
+	ErrUpgradeStrategyUnsupported = errors.New("upgrade strategy is not supported")
 )
 
 const (
@@ -119,23 +121,23 @@ func WithHandoffRetention(ttl time.Duration) Option {
 }
 
 type Service struct {
-	mu            sync.RWMutex
-	states        map[string]AgentState
-	manifests     map[string]manifest.Manifest
-	memoryLinks   map[string][]string
-	logs          map[string][]string
-	handoffs      map[string]DiagnosisHandoff
-	auditLogs     []AuditLog
-	auditLogLimit int
-	triager       baseagent.Triager
-	checker       runtimecheck.Checker
-	runner        commandexec.Runner
-	diagnoseDir   string
-	logLimit      int
-	handoffTTL    time.Duration
-	now           func() time.Time
-	idCounter     uint64
-	idGenerator   func(prefix string) string
+	mu                 sync.RWMutex
+	states             map[string]AgentState
+	manifests          map[string]manifest.Manifest
+	memoryLinks        map[string][]string
+	logs               map[string][]string
+	handoffs           map[string]DiagnosisHandoff
+	auditLogs          []AuditLog
+	auditLogLimit      int
+	triager            baseagent.Triager
+	checker            runtimecheck.Checker
+	runner             commandexec.Runner
+	diagnoseDir        string
+	logLimit           int
+	handoffTTL         time.Duration
+	now                func() time.Time
+	idCounter          uint64
+	idGenerator        func(prefix string) string
 	restarts           map[string][]time.Time
 	cooldowns          map[string]time.Time
 	crashLoopThreshold int
@@ -149,20 +151,20 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 	}
 
 	svc := &Service{
-		states:        make(map[string]AgentState),
-		manifests:     make(map[string]manifest.Manifest),
-		memoryLinks:   make(map[string][]string),
-		logs:          make(map[string][]string),
-		handoffs:      make(map[string]DiagnosisHandoff),
-		auditLogs:     make([]AuditLog, 0, 128),
-		auditLogLimit: 1000,
-		triager:       triager,
-		checker:       runtimecheck.NewHostChecker(),
-		runner:        commandexec.NewShellRunner(),
-		diagnoseDir:   filepath.Join(os.TempDir(), "agentd-diagnose"),
-		logLimit:      1000,
-		handoffTTL:    24 * time.Hour,
-		now:           time.Now,
+		states:             make(map[string]AgentState),
+		manifests:          make(map[string]manifest.Manifest),
+		memoryLinks:        make(map[string][]string),
+		logs:               make(map[string][]string),
+		handoffs:           make(map[string]DiagnosisHandoff),
+		auditLogs:          make([]AuditLog, 0, 128),
+		auditLogLimit:      1000,
+		triager:            triager,
+		checker:            runtimecheck.NewHostChecker(),
+		runner:             commandexec.NewShellRunner(),
+		diagnoseDir:        filepath.Join(os.TempDir(), "agentd-diagnose"),
+		logLimit:           1000,
+		handoffTTL:         24 * time.Hour,
+		now:                time.Now,
 		restarts:           make(map[string][]time.Time),
 		cooldowns:          make(map[string]time.Time),
 		crashLoopThreshold: defaultCrashLoopThreshold,
@@ -331,6 +333,92 @@ func (s *Service) Start(agentID string) error {
 	return nil
 }
 
+func (s *Service) Upgrade(agentID string) (UpgradeResult, error) {
+	m, state, err := s.getManifestAndState(agentID)
+	if err != nil {
+		return UpgradeResult{}, err
+	}
+	fromVersion := state.Version
+	if state.Install != InstallStateInstalled {
+		return UpgradeResult{}, ErrNotInstalled
+	}
+	if state.Runtime == RuntimeStateRunning {
+		return UpgradeResult{}, ErrAgentRunning
+	}
+	if strings.TrimSpace(m.Runtime.Upgrade.Command) == "" {
+		return UpgradeResult{}, ErrUpgradeNotSupported
+	}
+
+	strategy := strings.TrimSpace(m.Upgrade.Strategy)
+	if strategy == "" {
+		strategy = manifest.UpgradeStrategyInPlaceOrReinstall
+	}
+	if strategy != manifest.UpgradeStrategyInPlaceOrReinstall {
+		return UpgradeResult{}, fmt.Errorf("%w: unsupported strategy %q; supported: %q", ErrUpgradeStrategyUnsupported, strategy, manifest.UpgradeStrategyInPlaceOrReinstall)
+	}
+
+	toVersion, err := nextPatchVersion(fromVersion)
+	if err != nil {
+		s.updateStateOnUpgradeError(agentID, fmt.Errorf("upgrade target version calculation failed: %w", err))
+		s.recordAudit("", "system", "upgrade", agentID, AuditResultFailure, "E_UPGRADE_VERSION", err.Error())
+		return UpgradeResult{AgentID: agentID, FromVersion: fromVersion}, err
+	}
+
+	if err := s.checkRuntimePrerequisites(m); err != nil {
+		updateErr := fmt.Errorf("%w: %v", ErrUpgradeFailed, err)
+		s.updateStateOnUpgradeError(agentID, updateErr)
+		s.recordAudit("", "system", "upgrade", agentID, AuditResultFailure, "E_UPGRADE_PREREQUISITES", err.Error())
+		return UpgradeResult{AgentID: agentID, FromVersion: fromVersion}, updateErr
+	}
+
+	attachments := s.getMemoryAttachments(agentID)
+	backupPath, backupErr := s.createUpgradeBackup(agentID, m, state, attachments)
+	if backupErr != nil {
+		updateErr := fmt.Errorf("%w: backup failed: %v", ErrUpgradeFailed, backupErr)
+		s.updateStateOnUpgradeError(agentID, updateErr)
+		s.recordAudit("", "system", "upgrade", agentID, AuditResultFailure, "E_UPGRADE_BACKUP", backupErr.Error())
+		return UpgradeResult{AgentID: agentID, FromVersion: fromVersion}, updateErr
+	}
+	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_start backup=%q command=%q", backupPath, m.Runtime.Upgrade.Command))
+
+	result, runErr := s.runner.Run(context.Background(), m.Runtime.Upgrade.Command)
+	s.appendCommandLog(agentID, "upgrade", m.Runtime.Upgrade.Command, result, runErr)
+	if runErr != nil {
+		updateErr := s.formatUpgradeFailure(runErr, backupPath)
+		s.updateStateOnUpgradeError(agentID, updateErr)
+		s.recordAudit("", "system", "upgrade", agentID, AuditResultFailure, "E_UPGRADE_FAILED", fmt.Sprintf("upgrade_failure backup=%q error=%q", backupPath, runErr.Error()))
+		return UpgradeResult{
+			AgentID:     agentID,
+			FromVersion: fromVersion,
+			ToVersion:   fromVersion,
+			BackupPath:  backupPath,
+		}, updateErr
+	}
+
+	s.mu.Lock()
+	state = s.states[agentID]
+	state.Version = toVersion
+	state.LastError = ""
+	state.Runtime = RuntimeStateStopped
+	state.Health = HealthStateUnknown
+	state.LastTriageSummary = ""
+	state.NeedsRemoteDiagnosis = false
+	state.UpdatedAt = s.now()
+	s.states[agentID] = state
+	s.restarts[agentID] = nil
+	delete(s.cooldowns, agentID)
+	s.memoryLinks[agentID] = append([]string(nil), attachments...)
+	s.mu.Unlock()
+
+	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_success from=%s to=%s backup=%q", fromVersion, toVersion, backupPath))
+	return UpgradeResult{
+		AgentID:     agentID,
+		FromVersion: fromVersion,
+		ToVersion:   toVersion,
+		BackupPath:  backupPath,
+	}, nil
+}
+
 func (s *Service) Stop(agentID string) error {
 	m, state, err := s.getManifestAndState(agentID)
 	if err != nil {
@@ -363,53 +451,6 @@ func (s *Service) Stop(agentID string) error {
 	s.mu.Unlock()
 	s.recordAudit("", "system", "stop", agentID, AuditResultSuccess, "", "stop completed")
 
-	return nil
-}
-
-func (s *Service) Upgrade(agentID string) error {
-	m, state, err := s.getManifestAndState(agentID)
-	if err != nil {
-		return err
-	}
-	if state.Install != InstallStateInstalled {
-		return ErrNotInstalled
-	}
-	if state.Runtime == RuntimeStateRunning {
-		return ErrAgentRunning
-	}
-	if strings.TrimSpace(m.Runtime.Upgrade.Command) == "" {
-		return ErrUpgradeNotSupported
-	}
-
-	attachments := s.getMemoryAttachments(agentID)
-	backupPath, err := s.createUpgradeBackup(agentID, m, state, attachments)
-	if err != nil {
-		return err
-	}
-
-	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_start backup=%q command=%q", backupPath, m.Runtime.Upgrade.Command))
-
-	result, runErr := s.runner.Run(context.Background(), m.Runtime.Upgrade.Command)
-	s.appendCommandLog(agentID, "upgrade", m.Runtime.Upgrade.Command, result, runErr)
-	if runErr != nil {
-		s.recordAudit("", "system", "upgrade", agentID, AuditResultFailure, "E_UPGRADE_FAILED", fmt.Sprintf("upgrade_failure backup=%q error=%q", backupPath, runErr.Error()))
-		return fmt.Errorf("upgrade failed; use backup at %s for manual rollback guidance: %w", backupPath, runErr)
-	}
-
-	s.mu.Lock()
-	state = s.states[agentID]
-	state.Runtime = RuntimeStateStopped
-	state.Health = HealthStateUnknown
-	state.LastError = ""
-	state.LastTriageSummary = ""
-	state.NeedsRemoteDiagnosis = false
-	state.UpdatedAt = s.now()
-	s.states[agentID] = state
-	s.restarts[agentID] = nil
-	delete(s.cooldowns, agentID)
-	s.mu.Unlock()
-
-	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_success backup=%q", backupPath))
 	return nil
 }
 
@@ -624,11 +665,54 @@ func (s *Service) updateStateOnStartError(agentID string, err error) {
 	s.states[agentID] = state
 }
 
+func (s *Service) updateStateOnUpgradeError(agentID string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.states[agentID]
+	if !ok {
+		return
+	}
+	state.Health = HealthStateUnhealthy
+	state.LastError = err.Error()
+	state.UpdatedAt = s.now()
+	s.states[agentID] = state
+}
+
 func (s *Service) checkRuntimePrerequisites(m manifest.Manifest) error {
 	if err := s.checker.Check(m); err != nil {
 		return fmt.Errorf("%w: %v", ErrRuntimePrerequisites, err)
 	}
 	return nil
+}
+
+func (s *Service) formatUpgradeFailure(runErr error, backupPath string) error {
+	detail := fmt.Sprintf("upgrade failed: %v", runErr)
+	if backupPath != "" {
+		return fmt.Errorf("%s. backup captured at %s; manual rollback guidance: restore from this backup path before retrying", detail, backupPath)
+	}
+	return fmt.Errorf("%s. no backup was captured; manual rollback guidance unavailable", detail)
+}
+
+func nextPatchVersion(version string) (string, error) {
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return "", fmt.Errorf("invalid version format %q, expected MAJOR.MINOR.PATCH", version)
+	}
+
+	patch, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return "", fmt.Errorf("invalid patch version %q: %w", parts[2], err)
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return "", fmt.Errorf("invalid major version %q: %w", parts[0], err)
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("invalid minor version %q: %w", parts[1], err)
+	}
+
+	return fmt.Sprintf("%d.%d.%d", major, minor, patch+1), nil
 }
 
 func (s *Service) validateRequiredEnv(m manifest.Manifest) error {

@@ -41,6 +41,13 @@ type AgentState struct {
 	UpdatedAt            time.Time
 }
 
+type UpgradeResult struct {
+	AgentID     string
+	FromVersion string
+	ToVersion   string
+	BackupPath  string
+}
+
 type HandoffStatus string
 
 const (

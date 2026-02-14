@@ -111,6 +111,34 @@ func TestValidateRejectsInvalidRuntimeType(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsValidUpgradeSpec(t *testing.T) {
+	m := validManifestForTest()
+	m.Upgrade = UpgradeSpec{
+		Channel:  "stable",
+		Strategy: UpgradeStrategyInPlaceOrReinstall,
+	}
+
+	if err := m.Validate(); err != nil {
+		t.Fatalf("expected valid upgrade manifest, got error: %v", err)
+	}
+}
+
+func TestValidateRejectsUnsupportedUpgradeStrategy(t *testing.T) {
+	m := validManifestForTest()
+	m.Upgrade = UpgradeSpec{
+		Channel:  "stable",
+		Strategy: "unsupported-strategy",
+	}
+
+	err := m.Validate()
+	if err == nil {
+		t.Fatal("expected error for unsupported upgrade strategy")
+	}
+	if !strings.Contains(err.Error(), "upgrade.strategy") {
+		t.Fatalf("expected upgrade.strategy in error, got %q", err.Error())
+	}
+}
+
 func TestValidateRejectsDuplicateMemoryType(t *testing.T) {
 	m := Manifest{
 		ID:      "openclaw",

@@ -28,6 +28,44 @@ jobs:
 
             const eventName = context.eventName;
             const payload = context.payload;
+            const token = process.env.CARRIER_PROJECTS_TOKEN || process.env.GITHUB_TOKEN;
+            const gh = token ? github.getOctokit(token) : github;
+
+            const preflightQuery = `query($projectId: ID!) {
+              node(id: $projectId) {
+                ... on ProjectV2 {
+                  id
+                  viewerCanUpdate
+                  fields(first: 20) {
+                    nodes {
+                      ... on ProjectV2Field {
+                        id
+                        name
+                      }
+                    }
+                  }
+                }
+              }
+            }`;
+
+            const preflight = await gh.graphql(preflightQuery, { projectId });
+            if (!preflight?.node) {
+              core.setFailed(`Unable to read project ${projectId}. Verify the token and projectId are valid.`);
+              return;
+            }
+
+            if (!preflight.node.viewerCanUpdate) {
+              core.setFailed([
+                'Project token does not have write access for this Project.',
+                'Use CARRIER_PROJECTS_TOKEN with project:write scope, then re-run.',
+              ].join(' '));
+              return;
+            }
+
+            if (!preflight.node.fields?.nodes?.some(field => field.id === statusFieldId)) {
+              core.setFailed(`Project status field ${statusFieldId} is not available or token lacks field permissions.`);
+              return;
+            }
 
             let contentId;
             let targetStatusId;
@@ -71,7 +109,7 @@ jobs:
                 }
               }`;
 
-              const data = await github.graphql(query, { projectId, after: cursor });
+            const data = await gh.graphql(query, { projectId, after: cursor });
               const project = data.node;
 
               const found = project.items.nodes.find((item) => {
@@ -103,7 +141,7 @@ jobs:
                 }
               }`;
 
-              const addResp = await github.graphql(addMutation, { projectId, contentId });
+              const addResp = await gh.graphql(addMutation, { projectId, contentId });
               return addResp.addProjectV2ItemById.item.id;
             };
 
@@ -119,7 +157,7 @@ jobs:
               }
             }`;
 
-            await github.graphql(updateMutation, {
+            await gh.graphql(updateMutation, {
               projectId,
               itemId: finalItemId,
               fieldId: statusFieldId,

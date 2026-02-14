@@ -22,6 +22,10 @@ const (
 	MemoryTypePublic   MemoryType = "public"
 )
 
+const (
+	UpgradeStrategyInPlaceOrReinstall = "in_place_or_reinstall"
+)
+
 type Manifest struct {
 	ID          string        `json:"id"`
 	Name        string        `json:"name"`
@@ -105,6 +109,9 @@ func (m Manifest) Validate() error {
 	if err := validateEnv(m.Env); err != nil {
 		return err
 	}
+	if err := validateUpgrade(m.Upgrade); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -169,6 +176,24 @@ func validateMemory(m MemorySpec) error {
 			return fmt.Errorf("memory.supports contains duplicate type: %q", t)
 		}
 		seen[t] = struct{}{}
+	}
+
+	return nil
+}
+
+func validateUpgrade(u UpgradeSpec) error {
+	if u.Channel == "" && u.Strategy == "" {
+		return nil
+	}
+
+	if strings.TrimSpace(u.Channel) == "" {
+		return errors.New("upgrade.channel is required when upgrade strategy is provided")
+	}
+	if strings.TrimSpace(u.Strategy) == "" {
+		return errors.New("upgrade.strategy is required when upgrade channel is provided")
+	}
+	if u.Strategy != UpgradeStrategyInPlaceOrReinstall {
+		return fmt.Errorf("upgrade.strategy %q is unsupported; supported: %q", u.Strategy, UpgradeStrategyInPlaceOrReinstall)
 	}
 
 	return nil
