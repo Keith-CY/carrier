@@ -43,7 +43,7 @@ See `CONTRIBUTING.md` for command examples and required process.
 ## Installation and testing
 
 ### Prerequisites
-- Go toolchain (1.21+)
+- Go toolchain (see `daemon/go.mod` for the exact version; currently 1.21)
 - Bun (for gateway TypeScript tasks)
 
 ### Install
