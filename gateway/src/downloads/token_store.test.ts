@@ -37,6 +37,12 @@ describe("DownloadTokenStore", () => {
     expect(store.consume(tok.token)).toBeNull();
   });
 
+  test("consume() unknown token returns null", () => {
+    const store = new DownloadTokenStore(() => new Date("2026-01-01T00:00:00Z"));
+
+    expect(store.consume("not-a-real-token")).toBeNull();
+  });
+
   test("single-use token consumed twice → second returns null", () => {
     const store = new DownloadTokenStore(() => new Date("2026-01-01T00:00:00Z"));
     const tok = store.issue("file.txt", 300, true);
