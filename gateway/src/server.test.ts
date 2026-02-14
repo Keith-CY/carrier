@@ -496,3 +496,146 @@ describe("port resolution fallback behavior", () => {
     }
   });
 });
+
+describe("HTTP method mismatch handling", () => {
+  test("rejects POST on healthz endpoint", async () => {
+    const deps = makeDeps();
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request("http://gateway.local/healthz", {
+      method: "POST",
+    }));
+    
+    expect(response.status).toBe(404);
+    const payload = await response.json() as { errorCode?: string };
+    expect(payload.errorCode).toBe("E_NOT_FOUND");
+  });
+
+  test("rejects PUT on healthz endpoint", async () => {
+    const deps = makeDeps();
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request("http://gateway.local/healthz", {
+      method: "PUT",
+    }));
+    
+    expect(response.status).toBe(404);
+    const payload = await response.json() as { errorCode?: string };
+    expect(payload.errorCode).toBe("E_NOT_FOUND");
+  });
+
+  test("rejects DELETE on healthz endpoint", async () => {
+    const deps = makeDeps();
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request("http://gateway.local/healthz", {
+      method: "DELETE",
+    }));
+    
+    expect(response.status).toBe(404);
+    const payload = await response.json() as { errorCode?: string };
+    expect(payload.errorCode).toBe("E_NOT_FOUND");
+  });
+
+  test("rejects GET on command endpoint", async () => {
+    const deps = makeDeps();
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request("http://gateway.local/command", {
+      method: "GET",
+    }));
+    
+    expect(response.status).toBe(404);
+    const payload = await response.json() as { errorCode?: string };
+    expect(payload.errorCode).toBe("E_NOT_FOUND");
+  });
+
+  test("rejects PUT on command endpoint", async () => {
+    const deps = makeDeps();
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request("http://gateway.local/command", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: "telegram 100 req-1 /agents" }),
+    }));
+    
+    expect(response.status).toBe(404);
+    const payload = await response.json() as { errorCode?: string };
+    expect(payload.errorCode).toBe("E_NOT_FOUND");
+  });
+
+  test("rejects DELETE on command endpoint", async () => {
+    const deps = makeDeps();
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request("http://gateway.local/command", {
+      method: "DELETE",
+    }));
+    
+    expect(response.status).toBe(404);
+    const payload = await response.json() as { errorCode?: string };
+    expect(payload.errorCode).toBe("E_NOT_FOUND");
+  });
+
+  test("rejects POST on download endpoint", async () => {
+    const deps = makeDeps();
+    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}.txt`;
+    await Bun.write(filePath, "test-content");
+    const token = deps.downloads.issue(filePath, 300, false);
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`, {
+      method: "POST",
+    }));
+    
+    expect(response.status).toBe(404);
+    const payload = await response.json() as { errorCode?: string };
+    expect(payload.errorCode).toBe("E_NOT_FOUND");
+  });
+
+  test("rejects PUT on download endpoint", async () => {
+    const deps = makeDeps();
+    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}.txt`;
+    await Bun.write(filePath, "test-content");
+    const token = deps.downloads.issue(filePath, 300, false);
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`, {
+      method: "PUT",
+    }));
+    
+    expect(response.status).toBe(404);
+    const payload = await response.json() as { errorCode?: string };
+    expect(payload.errorCode).toBe("E_NOT_FOUND");
+  });
+
+  test("rejects DELETE on download endpoint", async () => {
+    const deps = makeDeps();
+    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}.txt`;
+    await Bun.write(filePath, "test-content");
+    const token = deps.downloads.issue(filePath, 300, false);
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`, {
+      method: "DELETE",
+    }));
+    
+    expect(response.status).toBe(404);
+    const payload = await response.json() as { errorCode?: string };
+    expect(payload.errorCode).toBe("E_NOT_FOUND");
+  });
+
+  test("rejects PATCH on unknown route", async () => {
+    const deps = makeDeps();
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request("http://gateway.local/unknown", {
+      method: "PATCH",
+    }));
+    
+    expect(response.status).toBe(404);
+    const payload = await response.json() as { errorCode?: string };
+    expect(payload.errorCode).toBe("E_NOT_FOUND");
+  });
+});
