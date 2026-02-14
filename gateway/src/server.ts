@@ -193,6 +193,13 @@ async function handleDownloadRequest(
 }
 
 async function defaultReadFile(fileRef: string): Promise<Blob | null> {
+  // Validate path to prevent traversal attacks - reject relative paths and .. components
+  // Current callers are server-controlled, but this guards against future misuse
+  if (!fileRef.startsWith("/") || fileRef.includes("/../") || fileRef.endsWith("/..")) {
+    console.warn(`[security] rejected potentially unsafe fileRef: ${fileRef}`);
+    return null;
+  }
+  
   const file = Bun.file(fileRef);
   if (!(await file.exists())) {
     return null;
