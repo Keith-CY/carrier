@@ -24,7 +24,7 @@ Guide agents to periodically check open issues and pick up work that needs atten
 - Anything touching security-critical paths without clear spec
 
 ## Handling Lightweight Issues
-1. Self-assign: `gh issue edit <number> --repo Keith-CY/carrier --add-assignee dev01lay2`
+1. Self-assign: `gh issue edit <number> --repo Keith-CY/carrier --add-assignee @me`
 2. Create worktree: `git worktree add /tmp/carrier-issue-<N> -b codex/issue-<N>-<description> origin/main`
 3. Implement changes, run tests
 4. Push and create PR: `gh pr create --repo Keith-CY/carrier --base main`
