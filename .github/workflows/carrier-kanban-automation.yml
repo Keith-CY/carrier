@@ -1,0 +1,127 @@
+name: Carrier Kanban Sync
+
+on:
+  issues:
+    types: [opened, reopened, closed]
+  pull_request:
+    types: [opened, reopened, closed]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  project: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync issue/pr to Projects Kanban
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const projectId = 'PVT_kwHOAG7zoc4BPLc6';
+            const statusFieldId = 'PVTSSF_lAHOAG7zoc4BPLc6zg9qf3Q';
+            const optionTodo = 'f75ad846';
+            const optionInProgress = '47fc9ee4';
+            const optionDone = '98236657';
+
+            const eventName = context.eventName;
+            const payload = context.payload;
+
+            let contentId;
+            let targetStatusId;
+
+            if (eventName === 'issues') {
+              const issue = payload.issue;
+              contentId = issue && issue.node_id;
+              targetStatusId = issue.state === 'closed' ? optionDone : optionTodo;
+            } else if (eventName === 'pull_request') {
+              const pr = payload.pull_request;
+              contentId = pr && pr.node_id;
+              targetStatusId = (pr.merged || pr.state === 'closed') ? optionDone : optionInProgress;
+            } else {
+              return;
+            }
+
+            if (!contentId || !targetStatusId) {
+              core.warning('Missing contentId or targetStatusId.');
+              return;
+            }
+
+            const findProjectItem = async (cursor = null) => {
+              const query = `query($projectId: ID!, $after: String) {
+                node(id: $projectId) {
+                  ... on ProjectV2 {
+                    items(first: 100, after: $after) {
+                      nodes {
+                        id
+                        content {
+                          __typename
+                          ... on Issue { id }
+                          ... on PullRequest { id }
+                        }
+                      }
+                      pageInfo {
+                        hasNextPage
+                        endCursor
+                      }
+                    }
+                  }
+                }
+              }`;
+
+              const data = await github.graphql(query, { projectId, after: cursor });
+              const project = data.node;
+
+              const found = project.items.nodes.find((item) => {
+                const content = item.content;
+                return content && content.id === contentId;
+              });
+
+              if (found) {
+                return found.id;
+              }
+
+              if (project.items.pageInfo.hasNextPage) {
+                return findProjectItem(project.items.pageInfo.endCursor);
+              }
+
+              return null;
+            };
+
+            const itemId = await findProjectItem();
+
+            const ensureProjectItem = async () => {
+              if (itemId) {
+                return itemId;
+              }
+
+              const addMutation = `mutation($projectId: ID!, $contentId: ID!) {
+                addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
+                  item { id }
+                }
+              }`;
+
+              const addResp = await github.graphql(addMutation, { projectId, contentId });
+              return addResp.addProjectV2ItemById.item.id;
+            };
+
+            const finalItemId = await ensureProjectItem();
+            const updateMutation = `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $valueId: String!) {
+              updateProjectV2ItemFieldValue(input: {
+                projectId: $projectId,
+                itemId: $itemId,
+                fieldId: $fieldId,
+                value: { singleSelectOptionId: $valueId }
+              }) {
+                projectV2Item { id }
+              }
+            }`;
+
+            await github.graphql(updateMutation, {
+              projectId,
+              itemId: finalItemId,
+              fieldId: statusFieldId,
+              valueId: targetStatusId,
+            });
