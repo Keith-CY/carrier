@@ -251,7 +251,7 @@ func (s *Service) ListAgents() []AgentState {
 	return out
 }
 
-func (s *Service) Install(agentID string) error {
+func (s *Service) Install(ctx context.Context, agentID string) error {
 	m, state, err := s.getManifestAndState(agentID)
 	if err != nil {
 		return err
@@ -263,7 +263,7 @@ func (s *Service) Install(agentID string) error {
 		return err
 	}
 
-	result, runErr := s.runner.Run(context.Background(), m.Runtime.Install.Command)
+	result, runErr := s.runner.Run(ctx, m.Runtime.Install.Command)
 	s.appendCommandLog(agentID, "install", m.Runtime.Install.Command, result, runErr)
 	if runErr != nil {
 		s.updateStateOnInstallError(agentID, runErr)
@@ -287,7 +287,7 @@ func (s *Service) Install(agentID string) error {
 	return nil
 }
 
-func (s *Service) Start(agentID string) error {
+func (s *Service) Start(ctx context.Context, agentID string) error {
 	m, state, err := s.getManifestAndState(agentID)
 	if err != nil {
 		return err
@@ -330,10 +330,10 @@ func (s *Service) Start(agentID string) error {
 		}
 	}
 
-	result, runErr := s.runner.Run(context.Background(), m.Runtime.Start.Command)
+	result, runErr := s.runner.Run(ctx, m.Runtime.Start.Command)
 	s.appendCommandLog(agentID, "start", m.Runtime.Start.Command, result, runErr)
 	if runErr != nil {
-		triage, triageErr := s.HandleFailure(context.Background(), agentID, runErr.Error())
+		triage, triageErr := s.HandleFailure(ctx, agentID, runErr.Error())
 		if triageErr == nil {
 			s.appendLog(agentID, fmt.Sprintf("triage summary: %s", triage.Summary))
 		}
@@ -362,7 +362,7 @@ func (s *Service) Start(agentID string) error {
 	return nil
 }
 
-func (s *Service) Upgrade(agentID string) (UpgradeResult, error) {
+func (s *Service) Upgrade(ctx context.Context, agentID string) (UpgradeResult, error) {
 	m, state, err := s.getManifestAndState(agentID)
 	if err != nil {
 		return UpgradeResult{}, err
@@ -410,7 +410,7 @@ func (s *Service) Upgrade(agentID string) (UpgradeResult, error) {
 	}
 	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_start backup=%q command=%q", backupPath, m.Runtime.Upgrade.Command))
 
-	result, runErr := s.runner.Run(context.Background(), m.Runtime.Upgrade.Command)
+	result, runErr := s.runner.Run(ctx, m.Runtime.Upgrade.Command)
 	s.appendCommandLog(agentID, "upgrade", m.Runtime.Upgrade.Command, result, runErr)
 	if runErr != nil {
 		updateErr := s.formatUpgradeFailure(runErr, backupPath)
@@ -448,7 +448,7 @@ func (s *Service) Upgrade(agentID string) (UpgradeResult, error) {
 	}, nil
 }
 
-func (s *Service) Stop(agentID string) error {
+func (s *Service) Stop(ctx context.Context, agentID string) error {
 	m, state, err := s.getManifestAndState(agentID)
 	if err != nil {
 		return err
@@ -457,7 +457,7 @@ func (s *Service) Stop(agentID string) error {
 		return ErrAlreadyStopped
 	}
 
-	result, runErr := s.runner.Run(context.Background(), m.Runtime.Stop.Command)
+	result, runErr := s.runner.Run(ctx, m.Runtime.Stop.Command)
 	s.appendCommandLog(agentID, "stop", m.Runtime.Stop.Command, result, runErr)
 	if runErr != nil {
 		s.mu.Lock()
