@@ -1,20 +1,85 @@
 package catalog
 
-import "carrier/daemon/internal/manifest"
+import (
+	_ "embed"
+	"carrier/daemon/internal/manifest"
+	"fmt"
+	"runtime"
+)
+
+//go:embed openclaw-installer.sh
+var openclawInstallerScript string
+
+const openclawVersion = "1.0.0"
+
+// Pinned checksums for release artifacts, injected at build time via ldflags:
+//
+//	go build -ldflags "-X carrier/daemon/internal/catalog.openclawChecksumLinuxX86=abc123..."
+//
+// If not set (empty), the installer will refuse to run — fail-closed by design.
+var (
+	openclawChecksumLinuxX86  string
+	openclawChecksumLinuxArm  string
+	openclawChecksumDarwinX86 string
+	openclawChecksumDarwinArm string
+)
+
+// getPinnedChecksum returns the build-time-injected checksum for the current platform.
+// Returns empty string if not set — caller must handle this as a fatal condition.
+func getPinnedChecksum() string {
+	switch runtime.GOOS + "/" + runtime.GOARCH {
+	case "linux/amd64":
+		return openclawChecksumLinuxX86
+	case "linux/arm64":
+		return openclawChecksumLinuxArm
+	case "darwin/amd64":
+		return openclawChecksumDarwinX86
+	case "darwin/arm64":
+		return openclawChecksumDarwinArm
+	default:
+		return openclawChecksumLinuxX86
+	}
+}
+
+// getInstallCommand returns the install command that writes the embedded installer
+// to a securely-created temporary file (via mktemp) and executes it with the
+// pinned version and checksum. Checksum is anchored in the carrier binary (via
+// ldflags at build time), not fetched from the download source.
+func getInstallCommand() string {
+	checksum := getPinnedChecksum()
+
+	return fmt.Sprintf(`sh -c '
+set -e
+CHECKSUM="%s"
+if [ -z "$CHECKSUM" ]; then
+  echo "FATAL: no pinned checksum for this platform — binary was not built with release ldflags" >&2
+  exit 1
+fi
+SCRIPT="$(mktemp /tmp/openclaw-installer.XXXXXX.sh)"
+trap "rm -f \"$SCRIPT\"" EXIT
+cat > "$SCRIPT" << '\''INSTALLER_EOF'\''
+%s
+INSTALLER_EOF
+chmod 700 "$SCRIPT"
+"$SCRIPT" "%s" "$CHECKSUM"
+'`, checksum, openclawInstallerScript, openclawVersion)
+}
 
 func OpenClawManifest() manifest.Manifest {
+	installCmd := getInstallCommand()
+	
 	return manifest.Manifest{
 		ID:           "openclaw",
 		Name:         "OpenClaw",
-		Version:      "1.0.0",
+		Version:      openclawVersion,
 		Description:  "Full-featured AI assistant with memory support",
 		Capabilities: []string{"chat", "code", "memory"},
 		Runtime: manifest.RuntimeSpec{
 			Type:    manifest.RuntimeTypeLocalBinary,
-			Install: manifest.CommandSpec{Command: "./install.sh"},
-			Upgrade: manifest.CommandSpec{Command: "./install.sh --upgrade"},
-			Start:   manifest.CommandSpec{Command: "./openclaw --config ./config.yaml"},
-			Stop:    manifest.CommandSpec{Command: "./openclaw --stop"},
+			Install: manifest.CommandSpec{Command: installCmd},
+			Upgrade: manifest.CommandSpec{Command: installCmd},
+			Start:   manifest.CommandSpec{Command: "openclaw gateway start"},
+			Stop:    manifest.CommandSpec{Command: "openclaw gateway stop"},
 		},
 		Network: manifest.NetworkSpec{
 			Ports: []manifest.PortSpec{{Name: "http", Port: 8080}},

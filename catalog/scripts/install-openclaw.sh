@@ -11,7 +11,6 @@ BASE_URL="https://github.com/Keith-CY/carrier/releases/download/v${VERSION}"
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
 BINARY="openclaw-v${VERSION}-${OS}-${ARCH}"
-CHECKSUM_FILE="${BINARY}.sha256"
 
 # Determine checksum command
 if [ "$OS" = "darwin" ]; then
@@ -30,16 +29,25 @@ cd "$TMPDIR"
 echo "Downloading ${BINARY}..."
 curl -fsSL -O "${BASE_URL}/${BINARY}"
 
-# Download checksum
-echo "Downloading checksum file..."
-curl -fsSL -O "${BASE_URL}/${CHECKSUM_FILE}"
+# Checksum MUST be provided via OPENCLAW_CHECKSUM env var (pinned at release time).
+# Fail-closed: no checksum = no install. Never fall back to remote checksum files.
+EXPECTED="${OPENCLAW_CHECKSUM:-}"
 
-# Verify checksum
-echo "Verifying integrity..."
-if ! ${CHECKSUM_CMD} -c "$CHECKSUM_FILE" >/dev/null 2>&1; then
-    echo "ERROR: Checksum verification failed!" >&2
+echo "Verifying integrity against pinned checksum..."
+if [ -z "$EXPECTED" ]; then
+    echo "ERROR: OPENCLAW_CHECKSUM not set. Cannot verify artifact integrity." >&2
+    echo "Set OPENCLAW_CHECKSUM to the expected SHA-256 hash of ${BINARY}." >&2
     exit 1
 fi
+
+ACTUAL=$(${CHECKSUM_CMD} "$BINARY" | awk '{print $1}')
+if [ "$ACTUAL" != "$EXPECTED" ]; then
+    echo "ERROR: Checksum mismatch!" >&2
+    echo "  Expected: $EXPECTED" >&2
+    echo "  Actual:   $ACTUAL" >&2
+    exit 1
+fi
+echo "Checksum OK"
 
 # Install binary
 echo "Installing to /usr/local/bin/openclaw..."
