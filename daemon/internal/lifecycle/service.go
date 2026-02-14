@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"archive/zip"
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +10,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,10 +30,22 @@ var (
 	ErrNotInstalled             = errors.New("agent is not installed")
 	ErrAlreadyRunning           = errors.New("agent already running")
 	ErrAlreadyStopped           = errors.New("agent already stopped")
+	ErrCrashLoop                = errors.New("agent is in crash loop cooldown")
 	ErrMissingRequiredEnv       = errors.New("missing required environment variables")
 	ErrPortConflict             = errors.New("port conflict detected")
 	ErrRuntimePrerequisites     = errors.New("runtime prerequisites failed")
 	ErrRemoteDiagnosisNotNeeded = errors.New("remote diagnosis is not required for this agent")
+)
+
+const (
+	defaultCrashLoopThreshold = 3
+	defaultCrashLoopWindow    = 5 * time.Minute
+	defaultCrashLoopCooldown  = 5 * time.Minute
+)
+
+var (
+	listenTCP       = net.Listen
+	portOccupantFor = describePortOccupant
 )
 
 type Option func(*Service)
@@ -51,6 +66,20 @@ func WithLogLimit(limit int) Option {
 	return func(s *Service) {
 		if limit > 0 {
 			s.logLimit = limit
+		}
+	}
+}
+
+func WithCrashLoopConfig(threshold int, window, cooldown time.Duration) Option {
+	return func(s *Service) {
+		if threshold > 0 {
+			s.crashLoopThreshold = threshold
+		}
+		if window > 0 {
+			s.crashLoopWindow = window
+		}
+		if cooldown > 0 {
+			s.crashLoopCooldown = cooldown
 		}
 	}
 }
@@ -104,6 +133,11 @@ type Service struct {
 	now           func() time.Time
 	idCounter     uint64
 	idGenerator   func(prefix string) string
+	restarts           map[string][]time.Time
+	cooldowns          map[string]time.Time
+	crashLoopThreshold int
+	crashLoopWindow    time.Duration
+	crashLoopCooldown  time.Duration
 }
 
 func NewService(triager baseagent.Triager, opts ...Option) *Service {
@@ -125,6 +159,11 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		logLimit:      1000,
 		handoffTTL:    24 * time.Hour,
 		now:           time.Now,
+		restarts:           make(map[string][]time.Time),
+		cooldowns:          make(map[string]time.Time),
+		crashLoopThreshold: defaultCrashLoopThreshold,
+		crashLoopWindow:    defaultCrashLoopWindow,
+		crashLoopCooldown:  defaultCrashLoopCooldown,
 	}
 	svc.idGenerator = func(prefix string) string {
 		next := atomic.AddUint64(&svc.idCounter, 1)
@@ -155,6 +194,8 @@ func (s *Service) RegisterManifest(m manifest.Manifest) error {
 		UpdatedAt: s.now(),
 	}
 	s.logs[m.ID] = nil
+	s.restarts[m.ID] = nil
+	s.cooldowns[m.ID] = time.Time{}
 
 	return nil
 }
@@ -224,6 +265,9 @@ func (s *Service) Start(agentID string) error {
 	if state.Runtime == RuntimeStateRunning {
 		return ErrAlreadyRunning
 	}
+	if err := s.blockIfCrashLoopCoolingDown(agentID, state); err != nil {
+		return err
+	}
 
 	if err := s.checkRuntimePrerequisites(m); err != nil {
 		s.updateStateOnStartError(agentID, err)
@@ -248,6 +292,7 @@ func (s *Service) Start(agentID string) error {
 		if triageErr == nil {
 			s.appendLog(agentID, fmt.Sprintf("triage summary: %s", triage.Summary))
 		}
+		s.updateStateOnStartError(agentID, runErr)
 		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_START_FAILED", runErr.Error())
 		return runErr
 	}
@@ -261,6 +306,8 @@ func (s *Service) Start(agentID string) error {
 	state.NeedsRemoteDiagnosis = false
 	state.UpdatedAt = s.now()
 	s.states[agentID] = state
+	delete(s.restarts, agentID)
+	delete(s.cooldowns, agentID)
 	s.mu.Unlock()
 	s.recordAudit("", "system", "start", agentID, AuditResultSuccess, "", "start completed")
 
@@ -491,10 +538,25 @@ func (s *Service) updateStateOnStartError(agentID string, err error) {
 	if !ok {
 		return
 	}
+	now := s.now()
+	restarts := append(s.restarts[agentID], now)
+	restarts = trimRestartHistory(restarts, now.Add(-s.crashLoopWindow))
+	s.restarts[agentID] = restarts
 	state.Runtime = RuntimeStateCrashing
 	state.Health = HealthStateUnhealthy
 	state.LastError = err.Error()
-	state.UpdatedAt = s.now()
+	if len(restarts) >= s.crashLoopThreshold {
+		cooldownUntil := now.Add(s.crashLoopCooldown)
+		s.cooldowns[agentID] = cooldownUntil
+		state.LastError = fmt.Sprintf(
+			"crash-loop detected: %d restarts within %s; cooldown until %s; last error: %v",
+			len(restarts),
+			s.crashLoopWindow.String(),
+			cooldownUntil.UTC().Format(time.RFC3339),
+			err,
+		)
+	}
+	state.UpdatedAt = now
 	s.states[agentID] = state
 }
 
@@ -525,13 +587,167 @@ func (s *Service) ensurePortsAvailable(ports []manifest.PortSpec) error {
 			continue
 		}
 		addr := fmt.Sprintf("127.0.0.1:%d", port.Port)
-		ln, err := net.Listen("tcp", addr)
+		ln, err := listenTCP("tcp", addr)
 		if err != nil {
-			return fmt.Errorf("%w: %s (%d)", ErrPortConflict, port.Name, port.Port)
+			return fmt.Errorf("%w: %s (%d) is in use by %s", ErrPortConflict, port.Name, port.Port, portOccupantFor(port.Port))
 		}
 		_ = ln.Close()
 	}
 	return nil
+}
+
+func (s *Service) blockIfCrashLoopCoolingDown(agentID string, state AgentState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cooldownUntil, ok := s.cooldowns[agentID]
+	if !ok || cooldownUntil.IsZero() {
+		return nil
+	}
+
+	now := s.now()
+	if !now.Before(cooldownUntil) {
+		delete(s.cooldowns, agentID)
+		delete(s.restarts, agentID)
+		return nil
+	}
+
+	restartCount := len(trimRestartHistory(s.restarts[agentID], now.Add(-s.crashLoopWindow)))
+	state.Runtime = RuntimeStateCrashing
+	state.Health = HealthStateUnhealthy
+	state.LastError = fmt.Sprintf(
+		"crash-loop detected: %d restarts within %s; cooldown until %s",
+		restartCount,
+		s.crashLoopWindow.String(),
+		cooldownUntil.UTC().Format(time.RFC3339),
+	)
+	state.UpdatedAt = now
+	s.states[agentID] = state
+
+	return fmt.Errorf("%w: %s", ErrCrashLoop, state.LastError)
+}
+
+func trimRestartHistory(history []time.Time, windowStart time.Time) []time.Time {
+	if len(history) == 0 {
+		return history
+	}
+	firstKept := 0
+	for firstKept < len(history) && history[firstKept].Before(windowStart) {
+		firstKept++
+	}
+	if firstKept == 0 {
+		return history
+	}
+	if firstKept >= len(history) {
+		return nil
+	}
+	return append([]time.Time(nil), history[firstKept:]...)
+}
+
+func describePortOccupant(port int) string {
+	if runtime.GOOS != "linux" {
+		return "an unknown process"
+	}
+
+	inode, err := findListeningSocketInode(port)
+	if err != nil || inode == "" {
+		return "an unknown process"
+	}
+
+	pid, processName, err := findProcessBySocketInode(inode)
+	if err != nil || pid <= 0 {
+		return fmt.Sprintf("socket inode %s (pid unknown)", inode)
+	}
+	if processName == "" {
+		return fmt.Sprintf("pid %d", pid)
+	}
+	return fmt.Sprintf("pid %d (%s)", pid, processName)
+}
+
+func findListeningSocketInode(port int) (string, error) {
+	for _, procFile := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+		inode, err := findListeningSocketInodeInFile(procFile, port)
+		if err == nil && inode != "" {
+			return inode, nil
+		}
+	}
+	return "", errors.New("listening socket not found")
+}
+
+func findListeningSocketInodeInFile(path string, port int) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "sl") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 10 {
+			continue
+		}
+		localAddress := fields[1]
+		state := fields[3]
+		if state != "0A" {
+			continue
+		}
+		parts := strings.Split(localAddress, ":")
+		if len(parts) != 2 {
+			continue
+		}
+		p, err := strconv.ParseInt(parts[1], 16, 32)
+		if err != nil || int(p) != port {
+			continue
+		}
+		return fields[9], nil
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return "", errors.New("socket not found")
+}
+
+func findProcessBySocketInode(inode string) (int, string, error) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return 0, "", err
+	}
+	target := "socket:[" + inode + "]"
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		fdDir := filepath.Join("/proc", entry.Name(), "fd")
+		fds, err := os.ReadDir(fdDir)
+		if err != nil {
+			continue
+		}
+		for _, fd := range fds {
+			linkPath := filepath.Join(fdDir, fd.Name())
+			link, err := os.Readlink(linkPath)
+			if err != nil {
+				continue
+			}
+			if link != target {
+				continue
+			}
+			nameBytes, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "comm"))
+			if err != nil {
+				return pid, "", nil
+			}
+			return pid, strings.TrimSpace(string(nameBytes)), nil
+		}
+	}
+	return 0, "", errors.New("process not found")
 }
 
 func (s *Service) getManifestAndState(agentID string) (manifest.Manifest, AgentState, error) {
