@@ -2,6 +2,8 @@
   "id": "openclaw",
   "name": "OpenClaw",
   "version": "1.0.0",
+  "description": "Full-featured AI assistant with memory support",
+  "capabilities": ["chat", "code", "memory"],
   "runtime": {
     "type": "local_binary",
     "install": { "command": "./install.sh" },
@@ -14,8 +16,8 @@
     "healthcheck": { "type": "http", "url": "http://localhost:8080/health" }
   },
   "env": {
-    "required": [{ "name": "OPENAI_API_KEY", "secret": true }],
-    "optional": [{ "name": "LOG_LEVEL", "default": "info" }]
+    "required": [{ "name": "OPENAI_API_KEY", "secret": true, "description": "OpenAI API key for LLM access" }],
+    "optional": [{ "name": "LOG_LEVEL", "default": "info", "description": "Logging verbosity level" }]
   },
   "memory": {
     "supports": ["per_agent", "shared", "public"],
@@ -24,6 +26,13 @@
   "upgrade": {
     "channel": "stable",
     "strategy": "in_place_or_reinstall"
+  },
+  "health": {
+    "interval_seconds": 30,
+    "timeout_seconds": 5,
+    "retries": 3,
+    "restart_loop_window": 300,
+    "restart_loop_max": 5
   },
   "diagnostics": {
     "include": ["runtime_logs", "process_state", "env_sanitized"]

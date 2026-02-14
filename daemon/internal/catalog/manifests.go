@@ -4,9 +4,11 @@ import "carrier/daemon/internal/manifest"
 
 func OpenClawManifest() manifest.Manifest {
 	return manifest.Manifest{
-		ID:      "openclaw",
-		Name:    "OpenClaw",
-		Version: "1.0.0",
+		ID:           "openclaw",
+		Name:         "OpenClaw",
+		Version:      "1.0.0",
+		Description:  "Full-featured AI assistant with memory support",
+		Capabilities: []string{"chat", "code", "memory"},
 		Runtime: manifest.RuntimeSpec{
 			Type:    manifest.RuntimeTypeLocalBinary,
 			Install: manifest.CommandSpec{Command: "./install.sh"},
@@ -22,14 +24,21 @@ func OpenClawManifest() manifest.Manifest {
 			},
 		},
 		Env: manifest.EnvSpec{
-			Required: []manifest.EnvVar{{Name: "OPENAI_API_KEY", Secret: true}},
-			Optional: []manifest.EnvVar{{Name: "LOG_LEVEL", Default: "info"}},
+			Required: []manifest.EnvVar{{Name: "OPENAI_API_KEY", Secret: true, Description: "OpenAI API key for LLM access"}},
+			Optional: []manifest.EnvVar{{Name: "LOG_LEVEL", Default: "info", Description: "Logging verbosity level"}},
 		},
 		Memory: manifest.MemorySpec{
 			Supports:  []manifest.MemoryType{manifest.MemoryTypePerAgent, manifest.MemoryTypeShared, manifest.MemoryTypePublic},
 			MountPath: "./memory",
 		},
 		Upgrade: manifest.UpgradeSpec{Channel: "stable", Strategy: "in_place_or_reinstall"},
+		Health: manifest.HealthSpec{
+			IntervalSeconds:   30,
+			TimeoutSeconds:    5,
+			Retries:           3,
+			RestartLoopWindow: 300,
+			RestartLoopMax:    5,
+		},
 		Diagnostics: manifest.Diagnostics{Include: []string{"runtime_logs", "process_state", "env_sanitized"}},
 	}
 }
