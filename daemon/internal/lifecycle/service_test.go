@@ -583,10 +583,15 @@ func TestUpgradeResetsCrashLoopState(t *testing.T) {
 
 	// Trigger crash-loop
 	for i := 0; i < defaultCrashLoopThreshold; i++ {
-		_ = svc.Start(context.Background(), "openclaw")
+		if err := svc.Start(context.Background(), "openclaw"); err == nil {
+			t.Fatal("expected start to fail while triggering crash loop")
+		}
 	}
 
-	status, _ := svc.Status("openclaw")
+	status, err := svc.Status("openclaw")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
 	if status.Runtime != RuntimeStateCrashing {
 		t.Fatalf("expected crashing, got %s", status.Runtime)
 	}
@@ -607,7 +612,10 @@ func TestUpgradeResetsCrashLoopState(t *testing.T) {
 		t.Fatalf("upgrade: %v", err)
 	}
 
-	status, _ = svc.Status("openclaw")
+	status, err = svc.Status("openclaw")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
 	if status.Runtime != RuntimeStateStopped {
 		t.Fatalf("expected stopped after upgrade, got %s", status.Runtime)
 	}
