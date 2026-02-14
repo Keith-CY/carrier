@@ -26,7 +26,7 @@ func LoadFile(path string) (Manifest, error) {
 	}
 
 	if err := m.Validate(); err != nil {
-		return Manifest{}, err
+		return Manifest{}, fmt.Errorf("validate manifest: %w", err)
 	}
 
 	return m, nil

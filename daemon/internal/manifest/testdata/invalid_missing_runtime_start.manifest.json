@@ -1,0 +1,15 @@
+{
+  "id": "openclaw",
+  "name": "OpenClaw",
+  "version": "1.0.0",
+  "runtime": {
+    "type": "local_binary",
+    "install": {"command": "./install.sh"},
+    "start": {"command": "   "},
+    "stop": {"command": "./openclaw --stop"}
+  },
+  "memory": {
+    "supports": ["per_agent"],
+    "mount_path": "./memory"
+  }
+}
