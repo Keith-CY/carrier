@@ -39,6 +39,27 @@ func TestIsRepairActionAllowlisted(t *testing.T) {
 			},
 			want: false,
 		},
+		{
+			name: "command injection in systemctl service name is rejected",
+			action: RepairAction{
+				Command: "systemctl restart foo;reboot",
+			},
+			want: false,
+		},
+		{
+			name: "command injection in service name is rejected",
+			action: RepairAction{
+				Command: "service x;reboot restart",
+			},
+			want: false,
+		},
+		{
+			name: "rm -rf ./cache is no longer allowed",
+			action: RepairAction{
+				Command: "rm -rf ./cache",
+			},
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {

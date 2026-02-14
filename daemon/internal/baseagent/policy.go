@@ -35,10 +35,11 @@ var allowlistedRepairActionRules = []repairActionRule{
 		match: func(a RepairAction) bool {
 			cmd := strings.TrimSpace(a.Command)
 			if strings.HasPrefix(cmd, "systemctl restart ") {
-				return true
+				serviceName := strings.TrimPrefix(cmd, "systemctl restart ")
+				return len(serviceName) > 0 && !strings.ContainsAny(serviceName, " ;|&`$()<>\n")
 			}
 			parts := strings.Fields(cmd)
-			return len(parts) == 3 && parts[0] == "service" && parts[2] == "restart"
+			return len(parts) == 3 && parts[0] == "service" && parts[2] == "restart" && !strings.ContainsAny(parts[1], ";|&`$()<>\n")
 		},
 	},
 	{
@@ -46,7 +47,7 @@ var allowlistedRepairActionRules = []repairActionRule{
 		match: func(a RepairAction) bool {
 			cmd := strings.TrimSpace(a.Command)
 			switch cmd {
-			case "npm cache clean --force", "pip cache purge", "rm -rf ./cache", "rm -rf ./.cache":
+			case "npm cache clean --force", "pip cache purge":
 				return true
 			default:
 				return false
@@ -86,8 +87,14 @@ var systemDirectories = []string{
 }
 
 func IsRepairActionAllowlisted(action RepairAction) bool {
+	// Also check with sudo stripped, so "sudo systemctl restart x" matches "systemctl restart x"
+	stripped := action
+	cmd := strings.TrimSpace(action.Command)
+	if strings.HasPrefix(cmd, "sudo ") {
+		stripped.Command = strings.TrimPrefix(cmd, "sudo ")
+	}
 	for _, rule := range allowlistedRepairActionRules {
-		if rule.match(action) {
+		if rule.match(action) || rule.match(stripped) {
 			return true
 		}
 	}
@@ -119,10 +126,9 @@ func ValidateRepairAction(action RepairAction, confirmed bool) (RepairAction, er
 }
 
 func usesSudo(command string) bool {
-	for _, part := range strings.Fields(command) {
-		if part == "sudo" {
-			return true
-		}
+	parts := strings.Fields(command)
+	if len(parts) > 0 && (parts[0] == "sudo" || filepath.Base(parts[0]) == "sudo") {
+		return true
 	}
 	return false
 }
