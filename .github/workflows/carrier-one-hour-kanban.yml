@@ -1,0 +1,303 @@
+name: Carrier 1h Kanban Board Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report only, do not write content to discussion/issue'
+        required: false
+        default: 'false'
+  schedule:
+    - cron: '0 * * * *'
+
+permissions:
+  contents: read
+  issues: write
+  discussions: write
+
+jobs:
+  sync-1h-board:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update 1h Kanban snapshot
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const dryRun = String(context.payload.inputs?.dry_run || process.env.DRY_RUN || 'false').toLowerCase() === 'true';
+            const token = process.env.CARRIER_PROJECTS_TOKEN || process.env.GITHUB_TOKEN;
+            // Fallback to the pre-authenticated github-script client when no explicit token is provided.
+            const gh = token ? github.getOctokit(token) : github;
+
+            const targetIssueNumber = Number.parseInt(process.env.CARRIER_1H_ISSUE_NUMBER || '119', 10);
+            const discussionTitle = process.env.CARRIER_1H_DISCUSSION_TITLE || '1h Kanban Board (Pinned)';
+            const discussionCategoryName = process.env.CARRIER_1H_DISCUSSION_CATEGORY || 'General';
+            const timezone = process.env.CARRIER_1H_TIMEZONE || 'Asia/Tokyo';
+
+            const formatDate = (isoValue) => {
+              const value = new Date(isoValue);
+              const f = new Intl.DateTimeFormat('en-GB', {
+                timeZone: timezone,
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hourCycle: 'h23',
+              });
+              const p = Object.fromEntries(f.formatToParts(value).map((item) => [item.type, item.value]));
+              return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
+            };
+
+            const safeTableCell = (value) =>
+              String(value || '-')
+                .replace(/\|/g, '\\|')
+                .replace(/\r\n|\n/g, '<br>');
+
+            const escapeCsv = (value) => {
+              const raw = String(value ?? '').replace(/"/g, '""');
+              return `"${raw}"`;
+            };
+
+            const classifyBucket = (item) => {
+              const title = String(item.title || '').toLowerCase();
+              const labels = new Set((item.labels || []).map((label) => String(label.name || '').toLowerCase()));
+
+              if (labels.has('unscheduled') || labels.has('backlog') || labels.has('pending') || title.includes('pending')) {
+                return 'Unscheduled';
+              }
+
+              if (
+                labels.has('review') || labels.has('review-followup') || labels.has('review followup') ||
+                labels.has('review_followup') || labels.has('quickfix') || labels.has('hotfix') || labels.has('test') ||
+                title.includes('[review-followup]') || title.includes('review-followup') ||
+                title.startsWith('test:') || title.startsWith('[phase 1][risk]')
+              ) {
+                return 'Hotfix';
+              }
+
+              if (
+                labels.has('plan') || labels.has('planning') || labels.has('decomposition') ||
+                /^\[(plan|task)\]/i.test(item.title || '') ||
+                /^\[task\]|^\[plan\]/i.test(item.title || '') ||
+                /^\[phase [0-9]/i.test(item.title || '') ||
+                /release\s+workflow\s+follow-up/i.test(title) ||
+                /\[(?:A|B|C)\d+\]/i.test(item.title || '')
+              ) {
+                return 'Decomposition';
+              }
+
+              return 'Hotfix';
+            };
+
+            const issuesResponse = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner,
+                repo,
+                state: 'open',
+                per_page: 100,
+                sort: 'updated',
+                direction: 'asc',
+              },
+              (resp) => resp.data,
+            );
+
+            const openIssues = issuesResponse.filter((item) => !item.pull_request);
+            const boardRows = openIssues.map((issue) => {
+              const bucket = classifyBucket(issue);
+              const assignees = (issue.assignees || []).map((assignee) => assignee?.login || 'unassigned');
+
+              return {
+                number: issue.number,
+                title: issue.title || '-',
+                link: issue.html_url,
+                bucket,
+                assignee: assignees.length > 0 ? assignees.join(' ') : 'unassigned',
+                updatedAt: issue.updated_at,
+              };
+            });
+
+            const buckets = {
+              open: boardRows.length,
+              Hotfix: boardRows.filter((item) => item.bucket === 'Hotfix').length,
+              Decomposition: boardRows.filter((item) => item.bucket === 'Decomposition').length,
+              Unscheduled: boardRows.filter((item) => item.bucket === 'Unscheduled').length,
+            };
+
+            const order = ['Hotfix', 'Decomposition', 'Unscheduled'];
+            const orderedRows = boardRows
+              .slice()
+              .sort((a, b) => a.bucket.localeCompare(b.bucket) || new Date(a.updatedAt) - new Date(b.updatedAt));
+            const groupedRows = order.flatMap((bucket) => orderedRows.filter((row) => row.bucket === bucket));
+
+            const tableLines = groupedRows
+              .map((row) =>
+                `| [${row.number}](${row.link}) | ${safeTableCell(row.title)} | ${row.bucket} | ${safeTableCell(row.assignee)} | ${formatDate(row.updatedAt)} |`
+              )
+              .join('\n');
+
+            const csvLines = [
+              'id,title,bucket,assignees,updated_at',
+              ...orderedRows.map((row) => [
+                row.number,
+                row.title,
+                row.bucket,
+                row.assignee,
+                row.updatedAt,
+              ].map((value) => escapeCsv(value)).join(',')),
+            ];
+
+            const nowLabel = formatDate(new Date());
+            const body = [
+              '# 1h Kanban Board (Pinned)',
+              '',
+              `Updated (timezone: ${timezone}): ${nowLabel}`,
+              '',
+              '## Summary',
+              `- open: \`${buckets.open}\``,
+              `- Hotfix: \`${buckets.Hotfix}\``,
+              `- Decomposition: \`${buckets.Decomposition}\``,
+              `- Unscheduled: \`${buckets.Unscheduled}\``,
+              '',
+              '| Issue | Title | Bucket | Assignee | Updated At |',
+              '|---|---|---|---|---|',
+              tableLines || '| - | - | - | - | - |',
+              '',
+              '## CSV Export',
+              '',
+              '```csv',
+              csvLines.join('\n'),
+              '```',
+              '',
+              `Trigger: ${context.eventName === 'schedule' ? 'Scheduled (hourly)' : 'Manual run'}`,
+            ].join('\n');
+
+            if (dryRun) {
+              core.info('Dry run mode enabled, skip remote write.');
+              core.info(body);
+              return;
+            }
+
+            const repoMeta = await gh.graphql(`
+              query($owner: String!, $repo: String!) {
+                repository(owner: $owner, name: $repo) {
+                  id
+                  hasDiscussionsEnabled
+                  discussionCategories(first: 20) {
+                    nodes {
+                      id
+                      name
+                      slug
+                    }
+                  }
+                }
+              }
+            `, { owner, repo });
+
+            const publishToDiscussion = repoMeta.repository?.hasDiscussionsEnabled === true;
+            const categories = repoMeta.repository?.discussionCategories?.nodes || [];
+
+            if (publishToDiscussion) {
+              try {
+                const category =
+                  categories.find((item) => item.slug === discussionCategoryName.toLowerCase()) ||
+                  categories.find((item) => item.name.toLowerCase() === discussionCategoryName.toLowerCase()) ||
+                  categories[0];
+
+                const discussionNodes = await gh.graphql(`
+                  query($owner: String!, $repo: String!) {
+                    repository(owner: $owner, name: $repo) {
+                      discussions(first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) {
+                        nodes {
+                          id
+                          title
+                          url
+                        }
+                      }
+                    }
+                  }
+                `, { owner, repo });
+
+                const discussions = discussionNodes.repository?.discussions?.nodes || [];
+                const targetDiscussion = discussions.find((item) => item.title === discussionTitle);
+
+                if (targetDiscussion) {
+                  try {
+                    const updateMutation = `
+                      mutation($discussionId: ID!, $body: String!) {
+                        updateDiscussion(input: { discussionId: $discussionId, body: $body }) {
+                          discussion {
+                            url
+                          }
+                        }
+                      }
+                    `;
+                    await gh.graphql(updateMutation, {
+                      discussionId: targetDiscussion.id,
+                      body,
+                    });
+                    core.info(`Updated discussion: ${targetDiscussion.title}`);
+                    return;
+                  } catch (error) {
+                    core.warning(`Update discussion failed, fallback to issue: ${(error && error.message) ? error.message : error}`);
+                  }
+                }
+
+                if (!targetDiscussion && category) {
+                  try {
+                    const createMutation = `
+                      mutation($repositoryId: ID!, $categoryId: ID!, $title: String!, $body: String!) {
+                        createDiscussion(input: {
+                          repositoryId: $repositoryId,
+                          categoryId: $categoryId,
+                          title: $title,
+                          body: $body,
+                        }) {
+                          discussion {
+                            url
+                          }
+                        }
+                      }
+                    `;
+                    const created = await gh.graphql(createMutation, {
+                      repositoryId: repoMeta.repository.id,
+                      categoryId: category.id,
+                      title: discussionTitle,
+                      body,
+                    });
+                    core.info(`Created discussion: ${created.createDiscussion.discussion.url}`);
+                    return;
+                  } catch (error) {
+                    core.warning(`Create discussion failed, fallback to issue: ${(error && error.message) ? error.message : error}`);
+                  }
+                }
+
+                if (!category) {
+                  core.warning('Discussions enabled, but no discussion category matched. Fallback to issue update.');
+                }
+              } catch (error) {
+                core.warning(`Discussion sync failed, fallback to issue: ${(error && error.message) ? error.message : error}`);
+              }
+            }
+
+            if (!Number.isInteger(targetIssueNumber) || targetIssueNumber <= 0) {
+              core.setFailed(`Invalid CARRIER_1H_ISSUE_NUMBER: ${process.env.CARRIER_1H_ISSUE_NUMBER || '(unset)'}`);
+              return;
+            }
+
+            const issue = await github.rest.issues.get({
+              owner,
+              repo,
+              issue_number: targetIssueNumber,
+            });
+
+            await github.rest.issues.update({
+              owner,
+              repo,
+              issue_number: targetIssueNumber,
+              body,
+            });
+            core.info(`Updated issue #${targetIssueNumber}: ${issue.data.html_url}`);
