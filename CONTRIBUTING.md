@@ -12,8 +12,22 @@ git worktree add -b codex/<topic> ../carrier-<topic> origin/main
 cd ../carrier-<topic>
 ```
 
-Branch naming:
-- Use `codex/` prefix for development branches.
+Branch naming convention:
+- Use `codex/` prefix for all development branches.
+- Pattern: `codex/issue-<id>-<short-slug>` for issue-driven work.
+- Pattern: `codex/<topic>` for ad-hoc maintenance or exploration.
+- **Never push directly to `main`.**
+
+### Branch Naming Examples
+
+| Issue type | Branch name |
+|------------|-------------|
+| Docs update (#270) | `codex/issue-270-branch-naming` |
+| Test addition (#245) | `codex/issue-245-reload-failure-tests` |
+| Script/chore (#323) | `codex/issue-323-review-followup-dupes` |
+| Ad-hoc refactor | `codex/refactor-session-store` |
+
+Keep slugs short and lowercase with hyphens. Avoid special characters.
 
 ## Pull Request Policy
 
