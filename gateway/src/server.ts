@@ -246,7 +246,7 @@ async function parseCommandInput(request: Request): Promise<string | null> {
   return raw.length > 0 ? raw : null;
 }
 
-function parsePort(raw: string | undefined, fallback: number): number {
+export function parsePort(raw: string | undefined, fallback: number): number {
   const value = (raw ?? "").trim();
   if (!/^[0-9]+$/.test(value)) {
     return fallback;
