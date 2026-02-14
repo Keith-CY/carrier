@@ -42,6 +42,7 @@ PINNED_CHECKSUMS="
 
 # Verify checksum against pinned value (not downloaded from same source)
 echo "Verifying integrity against pinned checksum..."
+EXPECTED=$(echo "$PINNED_CHECKSUMS" | grep "$BINARY" | awk '{print $1}')
 
 if [ -z "$EXPECTED" ] || [ "$EXPECTED" = "0000000000000000000000000000000000000000000000000000000000000000" ]; then
     echo "WARNING: No pinned checksum for ${BINARY}. Falling back to remote checksum file." >&2
