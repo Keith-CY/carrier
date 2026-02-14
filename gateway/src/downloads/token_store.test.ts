@@ -141,7 +141,6 @@ describe("DownloadTokenStore", () => {
   });
 
   test("startPeriodicCleanup() replaces previous interval without leak", async () => {
-    let cleanupCount = 0;
     let time = new Date("2026-01-01T00:00:00Z");
     const store = new DownloadTokenStore(() => time);
 
