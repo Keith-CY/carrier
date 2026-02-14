@@ -28,6 +28,14 @@ git push -u origin codex/<topic>
 gh pr create --base main --head codex/<topic>
 ```
 
+## Scope Policy
+
+Phase milestones define delivery scope and must be respected in all planning and review.
+
+- Phase 1: Deliver the full lifecycle for OpenClaw only.
+- Every pull request must include a milestone label: `Phase 1` or `Phase 2`.
+- Candidate agents are blocked until Phase 1 exit criteria pass.
+
 ## Testing Policy
 
 GitHub Actions is the source of truth for test status.
