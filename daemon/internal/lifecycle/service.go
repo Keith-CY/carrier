@@ -292,20 +292,32 @@ func (s *Service) Start(agentID string) error {
 		return err
 	}
 
-	if err := s.checkRuntimePrerequisites(m); err != nil {
-		s.updateStateOnStartError(agentID, err)
-		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_RUNTIME_PREREQUISITES", err.Error())
-		return err
-	}
-	if err := s.validateRequiredEnv(m); err != nil {
-		s.updateStateOnStartError(agentID, err)
-		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_ENV_MISSING", err.Error())
-		return err
-	}
-	if err := s.ensurePortsAvailable(m.Network.Ports); err != nil {
-		s.updateStateOnStartError(agentID, err)
-		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_PORT_CONFLICT", err.Error())
-		return err
+	if pf, ok := s.checker.(runtimecheck.PreFlighter); ok {
+		pfResult := pf.PreFlight(m)
+		if !pfResult.Passed {
+			failMsg := formatPreFlightFailures(pfResult)
+			errCode := firstFailedCode(pfResult)
+			pfErr := fmt.Errorf("pre-flight checks failed: %s", failMsg)
+			s.updateStateOnStartError(agentID, pfErr)
+			s.recordAudit("", "system", "start", agentID, AuditResultFailure, errCode, failMsg)
+			return pfErr
+		}
+	} else {
+		if err := s.checkRuntimePrerequisites(m); err != nil {
+			s.updateStateOnStartError(agentID, err)
+			s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_RUNTIME_PREREQUISITES", err.Error())
+			return err
+		}
+		if err := s.validateRequiredEnv(m); err != nil {
+			s.updateStateOnStartError(agentID, err)
+			s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_ENV_MISSING", err.Error())
+			return err
+		}
+		if err := s.ensurePortsAvailable(m.Network.Ports); err != nil {
+			s.updateStateOnStartError(agentID, err)
+			s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_PORT_CONFLICT", err.Error())
+			return err
+		}
 	}
 
 	result, runErr := s.runner.Run(context.Background(), m.Runtime.Start.Command)
@@ -705,6 +717,29 @@ func (s *Service) checkRuntimePrerequisites(m manifest.Manifest) error {
 		return fmt.Errorf("%w: %v", ErrRuntimePrerequisites, err)
 	}
 	return nil
+}
+
+func formatPreFlightFailures(result runtimecheck.PreFlightResult) string {
+	var parts []string
+	for _, c := range result.Checks {
+		if !c.Passed {
+			msg := c.Message
+			if c.Repair != "" {
+				msg += " (fix: " + c.Repair + ")"
+			}
+			parts = append(parts, msg)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+func firstFailedCode(result runtimecheck.PreFlightResult) string {
+	for _, c := range result.Checks {
+		if !c.Passed && c.Code != "" {
+			return c.Code
+		}
+	}
+	return "E_PREFLIGHT_FAILED"
 }
 
 func (s *Service) formatUpgradeFailure(runErr error, backupPath string) error {
