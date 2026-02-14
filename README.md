@@ -15,6 +15,16 @@ For product scope/priority decisions, use this order:
 2. `docs/Agent_Installation_Platform_Implementation_Plan.md` (execution sequence and delivery plan)
 3. `README.md` (quick orientation and current implementation status)
 
+
+## Quick Navigation
+
+- [Architecture](#architecture)
+- [Repository Map](#repository-map)
+- [Installation and Testing](#installation-and-testing)
+- [Install OpenClaw from Release](#install-openclaw-from-release-package-non-technical-quick-path)
+- [三平台 Bot 管理（中文）](#三平台-bot-管理超详细步骤可直接照做)
+- [Three-Platform Bot Management (English)](#three-platform-bot-management-detailed-step-by-step)
+
 ## Architecture
 
 For a detailed overview of the system design and component interactions, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
