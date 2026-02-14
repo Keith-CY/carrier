@@ -23,7 +23,11 @@ import (
 	"carrier/daemon/internal/logging"
 )
 
-const shutdownTimeout = 30 * time.Second
+const (
+	shutdownTimeout = 30 * time.Second
+	defaultLogsTail = 200
+	maxLogsTail     = 1000
+)
 
 // agentIDPattern allows alphanumeric characters, hyphens, underscores, and dots.
 var agentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
@@ -225,12 +229,7 @@ func buildHTTPMux(svc *lifecycle.Service) *http.ServeMux {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		tail := 200
-		if t := r.URL.Query().Get("tail"); t != "" {
-			if n, err := strconv.Atoi(t); err == nil && n > 0 {
-				tail = n
-			}
-		}
+		tail := parseLogsTail(r.URL.Query().Get("tail"))
 		lines, err := svc.Logs(agentID, tail)
 		if err != nil {
 			writeServiceError(w, err)
@@ -326,6 +325,20 @@ func parsePathAgentID(raw string) (string, error) {
 		return "", err
 	}
 	return decoded, nil
+}
+
+func parseLogsTail(raw string) int {
+	if raw == "" {
+		return defaultLogsTail
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return defaultLogsTail
+	}
+	if n > maxLogsTail {
+		return maxLogsTail
+	}
+	return n
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

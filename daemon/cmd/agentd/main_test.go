@@ -147,6 +147,30 @@ func TestAPIMethodNotAllowed(t *testing.T) {
 	}
 }
 
+func TestParseLogsTail(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want int
+	}{
+		{name: "default empty", raw: "", want: defaultLogsTail},
+		{name: "invalid", raw: "abc", want: defaultLogsTail},
+		{name: "zero", raw: "0", want: defaultLogsTail},
+		{name: "negative", raw: "-5", want: defaultLogsTail},
+		{name: "valid", raw: "50", want: 50},
+		{name: "clamped", raw: "999999", want: maxLogsTail},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseLogsTail(tt.raw)
+			if got != tt.want {
+				t.Fatalf("parseLogsTail(%q)=%d, want %d", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestValidateAgentID(t *testing.T) {
 	tests := []struct {
 		id      string
