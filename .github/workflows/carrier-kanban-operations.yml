@@ -36,6 +36,8 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const dryRunInput = String((context.payload.inputs?.dry_run || process.env.DRY_RUN || 'false')).toLowerCase() === 'true';
+            const token = process.env.CARRIER_PROJECTS_TOKEN || process.env.GITHUB_TOKEN;
+            const gh = token ? github.getOctokit(token) : github;
 
             const repoMeta = await gh.graphql(`
               query($owner: String!, $repo: String!) {
@@ -205,36 +207,38 @@ jobs:
               const status = inferStatus(item, labels);
               const estimates = parseEstimate([item.title, item.body || ''].join(' '));
               const estimateHours = estimates == null ? 0 : estimates;
-              const owners = (item.assignees || []).map((a) => a?.login || 'unassigned');
-              const assignee = owners.length > 0 ? owners.join(', ') : 'unassigned';
+              const owners = (item.assignees || []).map((a) => a?.login).filter(Boolean);
+              const assignees = owners.length > 0 ? owners : ['unassigned'];
 
-              if (!workload.has(assignee)) {
-                workload.set(assignee, {
-                  todo: 0,
-                  inProgress: 0,
-                  blocked: 0,
-                  done: 0,
-                  totalEstimate: 0,
-                });
+              for (const assignee of assignees) {
+                if (!workload.has(assignee)) {
+                  workload.set(assignee, {
+                    todo: 0,
+                    inProgress: 0,
+                    blocked: 0,
+                    done: 0,
+                    totalEstimate: 0,
+                  });
+                }
+
+                const bucket = workload.get(assignee);
+                if (status === 'Blocked') {
+                  bucket.blocked += 1;
+                  blockedItems.push({
+                    title: item.title,
+                    url: item.html_url,
+                    assignee,
+                    labels: Array.from(labels).slice(0, 5).join(', ') || '-',
+                    estimate: estimateHours,
+                  });
+                } else if (status === 'In Progress') {
+                  bucket.inProgress += 1;
+                } else {
+                  bucket.todo += 1;
+                }
+
+                bucket.totalEstimate += estimateHours;
               }
-
-              const bucket = workload.get(assignee);
-              if (status === 'Blocked') {
-                bucket.blocked += 1;
-                blockedItems.push({
-                  title: item.title,
-                  url: item.html_url,
-                  assignee,
-                  labels: Array.from(labels).slice(0, 5).join(', ') || '-',
-                  estimate: estimateHours,
-                });
-              } else if (status === 'In Progress') {
-                bucket.inProgress += 1;
-              } else {
-                bucket.todo += 1;
-              }
-
-              bucket.totalEstimate += estimateHours;
             }
 
             const totalItems = issues.length;
