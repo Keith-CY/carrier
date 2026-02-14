@@ -62,6 +62,14 @@ func WithNow(now func() time.Time) Option {
 	}
 }
 
+func WithAuditLogLimit(limit int) Option {
+	return func(s *Service) {
+		if limit > 0 {
+			s.auditLogLimit = limit
+		}
+	}
+}
+
 func WithIDGenerator(gen func(prefix string) string) Option {
 	return func(s *Service) {
 		if gen != nil {
@@ -85,6 +93,7 @@ type Service struct {
 	logs        map[string][]string
 	handoffs    map[string]DiagnosisHandoff
 	auditLogs   []AuditLog
+	auditLogLimit int
 	triager     baseagent.Triager
 	checker     runtimecheck.Checker
 	runner      commandexec.Runner
@@ -105,9 +114,10 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		states:      make(map[string]AgentState),
 		manifests:   make(map[string]manifest.Manifest),
 		logs:        make(map[string][]string),
-		handoffs:    make(map[string]DiagnosisHandoff),
-		auditLogs:   make([]AuditLog, 0, 128),
-		triager:     triager,
+		handoffs:      make(map[string]DiagnosisHandoff),
+		auditLogs:     make([]AuditLog, 0, 128),
+		auditLogLimit: 1000,
+		triager:       triager,
 		checker:     runtimecheck.NewHostChecker(),
 		runner:      commandexec.NewShellRunner(),
 		diagnoseDir: filepath.Join(os.TempDir(), "agentd-diagnose"),
@@ -420,7 +430,7 @@ func (s *Service) CreateRemoteDiagnosisHandoff(agentID string, consent bool, act
 
 	result := AuditResultSuccess
 	if !consent {
-		result = AuditResultFailure
+		result = AuditResultNeutral
 	}
 	s.recordAudit(requestID, actor, "remote_diagnosis_consent", agentID, result, "", fmt.Sprintf("consent=%t handoff_id=%s", consent, handoff.ID))
 	return handoff, nil
@@ -579,6 +589,9 @@ func (s *Service) recordAudit(requestID, actor, action, target string, result Au
 		Message:   message,
 		Timestamp: s.now(),
 	})
+	if len(s.auditLogs) > s.auditLogLimit {
+		s.auditLogs = s.auditLogs[len(s.auditLogs)-s.auditLogLimit:]
+	}
 }
 
 func (s *Service) writeDiagnoseZip(path string, m manifest.Manifest, state AgentState, logs []string) error {

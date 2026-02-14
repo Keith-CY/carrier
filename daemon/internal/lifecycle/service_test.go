@@ -379,6 +379,60 @@ func TestCleanupExpiredDiagnosisHandoffs(t *testing.T) {
 	}
 }
 
+func TestCreateRemoteDiagnosisHandoffDeclinedUsesNeutralAuditResult(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if _, err := svc.HandleFailure(context.Background(), "openclaw", "cannot bind port"); err != nil {
+		t.Fatalf("handle failure: %v", err)
+	}
+	if _, err := svc.Diagnose("openclaw"); err != nil {
+		t.Fatalf("diagnose: %v", err)
+	}
+
+	handoff, err := svc.CreateRemoteDiagnosisHandoff("openclaw", false, "chat:123", "req-43")
+	if err != nil {
+		t.Fatalf("create handoff: %v", err)
+	}
+	if handoff.Status != HandoffStatusDeclined {
+		t.Fatalf("expected declined handoff, got %s", handoff.Status)
+	}
+
+	audits := svc.AuditLogs()
+	last := audits[len(audits)-1]
+	if last.Result != AuditResultNeutral {
+		t.Fatalf("expected neutral audit result, got %s", last.Result)
+	}
+}
+
+func TestAuditLogsBoundedByConfiguredLimit(t *testing.T) {
+	svc := NewService(nil,
+		WithAuditLogLimit(3),
+		WithNow(func() time.Time { return time.Date(2026, 2, 14, 4, 20, 0, 0, time.UTC) }),
+	)
+
+	svc.recordAudit("r1", "a", "x1", "t", AuditResultSuccess, "", "m1")
+	svc.recordAudit("r2", "a", "x2", "t", AuditResultSuccess, "", "m2")
+	svc.recordAudit("r3", "a", "x3", "t", AuditResultSuccess, "", "m3")
+	svc.recordAudit("r4", "a", "x4", "t", AuditResultSuccess, "", "m4")
+
+	audits := svc.AuditLogs()
+	if len(audits) != 3 {
+		t.Fatalf("expected 3 audit logs, got %d", len(audits))
+	}
+	if audits[0].RequestID != "r2" {
+		t.Fatalf("expected oldest retained request id r2, got %s", audits[0].RequestID)
+	}
+	if audits[2].RequestID != "r4" {
+		t.Fatalf("expected latest retained request id r4, got %s", audits[2].RequestID)
+	}
+}
+
 // Wrappers to keep tests explicit and avoid importing extra packages in each assertion block.
 var (
 	netListen     = net.Listen
