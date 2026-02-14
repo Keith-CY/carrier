@@ -758,7 +758,7 @@ func TestUpgradeBackupCreationFailureReturnsFocusedError(t *testing.T) {
 	}
 	svc.diagnoseDir = blockedPath
 
-	err := svc.Upgrade("openclaw")
+	_, err := svc.Upgrade("openclaw")
 	if err == nil {
 		t.Fatal("expected upgrade error")
 	}
