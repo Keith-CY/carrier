@@ -2,10 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,6 +20,9 @@ import (
 	"carrier/daemon/internal/config"
 	"carrier/daemon/internal/lifecycle"
 	"carrier/daemon/internal/logging"
+	"carrier/daemon/internal/pairing"
+
+	"net"
 )
 
 const shutdownTimeout = 30 * time.Second
@@ -53,6 +62,50 @@ func main() {
 		fmt.Printf("- %s (%s): %s\n", entry.Name, entry.ID, entry.Status)
 	}
 
+	// Generate pairing code
+	pairStore, err := pairing.NewStore()
+	if err != nil {
+		log.Fatalf("pairing store: %v", err)
+	}
+	pairCode, err := pairStore.Code()
+	if err != nil {
+		log.Fatalf("pairing code: %v", err)
+	}
+	fmt.Println("")
+	fmt.Println("╔══════════════════════════════════════╗")
+	fmt.Printf("║  PAIRING CODE:  %s            ║\n", pairCode)
+	fmt.Println("╚══════════════════════════════════════╝")
+	fmt.Println("")
+
+	// Validate security: refuse non-loopback binding without an API token.
+	if cfg.Server.APIToken == "" && !isLoopback(cfg.Server.Host) {
+		log.Fatalf("CARRIER_SERVER_API_TOKEN must be set when listening on non-loopback address %s", cfg.Server.Host)
+	}
+	if cfg.Server.APIToken == "" {
+		// Force loopback-only binding when no token is configured.
+		cfg.Server.Host = "127.0.0.1"
+		logger.Info("no API token configured; forcing loopback-only bind (127.0.0.1)")
+	}
+
+	// Build HTTP server
+	mux := buildHTTPMux(svc, pairStore)
+	var handler http.Handler = mux
+	if cfg.Server.APIToken != "" {
+		handler = bearerAuthMiddleware(cfg.Server.APIToken, mux)
+	}
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	httpServer := &http.Server{
+		Addr:    addr,
+		Handler: handler,
+	}
+
+	go func() {
+		fmt.Printf("HTTP API listening on %s\n", addr)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("http server error: %v", err)
+		}
+	}()
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
@@ -60,10 +113,313 @@ func main() {
 	<-ctx.Done()
 	fmt.Println("shutdown signal received, stopping agents...")
 
+	// Shutdown HTTP server
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer shutdownCancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		fmt.Fprintf(os.Stderr, "http server shutdown error: %v\n", err)
+	}
+
 	if err := shutdownAgents(svc, shutdownTimeout); err != nil {
 		log.Fatalf("shutdown error: %v", err)
 	}
 	fmt.Println("agentd stopped gracefully")
+}
+
+// validAgentIDPattern matches safe agent identifiers: alphanumeric, underscore, hyphen only.
+var validAgentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// extractAndValidateAgentID extracts the agentID from the URL path, URL-decodes it,
+// and validates it to prevent path traversal and injection attacks.
+func extractAndValidateAgentID(path, prefix string) (string, error) {
+	raw := strings.TrimPrefix(path, prefix)
+	if raw == "" {
+		return "", fmt.Errorf("missing agentId in path")
+	}
+	
+	// URL-decode the path segment
+	agentID, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid URL encoding in agentId")
+	}
+	
+	// Validate: reject path separators and parent directory references
+	if strings.Contains(agentID, "/") || strings.Contains(agentID, "\\") || strings.Contains(agentID, "..") {
+		return "", fmt.Errorf("agentId contains invalid path characters")
+	}
+	
+	// Enforce strict pattern: only alphanumeric, underscore, hyphen
+	if !validAgentIDPattern.MatchString(agentID) {
+		return "", fmt.Errorf("agentId must match pattern ^[a-zA-Z0-9_-]+$")
+	}
+	
+	return agentID, nil
+}
+
+// validateBodyAgentID validates an agent ID received in a JSON request body.
+func validateBodyAgentID(agentID string) error {
+	if agentID == "" {
+		return fmt.Errorf("agentId must not be empty")
+	}
+	if strings.Contains(agentID, "/") || strings.Contains(agentID, "\\") || strings.Contains(agentID, "..") {
+		return fmt.Errorf("agentId contains invalid path characters")
+	}
+	if !validAgentIDPattern.MatchString(agentID) {
+		return fmt.Errorf("agentId must match pattern ^[a-zA-Z0-9_-]+$")
+	}
+	return nil
+}
+
+func buildHTTPMux(svc *lifecycle.Service, pairStore *pairing.Store) *http.ServeMux {
+	mux := http.NewServeMux()
+
+	// Health checks
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "ok")
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "ok")
+	})
+
+	// Pairing code
+	mux.HandleFunc("/api/pair-code", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		code, err := pairStore.Code()
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "failed to get pairing code")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"code": code})
+	})
+
+	// API routes
+	mux.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		agents := svc.ListAgents()
+		writeJSON(w, http.StatusOK, agents)
+	})
+
+	mux.HandleFunc("/api/install", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body agentIDBody
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := validateBodyAgentID(body.AgentID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := svc.Install(r.Context(), body.AgentID); err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "installed"})
+	})
+
+	mux.HandleFunc("/api/start", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body agentIDBody
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := validateBodyAgentID(body.AgentID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := svc.Start(r.Context(), body.AgentID); err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
+	})
+
+	mux.HandleFunc("/api/stop", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body agentIDBody
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := validateBodyAgentID(body.AgentID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := svc.Stop(r.Context(), body.AgentID); err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+	})
+
+	mux.HandleFunc("/api/status/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		agentID, err := extractAndValidateAgentID(r.URL.Path, "/api/status/")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		state, err := svc.Status(agentID)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, state)
+	})
+
+	mux.HandleFunc("/api/logs/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		agentID, err := extractAndValidateAgentID(r.URL.Path, "/api/logs/")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		tail := 200
+		if t := r.URL.Query().Get("tail"); t != "" {
+			if n, err := strconv.Atoi(t); err == nil && n > 0 {
+				tail = n
+			}
+		}
+		lines, err := svc.Logs(agentID, tail)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"lines": lines})
+	})
+
+	mux.HandleFunc("/api/upgrade", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body agentIDBody
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := validateBodyAgentID(body.AgentID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		result, err := svc.Upgrade(r.Context(), body.AgentID)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
+
+	mux.HandleFunc("/api/diagnose", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body agentIDBody
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := validateBodyAgentID(body.AgentID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		artifactRef, err := svc.Diagnose(body.AgentID)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"artifactRef": artifactRef})
+	})
+
+	return mux
+}
+
+// bearerAuthMiddleware requires a valid Bearer token for /api/* routes.
+// Health-check endpoints (/healthz, /readyz) are excluded.
+func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			auth := r.Header.Get("Authorization")
+			if auth != "Bearer "+token {
+				writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isLoopback returns true when the host string resolves to a loopback address.
+func isLoopback(host string) bool {
+	if host == "" || host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+type agentIDBody struct {
+	AgentID string `json:"agentId"`
+}
+
+func decodeBody(w http.ResponseWriter, r *http.Request, v interface{}) bool {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return false
+	}
+	return true
+}
+
+func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeJSONError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func writeServiceError(w http.ResponseWriter, err error) {
+	// Map known errors to HTTP status codes
+	switch err {
+	case lifecycle.ErrAgentNotFound:
+		writeJSONError(w, http.StatusNotFound, err.Error())
+	case lifecycle.ErrNotInstalled:
+		writeJSONError(w, http.StatusConflict, err.Error())
+	case lifecycle.ErrAlreadyRunning:
+		writeJSONError(w, http.StatusConflict, err.Error())
+	case lifecycle.ErrAlreadyStopped:
+		writeJSONError(w, http.StatusConflict, err.Error())
+	case lifecycle.ErrCrashLoop:
+		writeJSONError(w, http.StatusConflict, err.Error())
+	case lifecycle.ErrAgentRunning:
+		writeJSONError(w, http.StatusConflict, err.Error())
+	case lifecycle.ErrUpgradeNotSupported:
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+	default:
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 func shutdownAgents(svc *lifecycle.Service, timeout time.Duration) error {

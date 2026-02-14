@@ -11,14 +11,14 @@ import (
 )
 
 const (
-	CheckNameEnvVars          = "required_env_vars"
-	CheckNamePortConflict     = "port_conflict"
-	CheckNameCommandExists    = "command_exists"
-	CheckNameRuntimePrereqs   = "runtime_prerequisites"
+	CheckNameEnvVars        = "required_env_vars"
+	CheckNamePortConflict   = "port_conflict"
+	CheckNameCommandExists  = "command_exists"
+	CheckNameRuntimePrereqs = "runtime_prerequisites"
 
-	IssueCodeEnvMissing       = "E_ENV_MISSING"
-	IssueCodePortConflict     = "E_PORT_CONFLICT"
-	IssueCodeCommandNotFound  = "E_COMMAND_NOT_FOUND"
+	IssueCodeEnvMissing      = "E_ENV_MISSING"
+	IssueCodePortConflict    = "E_PORT_CONFLICT"
+	IssueCodeCommandNotFound = "E_COMMAND_NOT_FOUND"
 )
 
 // CheckResult represents a single pre-flight check outcome.
@@ -40,10 +40,10 @@ type PreFlightResult struct {
 type PreFlightOption func(*preFlightRunner)
 
 type preFlightRunner struct {
-	checker    HostChecker
-	getenv     func(string) string
-	listenTCP  func(network, address string) (net.Listener, error)
-	lookPath   func(string) (string, error)
+	checker   HostChecker
+	getenv    func(string) string
+	listenTCP func(network, address string) (net.Listener, error)
+	lookPath  func(string) (string, error)
 }
 
 // WithGetenv overrides os.Getenv for testing.

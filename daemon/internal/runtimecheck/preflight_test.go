@@ -191,5 +191,5 @@ func TestHostChecker_PreFlight(t *testing.T) {
 type fakeListener struct{}
 
 func (f *fakeListener) Accept() (net.Conn, error) { return nil, errors.New("not implemented") }
-func (f *fakeListener) Close() error               { return nil }
-func (f *fakeListener) Addr() net.Addr              { return &net.TCPAddr{} }
+func (f *fakeListener) Close() error              { return nil }
+func (f *fakeListener) Addr() net.Addr            { return &net.TCPAddr{} }
