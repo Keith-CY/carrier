@@ -464,8 +464,7 @@ describe("port resolution fallback behavior", () => {
       port: undefined,
     });
     
-    // parseInt truncates to 8080, which is valid
-    expect(server.port).toBe(8080);
+    expect(server.port).toBe(8787);
     server.stop();
     
     if (originalEnv !== undefined) {
@@ -485,10 +484,49 @@ describe("port resolution fallback behavior", () => {
       port: undefined,
     });
     
-    // parseInt parses "8080" before hitting special chars
-    expect(server.port).toBe(8080);
+    expect(server.port).toBe(8787);
     server.stop();
     
+    if (originalEnv !== undefined) {
+      process.env.CARRIER_GATEWAY_PORT = originalEnv;
+    } else {
+      delete process.env.CARRIER_GATEWAY_PORT;
+    }
+  });
+
+  test("uses default port when env is above max port range", async () => {
+    const deps = makeDeps();
+    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
+    process.env.CARRIER_GATEWAY_PORT = "65536";
+
+    const server = startGatewayServer({
+      deps,
+      port: undefined,
+    });
+
+    expect(server.port).toBe(8787);
+    server.stop();
+
+    if (originalEnv !== undefined) {
+      process.env.CARRIER_GATEWAY_PORT = originalEnv;
+    } else {
+      delete process.env.CARRIER_GATEWAY_PORT;
+    }
+  });
+
+  test("uses env port when env is max valid port", async () => {
+    const deps = makeDeps();
+    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
+    process.env.CARRIER_GATEWAY_PORT = "65535";
+
+    const server = startGatewayServer({
+      deps,
+      port: undefined,
+    });
+
+    expect(server.port).toBe(65535);
+    server.stop();
+
     if (originalEnv !== undefined) {
       process.env.CARRIER_GATEWAY_PORT = originalEnv;
     } else {
