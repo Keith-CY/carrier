@@ -465,3 +465,30 @@ A PR is merge-ready when:
 - `pending` checks must complete before merge.
 
 See the [Required CI Check Names](#required-ci-check-names-for-pr-readiness) section for the list of required checks in this repo.
+## Auto-Merge Prerequisites
+
+When using `gh pr merge --auto --squash`, the merge will only proceed once all prerequisites are met. If it shows `BLOCKED`, check the following:
+
+### Checklist
+
+1. **Required reviews satisfied** — At least one approving review (no outstanding request-changes).
+2. **Required checks passing** — All required CI checks (`daemon-tests`, `gateway-check`) must be `pass` or `skipping`.
+3. **Branch up to date** — If branch protection requires "up to date with base", rebase or merge `main` into your branch.
+4. **No merge conflicts** — `mergeStateStatus` must not be `DIRTY`.
+
+### Commands
+
+```bash
+# Enable auto-merge on a PR
+gh pr merge <PR_NUMBER> --repo Keith-CY/carrier --auto --squash
+
+# Check current CI status
+gh pr checks <PR_NUMBER> --repo Keith-CY/carrier
+
+# Check merge state
+gh pr view <PR_NUMBER> --repo Keith-CY/carrier --json mergeStateStatus -q '.mergeStateStatus'
+```
+
+### Common "checks pending" case
+
+If auto-merge shows `BLOCKED` immediately after enabling, it usually means CI checks are still running. This is expected — auto-merge will proceed automatically once all required checks pass. Monitor with `gh pr checks`.
