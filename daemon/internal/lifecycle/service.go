@@ -120,6 +120,7 @@ type Service struct {
 	mu            sync.RWMutex
 	states        map[string]AgentState
 	manifests     map[string]manifest.Manifest
+	memoryLinks   map[string][]string
 	logs          map[string][]string
 	handoffs      map[string]DiagnosisHandoff
 	auditLogs     []AuditLog
@@ -148,6 +149,7 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 	svc := &Service{
 		states:        make(map[string]AgentState),
 		manifests:     make(map[string]manifest.Manifest),
+		memoryLinks:   make(map[string][]string),
 		logs:          make(map[string][]string),
 		handoffs:      make(map[string]DiagnosisHandoff),
 		auditLogs:     make([]AuditLog, 0, 128),
@@ -193,11 +195,24 @@ func (s *Service) RegisterManifest(m manifest.Manifest) error {
 		Health:    HealthStateUnknown,
 		UpdatedAt: s.now(),
 	}
+	if _, ok := s.memoryLinks[m.ID]; !ok {
+		s.memoryLinks[m.ID] = nil
+	}
 	s.logs[m.ID] = nil
 	s.restarts[m.ID] = nil
 	s.cooldowns[m.ID] = time.Time{}
 
 	return nil
+}
+
+type upgradeBackup struct {
+	AgentID           string            `json:"agent_id"`
+	CreatedAt         time.Time         `json:"created_at"`
+	CurrentVersion    string            `json:"current_version"`
+	EnvVarKeys        []string          `json:"env_var_keys"`
+	MemoryAttachments []string          `json:"memory_attachments"`
+	RuntimeState      AgentState        `json:"runtime_state"`
+	Config            manifest.Manifest `json:"config"`
 }
 
 func (s *Service) ListAgents() []AgentState {
@@ -346,6 +361,46 @@ func (s *Service) Stop(agentID string) error {
 	s.mu.Unlock()
 	s.recordAudit("", "system", "stop", agentID, AuditResultSuccess, "", "stop completed")
 
+	return nil
+}
+
+func (s *Service) Upgrade(agentID string) error {
+	m, state, err := s.getManifestAndState(agentID)
+	if err != nil {
+		return err
+	}
+	if state.Install != InstallStateInstalled {
+		return ErrNotInstalled
+	}
+	if state.Runtime == RuntimeStateRunning {
+		return fmt.Errorf("agent %s is running; stop it before upgrading", agentID)
+	}
+
+	attachments := s.getMemoryAttachments(agentID)
+	backupPath, err := s.createUpgradeBackup(agentID, m, state, attachments)
+	if err != nil {
+		return err
+	}
+
+	s.appendLog(agentID, "[audit] "+fmt.Sprintf("upgrade_start backup=%q command=%q", backupPath, m.Runtime.Upgrade.Command))
+
+	result, runErr := s.runner.Run(context.Background(), m.Runtime.Upgrade.Command)
+	s.appendCommandLog(agentID, "upgrade", m.Runtime.Upgrade.Command, result, runErr)
+	if runErr != nil {
+		s.appendLog(agentID, "[audit] "+fmt.Sprintf("upgrade_failure backup=%q error=%q", backupPath, runErr.Error()))
+		s.setMemoryAttachments(agentID, attachments)
+		return fmt.Errorf("upgrade failed; use backup at %s for manual rollback guidance: %w", backupPath, runErr)
+	}
+
+	s.setMemoryAttachments(agentID, attachments)
+	s.mu.Lock()
+	state = s.states[agentID]
+	state.LastError = ""
+	state.UpdatedAt = s.now()
+	s.states[agentID] = state
+	s.mu.Unlock()
+
+	s.appendLog(agentID, "[audit] "+fmt.Sprintf("upgrade_success backup=%q", backupPath))
 	return nil
 }
 
@@ -771,6 +826,68 @@ func (s *Service) appendCommandLog(agentID, action, command string, result comma
 	if runErr != nil {
 		s.appendLog(agentID, fmt.Sprintf("[%s] error=%v", action, runErr))
 	}
+}
+
+func (s *Service) getMemoryAttachments(agentID string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	attachments := s.memoryLinks[agentID]
+	return append([]string(nil), attachments...)
+}
+
+func (s *Service) setMemoryAttachments(agentID string, attachments []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.memoryLinks[agentID] = append([]string(nil), attachments...)
+}
+
+func (s *Service) envVarKeys(m manifest.Manifest) []string {
+	seen := make(map[string]struct{}, len(m.Env.Required)+len(m.Env.Optional))
+	keys := make([]string, 0, len(m.Env.Required)+len(m.Env.Optional))
+	for _, envVar := range m.Env.Required {
+		if _, ok := seen[envVar.Name]; ok {
+			continue
+		}
+		seen[envVar.Name] = struct{}{}
+		keys = append(keys, envVar.Name)
+	}
+	for _, envVar := range m.Env.Optional {
+		if _, ok := seen[envVar.Name]; ok {
+			continue
+		}
+		seen[envVar.Name] = struct{}{}
+		keys = append(keys, envVar.Name)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func (s *Service) createUpgradeBackup(agentID string, m manifest.Manifest, state AgentState, attachments []string) (string, error) {
+	if err := os.MkdirAll(s.diagnoseDir, 0o755); err != nil {
+		return "", fmt.Errorf("create diagnose dir: %w", err)
+	}
+
+	fileName := fmt.Sprintf("%s-pre-upgrade-%s.json", agentID, s.now().UTC().Format("2006-01-02T15-04-05Z"))
+	filePath := filepath.Join(s.diagnoseDir, fileName)
+	backup := upgradeBackup{
+		AgentID:           agentID,
+		CreatedAt:         s.now().UTC(),
+		CurrentVersion:    state.Version,
+		EnvVarKeys:        s.envVarKeys(m),
+		MemoryAttachments: append([]string(nil), attachments...),
+		RuntimeState:      state,
+		Config:            m,
+	}
+
+	content, err := json.MarshalIndent(backup, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal upgrade backup: %w", err)
+	}
+	if err := os.WriteFile(filePath, content, 0o644); err != nil {
+		return "", fmt.Errorf("write upgrade backup: %w", err)
+	}
+
+	return filePath, nil
 }
 
 func (s *Service) appendLog(agentID, line string) {

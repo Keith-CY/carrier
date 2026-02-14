@@ -10,6 +10,7 @@ func OpenClawManifest() manifest.Manifest {
 		Runtime: manifest.RuntimeSpec{
 			Type:    manifest.RuntimeTypeLocalBinary,
 			Install: manifest.CommandSpec{Command: "./install.sh"},
+			Upgrade: manifest.CommandSpec{Command: "./install.sh --upgrade"},
 			Start:   manifest.CommandSpec{Command: "./openclaw --config ./config.yaml"},
 			Stop:    manifest.CommandSpec{Command: "./openclaw --stop"},
 		},

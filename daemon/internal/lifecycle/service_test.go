@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -70,6 +71,7 @@ func sampleManifest() manifest.Manifest {
 		Runtime: manifest.RuntimeSpec{
 			Type:    manifest.RuntimeTypeLocalBinary,
 			Install: manifest.CommandSpec{Command: "install-openclaw"},
+			Upgrade: manifest.CommandSpec{Command: "upgrade-openclaw"},
 			Start:   manifest.CommandSpec{Command: "start-openclaw"},
 			Stop:    manifest.CommandSpec{Command: "stop-openclaw"},
 		},
@@ -376,6 +378,130 @@ func TestHandleFailureMarksRemoteDiagnosisNeed(t *testing.T) {
 	}
 	if status.LastTriageSummary == "" {
 		t.Fatal("expected LastTriageSummary to be populated")
+	}
+}
+
+func TestUpgradeCreatesBackupAndPreservesMemoryAttachments(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	svc.memoryLinks["openclaw"] = []string{"shared/team-style@1.0.0", "per-agent/default@0.1.0"}
+
+	if err := svc.Upgrade("openclaw"); err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+
+	entries, readDirErr := os.ReadDir(svc.diagnoseDir)
+	if readDirErr != nil {
+		t.Fatalf("read diagnose dir: %v", readDirErr)
+	}
+
+	var backupPath string
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), "-pre-upgrade-") && strings.HasSuffix(entry.Name(), ".json") {
+			backupPath = filepath.Join(svc.diagnoseDir, entry.Name())
+			break
+		}
+	}
+	if backupPath == "" {
+		t.Fatal("expected pre-upgrade backup file")
+	}
+
+	raw, readErr := os.ReadFile(backupPath)
+	if readErr != nil {
+		t.Fatalf("read backup: %v", readErr)
+	}
+	var backup upgradeBackup
+	if unmarshalErr := json.Unmarshal(raw, &backup); unmarshalErr != nil {
+		t.Fatalf("unmarshal backup: %v", unmarshalErr)
+	}
+
+	if backup.CurrentVersion != "1.0.0" {
+		t.Fatalf("expected backup version 1.0.0, got %q", backup.CurrentVersion)
+	}
+	if backup.RuntimeState.Runtime != RuntimeStateStopped {
+		t.Fatalf("expected backup runtime state stopped, got %q", backup.RuntimeState.Runtime)
+	}
+	if len(backup.MemoryAttachments) != 2 {
+		t.Fatalf("expected 2 memory attachments, got %d", len(backup.MemoryAttachments))
+	}
+	if len(backup.EnvVarKeys) != 1 || backup.EnvVarKeys[0] != "OPENAI_API_KEY" {
+		t.Fatalf("unexpected env keys: %#v", backup.EnvVarKeys)
+	}
+
+	gotAttachments := svc.memoryLinks["openclaw"]
+	if len(gotAttachments) != 2 {
+		t.Fatalf("expected memory attachments preserved, got %d", len(gotAttachments))
+	}
+
+	logs, logErr := svc.Logs("openclaw", 50)
+	if logErr != nil {
+		t.Fatalf("logs: %v", logErr)
+	}
+	hasStartAudit := false
+	hasSuccessAudit := false
+	for _, line := range logs {
+		if strings.Contains(line, "[audit] upgrade_start") {
+			hasStartAudit = true
+		}
+		if strings.Contains(line, "[audit] upgrade_success") {
+			hasSuccessAudit = true
+		}
+	}
+	if !hasStartAudit || !hasSuccessAudit {
+		t.Fatalf("expected upgrade start/success audit events, logs=%v", logs)
+	}
+}
+
+func TestUpgradeFailureReturnsBackupGuidanceAndAuditFailure(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{
+		results: map[string]runResult{
+			"upgrade-openclaw": {result: commandexec.Result{ExitCode: 1}, err: errors.New("upgrade crashed")},
+		},
+	}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	svc.memoryLinks["openclaw"] = []string{"shared/team-style@1.0.0"}
+
+	err := svc.Upgrade("openclaw")
+	if err == nil {
+		t.Fatal("expected upgrade error")
+	}
+	if !strings.Contains(err.Error(), "manual rollback guidance") {
+		t.Fatalf("expected rollback guidance in error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "-pre-upgrade-") {
+		t.Fatalf("expected backup path in error, got %v", err)
+	}
+
+	gotAttachments := svc.memoryLinks["openclaw"]
+	if len(gotAttachments) != 1 || gotAttachments[0] != "shared/team-style@1.0.0" {
+		t.Fatalf("expected memory attachments preserved on failure, got %v", gotAttachments)
+	}
+
+	logs, logErr := svc.Logs("openclaw", 50)
+	if logErr != nil {
+		t.Fatalf("logs: %v", logErr)
+	}
+	hasFailureAudit := false
+	for _, line := range logs {
+		if strings.Contains(line, "[audit] upgrade_failure") {
+			hasFailureAudit = true
+			break
+		}
+	}
+	if !hasFailureAudit {
+		t.Fatalf("expected upgrade failure audit event, logs=%v", logs)
 	}
 }
 

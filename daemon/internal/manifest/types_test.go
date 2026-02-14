@@ -13,6 +13,7 @@ func TestValidateSuccess(t *testing.T) {
 		Runtime: RuntimeSpec{
 			Type:    RuntimeTypeLocalBinary,
 			Install: CommandSpec{Command: "./install.sh"},
+			Upgrade: CommandSpec{Command: "./install.sh --upgrade"},
 			Start:   CommandSpec{Command: "./openclaw start"},
 			Stop:    CommandSpec{Command: "./openclaw stop"},
 		},
@@ -79,6 +80,13 @@ func TestValidateRejectsMissingRequiredFields(t *testing.T) {
 			},
 			wantErr: "runtime.start.command is required",
 		},
+		{
+			name: "missing runtime upgrade command",
+			mutate: func(m *Manifest) {
+				m.Runtime.Upgrade.Command = " "
+			},
+			wantErr: "runtime.upgrade.command is required",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -118,6 +126,7 @@ func TestValidateRejectsDuplicateMemoryType(t *testing.T) {
 		Runtime: RuntimeSpec{
 			Type:    RuntimeTypeGoCLI,
 			Install: CommandSpec{Command: "x"},
+			Upgrade: CommandSpec{Command: "x"},
 			Start:   CommandSpec{Command: "x"},
 			Stop:    CommandSpec{Command: "x"},
 		},
@@ -140,6 +149,7 @@ func validManifestForTest() Manifest {
 		Runtime: RuntimeSpec{
 			Type:    RuntimeTypeLocalBinary,
 			Install: CommandSpec{Command: "./install.sh"},
+			Upgrade: CommandSpec{Command: "./install.sh --upgrade"},
 			Start:   CommandSpec{Command: "./openclaw start"},
 			Stop:    CommandSpec{Command: "./openclaw stop"},
 		},

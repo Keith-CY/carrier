@@ -5,6 +5,7 @@
   "runtime": {
     "type": "local_binary",
     "install": {"command": "./install.sh"},
+    "upgrade": {"command": "./install.sh --upgrade"},
     "start": {"command": "   "},
     "stop": {"command": "./openclaw --stop"}
   },
