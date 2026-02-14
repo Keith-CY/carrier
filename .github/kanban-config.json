@@ -1,0 +1,124 @@
+{
+  "projectId": "PVT_kwHOAG7zoc4BPLc6",
+  "discussionCategory": "General",
+  "fields": [
+    {
+      "name": "Status",
+      "aliases": ["Status", "状态"],
+      "type": "SINGLE_SELECT",
+      "options": ["To Do", "In Progress", "Blocked", "Done", "Review"],
+      "description": "流程状态"
+    },
+    {
+      "name": "Priority",
+      "aliases": ["Priority", "优先级"],
+      "type": "SINGLE_SELECT",
+      "options": ["P0", "P1", "P2", "P3"],
+      "description": "工作优先级"
+    },
+    {
+      "name": "Type",
+      "aliases": ["Type", "类型"],
+      "type": "SINGLE_SELECT",
+      "options": ["Bug", "Feature", "Infra", "Docs", "Refactor", "Release"],
+      "description": "任务类型"
+    },
+    {
+      "name": "Iteration",
+      "aliases": ["Iteration", "Sprint", "迭代", "里程碑"],
+      "type": "SINGLE_SELECT",
+      "options": ["Backlog", "Sprint 1", "Sprint 2", "Sprint 3"],
+      "description": "迭代（建议与里程碑命名一致）"
+    },
+    {
+      "name": "Estimate Hours",
+      "aliases": ["Estimate Hours", "Story Points", "估时", "预估工时", "预估工作量"],
+      "type": "NUMBER",
+      "description": "预估工时（数字）"
+    },
+    {
+      "name": "Blocked Reason",
+      "aliases": ["Blocked Reason", "阻塞原因", "阻塞说明"],
+      "type": "TEXT",
+      "description": "阻塞原因说明"
+    },
+    {
+      "name": "Due Date",
+      "aliases": ["Due Date", "截止日期", "交付日期"],
+      "type": "DATE",
+      "description": "预估/计划交付日期（YYYY-MM-DD）"
+    }
+  ],
+  "views": [
+    {
+      "name": "看板总览",
+      "groupBy": "Status",
+      "fields": ["Title", "Assignees", "Priority", "Estimate Hours", "Iteration", "Blocked Reason"],
+      "filters": "Status != Done",
+      "sort": "Priority, Due Date"
+    },
+    {
+      "name": "待办池（可排期）",
+      "groupBy": "Status",
+      "fields": ["Title", "Assignees", "Type", "Priority", "Estimate Hours", "Due Date", "Iteration"],
+      "filters": "Status = To Do",
+      "sort": "Priority, Due Date"
+    },
+    {
+      "name": "个人负载",
+      "groupBy": "Assignees",
+      "fields": ["Title", "Status", "Estimate Hours", "Type", "Priority", "Iteration"],
+      "filters": "Status in To Do, In Progress, Blocked",
+      "sort": "Priority, Iteration"
+    },
+    {
+      "name": "PM 周报（交付）",
+      "groupBy": "Iteration",
+      "fields": ["Title", "Assignees", "Status", "Priority", "Estimate Hours", "Due Date", "Type"],
+      "filters": "Status in To Do, In Progress, Blocked, Review, Done",
+      "sort": "Iteration, Due Date"
+    },
+    {
+      "name": "迭代视图",
+      "groupBy": "Iteration",
+      "fields": ["Title", "Status", "Priority", "Assignees", "Estimate Hours", "Blocked Reason"],
+      "filters": "Iteration != Backlog",
+      "sort": "Status, Due Date"
+    },
+    {
+      "name": "高优先级看板",
+      "groupBy": "Status",
+      "fields": ["Title", "Assignees", "Type", "Estimate Hours", "Iteration", "Due Date", "Blocked Reason"],
+      "filters": "Priority in P0, P1",
+      "sort": "Due Date, Assignees"
+    },
+    {
+      "name": "阻塞视图",
+      "groupBy": "Status",
+      "fields": ["Title", "Assignees", "Blocked Reason", "Iteration", "Priority", "Due Date"],
+      "filters": "Status = Blocked",
+      "sort": "Due Date"
+    },
+    {
+      "name": "评审队列",
+      "groupBy": "Assignees",
+      "fields": ["Title", "Status", "Iteration", "Due Date", "Estimate Hours", "Priority"],
+      "filters": "Status = Review",
+      "sort": "Due Date"
+    },
+    {
+      "name": "交付趋势",
+      "groupBy": "Iteration",
+      "fields": ["Title", "Assignees", "Status", "Estimate Hours", "Due Date"],
+      "filters": "Status in To Do, In Progress, Blocked, Done",
+      "sort": "Due Date"
+    },
+    {
+      "name": "超期预警",
+      "groupBy": "Status",
+      "fields": ["Title", "Assignees", "Due Date", "Priority", "Iteration", "Blocked Reason"],
+      "filters": "Status != Done",
+      "sort": "Due Date"
+    }
+  ]
+}

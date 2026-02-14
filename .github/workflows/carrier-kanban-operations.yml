@@ -1,0 +1,367 @@
+name: Carrier Kanban Operations
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: 'GitHub ProjectV2 node ID (defaults to config file or current value).'
+        required: false
+      dry_run:
+        description: 'Report only, do not post to Discussions.'
+        required: false
+        default: 'false'
+  schedule:
+    - cron: '0 9 * * 1'
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  projects: read
+  discussions: write
+
+jobs:
+  sync-config-and-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Publish Kanban field/view status to Discussion
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const dryRunInput = String((context.payload.inputs?.dry_run || process.env.DRY_RUN || 'false')).toLowerCase() === 'true';
+
+            const repoMeta = await gh.graphql(`
+              query($owner: String!, $repo: String!) {
+                repository(owner: $owner, name: $repo) {
+                  id
+                  discussionCategories(first: 20) {
+                    nodes {
+                      id
+                      name
+                      slug
+                    }
+                  }
+                }
+              }
+            `, { owner, repo });
+
+            const configPath = '.github/kanban-config.json';
+            if (!fs.existsSync(configPath)) {
+              core.setFailed(`Missing configuration file: ${configPath}`);
+              return;
+            }
+
+            const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            const projectId = process.env.CARRIER_PROJECT_ID || (context.payload.inputs && context.payload.inputs.project_id) || config.projectId;
+            if (!projectId) {
+              core.setFailed('Missing projectId. Set CARRIER_PROJECT_ID secret or pass workflow input project_id.');
+              return;
+            }
+
+            const preflight = await gh.graphql(`
+              query($projectId: ID!) {
+                node(id: $projectId) {
+                  ... on ProjectV2 {
+                    id
+                    title
+                    fields(first: 200) {
+                      nodes {
+                        ... on ProjectV2Field {
+                          id
+                          name
+                          dataType
+                        }
+                        ... on ProjectV2SingleSelectField {
+                          options(first: 50) {
+                            nodes {
+                              id
+                              name
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `, { projectId });
+
+            if (!preflight?.node) {
+              core.setFailed(`Cannot read ProjectV2 ${projectId}.`);
+              return;
+            }
+
+            const existingFields = preflight.node.fields?.nodes || [];
+            const fieldByName = new Map(existingFields.map((f) => [String(f.name || '').toLowerCase(), f]));
+
+            const normalize = (text) => String(text || '').trim().toLowerCase();
+
+            const findField = (names = []) => {
+              for (const name of names) {
+                const found = fieldByName.get(normalize(name));
+                if (found) {
+                  return found;
+                }
+              }
+              return null;
+            };
+
+            const requiredReport = config.fields.map((field) => {
+              const existing = findField(field.aliases || [field.name]);
+              if (!existing) {
+                return {
+                  field: field.name,
+                  status: 'missing',
+                  reason: `field not found. expected aliases: ${(field.aliases || [field.name]).join(', ')}`,
+                };
+              }
+
+              const expectedDataType = field.type;
+              if (expectedDataType && existing.dataType && String(existing.dataType) !== String(expectedDataType)) {
+                return {
+                  field: field.name,
+                  status: 'type_mismatch',
+                  reason: `existing type: ${existing.dataType}, expected: ${expectedDataType}`,
+                };
+              }
+
+              if (String(existing.dataType) === 'SINGLE_SELECT' && Array.isArray(field.options)) {
+                const exists = new Set((existing.options?.nodes || []).map((o) => normalize(o.name)));
+                const missingOptions = field.options.filter((option) => !exists.has(normalize(option)));
+                if (missingOptions.length > 0) {
+                  return {
+                    field: field.name,
+                    status: 'partial',
+                    reason: `missing options: ${missingOptions.join(', ')}`,
+                  };
+                }
+              }
+
+              return {
+                field: field.name,
+                status: 'ok',
+                reason: 'configured',
+              };
+            });
+
+            const now = new Date();
+            const isoDate = now.toISOString().split('T')[0];
+
+            const parseEstimate = (text) => {
+              if (!text) {
+                return null;
+              }
+              const source = String(text);
+              const estimateMatchers = [
+                /(?:^|\s)estimate\s*[:：]\s*(\d+(?:\.\d+)?)/i,
+                /(?:^|\s)预估\s*[:：]\s*(\d+(?:\.\d+)?)/i,
+                /(?:^|\s)(?:story\s*points|sp|points)\s*[:：]\s*(\d+(?:\.\d+)?)/i,
+              ];
+
+              for (const matcher of estimateMatchers) {
+                const match = source.match(matcher);
+                if (match && match[1]) {
+                  const value = Number.parseFloat(match[1]);
+                  return Number.isFinite(value) ? value : null;
+                }
+              }
+
+              return null;
+            };
+
+            const normalizeLabel = (name) => String(name || '').trim().toLowerCase();
+
+            const inferStatus = (item, labelNames) => {
+              if (item.state === 'closed') {
+                return 'Done';
+              }
+
+              if (labelNames.has('blocked') || labelNames.has('blocker')) {
+                return 'Blocked';
+              }
+
+              if (labelNames.has('in progress') || labelNames.has('in-progress') || labelNames.has('wip') || labelNames.has('review')) {
+                return 'In Progress';
+              }
+
+              return 'To Do';
+            };
+
+            const issueOpts = { owner, repo, state: 'open', per_page: 100 };
+            const issues = await github.paginate(github.rest.issues.listForRepo, issueOpts, (r) => r.data);
+
+            const workload = new Map();
+            const blockedItems = [];
+
+            for (const item of issues) {
+              const labels = new Set((item.labels || []).map((label) => normalizeLabel(label.name)));
+              const status = inferStatus(item, labels);
+              const estimates = parseEstimate([item.title, item.body || ''].join(' '));
+              const estimateHours = estimates == null ? 0 : estimates;
+              const owners = (item.assignees || []).map((a) => a?.login || 'unassigned');
+              const assignee = owners.length > 0 ? owners.join(', ') : 'unassigned';
+
+              if (!workload.has(assignee)) {
+                workload.set(assignee, {
+                  todo: 0,
+                  inProgress: 0,
+                  blocked: 0,
+                  done: 0,
+                  totalEstimate: 0,
+                });
+              }
+
+              const bucket = workload.get(assignee);
+              if (status === 'Blocked') {
+                bucket.blocked += 1;
+                blockedItems.push({
+                  title: item.title,
+                  url: item.html_url,
+                  assignee,
+                  labels: Array.from(labels).slice(0, 5).join(', ') || '-',
+                  estimate: estimateHours,
+                });
+              } else if (status === 'In Progress') {
+                bucket.inProgress += 1;
+              } else {
+                bucket.todo += 1;
+              }
+
+              bucket.totalEstimate += estimateHours;
+            }
+
+            const totalItems = issues.length;
+            const totalBlocked = blockedItems.length;
+            const totalInProgress = Array.from(workload.values()).reduce((sum, value) => sum + value.inProgress, 0);
+            const totalTodo = Array.from(workload.values()).reduce((sum, value) => sum + value.todo, 0);
+            const blockedRate = totalItems === 0 ? '0.00' : ((totalBlocked / totalItems) * 100).toFixed(2);
+
+            const renderStatusTable = (rows) => {
+              const header = '| 字段 | 状态 | 说明 |\n| --- | --- | --- |';
+              const body = rows.map((row) => {
+                let badge = '✅';
+                if (row.status === 'missing') badge = '❌';
+                if (row.status !== 'ok') badge = '⚠️';
+                return `| ${row.field} | ${badge} ${row.status} | ${row.reason} |`;
+              });
+              return `${header}\n${body.join('\n')}`;
+            };
+
+            const renderViewTable = (views) => {
+              const header = '| 视图 | 配置 |';
+              const sep = '| --- | --- |';
+              const lines = views.map((view) => `| ${view.name} | ${view.desc} |`);
+              return `${header}\n${sep}\n${lines.join('\n')}`;
+            };
+
+            const renderWorkload = (rows) => {
+              const header = '| 负责人 | 待办(To Do) | 进行中(In Progress) | 阻塞(Blocked) | 待交付工时估算 |';
+              const sep = '| --- | ---: | ---: | ---: | ---: |';
+              const lines = Array.from(rows.entries())
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([assignee, value]) =>
+                  `| ${assignee} | ${value.todo} | ${value.inProgress} | ${value.blocked} | ${value.totalEstimate.toFixed(2)} |`);
+
+              if (!lines.length) {
+                return '| 负责人 | 待办(To Do) | 进行中(In Progress) | 阻塞(Blocked) | 待交付工时估算 |\n| --- | ---: | ---: | ---: | ---: |\n| - | 0 | 0 | 0 | 0 |';
+              }
+
+              return `${header}\n${sep}\n${lines.join('\n')}`;
+            };
+
+            const renderBlockedList = (rows) => {
+              if (!rows.length) {
+                return '- 当前无阻塞项';
+              }
+
+              return rows
+                .slice(0, 12)
+                .map((item) => `- [${item.title}](${item.url}) · ${item.assignee} · 预估 ${item.estimate || 0}h · 标签: ${item.labels}`)
+                .join('\n');
+            };
+
+            const viewRows = (config.views || []).map((view) => ({
+              name: view.name,
+              desc: `${view.groupBy}；列: ${(view.fields || []).join(', ')}；过滤: ${view.filters || '无'}；排序: ${view.sort || '无'}`,
+            }));
+
+            const summaryBody = [
+              `# Carrier Kanban 配置与工作量报告 (${isoDate})`,
+              '',
+              `项目: **${preflight.node.title || projectId}**`,
+              `Project ID: \'${projectId}\'`,
+              `触发: ${context.eventName === 'workflow_dispatch' ? '手动执行' : '周度定时任务'}`,
+              '',
+              '## 字段配置检查',
+              renderStatusTable(requiredReport),
+              '',
+              '## 建议视图',
+              renderViewTable(viewRows),
+              '',
+              '## 周度工作量快照（按未关闭 Issue/PR）',
+              `- 统计范围：
+  - 总未关闭项: **${totalItems}**
+  - 进行中: **${totalInProgress}**
+  - 待办: **${totalTodo}**
+  - 阻塞: **${totalBlocked}**（阻塞率 **${blockedRate}%**）`,
+              '',
+              renderWorkload(workload),
+              '',
+              '## 当前阻塞列表（最多 12）',
+              renderBlockedList(blockedItems),
+              '',
+              '### 说明',
+              '- `Status` 识别依赖于 `blocked` 标签及状态标签规则；建议将真实状态固化为项目 `Status` 列以避免偏差。',
+              '- 如需更新可直接运行此 workflow，自动重算并同步到 Discussion。',
+            ].join('\n');
+
+            if (dryRunInput) {
+              core.info('DRY RUN enabled: no discussion update.');
+              core.info(summaryBody);
+              return;
+            }
+
+            const categoryName = process.env.CARRIER_DISCUSSION_CATEGORY || config.discussionCategory || 'General';
+            const categories = repoMeta.repository?.discussionCategories?.nodes || [];
+            const category = categories.find((item) => item.slug === categoryName.toLowerCase()) ||
+              categories.find((item) => item.name.toLowerCase() === categoryName.toLowerCase()) ||
+              categories[0];
+
+            if (!category) {
+              core.setFailed('Unable to determine a discussion category. Configure CARRIER_DISCUSSION_CATEGORY.');
+              return;
+            }
+
+            const createDiscussionMutation = `
+              mutation($repositoryId: ID!, $categoryId: ID!, $title: String!, $body: String!) {
+                createDiscussion(input: {
+                  repositoryId: $repositoryId,
+                  categoryId: $categoryId,
+                  title: $title,
+                  body: $body
+                }) {
+                  discussion {
+                    id
+                    url
+                  }
+                }
+              }
+            `;
+
+            const title = `Carrier Kanban：字段/视图配置与工作量报告 (${isoDate})`;
+
+            const resp = await gh.graphql(createDiscussionMutation, {
+              repositoryId: repoMeta.repository.id,
+              categoryId: category.id,
+              title,
+              body: summaryBody,
+            });
+
+            core.info(`Discussion created: ${resp.createDiscussion.discussion.url}`);
