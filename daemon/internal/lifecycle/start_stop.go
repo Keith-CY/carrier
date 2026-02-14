@@ -79,6 +79,8 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 	s.mu.Unlock()
 	s.recordAudit("", "system", "start", agentID, AuditResultSuccess, "", "start completed")
 
+	s.saveState()
+
 	return nil
 }
 
@@ -116,6 +118,8 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 	s.states[agentID] = state
 	s.mu.Unlock()
 	s.recordAudit("", "system", "stop", agentID, AuditResultSuccess, "", "stop completed")
+
+	s.saveState()
 
 	return nil
 }

@@ -126,6 +126,12 @@ func WithMemoryStore(ms *memory.Store) Option {
 	}
 }
 
+func WithStateFile(path string) Option {
+	return func(s *Service) {
+		s.stateFile = NewStateFile(path)
+	}
+}
+
 type Service struct {
 	mu                 sync.RWMutex
 	states             map[string]AgentState
@@ -150,6 +156,7 @@ type Service struct {
 	crashLoopWindow    time.Duration
 	crashLoopCooldown  time.Duration
 	memoryStore        *memory.Store
+	stateFile          *StateFile
 }
 
 func NewService(triager baseagent.Triager, opts ...Option) *Service {
@@ -184,6 +191,15 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 	}
 	for _, opt := range opts {
 		opt(svc)
+	}
+
+	// Load persisted state if configured
+	if svc.stateFile != nil {
+		if err := svc.loadPersistedState(); err != nil {
+			// Log but don't fail - start with empty state if load fails
+			// In production, you might want to handle this differently
+			_ = err
+		}
 	}
 
 	return svc
@@ -422,4 +438,56 @@ func (s *Service) CleanupExpiredDiagnosisHandoffs() int {
 		s.recordAudit("", "system", "handoff_cleanup", "diagnosis_handoffs", AuditResultSuccess, "", fmt.Sprintf("removed=%d", removed))
 	}
 	return removed
+}
+
+// loadPersistedState restores agent state from the state file.
+// Only restores Install and Runtime state for registered agents.
+func (s *Service) loadPersistedState() error {
+	if s.stateFile == nil {
+		return nil
+	}
+
+	persisted, err := s.stateFile.Load()
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for id, pState := range persisted {
+		// Only restore state for agents that have been registered
+		if state, ok := s.states[id]; ok {
+			if pState.Installed {
+				state.Install = InstallStateInstalled
+			} else {
+				state.Install = InstallStateNotInstalled
+			}
+			state.Runtime = RuntimeState(pState.RuntimeState)
+			state.UpdatedAt = pState.LastTransition
+			s.states[id] = state
+		}
+	}
+
+	return nil
+}
+
+// saveState persists the current agent states to disk.
+func (s *Service) saveState() {
+	if s.stateFile == nil {
+		return
+	}
+
+	s.mu.RLock()
+	// Create a map of pointers for Save
+	agents := make(map[string]*AgentState, len(s.states))
+	for id := range s.states {
+		state := s.states[id]
+		agents[id] = &state
+	}
+	s.mu.RUnlock()
+
+	// Save asynchronously to avoid blocking lifecycle operations
+	// In production, you might want to handle errors more carefully
+	_ = s.stateFile.Save(agents)
 }

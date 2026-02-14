@@ -37,5 +37,7 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 	s.mu.Unlock()
 	s.recordAudit("", "system", "install", agentID, AuditResultSuccess, "", "install completed")
 
+	s.saveState()
+
 	return nil
 }
