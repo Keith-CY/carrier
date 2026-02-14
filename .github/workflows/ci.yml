@@ -78,10 +78,6 @@ jobs:
         working-directory: gateway
         run: bun run ci
 
-      - name: Run gateway tests
-        working-directory: gateway
-        run: bun test
-
   e2e-tests:
     name: End-to-End Tests
     runs-on: ubuntu-latest
