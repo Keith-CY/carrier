@@ -148,7 +148,7 @@ Implementation note: workflows now skip with a warning when `CARRIER_PROJECTS_TO
 
 ### English
 
-1. Open [**Releases**](https://github.com/Keith-CY/carrier/releases) for this repository.
+1. Open [**Releases**](https://github.com/Keith-CY/carrier/releases) for this repository. Artifacts follow the naming pattern `carrier-<os>-<arch>.zip` (e.g., `carrier-linux-x64.zip`, `carrier-darwin-arm64.zip`).
 2. Download the ZIP package for your OS/CPU (for example: `linux-x64`, `darwin-arm64`, `windows-x64`).
 3. (Optional but recommended) Download the matching `.sha256` file and verify checksum:
    - Linux (GNU): `sha256sum -c carrier-*.sha256`
