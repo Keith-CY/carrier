@@ -15,17 +15,15 @@ THRESHOLD_DAYS=7
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --days)
-      if [[ $# -lt 2 ]] || [[ "$2" == --* ]]; then
-        echo "Error: --days requires a positive integer value." >&2
-        echo "Usage: $0 [--days N]" >&2
-        exit 1
-      fi
-      if ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
-        echo "Error: --days must be a positive integer, got: $2" >&2
-        echo "Usage: $0 [--days N]" >&2
+      if [[ -z "${2:-}" ]]; then
+        echo "Error: --days requires a value" >&2
         exit 1
       fi
       THRESHOLD_DAYS="$2"
+      if ! [[ "$THRESHOLD_DAYS" =~ ^[0-9]+$ ]] || [[ "$THRESHOLD_DAYS" -le 0 ]]; then
+        echo "Error: --days must be a positive integer, got '$THRESHOLD_DAYS'" >&2
+        exit 1
+      fi
       shift 2
       ;;
     *)
@@ -37,7 +35,7 @@ done
 
 REPO="${GITHUB_REPOSITORY:-Keith-CY/carrier}"
 THRESHOLD_DATE=$(date -u -d "-${THRESHOLD_DAYS} days" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
-                 date -u -v-"${THRESHOLD_DAYS}"d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
+                 date -u -v-${THRESHOLD_DAYS}d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
                  echo "")
 
 echo "Scanning for stale [review-followup] issues (older than ${THRESHOLD_DAYS} days)..."
