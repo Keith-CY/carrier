@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { DownloadTokenStore } from "./token_store";
 
 describe("DownloadTokenStore", () => {
+  const createStoreAt = (isoTime: string) => new DownloadTokenStore(() => new Date(isoTime));
+
   test("issue() returns a valid token with correct fileRef, expiresAt, singleUse", () => {
     const base = new Date("2026-01-01T00:00:00Z");
     const store = new DownloadTokenStore(() => base);
@@ -15,7 +17,7 @@ describe("DownloadTokenStore", () => {
   });
 
   test("consume() valid token returns the record", () => {
-    const store = new DownloadTokenStore(() => new Date("2026-01-01T00:00:00Z"));
+    const store = createStoreAt("2026-01-01T00:00:00Z");
     const tok = store.issue("file.txt", 300, false);
 
     const result = store.consume(tok.token);
@@ -38,7 +40,7 @@ describe("DownloadTokenStore", () => {
   });
 
   test("consume() unknown token returns null", () => {
-    const store = new DownloadTokenStore(() => new Date("2026-01-01T00:00:00Z"));
+    const store = createStoreAt("2026-01-01T00:00:00Z");
 
     expect(store.consume("not-a-real-token")).toBeNull();
   });
