@@ -15,4 +15,20 @@
 
 ## Audit Traceability
 
-- [ ] PR description includes a “Commit highlights” section summarizing key commit-level deltas (for post-merge audit follow-up).
+- [ ] PR description includes a "Commit highlights" section summarizing key commit-level deltas (for post-merge audit follow-up).
+
+## Review Readiness Checklist
+
+Local verification (run the checks relevant to your change type):
+
+- [ ] **Daemon changes:** `cd daemon && go test ./...`
+- [ ] **Gateway changes:** `cd gateway && bun install && bun run check && bun test`
+- [ ] **Docs-only:** Verified markdown links render correctly
+- [ ] **Full suite:** `./scripts/run-all-tests.sh` (recommended before final push)
+
+CI checks (must be green before merge):
+
+- [ ] Daemon Tests (`daemon-tests`)
+- [ ] Gateway Type Check (`gateway-check`)
+
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for detailed guidance.
