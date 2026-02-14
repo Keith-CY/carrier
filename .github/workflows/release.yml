@@ -40,6 +40,11 @@ jobs:
             label: windows-x64
             ext: ".exe"
             archive_ext: zip
+          - goos: windows
+            goarch: arm64
+            label: windows-arm64
+            ext: ".exe"
+            archive_ext: zip
 
     steps:
       - name: Checkout
@@ -57,6 +62,7 @@ jobs:
           archive_name="carrier-${GITHUB_SHA}-${{ matrix.label }}"
           binary_name="agentd${{ matrix.ext }}"
           release_dir="dist/${archive_name}"
+          package_file="${archive_name}.${{ matrix.archive_ext }}"
 
           mkdir -p "${release_dir}"
 
@@ -66,13 +72,16 @@ jobs:
 
           cp -R daemon catalog gateway docs README.md "${release_dir}/"
 
-          (cd dist && zip -r "${archive_name}.${{ matrix.archive_ext }}" "${archive_name}")
+          (cd dist && zip -r "${package_file}" "${archive_name}")
+          (cd dist && sha256sum "${package_file}" > "${package_file}.sha256")
 
       - name: Upload package
         uses: actions/upload-artifact@v4
         with:
           name: carrier-${{ matrix.label }}
-          path: dist/carrier-${{ github.sha }}-${{ matrix.label }}.${{ matrix.archive_ext }}
+          path: |
+            dist/carrier-${{ github.sha }}-${{ matrix.label }}.${{ matrix.archive_ext }}
+            dist/carrier-${{ github.sha }}-${{ matrix.label }}.${{ matrix.archive_ext }}.sha256
           if-no-files-found: error
 
   release:
@@ -97,3 +106,4 @@ jobs:
             Commit: ${{ github.sha }}
           files: |
             dist/**/*.zip
+            dist/**/*.sha256
