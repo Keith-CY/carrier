@@ -1,0 +1,110 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Keith-CY/carrier/docs/plans/memory-schema.json",
+  "title": "Memory Package Manifest",
+  "description": "Schema for memory.yaml — the manifest file for Carrier memory packages.",
+  "type": "object",
+  "required": ["id", "version", "type", "owner", "checksum", "artifacts"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,126}[a-z0-9]$",
+      "description": "Unique package identifier. Lowercase alphanumeric and hyphens, 3-128 characters."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version (major.minor.patch)."
+    },
+    "type": {
+      "type": "string",
+      "enum": ["model", "dataset", "config", "plugin"],
+      "description": "Package type."
+    },
+    "owner": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "GitHub handle or org identifier of the package owner."
+    },
+    "checksum": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "SHA-256 hex digest of the artifact payload."
+    },
+    "name": {
+      "type": "string",
+      "maxLength": 256,
+      "description": "Human-readable display name."
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "Short package description."
+    },
+    "license": {
+      "type": "string",
+      "description": "SPDX license identifier."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 creation timestamp."
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 20,
+      "description": "Freeform tags for discovery."
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "version"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{1,126}[a-z0-9]$"
+          },
+          "version": {
+            "type": "string",
+            "description": "SemVer constraint (e.g. >=1.0.0, ^2.1.0)."
+          }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["path", "size"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Relative path within the package."
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "File size in bytes."
+          },
+          "checksum": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "Per-file SHA-256 hex digest."
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Arbitrary key-value pairs for extensibility."
+    }
+  }
+}
