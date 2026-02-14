@@ -142,42 +142,6 @@ bun test
 - Bun: see `gateway/package.json` or CI workflow (`bun-version`)
 
 These are the same commands CI runs. Fix failures locally before pushing updates.
-## Cleanup Stale Worktrees and Branches
-
-When using the issue-driven worktree workflow (`git worktree add …`), stale worktrees and branches accumulate over time. Use the commands below to clean up.
-
-**List current worktrees:**
-
-```bash
-git worktree list
-```
-
-**Remove a stale worktree** (after its PR is merged):
-
-```bash
-git worktree remove /tmp/carrier-issue-<number>
-```
-
-If the directory was already deleted, prune the worktree records:
-
-```bash
-git worktree prune
-```
-
-**Delete merged local branches:**
-
-```bash
-git branch --merged main | grep -v '^\*\|main' | xargs -r git branch -d
-```
-
-**Sync before starting new work:**
-
-```bash
-git checkout main && git pull origin main
-```
-
-> **Tip:** Branch names follow the pattern `codex/issue-<number>-<short-desc>`. Avoid `git branch -D` (force delete) unless you are certain the branch has been merged or abandoned.
-
 ## Stale Follow-Up Detection
 
 To find stale `[review-followup]` issues whose referenced PR is already merged:
@@ -259,3 +223,42 @@ NBS: The error message could include the agent ID for easier debugging.
 ```
 
 Non-blocking suggestions tagged with `NBS:` are automatically converted to follow-up issues by the `review-nbs-followup` automation after the PR merges.
+
+## Quick CI Inspection and Rerun Workflow
+
+When a CI check fails on your PR, use these `gh` commands to inspect and rerun without leaving the terminal.
+
+**1. List recent workflow runs for your PR branch:**
+
+```bash
+gh run list --branch "$(git branch --show-current)" --limit 5
+```
+
+**2. View logs for the failed run:**
+
+```bash
+gh run view <run-id> --log-failed
+```
+
+**3. Rerun only the failed jobs:**
+
+```bash
+gh run rerun <run-id> --failed
+```
+
+**4. Rerun the entire workflow (all jobs):**
+
+```bash
+gh run rerun <run-id>
+```
+
+**Permissions note:** You need write access to the repository to trigger reruns. If the button is unavailable, ask a maintainer to rerun or push an update to your PR branch to trigger a fresh run.
+## Local ShellCheck Lint
+
+Run shellcheck across all repository shell scripts:
+
+```bash
+bash scripts/run-shellcheck.sh
+```
+
+The script discovers `scripts/**/*.sh` files, runs shellcheck on each, and exits non-zero on any findings. Requires `shellcheck` to be installed locally.
