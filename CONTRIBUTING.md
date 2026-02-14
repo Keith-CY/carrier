@@ -117,7 +117,7 @@ Before opening or updating a PR, run the minimum local validation for your chang
 
 - **CI/workflow changes:** Test the workflow logic locally where possible. For GitHub Actions changes, verify YAML syntax with a linter (e.g., `actionlint`).
 
-- **Shell script changes:** Run `shellcheck scripts/*.sh` locally to catch portability/quoting issues before CI does.
+- **Shell script changes:** Run `bash scripts/run-shellcheck.sh` locally to lint the same tracked `*.sh` files that CI checks.
 
 These are minimum checks. The full local validation suite is available via `./scripts/run-all-tests.sh`.
 ## CI Troubleshooting
@@ -261,7 +261,7 @@ while IFS= read -r f; do echo "$f"; done < <(find . -name "*.sh")
 Run ShellCheck locally before pushing:
 
 ```bash
-shellcheck scripts/*.sh
+bash scripts/run-shellcheck.sh
 ```
 ### Missing Bun Type Definitions (TS2688)
 
@@ -435,7 +435,7 @@ Run shellcheck across all repository shell scripts:
 bash scripts/run-shellcheck.sh
 ```
 
-The script discovers `scripts/**/*.sh` files, runs shellcheck on each, and exits non-zero on any findings. Requires `shellcheck` to be installed locally.
+The script discovers all git-tracked `*.sh` files in the repository (same scope as CI), runs shellcheck on each, and exits non-zero on any findings. Requires `shellcheck` to be installed locally.
 ## GitHub CLI Preflight and Troubleshooting
 
 Before running review or triage automation scripts locally, verify your `gh` setup:
