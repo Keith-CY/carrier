@@ -60,6 +60,51 @@ describe("composeMiddleware", () => {
       "mw1:after",
     ]);
   });
+
+  test("rejects when middleware calls next() multiple times and does not double-run downstream", async () => {
+    const trace: string[] = [];
+    const deps = makeDeps();
+
+    const middlewares = [
+      async (_ctx: GatewayRequestContext, next: () => Promise<Response>) => {
+        trace.push("mw1:before");
+        const first = await next();
+        trace.push("mw1:after-first-next");
+        await expect(next()).rejects.toThrow("next() called multiple times");
+        trace.push("mw1:after-second-next-error");
+        return first;
+      },
+      async (_ctx: GatewayRequestContext, next: () => Promise<Response>) => {
+        trace.push("mw2:before");
+        const response = await next();
+        trace.push("mw2:after");
+        return response;
+      },
+    ];
+
+    const handler = composeMiddleware(middlewares, async () => {
+      trace.push("handler");
+      return new Response("ok");
+    });
+
+    const response = await handler({
+      request: new Request("http://gateway.local/healthz"),
+      requestId: "",
+      deps,
+    });
+
+    expect(response.status).toBe(200);
+    expect(trace).toEqual([
+      "mw1:before",
+      "mw2:before",
+      "handler",
+      "mw2:after",
+      "mw1:after-first-next",
+      "mw1:after-second-next-error",
+    ]);
+    expect(trace.filter((item) => item === "mw2:before")).toHaveLength(1);
+    expect(trace.filter((item) => item === "handler")).toHaveLength(1);
+  });
 });
 
 describe("runtime dependencies", () => {
