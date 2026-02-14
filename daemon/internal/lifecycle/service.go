@@ -649,6 +649,12 @@ func describePortOccupant(port int) string {
 		return "an unknown process"
 	}
 
+	// Try ss command first for better performance
+	if info := tryDescribePortWithSS(port); info != "" {
+		return info
+	}
+
+	// Fallback to /proc scan if ss is unavailable
 	inode, err := findListeningSocketInode(port)
 	if err != nil || inode == "" {
 		return "an unknown process"
@@ -662,6 +668,52 @@ func describePortOccupant(port int) string {
 		return fmt.Sprintf("pid %d", pid)
 	}
 	return fmt.Sprintf("pid %d (%s)", pid, processName)
+}
+
+func tryDescribePortWithSS(port int) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	cmd := commandexec.NewShellRunner()
+	result, err := cmd.Run(ctx, fmt.Sprintf("ss -tlnp sport = :%d 2>/dev/null", port))
+	if err != nil || result.ExitCode != 0 {
+		return ""
+	}
+
+	output := strings.TrimSpace(result.CombinedOutput)
+	lines := strings.Split(output, "\n")
+	if len(lines) < 2 {
+		return ""
+	}
+
+	// Parse ss output (second line contains the data)
+	dataLine := lines[1]
+	// ss output format: State Recv-Q Send-Q Local:Port Peer:Port Process
+	// Look for process info in format: users:(("process",pid=123,fd=4))
+	if idx := strings.Index(dataLine, "users:(("); idx >= 0 {
+		rest := dataLine[idx+8:]
+		if endIdx := strings.Index(rest, "))"); endIdx >= 0 {
+			info := rest[:endIdx]
+			// Parse: "process",pid=123,fd=4
+			parts := strings.Split(info, ",")
+			var processName string
+			var pid string
+			for _, part := range parts {
+				if strings.HasPrefix(part, "\"") && strings.HasSuffix(part, "\"") {
+					processName = strings.Trim(part, "\"")
+				} else if strings.HasPrefix(part, "pid=") {
+					pid = strings.TrimPrefix(part, "pid=")
+				}
+			}
+			if pid != "" && processName != "" {
+				return fmt.Sprintf("pid %s (%s)", pid, processName)
+			} else if pid != "" {
+				return fmt.Sprintf("pid %s", pid)
+			}
+		}
+	}
+
+	return ""
 }
 
 func findListeningSocketInode(port int) (string, error) {
@@ -713,40 +765,42 @@ func findListeningSocketInodeInFile(path string, port int) (string, error) {
 }
 
 func findProcessBySocketInode(inode string) (int, string, error) {
-	entries, err := os.ReadDir("/proc")
+	target := "socket:[" + inode + "]"
+	
+	// Use glob to efficiently scan all fd symlinks at once
+	fdPaths, err := filepath.Glob("/proc/[0-9]*/fd/*")
 	if err != nil {
 		return 0, "", err
 	}
-	target := "socket:[" + inode + "]"
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		pid, err := strconv.Atoi(entry.Name())
+
+	for _, linkPath := range fdPaths {
+		link, err := os.Readlink(linkPath)
 		if err != nil {
 			continue
 		}
-		fdDir := filepath.Join("/proc", entry.Name(), "fd")
-		fds, err := os.ReadDir(fdDir)
+		if link != target {
+			continue
+		}
+
+		// Extract PID from path: /proc/{pid}/fd/{fd}
+		parts := strings.Split(linkPath, "/")
+		if len(parts) < 3 {
+			continue
+		}
+		pidStr := parts[2]
+		pid, err := strconv.Atoi(pidStr)
 		if err != nil {
 			continue
 		}
-		for _, fd := range fds {
-			linkPath := filepath.Join(fdDir, fd.Name())
-			link, err := os.Readlink(linkPath)
-			if err != nil {
-				continue
-			}
-			if link != target {
-				continue
-			}
-			nameBytes, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "comm"))
-			if err != nil {
-				return pid, "", nil
-			}
-			return pid, strings.TrimSpace(string(nameBytes)), nil
+
+		// Read process name
+		nameBytes, err := os.ReadFile(filepath.Join("/proc", pidStr, "comm"))
+		if err != nil {
+			return pid, "", nil
 		}
+		return pid, strings.TrimSpace(string(nameBytes)), nil
 	}
+
 	return 0, "", errors.New("process not found")
 }
 
