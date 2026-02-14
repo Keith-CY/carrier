@@ -202,6 +202,67 @@ Run ShellCheck across all repository scripts to match CI behavior:
 ```
 
 The script discovers all `scripts/**/*.sh` files and exits non-zero on any lint error.
+## ShellCheck Troubleshooting
+
+When ShellCheck fails on a script, use the patterns below to resolve common issues.
+
+### SC2086 — Double-quote to prevent globbing and word splitting
+
+```bash
+# Bad
+echo $MY_VAR
+
+# Good
+echo "$MY_VAR"
+```
+
+### SC2154 — Variable referenced but not assigned
+
+```bash
+# Bad — shellcheck cannot see the variable source
+echo "$UNDEFINED_VAR"
+
+# Good — declare or default the variable
+: "${MY_VAR:=default}"
+echo "$MY_VAR"
+```
+
+### SC2128 — Expanding an array without an index
+
+```bash
+# Bad
+echo $MY_ARRAY
+
+# Good
+echo "${MY_ARRAY[@]}"
+```
+
+### SC2039 / SC3010 — Bashisms in sh scripts
+
+```bash
+# Bad (POSIX sh)
+[[ -f file ]]
+
+# Good (POSIX sh)
+[ -f file ]
+```
+
+### SC2046 — Quote to prevent word splitting on command substitution
+
+```bash
+# Bad
+files=$(find . -name "*.sh")
+echo $files
+
+# Good
+while IFS= read -r f; do echo "$f"; done < <(find . -name "*.sh")
+```
+
+Run ShellCheck locally before pushing:
+
+```bash
+shellcheck scripts/*.sh
+```
 ## Stale Follow-Up Detection
 
 To find stale `[review-followup]` issues whose referenced PR is already merged:
