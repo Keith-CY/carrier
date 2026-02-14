@@ -80,6 +80,18 @@ See `CONTRIBUTING.md` for command examples and required process. For security vu
 - Go toolchain (see `daemon/go.mod` for the required version)
 - Bun (for gateway TypeScript tasks)
 
+#### Toolchain quick check
+
+Run the following to verify required tools are installed and print their versions:
+
+```bash
+echo "gh:  $(gh --version | head -1)"
+echo "go:  $(go version)"
+echo "bun: $(bun --version)"
+```
+
+If any command fails, install the missing tool before running automation scripts. See [CONTRIBUTING.md](./CONTRIBUTING.md) for detailed CI troubleshooting.
+
 ### Install
 - Daemon (Go): Go modules are loaded automatically when building or testing; no additional install command needed.
 - Gateway (TypeScript):
