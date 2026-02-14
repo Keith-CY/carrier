@@ -69,6 +69,19 @@ A background goroutine checks available disk space every 60 seconds on the parti
 
 ### Thresholds and Behaviors
 
+All threshold values are configurable via the deployment profile to accommodate different environments:
+
+```yaml
+disk_protection:
+  normal_threshold_mb: 500       # above this → Normal (no action)
+  warning_threshold_mb: 200      # 200–500 MB → Warning
+  critical_threshold_mb: 100     # 100–200 MB → Critical
+  recovery_target_mb: 200        # target free space after emergency cleanup
+  warning_rotation_mb: 25        # rotation size during Warning state
+```
+
+**Default thresholds:**
+
 | Available Space | Level | Action |
 |----------------|-------|--------|
 | > 500 MB | Normal | No action |
@@ -84,6 +97,20 @@ When emergency threshold is hit:
 3. If still insufficient, truncate active log file to 0 bytes.
 4. Resume logging at `error` level only.
 5. Emit a structured event to any configured alerting channel.
+
+### State-Transition Policy
+
+After entering a degraded state (Critical or Emergency), the system transitions back to normal operation as follows:
+
+| Current State | Transition Condition | Target State |
+|--------------|---------------------|-------------|
+| Emergency | Free space recovers above `critical_threshold_mb` (default 100 MB) | Critical (`error`-only logging resumes to disk) |
+| Critical | Free space recovers above `warning_threshold_mb` (default 200 MB) for 2 consecutive checks | Warning (normal log levels restored, increased rotation retained) |
+| Warning | Free space recovers above `normal_threshold_mb` (default 500 MB) for 2 consecutive checks | Normal (default rotation settings restored) |
+
+**Hysteresis:** Transitions to a less-severe state require the condition to hold for 2 consecutive monitoring intervals (2 × 60 s = 120 s) to prevent rapid oscillation near threshold boundaries. Transitions to a more-severe state are immediate.
+
+**Operator override:** Operators can force a state transition via the `carrier log-level reset` command, which immediately re-evaluates disk space and sets the appropriate state.
 
 ### Safeguard: Never Delete Non-Log Files
 
