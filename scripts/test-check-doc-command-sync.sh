@@ -2,7 +2,6 @@
 # Regression tests for check-doc-command-sync.sh drift detection.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 pass=0
 fail=0
 

@@ -83,11 +83,9 @@ jobs:
                           dataType
                         }
                         ... on ProjectV2SingleSelectField {
-                          options(first: 50) {
-                            nodes {
-                              id
-                              name
-                            }
+                          options {
+                            id
+                            name
                           }
                         }
                       }
@@ -137,7 +135,7 @@ jobs:
               }
 
               if (String(existing.dataType) === 'SINGLE_SELECT' && Array.isArray(field.options)) {
-                const exists = new Set((existing.options?.nodes || []).map((o) => normalize(o.name)));
+                const exists = new Set((existing.options || []).map((o) => normalize(o.name)));
                 const missingOptions = field.options.filter((option) => !exists.has(normalize(option)));
                 if (missingOptions.length > 0) {
                   return {
