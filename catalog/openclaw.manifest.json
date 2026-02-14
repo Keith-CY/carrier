@@ -3,22 +3,26 @@
   "name": "OpenClaw",
   "version": "1.0.0",
   "description": "Full-featured AI assistant with memory support",
-  "capabilities": ["chat", "code", "memory"],
+  "capabilities": [
+    "chat",
+    "code",
+    "memory"
+  ],
   "runtime": {
     "type": "local_binary",
     "install": {
-      "command": "npm install -g openclaw || curl -fsSL https://github.com/Keith-CY/carrier/releases/latest/download/install.sh | bash",
+      "command": "bash -c 'SCRIPT=$(mktemp) && curl -fsSL -o \"$SCRIPT\" \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/install.sh\" && curl -fsSL -o \"$SCRIPT.sha256\" \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/install.sh.sha256\" && echo \"  $SCRIPT\" >> \"$SCRIPT.sha256\" && sha256sum -c \"$SCRIPT.sha256\" && bash \"$SCRIPT\" && rm -f \"$SCRIPT\" \"$SCRIPT.sha256\"'",
       "platforms": {
-        "linux": "npm install -g openclaw || curl -fsSL https://github.com/Keith-CY/carrier/releases/latest/download/install.sh | bash",
-        "darwin": "npm install -g openclaw || curl -fsSL https://github.com/Keith-CY/carrier/releases/latest/download/install.sh | bash",
+        "linux": "bash -c 'SCRIPT=$(mktemp) && curl -fsSL -o \"$SCRIPT\" \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/install.sh\" && curl -fsSL -o \"$SCRIPT.sha256\" \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/install.sh.sha256\" && echo \"  $SCRIPT\" >> \"$SCRIPT.sha256\" && sha256sum -c \"$SCRIPT.sha256\" && bash \"$SCRIPT\" && rm -f \"$SCRIPT\" \"$SCRIPT.sha256\"'",
+        "darwin": "bash -c 'SCRIPT=$(mktemp) && curl -fsSL -o \"$SCRIPT\" \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/install.sh\" && curl -fsSL -o \"$SCRIPT.sha256\" \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/install.sh.sha256\" && echo \"  $SCRIPT\" >> \"$SCRIPT.sha256\" && sha256sum -c \"$SCRIPT.sha256\" && bash \"$SCRIPT\" && rm -f \"$SCRIPT\" \"$SCRIPT.sha256\"'",
         "windows": "npm install -g openclaw"
       }
     },
     "upgrade": {
-      "command": "npm update -g openclaw || curl -fsSL https://github.com/Keith-CY/carrier/releases/latest/download/install.sh | bash --upgrade",
+      "command": "bash -c 'SCRIPT=$(mktemp) && curl -fsSL -o \"$SCRIPT\" \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/install.sh\" && curl -fsSL -o \"$SCRIPT.sha256\" \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/install.sh.sha256\" && echo \"  $SCRIPT\" >> \"$SCRIPT.sha256\" && sha256sum -c \"$SCRIPT.sha256\" && bash \"$SCRIPT\" --upgrade && rm -f \"$SCRIPT\" \"$SCRIPT.sha256\"'",
       "platforms": {
-        "linux": "npm update -g openclaw || curl -fsSL https://github.com/Keith-CY/carrier/releases/latest/download/install.sh | bash --upgrade",
-        "darwin": "npm update -g openclaw || curl -fsSL https://github.com/Keith-CY/carrier/releases/latest/download/install.sh | bash --upgrade",
+        "linux": "bash -c 'SCRIPT=$(mktemp) && curl -fsSL -o \"$SCRIPT\" \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/install.sh\" && curl -fsSL -o \"$SCRIPT.sha256\" \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/install.sh.sha256\" && echo \"  $SCRIPT\" >> \"$SCRIPT.sha256\" && sha256sum -c \"$SCRIPT.sha256\" && bash \"$SCRIPT\" --upgrade && rm -f \"$SCRIPT\" \"$SCRIPT.sha256\"'",
+        "darwin": "bash -c 'SCRIPT=$(mktemp) && curl -fsSL -o \"$SCRIPT\" \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/install.sh\" && curl -fsSL -o \"$SCRIPT.sha256\" \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/install.sh.sha256\" && echo \"  $SCRIPT\" >> \"$SCRIPT.sha256\" && sha256sum -c \"$SCRIPT.sha256\" && bash \"$SCRIPT\" --upgrade && rm -f \"$SCRIPT\" \"$SCRIPT.sha256\"'",
         "windows": "npm update -g openclaw"
       }
     },
@@ -40,15 +44,39 @@
     }
   },
   "network": {
-    "ports": [{ "name": "http", "port": 8080 }],
-    "healthcheck": { "type": "http", "url": "http://localhost:8080/health" }
+    "ports": [
+      {
+        "name": "http",
+        "port": 8080
+      }
+    ],
+    "healthcheck": {
+      "type": "http",
+      "url": "http://localhost:8080/health"
+    }
   },
   "env": {
-    "required": [{ "name": "OPENAI_API_KEY", "secret": true, "description": "OpenAI API key for LLM access" }],
-    "optional": [{ "name": "LOG_LEVEL", "default": "info", "description": "Logging verbosity level" }]
+    "required": [
+      {
+        "name": "OPENAI_API_KEY",
+        "secret": true,
+        "description": "OpenAI API key for LLM access"
+      }
+    ],
+    "optional": [
+      {
+        "name": "LOG_LEVEL",
+        "default": "info",
+        "description": "Logging verbosity level"
+      }
+    ]
   },
   "memory": {
-    "supports": ["per_agent", "shared", "public"],
+    "supports": [
+      "per_agent",
+      "shared",
+      "public"
+    ],
     "mount_path": "./memory"
   },
   "upgrade": {
@@ -63,6 +91,10 @@
     "restart_loop_max": 5
   },
   "diagnostics": {
-    "include": ["runtime_logs", "process_state", "env_sanitized"]
+    "include": [
+      "runtime_logs",
+      "process_state",
+      "env_sanitized"
+    ]
   }
 }
