@@ -1,15 +1,43 @@
 package catalog
 
-import "carrier/daemon/internal/manifest"
+import (
+	_ "embed"
+	"carrier/daemon/internal/manifest"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+//go:embed openclaw-installer.sh
+var openclawInstallerScript string
 
 const (
 	openclawVersion = "1.0.0"
-	openclawBaseURL = "https://github.com/openclaw/openclaw/releases/download/v1.0.0"
 )
 
+// getInstallCommand returns the install command that writes the embedded installer
+// to a temporary location and executes it with the pinned version.
+// This avoids pipe-to-shell and dynamic shell pipelines.
+func getInstallCommand() string {
+	tmpDir := os.TempDir()
+	scriptPath := filepath.Join(tmpDir, "openclaw-installer.sh")
+	
+	// Write installer script to temp, execute it with pinned version, then clean up
+	// No pipe-to-shell: script is embedded in carrier binary, not fetched remotely
+	return fmt.Sprintf(`sh -c '
+set -e
+SCRIPT="%s"
+cat > "$SCRIPT" << '\''INSTALLER_EOF'\''
+%s
+INSTALLER_EOF
+chmod 755 "$SCRIPT"
+"$SCRIPT" "%s"
+rm -f "$SCRIPT"
+'`, scriptPath, openclawInstallerScript, openclawVersion)
+}
+
 func OpenClawManifest() manifest.Manifest {
-	// Pinned artifact URLs with explicit version - no dynamic script execution
-	installCmd := `sh -c 'set -e; V="` + openclawVersion + `"; U="` + openclawBaseURL + `"; A="openclaw-$(uname -s)-$(uname -m).tar.gz"; curl -fsSL -o "$A" "$U/$A"; curl -fsSL -o "$A.sha256" "$U/$A.sha256"; sha256sum -c "$A.sha256"; tar xzf "$A"; install -m 755 openclaw /usr/local/bin/openclaw; rm -f "$A" "$A.sha256" openclaw'`
+	installCmd := getInstallCommand()
 	
 	return manifest.Manifest{
 		ID:           "openclaw",
