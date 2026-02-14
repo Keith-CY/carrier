@@ -6,8 +6,28 @@ type DownloadTokenRecord = ReadOnlyDownloadToken & {
 
 export class DownloadTokenStore {
   private readonly tokens = new Map<string, DownloadTokenRecord>();
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly now: () => Date = () => new Date()) {}
+
+  /** Start a periodic cleanup interval. Returns this for chaining. */
+  startPeriodicCleanup(intervalMs = 60_000): this {
+    this.stopPeriodicCleanup();
+    this.cleanupTimer = setInterval(() => this.cleanup(), intervalMs);
+    // Allow the process to exit even if the timer is still running.
+    if (this.cleanupTimer && typeof this.cleanupTimer === "object" && "unref" in this.cleanupTimer) {
+      this.cleanupTimer.unref();
+    }
+    return this;
+  }
+
+  /** Stop the periodic cleanup interval if running. */
+  stopPeriodicCleanup(): void {
+    if (this.cleanupTimer !== null) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
+  }
 
   issue(fileRef: string, ttlSeconds = 300, singleUse = true): ReadOnlyDownloadToken {
     const token = `dl-${crypto.randomUUID()}`;
