@@ -38,10 +38,28 @@ jobs:
 
       - name: Run daemon tests
         working-directory: daemon
-        run: go test ./...
+        run: go test -race -count=1 ./...
+
+  daemon-lint:
+    name: Daemon Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: daemon/go.mod
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+          working-directory: daemon
 
   gateway-check:
-    name: Gateway Type Check
+    name: Gateway Check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -59,6 +77,10 @@ jobs:
       - name: Type check gateway
         working-directory: gateway
         run: bun run check
+
+      - name: Run gateway tests
+        working-directory: gateway
+        run: bun test
 
   e2e-tests:
     name: End-to-End Tests
