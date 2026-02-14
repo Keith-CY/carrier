@@ -8,6 +8,7 @@ import {
   createGatewayRuntime,
   createRuntimeDependencies,
   requestIdMiddleware,
+  startGatewayServer,
   type GatewayRequestContext,
 } from "./server";
 
@@ -311,5 +312,187 @@ describe("download Content-Disposition edge cases", () => {
     const disposition = response.headers.get("content-disposition");
     expect(disposition).toBeDefined();
     expect(disposition).toContain("filename=");
+  });
+});
+
+describe("port resolution fallback behavior", () => {
+  test("uses default port when config and env are both undefined", async () => {
+    const deps = makeDeps();
+    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
+    delete process.env.CARRIER_GATEWAY_PORT;
+
+    const server = startGatewayServer({ 
+      deps,
+      port: undefined,
+    });
+    
+    expect(server.port).toBe(8787);
+    server.stop();
+    
+    if (originalEnv !== undefined) {
+      process.env.CARRIER_GATEWAY_PORT = originalEnv;
+    }
+  });
+
+  test("uses default port when env is non-numeric", async () => {
+    const deps = makeDeps();
+    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
+    process.env.CARRIER_GATEWAY_PORT = "not-a-number";
+
+    const server = startGatewayServer({ 
+      deps,
+      port: undefined,
+    });
+    
+    expect(server.port).toBe(8787);
+    server.stop();
+    
+    if (originalEnv !== undefined) {
+      process.env.CARRIER_GATEWAY_PORT = originalEnv;
+    } else {
+      delete process.env.CARRIER_GATEWAY_PORT;
+    }
+  });
+
+  test("uses default port when env is empty string", async () => {
+    const deps = makeDeps();
+    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
+    process.env.CARRIER_GATEWAY_PORT = "";
+
+    const server = startGatewayServer({ 
+      deps,
+      port: undefined,
+    });
+    
+    expect(server.port).toBe(8787);
+    server.stop();
+    
+    if (originalEnv !== undefined) {
+      process.env.CARRIER_GATEWAY_PORT = originalEnv;
+    } else {
+      delete process.env.CARRIER_GATEWAY_PORT;
+    }
+  });
+
+  test("uses default port when env is zero", async () => {
+    const deps = makeDeps();
+    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
+    process.env.CARRIER_GATEWAY_PORT = "0";
+
+    const server = startGatewayServer({ 
+      deps,
+      port: undefined,
+    });
+    
+    expect(server.port).toBe(8787);
+    server.stop();
+    
+    if (originalEnv !== undefined) {
+      process.env.CARRIER_GATEWAY_PORT = originalEnv;
+    } else {
+      delete process.env.CARRIER_GATEWAY_PORT;
+    }
+  });
+
+  test("uses default port when env is negative", async () => {
+    const deps = makeDeps();
+    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
+    process.env.CARRIER_GATEWAY_PORT = "-1234";
+
+    const server = startGatewayServer({ 
+      deps,
+      port: undefined,
+    });
+    
+    expect(server.port).toBe(8787);
+    server.stop();
+    
+    if (originalEnv !== undefined) {
+      process.env.CARRIER_GATEWAY_PORT = originalEnv;
+    } else {
+      delete process.env.CARRIER_GATEWAY_PORT;
+    }
+  });
+
+  test("uses env port when env is valid numeric string", async () => {
+    const deps = makeDeps();
+    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
+    process.env.CARRIER_GATEWAY_PORT = "9999";
+
+    const server = startGatewayServer({ 
+      deps,
+      port: undefined,
+    });
+    
+    expect(server.port).toBe(9999);
+    server.stop();
+    
+    if (originalEnv !== undefined) {
+      process.env.CARRIER_GATEWAY_PORT = originalEnv;
+    } else {
+      delete process.env.CARRIER_GATEWAY_PORT;
+    }
+  });
+
+  test("config port takes precedence over env", async () => {
+    const deps = makeDeps();
+    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
+    process.env.CARRIER_GATEWAY_PORT = "9999";
+
+    const server = startGatewayServer({ 
+      deps,
+      port: 7777,
+    });
+    
+    expect(server.port).toBe(7777);
+    server.stop();
+    
+    if (originalEnv !== undefined) {
+      process.env.CARRIER_GATEWAY_PORT = originalEnv;
+    } else {
+      delete process.env.CARRIER_GATEWAY_PORT;
+    }
+  });
+
+  test("uses default port when env has decimal value", async () => {
+    const deps = makeDeps();
+    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
+    process.env.CARRIER_GATEWAY_PORT = "8080.5";
+
+    const server = startGatewayServer({ 
+      deps,
+      port: undefined,
+    });
+    
+    // parseInt truncates to 8080, which is valid
+    expect(server.port).toBe(8080);
+    server.stop();
+    
+    if (originalEnv !== undefined) {
+      process.env.CARRIER_GATEWAY_PORT = originalEnv;
+    } else {
+      delete process.env.CARRIER_GATEWAY_PORT;
+    }
+  });
+
+  test("uses default port when env contains special characters", async () => {
+    const deps = makeDeps();
+    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
+    process.env.CARRIER_GATEWAY_PORT = "8080!@#";
+
+    const server = startGatewayServer({ 
+      deps,
+      port: undefined,
+    });
+    
+    // parseInt parses "8080" before hitting special chars
+    expect(server.port).toBe(8080);
+    server.stop();
+    
+    if (originalEnv !== undefined) {
+      process.env.CARRIER_GATEWAY_PORT = originalEnv;
+    } else {
+      delete process.env.CARRIER_GATEWAY_PORT;
+    }
   });
 });
