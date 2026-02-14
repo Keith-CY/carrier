@@ -91,6 +91,16 @@ Optional local flow from repo root:
 
 - Before making changes, read the skill instructions under `skills/` (especially `skills/pr-review/SKILL.md` and `skills/review-followup/SKILL.md`) to follow repository-specific conventions.
 
+## Kanban workflow required secrets/env vars
+
+For `.github/workflows/carrier-kanban-operations.yml`, configure these repository-level secrets/variables before running the workflow:
+
+- `CARRIER_PROJECT_ID` (required): GitHub Project (v2) ID used by the workflow.
+- `CARRIER_PROJECTS_TOKEN` (required): token with project read/write permissions for field/view operations.
+- `CARRIER_DISCUSSION_CATEGORY_ID` (optional): discussion category override for workflow-generated discussion posts.
+
+Without the required values above, Kanban operations workflow runs will fail early during setup.
+
 ## Install OpenClaw from release package (non-technical quick path)
 
 > Status note: this project is still in Phase 1 scaffold, but release packages can already be used as the starting point for local installation flow.
