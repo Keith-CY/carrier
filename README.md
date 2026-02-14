@@ -35,5 +35,6 @@ Phase 1 scaffold for the Agent Installation Platform.
 - Start work from `origin/main` using a new `codex/*` branch and worktree.
 - Submit all feature updates via Pull Request.
 - Use GitHub Actions as test source of truth.
+- For non-blocking review suggestions, use `NBS:` lines (one suggestion per line). Post-merge automation creates follow-up issues from those lines.
 
 See `CONTRIBUTING.md` for command examples and required process.

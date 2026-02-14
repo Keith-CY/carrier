@@ -4,5 +4,7 @@
 - Use `auto-merge` with `squash` for all project pull requests by default.
 
 ## Post-Merge Review Follow-up
-- After a PR is merged, collect non-blocking review suggestions and record them in a tracking issue.
-- The issue should keep a checkbox TODO list so suggestions are visible and actionable.
+- Use the internal skill: `skills/review-followup/SKILL.md`.
+- Every non-blocking review suggestion must be marked with the fixed keyword prefix: `NBS:`.
+- Write one `NBS:` suggestion per line.
+- After merge, automation creates one follow-up issue per `NBS:` line.
