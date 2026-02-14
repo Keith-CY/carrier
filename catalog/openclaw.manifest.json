@@ -78,9 +78,6 @@
     ]
   },
   "checksums": {
-    "Linux-x86_64": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "Linux-aarch64": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "Darwin-x86_64": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "Darwin-arm64": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    "_note": "Populate with real SHA-256 hashes at release time. Install script fails-closed without valid checksums."
   }
 }
