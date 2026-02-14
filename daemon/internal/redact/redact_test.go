@@ -59,6 +59,28 @@ func TestIsSensitiveKeyName(t *testing.T) {
 	}
 }
 
+func TestIsSensitiveKeyNameMixedCase(t *testing.T) {
+	// Regression: ensure mixed-case keys like Api_Key, Token are detected.
+	tests := []struct {
+		key  string
+		want bool
+	}{
+		{key: "Api_Key", want: true},
+		{key: "Token", want: true},
+		{key: "mySecret", want: true},
+		{key: "DB_PASSWORD", want: true},
+		{key: "aws_credential_file", want: true},
+		{key: "Api_Url", want: false},
+		{key: "HomeDir", want: false},
+	}
+	for _, tc := range tests {
+		got := IsSensitiveKeyName(tc.key)
+		if got != tc.want {
+			t.Errorf("IsSensitiveKeyName(%q) = %v, want %v", tc.key, got, tc.want)
+		}
+	}
+}
+
 func TestRedactTextScrubsSensitiveAssignments(t *testing.T) {
 	input := strings.Join([]string{
 		`OPENAI_API_KEY=sk-live-abc`,
