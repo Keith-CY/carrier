@@ -1,24 +1,29 @@
 #!/usr/bin/env bash
-# Run shellcheck consistently across all repository shell scripts.
+# Run shellcheck consistently across all tracked repository shell scripts.
 # Usage: bash scripts/run-shellcheck.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-mapfile -t scripts < <(find "$REPO_ROOT/scripts" -name '*.sh' -type f | sort)
+if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "Not inside a git work tree: $REPO_ROOT"
+  exit 1
+fi
+
+mapfile -t scripts < <(git -C "$REPO_ROOT" ls-files '*.sh' | sort)
 
 if [ ${#scripts[@]} -eq 0 ]; then
-  echo "No shell scripts found under scripts/. Nothing to check."
+  echo "No tracked shell scripts found. Nothing to check."
   exit 0
 fi
 
-echo "Running shellcheck on ${#scripts[@]} script(s)..."
+echo "Running shellcheck on ${#scripts[@]} tracked script(s)..."
 echo ""
 
 errors=0
-for script in "${scripts[@]}"; do
-  rel="${script#"$REPO_ROOT/"}"
-  if shellcheck "$script"; then
+for rel in "${scripts[@]}"; do
+  abs="$REPO_ROOT/$rel"
+  if shellcheck "$abs"; then
     echo "  ✓ $rel"
   else
     echo "  ✗ $rel"
