@@ -25,7 +25,13 @@ curl -fsSL -o "$ARTIFACT" "${BASE_URL}/${ARTIFACT}"
 
 # Verify against pinned checksum from carrier manifest
 echo "Verifying integrity against pinned checksum..."
-ACTUAL_CHECKSUM="$(sha256sum "$ARTIFACT" | awk '{print $1}')"
+if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL_CHECKSUM="$(sha256sum "$ARTIFACT" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+    ACTUAL_CHECKSUM="$(shasum -a 256 "$ARTIFACT" | awk '{print $1}')"
+else
+    echo "ERROR: no sha256sum or shasum found" >&2; exit 1
+fi
 if [ "$ACTUAL_CHECKSUM" != "$EXPECTED_CHECKSUM" ]; then
     echo "ERROR: Checksum mismatch!" >&2
     echo "  Expected: $EXPECTED_CHECKSUM" >&2

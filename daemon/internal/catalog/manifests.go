@@ -4,25 +4,28 @@ import (
 	_ "embed"
 	"carrier/daemon/internal/manifest"
 	"fmt"
-	"os"
-	"path/filepath"
 	"runtime"
 )
 
 //go:embed openclaw-installer.sh
 var openclawInstallerScript string
 
-const (
-	openclawVersion = "1.0.0"
-	// Pinned checksums for release artifacts — anchored independently from the download source.
-	// Update these when cutting a new release.
-	openclawChecksumLinuxX86  = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-	openclawChecksumLinuxArm  = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-	openclawChecksumDarwinX86 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-	openclawChecksumDarwinArm = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+const openclawVersion = "1.0.0"
+
+// Pinned checksums for release artifacts, injected at build time via ldflags:
+//
+//	go build -ldflags "-X carrier/daemon/internal/catalog.openclawChecksumLinuxX86=abc123..."
+//
+// If not set (empty), the installer will refuse to run — fail-closed by design.
+var (
+	openclawChecksumLinuxX86  string
+	openclawChecksumLinuxArm  string
+	openclawChecksumDarwinX86 string
+	openclawChecksumDarwinArm string
 )
 
-// getPinnedChecksum returns the checksum for the current platform, pinned in source.
+// getPinnedChecksum returns the build-time-injected checksum for the current platform.
+// Returns empty string if not set — caller must handle this as a fatal condition.
 func getPinnedChecksum() string {
 	switch runtime.GOOS + "/" + runtime.GOARCH {
 	case "linux/amd64":
@@ -39,23 +42,27 @@ func getPinnedChecksum() string {
 }
 
 // getInstallCommand returns the install command that writes the embedded installer
-// to a temporary location and executes it with the pinned version and checksum.
-// Checksum is anchored in the carrier binary, not fetched from the download source.
+// to a securely-created temporary file (via mktemp) and executes it with the
+// pinned version and checksum. Checksum is anchored in the carrier binary (via
+// ldflags at build time), not fetched from the download source.
 func getInstallCommand() string {
-	tmpDir := os.TempDir()
-	scriptPath := filepath.Join(tmpDir, "openclaw-installer.sh")
 	checksum := getPinnedChecksum()
-	
+
 	return fmt.Sprintf(`sh -c '
 set -e
-SCRIPT="%s"
+CHECKSUM="%s"
+if [ -z "$CHECKSUM" ]; then
+  echo "FATAL: no pinned checksum for this platform — binary was not built with release ldflags" >&2
+  exit 1
+fi
+SCRIPT="$(mktemp /tmp/openclaw-installer.XXXXXX.sh)"
+trap "rm -f \"$SCRIPT\"" EXIT
 cat > "$SCRIPT" << '\''INSTALLER_EOF'\''
 %s
 INSTALLER_EOF
-chmod 755 "$SCRIPT"
-"$SCRIPT" "%s" "%s"
-rm -f "$SCRIPT"
-'`, scriptPath, openclawInstallerScript, openclawVersion, checksum)
+chmod 700 "$SCRIPT"
+"$SCRIPT" "%s" "$CHECKSUM"
+'`, checksum, openclawInstallerScript, openclawVersion)
 }
 
 func OpenClawManifest() manifest.Manifest {
