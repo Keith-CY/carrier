@@ -14,11 +14,10 @@ if ! command -v carrier >/dev/null 2>&1; then
   if [[ "${CI:-}" == "true" ]]; then
     echo "CI mode: failing fast to avoid silently skipping end-to-end validation."
     echo "Install/configure carrier CLI in CI before running this workflow."
-    echo "Hint: see CONTRIBUTING.md for carrier CLI setup guidance."
-    exit 1
+  else
+    echo "Install/configure the carrier CLI before running e2e checks locally."
   fi
 
-  echo "Install/configure the carrier CLI before running e2e checks locally."
   echo "Hint: see CONTRIBUTING.md for carrier CLI setup guidance."
   exit 1
 fi
