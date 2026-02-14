@@ -1,8 +1,8 @@
 package catalog
 
 import (
-	_ "embed"
 	"carrier/daemon/internal/manifest"
+	_ "embed"
 	"fmt"
 	"runtime"
 )
@@ -67,7 +67,7 @@ chmod 700 "$SCRIPT"
 
 func OpenClawManifest() manifest.Manifest {
 	installCmd := getInstallCommand()
-	
+
 	return manifest.Manifest{
 		ID:           "openclaw",
 		Name:         "OpenClaw",

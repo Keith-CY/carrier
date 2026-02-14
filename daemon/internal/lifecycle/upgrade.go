@@ -102,6 +102,9 @@ func (s *Service) Upgrade(ctx context.Context, agentID string) (UpgradeResult, e
 	s.mu.Unlock()
 
 	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_success from=%s to=%s backup=%q", fromVersion, toVersion, backupPath))
+
+	s.saveState()
+
 	return UpgradeResult{
 		AgentID:     agentID,
 		FromVersion: fromVersion,

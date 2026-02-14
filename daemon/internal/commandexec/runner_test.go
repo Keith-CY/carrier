@@ -51,7 +51,7 @@ func TestShellRunnerTimeout(t *testing.T) {
 
 func TestShellRunnerNonZeroExitWithStderr(t *testing.T) {
 	runner := ShellRunner{GOOS: "linux"}
-	
+
 	// Command that writes to stderr and exits with non-zero code
 	result, err := runner.Run(context.Background(), "echo 'error message' >&2; exit 42")
 	if err == nil {
@@ -69,7 +69,7 @@ func TestShellRunnerNonZeroExitWithStderr(t *testing.T) {
 
 func TestShellRunnerCapturesBothStdoutAndStderr(t *testing.T) {
 	runner := ShellRunner{GOOS: "linux"}
-	
+
 	// Command that writes to both stdout and stderr
 	result, err := runner.Run(context.Background(), "echo 'stdout'; echo 'stderr' >&2")
 	if err != nil {
@@ -92,10 +92,10 @@ func TestShellRunnerCapturesBothStdoutAndStderr(t *testing.T) {
 func TestShellRunnerContextCancellation(t *testing.T) {
 	runner := ShellRunner{GOOS: "linux"}
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	// Cancel immediately
 	cancel()
-	
+
 	result, err := runner.Run(ctx, "sleep 10")
 	if err == nil {
 		t.Fatal("expected cancellation error")
@@ -109,7 +109,7 @@ func TestShellRunnerContextCancellation(t *testing.T) {
 
 func TestShellRunnerExitCodeZeroOnSuccess(t *testing.T) {
 	runner := ShellRunner{GOOS: "linux"}
-	
+
 	// Explicit exit 0 should work
 	result, err := runner.Run(context.Background(), "exit 0")
 	if err != nil {
