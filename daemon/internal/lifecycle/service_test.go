@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -956,4 +957,77 @@ func readZipEntry(t *testing.T, files []*zip.File, name string) []byte {
 	}
 	t.Fatalf("missing zip entry %s", name)
 	return nil
+}
+
+func TestMemoryAttachmentsSetAndGet(t *testing.T) {
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	// Initially empty
+	got := svc.getMemoryAttachments("openclaw")
+	if len(got) != 0 {
+		t.Fatalf("expected empty attachments, got %v", got)
+	}
+
+	// Set and get
+	svc.setMemoryAttachments("openclaw", []string{"/mem/a.md", "/mem/b.md"})
+	got = svc.getMemoryAttachments("openclaw")
+	if !reflect.DeepEqual(got, []string{"/mem/a.md", "/mem/b.md"}) {
+		t.Fatalf("unexpected attachments: %v", got)
+	}
+
+	// Returned slice is a copy (mutation-safe)
+	got[0] = "mutated"
+	fresh := svc.getMemoryAttachments("openclaw")
+	if fresh[0] == "mutated" {
+		t.Fatal("getMemoryAttachments must return a copy")
+	}
+}
+
+func TestMemoryAttachmentsPreservedAcrossStartStop(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	svc.setMemoryAttachments("openclaw", []string{"/mem/persist.md"})
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if err := svc.Start("openclaw"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := svc.Stop("openclaw"); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+
+	got := svc.getMemoryAttachments("openclaw")
+	if !reflect.DeepEqual(got, []string{"/mem/persist.md"}) {
+		t.Fatalf("attachments lost after start/stop: %v", got)
+	}
+}
+
+func TestMemoryAttachmentsPreservedAcrossUpgrade(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	svc.setMemoryAttachments("openclaw", []string{"/mem/keep.md"})
+
+	_, err := svc.Upgrade("openclaw")
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+
+	got := svc.getMemoryAttachments("openclaw")
+	if !reflect.DeepEqual(got, []string{"/mem/keep.md"}) {
+		t.Fatalf("attachments lost after upgrade: %v", got)
+	}
 }
