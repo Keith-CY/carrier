@@ -662,3 +662,12 @@ Before running automation scripts, verify all required tools are installed:
 ```
 
 The script checks for `gh`, `jq`, `bun`, and `go` and prints install hints for any missing tools.
+## Duplicate Review-Followup Detection
+
+To find duplicate `[review-followup]` issues that reference the same PR:
+
+```bash
+./scripts/review-followup-dupes.sh
+```
+
+The script is report-only and does not modify any issues. When duplicates are found, manually close the older/less-specific issue and link to the remaining one.
