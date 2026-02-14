@@ -90,3 +90,69 @@ describe("HttpDaemonClient", () => {
     })).rejects.toBeInstanceOf(RemoteDiagnosisNotNeededError);
   });
 });
+
+describe("HttpDaemonClient header propagation", () => {
+  test("listAgents propagates actor and request-id headers", async () => {
+    let capturedHeaders: HeadersInit | undefined;
+    const fetchMock: typeof fetch = async (input, init) => {
+      capturedHeaders = init?.headers;
+      return new Response(JSON.stringify({ agents: [] }), { status: 200 });
+    };
+
+    const client = new HttpDaemonClient("http://daemon.local", fetchMock);
+    await client.listAgents({ actor: "discord:channel:12345", requestId: "req-list-1" });
+
+    expect(capturedHeaders).toBeDefined();
+    const headers = capturedHeaders as Record<string, string>;
+    expect(headers["x-carrier-actor"]).toBe("discord:channel:12345");
+    expect(headers["x-carrier-request-id"]).toBe("req-list-1");
+  });
+
+  test("startAgent propagates actor and request-id headers", async () => {
+    let capturedHeaders: HeadersInit | undefined;
+    const fetchMock: typeof fetch = async (input, init) => {
+      capturedHeaders = init?.headers;
+      return new Response(JSON.stringify({}), { status: 200 });
+    };
+
+    const client = new HttpDaemonClient("http://daemon.local", fetchMock);
+    await client.startAgent("openclaw", { actor: "telegram:user:999", requestId: "req-start-1" });
+
+    expect(capturedHeaders).toBeDefined();
+    const headers = capturedHeaders as Record<string, string>;
+    expect(headers["x-carrier-actor"]).toBe("telegram:user:999");
+    expect(headers["x-carrier-request-id"]).toBe("req-start-1");
+  });
+
+  test("stopAgent propagates actor and request-id headers", async () => {
+    let capturedHeaders: HeadersInit | undefined;
+    const fetchMock: typeof fetch = async (input, init) => {
+      capturedHeaders = init?.headers;
+      return new Response(JSON.stringify({}), { status: 200 });
+    };
+
+    const client = new HttpDaemonClient("http://daemon.local", fetchMock);
+    await client.stopAgent("openclaw", { actor: "whatsapp:chat:777", requestId: "req-stop-1" });
+
+    expect(capturedHeaders).toBeDefined();
+    const headers = capturedHeaders as Record<string, string>;
+    expect(headers["x-carrier-actor"]).toBe("whatsapp:chat:777");
+    expect(headers["x-carrier-request-id"]).toBe("req-stop-1");
+  });
+
+  test("installAgent propagates actor and request-id headers", async () => {
+    let capturedHeaders: HeadersInit | undefined;
+    const fetchMock: typeof fetch = async (input, init) => {
+      capturedHeaders = init?.headers;
+      return new Response(JSON.stringify({}), { status: 200 });
+    };
+
+    const client = new HttpDaemonClient("http://daemon.local", fetchMock);
+    await client.installAgent("newagent", { actor: "cli:user:alice", requestId: "req-install-1" });
+
+    expect(capturedHeaders).toBeDefined();
+    const headers = capturedHeaders as Record<string, string>;
+    expect(headers["x-carrier-actor"]).toBe("cli:user:alice");
+    expect(headers["x-carrier-request-id"]).toBe("req-install-1");
+  });
+});
