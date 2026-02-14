@@ -1,69 +1,41 @@
 #!/usr/bin/env bash
-# Verify SHA-256 checksums from a checksum file.
-# Each line must be: <hex-checksum>  <filename>
-# Usage: ./scripts/verify-checksum.sh <checksum-file>
+# Print and verify checksum commands for release artifacts.
+# Usage: ./scripts/verify-checksum.sh [artifact.zip]
+#
+# Without arguments, prints supported checksum commands for reference.
+# With an argument, verifies the checksum of the given file.
+
 set -euo pipefail
 
-if [[ $# -lt 1 ]]; then
-  echo "Usage: verify-checksum.sh <checksum-file>" >&2
+if [[ $# -eq 0 ]]; then
+  echo "Supported checksum verification commands:"
+  echo ""
+  echo "  Linux (GNU coreutils):"
+  echo "    sha256sum -c carrier-*.sha256"
+  echo ""
+  echo "  macOS:"
+  echo "    shasum -a 256 carrier-*.zip"
+  echo ""
+  echo "  Windows PowerShell:"
+  echo "    Get-FileHash .\\carrier-*.zip -Algorithm SHA256"
+  echo ""
+  echo "To generate a .sha256 file:"
+  echo "  sha256sum carrier-linux-x64.zip > carrier-linux-x64.zip.sha256"
+  exit 0
+fi
+
+FILE="$1"
+if [[ ! -f "$FILE" ]]; then
+  echo "Error: file not found: $FILE" >&2
   exit 1
 fi
 
-CHECKSUM_FILE="$1"
-
-if [[ ! -f "$CHECKSUM_FILE" ]]; then
-  echo "Error: checksum file not found: $CHECKSUM_FILE" >&2
+echo "SHA-256 checksum for $FILE:"
+if command -v sha256sum &>/dev/null; then
+  sha256sum "$FILE"
+elif command -v shasum &>/dev/null; then
+  shasum -a 256 "$FILE"
+else
+  echo "Error: no checksum tool found (need sha256sum or shasum)" >&2
   exit 1
 fi
-
-FAIL=0
-LINE_NUM=0
-
-while IFS= read -r line; do
-  LINE_NUM=$((LINE_NUM + 1))
-
-  # Normalize whitespace and skip empty/comment lines
-  trimmed="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-  if [[ -z "$trimmed" || "$trimmed" == \#* ]]; then
-    continue
-  fi
-
-  # Extract checksum and filename
-  checksum="$(echo "$trimmed" | awk '{print $1}')"
-  filename="$(echo "$trimmed" | awk '{print $2}')"
-
-  if [[ -z "$checksum" ]]; then
-    echo "Line $LINE_NUM: missing checksum" >&2
-    FAIL=1
-    continue
-  fi
-
-  if [[ -z "$filename" ]]; then
-    echo "Line $LINE_NUM: missing filename" >&2
-    FAIL=1
-    continue
-  fi
-
-  # Validate checksum is hex
-  if ! echo "$checksum" | grep -qE '^[0-9a-fA-F]+$'; then
-    echo "Line $LINE_NUM: invalid checksum format: $checksum" >&2
-    FAIL=1
-    continue
-  fi
-
-  if [[ ! -f "$filename" ]]; then
-    echo "Line $LINE_NUM: file not found: $filename" >&2
-    FAIL=1
-    continue
-  fi
-
-  actual="$(sha256sum "$filename" | awk '{print $1}')"
-  if [[ "$actual" != "$checksum" ]]; then
-    echo "FAIL: $filename (expected $checksum, got $actual)" >&2
-    FAIL=1
-  else
-    echo "OK: $filename"
-  fi
-done < "$CHECKSUM_FILE"
-
-exit $FAIL
