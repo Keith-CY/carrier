@@ -38,7 +38,7 @@ issues=$(gh issue list --repo "$REPO" --state open --search "[review-followup] i
   --json number,title,createdAt,body --limit 100)
 
 found=0
-echo "$issues" | jq -c '.[]' | while IFS= read -r issue; do
+while IFS= read -r issue; do
   number=$(echo "$issue" | jq -r '.number')
   title=$(echo "$issue" | jq -r '.title')
   created=$(echo "$issue" | jq -r '.createdAt')
@@ -68,7 +68,7 @@ echo "$issues" | jq -c '.[]' | while IFS= read -r issue; do
     echo ""
     found=1
   fi
-done
+done < <(echo "$issues" | jq -c '.[]')
 
 if [[ "$found" -eq 0 ]]; then
   echo "No stale review-followup issues found."
