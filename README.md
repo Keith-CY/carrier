@@ -181,6 +181,37 @@ If install/start fails, run `/diagnose openclaw` and use the generated artifact 
 
 如果安装或启动失败，请执行 `/diagnose openclaw` 并提交诊断产物。
 
+### Flow verification checklist (download → pair → install/start)
+
+Use this as a quick pass/fail checklist when validating the README flow:
+
+1. **Download**
+   - Can locate matching ZIP + `.sha256` in Releases.
+2. **Checksum**
+   - Verification command is available for your OS and returns success.
+3. **Daemon start**
+   - `agentd` starts and prints a usable `PAIR_CODE`.
+4. **Pair**
+   - `/pair <code>` returns success before TTL expires.
+5. **Install path**
+   - `/agents` includes `openclaw`, then `/install openclaw` starts normally.
+6. **Start/Status**
+   - `/start openclaw` succeeds; `/status openclaw` returns healthy/running.
+7. **Fallback path**
+   - On failure, `/diagnose openclaw` generates a support artifact.
+
+### 流程验收清单（下载 → 配对 → 安装/启动）
+
+可用下面清单快速确认 README 流程是否可执行：
+
+1. **下载**：能在 Releases 找到匹配 ZIP 与 `.sha256`。
+2. **校验**：对应系统校验命令可用且结果成功。
+3. **启动 daemon**：`agentd` 启动后可看到可用 `PAIR_CODE`。
+4. **配对**：`/pair <code>` 在有效期内返回成功。
+5. **安装链路**：`/agents` 包含 `openclaw`，`/install openclaw` 能正常开始。
+6. **启动与状态**：`/start openclaw` 成功，`/status openclaw` 显示 healthy/running。
+7. **兜底诊断**：失败场景可通过 `/diagnose openclaw` 产出诊断文件。
+
 ## 三平台 Bot 管理（超详细步骤，可直接照做）
 
 本节用于“只使用聊天软件操作”的场景。  
