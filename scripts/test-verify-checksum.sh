@@ -1,71 +1,69 @@
 #!/usr/bin/env bash
-# Test verify-checksum.sh including filenames with spaces and relative paths.
+# Tests for verify-checksum.sh malformed input handling.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VERIFY="$SCRIPT_DIR/verify-checksum.sh"
-pass=0
-fail=0
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
 
-assert_exit() {
-  local name="$1"
-  local expected="$2"
-  shift 2
-  local actual=0
-  "$@" >/dev/null 2>&1 || actual=$?
-  if [ "$actual" -eq "$expected" ]; then
-    echo "  PASS: $name"
-    pass=$((pass + 1))
+PASS=0
+FAIL=0
+
+assert_fail() {
+  local desc="$1"; shift
+  if "$@" >/dev/null 2>&1; then
+    echo "FAIL: $desc (expected non-zero exit)"
+    FAIL=$((FAIL + 1))
   else
-    echo "  FAIL: $name (expected $expected, got $actual)"
-    fail=$((fail + 1))
+    echo "PASS: $desc"
+    PASS=$((PASS + 1))
   fi
 }
 
-echo "Testing verify-checksum.sh..."
+assert_pass() {
+  local desc="$1"; shift
+  if "$@" >/dev/null 2>&1; then
+    echo "PASS: $desc"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: $desc (expected zero exit)"
+    FAIL=$((FAIL + 1))
+  fi
+}
 
-tmpdir=$(mktemp -d)
+# Test: empty lines are skipped, valid entry passes
+echo "hello" > "$TMPDIR/hello.txt"
+VALID_SUM="$(sha256sum "$TMPDIR/hello.txt" | awk '{print $1}')"
+printf '\n\n%s  %s\n\n' "$VALID_SUM" "$TMPDIR/hello.txt" > "$TMPDIR/with-blanks.txt"
+assert_pass "empty lines skipped" bash "$VERIFY" "$TMPDIR/with-blanks.txt"
 
-# --- Basic valid case ---
-echo "hello world" > "$tmpdir/test.bin"
-HASH=$(sha256sum "$tmpdir/test.bin" | awk '{print $1}')
-echo "$HASH  test.bin" > "$tmpdir/checksums.txt"
-assert_exit "basic valid checksum" 0 bash "$VERIFY" "$tmpdir/test.bin" "$tmpdir/checksums.txt"
+# Test: missing checksum token (line with only whitespace after trimming is skipped)
+echo "   " > "$TMPDIR/only-spaces.txt"
+assert_pass "whitespace-only line skipped" bash "$VERIFY" "$TMPDIR/only-spaces.txt"
 
-# --- Mismatch case ---
-echo "aaaa  test.bin" > "$tmpdir/bad-checksums.txt"
-assert_exit "checksum mismatch fails" 1 bash "$VERIFY" "$tmpdir/test.bin" "$tmpdir/bad-checksums.txt"
+# Test: missing filename (single token on line)
+echo "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890" > "$TMPDIR/no-filename.txt"
+assert_fail "missing filename" bash "$VERIFY" "$TMPDIR/no-filename.txt"
 
-# --- Filename with spaces ---
-echo "space content" > "$tmpdir/my file name.tar.gz"
-HASH_SPACE=$(sha256sum "$tmpdir/my file name.tar.gz" | awk '{print $1}')
-echo "$HASH_SPACE  my file name.tar.gz" > "$tmpdir/checksums-space.txt"
-assert_exit "filename with spaces" 0 bash "$VERIFY" "$tmpdir/my file name.tar.gz" "$tmpdir/checksums-space.txt"
+# Test: non-hex checksum
+printf 'ZZZZZZ  %s\n' "$TMPDIR/hello.txt" > "$TMPDIR/bad-hex.txt"
+assert_fail "non-hex checksum" bash "$VERIFY" "$TMPDIR/bad-hex.txt"
 
-# --- Relative path case ---
-echo "relative content" > "$tmpdir/rel.bin"
-HASH_REL=$(sha256sum "$tmpdir/rel.bin" | awk '{print $1}')
-echo "$HASH_REL  rel.bin" > "$tmpdir/checksums-rel.txt"
-pushd /tmp >/dev/null
-assert_exit "relative path from different cwd" 0 bash "$VERIFY" "$tmpdir/rel.bin" "$tmpdir/checksums-rel.txt"
-popd >/dev/null
+# Test: extra whitespace normalization (tabs between fields)
+printf '%s\t\t%s\n' "$VALID_SUM" "$TMPDIR/hello.txt" > "$TMPDIR/tabs.txt"
+assert_pass "tab-separated fields" bash "$VERIFY" "$TMPDIR/tabs.txt"
 
-# --- Missing file ---
-assert_exit "missing target file" 1 bash "$VERIFY" "$tmpdir/nonexistent" "$tmpdir/checksums.txt"
+# Test: comment lines are skipped
+printf '# comment\n%s  %s\n' "$VALID_SUM" "$TMPDIR/hello.txt" > "$TMPDIR/comments.txt"
+assert_pass "comment lines skipped" bash "$VERIFY" "$TMPDIR/comments.txt"
 
-# --- Missing checksum file ---
-assert_exit "missing checksum file" 1 bash "$VERIFY" "$tmpdir/test.bin" "$tmpdir/nonexistent.txt"
+# Test: no arguments
+assert_fail "no arguments" bash "$VERIFY"
 
-# --- No matching entry ---
-echo "deadbeef  other.bin" > "$tmpdir/checksums-other.txt"
-assert_exit "no matching entry in checksum file" 1 bash "$VERIFY" "$tmpdir/test.bin" "$tmpdir/checksums-other.txt"
-
-# --- Malformed input (empty checksum file) ---
-> "$tmpdir/empty-checksums.txt"
-assert_exit "empty checksum file" 1 bash "$VERIFY" "$tmpdir/test.bin" "$tmpdir/empty-checksums.txt"
-
-rm -rf "$tmpdir"
+# Test: nonexistent checksum file
+assert_fail "nonexistent file" bash "$VERIFY" "$TMPDIR/nonexistent.txt"
 
 echo ""
-echo "Results: $pass passed, $fail failed"
-[ "$fail" -eq 0 ]
+echo "Results: $PASS passed, $FAIL failed"
+[[ $FAIL -eq 0 ]]

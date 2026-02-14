@@ -1,46 +1,69 @@
 #!/usr/bin/env bash
-# Verify SHA-256 checksum of a file against a checksum file.
-# Usage: bash scripts/verify-checksum.sh <target-file> <checksum-file>
+# Verify SHA-256 checksums from a checksum file.
+# Each line must be: <hex-checksum>  <filename>
+# Usage: ./scripts/verify-checksum.sh <checksum-file>
 set -euo pipefail
 
-if [ $# -lt 2 ]; then
-  echo "Usage: $0 <target-file> <checksum-file>"
+if [[ $# -lt 1 ]]; then
+  echo "Usage: verify-checksum.sh <checksum-file>" >&2
   exit 1
 fi
 
-TARGET="$1"
-CHECKSUM_FILE="$2"
+CHECKSUM_FILE="$1"
 
-if [ ! -f "$TARGET" ]; then
-  echo "ERROR: Target file not found: $TARGET"
+if [[ ! -f "$CHECKSUM_FILE" ]]; then
+  echo "Error: checksum file not found: $CHECKSUM_FILE" >&2
   exit 1
 fi
 
-if [ ! -f "$CHECKSUM_FILE" ]; then
-  echo "ERROR: Checksum file not found: $CHECKSUM_FILE"
-  exit 1
-fi
+FAIL=0
+LINE_NUM=0
 
-# Compute actual hash
-ACTUAL_HASH=$(sha256sum "$TARGET" | awk '{print $1}')
+while IFS= read -r line; do
+  LINE_NUM=$((LINE_NUM + 1))
 
-# Extract expected hash — match by basename to handle paths
-TARGET_BASENAME=$(basename "$TARGET")
-EXPECTED_LINE=$(grep -F "$TARGET_BASENAME" "$CHECKSUM_FILE" | head -1)
+  # Normalize whitespace and skip empty/comment lines
+  trimmed="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  if [[ -z "$trimmed" || "$trimmed" == \#* ]]; then
+    continue
+  fi
 
-if [ -z "$EXPECTED_LINE" ]; then
-  echo "ERROR: No checksum entry found for '$TARGET_BASENAME' in $CHECKSUM_FILE"
-  exit 1
-fi
+  # Extract checksum and filename
+  checksum="$(echo "$trimmed" | awk '{print $1}')"
+  filename="$(echo "$trimmed" | awk '{print $2}')"
 
-EXPECTED_HASH=$(echo "$EXPECTED_LINE" | awk '{print $1}')
+  if [[ -z "$checksum" ]]; then
+    echo "Line $LINE_NUM: missing checksum" >&2
+    FAIL=1
+    continue
+  fi
 
-if [ "$ACTUAL_HASH" = "$EXPECTED_HASH" ]; then
-  echo "OK: $TARGET_BASENAME checksum verified ($ACTUAL_HASH)"
-  exit 0
-else
-  echo "FAIL: checksum mismatch for $TARGET_BASENAME"
-  echo "  Expected: $EXPECTED_HASH"
-  echo "  Actual:   $ACTUAL_HASH"
-  exit 1
-fi
+  if [[ -z "$filename" ]]; then
+    echo "Line $LINE_NUM: missing filename" >&2
+    FAIL=1
+    continue
+  fi
+
+  # Validate checksum is hex
+  if ! echo "$checksum" | grep -qE '^[0-9a-fA-F]+$'; then
+    echo "Line $LINE_NUM: invalid checksum format: $checksum" >&2
+    FAIL=1
+    continue
+  fi
+
+  if [[ ! -f "$filename" ]]; then
+    echo "Line $LINE_NUM: file not found: $filename" >&2
+    FAIL=1
+    continue
+  fi
+
+  actual="$(sha256sum "$filename" | awk '{print $1}')"
+  if [[ "$actual" != "$checksum" ]]; then
+    echo "FAIL: $filename (expected $checksum, got $actual)" >&2
+    FAIL=1
+  else
+    echo "OK: $filename"
+  fi
+done < "$CHECKSUM_FILE"
+
+exit $FAIL
