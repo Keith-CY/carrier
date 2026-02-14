@@ -24,6 +24,26 @@ export class DownloadTokenStore {
     return record;
   }
 
+  /** Remove expired and consumed single-use tokens from the internal map. */
+  cleanup(): number {
+    let removed = 0;
+    const nowMs = this.now().getTime();
+    for (const [key, record] of this.tokens) {
+      const expired = Date.parse(record.expiresAt) <= nowMs;
+      const consumed = record.singleUse && record.consumedAt !== undefined;
+      if (expired || consumed) {
+        this.tokens.delete(key);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
+  /** Return the number of tokens currently stored. */
+  get size(): number {
+    return this.tokens.size;
+  }
+
   consume(token: string): ReadOnlyDownloadToken | null {
     const record = this.tokens.get(token);
     if (!record) {
