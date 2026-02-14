@@ -50,6 +50,18 @@ func (f *fakeChecker) Check(manifest.Manifest) error {
 	return f.err
 }
 
+type fakeClock struct {
+	current time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	return c.current
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.current = c.current.Add(d)
+}
+
 func sampleManifest() manifest.Manifest {
 	return manifest.Manifest{
 		ID:      "openclaw",
@@ -76,12 +88,12 @@ func sampleManifest() manifest.Manifest {
 
 func newServiceForTest(t *testing.T, runner *fakeRunner, checker *fakeChecker) *Service {
 	t.Helper()
-	fixedNow := time.Date(2026, 2, 14, 4, 20, 0, 0, time.UTC)
+	clock := &fakeClock{current: time.Date(2026, 2, 14, 4, 20, 0, 0, time.UTC)}
 	svc := NewService(nil,
 		WithRunner(runner),
 		WithRuntimeChecker(checker),
 		WithDiagnoseDir(t.TempDir()),
-		WithNow(func() time.Time { return fixedNow }),
+		WithNow(clock.Now),
 	)
 	if err := svc.RegisterManifest(sampleManifest()); err != nil {
 		t.Fatalf("register manifest: %v", err)
@@ -89,18 +101,19 @@ func newServiceForTest(t *testing.T, runner *fakeRunner, checker *fakeChecker) *
 	return svc
 }
 
-func newServiceForTestWithClock(t *testing.T, runner *fakeRunner, checker *fakeChecker, now func() time.Time) *Service {
+func newServiceForTestWithClock(t *testing.T, runner *fakeRunner, checker *fakeChecker) (*Service, *fakeClock) {
 	t.Helper()
+	clock := &fakeClock{current: time.Date(2026, 2, 14, 4, 20, 0, 0, time.UTC)}
 	svc := NewService(nil,
 		WithRunner(runner),
 		WithRuntimeChecker(checker),
 		WithDiagnoseDir(t.TempDir()),
-		WithNow(now),
+		WithNow(clock.Now),
 	)
 	if err := svc.RegisterManifest(sampleManifest()); err != nil {
 		t.Fatalf("register manifest: %v", err)
 	}
-	return svc
+	return svc, clock
 }
 
 func TestLifecycleInstallStartStop(t *testing.T) {
@@ -172,25 +185,20 @@ func TestStartFailsWhenPortIsInUse(t *testing.T) {
 	runner := &fakeRunner{}
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
+	origListen := listenTCP
+	origOccupant := portOccupantFor
+	listenTCP = func(_, _ string) (net.Listener, error) {
+		return nil, errors.New("bind: address already in use")
+	}
+	portOccupantFor = func(_ int) string { return "pid 4242 (test-holder)" }
+	t.Cleanup(func() {
+		listenTCP = origListen
+		portOccupantFor = origOccupant
+	})
 
 	// Override manifest with fixed port for conflict test.
 	m := sampleManifest()
-	ln, err := netListen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer ln.Close()
-
-	addr := ln.Addr().String()
-	_, portStr, splitErr := splitHostPort(addr)
-	if splitErr != nil {
-		t.Fatalf("split host/port: %v", splitErr)
-	}
-	port, atoiErr := atoi(portStr)
-	if atoiErr != nil {
-		t.Fatalf("parse port: %v", atoiErr)
-	}
-	m.Network.Ports = []manifest.PortSpec{{Name: "http", Port: port}}
+	m.Network.Ports = []manifest.PortSpec{{Name: "http", Port: 18080}}
 	if regErr := svc.RegisterManifest(m); regErr != nil {
 		t.Fatalf("re-register manifest: %v", regErr)
 	}
@@ -201,6 +209,52 @@ func TestStartFailsWhenPortIsInUse(t *testing.T) {
 	startErr := svc.Start("openclaw")
 	if !errors.Is(startErr, ErrPortConflict) {
 		t.Fatalf("expected ErrPortConflict, got %v", startErr)
+	}
+	wantPID := "pid 4242"
+	if !strings.Contains(startErr.Error(), wantPID) {
+		t.Fatalf("expected port conflict error to include %q, got %q", wantPID, startErr.Error())
+	}
+}
+
+func TestStartDetectsCrashLoopAndAppliesCooldown(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{results: map[string]runResult{
+		"start-openclaw": {err: errors.New("boom")},
+	}}
+	checker := &fakeChecker{}
+	svc, clock := newServiceForTestWithClock(t, runner, checker)
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	for i := 0; i < defaultCrashLoopThreshold; i++ {
+		err := svc.Start("openclaw")
+		if err == nil {
+			t.Fatalf("expected start error on attempt %d", i+1)
+		}
+	}
+
+	status, statusErr := svc.Status("openclaw")
+	if statusErr != nil {
+		t.Fatalf("status: %v", statusErr)
+	}
+	if status.Runtime != RuntimeStateCrashing {
+		t.Fatalf("expected runtime state crashing, got %s", status.Runtime)
+	}
+	if !strings.Contains(status.LastError, "crash-loop detected") {
+		t.Fatalf("expected crash-loop reason, got %q", status.LastError)
+	}
+
+	blockedErr := svc.Start("openclaw")
+	if !errors.Is(blockedErr, ErrCrashLoop) {
+		t.Fatalf("expected ErrCrashLoop while cooling down, got %v", blockedErr)
+	}
+
+	clock.Advance(defaultCrashLoopCooldown + time.Second)
+	runner.results["start-openclaw"] = runResult{result: commandexec.Result{ExitCode: 0}}
+	if err := svc.Start("openclaw"); err != nil {
+		t.Fatalf("expected start success after cooldown, got %v", err)
 	}
 }
 
@@ -387,8 +441,7 @@ func TestCleanupExpiredDiagnosisHandoffs(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	runner := &fakeRunner{}
 	checker := &fakeChecker{}
-	now := time.Date(2026, 2, 14, 4, 20, 0, 0, time.UTC)
-	svc := newServiceForTestWithClock(t, runner, checker, func() time.Time { return now })
+	svc, clock := newServiceForTestWithClock(t, runner, checker)
 
 	if err := svc.Install("openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
@@ -404,7 +457,7 @@ func TestCleanupExpiredDiagnosisHandoffs(t *testing.T) {
 	}
 
 	// Advance clock and create a fresh handoff.
-	now = now.Add(25 * time.Hour)
+	clock.Advance(25 * time.Hour)
 	if _, err := svc.CreateRemoteDiagnosisHandoff("openclaw", true, "chat:2", "req-new"); err != nil {
 		t.Fatalf("create new handoff: %v", err)
 	}
