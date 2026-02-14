@@ -37,9 +37,9 @@ jobs:
             const repo = context.repo.repo;
             const dryRunInput = String((context.payload.inputs?.dry_run || process.env.DRY_RUN || 'false')).toLowerCase() === 'true';
             const token = process.env.CARRIER_PROJECTS_TOKEN || process.env.GITHUB_TOKEN;
-            const gh = token ? github.getOctokit(token) : github;
+            const octokit = token ? github.getOctokit(token) : github;
 
-            const repoMeta = await gh.graphql(`
+            const repoMeta = await octokit.graphql(`
               query($owner: String!, $repo: String!) {
                 repository(owner: $owner, name: $repo) {
                   id
@@ -67,7 +67,7 @@ jobs:
               return;
             }
 
-            const preflight = await gh.graphql(`
+            const preflight = await octokit.graphql(`
               query($projectId: ID!) {
                 node(id: $projectId) {
                   ... on ProjectV2 {
@@ -361,7 +361,7 @@ jobs:
 
             const title = `Carrier Kanban：字段/视图配置与工作量报告 (${isoDate})`;
 
-            const resp = await gh.graphql(createDiscussionMutation, {
+            const resp = await octokit.graphql(createDiscussionMutation, {
               repositoryId: repoMeta.repository.id,
               categoryId: category.id,
               title,
