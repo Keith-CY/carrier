@@ -623,3 +623,33 @@ When GitHub Actions checks are green but local runs fail (or vice versa), use th
 - Update Bun: `bun upgrade`
 - Reinstall dependencies: `rm -rf gateway/node_modules && cd gateway && bun install`
 - See [Bun docs](https://bun.sh/docs) for version-specific changes.
+## GitHub CLI JSON Field Minimization for Automation
+
+When writing automation scripts that use `gh` commands, prefer minimal `--json` field sets to reduce API noise and improve stability.
+
+### When to use `gh pr view --json` vs `gh api`
+
+| Use case | Preferred command | Why |
+|----------|-------------------|-----|
+| Read specific PR fields | `gh pr view --json field1,field2` | Simpler, handles auth automatically |
+| Bulk/paginated queries | `gh api` with GraphQL | More control over pagination and field selection |
+| Write operations | `gh pr merge`, `gh pr review`, etc. | Purpose-built, handles edge cases |
+
+### Recommended examples
+
+```bash
+# ✅ Minimal fields — fast and stable
+gh pr view 123 --repo Keith-CY/carrier --json state,mergeStateStatus,title -q '.mergeStateStatus'
+
+# ✅ Targeted check query
+gh pr checks 123 --repo Keith-CY/carrier
+```
+
+### Anti-pattern: over-fetching
+
+```bash
+# ❌ Avoid — fetches large payload including full body, comments, reviews
+gh pr view 123 --repo Keith-CY/carrier --json title,body,comments,reviews,commits,files
+```
+
+Instead, request only the fields you need. Large payloads are slower, hit rate limits faster, and are more likely to break when GitHub changes response shapes.
