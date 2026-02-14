@@ -293,6 +293,30 @@ Use this as a quick pass/fail checklist when validating the README flow:
 /stop openclaw
 ```
 
+
+### 预期响应示例
+
+以下是通用响应示例（不含真实 ID 或令牌）：
+
+**配对成功 (`/pair`)：**
+```
+✅ 配对成功。你现在可以使用 /agents、/install 等命令。
+```
+
+**代理列表 (`/agents`)：**
+```
+可用代理:
+- openclaw (v0.1.0) — 已停止
+```
+
+**健康状态 (`/status openclaw`)：**
+```
+代理: openclaw
+版本: 0.1.0
+状态: running
+健康: healthy
+```
+
 ### 验收标准（三平台都要通过）
 
 以下 3 条都满足，表示配置成功：
@@ -403,6 +427,30 @@ If any of the items above is missing, this flow cannot be completed.
 /logs openclaw 200
 /diagnose openclaw
 /stop openclaw
+```
+
+
+### Expected response examples
+
+Below are generic response examples (no real IDs or tokens):
+
+**Pairing success (`/pair`):**
+```
+✅ Paired successfully. You can now use /agents, /install, and other commands.
+```
+
+**Agent listing (`/agents`):**
+```
+Available agents:
+- openclaw (v0.1.0) — stopped
+```
+
+**Healthy status (`/status openclaw`):**
+```
+Agent: openclaw
+Version: 0.1.0
+Status: running
+Health: healthy
 ```
 
 ### Acceptance criteria (all 3 platforms)
