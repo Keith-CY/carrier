@@ -1,0 +1,30 @@
+name: Shell Script Lint
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/**/*.sh'
+      - '.github/workflows/shellcheck.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck on scripts
+        run: |
+          shopt -s globstar nullglob
+          files=(scripts/**/*.sh)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No shell scripts found."
+            exit 0
+          fi
+          echo "Checking ${#files[@]} file(s)..."
+          shellcheck "${files[@]}"
