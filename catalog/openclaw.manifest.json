@@ -6,10 +6,38 @@
   "capabilities": ["chat", "code", "memory"],
   "runtime": {
     "type": "local_binary",
-    "install": { "command": "./install.sh" },
-    "upgrade": { "command": "./install.sh --upgrade" },
-    "start": { "command": "./openclaw --config ./config.yaml" },
-    "stop": { "command": "./openclaw --stop" }
+    "install": {
+      "command": "npm install -g openclaw || curl -fsSL https://github.com/Keith-CY/carrier/releases/latest/download/install.sh | bash",
+      "platforms": {
+        "linux": "npm install -g openclaw || curl -fsSL https://github.com/Keith-CY/carrier/releases/latest/download/install.sh | bash",
+        "darwin": "npm install -g openclaw || curl -fsSL https://github.com/Keith-CY/carrier/releases/latest/download/install.sh | bash",
+        "windows": "npm install -g openclaw"
+      }
+    },
+    "upgrade": {
+      "command": "npm update -g openclaw || curl -fsSL https://github.com/Keith-CY/carrier/releases/latest/download/install.sh | bash --upgrade",
+      "platforms": {
+        "linux": "npm update -g openclaw || curl -fsSL https://github.com/Keith-CY/carrier/releases/latest/download/install.sh | bash --upgrade",
+        "darwin": "npm update -g openclaw || curl -fsSL https://github.com/Keith-CY/carrier/releases/latest/download/install.sh | bash --upgrade",
+        "windows": "npm update -g openclaw"
+      }
+    },
+    "start": {
+      "command": "openclaw --config ./config.yaml",
+      "platforms": {
+        "linux": "openclaw --config ./config.yaml",
+        "darwin": "openclaw --config ./config.yaml",
+        "windows": "wsl.exe bash -lc 'openclaw --config ./config.yaml'"
+      }
+    },
+    "stop": {
+      "command": "openclaw --stop",
+      "platforms": {
+        "linux": "openclaw --stop",
+        "darwin": "openclaw --stop",
+        "windows": "wsl.exe bash -lc 'openclaw --stop'"
+      }
+    }
   },
   "network": {
     "ports": [{ "name": "http", "port": 8080 }],
