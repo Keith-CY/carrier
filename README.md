@@ -66,3 +66,39 @@ See `CONTRIBUTING.md` for command examples and required process.
 ## Local workflow notes
 
 - Before making changes, read the skill instructions under `skills/` (especially `skills/pr-review/SKILL.md` and `skills/review-followup/SKILL.md`) to follow repository-specific conventions.
+
+## Install OpenClaw from release package (non-technical quick path)
+
+> Status note: this project is still in Phase 1 scaffold, but release packages can already be used as the starting point for local installation flow.
+
+### English
+
+1. Open the **Releases** page of this repository.
+2. Download the ZIP file for your OS/CPU (for example: `linux-x64`, `darwin-arm64`, `windows-x64`).
+3. (Optional but recommended) Download the matching `.sha256` file and verify checksum.
+4. Extract the ZIP to a local folder.
+5. Start the daemon (`agentd`) from the extracted folder.
+6. Use your chat provider flow (Telegram/Discord/Feishu) to pair and run commands:
+   - `/pair <code>`
+   - `/agents`
+   - `/install openclaw`
+   - `/start openclaw`
+   - `/status openclaw`
+
+If install/start fails, run diagnose flow and use the generated artifact for support.
+
+### 中文（简版）
+
+1. 打开本仓库 **Releases** 页面。
+2. 下载与你系统匹配的 ZIP（如 `linux-x64`、`darwin-arm64`、`windows-x64`）。
+3. （可选）下载同名 `.sha256` 文件做校验。
+4. 解压 ZIP 到本地目录。
+5. 运行解压目录里的 daemon（`agentd`）。
+6. 通过 Telegram/Discord/Feishu 配对后执行：
+   - `/pair <code>`
+   - `/agents`
+   - `/install openclaw`
+   - `/start openclaw`
+   - `/status openclaw`
+
+如果安装或启动失败，请走 diagnose 流程并提交诊断产物。
