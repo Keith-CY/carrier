@@ -93,12 +93,13 @@ See `CONTRIBUTING.md` for command examples and required process.
 1. Open [**Releases**](../../releases) for this repository.
 2. Download the ZIP package for your OS/CPU (for example: `linux-x64`, `darwin-arm64`, `windows-x64`).
 3. (Optional but recommended) Download the matching `.sha256` file and verify checksum:
-   - Linux/macOS: `sha256sum -c carrier-*.sha256`
+   - Linux (GNU): `sha256sum -c carrier-*.sha256`
+   - macOS: `shasum -a 256 carrier-*.zip`
    - Windows PowerShell: `Get-FileHash .\carrier-*.zip -Algorithm SHA256`
 4. Extract the ZIP to a local folder.
 5. Start the daemon from the extracted folder:
-   - macOS/Linux: `agentd`
-   - Windows: `agentd.exe`
+   - macOS/Linux: `./agentd`
+   - Windows PowerShell: `.\agentd.exe`
 6. Get your pairing code from the daemon terminal output (it is generated when daemon/gateway pairing flow is ready).
 7. Use your chat provider flow (Telegram/Discord/Feishu) to pair and run commands:
    - `/pair <code>`
@@ -116,12 +117,13 @@ If install/start fails, run `/diagnose openclaw` and use the generated artifact 
 1. 打开本仓库 [**Releases**](../../releases) 页面。
 2. 下载与你系统匹配的 ZIP（如 `linux-x64`、`darwin-arm64`、`windows-x64`）。
 3. （可选）下载同名 `.sha256` 文件做校验：
-   - Linux/macOS：`sha256sum -c carrier-*.sha256`
+   - Linux（GNU）：`sha256sum -c carrier-*.sha256`
+   - macOS：`shasum -a 256 carrier-*.zip`
    - Windows PowerShell：`Get-FileHash .\carrier-*.zip -Algorithm SHA256`
 4. 解压 ZIP 到本地目录。
 5. 运行解压目录里的 daemon：
-   - macOS/Linux：`agentd`
-   - Windows：`agentd.exe`
+   - macOS/Linux：`./agentd`
+   - Windows PowerShell：`.\agentd.exe`
 6. 从 daemon 终端输出里获取配对码（pair code）。
 7. 通过 Telegram/Discord/Feishu 配对后执行：
    - `/pair <code>`
