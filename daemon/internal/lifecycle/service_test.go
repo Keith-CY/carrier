@@ -129,13 +129,13 @@ func TestLifecycleInstallStartStop(t *testing.T) {
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if err := svc.Start("openclaw"); err != nil {
+	if err := svc.Start(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	if err := svc.Stop("openclaw"); err != nil {
+	if err := svc.Stop(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
 
@@ -159,10 +159,10 @@ func TestLifecycleUpgradeCreatesBackupAndBumpsVersion(t *testing.T) {
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	result, err := svc.Upgrade("openclaw")
+	result, err := svc.Upgrade(context.Background(), "openclaw")
 	if err != nil {
 		t.Fatalf("upgrade: %v", err)
 	}
@@ -208,14 +208,14 @@ func TestLifecycleUpgradeRequiresStoppedAgent(t *testing.T) {
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if err := svc.Start("openclaw"); err != nil {
+	if err := svc.Start(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 
-	if _, err := svc.Upgrade("openclaw"); !errors.Is(err, ErrAgentRunning) {
+	if _, err := svc.Upgrade(context.Background(), "openclaw"); !errors.Is(err, ErrAgentRunning) {
 		t.Fatalf("expected ErrAgentRunning, got %v", err)
 	}
 }
@@ -233,11 +233,11 @@ func TestLifecycleUpgradeRejectsUnsupportedStrategy(t *testing.T) {
 	svc.mu.Lock()
 	svc.manifests["openclaw"] = brokenManifest
 	svc.mu.Unlock()
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
-	_, err := svc.Upgrade("openclaw")
+	_, err := svc.Upgrade(context.Background(), "openclaw")
 	if err == nil {
 		t.Fatal("expected upgrade strategy error")
 	}
@@ -255,11 +255,11 @@ func TestLifecycleUpgradeFailureKeepsStateAndReturnsRollbackGuidance(t *testing.
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	runner.results["upgrade-openclaw"] = runResult{err: errors.New("upgrade command failed"), result: commandexec.Result{ExitCode: 1}}
-	result, err := svc.Upgrade("openclaw")
+	result, err := svc.Upgrade(context.Background(), "openclaw")
 	if err == nil {
 		t.Fatal("expected upgrade failure")
 	}
@@ -296,7 +296,7 @@ func TestInstallFailsWhenPrerequisiteCheckFails(t *testing.T) {
 	checker := &fakeChecker{err: errors.New("missing wsl")}
 	svc := newServiceForTest(t, runner, checker)
 
-	err := svc.Install("openclaw")
+	err := svc.Install(context.Background(), "openclaw")
 	if !errors.Is(err, ErrRuntimePrerequisites) {
 		t.Fatalf("expected ErrRuntimePrerequisites, got %v", err)
 	}
@@ -315,11 +315,11 @@ func TestStartFailsWhenRequiredEnvIsMissing(t *testing.T) {
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
-	err := svc.Start("openclaw")
+	err := svc.Start(context.Background(), "openclaw")
 	if !errors.Is(err, ErrMissingRequiredEnv) {
 		t.Fatalf("expected ErrMissingRequiredEnv, got %v", err)
 	}
@@ -348,10 +348,10 @@ func TestStartFailsWhenPortIsInUse(t *testing.T) {
 		t.Fatalf("re-register manifest: %v", regErr)
 	}
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	startErr := svc.Start("openclaw")
+	startErr := svc.Start(context.Background(), "openclaw")
 	if !errors.Is(startErr, ErrPortConflict) {
 		t.Fatalf("expected ErrPortConflict, got %v", startErr)
 	}
@@ -369,12 +369,12 @@ func TestStartDetectsCrashLoopAndAppliesCooldown(t *testing.T) {
 	checker := &fakeChecker{}
 	svc, clock := newServiceForTestWithClock(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
 	for i := 0; i < defaultCrashLoopThreshold; i++ {
-		err := svc.Start("openclaw")
+		err := svc.Start(context.Background(), "openclaw")
 		if err == nil {
 			t.Fatalf("expected start error on attempt %d", i+1)
 		}
@@ -391,14 +391,14 @@ func TestStartDetectsCrashLoopAndAppliesCooldown(t *testing.T) {
 		t.Fatalf("expected crash-loop reason, got %q", status.LastError)
 	}
 
-	blockedErr := svc.Start("openclaw")
+	blockedErr := svc.Start(context.Background(), "openclaw")
 	if !errors.Is(blockedErr, ErrCrashLoop) {
 		t.Fatalf("expected ErrCrashLoop while cooling down, got %v", blockedErr)
 	}
 
 	clock.Advance(defaultCrashLoopCooldown + time.Second)
 	runner.results["start-openclaw"] = runResult{result: commandexec.Result{ExitCode: 0}}
-	if err := svc.Start("openclaw"); err != nil {
+	if err := svc.Start(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("expected start success after cooldown, got %v", err)
 	}
 }
@@ -411,7 +411,7 @@ func TestLogsAndDiagnoseArtifact(t *testing.T) {
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
@@ -500,7 +500,7 @@ func TestHandleFailureMarksRemoteDiagnosisNeed(t *testing.T) {
 	runner := &fakeRunner{}
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
@@ -540,11 +540,11 @@ func TestUpgradeRejectsWhenNoUpgradeCommand(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
-	_, err := svc.Upgrade("openclaw")
+	_, err := svc.Upgrade(context.Background(), "openclaw")
 	if !errors.Is(err, ErrUpgradeNotSupported) {
 		t.Fatalf("expected ErrUpgradeNotSupported, got %v", err)
 	}
@@ -556,14 +556,14 @@ func TestUpgradeRejectsWhenAgentRunning(t *testing.T) {
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if err := svc.Start("openclaw"); err != nil {
+	if err := svc.Start(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 
-	_, err := svc.Upgrade("openclaw")
+	_, err := svc.Upgrade(context.Background(), "openclaw")
 	if !errors.Is(err, ErrAgentRunning) {
 		t.Fatalf("expected ErrAgentRunning, got %v", err)
 	}
@@ -577,13 +577,13 @@ func TestUpgradeResetsCrashLoopState(t *testing.T) {
 	checker := &fakeChecker{}
 	svc, clock := newServiceForTestWithClock(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
 	// Trigger crash-loop
 	for i := 0; i < defaultCrashLoopThreshold; i++ {
-		_ = svc.Start("openclaw")
+		_ = svc.Start(context.Background(), "openclaw")
 	}
 
 	status, _ := svc.Status("openclaw")
@@ -592,7 +592,7 @@ func TestUpgradeResetsCrashLoopState(t *testing.T) {
 	}
 
 	// Verify blocked by cooldown
-	blockedErr := svc.Start("openclaw")
+	blockedErr := svc.Start(context.Background(), "openclaw")
 	if !errors.Is(blockedErr, ErrCrashLoop) {
 		t.Fatalf("expected ErrCrashLoop, got %v", blockedErr)
 	}
@@ -600,10 +600,10 @@ func TestUpgradeResetsCrashLoopState(t *testing.T) {
 	// Stop and upgrade should reset crash-loop state
 	clock.Advance(defaultCrashLoopCooldown + time.Second)
 	// Force state to stopped for upgrade
-	svc.Stop("openclaw")
+	svc.Stop(context.Background(), "openclaw")
 
 	runner.results["upgrade-openclaw"] = runResult{result: commandexec.Result{ExitCode: 0}}
-	if _, err := svc.Upgrade("openclaw"); err != nil {
+	if _, err := svc.Upgrade(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("upgrade: %v", err)
 	}
 
@@ -620,7 +620,7 @@ func TestUpgradeResetsCrashLoopState(t *testing.T) {
 
 	// Verify can start without crash-loop blocking
 	runner.results["start-openclaw"] = runResult{result: commandexec.Result{ExitCode: 0}}
-	if err := svc.Start("openclaw"); err != nil {
+	if err := svc.Start(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("expected start success after upgrade reset, got %v", err)
 	}
 }
@@ -631,12 +631,12 @@ func TestUpgradeCreatesBackupAndPreservesMemoryAttachments(t *testing.T) {
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	svc.memoryLinks["openclaw"] = []string{"shared/team-style@1.0.0", "per-agent/default@0.1.0"}
 
-	if _, err := svc.Upgrade("openclaw"); err != nil {
+	if _, err := svc.Upgrade(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("upgrade: %v", err)
 	}
 
@@ -709,12 +709,12 @@ func TestUpgradeFailureReturnsBackupGuidanceAndAuditFailure(t *testing.T) {
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	svc.memoryLinks["openclaw"] = []string{"shared/team-style@1.0.0"}
 
-	_, err := svc.Upgrade("openclaw")
+	_, err := svc.Upgrade(context.Background(), "openclaw")
 	if err == nil {
 		t.Fatal("expected upgrade error")
 	}
@@ -749,7 +749,7 @@ func TestUpgradeBackupCreationFailureReturnsFocusedError(t *testing.T) {
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
@@ -759,7 +759,7 @@ func TestUpgradeBackupCreationFailureReturnsFocusedError(t *testing.T) {
 	}
 	svc.diagnoseDir = blockedPath
 
-	_, err := svc.Upgrade("openclaw")
+	_, err := svc.Upgrade(context.Background(), "openclaw")
 	if err == nil {
 		t.Fatal("expected upgrade error")
 	}
@@ -783,7 +783,7 @@ func TestCreateRemoteDiagnosisHandoffRequiresNeedFlag(t *testing.T) {
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
@@ -799,7 +799,7 @@ func TestCreateRemoteDiagnosisHandoffSuccessAndAudit(t *testing.T) {
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	if _, err := svc.HandleFailure(context.Background(), "openclaw", "cannot bind port"); err != nil {
@@ -841,7 +841,7 @@ func TestCleanupExpiredDiagnosisHandoffs(t *testing.T) {
 	checker := &fakeChecker{}
 	svc, clock := newServiceForTestWithClock(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	if _, err := svc.HandleFailure(context.Background(), "openclaw", "cannot bind port"); err != nil {
@@ -883,7 +883,7 @@ func TestCreateRemoteDiagnosisHandoffDeclinedUsesNeutralAuditResult(t *testing.T
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	if _, err := svc.HandleFailure(context.Background(), "openclaw", "cannot bind port"); err != nil {
@@ -966,7 +966,7 @@ func TestAuditBufferStatus(t *testing.T) {
 	if err := svc.RegisterManifest(m); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Install("a"); err != nil {
+	if err := svc.Install(context.Background(), "a"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1031,13 +1031,13 @@ func TestMemoryAttachmentsPreservedAcrossStartStop(t *testing.T) {
 
 	svc.setMemoryAttachments("openclaw", []string{"/mem/persist.md"})
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if err := svc.Start("openclaw"); err != nil {
+	if err := svc.Start(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	if err := svc.Stop("openclaw"); err != nil {
+	if err := svc.Stop(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
 
@@ -1053,13 +1053,13 @@ func TestMemoryAttachmentsPreservedAcrossUpgrade(t *testing.T) {
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
 
-	if err := svc.Install("openclaw"); err != nil {
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
 	svc.setMemoryAttachments("openclaw", []string{"/mem/keep.md"})
 
-	_, err := svc.Upgrade("openclaw")
+	_, err := svc.Upgrade(context.Background(), "openclaw")
 	if err != nil {
 		t.Fatalf("upgrade: %v", err)
 	}

@@ -70,7 +70,7 @@ func stopAllAgents(svc *lifecycle.Service) error {
 	var firstErr error
 	for _, agent := range agents {
 		if agent.Runtime == lifecycle.RuntimeStateRunning {
-			if err := svc.Stop(agent.ID); err != nil {
+			if err := svc.Stop(context.Background(), agent.ID); err != nil {
 				fmt.Fprintf(os.Stderr, "failed to stop agent %s: %v\n", agent.ID, err)
 				if firstErr == nil {
 					firstErr = err
