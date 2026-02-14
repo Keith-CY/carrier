@@ -12,22 +12,8 @@ git worktree add -b codex/<topic> ../carrier-<topic> origin/main
 cd ../carrier-<topic>
 ```
 
-Branch naming convention:
-- Use `codex/` prefix for all development branches.
-- Pattern: `codex/issue-<id>-<short-slug>` for issue-driven work.
-- Pattern: `codex/<topic>` for ad-hoc maintenance or exploration.
-- **Never push directly to `main`.**
-
-### Branch Naming Examples
-
-| Issue type | Branch name |
-|------------|-------------|
-| Docs update (#270) | `codex/issue-270-branch-naming` |
-| Test addition (#245) | `codex/issue-245-reload-failure-tests` |
-| Script/chore (#323) | `codex/issue-323-review-followup-dupes` |
-| Ad-hoc refactor | `codex/refactor-session-store` |
-
-Keep slugs short and lowercase with hyphens. Avoid special characters.
+Branch naming:
+- Use `codex/` prefix for development branches.
 
 ## Pull Request Policy
 
@@ -117,8 +103,6 @@ Before opening or updating a PR, run the minimum local validation for your chang
 
 - **CI/workflow changes:** Test the workflow logic locally where possible. For GitHub Actions changes, verify YAML syntax with a linter (e.g., `actionlint`).
 
-- **Shell script changes:** Run `shellcheck scripts/*.sh` locally to catch portability/quoting issues before CI does.
-
 These are minimum checks. The full local validation suite is available via `./scripts/run-all-tests.sh`.
 ## CI Troubleshooting
 
@@ -158,73 +142,42 @@ bun test
 - Bun: see `gateway/package.json` or CI workflow (`bun-version`)
 
 These are the same commands CI runs. Fix failures locally before pushing updates.
-## ShellCheck (Local Lint)
+## Cleanup Stale Worktrees and Branches
 
-Run ShellCheck across all repository scripts to match CI behavior:
+When using the issue-driven worktree workflow (`git worktree add …`), stale worktrees and branches accumulate over time. Use the commands below to clean up.
 
-```bash
-./scripts/run-shellcheck.sh
-```
-
-The script discovers all `scripts/**/*.sh` files and exits non-zero on any lint error.
-## Doc Command Sync Check
-
-Ensure key command snippets stay aligned between `README.md` and `CONTRIBUTING.md`:
+**List current worktrees:**
 
 ```bash
-./scripts/check-doc-command-sync.sh
+git worktree list
 ```
 
-The script compares high-churn commands (`go test ./...`, `bun run check`, `./scripts/run-all-tests.sh`) and exits non-zero when any snippet appears in one file but not the other. CI runs this check automatically on PRs that touch documentation.
-
-
-### Inspecting and Rerunning Failed CI
-
-Use `gh` to quickly inspect failures and rerun jobs without leaving the terminal:
+**Remove a stale worktree** (after its PR is merged):
 
 ```bash
-# List recent workflow runs for your PR
-gh run list --branch <your-branch> --limit 5
-
-# View logs for the failed step
-gh run view <run-id> --log-failed
-
-# Rerun only failed jobs (requires write access)
-gh run rerun <run-id> --failed
+git worktree remove /tmp/carrier-issue-<number>
 ```
 
-> **Note:** Rerunning requires write/maintain permissions. If you lack access, push a fixup commit to trigger a new run.
-
-### Transient GitHub API Failures
-
-When `gh pr checks` or `gh run view` fails unexpectedly, check these common causes:
-
-**DNS/connectivity issues:**
+If the directory was already deleted, prune the worktree records:
 
 ```bash
-# Verify connectivity
-curl -s https://api.github.com/zen
-# Retry after a short wait
-sleep 5 && gh pr checks <pr-number>
+git worktree prune
 ```
 
-**GitHub API rate limits:**
+**Delete merged local branches:**
 
 ```bash
-# Check remaining quota
-gh api rate_limit --jq '.rate | "\(.remaining)/\(.limit) (resets \(.reset | todate))"'
+git branch --merged main | grep -v '^\*\|main' | xargs -r git branch -d
 ```
 
-If rate-limited, wait for the reset time or authenticate with a token that has higher limits.
-
-**Expired or missing auth session:**
+**Sync before starting new work:**
 
 ```bash
-# Check auth status
-gh auth status
-# Re-authenticate if needed
-gh auth login
+git checkout main && git pull origin main
 ```
+
+> **Tip:** Branch names follow the pattern `codex/issue-<number>-<short-desc>`. Avoid `git branch -D` (force delete) unless you are certain the branch has been merged or abandoned.
+
 ## Stale Follow-Up Detection
 
 To find stale `[review-followup]` issues whose referenced PR is already merged:
@@ -255,7 +208,7 @@ This project maintains a [`CHANGELOG.md`](./CHANGELOG.md) following [Keep a Chan
 **Categories used in this repo:**
 - `Features` — new capabilities
 - `Bug Fixes` — corrections to existing behavior
-- `Security` — vulnerability fixes or hardening (see also [`docs/security-install-integrity.md`](./docs/security-install-integrity.md) for install/upgrade verification)
+- `Security` — vulnerability fixes or hardening
 - `Refactor` — internal restructuring without behavior change
 - `Docs` — documentation additions or updates
 - `Tests` — new or improved test coverage
@@ -268,30 +221,6 @@ This project maintains a [`CHANGELOG.md`](./CHANGELOG.md) following [Keep a Chan
 
 - **WebSocket support** — add real-time event streaming to gateway ([#999](https://github.com/Keith-CY/carrier/pull/999))
 ```
-
-## Re-Review Rule (Head SHA vs Review SHA)
-
-After new commits are pushed to a PR, determine whether re-review is needed by comparing the current head SHA against the SHA that was last reviewed.
-
-**Fetch the current PR head SHA:**
-
-```bash
-gh pr view <PR_NUMBER> --repo Keith-CY/carrier --json headRefOid --jq '.headRefOid'
-```
-
-**Fetch the SHA of the last reviewed commit:**
-
-```bash
-gh pr view <PR_NUMBER> --repo Keith-CY/carrier --json latestReviews \
-  --jq '.latestReviews[0].commit.oid'
-```
-
-**Decision flow:**
-
-1. If `headRefOid == latestReviews[].commit.oid` → **skip** (already reviewed at this commit).
-2. If they differ → **re-review required** (new commits since last approval).
-
-This rule applies to both manual review sweeps and automated review triggers.
 
 ## Review Convention (Non-Blocking Suggestions)
 
@@ -330,51 +259,3 @@ NBS: The error message could include the agent ID for easier debugging.
 ```
 
 Non-blocking suggestions tagged with `NBS:` are automatically converted to follow-up issues by the `review-nbs-followup` automation after the PR merges.
-
-## Quick CI Inspection and Rerun Workflow
-
-When a CI check fails on your PR, use these `gh` commands to inspect and rerun without leaving the terminal.
-
-**1. List recent workflow runs for your PR branch:**
-
-```bash
-gh run list --branch "$(git branch --show-current)" --limit 5
-```
-
-**2. View logs for the failed run:**
-
-```bash
-gh run view <run-id> --log-failed
-```
-
-**3. Rerun only the failed jobs:**
-
-```bash
-gh run rerun <run-id> --failed
-```
-
-**4. Rerun the entire workflow (all jobs):**
-
-```bash
-gh run rerun <run-id>
-```
-
-**Permissions note:** You need write access to the repository to trigger reruns. If the button is unavailable, ask a maintainer to rerun or push an update to your PR branch to trigger a fresh run.
-## PR Check Health Summary
-
-To get a quick overview of open PR check statuses:
-
-```bash
-bash scripts/pr-check-summary.sh
-```
-
-The script prints counts for green, pending, and failing PRs, and lists PR numbers for non-green entries. It uses `gh` JSON output and performs no write/mutation actions.
-## Pre-Flight Tool Check
-
-Before running repository scripts, verify required tools are installed:
-
-```bash
-bash scripts/check-tools.sh
-```
-
-The script checks for `gh`, `jq`, `go`, `bun`, and optionally `shellcheck`, printing actionable install hints for any missing tool.
