@@ -50,9 +50,10 @@ while IFS= read -r issue; do
   fi
 
   # Extract PR number from title (e.g., "PR #47:") or body (e.g., "/pull/47")
-  pr_num=$(echo "$title" | grep -oP 'PR #\K[0-9]+' || \
-           echo "$body" | grep -oP '/pull/\K[0-9]+' | head -1 || \
-           echo "")
+  pr_num=$(echo "$title" | sed -n 's/.*PR #\([0-9]\{1,\}\).*/\1/p' | head -1)
+  if [[ -z "$pr_num" ]]; then
+    pr_num=$(echo "$body" | sed -n 's|.*/pull/\([0-9]\{1,\}\).*|\1|p' | head -1)
+  fi
 
   if [[ -z "$pr_num" ]]; then
     continue
