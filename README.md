@@ -65,4 +65,4 @@ See `CONTRIBUTING.md` for command examples and required process.
 
 ## Local workflow notes
 
-- Before making changes, read the skill instructions under `skills/` (especially `skills/pr-create/SKILL.md` and `skills/review-followup/SKILL.md`) to follow repository-specific conventions.
+- Before making changes, read the skill instructions under `skills/` (especially `skills/pr-review/SKILL.md` and `skills/review-followup/SKILL.md`) to follow repository-specific conventions.

@@ -38,7 +38,7 @@ Phase milestones define delivery scope and must be respected in all planning and
 
 ## Skills Directory
 
-- Before proposing changes, read the `skills/` directory and follow any instructions there (especially `skills/pr-create/SKILL.md`).
+- Before proposing changes, read the `skills/` directory and follow any instructions there (especially `skills/pr-review/SKILL.md` and `skills/review-followup/SKILL.md`).
 
 ## Testing Policy
 
