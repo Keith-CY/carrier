@@ -30,8 +30,9 @@ type Config struct {
 
 // ServerConfig holds the network server settings.
 type ServerConfig struct {
-	Host string `json:"host"`
-	Port int    `json:"port"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	APIToken string `json:"api_token"`
 }
 
 // LogConfig holds the logging settings.
@@ -106,6 +107,9 @@ func applyEnvOverrides(cfg *Config) {
 		if p, err := strconv.Atoi(v); err == nil && p > 0 {
 			cfg.Server.Port = p
 		}
+	}
+	if v := os.Getenv("CARRIER_SERVER_API_TOKEN"); v != "" {
+		cfg.Server.APIToken = v
 	}
 	if v := os.Getenv("CARRIER_LOG_LEVEL"); v != "" {
 		cfg.Log.Level = v

@@ -20,7 +20,7 @@ type RepairAction struct {
 }
 
 var (
-	ErrRepairActionNotAllowed = errors.New("repair action is not in allowlist")
+	ErrRepairActionNotAllowed        = errors.New("repair action is not in allowlist")
 	ErrRepairActionNeedsConfirmation = errors.New("high-risk repair action requires confirmation")
 )
 

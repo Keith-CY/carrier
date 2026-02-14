@@ -11,9 +11,9 @@ type Evidence struct {
 }
 
 type TriageResult struct {
-	Resolved               bool
-	Summary                string
-	SuggestedActions       []string
+	Resolved                bool
+	Summary                 string
+	SuggestedActions        []string
 	RequiresRemoteDiagnosis bool
 }
 
@@ -25,9 +25,9 @@ type NoopTriager struct{}
 
 func (NoopTriager) Analyze(_ context.Context, e Evidence) (TriageResult, error) {
 	return TriageResult{
-		Resolved:               false,
-		Summary:                "Base Agent could not resolve the issue in scaffold mode",
-		SuggestedActions:       []string{"Run /diagnose", "Review latest logs", "Confirm remote diagnosis consent"},
+		Resolved:                false,
+		Summary:                 "Base Agent could not resolve the issue in scaffold mode",
+		SuggestedActions:        []string{"Run /diagnose", "Review latest logs", "Confirm remote diagnosis consent"},
 		RequiresRemoteDiagnosis: true,
 	}, nil
 }
