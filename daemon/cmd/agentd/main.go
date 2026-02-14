@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -119,6 +121,36 @@ func main() {
 	fmt.Println("agentd stopped gracefully")
 }
 
+// validAgentIDPattern matches safe agent identifiers: alphanumeric, underscore, hyphen only.
+var validAgentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// extractAndValidateAgentID extracts the agentID from the URL path, URL-decodes it,
+// and validates it to prevent path traversal and injection attacks.
+func extractAndValidateAgentID(path, prefix string) (string, error) {
+	raw := strings.TrimPrefix(path, prefix)
+	if raw == "" {
+		return "", fmt.Errorf("missing agentId in path")
+	}
+	
+	// URL-decode the path segment
+	agentID, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid URL encoding in agentId")
+	}
+	
+	// Validate: reject path separators and parent directory references
+	if strings.Contains(agentID, "/") || strings.Contains(agentID, "\\") || strings.Contains(agentID, "..") {
+		return "", fmt.Errorf("agentId contains invalid path characters")
+	}
+	
+	// Enforce strict pattern: only alphanumeric, underscore, hyphen
+	if !validAgentIDPattern.MatchString(agentID) {
+		return "", fmt.Errorf("agentId must match pattern ^[a-zA-Z0-9_-]+$")
+	}
+	
+	return agentID, nil
+}
+
 func buildHTTPMux(svc *lifecycle.Service, pairStore *pairing.Store) *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -209,9 +241,9 @@ func buildHTTPMux(svc *lifecycle.Service, pairStore *pairing.Store) *http.ServeM
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		agentID := strings.TrimPrefix(r.URL.Path, "/api/status/")
-		if agentID == "" {
-			writeJSONError(w, http.StatusBadRequest, "missing agentId in path")
+		agentID, err := extractAndValidateAgentID(r.URL.Path, "/api/status/")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		state, err := svc.Status(agentID)
@@ -227,9 +259,9 @@ func buildHTTPMux(svc *lifecycle.Service, pairStore *pairing.Store) *http.ServeM
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		agentID := strings.TrimPrefix(r.URL.Path, "/api/logs/")
-		if agentID == "" {
-			writeJSONError(w, http.StatusBadRequest, "missing agentId in path")
+		agentID, err := extractAndValidateAgentID(r.URL.Path, "/api/logs/")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		tail := 200
