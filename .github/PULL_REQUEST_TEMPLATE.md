@@ -15,4 +15,4 @@
 
 ## Audit Traceability
 
-- [ ] Add a concise “Commit highlights” section in this PR description summarizing key commit-level deltas (for post-merge audit follow-up).
+- [ ] PR description includes a “Commit highlights” section summarizing key commit-level deltas (for post-merge audit follow-up).
