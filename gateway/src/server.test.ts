@@ -116,6 +116,19 @@ describe("gateway runtime routes", () => {
     expect(payload.errorCode).toBe("E_DOWNLOAD_FILE_MISMATCH");
   });
 
+  test("download route rejects malformed percent-encoded filename path", async () => {
+    const deps = makeDeps();
+    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}.txt`;
+    await Bun.write(filePath, "file-content");
+    const token = deps.downloads.issue(filePath, 300, false);
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request(`http://gateway.local/downloads/${token.token}/bad%ZZname.txt`));
+    expect(response.status).toBe(400);
+    const payload = await response.json() as { errorCode?: string };
+    expect(payload.errorCode).toBe("E_USAGE");
+  });
+
   test("download route escapes quotes in content-disposition filename", async () => {
     const deps = makeDeps();
     // Create a file with a name containing quotes and backslashes

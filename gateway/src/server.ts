@@ -152,7 +152,18 @@ async function handleDownloadRequest(
   }
 
   const token = parts[1] ?? "";
-  const requestedFileName = decodeURIComponent(parts[2] ?? "");
+  let requestedFileName: string;
+  try {
+    requestedFileName = decodeURIComponent(parts[2] ?? "");
+  } catch {
+    return jsonResponse({
+      requestId: ctx.requestId,
+      result: "error",
+      errorCode: "E_USAGE",
+      message: "invalid download path",
+    }, 400);
+  }
+
   const resolved = ctx.deps.downloads.consume(token);
   if (!resolved) {
     return jsonResponse({
