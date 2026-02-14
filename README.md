@@ -15,6 +15,16 @@ For product scope/priority decisions, use this order:
 2. `docs/Agent_Installation_Platform_Implementation_Plan.md` (execution sequence and delivery plan)
 3. `README.md` (quick orientation and current implementation status)
 
+## Architecture
+
+For a detailed overview of the system design and component interactions, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+
+Key topics covered:
+- Daemon lifecycle state machine and service boundaries
+- Gateway routing and provider abstraction
+- Catalog manifest schema and validation flow
+- Memory model (Per-Agent, Shared, Public) and mount policy
+
 ## Repository layout
 - `daemon/`: Go daemon lifecycle, catalog, Base Agent triage interfaces
 - `gateway/`: TypeScript gateway contracts and routing scaffold
