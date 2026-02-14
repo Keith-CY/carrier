@@ -80,13 +80,6 @@ func TestValidateRejectsMissingRequiredFields(t *testing.T) {
 			},
 			wantErr: "runtime.start.command is required",
 		},
-		{
-			name: "missing runtime upgrade command",
-			mutate: func(m *Manifest) {
-				m.Runtime.Upgrade.Command = " "
-			},
-			wantErr: "runtime.upgrade.command is required",
-		},
 	}
 
 	for _, tc := range testCases {

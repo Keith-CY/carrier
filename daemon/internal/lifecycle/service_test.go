@@ -439,22 +439,19 @@ func TestUpgradeCreatesBackupAndPreservesMemoryAttachments(t *testing.T) {
 		t.Fatalf("expected memory attachments preserved, got %d", len(gotAttachments))
 	}
 
-	logs, logErr := svc.Logs("openclaw", 50)
-	if logErr != nil {
-		t.Fatalf("logs: %v", logErr)
-	}
+	auditLogs := svc.AuditLogs()
 	hasStartAudit := false
 	hasSuccessAudit := false
-	for _, line := range logs {
-		if strings.Contains(line, "[audit] upgrade_start") {
+	for _, log := range auditLogs {
+		if log.Action == "upgrade" && log.Target == "openclaw" && strings.Contains(log.Message, "upgrade_start") {
 			hasStartAudit = true
 		}
-		if strings.Contains(line, "[audit] upgrade_success") {
+		if log.Action == "upgrade" && log.Target == "openclaw" && strings.Contains(log.Message, "upgrade_success") {
 			hasSuccessAudit = true
 		}
 	}
 	if !hasStartAudit || !hasSuccessAudit {
-		t.Fatalf("expected upgrade start/success audit events, logs=%v", logs)
+		t.Fatalf("expected upgrade start/success audit events, got %d audit logs", len(auditLogs))
 	}
 }
 
@@ -489,19 +486,16 @@ func TestUpgradeFailureReturnsBackupGuidanceAndAuditFailure(t *testing.T) {
 		t.Fatalf("expected memory attachments preserved on failure, got %v", gotAttachments)
 	}
 
-	logs, logErr := svc.Logs("openclaw", 50)
-	if logErr != nil {
-		t.Fatalf("logs: %v", logErr)
-	}
+	auditLogs := svc.AuditLogs()
 	hasFailureAudit := false
-	for _, line := range logs {
-		if strings.Contains(line, "[audit] upgrade_failure") {
+	for _, log := range auditLogs {
+		if log.Action == "upgrade" && log.Target == "openclaw" && log.Result == AuditResultFailure && strings.Contains(log.Message, "upgrade_failure") {
 			hasFailureAudit = true
 			break
 		}
 	}
 	if !hasFailureAudit {
-		t.Fatalf("expected upgrade failure audit event, logs=%v", logs)
+		t.Fatalf("expected upgrade failure audit event, got %d audit logs", len(auditLogs))
 	}
 }
 

@@ -130,9 +130,7 @@ func validateRuntime(r RuntimeSpec) error {
 	if err := validateRequired("runtime.install.command", r.Install.Command); err != nil {
 		return err
 	}
-	if err := validateRequired("runtime.upgrade.command", r.Upgrade.Command); err != nil {
-		return err
-	}
+	// runtime.upgrade.command is optional - not all agents need upgrade support
 	if err := validateRequired("runtime.start.command", r.Start.Command); err != nil {
 		return err
 	}

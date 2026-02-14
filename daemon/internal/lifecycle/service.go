@@ -31,6 +31,7 @@ var (
 	ErrAlreadyRunning           = errors.New("agent already running")
 	ErrAlreadyStopped           = errors.New("agent already stopped")
 	ErrCrashLoop                = errors.New("agent is in crash loop cooldown")
+	ErrAgentRunning             = errors.New("agent is running; stop it before upgrading")
 	ErrMissingRequiredEnv       = errors.New("missing required environment variables")
 	ErrPortConflict             = errors.New("port conflict detected")
 	ErrRuntimePrerequisites     = errors.New("runtime prerequisites failed")
@@ -373,7 +374,7 @@ func (s *Service) Upgrade(agentID string) error {
 		return ErrNotInstalled
 	}
 	if state.Runtime == RuntimeStateRunning {
-		return fmt.Errorf("agent %s is running; stop it before upgrading", agentID)
+		return ErrAgentRunning
 	}
 
 	attachments := s.getMemoryAttachments(agentID)
@@ -382,17 +383,15 @@ func (s *Service) Upgrade(agentID string) error {
 		return err
 	}
 
-	s.appendLog(agentID, "[audit] "+fmt.Sprintf("upgrade_start backup=%q command=%q", backupPath, m.Runtime.Upgrade.Command))
+	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_start backup=%q command=%q", backupPath, m.Runtime.Upgrade.Command))
 
 	result, runErr := s.runner.Run(context.Background(), m.Runtime.Upgrade.Command)
 	s.appendCommandLog(agentID, "upgrade", m.Runtime.Upgrade.Command, result, runErr)
 	if runErr != nil {
-		s.appendLog(agentID, "[audit] "+fmt.Sprintf("upgrade_failure backup=%q error=%q", backupPath, runErr.Error()))
-		s.setMemoryAttachments(agentID, attachments)
+		s.recordAudit("", "system", "upgrade", agentID, AuditResultFailure, "E_UPGRADE_FAILED", fmt.Sprintf("upgrade_failure backup=%q error=%q", backupPath, runErr.Error()))
 		return fmt.Errorf("upgrade failed; use backup at %s for manual rollback guidance: %w", backupPath, runErr)
 	}
 
-	s.setMemoryAttachments(agentID, attachments)
 	s.mu.Lock()
 	state = s.states[agentID]
 	state.LastError = ""
@@ -400,7 +399,7 @@ func (s *Service) Upgrade(agentID string) error {
 	s.states[agentID] = state
 	s.mu.Unlock()
 
-	s.appendLog(agentID, "[audit] "+fmt.Sprintf("upgrade_success backup=%q", backupPath))
+	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_success backup=%q", backupPath))
 	return nil
 }
 
@@ -842,20 +841,11 @@ func (s *Service) setMemoryAttachments(agentID string, attachments []string) {
 }
 
 func (s *Service) envVarKeys(m manifest.Manifest) []string {
-	seen := make(map[string]struct{}, len(m.Env.Required)+len(m.Env.Optional))
 	keys := make([]string, 0, len(m.Env.Required)+len(m.Env.Optional))
 	for _, envVar := range m.Env.Required {
-		if _, ok := seen[envVar.Name]; ok {
-			continue
-		}
-		seen[envVar.Name] = struct{}{}
 		keys = append(keys, envVar.Name)
 	}
 	for _, envVar := range m.Env.Optional {
-		if _, ok := seen[envVar.Name]; ok {
-			continue
-		}
-		seen[envVar.Name] = struct{}{}
 		keys = append(keys, envVar.Name)
 	}
 	sort.Strings(keys)
