@@ -146,3 +146,27 @@ func TestAPIMethodNotAllowed(t *testing.T) {
 		t.Fatalf("expected 405, got %d", rec.Code)
 	}
 }
+
+func TestValidateAgentID(t *testing.T) {
+	tests := []struct {
+		id      string
+		wantErr bool
+	}{
+		{"my-agent", false},
+		{"agent_1.0", false},
+		{"a", false},
+		{"", true},
+		{"../etc/passwd", true},
+		{"foo/bar", true},
+		{"foo\\bar", true},
+		{"a..b", true},
+		{".hidden", true},
+		{"-start", true},
+	}
+	for _, tt := range tests {
+		err := validateAgentID(tt.id)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("validateAgentID(%q) err=%v, wantErr=%v", tt.id, err, tt.wantErr)
+		}
+	}
+}

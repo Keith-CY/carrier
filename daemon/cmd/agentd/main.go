@@ -304,6 +304,9 @@ func validateAgentID(id string) error {
 	if strings.Contains(id, "/") || strings.Contains(id, "\\") {
 		return fmt.Errorf("agent ID must not contain path separators")
 	}
+	if strings.Contains(id, "..") {
+		return fmt.Errorf("agent ID must not contain parent-directory tokens")
+	}
 	if !agentIDPattern.MatchString(id) {
 		return fmt.Errorf("agent ID contains invalid characters")
 	}
