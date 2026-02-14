@@ -168,6 +168,54 @@ Run ShellCheck across all repository scripts to match CI behavior:
 
 The script discovers all `scripts/**/*.sh` files and exits non-zero on any lint error.
 
+
+### Inspecting and Rerunning Failed CI
+
+Use `gh` to quickly inspect failures and rerun jobs without leaving the terminal:
+
+```bash
+# List recent workflow runs for your PR
+gh run list --branch <your-branch> --limit 5
+
+# View logs for the failed step
+gh run view <run-id> --log-failed
+
+# Rerun only failed jobs (requires write access)
+gh run rerun <run-id> --failed
+```
+
+> **Note:** Rerunning requires write/maintain permissions. If you lack access, push a fixup commit to trigger a new run.
+
+### Transient GitHub API Failures
+
+When `gh pr checks` or `gh run view` fails unexpectedly, check these common causes:
+
+**DNS/connectivity issues:**
+
+```bash
+# Verify connectivity
+curl -s https://api.github.com/zen
+# Retry after a short wait
+sleep 5 && gh pr checks <pr-number>
+```
+
+**GitHub API rate limits:**
+
+```bash
+# Check remaining quota
+gh api rate_limit --jq '.rate | "\(.remaining)/\(.limit) (resets \(.reset | todate))"'
+```
+
+If rate-limited, wait for the reset time or authenticate with a token that has higher limits.
+
+**Expired or missing auth session:**
+
+```bash
+# Check auth status
+gh auth status
+# Re-authenticate if needed
+gh auth login
+```
 ## Stale Follow-Up Detection
 
 To find stale `[review-followup]` issues whose referenced PR is already merged:
