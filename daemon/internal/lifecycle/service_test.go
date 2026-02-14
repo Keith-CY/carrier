@@ -1,11 +1,50 @@
 package lifecycle
 
 import (
+	"archive/zip"
 	"context"
+	"errors"
+	"net"
+	"os"
+	"sort"
+	"strconv"
 	"testing"
+	"time"
 
+	"carrier/daemon/internal/commandexec"
 	"carrier/daemon/internal/manifest"
 )
+
+type fakeRunner struct {
+	calls   []string
+	results map[string]runResult
+}
+
+type runResult struct {
+	result commandexec.Result
+	err    error
+}
+
+func (f *fakeRunner) Run(_ context.Context, command string) (commandexec.Result, error) {
+	f.calls = append(f.calls, command)
+	if f.results == nil {
+		return commandexec.Result{}, nil
+	}
+	if res, ok := f.results[command]; ok {
+		return res.result, res.err
+	}
+	return commandexec.Result{}, nil
+}
+
+type fakeChecker struct {
+	err   error
+	calls int
+}
+
+func (f *fakeChecker) Check(manifest.Manifest) error {
+	f.calls++
+	return f.err
+}
 
 func sampleManifest() manifest.Manifest {
 	return manifest.Manifest{
@@ -14,9 +53,15 @@ func sampleManifest() manifest.Manifest {
 		Version: "1.0.0",
 		Runtime: manifest.RuntimeSpec{
 			Type:    manifest.RuntimeTypeLocalBinary,
-			Install: manifest.CommandSpec{Command: "./install.sh"},
-			Start:   manifest.CommandSpec{Command: "./openclaw start"},
-			Stop:    manifest.CommandSpec{Command: "./openclaw stop"},
+			Install: manifest.CommandSpec{Command: "install-openclaw"},
+			Start:   manifest.CommandSpec{Command: "start-openclaw"},
+			Stop:    manifest.CommandSpec{Command: "stop-openclaw"},
+		},
+		Network: manifest.NetworkSpec{
+			Ports: []manifest.PortSpec{{Name: "http", Port: 0}},
+		},
+		Env: manifest.EnvSpec{
+			Required: []manifest.EnvVar{{Name: "OPENAI_API_KEY", Secret: true}},
 		},
 		Memory: manifest.MemorySpec{
 			Supports:  []manifest.MemoryType{manifest.MemoryTypePerAgent, manifest.MemoryTypeShared, manifest.MemoryTypePublic},
@@ -25,11 +70,26 @@ func sampleManifest() manifest.Manifest {
 	}
 }
 
-func TestLifecycleInstallStartStop(t *testing.T) {
-	svc := NewService(nil)
+func newServiceForTest(t *testing.T, runner *fakeRunner, checker *fakeChecker) *Service {
+	t.Helper()
+	fixedNow := time.Date(2026, 2, 14, 4, 20, 0, 0, time.UTC)
+	svc := NewService(nil,
+		WithRunner(runner),
+		WithRuntimeChecker(checker),
+		WithDiagnoseDir(t.TempDir()),
+		WithNow(func() time.Time { return fixedNow }),
+	)
 	if err := svc.RegisterManifest(sampleManifest()); err != nil {
 		t.Fatalf("register manifest: %v", err)
 	}
+	return svc
+}
+
+func TestLifecycleInstallStartStop(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
 
 	if err := svc.Install("openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
@@ -37,37 +97,176 @@ func TestLifecycleInstallStartStop(t *testing.T) {
 	if err := svc.Start("openclaw"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
-
-	status, err := svc.Status("openclaw")
-	if err != nil {
-		t.Fatalf("status: %v", err)
-	}
-	if status.Runtime != RuntimeStateRunning {
-		t.Fatalf("expected running, got %s", status.Runtime)
-	}
-
 	if err := svc.Stop("openclaw"); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
+
+	if checker.calls != 2 {
+		t.Fatalf("expected checker called twice (install/start), got %d", checker.calls)
+	}
+	wantCalls := []string{"install-openclaw", "start-openclaw", "stop-openclaw"}
+	if len(runner.calls) != len(wantCalls) {
+		t.Fatalf("expected %d runner calls, got %d", len(wantCalls), len(runner.calls))
+	}
+	for i := range wantCalls {
+		if runner.calls[i] != wantCalls[i] {
+			t.Fatalf("runner call %d mismatch: want %q got %q", i, wantCalls[i], runner.calls[i])
+		}
+	}
 }
 
-func TestHandleFailure(t *testing.T) {
-	svc := NewService(nil)
-	if err := svc.RegisterManifest(sampleManifest()); err != nil {
-		t.Fatalf("register manifest: %v", err)
+func TestInstallFailsWhenPrerequisiteCheckFails(t *testing.T) {
+	runner := &fakeRunner{}
+	checker := &fakeChecker{err: errors.New("missing wsl")}
+	svc := newServiceForTest(t, runner, checker)
+
+	err := svc.Install("openclaw")
+	if !errors.Is(err, ErrRuntimePrerequisites) {
+		t.Fatalf("expected ErrRuntimePrerequisites, got %v", err)
 	}
+
+	status, statusErr := svc.Status("openclaw")
+	if statusErr != nil {
+		t.Fatalf("status: %v", statusErr)
+	}
+	if status.Install != InstallStateBroken {
+		t.Fatalf("expected install state broken, got %s", status.Install)
+	}
+}
+
+func TestStartFailsWhenRequiredEnvIsMissing(t *testing.T) {
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
 	if err := svc.Install("openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
-	result, err := svc.HandleFailure(context.Background(), "openclaw", "port in use")
+	err := svc.Start("openclaw")
+	if !errors.Is(err, ErrMissingRequiredEnv) {
+		t.Fatalf("expected ErrMissingRequiredEnv, got %v", err)
+	}
+}
+
+func TestStartFailsWhenPortIsInUse(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	// Override manifest with fixed port for conflict test.
+	m := sampleManifest()
+	ln, err := netListen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	addr := ln.Addr().String()
+	_, portStr, splitErr := splitHostPort(addr)
+	if splitErr != nil {
+		t.Fatalf("split host/port: %v", splitErr)
+	}
+	port, atoiErr := atoi(portStr)
+	if atoiErr != nil {
+		t.Fatalf("parse port: %v", atoiErr)
+	}
+	m.Network.Ports = []manifest.PortSpec{{Name: "http", Port: port}}
+	if regErr := svc.RegisterManifest(m); regErr != nil {
+		t.Fatalf("re-register manifest: %v", regErr)
+	}
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	startErr := svc.Start("openclaw")
+	if !errors.Is(startErr, ErrPortConflict) {
+		t.Fatalf("expected ErrPortConflict, got %v", startErr)
+	}
+}
+
+func TestLogsAndDiagnoseArtifact(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{results: map[string]runResult{
+		"install-openclaw": {result: commandexec.Result{CombinedOutput: "install-ok", ExitCode: 0}},
+	}}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	logs, logErr := svc.Logs("openclaw", 10)
+	if logErr != nil {
+		t.Fatalf("logs: %v", logErr)
+	}
+	if len(logs) == 0 {
+		t.Fatal("expected logs to be present")
+	}
+
+	zipPath, diagErr := svc.Diagnose("openclaw")
+	if diagErr != nil {
+		t.Fatalf("diagnose: %v", diagErr)
+	}
+	if _, statErr := os.Stat(zipPath); statErr != nil {
+		t.Fatalf("expected diagnose file to exist: %v", statErr)
+	}
+
+	zr, openErr := zip.OpenReader(zipPath)
+	if openErr != nil {
+		t.Fatalf("open zip: %v", openErr)
+	}
+	defer zr.Close()
+
+	names := make([]string, 0, len(zr.File))
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+	}
+	sort.Strings(names)
+	want := []string{"logs.txt", "manifest.json", "state.json"}
+	if len(names) != len(want) {
+		t.Fatalf("unexpected zip entry count: want %d got %d", len(want), len(names))
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("unexpected zip entry %d: want %q got %q", i, want[i], names[i])
+		}
+	}
+}
+
+func TestHandleFailureMarksRemoteDiagnosisNeed(t *testing.T) {
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	triage, err := svc.HandleFailure(context.Background(), "openclaw", "startup failed")
 	if err != nil {
 		t.Fatalf("handle failure: %v", err)
 	}
-	if result.Resolved {
-		t.Fatal("expected unresolved in noop triager")
+	if triage.Resolved {
+		t.Fatal("expected unresolved triage in noop mode")
 	}
-	if !result.RequiresRemoteDiagnosis {
-		t.Fatal("expected remote diagnosis requirement")
+
+	status, statusErr := svc.Status("openclaw")
+	if statusErr != nil {
+		t.Fatalf("status: %v", statusErr)
+	}
+	if !status.NeedsRemoteDiagnosis {
+		t.Fatal("expected NeedsRemoteDiagnosis=true")
+	}
+	if status.LastTriageSummary == "" {
+		t.Fatal("expected LastTriageSummary to be populated")
 	}
 }
+
+// Wrappers to keep tests explicit and avoid importing extra packages in each assertion block.
+var (
+	netListen     = net.Listen
+	splitHostPort = net.SplitHostPort
+	atoi          = strconv.Atoi
+)
