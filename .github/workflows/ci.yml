@@ -78,5 +78,17 @@ jobs:
         with:
           bun-version: "1.1.8"
 
+      - name: Detect carrier CLI
+        id: carrier-cli
+        shell: bash
+        run: |
+          if command -v carrier >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "carrier CLI is not available on this runner; skipping e2e execution for this run."
+          fi
+
       - name: Run end-to-end tests
+        if: steps.carrier-cli.outputs.available == 'true'
         run: ./scripts/run-e2e-tests.sh
