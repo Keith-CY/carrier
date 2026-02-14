@@ -6,7 +6,7 @@
     "strict": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "types": []
+    "types": ["bun"]
   },
   "include": ["src"]
 }
