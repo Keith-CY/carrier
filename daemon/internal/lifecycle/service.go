@@ -234,6 +234,32 @@ func (s *Service) ListAgents() []AgentState {
 	return out
 }
 
+// RunningAgentsCount returns the number of agents currently in running state.
+func (s *Service) RunningAgentsCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	count := 0
+	for _, state := range s.states {
+		if state.Runtime == RuntimeStateRunning {
+			count++
+		}
+	}
+	return count
+}
+
+// AgentName returns the manifest name for an agent ID, or the ID when no name is available.
+func (s *Service) AgentName(agentID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	m, ok := s.manifests[agentID]
+	if !ok || m.Name == "" {
+		return agentID
+	}
+	return m.Name
+}
+
 func (s *Service) Status(agentID string) (AgentState, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
