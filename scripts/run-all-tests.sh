@@ -7,6 +7,7 @@ printf '\n=== Daemon tests ===\n'
 (
   cd "$repo_root/daemon"
   go test ./...
+  go test ./internal/manifest -run TestLoadFileAcceptsCatalogManifest -count=1
 )
 
 printf '\n=== Gateway checks and tests ===\n'
