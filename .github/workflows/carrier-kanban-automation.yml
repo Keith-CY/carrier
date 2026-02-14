@@ -20,10 +20,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
-            const configPath = '.github/kanban-config.json';
-            const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {};
-            const projectId = process.env.CARRIER_PROJECT_ID || config.projectId;
+            const projectId = process.env.CARRIER_PROJECT_ID || 'PVT_kwHOAG7zoc4BPLc6';
             const statusFieldNames = ['Status', '状态'];
             const fieldAliases = {
               priority: ['Priority', '优先级'],
@@ -36,16 +33,9 @@ jobs:
 
             const eventName = context.eventName;
             const payload = context.payload;
-            const projectToken = process.env.CARRIER_PROJECTS_TOKEN;
-            if (!projectToken) {
-              core.warning('Skipping Kanban sync: CARRIER_PROJECTS_TOKEN is not configured.');
-              return;
-            }
-            if (!projectId) {
-              core.warning('Skipping Kanban sync: missing projectId. Set CARRIER_PROJECT_ID or config.projectId.');
-              return;
-            }
-            const ghClient = github.getOctokit(projectToken);
+            const token = process.env.CARRIER_PROJECTS_TOKEN || process.env.GITHUB_TOKEN;
+            // Fallback `github` comes from @actions/github and uses the default GITHUB_TOKEN context.
+            const ghClient = token ? github.getOctokit(token) : github;
 
             const getStatusCandidates = (item, labels) => {
               const hasLabel = (target) => labels.includes(target.toLowerCase());
@@ -172,9 +162,11 @@ jobs:
                         dataType
                       }
                       ... on ProjectV2SingleSelectField {
-                        options {
-                          id
-                          name
+                        options(first: 100) {
+                          nodes {
+                            id
+                            name
+                          }
                         }
                       }
                     }
@@ -183,22 +175,16 @@ jobs:
               }
             }`;
 
-            let preflight;
-            try {
-              preflight = await ghClient.graphql(preflightQuery, { projectId });
-            } catch (error) {
-              core.warning(`Skipping Kanban sync: cannot read ProjectV2 ${projectId}. ${error.message}`);
-              return;
-            }
+            const preflight = await ghClient.graphql(preflightQuery, { projectId });
             if (!preflight?.node) {
-              core.warning(`Skipping Kanban sync: unable to read project ${projectId}. Verify token and project ID.`);
+              core.setFailed(`Unable to read project ${projectId}. Verify the token and projectId are valid.`);
               return;
             }
 
             if (!preflight.node.viewerCanUpdate) {
-              core.warning([
+              core.setFailed([
                 'Project token does not have write access for this Project.',
-                'Skipping Kanban sync for this event.',
+                'Use CARRIER_PROJECTS_TOKEN with project:write scope, then re-run.',
               ].join(' '));
               return;
             }
@@ -219,21 +205,21 @@ jobs:
             const normalizeOption = (value) => String(value || '').trim().toLowerCase();
 
             const resolveOption = (field, value) => {
-              if (!field?.options) {
+              if (!field?.options?.nodes) {
                 return null;
               }
               const target = normalizeOption(value);
-              const direct = field.options.find((option) => normalizeOption(option.name) === target);
+              const direct = field.options.nodes.find((option) => normalizeOption(option.name) === target);
               if (direct) {
                 return direct.id;
               }
-              const numeric = field.options.find((option) => option.name === value);
+              const numeric = field.options.nodes.find((option) => option.name === value);
               return numeric ? numeric.id : null;
             };
 
             const statusField = findField(statusFieldNames);
             if (!statusField) {
-              core.warning('Skipping Kanban sync: project status field is missing or inaccessible.');
+              core.setFailed('Project status field was not found or is not accessible. Ensure there is a single-select field named "Status".');
               return;
             }
 

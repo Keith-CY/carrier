@@ -223,3 +223,33 @@ NBS: The error message could include the agent ID for easier debugging.
 ```
 
 Non-blocking suggestions tagged with `NBS:` are automatically converted to follow-up issues by the `review-nbs-followup` automation after the PR merges.
+
+## Quick CI Inspection and Rerun Workflow
+
+When a CI check fails on your PR, use these `gh` commands to inspect and rerun without leaving the terminal.
+
+**1. List recent workflow runs for your PR branch:**
+
+```bash
+gh run list --branch "$(git branch --show-current)" --limit 5
+```
+
+**2. View logs for the failed run:**
+
+```bash
+gh run view <run-id> --log-failed
+```
+
+**3. Rerun only the failed jobs:**
+
+```bash
+gh run rerun <run-id> --failed
+```
+
+**4. Rerun the entire workflow (all jobs):**
+
+```bash
+gh run rerun <run-id>
+```
+
+**Permissions note:** You need write access to the repository to trigger reruns. If the button is unavailable, ask a maintainer to rerun or push an update to your PR branch to trigger a fresh run.
