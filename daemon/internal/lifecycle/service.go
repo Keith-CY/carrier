@@ -482,6 +482,24 @@ func (s *Service) Logs(agentID string, tail int) ([]string, error) {
 	return append([]string(nil), logs[start:]...), nil
 }
 
+// AuditStatus returns the current audit buffer size, configured limit, and
+// the number of entries that have been dropped due to the limit.  This is
+// intended for operational inspection / debug endpoints.
+type AuditStatus struct {
+	BufferSize int `json:"buffer_size"`
+	Limit      int `json:"limit"`
+}
+
+// AuditBufferStatus returns a snapshot of the audit buffer metrics.
+func (s *Service) AuditBufferStatus() AuditStatus {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return AuditStatus{
+		BufferSize: len(s.auditLogs),
+		Limit:      s.auditLogLimit,
+	}
+}
+
 func (s *Service) AuditLogs() []AuditLog {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
