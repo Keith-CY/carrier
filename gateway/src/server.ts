@@ -104,7 +104,7 @@ async function handleWebhook(
 }
 
 export function createServer(config: ServerConfig) {
-  const port = config.port ?? Number(process.env.CARRIER_GATEWAY_PORT) ?? DEFAULT_PORT;
+  const port = config.port ?? (Number(process.env.CARRIER_GATEWAY_PORT) || DEFAULT_PORT);
   const deps = config.deps;
 
   const server = Bun.serve({
