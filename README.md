@@ -38,3 +38,26 @@ Phase 1 scaffold for the Agent Installation Platform.
 - For non-blocking review suggestions, use `NBS:` lines (one suggestion per line). Post-merge automation creates follow-up issues from those lines.
 
 See `CONTRIBUTING.md` for command examples and required process.
+
+## Installation and testing
+
+### Prerequisites
+- Go toolchain (1.21+)
+- Bun (for gateway TypeScript tasks)
+
+### Install
+- Daemon (Go): Go modules are loaded automatically when building or testing; no additional install command needed.
+- Gateway (TypeScript):
+  - `cd gateway`
+  - `bun install`
+
+### Run tests / checks
+- Daemon tests:
+  - `cd daemon`
+  - `go test ./...`
+  - `go test ./internal/manifest -run TestLoadFileAcceptsCatalogManifest -count=1`
+- Gateway checks:
+  - `cd gateway`
+  - `bun run check`
+- Optional local flow from repo root:
+  - `cd gateway && bun install && bun run check && cd ../daemon && go test ./...`
