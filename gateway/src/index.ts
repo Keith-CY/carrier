@@ -10,6 +10,7 @@ import {
   type RequestContext,
 } from "./daemon/client";
 import { DownloadTokenStore } from "./downloads/token_store";
+import { RateLimiter } from "./ratelimit";
 import { SessionStore } from "./session/store";
 
 const COMMAND_NAMES: ReadonlySet<CommandName> = new Set([
@@ -29,6 +30,7 @@ export type GatewayDependencies = {
   daemon: DaemonClient;
   sessions: SessionStore;
   downloads: DownloadTokenStore;
+  rateLimiter?: RateLimiter;
 };
 
 export class ParseError extends Error {
@@ -95,6 +97,14 @@ export async function handleCommand(
     );
   }
   deps.sessions.touch(cmd.provider, cmd.chatId);
+
+  if (deps.rateLimiter) {
+    const sessionKey = `${cmd.provider}:${cmd.chatId}`;
+    const rl = deps.rateLimiter.check(sessionKey);
+    if (!rl.allowed) {
+      return errorResponse(cmd.requestId, rl.errorCode ?? "E_RATE_LIMITED", rl.message ?? "rate limit exceeded");
+    }
+  }
 
   const ctx = requestContext(cmd);
   try {
