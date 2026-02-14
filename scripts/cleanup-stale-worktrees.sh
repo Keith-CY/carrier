@@ -72,9 +72,35 @@ flush_entry() {
   commit_ts="$(git -C "$current_path" log -1 --format=%ct 2>/dev/null || echo 0)"
 
   # Last file modification timestamp (excluding .git metadata), shallow scan for speed.
-  fs_ts="$(find "$current_path" -mindepth 1 -maxdepth 3 \
-    -not -path "$current_path/.git*" \
-    -printf '%T@\n' 2>/dev/null | sort -nr | head -1 | cut -d. -f1)"
+  # Use python3 for portability across GNU/BSD environments.
+  fs_ts="$(python3 - "$current_path" <<'PY'
+import os
+import sys
+
+root = sys.argv[1]
+max_depth = 3
+best = 0
+
+for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+    rel = os.path.relpath(dirpath, root)
+    depth = 0 if rel == '.' else rel.count(os.sep) + 1
+
+    dirnames[:] = [d for d in dirnames if d != '.git']
+    if depth >= max_depth:
+        dirnames[:] = []
+
+    for name in filenames:
+        path = os.path.join(dirpath, name)
+        try:
+            mtime = int(os.path.getmtime(path))
+        except OSError:
+            continue
+        if mtime > best:
+            best = mtime
+
+print(best)
+PY
+  )"
   fs_ts="${fs_ts:-0}"
 
   recent_ts="$commit_ts"
