@@ -29,5 +29,5 @@ Before approving, confirm all CI checks have passed:
 - **Daemon (Go)**: `cd daemon && go test ./...`
 - **Gateway (TypeScript)**: `cd gateway && bun run check`
 
-## Auto-Review Cadence
-A cron job runs every 15 minutes to check for unreviewed open PRs and submit reviews automatically.
+## Automation Trigger
+This skill is intended to be executed by repository automation (for example cron-driven sweeps). Keep cadence details in the automation configuration/prompt as the source of truth.
