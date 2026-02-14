@@ -142,6 +142,41 @@ bun test
 - Bun: see `gateway/package.json` or CI workflow (`bun-version`)
 
 These are the same commands CI runs. Fix failures locally before pushing updates.
+## Cleanup Stale Worktrees and Branches
+
+When using the issue-driven worktree workflow (`git worktree add …`), stale worktrees and branches accumulate over time. Use the commands below to clean up.
+
+**List current worktrees:**
+
+```bash
+git worktree list
+```
+
+**Remove a stale worktree** (after its PR is merged):
+
+```bash
+git worktree remove /tmp/carrier-issue-<number>
+```
+
+If the directory was already deleted, prune the worktree records:
+
+```bash
+git worktree prune
+```
+
+**Delete merged local branches:**
+
+```bash
+git branch --merged main | grep -v '^\*\|main' | xargs -r git branch -d
+```
+
+**Sync before starting new work:**
+
+```bash
+git checkout main && git pull origin main
+```
+
+> **Tip:** Branch names follow the pattern `codex/issue-<number>-<short-desc>`. Avoid `git branch -D` (force delete) unless you are certain the branch has been merged or abandoned.
 ## Stale Follow-Up Detection
 
 To find stale `[review-followup]` issues whose referenced PR is already merged:
@@ -223,7 +258,6 @@ NBS: The error message could include the agent ID for easier debugging.
 ```
 
 Non-blocking suggestions tagged with `NBS:` are automatically converted to follow-up issues by the `review-nbs-followup` automation after the PR merges.
-
 ## Quick CI Inspection and Rerun Workflow
 
 When a CI check fails on your PR, use these `gh` commands to inspect and rerun without leaving the terminal.
@@ -262,3 +296,34 @@ bash scripts/run-shellcheck.sh
 ```
 
 The script discovers `scripts/**/*.sh` files, runs shellcheck on each, and exits non-zero on any findings. Requires `shellcheck` to be installed locally.
+## GitHub CLI Preflight and Troubleshooting
+
+Before running review or triage automation scripts locally, verify your `gh` setup:
+
+### Preflight checklist
+
+```bash
+# 1. Confirm authentication
+gh auth status
+
+# 2. Verify required scopes (need repo, read:org at minimum)
+gh auth status -t 2>&1 | grep -i scopes
+
+# 3. Confirm repo context
+gh repo view Keith-CY/carrier --json nameWithOwner -q '.nameWithOwner'
+```
+
+### Common failures and fixes
+
+**401 Unauthorized / 403 Forbidden:**
+- Run `gh auth login` to re-authenticate.
+- If using a PAT, ensure it has `repo` scope. Fine-grained tokens need "Issues" and "Pull requests" read/write.
+
+**"Could not resolve to a Repository":**
+- You are targeting the wrong repo. Always pass `--repo Keith-CY/carrier` explicitly when running outside a local clone.
+
+**Rate limiting (HTTP 403 with `rate limit` message):**
+- Check remaining quota: `gh api rate_limit -q '.rate.remaining'`
+- Wait for reset or authenticate with a different token.
+
+These checks apply to both PR review (`gh pr view`, `gh pr checks`) and issue triage (`gh issue list`, `gh issue view`) workflows.
