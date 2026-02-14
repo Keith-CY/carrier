@@ -1,0 +1,30 @@
+{
+  "id": "openclaw",
+  "name": "OpenClaw",
+  "version": "1.0.0",
+  "runtime": {
+    "type": "local_binary",
+    "install": { "command": "./install.sh" },
+    "start": { "command": "./openclaw --config ./config.yaml" },
+    "stop": { "command": "./openclaw --stop" }
+  },
+  "network": {
+    "ports": [{ "name": "http", "port": 8080 }],
+    "healthcheck": { "type": "http", "url": "http://localhost:8080/health" }
+  },
+  "env": {
+    "required": [{ "name": "OPENAI_API_KEY", "secret": true }],
+    "optional": [{ "name": "LOG_LEVEL", "default": "info" }]
+  },
+  "memory": {
+    "supports": ["per_agent", "shared", "public"],
+    "mount_path": "./memory"
+  },
+  "upgrade": {
+    "channel": "stable",
+    "strategy": "in_place_or_reinstall"
+  },
+  "diagnostics": {
+    "include": ["runtime_logs", "process_state", "env_sanitized"]
+  }
+}

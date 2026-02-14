@@ -1,0 +1,6 @@
+[
+  { "id": "openclaw", "name": "OpenClaw", "status": "active" },
+  { "id": "pi-mono", "name": "Pi Mono", "status": "candidate" },
+  { "id": "nanoclaw", "name": "NanoClaw", "status": "candidate" },
+  { "id": "picoclaw", "name": "Pico Claw", "status": "candidate" }
+]
