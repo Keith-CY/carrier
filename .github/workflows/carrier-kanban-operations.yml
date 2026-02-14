@@ -209,7 +209,8 @@ jobs:
               const estimates = parseEstimate([item.title, item.body || ''].join(' '));
               const estimateHours = estimates == null ? 0 : estimates;
               const owners = (item.assignees || []).map((a) => a?.login).filter(Boolean);
-              const assignees = owners.length > 0 ? owners : ['unassigned'];
+              // Workload is tracked per individual assignee; unassigned issues are grouped under `unassigned`.
+              const assignees = owners.length > 0 ? Array.from(new Set(owners)) : ['unassigned'];
 
               for (const assignee of assignees) {
                 if (!workload.has(assignee)) {
