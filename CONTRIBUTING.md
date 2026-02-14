@@ -167,6 +167,15 @@ Run ShellCheck across all repository scripts to match CI behavior:
 ```
 
 The script discovers all `scripts/**/*.sh` files and exits non-zero on any lint error.
+## Doc Command Sync Check
+
+Ensure key command snippets stay aligned between `README.md` and `CONTRIBUTING.md`:
+
+```bash
+./scripts/check-doc-command-sync.sh
+```
+
+The script compares high-churn commands (`go test ./...`, `bun run check`, `./scripts/run-all-tests.sh`) and exits non-zero when any snippet appears in one file but not the other. CI runs this check automatically on PRs that touch documentation.
 
 
 ### Inspecting and Rerunning Failed CI
