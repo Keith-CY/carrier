@@ -5,14 +5,12 @@ type DownloadTokenRecord = ReadOnlyDownloadToken & {
 };
 
 export class DownloadTokenStore {
-  private nextToken = 0;
   private readonly tokens = new Map<string, DownloadTokenRecord>();
 
   constructor(private readonly now: () => Date = () => new Date()) {}
 
   issue(fileRef: string, ttlSeconds = 300, singleUse = true): ReadOnlyDownloadToken {
-    this.nextToken += 1;
-    const token = `dl-${this.nextToken}`;
+    const token = `dl-${crypto.randomUUID()}`;
     const expiresAt = new Date(this.now().getTime() + ttlSeconds * 1000).toISOString();
     const record: DownloadTokenRecord = {
       token,
