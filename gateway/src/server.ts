@@ -185,7 +185,9 @@ async function handleDownloadRequest(
 
   const headers = new Headers();
   headers.set("content-type", blob.type || "application/octet-stream");
-  headers.set("content-disposition", `attachment; filename="${expectedFileName}"`);
+  // Escape quotes and backslashes per RFC 2616 quoted-string rules
+  const sanitizedFilename = expectedFileName.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  headers.set("content-disposition", `attachment; filename="${sanitizedFilename}"`);
   return new Response(blob, {
     status: 200,
     headers,
