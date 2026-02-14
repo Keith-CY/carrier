@@ -37,7 +37,8 @@ jobs:
             const repo = context.repo.repo;
             const dryRunInput = String((context.payload.inputs?.dry_run || process.env.DRY_RUN || 'false')).toLowerCase() === 'true';
             const token = process.env.CARRIER_PROJECTS_TOKEN || process.env.GITHUB_TOKEN;
-            // Fallback `github` comes from @actions/github and uses the default GITHUB_TOKEN context.
+            // Fallback `github` comes from @actions/github and is a pre-authenticated Octokit client
+            // scoped to the current repo context (default GITHUB_TOKEN), so graphql/rest calls still work.
             const octokit = token ? github.getOctokit(token) : github;
 
             const repoMeta = await octokit.graphql(`
