@@ -3,6 +3,7 @@ package manifest
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 type RuntimeType string
@@ -85,14 +86,14 @@ type Diagnostics struct {
 }
 
 func (m Manifest) Validate() error {
-	if m.ID == "" {
-		return errors.New("manifest.id is required")
+	if err := validateRequired("manifest.id", m.ID); err != nil {
+		return err
 	}
-	if m.Name == "" {
-		return errors.New("manifest.name is required")
+	if err := validateRequired("manifest.name", m.Name); err != nil {
+		return err
 	}
-	if m.Version == "" {
-		return errors.New("manifest.version is required")
+	if err := validateRequired("manifest.version", m.Version); err != nil {
+		return err
 	}
 	if err := validateRuntime(m.Runtime); err != nil {
 		return err
@@ -108,21 +109,39 @@ func (m Manifest) Validate() error {
 }
 
 func validateRuntime(r RuntimeSpec) error {
+	if err := validateRequired("runtime.type", string(r.Type)); err != nil {
+		return err
+	}
+
 	switch r.Type {
 	case RuntimeTypeLocalBinary, RuntimeTypeNpmCLI, RuntimeTypeGoCLI:
 		// valid
 	default:
-		return fmt.Errorf("runtime.type is invalid: %q", r.Type)
+		return fmt.Errorf(
+			"runtime.type %q is invalid; expected one of %q, %q, %q",
+			r.Type,
+			RuntimeTypeLocalBinary,
+			RuntimeTypeNpmCLI,
+			RuntimeTypeGoCLI,
+		)
 	}
 
-	if r.Install.Command == "" {
-		return errors.New("runtime.install.command is required")
+	if err := validateRequired("runtime.install.command", r.Install.Command); err != nil {
+		return err
 	}
-	if r.Start.Command == "" {
-		return errors.New("runtime.start.command is required")
+	if err := validateRequired("runtime.start.command", r.Start.Command); err != nil {
+		return err
 	}
-	if r.Stop.Command == "" {
-		return errors.New("runtime.stop.command is required")
+	if err := validateRequired("runtime.stop.command", r.Stop.Command); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func validateRequired(field, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s is required", field)
 	}
 
 	return nil
