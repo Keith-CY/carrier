@@ -24,6 +24,8 @@ export type GatewayResponse = {
   requestId: string;
   result: "ok" | "error";
   message: string;
+  errorCode?: string;
+  sessionToken?: string;
   downloadUrl?: string;
   handoffId?: string;
   handoffStatus?: "pending" | "declined";
