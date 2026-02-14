@@ -937,6 +937,44 @@ var (
 	atoi          = strconv.Atoi
 )
 
+func TestAuditBufferStatus(t *testing.T) {
+	svc := NewService(nil, WithAuditLogLimit(50))
+
+	status := svc.AuditBufferStatus()
+	if status.BufferSize != 0 {
+		t.Fatalf("expected empty buffer, got %d", status.BufferSize)
+	}
+	if status.Limit != 50 {
+		t.Fatalf("expected limit 50, got %d", status.Limit)
+	}
+
+	// Generate some audit entries by installing an agent.
+	m := manifest.Manifest{
+		ID: "a", Name: "a", Version: "1",
+		Runtime: manifest.RuntimeSpec{
+			Type:    manifest.RuntimeTypeLocalBinary,
+			Install: manifest.CommandSpec{Command: "echo ok"},
+			Start:   manifest.CommandSpec{Command: "echo start"},
+			Stop:    manifest.CommandSpec{Command: "echo stop"},
+		},
+		Memory: manifest.MemorySpec{
+			MountPath: "/tmp/test-audit-mem",
+			Supports:  []manifest.MemoryType{manifest.MemoryTypePerAgent},
+		},
+	}
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Install("a"); err != nil {
+		t.Fatal(err)
+	}
+
+	status = svc.AuditBufferStatus()
+	if status.BufferSize == 0 {
+		t.Fatal("expected non-zero buffer after install")
+	}
+}
+
 func readZipEntry(t *testing.T, files []*zip.File, name string) []byte {
 	t.Helper()
 	for _, f := range files {
