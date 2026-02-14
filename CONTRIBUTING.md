@@ -142,6 +142,16 @@ bun test
 - Bun: see `gateway/package.json` or CI workflow (`bun-version`)
 
 These are the same commands CI runs. Fix failures locally before pushing updates.
+## ShellCheck (Local Lint)
+
+Run ShellCheck across all repository scripts to match CI behavior:
+
+```bash
+./scripts/run-shellcheck.sh
+```
+
+The script discovers all `scripts/**/*.sh` files and exits non-zero on any lint error.
+
 ## Stale Follow-Up Detection
 
 To find stale `[review-followup]` issues whose referenced PR is already merged:
