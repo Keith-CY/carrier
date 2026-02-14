@@ -90,7 +90,7 @@ See `CONTRIBUTING.md` for command examples and required process.
 
 ### English
 
-1. Open [**Releases**](../../releases) for this repository.
+1. Open [**Releases**](https://github.com/Keith-CY/carrier/releases) for this repository.
 2. Download the ZIP package for your OS/CPU (for example: `linux-x64`, `darwin-arm64`, `windows-x64`).
 3. (Optional but recommended) Download the matching `.sha256` file and verify checksum:
    - Linux (GNU): `sha256sum -c carrier-*.sha256`
@@ -114,7 +114,7 @@ If install/start fails, run `/diagnose openclaw` and use the generated artifact 
 
 ### 中文（简版）
 
-1. 打开本仓库 [**Releases**](../../releases) 页面。
+1. 打开本仓库 [**Releases**](https://github.com/Keith-CY/carrier/releases) 页面。
 2. 下载与你系统匹配的 ZIP（如 `linux-x64`、`darwin-arm64`、`windows-x64`）。
 3. （可选）下载同名 `.sha256` 文件做校验：
    - Linux（GNU）：`sha256sum -c carrier-*.sha256`
