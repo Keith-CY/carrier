@@ -62,7 +62,7 @@ Key topics covered:
 - Use GitHub Actions as test source of truth.
 - For non-blocking review suggestions, use `NBS:` lines (one suggestion per line). Post-merge automation creates follow-up issues from those lines.
 
-See `CONTRIBUTING.md` for command examples and required process. For security vulnerability reporting, see [`SECURITY.md`](./SECURITY.md).
+See `CONTRIBUTING.md` for command examples and required process. For security vulnerability reporting, see [`SECURITY.md`](./SECURITY.md). For install/upgrade integrity verification, see [`docs/security-install-integrity.md`](./docs/security-install-integrity.md).
 
 ## Terminology (quick glossary)
 - **Runtime**: where agent processes run (macOS/Linux host, Windows via WSL2).

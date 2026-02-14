@@ -182,7 +182,7 @@ This project maintains a [`CHANGELOG.md`](./CHANGELOG.md) following [Keep a Chan
 **Categories used in this repo:**
 - `Features` — new capabilities
 - `Bug Fixes` — corrections to existing behavior
-- `Security` — vulnerability fixes or hardening
+- `Security` — vulnerability fixes or hardening (see also [`docs/security-install-integrity.md`](./docs/security-install-integrity.md) for install/upgrade verification)
 - `Refactor` — internal restructuring without behavior change
 - `Docs` — documentation additions or updates
 - `Tests` — new or improved test coverage
