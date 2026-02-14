@@ -164,7 +164,10 @@ async function handleDownloadRequest(
   }
 
   const expectedFileName = resolved.fileRef.split("/").pop() || "artifact.bin";
-  if (requestedFileName !== expectedFileName) {
+  const normalizedExpected = expectedFileName.trim();
+  const normalizedRequested = requestedFileName.trim();
+  
+  if (normalizedRequested !== normalizedExpected) {
     return jsonResponse({
       requestId: ctx.requestId,
       result: "error",
@@ -185,13 +188,29 @@ async function handleDownloadRequest(
 
   const headers = new Headers();
   headers.set("content-type", blob.type || "application/octet-stream");
-  // Escape quotes and backslashes per RFC 2616 quoted-string rules
-  const sanitizedFilename = expectedFileName.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  headers.set("content-disposition", `attachment; filename="${sanitizedFilename}"`);
+  headers.set("content-disposition", buildContentDisposition(normalizedExpected));
   return new Response(blob, {
     status: 200,
     headers,
   });
+}
+
+function buildContentDisposition(filename: string): string {
+  // Check if filename contains non-ASCII characters
+  const hasNonASCII = /[^\x00-\x7F]/.test(filename);
+  
+  if (hasNonASCII) {
+    // For non-ASCII filenames, use an ASCII-safe fallback in filename parameter
+    // and the full UTF-8 filename in filename* parameter (RFC 5987)
+    const asciiFallback = filename.replace(/[^\x00-\x7F]/g, "_");
+    const escapedFallback = asciiFallback.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const encodedFilename = encodeURIComponent(filename);
+    return `attachment; filename="${escapedFallback}"; filename*=UTF-8''${encodedFilename}`;
+  }
+  
+  // For ASCII filenames, just escape quotes and backslashes
+  const escapedFilename = filename.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `attachment; filename="${escapedFilename}"`;
 }
 
 async function defaultReadFile(fileRef: string): Promise<Blob | null> {
