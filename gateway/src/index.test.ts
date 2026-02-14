@@ -42,8 +42,9 @@ describe("gateway parseInput", () => {
   });
 
   test("returns parse error for unknown command", () => {
-    expect(() => parseInput("telegram 100 req-1 /foobar")).toThrow("unknown command: /foobar");
-    expect(() => parseInput("telegram 100 req-1 /foobar")).toThrow("requestId=req-1");
+    expect(() => parseInput("telegram 100 req-1 /foobar")).toThrow(
+      /unknown command:.*requestId=req-1/,
+    );
   });
 });
 
