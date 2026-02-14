@@ -3,8 +3,24 @@ name: CI
 on:
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - '.github/kanban-config.json'
+      - '.github/workflows/carrier-kanban-automation.yml'
+      - '.github/workflows/carrier-kanban-operations.yml'
+      - '.github/workflows/review-nbs-followup.yml'
   push:
     branches: [main]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - '.github/kanban-config.json'
+      - '.github/workflows/carrier-kanban-automation.yml'
+      - '.github/workflows/carrier-kanban-operations.yml'
+      - '.github/workflows/review-nbs-followup.yml'
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 concurrency:
@@ -51,3 +67,24 @@ jobs:
       - name: Type check gateway
         working-directory: gateway
         run: bun run check
+
+  e2e-tests:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: daemon/go.mod
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.1.8"
+
+      - name: Run end-to-end tests
+        run: ./scripts/run-e2e-tests.sh
