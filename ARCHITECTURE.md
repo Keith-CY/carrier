@@ -49,6 +49,10 @@ The gateway is a Bun/TypeScript WebSocket server that:
 
 Typed command definitions shared between gateway and clients, defining the request/response schema for each operation (`/pair`, `/agents`, `/install`, `/start`, `/stop`, `/status`, `/logs`, `/upgrade`, `/diagnose`).
 
+### Daemon API Contract (`docs/daemon-api-contract.md`)
+
+Canonical endpoint/method matrix and error-envelope mapping for daemon HTTP APIs consumed by the gateway.
+
 ## Data Flow
 
 1. Client connects to gateway via WebSocket
