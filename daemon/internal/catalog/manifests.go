@@ -11,8 +11,8 @@ func OpenClawManifest() manifest.Manifest {
 		Capabilities: []string{"chat", "code", "memory"},
 		Runtime: manifest.RuntimeSpec{
 			Type:    manifest.RuntimeTypeLocalBinary,
-			Install: manifest.CommandSpec{Command: "bash -c 'command -v npm >/dev/null 2>&1 && npm install -g openclaw || (echo \"npm not found, downloading binary...\" && curl -fsSL https://get.openclaw.ai | bash)'"},
-			Upgrade: manifest.CommandSpec{Command: "bash -c 'command -v npm >/dev/null 2>&1 && npm install -g openclaw@latest || (curl -fsSL https://get.openclaw.ai | bash)'"},
+			Install: manifest.CommandSpec{Command: `bash -c 'command -v npm >/dev/null 2>&1 && npm install -g openclaw || (ARCHIVE="openclaw-$(uname -s)-$(uname -m).tar.gz" && curl -fsSL -o "$ARCHIVE" "https://github.com/openclaw/openclaw/releases/latest/download/$ARCHIVE" && curl -fsSL -o "$ARCHIVE.sha256" "https://github.com/openclaw/openclaw/releases/latest/download/$ARCHIVE.sha256" && sha256sum -c "$ARCHIVE.sha256" && tar xzf "$ARCHIVE" && install -m 755 openclaw /usr/local/bin/openclaw && rm -f "$ARCHIVE" "$ARCHIVE.sha256")'`},
+			Upgrade: manifest.CommandSpec{Command: `bash -c 'command -v npm >/dev/null 2>&1 && npm install -g openclaw@latest || (ARCHIVE="openclaw-$(uname -s)-$(uname -m).tar.gz" && curl -fsSL -o "$ARCHIVE" "https://github.com/openclaw/openclaw/releases/latest/download/$ARCHIVE" && curl -fsSL -o "$ARCHIVE.sha256" "https://github.com/openclaw/openclaw/releases/latest/download/$ARCHIVE.sha256" && sha256sum -c "$ARCHIVE.sha256" && tar xzf "$ARCHIVE" && install -m 755 openclaw /usr/local/bin/openclaw && rm -f "$ARCHIVE" "$ARCHIVE.sha256")'`},
 			Start:   manifest.CommandSpec{Command: "openclaw gateway start"},
 			Stop:    manifest.CommandSpec{Command: "openclaw gateway stop"},
 		},
