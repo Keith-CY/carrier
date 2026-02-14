@@ -1,7 +1,6 @@
 package runtimecheck
 
 import (
-	"errors"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -112,8 +111,5 @@ func (c HostChecker) hasTool(name string) bool {
 		return false
 	}
 	_, err := c.Lookup.LookPath(name)
-	if err == nil {
-		return true
-	}
-	return !errors.Is(err, exec.ErrNotFound)
+	return err == nil
 }
