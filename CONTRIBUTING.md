@@ -60,6 +60,16 @@ Current CI checks:
 - Daemon Go tests
 - Gateway TypeScript type check
 
+### Required CI Check Names for PR Readiness
+
+Before merging, the following required checks must be green:
+
+- **Daemon Tests** — runs `go test ./...` in `daemon/` (job: `daemon-tests`)
+- **Gateway Type Check** — runs `bun run check` in `gateway/` (job: `gateway-check`)
+- **End-to-End Tests** — runs `./scripts/run-e2e-tests.sh` (job: `e2e-tests`, push-to-main only)
+
+All required checks must pass before a PR can enter the merge queue.
+
 ## Review Convention (Non-Blocking Suggestions)
 
 For review comments, use the fixed keyword `NBS:` for each non-blocking suggestion.
