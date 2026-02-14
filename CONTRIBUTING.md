@@ -81,6 +81,30 @@ The following labels are used for planning and priority triage:
 
 See also the [Scope Policy](#scope-policy) section for milestone rules.
 
+## Validation by Change Type
+
+Before opening or updating a PR, run the minimum local validation for your change type:
+
+- **Daemon code changes:**
+  ```bash
+  cd daemon
+  go test ./...
+  ```
+
+- **Gateway code changes:**
+  ```bash
+  cd gateway
+  bun install
+  bun run check
+  bun test
+  ```
+
+- **Docs-only changes:** Verify markdown links render correctly in GitHub preview. No CI test run is required (CI skips docs-only changes via `paths-ignore`).
+
+- **CI/workflow changes:** Test the workflow logic locally where possible. For GitHub Actions changes, verify YAML syntax with a linter (e.g., `actionlint`).
+
+These are minimum checks. The full local validation suite is available via `./scripts/run-all-tests.sh`.
+
 ## Review Convention (Non-Blocking Suggestions)
 
 For review comments, use the fixed keyword `NBS:` for each non-blocking suggestion.
