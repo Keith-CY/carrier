@@ -67,6 +67,19 @@ describe("SessionStore", () => {
       expect(session).toBeNull();
     });
 
+    test("returns null for code at exact expiry boundary", () => {
+      let time = new Date("2026-01-01T00:00:00Z");
+      const store = new SessionStore(() => time);
+      store.registerPairCode("boundary-code", 60);
+
+      // Advance to exactly the expiry moment (60s later)
+      time = new Date("2026-01-01T00:01:00Z");
+
+      const session = store.pair({ provider: "telegram", chatId: "chat-1", code: "boundary-code" });
+
+      expect(session).toBeNull();
+    });
+
     test("code is consumed after successful pairing", () => {
       const store = new SessionStore(() => new Date("2026-01-01T00:00:00Z"));
       store.registerPairCode("once", 300);
@@ -77,15 +90,21 @@ describe("SessionStore", () => {
       expect(second).toBeNull();
     });
 
-    test("re-pairing same provider+chatId reuses session token", () => {
-      const store = new SessionStore(() => new Date("2026-01-01T00:00:00Z"));
-      store.registerPairCode("code-1", 300);
-      store.registerPairCode("code-2", 300);
+    test("re-pairing same provider+chatId reuses session token and preserves createdAt", () => {
+      let time = new Date("2026-01-01T00:00:00Z");
+      const store = new SessionStore(() => time);
+      store.registerPairCode("code-1", 3600);
 
       const first = store.pair({ provider: "telegram", chatId: "c1", code: "code-1" });
+
+      time = new Date("2026-01-01T00:30:00Z");
+      store.registerPairCode("code-2", 3600);
       const second = store.pair({ provider: "telegram", chatId: "c1", code: "code-2" });
 
       expect(first!.sessionToken).toBe(second!.sessionToken);
+      expect(second!.createdAt).toBe(first!.createdAt);
+      expect(second!.lastSeenAt).toBe(time.toISOString());
+      expect(second!.lastSeenAt).not.toBe(first!.lastSeenAt);
     });
 
     test("different providers get different session tokens", () => {
