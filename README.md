@@ -9,6 +9,12 @@ Phase 1 scaffold for the Agent Installation Platform.
 - Memory model: Per-Agent, Shared, Public
 - Gateway providers: Telegram, Discord, Feishu
 
+## Read order (single source of truth)
+For product scope/priority decisions, use this order:
+1. `docs/Agent_Installation_Platform_PRD.md` (source of truth for scope and requirements)
+2. `docs/Agent_Installation_Platform_Implementation_Plan.md` (execution sequence and delivery plan)
+3. `README.md` (quick orientation and current implementation status)
+
 ## Repository layout
 - `daemon/`: Go daemon lifecycle, catalog, Base Agent triage interfaces
 - `gateway/`: TypeScript gateway contracts and routing scaffold
@@ -39,6 +45,17 @@ Phase 1 scaffold for the Agent Installation Platform.
 - For non-blocking review suggestions, use `NBS:` lines (one suggestion per line). Post-merge automation creates follow-up issues from those lines.
 
 See `CONTRIBUTING.md` for command examples and required process.
+
+## Terminology (quick glossary)
+- **Runtime**: where agent processes run (macOS/Linux host, Windows via WSL2).
+- **Diagnose**: generate a sanitized diagnostic artifact for troubleshooting.
+- **Memory types**:
+  - **Per-Agent**: memory private to one agent instance.
+  - **Shared**: reusable memory across local agents (default read-only mount).
+  - **Public**: template memory packages (read-only).
+- **Priority levels**:
+  - **P0**: must-have for Phase 1 acceptance.
+  - **P1**: important but can follow after P0.
 
 ## Installation and testing
 
