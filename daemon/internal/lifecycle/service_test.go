@@ -85,6 +85,20 @@ func newServiceForTest(t *testing.T, runner *fakeRunner, checker *fakeChecker) *
 	return svc
 }
 
+func newServiceForTestWithClock(t *testing.T, runner *fakeRunner, checker *fakeChecker, now func() time.Time) *Service {
+	t.Helper()
+	svc := NewService(nil,
+		WithRunner(runner),
+		WithRuntimeChecker(checker),
+		WithDiagnoseDir(t.TempDir()),
+		WithNow(now),
+	)
+	if err := svc.RegisterManifest(sampleManifest()); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+	return svc
+}
+
 func TestLifecycleInstallStartStop(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	runner := &fakeRunner{}
@@ -319,6 +333,49 @@ func TestCreateRemoteDiagnosisHandoffSuccessAndAudit(t *testing.T) {
 	}
 	if last.RequestID != "req-42" {
 		t.Fatalf("expected request id req-42, got %s", last.RequestID)
+	}
+}
+
+func TestCleanupExpiredDiagnosisHandoffs(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	now := time.Date(2026, 2, 14, 4, 20, 0, 0, time.UTC)
+	svc := newServiceForTestWithClock(t, runner, checker, func() time.Time { return now })
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if _, err := svc.HandleFailure(context.Background(), "openclaw", "cannot bind port"); err != nil {
+		t.Fatalf("handle failure: %v", err)
+	}
+	if _, err := svc.Diagnose("openclaw"); err != nil {
+		t.Fatalf("diagnose: %v", err)
+	}
+	if _, err := svc.CreateRemoteDiagnosisHandoff("openclaw", true, "chat:1", "req-old"); err != nil {
+		t.Fatalf("create old handoff: %v", err)
+	}
+
+	// Advance clock and create a fresh handoff.
+	now = now.Add(25 * time.Hour)
+	if _, err := svc.CreateRemoteDiagnosisHandoff("openclaw", true, "chat:2", "req-new"); err != nil {
+		t.Fatalf("create new handoff: %v", err)
+	}
+
+	removed := svc.CleanupExpiredDiagnosisHandoffs()
+	if removed != 1 {
+		t.Fatalf("expected 1 removed handoff, got %d", removed)
+	}
+
+	handoffs := svc.DiagnosisHandoffs()
+	if len(handoffs) != 1 {
+		t.Fatalf("expected 1 retained handoff, got %d", len(handoffs))
+	}
+
+	audits := svc.AuditLogs()
+	last := audits[len(audits)-1]
+	if last.Action != "handoff_cleanup" {
+		t.Fatalf("expected last audit action handoff_cleanup, got %s", last.Action)
 	}
 }
 
