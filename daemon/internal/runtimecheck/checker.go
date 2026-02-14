@@ -24,6 +24,11 @@ type Checker interface {
 	Check(m manifest.Manifest) error
 }
 
+// PreFlighter runs structured pre-flight checks and returns a PreFlightResult.
+type PreFlighter interface {
+	PreFlight(m manifest.Manifest) PreFlightResult
+}
+
 const (
 	IssueCodeWSL2Missing    = "E_WSL2_MISSING"
 	IssueCodeNPMMissing     = "E_NPM_MISSING"
@@ -131,6 +136,11 @@ func (c HostChecker) hasTool(name string) bool {
 	}
 	_, err := c.Lookup.LookPath(name)
 	return err == nil
+}
+
+// PreFlight runs all pre-flight checks and returns a structured result.
+func (c HostChecker) PreFlight(m manifest.Manifest) PreFlightResult {
+	return RunPreFlight(m, c)
 }
 
 func (c HostChecker) detectWSL() bool {
