@@ -11,10 +11,10 @@ func OpenClawManifest() manifest.Manifest {
 		Capabilities: []string{"chat", "code", "memory"},
 		Runtime: manifest.RuntimeSpec{
 			Type:    manifest.RuntimeTypeLocalBinary,
-			Install: manifest.CommandSpec{Command: "./install.sh"},
-			Upgrade: manifest.CommandSpec{Command: "./install.sh --upgrade"},
-			Start:   manifest.CommandSpec{Command: "./openclaw --config ./config.yaml"},
-			Stop:    manifest.CommandSpec{Command: "./openclaw --stop"},
+			Install: manifest.CommandSpec{Command: "bash -c 'command -v npm >/dev/null 2>&1 && npm install -g openclaw || (echo \"npm not found, downloading binary...\" && curl -fsSL https://get.openclaw.ai | bash)'"},
+			Upgrade: manifest.CommandSpec{Command: "bash -c 'command -v npm >/dev/null 2>&1 && npm install -g openclaw@latest || (curl -fsSL https://get.openclaw.ai | bash)'"},
+			Start:   manifest.CommandSpec{Command: "openclaw gateway start"},
+			Stop:    manifest.CommandSpec{Command: "openclaw gateway stop"},
 		},
 		Network: manifest.NetworkSpec{
 			Ports: []manifest.PortSpec{{Name: "http", Port: 8080}},
