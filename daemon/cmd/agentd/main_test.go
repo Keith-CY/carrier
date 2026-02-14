@@ -14,7 +14,6 @@ import (
 	"carrier/daemon/internal/commandexec"
 	"carrier/daemon/internal/lifecycle"
 	"carrier/daemon/internal/manifest"
-	"carrier/daemon/internal/pairing"
 	"carrier/daemon/internal/runtimecheck"
 )
 
@@ -58,8 +57,7 @@ func TestShutdownAgents_VeryShortTimeout(t *testing.T) {
 
 func TestHealthz(t *testing.T) {
 	svc := lifecycle.NewService(baseagent.NoopTriager{})
-	ps, _ := pairing.NewStore()
-	mux := buildHTTPMux(svc, ps)
+	mux := buildHTTPMux(svc)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != http.StatusOK {
@@ -69,8 +67,7 @@ func TestHealthz(t *testing.T) {
 
 func TestReadyz(t *testing.T) {
 	svc := lifecycle.NewService(baseagent.NoopTriager{})
-	ps, _ := pairing.NewStore()
-	mux := buildHTTPMux(svc, ps)
+	mux := buildHTTPMux(svc)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/readyz", nil))
 	if rec.Code != http.StatusOK {
@@ -83,8 +80,7 @@ func TestAPIListAgents(t *testing.T) {
 	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
 		t.Fatal(err)
 	}
-	ps, _ := pairing.NewStore()
-	mux := buildHTTPMux(svc, ps)
+	mux := buildHTTPMux(svc)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/agents", nil))
 	if rec.Code != http.StatusOK {
@@ -101,8 +97,7 @@ func TestAPIListAgents(t *testing.T) {
 
 func TestAPIStatusNotFound(t *testing.T) {
 	svc := lifecycle.NewService(baseagent.NoopTriager{})
-	ps, _ := pairing.NewStore()
-	mux := buildHTTPMux(svc, ps)
+	mux := buildHTTPMux(svc)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/status/nonexistent", nil))
 	if rec.Code != http.StatusNotFound {
@@ -115,8 +110,7 @@ func TestAPIInstallAndStart(t *testing.T) {
 	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
 		t.Fatal(err)
 	}
-	ps, _ := pairing.NewStore()
-	mux := buildHTTPMux(svc, ps)
+	mux := buildHTTPMux(svc)
 
 	// Set required env
 	t.Setenv("OPENAI_API_KEY", "test-key")
@@ -145,29 +139,10 @@ func TestAPIInstallAndStart(t *testing.T) {
 
 func TestAPIMethodNotAllowed(t *testing.T) {
 	svc := lifecycle.NewService(baseagent.NoopTriager{})
-	ps, _ := pairing.NewStore()
-	mux := buildHTTPMux(svc, ps)
+	mux := buildHTTPMux(svc)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/agents", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec.Code)
-	}
-}
-
-func TestAPIPairCode(t *testing.T) {
-	svc := lifecycle.NewService(baseagent.NoopTriager{})
-	ps, _ := pairing.NewStore()
-	mux := buildHTTPMux(svc, ps)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/pair-code", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-	var resp map[string]string
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatal(err)
-	}
-	if len(resp["code"]) != 8 {
-		t.Fatalf("expected 8-char code, got %q", resp["code"])
 	}
 }
