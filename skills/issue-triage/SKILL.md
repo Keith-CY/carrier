@@ -25,7 +25,7 @@ Guide agents to periodically check open issues and pick up work that needs atten
 
 ## Handling Lightweight Issues
 1. Self-assign: `gh issue edit <number> --repo Keith-CY/carrier --add-assignee @me`
-2. Create worktree: `git worktree add /tmp/carrier-issue-<N> -b codex/issue-<N>-<description> origin/main`
+2. Create worktree: `git worktree add /tmp/carrier-issue-<N> -b codex/issue-<N>-<description> origin/main` (where `<description>` is a short kebab-case summary of the issue title, e.g., `codex/issue-42-fix-readme-typo`)
 3. Implement changes, run tests
 4. Push and create PR: `gh pr create --repo Keith-CY/carrier --base main`
 5. **Never push directly to main or develop**

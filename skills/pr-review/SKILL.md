@@ -6,7 +6,7 @@ Guide agents to review pull requests like a human collaborator — with inline c
 ## Review Process
 1. Fetch the PR diff via `gh pr diff <number> --repo Keith-CY/carrier`
 2. Read the full diff before commenting
-3. Submit a review using the GitHub Review API with inline `comments` array (path + position + body)
+3. Submit a review using the GitHub Review API with inline `comments` array (path, line, side, body)
 4. Approve if code is correct; request changes if blocking issues found
 
 ## What to Check
@@ -24,9 +24,10 @@ Guide agents to review pull requests like a human collaborator — with inline c
 - Reference related PRs/issues when relevant (e.g., "This conflicts with the pattern in PR #14")
 
 ## Build Verification
-Before approving, confirm the author validated:
+Before approving, confirm all CI checks have passed:
+- Check CI status: `gh pr checks <number> --repo Keith-CY/carrier`
 - **Daemon (Go)**: `cd daemon && go test ./...`
-- **Gateway (TypeScript)**: `cd gateway && bun run check && bun test`
+- **Gateway (TypeScript)**: `cd gateway && bun run check`
 
 ## Auto-Review Cadence
 A cron job runs every 15 minutes to check for unreviewed open PRs and submit reviews automatically.
