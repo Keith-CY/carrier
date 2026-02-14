@@ -14,6 +14,7 @@ export type DaemonAgentState = {
   health: "healthy" | "unhealthy" | "unknown";
   needsRemoteDiagnosis: boolean;
   lastError?: string;
+  /** ISO-8601 datetime string (e.g. `"2026-01-15T08:30:00.000Z"`). */
   updatedAt: string;
 };
 
