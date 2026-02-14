@@ -181,8 +181,7 @@ function parseCommandText(rawText: string): ParsedCommandText | null {
 
 function stripLeadingMentions(input: string): string {
   return input
-    .replace(/^<@!?[0-9]+>\s*/g, "")
-    .replace(/^@\S+\s+/g, "")
+    .replace(/^(?:(?:<@!?[0-9]+>|@\S+)\s*)+/, "")
     .trim();
 }
 

@@ -83,6 +83,17 @@ describe("parseDiscordPayloadToCommand", () => {
     expect(parsed?.args).toEqual(["openclaw", "50"]);
   });
 
+  test("parses message payload with mixed leading mentions", () => {
+    const parsed = parseDiscordPayloadToCommand({
+      id: "message-1b",
+      channel_id: "channel-7",
+      content: "<@!999> @carrier-bot /status",
+    });
+
+    expect(parsed?.command).toBe("/status");
+    expect(parsed?.args).toEqual([]);
+  });
+
   test("returns null when payload has no command text", () => {
     const parsed = parseDiscordPayloadToCommand({
       id: "message-2",
