@@ -77,9 +77,14 @@ func main() {
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Println("")
 
-	// Warn/refuse if binding to non-loopback without an API token
+	// Validate security: refuse non-loopback binding without an API token.
 	if cfg.Server.APIToken == "" && !isLoopback(cfg.Server.Host) {
 		log.Fatalf("CARRIER_SERVER_API_TOKEN must be set when listening on non-loopback address %s", cfg.Server.Host)
+	}
+	if cfg.Server.APIToken == "" {
+		// Force loopback-only binding when no token is configured.
+		cfg.Server.Host = "127.0.0.1"
+		logger.Info("no API token configured; forcing loopback-only bind (127.0.0.1)")
 	}
 
 	// Build HTTP server
@@ -151,6 +156,20 @@ func extractAndValidateAgentID(path, prefix string) (string, error) {
 	return agentID, nil
 }
 
+// validateBodyAgentID validates an agent ID received in a JSON request body.
+func validateBodyAgentID(agentID string) error {
+	if agentID == "" {
+		return fmt.Errorf("agentId must not be empty")
+	}
+	if strings.Contains(agentID, "/") || strings.Contains(agentID, "\\") || strings.Contains(agentID, "..") {
+		return fmt.Errorf("agentId contains invalid path characters")
+	}
+	if !validAgentIDPattern.MatchString(agentID) {
+		return fmt.Errorf("agentId must match pattern ^[a-zA-Z0-9_-]+$")
+	}
+	return nil
+}
+
 func buildHTTPMux(svc *lifecycle.Service, pairStore *pairing.Store) *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -197,6 +216,10 @@ func buildHTTPMux(svc *lifecycle.Service, pairStore *pairing.Store) *http.ServeM
 		if !decodeBody(w, r, &body) {
 			return
 		}
+		if err := validateBodyAgentID(body.AgentID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if err := svc.Install(r.Context(), body.AgentID); err != nil {
 			writeServiceError(w, err)
 			return
@@ -213,6 +236,10 @@ func buildHTTPMux(svc *lifecycle.Service, pairStore *pairing.Store) *http.ServeM
 		if !decodeBody(w, r, &body) {
 			return
 		}
+		if err := validateBodyAgentID(body.AgentID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if err := svc.Start(r.Context(), body.AgentID); err != nil {
 			writeServiceError(w, err)
 			return
@@ -227,6 +254,10 @@ func buildHTTPMux(svc *lifecycle.Service, pairStore *pairing.Store) *http.ServeM
 		}
 		var body agentIDBody
 		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := validateBodyAgentID(body.AgentID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		if err := svc.Stop(r.Context(), body.AgentID); err != nil {
@@ -287,6 +318,10 @@ func buildHTTPMux(svc *lifecycle.Service, pairStore *pairing.Store) *http.ServeM
 		if !decodeBody(w, r, &body) {
 			return
 		}
+		if err := validateBodyAgentID(body.AgentID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		result, err := svc.Upgrade(r.Context(), body.AgentID)
 		if err != nil {
 			writeServiceError(w, err)
@@ -302,6 +337,10 @@ func buildHTTPMux(svc *lifecycle.Service, pairStore *pairing.Store) *http.ServeM
 		}
 		var body agentIDBody
 		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := validateBodyAgentID(body.AgentID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		artifactRef, err := svc.Diagnose(body.AgentID)
