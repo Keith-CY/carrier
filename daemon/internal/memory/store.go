@@ -10,8 +10,8 @@ import (
 // It enforces state transitions and delegates policy checks to Policy.
 type Store struct {
 	mu      sync.RWMutex
-	entries map[string]Entry       // keyed by memory ID
-	mounts  []MountRecord          // active mounts
+	entries map[string]Entry // keyed by memory ID
+	mounts  []MountRecord    // active mounts
 	policy  Policy
 	now     func() time.Time
 }
@@ -92,10 +92,10 @@ func (s *Store) Mount(memoryID, agentID string, requestedMode AccessMode) (Mount
 		return MountRecord{}, ErrMemoryNotFound
 	}
 
-	// Collect active mounts for this agent (only per-agent type matters for limit check).
-	agentPerAgentMounts := s.agentMountsOfType(agentID, TypePerAgent)
+	// Collect all active mounts for this agent; Policy.CheckMount filters by type internally.
+	agentMounts := s.agentMounts(agentID)
 
-	if err := s.policy.CheckMount(entry, agentID, agentPerAgentMounts); err != nil {
+	if err := s.policy.CheckMount(entry, agentID, agentMounts); err != nil {
 		return MountRecord{}, err
 	}
 
@@ -114,6 +114,7 @@ func (s *Store) Mount(memoryID, agentID string, requestedMode AccessMode) (Mount
 	rec := MountRecord{
 		MemoryID:   memoryID,
 		AgentID:    agentID,
+		MemoryType: entry.Type,
 		AccessMode: mode,
 		MountedAt:  now,
 	}
@@ -209,16 +210,20 @@ func (s *Store) UnmountAll(agentID string) int {
 	return count
 }
 
-// agentMountsOfType returns mount records for an agent filtered by memory type.
-func (s *Store) agentMountsOfType(agentID string, t Type) []MountRecord {
+// agentMounts returns all mount records for an agent, enriching MemoryType from entry data.
+func (s *Store) agentMounts(agentID string) []MountRecord {
 	var out []MountRecord
 	for _, m := range s.mounts {
 		if m.AgentID != agentID {
 			continue
 		}
-		if e, ok := s.entries[m.MemoryID]; ok && e.Type == t {
-			out = append(out, m)
+		// Ensure MemoryType is populated (defensive for older records).
+		if m.MemoryType == "" {
+			if e, ok := s.entries[m.MemoryID]; ok {
+				m.MemoryType = e.Type
+			}
 		}
+		out = append(out, m)
 	}
 	return out
 }

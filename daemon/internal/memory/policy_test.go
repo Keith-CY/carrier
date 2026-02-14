@@ -28,12 +28,12 @@ func TestPolicyResolveAccessMode(t *testing.T) {
 		requested AccessMode
 		want      AccessMode
 	}{
-		{TypePerAgent, AccessReadOnly, AccessReadWrite},   // always rw
+		{TypePerAgent, AccessReadOnly, AccessReadWrite}, // always rw
 		{TypePerAgent, AccessReadWrite, AccessReadWrite},
 		{TypeShared, AccessReadOnly, AccessReadOnly},
-		{TypeShared, AccessReadWrite, AccessReadWrite},     // explicit authorization
+		{TypeShared, AccessReadWrite, AccessReadWrite}, // explicit authorization
 		{TypePublic, AccessReadOnly, AccessReadOnly},
-		{TypePublic, AccessReadWrite, AccessReadOnly},      // forced ro
+		{TypePublic, AccessReadWrite, AccessReadOnly}, // forced ro
 	}
 	for _, tc := range tests {
 		got := p.ResolveAccessMode(tc.memType, tc.requested)
@@ -64,10 +64,27 @@ func TestPolicyCheckMountMountedDenied(t *testing.T) {
 func TestPolicyCheckMountDuplicateDenied(t *testing.T) {
 	p := Policy{}
 	entry := Entry{ID: "m1", Type: TypeShared, State: StateCreated}
-	mounts := []MountRecord{{MemoryID: "m1", AgentID: "agent-a"}}
+	mounts := []MountRecord{{MemoryID: "m1", AgentID: "agent-a", MemoryType: TypeShared}}
 	err := p.CheckMount(entry, "agent-a", mounts)
 	if err != ErrAlreadyMounted {
 		t.Fatalf("expected ErrAlreadyMounted, got %v", err)
+	}
+}
+
+func TestPolicyCheckMountPerAgentLimitScopedByType(t *testing.T) {
+	p := Policy{}
+	entry := Entry{ID: "m2", Type: TypePerAgent, Owner: "agent-a", State: StateCreated}
+
+	// A shared mount should NOT block mounting a per-agent memory.
+	sharedMounts := []MountRecord{{MemoryID: "m1", AgentID: "agent-a", MemoryType: TypeShared}}
+	if err := p.CheckMount(entry, "agent-a", sharedMounts); err != nil {
+		t.Fatalf("shared mount should not block per-agent mount, got %v", err)
+	}
+
+	// An existing per-agent mount SHOULD block a second per-agent mount.
+	perAgentMounts := []MountRecord{{MemoryID: "m3", AgentID: "agent-a", MemoryType: TypePerAgent}}
+	if err := p.CheckMount(entry, "agent-a", perAgentMounts); err != ErrPerAgentLimit {
+		t.Fatalf("expected ErrPerAgentLimit, got %v", err)
 	}
 }
 

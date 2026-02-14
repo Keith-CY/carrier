@@ -42,7 +42,7 @@ type Entry struct {
 	Name      string    `json:"name"`
 	Version   string    `json:"version"`
 	Type      Type      `json:"type"`
-	Owner     string    `json:"owner"`      // agent ID that created it (empty for public)
+	Owner     string    `json:"owner"` // agent ID that created it (empty for public)
 	State     State     `json:"state"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -52,6 +52,7 @@ type Entry struct {
 type MountRecord struct {
 	MemoryID   string     `json:"memory_id"`
 	AgentID    string     `json:"agent_id"`
+	MemoryType Type       `json:"memory_type"`
 	AccessMode AccessMode `json:"access_mode"`
 	MountedAt  time.Time  `json:"mounted_at"`
 }

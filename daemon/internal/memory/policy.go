@@ -6,13 +6,13 @@ import (
 )
 
 var (
-	ErrMountDenied       = errors.New("mount denied by policy")
-	ErrAlreadyMounted    = errors.New("memory already mounted by this agent")
-	ErrPerAgentLimit     = errors.New("agent already has a per-agent memory mounted")
-	ErrNotMounted        = errors.New("memory is not mounted by this agent")
-	ErrMemoryNotFound    = errors.New("memory not found")
-	ErrInvalidState      = errors.New("memory is not in a mountable state")
-	ErrOwnerMismatch     = errors.New("per-agent memory can only be mounted by its owner")
+	ErrMountDenied    = errors.New("mount denied by policy")
+	ErrAlreadyMounted = errors.New("memory already mounted by this agent")
+	ErrPerAgentLimit  = errors.New("agent already has a per-agent memory mounted")
+	ErrNotMounted     = errors.New("memory is not mounted by this agent")
+	ErrMemoryNotFound = errors.New("memory not found")
+	ErrInvalidState   = errors.New("memory is not in a mountable state")
+	ErrOwnerMismatch  = errors.New("per-agent memory can only be mounted by its owner")
 )
 
 // Policy enforces mount rules per the PRD:
@@ -45,9 +45,7 @@ func (p Policy) CheckMount(entry Entry, agentID string, mounts []MountRecord) er
 		}
 		// An agent may have at most one per-agent memory mounted.
 		for _, m := range mounts {
-			if m.AgentID == agentID && m.MemoryID != entry.ID {
-				// Check if the other mount is per-agent type — caller should
-				// supply only active mounts, but we check defensively.
+			if m.AgentID == agentID && m.MemoryID != entry.ID && m.MemoryType == TypePerAgent {
 				return ErrPerAgentLimit
 			}
 		}
