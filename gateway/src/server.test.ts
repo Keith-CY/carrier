@@ -119,7 +119,8 @@ describe("gateway runtime routes", () => {
     // Create a file with a name containing quotes and backslashes
     const fileName = 'test"file\\name.txt';
     const tmpDir = `/tmp/gateway-dl-test-${crypto.randomUUID()}`;
-    await Bun.write(`${tmpDir}/.keep`, ""); // Create directory
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(tmpDir, { recursive: true });
     const filePath = `${tmpDir}/${fileName}`;
     await Bun.write(filePath, "content");
     const token = deps.downloads.issue(filePath, 300, false);
