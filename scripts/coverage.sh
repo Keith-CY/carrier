@@ -33,12 +33,12 @@ TOTAL=$(go tool cover -func="${PROFILE}" | tail -1 | awk '{print $NF}')
 DATE=$(date -u +%Y-%m-%d)
 
 # Identify per-package coverage
-PKG_COVERAGE=$(go tool cover -func="${PROFILE}" | grep -v "^total:" | \
-  awk -F'\t' '{split($1,a,":"); pkg=a[1]; pct=$NF; gsub(/%/,"",pct); if(pct+0>=0) pkgs[pkg]+=pct; counts[pkg]++} END{for(p in pkgs) printf "%s\t%.1f%%\n", p, pkgs[p]/counts[p]}' | \
+FILE_COVERAGE=$(go tool cover -func="${PROFILE}" | grep -v "^total:" | \
+  awk -F'\t' '{split($1,a,":"); file=a[1]; pct=$NF; gsub(/%/,"",pct); if(pct+0>=0) files[file]+=pct; counts[file]++} END{for(f in files) printf "%s\t%.1f%%\n", f, files[f]/counts[f]}' | \
   sort -t$'\t' -k2 -n)
 
-# Top 5 coverage gaps (lowest coverage packages)
-TOP_GAPS=$(echo "$PKG_COVERAGE" | head -5)
+# Top 5 coverage gaps (lowest coverage files)
+TOP_GAPS=$(echo "$FILE_COVERAGE" | head -5)
 
 cat > "${REPORT}" <<EOF
 # Daemon Test Coverage Report
@@ -46,15 +46,15 @@ cat > "${REPORT}" <<EOF
 **Date:** ${DATE}
 **Total Coverage:** ${TOTAL}
 
-## Per-Package Coverage
+## Per-File Coverage
 
 \`\`\`
-${PKG_COVERAGE}
+${FILE_COVERAGE}
 \`\`\`
 
 ## Top Coverage Gaps
 
-The following packages have the lowest coverage and would benefit from additional tests:
+The following files have the lowest coverage and would benefit from additional tests:
 
 \`\`\`
 ${TOP_GAPS}
