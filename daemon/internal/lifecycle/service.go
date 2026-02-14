@@ -18,6 +18,7 @@ import (
 	"carrier/daemon/internal/baseagent"
 	"carrier/daemon/internal/commandexec"
 	"carrier/daemon/internal/manifest"
+	"carrier/daemon/internal/redact"
 	"carrier/daemon/internal/runtimecheck"
 )
 
@@ -87,22 +88,22 @@ func WithHandoffRetention(ttl time.Duration) Option {
 }
 
 type Service struct {
-	mu          sync.RWMutex
-	states      map[string]AgentState
-	manifests   map[string]manifest.Manifest
-	logs        map[string][]string
-	handoffs    map[string]DiagnosisHandoff
-	auditLogs   []AuditLog
+	mu            sync.RWMutex
+	states        map[string]AgentState
+	manifests     map[string]manifest.Manifest
+	logs          map[string][]string
+	handoffs      map[string]DiagnosisHandoff
+	auditLogs     []AuditLog
 	auditLogLimit int
-	triager     baseagent.Triager
-	checker     runtimecheck.Checker
-	runner      commandexec.Runner
-	diagnoseDir string
-	logLimit    int
-	handoffTTL  time.Duration
-	now         func() time.Time
-	idCounter   uint64
-	idGenerator func(prefix string) string
+	triager       baseagent.Triager
+	checker       runtimecheck.Checker
+	runner        commandexec.Runner
+	diagnoseDir   string
+	logLimit      int
+	handoffTTL    time.Duration
+	now           func() time.Time
+	idCounter     uint64
+	idGenerator   func(prefix string) string
 }
 
 func NewService(triager baseagent.Triager, opts ...Option) *Service {
@@ -111,19 +112,19 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 	}
 
 	svc := &Service{
-		states:      make(map[string]AgentState),
-		manifests:   make(map[string]manifest.Manifest),
-		logs:        make(map[string][]string),
+		states:        make(map[string]AgentState),
+		manifests:     make(map[string]manifest.Manifest),
+		logs:          make(map[string][]string),
 		handoffs:      make(map[string]DiagnosisHandoff),
 		auditLogs:     make([]AuditLog, 0, 128),
 		auditLogLimit: 1000,
 		triager:       triager,
-		checker:     runtimecheck.NewHostChecker(),
-		runner:      commandexec.NewShellRunner(),
-		diagnoseDir: filepath.Join(os.TempDir(), "agentd-diagnose"),
-		logLimit:    1000,
-		handoffTTL:  24 * time.Hour,
-		now:         time.Now,
+		checker:       runtimecheck.NewHostChecker(),
+		runner:        commandexec.NewShellRunner(),
+		diagnoseDir:   filepath.Join(os.TempDir(), "agentd-diagnose"),
+		logLimit:      1000,
+		handoffTTL:    24 * time.Hour,
+		now:           time.Now,
 	}
 	svc.idGenerator = func(prefix string) string {
 		next := atomic.AddUint64(&svc.idCounter, 1)
@@ -385,7 +386,7 @@ func (s *Service) Diagnose(agentID string) (string, error) {
 
 	fileName := fmt.Sprintf("%s-diagnose-%s.zip", agentID, s.now().UTC().Format("2006-01-02T15-04-05Z"))
 	filePath := filepath.Join(s.diagnoseDir, fileName)
-	if err := s.writeDiagnoseZip(filePath, m, state, logs); err != nil {
+	if err := s.writeDiagnoseZip(filePath, m, state, logs, s.now()); err != nil {
 		s.recordAudit("", "system", "diagnose", agentID, AuditResultFailure, "E_DIAG_WRITE", err.Error())
 		return "", err
 	}
@@ -594,7 +595,7 @@ func (s *Service) recordAudit(requestID, actor, action, target string, result Au
 	}
 }
 
-func (s *Service) writeDiagnoseZip(path string, m manifest.Manifest, state AgentState, logs []string) error {
+func (s *Service) writeDiagnoseZip(path string, m manifest.Manifest, state AgentState, logs []string, createdAt time.Time) error {
 	file, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("create diagnose zip: %w", err)
@@ -602,7 +603,6 @@ func (s *Service) writeDiagnoseZip(path string, m manifest.Manifest, state Agent
 	defer file.Close()
 
 	zipWriter := zip.NewWriter(file)
-	defer zipWriter.Close()
 
 	stateJSON, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
@@ -613,14 +613,38 @@ func (s *Service) writeDiagnoseZip(path string, m manifest.Manifest, state Agent
 		return fmt.Errorf("marshal manifest: %w", err)
 	}
 
-	if err := addZipFile(zipWriter, "state.json", stateJSON); err != nil {
-		return err
+	redactedEnvJSON, err := json.MarshalIndent(redact.RedactEnviron(os.Environ()), "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal env: %w", err)
 	}
-	if err := addZipFile(zipWriter, "manifest.json", manifestJSON); err != nil {
-		return err
+
+	artifacts := map[string][]byte{
+		"state.json":    []byte(redact.RedactText(string(stateJSON))),
+		"manifest.json": []byte(redact.RedactText(string(manifestJSON))),
+		"logs.txt":      []byte(redact.RedactText(strings.Join(logs, "\n"))),
+		"env.json":      redactedEnvJSON,
 	}
-	if err := addZipFile(zipWriter, "logs.txt", []byte(strings.Join(logs, "\n"))); err != nil {
-		return err
+
+	metadataJSON, err := redact.MetadataJSON(createdAt, 24*time.Hour, artifacts)
+	if err != nil {
+		return fmt.Errorf("marshal metadata: %w", err)
+	}
+	artifacts["metadata.json"] = metadataJSON
+
+	names := make([]string, 0, len(artifacts))
+	for name := range artifacts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		if err := addZipFile(zipWriter, name, artifacts[name]); err != nil {
+			return err
+		}
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		return fmt.Errorf("close zip writer: %w", err)
 	}
 
 	return nil
