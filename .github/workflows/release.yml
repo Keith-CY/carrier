@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-packages:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            label: linux-x64
+            ext: ""
+            archive_ext: zip
+          - goos: linux
+            goarch: arm64
+            label: linux-arm64
+            ext: ""
+            archive_ext: zip
+          - goos: darwin
+            goarch: amd64
+            label: darwin-x64
+            ext: ""
+            archive_ext: zip
+          - goos: darwin
+            goarch: arm64
+            label: darwin-arm64
+            ext: ""
+            archive_ext: zip
+          - goos: windows
+            goarch: amd64
+            label: windows-x64
+            ext: ".exe"
+            archive_ext: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: daemon/go.mod
+
+      - name: Build release package
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_name="carrier-${GITHUB_SHA}-${{ matrix.label }}"
+          binary_name="agentd${{ matrix.ext }}"
+          release_dir="dist/${archive_name}"
+
+          mkdir -p "${release_dir}"
+
+          (cd daemon && \
+            CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
+              go build -trimpath -ldflags="-s -w" -o "../${release_dir}/${binary_name}" ./cmd/agentd)
+
+          cp -R daemon catalog gateway docs README.md "${release_dir}/"
+
+          (cd dist && zip -r "${archive_name}.${{ matrix.archive_ext }}" "${archive_name}")
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: carrier-${{ matrix.label }}
+          path: dist/carrier-${{ github.sha }}-${{ matrix.label }}.${{ matrix.archive_ext }}
+          if-no-files-found: error
+
+  release:
+    needs: build-packages
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: main-${{ github.sha }}
+          name: "main-${{ github.sha }}"
+          generate_release_notes: true
+          body: |
+            自动发布：每次合并到 main 后自动打包。  
+            Commit: ${{ github.sha }}
+          files: |
+            dist/**/*.zip
