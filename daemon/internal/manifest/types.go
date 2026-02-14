@@ -41,6 +41,7 @@ type Manifest struct {
 type RuntimeSpec struct {
 	Type    RuntimeType `json:"type"`
 	Install CommandSpec `json:"install"`
+	Upgrade CommandSpec `json:"upgrade"`
 	Start   CommandSpec `json:"start"`
 	Stop    CommandSpec `json:"stop"`
 }
@@ -136,6 +137,7 @@ func validateRuntime(r RuntimeSpec) error {
 	if err := validateRequired("runtime.install.command", r.Install.Command); err != nil {
 		return err
 	}
+	// runtime.upgrade.command is optional - not all agents need upgrade support
 	if err := validateRequired("runtime.start.command", r.Start.Command); err != nil {
 		return err
 	}

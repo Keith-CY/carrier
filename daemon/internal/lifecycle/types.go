@@ -42,7 +42,7 @@ type AgentState struct {
 }
 
 type UpgradeResult struct {
-	AgentID    string
+	AgentID     string
 	FromVersion string
 	ToVersion   string
 	BackupPath  string
