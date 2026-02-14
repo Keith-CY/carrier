@@ -50,8 +50,8 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 		}
 	}
 
-	result, runErr := s.runner.Run(ctx, m.Runtime.Start.Command)
-	s.appendCommandLog(agentID, "start", m.Runtime.Start.Command, result, runErr)
+	// Start the process using ProcessManager
+	pid, runErr := s.processManager.Start(agentID, "sh", []string{"-c", m.Runtime.Start.Command})
 	if runErr != nil {
 		triage, triageErr := s.HandleFailure(ctx, agentID, runErr.Error())
 		if triageErr == nil {
@@ -61,6 +61,8 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_START_FAILED", runErr.Error())
 		return runErr
 	}
+
+	s.appendLog(agentID, fmt.Sprintf("started process with PID %d", pid))
 
 	// Auto-mount memories linked to this agent.
 	s.autoMountMemories(agentID)
@@ -77,7 +79,10 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 	delete(s.restarts, agentID)
 	delete(s.cooldowns, agentID)
 	s.mu.Unlock()
-	s.recordAudit("", "system", "start", agentID, AuditResultSuccess, "", "start completed")
+	s.recordAudit("", "system", "start", agentID, AuditResultSuccess, "", fmt.Sprintf("start completed (PID %d)", pid))
+
+	// Monitor the process in background
+	go s.monitorProcess(agentID)
 
 	s.saveState()
 
@@ -85,7 +90,7 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 }
 
 func (s *Service) Stop(ctx context.Context, agentID string) error {
-	m, state, err := s.getManifestAndState(agentID)
+	_, state, err := s.getManifestAndState(agentID)
 	if err != nil {
 		return err
 	}
@@ -93,8 +98,8 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 		return ErrAlreadyStopped
 	}
 
-	result, runErr := s.runner.Run(ctx, m.Runtime.Stop.Command)
-	s.appendCommandLog(agentID, "stop", m.Runtime.Stop.Command, result, runErr)
+	// Stop the process using ProcessManager
+	runErr := s.processManager.Stop(agentID)
 	if runErr != nil {
 		s.mu.Lock()
 		state = s.states[agentID]
@@ -105,6 +110,8 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 		s.recordAudit("", "system", "stop", agentID, AuditResultFailure, "E_STOP_FAILED", runErr.Error())
 		return runErr
 	}
+
+	s.appendLog(agentID, "process stopped successfully")
 
 	// Auto-unmount all memories for this agent.
 	s.autoUnmountMemories(agentID)
@@ -122,4 +129,35 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 	s.saveState()
 
 	return nil
+}
+
+// monitorProcess watches a running agent process and updates state when it exits.
+func (s *Service) monitorProcess(agentID string) {
+	err := s.processManager.Wait(agentID)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, ok := s.states[agentID]
+	if !ok {
+		return
+	}
+
+	// If the process exited unexpectedly (not stopped by user)
+	if state.Runtime == RuntimeStateRunning {
+		state.Runtime = RuntimeStateCrashing
+		state.Health = HealthStateUnhealthy
+		if err != nil {
+			state.LastError = fmt.Sprintf("process exited: %v", err)
+			s.appendLog(agentID, state.LastError)
+		} else {
+			state.LastError = "process exited unexpectedly"
+			s.appendLog(agentID, state.LastError)
+		}
+		state.UpdatedAt = s.now()
+		s.states[agentID] = state
+
+		// Record crash for crash-loop detection
+		s.recordRestart(agentID)
+	}
 }

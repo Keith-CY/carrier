@@ -132,6 +132,14 @@ func WithStateFile(path string) Option {
 	}
 }
 
+func WithProcessLogDir(dir string) Option {
+	return func(s *Service) {
+		if dir != "" {
+			s.processLogDir = dir
+		}
+	}
+}
+
 type Service struct {
 	mu                 sync.RWMutex
 	states             map[string]AgentState
@@ -157,6 +165,8 @@ type Service struct {
 	crashLoopCooldown  time.Duration
 	memoryStore        *memory.Store
 	stateFile          *StateFile
+	processManager     *ProcessManager
+	processLogDir      string
 }
 
 func NewService(triager baseagent.Triager, opts ...Option) *Service {
@@ -164,6 +174,7 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		triager = baseagent.NoopTriager{}
 	}
 
+	processLogDir := filepath.Join(os.TempDir(), "agentd-process-logs")
 	svc := &Service{
 		states:             make(map[string]AgentState),
 		manifests:          make(map[string]manifest.Manifest),
@@ -184,7 +195,9 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		crashLoopThreshold: defaultCrashLoopThreshold,
 		crashLoopWindow:    defaultCrashLoopWindow,
 		crashLoopCooldown:  defaultCrashLoopCooldown,
+		processLogDir:      processLogDir,
 	}
+	svc.processManager = NewProcessManager(processLogDir)
 	svc.idGenerator = func(prefix string) string {
 		next := atomic.AddUint64(&svc.idCounter, 1)
 		return fmt.Sprintf("%s-%d", prefix, next)
