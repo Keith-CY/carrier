@@ -101,9 +101,6 @@ jobs:
           tag_name: main-${{ github.sha }}
           name: "main-${{ github.sha }}"
           generate_release_notes: true
-          body: |
-            自动发布：每次合并到 main 后自动打包。  
-            Commit: ${{ github.sha }}
           files: |
             dist/**/*.zip
             dist/**/*.sha256
