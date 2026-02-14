@@ -1,94 +1,93 @@
 import type { GatewayCommand, GatewayResponse } from "./contracts/commands";
-import {
-  RemoteDiagnosisNotNeededError,
-  type DaemonClient,
-} from "./daemon/client";
+import { errorResponse, okResponse } from "./contracts/response";
+
+export class ParseError extends Error {
+  constructor(public readonly requestId: string, message: string) {
+    super(message);
+    this.name = "ParseError";
+  }
+}
 
 export function parseInput(input: string): GatewayCommand {
   const parts = input.trim().split(/\s+/);
   const [provider, chatId, requestId, name, ...args] = parts;
 
-  return {
+  const base = {
     provider: provider as GatewayCommand["provider"],
     chatId,
     requestId,
     name: name as GatewayCommand["name"],
-    args,
   };
-}
 
-function parseConsentFlag(value: string | undefined): boolean | null {
-  if (!value) {
-    return null;
-  }
-  const normalized = value.toLowerCase();
-  if (["yes", "y", "true"].includes(normalized)) {
-    return true;
-  }
-  if (["no", "n", "false"].includes(normalized)) {
-    return false;
-  }
-  return null;
-}
-
-export async function handleCommand(cmd: GatewayCommand, daemon: DaemonClient): Promise<GatewayResponse> {
-  if (cmd.name !== "/diagnose-consent") {
-    // Contract-only scaffold for other M4 command routing.
-    return {
-      requestId: cmd.requestId,
-      result: "ok",
-      message: `[${cmd.provider}] ${cmd.name} accepted for ${cmd.chatId}`,
-    };
-  }
-
-  const [agentId, consentRaw] = cmd.args;
-  if (!agentId) {
-    return {
-      requestId: cmd.requestId,
-      result: "error",
-      message: "usage: /diagnose-consent <agent_id> <yes|no>",
-    };
-  }
-
-  const consent = parseConsentFlag(consentRaw);
-  if (consent === null) {
-    return {
-      requestId: cmd.requestId,
-      result: "error",
-      message: "invalid consent flag: expected yes or no",
-    };
-  }
-
-  try {
-    const handoff = await daemon.createRemoteDiagnosisHandoff({
-      agentId,
-      consent,
-      actor: `${cmd.provider}:${cmd.chatId}`,
-      requestId: cmd.requestId,
-    });
-
-    return {
-      requestId: cmd.requestId,
-      result: "ok",
-      message: `remote diagnosis consent recorded for ${agentId}`,
-      handoffId: handoff.id,
-      handoffStatus: handoff.status,
-      downloadUrl: handoff.artifactRef || undefined,
-    };
-  } catch (error) {
-    if (error instanceof RemoteDiagnosisNotNeededError) {
+  switch (name) {
+    case "/pair":
+      if (!args[0]) throw new ParseError(requestId, "usage: /pair <code>");
+      return { ...base, name, data: { code: args[0] } };
+    case "/agents":
       return {
-        requestId: cmd.requestId,
-        result: "error",
-        message: `${error.code}: ${error.message}`,
+        ...base,
+        name,
+        data: { filter: args[0], includeInstalled: args.includes("--installed") },
       };
-    }
-    return {
-      requestId: cmd.requestId,
-      result: "error",
-      message: `failed to create remote diagnosis handoff: ${
-        error instanceof Error ? error.message : "unknown error"
-      }`,
-    };
+    case "/install":
+      if (!args[0]) throw new ParseError(requestId, "usage: /install <agent> [version]");
+      return { ...base, name, data: { agent: args[0], version: args[1] } };
+    case "/start":
+      if (!args[0]) throw new ParseError(requestId, "usage: /start <agent> [profile]");
+      return { ...base, name, data: { agent: args[0], profile: args[1] } };
+    case "/stop":
+      if (!args[0]) throw new ParseError(requestId, "usage: /stop <agent>");
+      return { ...base, name, data: { agent: args[0] } };
+    case "/status":
+      return { ...base, name, data: { agent: args[0], verbose: args.includes("--verbose") } };
+    case "/logs":
+      if (!args[0]) throw new ParseError(requestId, "usage: /logs <agent> [tail]");
+      return {
+        ...base,
+        name,
+        data: {
+          agent: args[0],
+          tail: args[1] ? Number.parseInt(args[1], 10) : undefined,
+        },
+      };
+    case "/upgrade":
+      return { ...base, name, data: { agent: args[0], version: args[1] } };
+    case "/diagnose":
+      return {
+        ...base,
+        name,
+        data: { scope: (args[0] as "gateway" | "agent" | "system" | undefined), agent: args[1] },
+      };
+    default:
+      throw new ParseError(requestId, `unknown command: ${name}`);
   }
 }
+
+export function handleCommand(cmd: GatewayCommand): GatewayResponse {
+  // Contract-only scaffold for Phase 1 routing.
+  return okResponse(cmd.requestId, {
+    checks: [
+      {
+        name: `${cmd.provider}:${cmd.name}`,
+        status: "pass",
+        detail: `accepted for ${cmd.chatId}`,
+      },
+    ],
+  });
+}
+
+export function safeHandleCommand(input: string): GatewayResponse {
+  try {
+    const cmd = parseInput(input);
+    return handleCommand(cmd);
+  } catch (e) {
+    if (e instanceof ParseError) {
+      return errorResponse(e.requestId, "E_PARSE", e.message);
+    }
+    return errorResponse("unknown", "E_INTERNAL", e instanceof Error ? e.message : "unknown error");
+  }
+}
+
+const example = "telegram 123 req-1 /agents";
+const response = safeHandleCommand(example);
+console.log(JSON.stringify(response, null, 2));
