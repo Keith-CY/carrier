@@ -26,16 +26,16 @@ import (
 )
 
 var (
-	ErrAgentNotFound            = errors.New("agent not found")
-	ErrNotInstalled             = errors.New("agent is not installed")
-	ErrAlreadyRunning           = errors.New("agent already running")
-	ErrAlreadyStopped           = errors.New("agent already stopped")
-	ErrCrashLoop                = errors.New("agent is in crash loop cooldown")
-	ErrMissingRequiredEnv       = errors.New("missing required environment variables")
-	ErrPortConflict             = errors.New("port conflict detected")
-	ErrRuntimePrerequisites     = errors.New("runtime prerequisites failed")
-	ErrRemoteDiagnosisNotNeeded = errors.New("remote diagnosis is not required for this agent")
-	ErrUpgradeFailed            = errors.New("agent upgrade failed")
+	ErrAgentNotFound              = errors.New("agent not found")
+	ErrNotInstalled               = errors.New("agent is not installed")
+	ErrAlreadyRunning             = errors.New("agent already running")
+	ErrAlreadyStopped             = errors.New("agent already stopped")
+	ErrCrashLoop                  = errors.New("agent is in crash loop cooldown")
+	ErrMissingRequiredEnv         = errors.New("missing required environment variables")
+	ErrPortConflict               = errors.New("port conflict detected")
+	ErrRuntimePrerequisites       = errors.New("runtime prerequisites failed")
+	ErrRemoteDiagnosisNotNeeded   = errors.New("remote diagnosis is not required for this agent")
+	ErrUpgradeFailed              = errors.New("agent upgrade failed")
 	ErrUpgradeStrategyUnsupported = errors.New("upgrade strategy is not supported")
 )
 
@@ -119,22 +119,22 @@ func WithHandoffRetention(ttl time.Duration) Option {
 }
 
 type Service struct {
-	mu            sync.RWMutex
-	states        map[string]AgentState
-	manifests     map[string]manifest.Manifest
-	logs          map[string][]string
-	handoffs      map[string]DiagnosisHandoff
-	auditLogs     []AuditLog
-	auditLogLimit int
-	triager       baseagent.Triager
-	checker       runtimecheck.Checker
-	runner        commandexec.Runner
-	diagnoseDir   string
-	logLimit      int
-	handoffTTL    time.Duration
-	now           func() time.Time
-	idCounter     uint64
-	idGenerator   func(prefix string) string
+	mu                 sync.RWMutex
+	states             map[string]AgentState
+	manifests          map[string]manifest.Manifest
+	logs               map[string][]string
+	handoffs           map[string]DiagnosisHandoff
+	auditLogs          []AuditLog
+	auditLogLimit      int
+	triager            baseagent.Triager
+	checker            runtimecheck.Checker
+	runner             commandexec.Runner
+	diagnoseDir        string
+	logLimit           int
+	handoffTTL         time.Duration
+	now                func() time.Time
+	idCounter          uint64
+	idGenerator        func(prefix string) string
 	restarts           map[string][]time.Time
 	cooldowns          map[string]time.Time
 	crashLoopThreshold int
@@ -148,19 +148,19 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 	}
 
 	svc := &Service{
-		states:        make(map[string]AgentState),
-		manifests:     make(map[string]manifest.Manifest),
-		logs:          make(map[string][]string),
-		handoffs:      make(map[string]DiagnosisHandoff),
-		auditLogs:     make([]AuditLog, 0, 128),
-		auditLogLimit: 1000,
-		triager:       triager,
-		checker:       runtimecheck.NewHostChecker(),
-		runner:        commandexec.NewShellRunner(),
-		diagnoseDir:   filepath.Join(os.TempDir(), "agentd-diagnose"),
-		logLimit:      1000,
-		handoffTTL:    24 * time.Hour,
-		now:           time.Now,
+		states:             make(map[string]AgentState),
+		manifests:          make(map[string]manifest.Manifest),
+		logs:               make(map[string][]string),
+		handoffs:           make(map[string]DiagnosisHandoff),
+		auditLogs:          make([]AuditLog, 0, 128),
+		auditLogLimit:      1000,
+		triager:            triager,
+		checker:            runtimecheck.NewHostChecker(),
+		runner:             commandexec.NewShellRunner(),
+		diagnoseDir:        filepath.Join(os.TempDir(), "agentd-diagnose"),
+		logLimit:           1000,
+		handoffTTL:         24 * time.Hour,
+		now:                time.Now,
 		restarts:           make(map[string][]time.Time),
 		cooldowns:          make(map[string]time.Time),
 		crashLoopThreshold: defaultCrashLoopThreshold,
@@ -366,7 +366,7 @@ func (s *Service) Upgrade(agentID string) (UpgradeResult, error) {
 		s.updateStateOnUpgradeError(agentID, updateErr)
 		s.recordAudit("", "system", "upgrade", agentID, AuditResultFailure, "E_UPGRADE_FAILED", fmt.Sprintf("%v", runErr))
 		return UpgradeResult{
-			AgentID:    agentID,
+			AgentID:     agentID,
 			FromVersion: fromVersion,
 			ToVersion:   fromVersion,
 			BackupPath:  backupPath,
@@ -385,7 +385,7 @@ func (s *Service) Upgrade(agentID string) (UpgradeResult, error) {
 
 	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("from %s -> %s; backup=%s", fromVersion, toVersion, backupPath))
 	return UpgradeResult{
-		AgentID:    agentID,
+		AgentID:     agentID,
 		FromVersion: fromVersion,
 		ToVersion:   toVersion,
 		BackupPath:  backupPath,
