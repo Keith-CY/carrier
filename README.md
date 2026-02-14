@@ -134,15 +134,13 @@ Runtime environment variables:
 
 ## Kanban workflow required secrets/env vars
 
-For `.github/workflows/carrier-kanban-operations.yml`, configure these repository-level secrets/variables before running the workflow (see workflow file: [`.github/workflows/carrier-kanban-operations.yml`](./.github/workflows/carrier-kanban-operations.yml)):
+For the Kanban workflows (`.github/workflows/carrier-kanban-operations.yml`, `.github/workflows/carrier-kanban-automation.yml`), configure these repository-level secrets/variables (see workflow files under [`.github/workflows/`](./.github/workflows/)):
 
-- `CARRIER_PROJECT_ID` (required): GitHub Project (v2) ID used by the workflow.
-- `CARRIER_PROJECTS_TOKEN` (required): token with project read/write permissions for field/view operations.
+- `CARRIER_PROJECT_ID` (recommended): GitHub Project (v2) ID used by the workflow. If omitted, workflows try `.github/kanban-config.json` `projectId`.
+- `CARRIER_PROJECTS_TOKEN` (required to execute sync/report): token with project read/write permissions for user/org ProjectV2 operations.
 - `CARRIER_DISCUSSION_CATEGORY_ID` (optional): discussion category override for workflow-generated discussion posts.
 
-Implementation note: the workflow falls back to the pre-authenticated `github` client from `@actions/github` when an explicit token is not provided, so repository-scoped operations still work with default workflow auth.
-
-Without the required values above, Kanban operations workflow runs will fail early during setup.
+Implementation note: workflows now skip with a warning when `CARRIER_PROJECTS_TOKEN` is missing or project access is unavailable, so unrelated CI checks are not blocked by Kanban configuration gaps.
 
 ## Install OpenClaw from release package (non-technical quick path)
 

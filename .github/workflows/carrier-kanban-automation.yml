@@ -10,7 +10,7 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
-  projects: write
+  repository-projects: write
 
 jobs:
   sync:
@@ -20,7 +20,10 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const projectId = process.env.CARRIER_PROJECT_ID || 'PVT_kwHOAG7zoc4BPLc6';
+            const fs = require('fs');
+            const configPath = '.github/kanban-config.json';
+            const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {};
+            const projectId = process.env.CARRIER_PROJECT_ID || config.projectId;
             const statusFieldNames = ['Status', '状态'];
             const fieldAliases = {
               priority: ['Priority', '优先级'],
@@ -33,9 +36,16 @@ jobs:
 
             const eventName = context.eventName;
             const payload = context.payload;
-            const token = process.env.CARRIER_PROJECTS_TOKEN || process.env.GITHUB_TOKEN;
-            // Fallback `github` comes from @actions/github and uses the default GITHUB_TOKEN context.
-            const octokit = token ? github.getOctokit(token) : github;
+            const projectToken = process.env.CARRIER_PROJECTS_TOKEN;
+            if (!projectToken) {
+              core.warning('Skipping Kanban sync: CARRIER_PROJECTS_TOKEN is not configured.');
+              return;
+            }
+            if (!projectId) {
+              core.warning('Skipping Kanban sync: missing projectId. Set CARRIER_PROJECT_ID or config.projectId.');
+              return;
+            }
+            const ghClient = github.getOctokit(projectToken);
 
             const getStatusCandidates = (item, labels) => {
               const hasLabel = (target) => labels.includes(target.toLowerCase());
@@ -162,11 +172,9 @@ jobs:
                         dataType
                       }
                       ... on ProjectV2SingleSelectField {
-                        options(first: 100) {
-                          nodes {
-                            id
-                            name
-                          }
+                        options {
+                          id
+                          name
                         }
                       }
                     }
@@ -175,16 +183,22 @@ jobs:
               }
             }`;
 
-            const preflight = await octokit.graphql(preflightQuery, { projectId });
+            let preflight;
+            try {
+              preflight = await ghClient.graphql(preflightQuery, { projectId });
+            } catch (error) {
+              core.warning(`Skipping Kanban sync: cannot read ProjectV2 ${projectId}. ${error.message}`);
+              return;
+            }
             if (!preflight?.node) {
-              core.setFailed(`Unable to read project ${projectId}. Verify the token and projectId are valid.`);
+              core.warning(`Skipping Kanban sync: unable to read project ${projectId}. Verify token and project ID.`);
               return;
             }
 
             if (!preflight.node.viewerCanUpdate) {
-              core.setFailed([
+              core.warning([
                 'Project token does not have write access for this Project.',
-                'Use CARRIER_PROJECTS_TOKEN with project:write scope, then re-run.',
+                'Skipping Kanban sync for this event.',
               ].join(' '));
               return;
             }
@@ -205,21 +219,21 @@ jobs:
             const normalizeOption = (value) => String(value || '').trim().toLowerCase();
 
             const resolveOption = (field, value) => {
-              if (!field?.options?.nodes) {
+              if (!field?.options) {
                 return null;
               }
               const target = normalizeOption(value);
-              const direct = field.options.nodes.find((option) => normalizeOption(option.name) === target);
+              const direct = field.options.find((option) => normalizeOption(option.name) === target);
               if (direct) {
                 return direct.id;
               }
-              const numeric = field.options.nodes.find((option) => option.name === value);
+              const numeric = field.options.find((option) => option.name === value);
               return numeric ? numeric.id : null;
             };
 
             const statusField = findField(statusFieldNames);
             if (!statusField) {
-              core.setFailed('Project status field was not found or is not accessible. Ensure there is a single-select field named "Status".');
+              core.warning('Skipping Kanban sync: project status field is missing or inaccessible.');
               return;
             }
 
@@ -342,7 +356,7 @@ jobs:
                 }
               }`;
 
-              const data = await octokit.graphql(query, { projectId, after: cursor });
+              const data = await ghClient.graphql(query, { projectId, after: cursor });
               const project = data.node;
 
               const found = project.items.nodes.find((entry) => {
@@ -374,7 +388,7 @@ jobs:
                 }
               }`;
 
-              const addResp = await octokit.graphql(addMutation, { projectId, contentId });
+              const addResp = await ghClient.graphql(addMutation, { projectId, contentId });
               return addResp.addProjectV2ItemById.item.id;
             };
 
@@ -418,7 +432,7 @@ jobs:
             for (const update of updates) {
               try {
                 if (update.kind === 'single_select') {
-                  await octokit.graphql(updateMutations.single_select, {
+                  await ghClient.graphql(updateMutations.single_select, {
                     projectId,
                     itemId: finalItemId,
                     fieldId: update.fieldId,
@@ -428,7 +442,7 @@ jobs:
                 }
 
                 if (update.kind === 'number') {
-                  await octokit.graphql(updateMutations.number, {
+                  await ghClient.graphql(updateMutations.number, {
                     projectId,
                     itemId: finalItemId,
                     fieldId: update.fieldId,
@@ -438,7 +452,7 @@ jobs:
                 }
 
                 if (update.kind === 'text') {
-                  await octokit.graphql(updateMutations.text, {
+                  await ghClient.graphql(updateMutations.text, {
                     projectId,
                     itemId: finalItemId,
                     fieldId: update.fieldId,
@@ -448,7 +462,7 @@ jobs:
                 }
 
                 if (update.kind === 'date') {
-                  await octokit.graphql(updateMutations.date, {
+                  await ghClient.graphql(updateMutations.date, {
                     projectId,
                     itemId: finalItemId,
                     fieldId: update.fieldId,
