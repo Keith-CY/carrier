@@ -27,7 +27,7 @@ done
 
 REPO="${GITHUB_REPOSITORY:-Keith-CY/carrier}"
 THRESHOLD_DATE=$(date -u -d "-${THRESHOLD_DAYS} days" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
-                 date -u -v-${THRESHOLD_DAYS}d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
+                 date -u -v-"${THRESHOLD_DAYS}"d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
                  echo "")
 
 echo "Scanning for stale [review-followup] issues (older than ${THRESHOLD_DAYS} days)..."
