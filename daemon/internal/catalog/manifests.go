@@ -2,17 +2,25 @@ package catalog
 
 import "carrier/daemon/internal/manifest"
 
+const (
+	openclawVersion = "1.0.0"
+	openclawBaseURL = "https://github.com/openclaw/openclaw/releases/download/v1.0.0"
+)
+
 func OpenClawManifest() manifest.Manifest {
+	// Pinned artifact URLs with explicit version - no dynamic script execution
+	installCmd := `sh -c 'set -e; V="` + openclawVersion + `"; U="` + openclawBaseURL + `"; A="openclaw-$(uname -s)-$(uname -m).tar.gz"; curl -fsSL -o "$A" "$U/$A"; curl -fsSL -o "$A.sha256" "$U/$A.sha256"; sha256sum -c "$A.sha256"; tar xzf "$A"; install -m 755 openclaw /usr/local/bin/openclaw; rm -f "$A" "$A.sha256" openclaw'`
+	
 	return manifest.Manifest{
 		ID:           "openclaw",
 		Name:         "OpenClaw",
-		Version:      "1.0.0",
+		Version:      openclawVersion,
 		Description:  "Full-featured AI assistant with memory support",
 		Capabilities: []string{"chat", "code", "memory"},
 		Runtime: manifest.RuntimeSpec{
 			Type:    manifest.RuntimeTypeLocalBinary,
-			Install: manifest.CommandSpec{Command: `bash -c 'command -v npm >/dev/null 2>&1 && npm install -g openclaw@1.0.0 || (ARCHIVE="openclaw-$(uname -s)-$(uname -m).tar.gz" && curl -fsSL -o "$ARCHIVE" "https://github.com/openclaw/openclaw/releases/download/v1.0.0/$ARCHIVE" && curl -fsSL -o "$ARCHIVE.sha256" "https://github.com/openclaw/openclaw/releases/download/v1.0.0/$ARCHIVE.sha256" && sha256sum -c "$ARCHIVE.sha256" && tar xzf "$ARCHIVE" && install -m 755 openclaw /usr/local/bin/openclaw && rm -f "$ARCHIVE" "$ARCHIVE.sha256")'`},
-			Upgrade: manifest.CommandSpec{Command: `bash -c 'command -v npm >/dev/null 2>&1 && npm install -g openclaw@1.0.0 || (ARCHIVE="openclaw-$(uname -s)-$(uname -m).tar.gz" && curl -fsSL -o "$ARCHIVE" "https://github.com/openclaw/openclaw/releases/download/v1.0.0/$ARCHIVE" && curl -fsSL -o "$ARCHIVE.sha256" "https://github.com/openclaw/openclaw/releases/download/v1.0.0/$ARCHIVE.sha256" && sha256sum -c "$ARCHIVE.sha256" && tar xzf "$ARCHIVE" && install -m 755 openclaw /usr/local/bin/openclaw && rm -f "$ARCHIVE" "$ARCHIVE.sha256")'`},
+			Install: manifest.CommandSpec{Command: installCmd},
+			Upgrade: manifest.CommandSpec{Command: installCmd},
 			Start:   manifest.CommandSpec{Command: "openclaw gateway start"},
 			Stop:    manifest.CommandSpec{Command: "openclaw gateway stop"},
 		},
