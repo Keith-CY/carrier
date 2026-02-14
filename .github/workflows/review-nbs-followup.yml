@@ -1,0 +1,117 @@
+name: Review NBS Follow-up
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+jobs:
+  create-followup-issues:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create issues from NBS lines
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pr = context.payload.pull_request;
+            const prNumber = pr.number;
+            const prUrl = pr.html_url;
+            const prTitle = pr.title;
+
+            const nbsRegex = /^\s*NBS:\s*(.+)\s*$/gmi;
+
+            function extractNbsLines(text, source) {
+              if (!text) return [];
+              const out = [];
+              let match;
+              while ((match = nbsRegex.exec(text)) !== null) {
+                const suggestion = (match[1] || "").trim();
+                if (!suggestion) continue;
+                out.push({ suggestion, source });
+              }
+              return out;
+            }
+
+            async function paginate(method, params) {
+              const results = [];
+              let page = 1;
+              while (true) {
+                const { data } = await method({ ...params, per_page: 100, page });
+                if (!data.length) break;
+                results.push(...data);
+                if (data.length < 100) break;
+                page += 1;
+              }
+              return results;
+            }
+
+            const [reviews, issueComments, reviewComments] = await Promise.all([
+              paginate(github.rest.pulls.listReviews, { owner, repo, pull_number: prNumber }),
+              paginate(github.rest.issues.listComments, { owner, repo, issue_number: prNumber }),
+              paginate(github.rest.pulls.listReviewComments, { owner, repo, pull_number: prNumber }),
+            ]);
+
+            const extracted = [];
+
+            for (const r of reviews) {
+              extracted.push(...extractNbsLines(r.body, `review:${r.user?.login || "unknown"}`));
+            }
+            for (const c of issueComments) {
+              extracted.push(...extractNbsLines(c.body, `issue-comment:${c.user?.login || "unknown"}`));
+            }
+            for (const c of reviewComments) {
+              extracted.push(...extractNbsLines(c.body, `review-comment:${c.user?.login || "unknown"}`));
+            }
+
+            if (!extracted.length) {
+              core.info("No NBS lines found; nothing to create.");
+              return;
+            }
+
+            // Deduplicate by normalized suggestion text.
+            const bySuggestion = new Map();
+            for (const item of extracted) {
+              const key = item.suggestion.toLowerCase();
+              const existing = bySuggestion.get(key);
+              if (existing) {
+                existing.sources.add(item.source);
+              } else {
+                bySuggestion.set(key, {
+                  suggestion: item.suggestion,
+                  sources: new Set([item.source]),
+                });
+              }
+            }
+
+            function shortTitle(s) {
+              const cleaned = s.replace(/\s+/g, " ").trim();
+              return cleaned.length > 80 ? `${cleaned.slice(0, 77)}...` : cleaned;
+            }
+
+            for (const { suggestion, sources } of bySuggestion.values()) {
+              const marker = `<!-- nbs:pr-${prNumber}:${Buffer.from(suggestion).toString("base64").slice(0, 20)} -->`;
+              const title = `[review-followup] PR #${prNumber}: ${shortTitle(suggestion)}`;
+              const body = [
+                marker,
+                `Source PR: ${prUrl}`,
+                `PR title: ${prTitle}`,
+                "",
+                "Auto-created from a non-blocking review suggestion marked with `NBS:`.",
+                "",
+                "## Suggestion",
+                `- [ ] ${suggestion}`,
+                "",
+                "## Trace",
+                ...Array.from(sources).map((s) => `- ${s}`),
+              ].join("\n");
+
+              await github.rest.issues.create({ owner, repo, title, body });
+              core.info(`Created follow-up issue: ${title}`);
+            }

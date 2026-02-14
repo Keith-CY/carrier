@@ -38,3 +38,19 @@ GitHub Actions is the source of truth for test status.
 Current CI checks:
 - Daemon Go tests
 - Gateway TypeScript type check
+
+## Review Convention (Non-Blocking Suggestions)
+
+For review comments, use the fixed keyword `NBS:` for each non-blocking suggestion.
+
+Rules:
+- one suggestion per line
+- each line starts with `NBS:`
+
+Example:
+```text
+NBS: Add edge-case test for missing request_id.
+NBS: Clarify fallback behavior in README.
+```
+
+Post-merge automation parses `NBS:` lines and creates one follow-up issue per suggestion.
