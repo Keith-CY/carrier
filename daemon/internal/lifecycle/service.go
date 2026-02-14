@@ -486,9 +486,8 @@ func (s *Service) Logs(agentID string, tail int) ([]string, error) {
 	return append([]string(nil), logs[start:]...), nil
 }
 
-// AuditStatus returns the current audit buffer size, configured limit, and
-// the number of entries that have been dropped due to the limit.  This is
-// intended for operational inspection / debug endpoints.
+// AuditStatus returns the current audit buffer size and configured limit.
+// This is intended for operational inspection / debug endpoints.
 type AuditStatus struct {
 	BufferSize int `json:"buffer_size"`
 	Limit      int `json:"limit"`
