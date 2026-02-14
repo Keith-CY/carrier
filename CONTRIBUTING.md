@@ -653,3 +653,12 @@ gh pr view 123 --repo Keith-CY/carrier --json title,body,comments,reviews,commit
 ```
 
 Instead, request only the fields you need. Large payloads are slower, hit rate limits faster, and are more likely to break when GitHub changes response shapes.
+## Preflight Check
+
+Before running automation scripts, verify all required tools are installed:
+
+```bash
+./scripts/preflight-check.sh
+```
+
+The script checks for `gh`, `jq`, `bun`, and `go` and prints install hints for any missing tools.
