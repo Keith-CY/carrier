@@ -75,6 +75,29 @@ export class SessionStore {
     this.sessions.set(key, { ...session, lastSeenAt: this.now().toISOString() });
   }
 
+  /** Remove expired pairing codes from the internal map. */
+  cleanup(): number {
+    let removed = 0;
+    const nowMs = this.now().getTime();
+    for (const [key, record] of this.pairCodes) {
+      if (Date.parse(record.expiresAt) <= nowMs) {
+        this.pairCodes.delete(key);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
+  /** Return the number of active pairing codes. */
+  get pairCodeCount(): number {
+    return this.pairCodes.size;
+  }
+
+  /** Return the number of active sessions. */
+  get sessionCount(): number {
+    return this.sessions.size;
+  }
+
   private issueSessionToken(): string {
     this.nextToken += 1;
     return `session-${this.nextToken}`;

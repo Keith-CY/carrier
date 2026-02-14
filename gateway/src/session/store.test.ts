@@ -158,4 +158,43 @@ describe("SessionStore", () => {
       store.touch("telegram", "unknown");
     });
   });
+
+  describe("cleanup", () => {
+    test("removes expired pairing codes", () => {
+      let time = new Date("2026-01-01T00:00:00Z");
+      const store = new SessionStore(() => time);
+      store.registerPairCode("code-a", 60);
+      store.registerPairCode("code-b", 300);
+
+      expect(store.pairCodeCount).toBe(2);
+
+      // Advance past first code's expiry but before second
+      time = new Date("2026-01-01T00:02:00Z");
+      const removed = store.cleanup();
+
+      expect(removed).toBe(1);
+      expect(store.pairCodeCount).toBe(1);
+
+      // The non-expired code should still work
+      const session = store.pair({ provider: "telegram", chatId: "c1", code: "code-b" });
+      expect(session).not.toBeNull();
+    });
+
+    test("returns 0 when nothing to clean", () => {
+      const store = new SessionStore(() => new Date("2026-01-01T00:00:00Z"));
+      expect(store.cleanup()).toBe(0);
+    });
+  });
+
+  describe("sessionCount", () => {
+    test("tracks active sessions", () => {
+      const store = new SessionStore(() => new Date("2026-01-01T00:00:00Z"));
+      expect(store.sessionCount).toBe(0);
+
+      store.registerPairCode("code-1", 300);
+      store.pair({ provider: "telegram", chatId: "c1", code: "code-1" });
+
+      expect(store.sessionCount).toBe(1);
+    });
+  });
 });
