@@ -104,6 +104,44 @@ Before opening or updating a PR, run the minimum local validation for your chang
 - **CI/workflow changes:** Test the workflow logic locally where possible. For GitHub Actions changes, verify YAML syntax with a linter (e.g., `actionlint`).
 
 These are minimum checks. The full local validation suite is available via `./scripts/run-all-tests.sh`.
+## CI Troubleshooting
+
+When a required CI check fails on your PR, reproduce the failure locally with the commands below.
+
+**Daemon tests (with race detector):**
+
+```bash
+cd daemon
+go test -race ./...
+```
+
+**Daemon lint (golangci-lint):**
+
+```bash
+cd daemon
+golangci-lint run ./...
+```
+
+**Gateway type check:**
+
+```bash
+cd gateway
+bun install
+bun run check
+```
+
+**Gateway tests:**
+
+```bash
+cd gateway
+bun test
+```
+
+**Expected tool versions:**
+- Go: see `daemon/go.mod` (`go` directive)
+- Bun: see `gateway/package.json` or CI workflow (`bun-version`)
+
+These are the same commands CI runs. Fix failures locally before pushing updates.
 
 ## Review Convention (Non-Blocking Suggestions)
 
