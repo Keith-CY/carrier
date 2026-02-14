@@ -49,7 +49,7 @@ export function parseInput(input: string): GatewayCommand {
 
   const [provider, chatId, requestId, name, ...args] = parts;
   if (!COMMAND_NAMES.has(name as CommandName)) {
-    throw new ParseError(requestId, `unknown command: ${name}`);
+    throw new ParseError(requestId, `unknown command: ${name} (requestId=${requestId})`);
   }
 
   return {
