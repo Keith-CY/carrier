@@ -7,7 +7,10 @@ Guide agents to review pull requests like a human collaborator — with inline c
 1. Fetch the PR diff via `gh pr diff <number> --repo Keith-CY/carrier`
 2. Read the full diff before commenting
 3. Submit a review using the GitHub Review API with inline `comments` array (path, line, side, body)
-4. Approve if code is correct; request changes if blocking issues found
+4. Apply decision rules strictly:
+   - If there is any **BS** (Blocking Suggestion), submit **Request Changes**.
+   - If there are only **NBS** (Non-Blocking Suggestions), leave `NBS:` comments per format and keep review non-blocking.
+   - If there is no BS, submit **Approve**.
 
 ## What to Check
 - **Security**: command injection, credential leaks, unsafe file operations
@@ -18,10 +21,14 @@ Guide agents to review pull requests like a human collaborator — with inline c
 - **Dependencies**: accidental inclusion of `node_modules` or build artifacts
 
 ## Comment Style
-- **Blocking issues**: use normal review comments or request changes
-- **Non-blocking suggestions**: prefix with `NBS:` per `skills/review-followup/SKILL.md`
-- One suggestion per `NBS:` line
-- Reference related PRs/issues when relevant (e.g., "This conflicts with the pattern in PR #14")
+- **BS (Blocking Suggestion)**:
+  - Use clear blocking language and expected fix.
+  - If any BS exists in the review, overall decision must be **Request Changes**.
+- **NBS (Non-Blocking Suggestion)**:
+  - Prefix each non-blocking suggestion with `NBS:` per `skills/review-followup/SKILL.md`.
+  - One suggestion per `NBS:` line.
+- If no BS exists, final decision should be **Approve**.
+- Reference related PRs/issues when relevant (e.g., "This conflicts with the pattern in PR #14").
 
 ## Build Verification
 Before approving, confirm all CI checks have passed:
