@@ -100,5 +100,9 @@ jobs:
         with:
           bun-version: "1.1.8"
 
+      - name: Install gateway dependencies
+        working-directory: gateway
+        run: bun install --no-progress
+
       - name: Run end-to-end tests
         run: ./scripts/run-e2e-tests.sh
