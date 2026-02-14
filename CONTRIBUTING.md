@@ -401,3 +401,40 @@ git push --force-with-lease origin codex/my-feature
 - **Never push directly to `main`** to resolve conflicts.
 - After force-push, verify CI checks pass on the updated PR before requesting re-review.
 - If conflicts are complex, consider asking the original author for help.
+## Multiline Review Comments with --body-file
+
+For multiline review comments or PR reviews, use `--body-file` instead of inline escaped newlines. This is more reliable for automation and avoids shell quoting issues.
+
+### Preparing a review body file
+
+```bash
+cat > /tmp/review.md << 'EOF'
+Overall the change looks good. Two non-blocking suggestions:
+
+NBS: Extract the retry logic into a shared helper for reuse across providers.
+NBS: The error message could include the agent ID for easier debugging.
+EOF
+```
+
+### Submitting a review with --body-file
+
+```bash
+# Submit an approving review with multiline body
+gh pr review <PR_NUMBER> --repo Keith-CY/carrier --approve --body-file /tmp/review.md
+
+# Submit a comment-only review (no approval/rejection)
+gh pr review <PR_NUMBER> --repo Keith-CY/carrier --comment --body-file /tmp/review.md
+```
+
+### Submitting a PR comment with --body-file
+
+```bash
+gh pr comment <PR_NUMBER> --repo Keith-CY/carrier --body-file /tmp/review.md
+```
+
+### Why --body-file over inline --body
+
+- Avoids shell escaping issues with newlines, quotes, and special characters.
+- Keeps `NBS:` formatting intact (one suggestion per line).
+- Easier to review/edit before submitting.
+- More reliable in scripts and CI automation.
