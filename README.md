@@ -25,11 +25,18 @@ Key topics covered:
 - Catalog manifest schema and validation flow
 - Memory model (Per-Agent, Shared, Public) and mount policy
 
-## Repository layout
-- `daemon/`: Go daemon lifecycle, catalog, Base Agent triage interfaces
-- `gateway/`: TypeScript gateway contracts and routing scaffold
-- `catalog/`: OpenClaw manifest and candidate agent list
-- `docs/`: Product and delivery documentation
+## Repository Map
+
+| Path | Purpose |
+|------|---------|
+| [`daemon/`](./daemon/) | Go daemon — lifecycle management, catalog loading, Base Agent triage interfaces |
+| [`gateway/`](./gateway/) | TypeScript gateway — provider routing, session management, download tokens |
+| [`catalog/`](./catalog/) | OpenClaw manifest and candidate agent list |
+| [`docs/`](./docs/) | Product requirements, implementation plan, and architecture docs |
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | System design overview and component interaction diagrams |
+| [`CONTRIBUTING.md`](./CONTRIBUTING.md) | Contributor workflow, branching policy, and review conventions |
+| [`skills/`](./skills/) | Automation and review helper skills (PR review, NBS follow-up) |
+| [`scripts/`](./scripts/) | Development and CI helper scripts |
 
 ## M2 daemon scaffold status
 - Runtime prerequisite checks are implemented for local host and WSL2 requirement detection.
