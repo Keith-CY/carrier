@@ -7,8 +7,6 @@ on:
       - '*.md'
       - 'docs/**'
       - '.github/kanban-config.json'
-      - '.github/workflows/carrier-kanban-automation.yml'
-      - '.github/workflows/carrier-kanban-operations.yml'
       - '.github/workflows/review-nbs-followup.yml'
   push:
     branches: [main]
@@ -16,8 +14,6 @@ on:
       - '*.md'
       - 'docs/**'
       - '.github/kanban-config.json'
-      - '.github/workflows/carrier-kanban-automation.yml'
-      - '.github/workflows/carrier-kanban-operations.yml'
       - '.github/workflows/review-nbs-followup.yml'
   merge_group:
     types: [checks_requested]

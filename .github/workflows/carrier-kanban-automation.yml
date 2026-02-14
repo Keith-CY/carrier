@@ -2,9 +2,9 @@ name: Carrier Kanban Sync
 
 on:
   issues:
-    types: [opened, reopened, closed]
+    types: [opened, reopened, closed, edited, labeled, unlabeled, assigned, unassigned]
   pull_request:
-    types: [opened, reopened, closed]
+    types: [opened, reopened, closed, edited, labeled, unlabeled, ready_for_review, converted_to_draft]
 
 permissions:
   contents: read
@@ -20,27 +20,153 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const projectId = 'PVT_kwHOAG7zoc4BPLc6';
-            const statusFieldId = 'PVTSSF_lAHOAG7zoc4BPLc6zg9qf3Q';
-            const optionTodo = 'f75ad846';
-            const optionInProgress = '47fc9ee4';
-            const optionDone = '98236657';
+            const projectId = process.env.CARRIER_PROJECT_ID || 'PVT_kwHOAG7zoc4BPLc6';
+            const statusFieldNames = ['Status', '状态'];
+            const fieldAliases = {
+              priority: ['Priority', '优先级'],
+              type: ['Type', '类型'],
+              iteration: ['Iteration', 'Sprint', '迭代', '里程碑'],
+              estimate: ['Estimate Hours', 'Story Points', '估时', '预估工作量'],
+              blockedReason: ['Blocked Reason', '阻塞原因'],
+              dueDate: ['Due Date', '截止日期', '计划交付日'],
+            };
 
             const eventName = context.eventName;
             const payload = context.payload;
             const token = process.env.CARRIER_PROJECTS_TOKEN || process.env.GITHUB_TOKEN;
             const gh = token ? github.getOctokit(token) : github;
 
+            const getStatusCandidates = (item, labels) => {
+              const hasLabel = (target) => labels.includes(target.toLowerCase());
+              const isBlocked =
+                hasLabel('blocked') || hasLabel('blocker') || hasLabel('pending') ||
+                hasLabel('blocked-for-review') || hasLabel('blocked-依赖') || hasLabel('blocked-dependency');
+
+              if (item.state === 'closed') {
+                return ['Done', '已完成'];
+              }
+
+              if (isBlocked) {
+                return ['Blocked', '阻塞'];
+              }
+
+              if (eventName === 'issues') {
+                if (hasLabel('in progress') || hasLabel('in-progress') || (item.assignees && item.assignees.length > 0)) {
+                  return ['In Progress', '进行中'];
+                }
+                return ['To Do', '待办'];
+              }
+
+              if (item.draft) {
+                return ['In Progress', '待审核'];
+              }
+
+              return ['In Progress', '进行中'];
+            };
+
+            const findLabelMatch = (labels, pattern) => {
+              if (!labels || !labels.length) {
+                return null;
+              }
+
+              for (const label of labels) {
+                const name = String(label.name || '').toLowerCase();
+                const match = name.match(pattern);
+                if (match) {
+                  return match;
+                }
+              }
+              return null;
+            };
+
+            const inferPriority = (labels) => {
+              const match =
+                findLabelMatch(labels, /^p([0-3])$/) ||
+                findLabelMatch(labels, /^priority[: ]*p([0-3])/);
+
+              if (!match) {
+                return null;
+              }
+
+              return `P${match[1]}`;
+            };
+
+            const inferType = (labels) => {
+              const match = findLabelMatch(labels, /^(bug|feature|infra|docs|refactor|release)$/);
+              return match ? match[1].replace(/^./, (c) => c.toUpperCase()) : null;
+            };
+
+            const inferIteration = (item, labels) => {
+              const labelName = labels
+                .map((label) => String(label.name || ''))
+                .find((name) => /^sprint\s*[:\-]?\s*/i.test(name) || /^iteration\s*[:\-]?\s*/i.test(name));
+
+              if (labelName) {
+                return labelName
+                  .replace(/^sprint\s*[:\-]?\s*/i, '')
+                  .replace(/^iteration\s*[:\-]?\s*/i, '')
+                  .trim();
+              }
+
+              if (item.milestone && item.milestone.title) {
+                return item.milestone.title;
+              }
+
+              return null;
+            };
+
+            const inferEstimate = (item) => {
+              const source = [item.title || '', item.body || ''].join('\n');
+              const m = source.match(/(?:estimat|story\s*points|sp|size)\s*[:：]?\s*(\d+(?:\.\d+)?)/i);
+              if (!m) {
+                return null;
+              }
+              const value = Number.parseFloat(m[1]);
+              return Number.isFinite(value) ? value : null;
+            };
+
+            const inferBlockedReason = (labels, item) => {
+              const blocker = labels.find((label) => /blocked/i.test(label.name || ''));
+              if (blocker) {
+                return String(blocker.name).replace(/^blocked\s*[:：]?\s*/i, '').trim() || 'Blocked';
+              }
+              const bodyMatch = String(item.body || '').match(/阻塞原因\s*[:：]\s*([^\n]+)/i);
+              if (bodyMatch) {
+                return bodyMatch[1].trim();
+              }
+              return null;
+            };
+
+            const inferDueDate = (item) => {
+              if (item.milestone && item.milestone.due_on) {
+                return String(item.milestone.due_on).slice(0, 10);
+              }
+              const bodyMatch = String(item.body || '').match(/(?:due|deadline|到期|交付)\s*[:：]\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/i);
+              if (bodyMatch) {
+                return bodyMatch[1];
+              }
+              return null;
+            };
+
             const preflightQuery = `query($projectId: ID!) {
               node(id: $projectId) {
                 ... on ProjectV2 {
                   id
                   viewerCanUpdate
-                  fields(first: 20) {
+                  fields(first: 200) {
                     nodes {
                       ... on ProjectV2Field {
                         id
                         name
+                        dataType
+                      }
+                      ... on ProjectV2SingleSelectField {
+                        options(first: 100) {
+                          nodes {
+                            id
+                            name
+                          }
+                        }
                       }
                     }
                   }
@@ -62,28 +188,134 @@ jobs:
               return;
             }
 
-            if (!preflight.node.fields?.nodes?.some(field => field.id === statusFieldId)) {
-              core.setFailed(`Project status field ${statusFieldId} is not available or token lacks field permissions.`);
+            const findField = (aliases) => {
+              const aliasSet = new Set(aliases.map((a) => String(a).toLowerCase()));
+              for (const field of preflight.node.fields?.nodes || []) {
+                if (!field?.name) {
+                  continue;
+                }
+                if (aliasSet.has(String(field.name).toLowerCase())) {
+                  return field;
+                }
+              }
+              return null;
+            };
+
+            const normalizeOption = (value) => String(value || '').trim().toLowerCase();
+
+            const resolveOption = (field, value) => {
+              if (!field?.options?.nodes) {
+                return null;
+              }
+              const target = normalizeOption(value);
+              const direct = field.options.nodes.find((option) => normalizeOption(option.name) === target);
+              if (direct) {
+                return direct.id;
+              }
+              const numeric = field.options.nodes.find((option) => option.name === value);
+              return numeric ? numeric.id : null;
+            };
+
+            const statusField = findField(statusFieldNames);
+            if (!statusField) {
+              core.setFailed('Project status field was not found or is not accessible. Ensure there is a single-select field named "Status".');
               return;
             }
 
-            let contentId;
-            let targetStatusId;
+            const fieldsByAlias = {
+              priority: findField(fieldAliases.priority),
+              type: findField(fieldAliases.type),
+              iteration: findField(fieldAliases.iteration),
+              estimate: findField(fieldAliases.estimate),
+              blockedReason: findField(fieldAliases.blockedReason),
+              dueDate: findField(fieldAliases.dueDate),
+            };
 
-            if (eventName === 'issues') {
-              const issue = payload.issue;
-              contentId = issue && issue.node_id;
-              targetStatusId = issue.state === 'closed' ? optionDone : optionTodo;
-            } else if (eventName === 'pull_request') {
-              const pr = payload.pull_request;
-              contentId = pr && pr.node_id;
-              targetStatusId = (pr.merged || pr.state === 'closed') ? optionDone : optionInProgress;
-            } else {
+            const item = eventName === 'issues' ? payload.issue : payload.pull_request;
+            if (!item) {
               return;
             }
 
-            if (!contentId || !targetStatusId) {
-              core.warning('Missing contentId or targetStatusId.');
+            const labels = item.labels || [];
+            const statusCandidates = getStatusCandidates(item, labels.map((l) => String(l.name || '').toLowerCase()));
+
+            const updates = [];
+            const pushField = (field, value, kind, textKind = 'text') => {
+              if (!field || value == null || value === '') {
+                return;
+              }
+
+              if (kind === 'single_select') {
+                if (String(field.dataType) !== 'SINGLE_SELECT') {
+                  core.warning(`Skip single-select update for field ${field.name}; actual type is ${field.dataType}.`);
+                  return;
+                }
+                const optionId = resolveOption(field, value);
+                if (!optionId) {
+                  core.warning(`No matching option for ${field.name}: ${value}`);
+                  return;
+                }
+                updates.push({ fieldId: field.id, kind, optionId });
+                return;
+              }
+
+              if (kind === 'number') {
+                if (String(field.dataType) !== 'NUMBER') {
+                  core.warning(`Skip number update for field ${field.name}; actual type is ${field.dataType}.`);
+                  return;
+                }
+                const parsed = Number.parseFloat(value);
+                if (!Number.isFinite(parsed)) {
+                  return;
+                }
+                updates.push({ fieldId: field.id, kind, value: parsed });
+                return;
+              }
+
+              if (textKind === 'text') {
+                if (String(field.dataType) !== 'TEXT' && String(field.dataType) !== 'SINGLE_LINE_TEXT') {
+                  core.warning(`Skip text update for field ${field.name}; actual type is ${field.dataType}.`);
+                  return;
+                }
+                updates.push({ fieldId: field.id, kind: 'text', value: String(value).trim() });
+                return;
+              }
+
+              if (textKind === 'date') {
+                if (String(field.dataType) !== 'DATE') {
+                  core.warning(`Skip date update for field ${field.name}; actual type is ${field.dataType}.`);
+                  return;
+                }
+                updates.push({ fieldId: field.id, kind: 'date', value: String(value).trim() });
+              }
+            };
+
+            const statusValue = statusCandidates.find((candidate) => resolveOption(statusField, candidate));
+            if (statusValue) {
+              updates.push({ fieldId: statusField.id, kind: 'single_select', optionId: resolveOption(statusField, statusValue) });
+            }
+
+            const priority = inferPriority(labels);
+            pushField(fieldsByAlias.priority, priority, 'single_select');
+
+            const inferredType = inferType(labels);
+            pushField(fieldsByAlias.type, inferredType, 'single_select');
+
+            const iteration = inferIteration(item, labels);
+            pushField(fieldsByAlias.iteration, iteration, 'single_select');
+
+            const estimate = inferEstimate(item);
+            pushField(fieldsByAlias.estimate, estimate, 'number');
+
+            const blockedReason = inferBlockedReason(labels, item);
+            pushField(fieldsByAlias.blockedReason, blockedReason, 'text');
+
+            const dueDate = inferDueDate(item);
+            pushField(fieldsByAlias.dueDate, dueDate, 'date', 'date');
+
+            const contentId = item.node_id;
+            if (!contentId) {
+              core.warning('Missing node id, cannot sync to project.');
               return;
             }
 
@@ -109,11 +341,11 @@ jobs:
                 }
               }`;
 
-            const data = await gh.graphql(query, { projectId, after: cursor });
+              const data = await gh.graphql(query, { projectId, after: cursor });
               const project = data.node;
 
-              const found = project.items.nodes.find((item) => {
-                const content = item.content;
+              const found = project.items.nodes.find((entry) => {
+                const content = entry.content;
                 return content && content.id === contentId;
               });
 
@@ -146,20 +378,92 @@ jobs:
             };
 
             const finalItemId = await ensureProjectItem();
-            const updateMutation = `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $valueId: String!) {
-              updateProjectV2ItemFieldValue(input: {
-                projectId: $projectId,
-                itemId: $itemId,
-                fieldId: $fieldId,
-                value: { singleSelectOptionId: $valueId }
-              }) {
-                projectV2Item { id }
-              }
-            }`;
 
-            await gh.graphql(updateMutation, {
-              projectId,
-              itemId: finalItemId,
-              fieldId: statusFieldId,
-              valueId: targetStatusId,
-            });
+            const updateMutations = {
+              single_select: `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId,
+                  itemId: $itemId,
+                  fieldId: $fieldId,
+                  value: { singleSelectOptionId: $optionId }
+                }) { projectV2Item { id } }
+              }`,
+              number: `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: Float!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId,
+                  itemId: $itemId,
+                  fieldId: $fieldId,
+                  value: { number: $value }
+                }) { projectV2Item { id } }
+              }`,
+              text: `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId,
+                  itemId: $itemId,
+                  fieldId: $fieldId,
+                  value: { text: $value }
+                }) { projectV2Item { id } }
+              }`,
+              date: `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: Date!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId,
+                  itemId: $itemId,
+                  fieldId: $fieldId,
+                  value: { date: $value }
+                }) { projectV2Item { id } }
+              }`,
+            };
+
+            for (const update of updates) {
+              try {
+                if (update.kind === 'single_select') {
+                  await gh.graphql(updateMutations.single_select, {
+                    projectId,
+                    itemId: finalItemId,
+                    fieldId: update.fieldId,
+                    optionId: update.optionId,
+                  });
+                  continue;
+                }
+
+                if (update.kind === 'number') {
+                  await gh.graphql(updateMutations.number, {
+                    projectId,
+                    itemId: finalItemId,
+                    fieldId: update.fieldId,
+                    value: update.value,
+                  });
+                  continue;
+                }
+
+                if (update.kind === 'text') {
+                  await gh.graphql(updateMutations.text, {
+                    projectId,
+                    itemId: finalItemId,
+                    fieldId: update.fieldId,
+                    value: update.value,
+                  });
+                  continue;
+                }
+
+                if (update.kind === 'date') {
+                  await gh.graphql(updateMutations.date, {
+                    projectId,
+                    itemId: finalItemId,
+                    fieldId: update.fieldId,
+                    value: update.value,
+                  });
+                }
+              } catch (err) {
+                const fieldMessage = `Failed to sync field update (${update.fieldId})`;
+                if (update.fieldId === statusField.id) {
+                  core.error(`${fieldMessage}: ${err.message}`);
+                } else {
+                  core.warning(`${fieldMessage}: ${err.message}`);
+                }
+              }
+            }
+
+            if (updates.length === 0) {
+              core.info('No project field updates were generated for this event.');
+            }

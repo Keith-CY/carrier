@@ -8,14 +8,15 @@ cd "$repo_root"
 echo "Running end-to-end test suite..."
 
 if ! command -v carrier >/dev/null 2>&1; then
-  if [[ "${CI:-}" == "true" ]]; then
-    echo "Skipping E2E: carrier CLI is not available in CI PATH."
-    echo "If CLI is expected in CI, install/configure it before running this workflow."
-    exit 0
-  fi
-
   echo "Error: carrier CLI is not available in PATH."
   echo "Expected e2e command: carrier test e2e --report test-results/"
+
+  if [[ "${CI:-}" == "true" ]]; then
+    echo "CI mode: failing fast to avoid silently skipping end-to-end validation."
+    echo "Install/configure carrier CLI in CI before running this workflow."
+    exit 1
+  fi
+
   echo "Install/configure the carrier CLI before running e2e checks locally."
   exit 1
 fi
