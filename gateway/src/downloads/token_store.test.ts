@@ -45,6 +45,34 @@ describe("DownloadTokenStore", () => {
     expect(store.consume(tok.token)).toBeNull();
   });
 
+  test("cleanup() removes expired tokens", () => {
+    let time = new Date("2026-01-01T00:00:00Z");
+    const store = new DownloadTokenStore(() => time);
+
+    store.issue("a.txt", 60, false);
+    store.issue("b.txt", 600, false);
+
+    // Advance past first token's expiry but not second
+    time = new Date("2026-01-01T00:02:00Z");
+
+    const removed = store.cleanup();
+    expect(removed).toBe(1);
+    expect(store.size).toBe(1);
+  });
+
+  test("cleanup() removes consumed single-use tokens", () => {
+    const store = new DownloadTokenStore(() => new Date("2026-01-01T00:00:00Z"));
+
+    const tok = store.issue("file.txt", 300, true);
+    store.issue("other.txt", 300, true); // not consumed
+
+    store.consume(tok.token);
+
+    const removed = store.cleanup();
+    expect(removed).toBe(1);
+    expect(store.size).toBe(1);
+  });
+
   test("toDownloadURL() generates correct path format", () => {
     const store = new DownloadTokenStore();
     const tok = store.issue("some/path/artifact.zip");
