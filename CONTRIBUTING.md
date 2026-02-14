@@ -142,6 +142,16 @@ bun test
 - Bun: see `gateway/package.json` or CI workflow (`bun-version`)
 
 These are the same commands CI runs. Fix failures locally before pushing updates.
+## Stale Follow-Up Detection
+
+To find stale `[review-followup]` issues whose referenced PR is already merged:
+
+```bash
+./scripts/stale-followups.sh          # default: older than 7 days
+./scripts/stale-followups.sh --days 14 # custom threshold
+```
+
+The script is report-only and does not modify any issues.
 
 ## Review Convention (Non-Blocking Suggestions)
 
