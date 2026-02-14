@@ -26,6 +26,11 @@ Phase 1 scaffold for the Agent Installation Platform.
 - Base Agent unresolved flow can create a remote diagnosis handoff placeholder with user consent.
 - Handoff records include consent flag, status, and diagnose artifact reference.
 
+## M4 gateway routing scaffold status
+- Gateway command layer now supports `/diagnose-consent <agent_id> <yes|no>`.
+- `/diagnose-consent` routes to a daemon client placeholder that matches `CreateRemoteDiagnosisHandoff`.
+- Gateway forwards `provider`, `chat_id`, and `request_id` as actor/request context for handoff creation.
+
 ## Development flow
 - Start work from `origin/main` using a new `codex/*` branch and worktree.
 - Submit all feature updates via Pull Request.
