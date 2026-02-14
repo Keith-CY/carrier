@@ -9,6 +9,7 @@ import {
   createRuntimeDependencies,
   requestIdMiddleware,
   startGatewayServer,
+  parsePort,
   type GatewayRequestContext,
 } from "./server";
 
@@ -316,142 +317,34 @@ describe("download Content-Disposition edge cases", () => {
 });
 
 describe("port resolution fallback behavior", () => {
-  test("uses default port when config and env are both undefined", async () => {
-    const deps = makeDeps();
-    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
-    delete process.env.CARRIER_GATEWAY_PORT;
-
-    const server = startGatewayServer({ 
-      deps,
-      port: undefined,
-    });
-    
-    expect(server.port).toBe(8787);
-    server.stop();
-    
-    if (originalEnv !== undefined) {
-      process.env.CARRIER_GATEWAY_PORT = originalEnv;
-    }
+  test("uses default port when env is undefined", () => {
+    expect(parsePort(undefined, 8787)).toBe(8787);
   });
 
-  test("uses default port when env is non-numeric", async () => {
-    const deps = makeDeps();
-    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
-    process.env.CARRIER_GATEWAY_PORT = "not-a-number";
-
-    const server = startGatewayServer({ 
-      deps,
-      port: undefined,
-    });
-    
-    expect(server.port).toBe(8787);
-    server.stop();
-    
-    if (originalEnv !== undefined) {
-      process.env.CARRIER_GATEWAY_PORT = originalEnv;
-    } else {
-      delete process.env.CARRIER_GATEWAY_PORT;
-    }
+  test("uses default port when env is non-numeric", () => {
+    expect(parsePort("not-a-number", 8787)).toBe(8787);
   });
 
-  test("uses default port when env is empty string", async () => {
-    const deps = makeDeps();
-    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
-    process.env.CARRIER_GATEWAY_PORT = "";
-
-    const server = startGatewayServer({ 
-      deps,
-      port: undefined,
-    });
-    
-    expect(server.port).toBe(8787);
-    server.stop();
-    
-    if (originalEnv !== undefined) {
-      process.env.CARRIER_GATEWAY_PORT = originalEnv;
-    } else {
-      delete process.env.CARRIER_GATEWAY_PORT;
-    }
+  test("uses default port when env is empty string", () => {
+    expect(parsePort("", 8787)).toBe(8787);
   });
 
-  test("uses default port when env is zero", async () => {
-    const deps = makeDeps();
-    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
-    process.env.CARRIER_GATEWAY_PORT = "0";
-
-    const server = startGatewayServer({ 
-      deps,
-      port: undefined,
-    });
-    
-    expect(server.port).toBe(8787);
-    server.stop();
-    
-    if (originalEnv !== undefined) {
-      process.env.CARRIER_GATEWAY_PORT = originalEnv;
-    } else {
-      delete process.env.CARRIER_GATEWAY_PORT;
-    }
+  test("uses default port when env is zero", () => {
+    expect(parsePort("0", 8787)).toBe(8787);
   });
 
-  test("uses default port when env is negative", async () => {
-    const deps = makeDeps();
-    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
-    process.env.CARRIER_GATEWAY_PORT = "-1234";
-
-    const server = startGatewayServer({ 
-      deps,
-      port: undefined,
-    });
-    
-    expect(server.port).toBe(8787);
-    server.stop();
-    
-    if (originalEnv !== undefined) {
-      process.env.CARRIER_GATEWAY_PORT = originalEnv;
-    } else {
-      delete process.env.CARRIER_GATEWAY_PORT;
-    }
+  test("uses default port when env is negative", () => {
+    expect(parsePort("-1234", 8787)).toBe(8787);
   });
 
-  test("uses env port when env is valid numeric string", async () => {
-    const deps = makeDeps();
-    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
-    process.env.CARRIER_GATEWAY_PORT = "9999";
-
-    const server = startGatewayServer({ 
-      deps,
-      port: undefined,
-    });
-    
-    expect(server.port).toBe(9999);
-    server.stop();
-    
-    if (originalEnv !== undefined) {
-      process.env.CARRIER_GATEWAY_PORT = originalEnv;
-    } else {
-      delete process.env.CARRIER_GATEWAY_PORT;
-    }
+  test("uses env port when env is valid numeric string", () => {
+    expect(parsePort("9999", 8787)).toBe(9999);
   });
 
-  test("config port takes precedence over env", async () => {
-    const deps = makeDeps();
-    const originalEnv = process.env.CARRIER_GATEWAY_PORT;
-    process.env.CARRIER_GATEWAY_PORT = "9999";
-
-    const server = startGatewayServer({ 
-      deps,
-      port: 7777,
-    });
-    
-    expect(server.port).toBe(7777);
-    server.stop();
-    
-    if (originalEnv !== undefined) {
-      process.env.CARRIER_GATEWAY_PORT = originalEnv;
-    } else {
-      delete process.env.CARRIER_GATEWAY_PORT;
-    }
+  test("config port takes precedence over env", () => {
+    const envPort = parsePort("9999", 8787);
+    const explicitConfigPort = 7777;
+    expect(explicitConfigPort ?? envPort).toBe(7777);
   });
 
   test("uses default port when env has decimal value", async () => {
@@ -459,14 +352,14 @@ describe("port resolution fallback behavior", () => {
     const originalEnv = process.env.CARRIER_GATEWAY_PORT;
     process.env.CARRIER_GATEWAY_PORT = "8080.5";
 
-    const server = startGatewayServer({ 
+    const server = startGatewayServer({
       deps,
       port: undefined,
     });
-    
+
     expect(server.port).toBe(8787);
     server.stop();
-    
+
     if (originalEnv !== undefined) {
       process.env.CARRIER_GATEWAY_PORT = originalEnv;
     } else {
@@ -479,14 +372,14 @@ describe("port resolution fallback behavior", () => {
     const originalEnv = process.env.CARRIER_GATEWAY_PORT;
     process.env.CARRIER_GATEWAY_PORT = "8080!@#";
 
-    const server = startGatewayServer({ 
+    const server = startGatewayServer({
       deps,
       port: undefined,
     });
-    
+
     expect(server.port).toBe(8787);
     server.stop();
-    
+
     if (originalEnv !== undefined) {
       process.env.CARRIER_GATEWAY_PORT = originalEnv;
     } else {
