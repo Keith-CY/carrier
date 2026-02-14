@@ -196,6 +196,50 @@ func TestUpgradeEndpointReturnsVersionAndRollbackMetadata(t *testing.T) {
 	}
 }
 
+func TestAgentCompatibilityEndpointsInstallStartStatusLogsDiagnose(t *testing.T) {
+	svc := newServiceForAPITest(t)
+	handler := NewServer(svc).Handler()
+
+	install := doJSONRequest(t, handler, http.MethodPost, "/api/v1/agents/openclaw/install", nil)
+	if install.Code != http.StatusOK {
+		t.Fatalf("install status = %d, want 200; body=%s", install.Code, install.Body.String())
+	}
+
+	start := doJSONRequest(t, handler, http.MethodPost, "/api/v1/agents/openclaw/start", nil)
+	if start.Code != http.StatusOK {
+		t.Fatalf("start status = %d, want 200; body=%s", start.Code, start.Body.String())
+	}
+
+	statusOne := doJSONRequest(t, handler, http.MethodGet, "/api/v1/agents/openclaw/status", nil)
+	if statusOne.Code != http.StatusOK {
+		t.Fatalf("status(one) = %d, want 200; body=%s", statusOne.Code, statusOne.Body.String())
+	}
+
+	statusAll := doJSONRequest(t, handler, http.MethodGet, "/api/v1/agents/status", nil)
+	if statusAll.Code != http.StatusOK {
+		t.Fatalf("status(all) = %d, want 200; body=%s", statusAll.Code, statusAll.Body.String())
+	}
+
+	logs := doJSONRequest(t, handler, http.MethodGet, "/api/v1/agents/openclaw/logs?tail=20", nil)
+	if logs.Code != http.StatusOK {
+		t.Fatalf("logs status = %d, want 200; body=%s", logs.Code, logs.Body.String())
+	}
+
+	diagnose := doJSONRequest(t, handler, http.MethodPost, "/api/v1/agents/openclaw/diagnose", nil)
+	if diagnose.Code != http.StatusOK {
+		t.Fatalf("diagnose status = %d, want 200; body=%s", diagnose.Code, diagnose.Body.String())
+	}
+}
+
+func TestParseAgentActionPathRejectsEncodedTraversal(t *testing.T) {
+	if _, _, ok := parseAgentActionPath("/api/v1/agents/%2E%2E/start"); ok {
+		t.Fatal("expected encoded traversal path to be rejected")
+	}
+	if _, _, ok := parseAgentActionPath("/api/v1/agents/a%2Fb/start"); ok {
+		t.Fatal("expected encoded slash path to be rejected")
+	}
+}
+
 func TestVerifyConsumePairCodeSuccessAndInvalid(t *testing.T) {
 	clock := &fakeClock{now: time.Date(2026, 2, 14, 17, 0, 0, 0, time.UTC)}
 	pairing := NewPairingCodeStore(clock.Now)

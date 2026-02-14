@@ -6,11 +6,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"carrier/daemon/internal/lifecycle"
 )
+
+var validAgentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 
 type Server struct {
 	lifecycle *lifecycle.Service
@@ -44,6 +49,7 @@ func (s *Server) Handler() *http.ServeMux {
 	mux.HandleFunc("/api/v1/agents/", s.handleAgentAction)
 	mux.HandleFunc("/api/v1/pairing/codes", s.handleIssuePairCode)
 	mux.HandleFunc("/api/v1/pairing/verify-consume", s.handleVerifyConsumePairCode)
+	mux.HandleFunc("/api/v1/diagnosis/handoffs", s.handleCreateDiagnosisHandoff)
 	return mux
 }
 
@@ -93,7 +99,28 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
-	if !allowMethod(w, r, http.MethodPost) {
+	if r.URL.Path == "/api/v1/agents/status" {
+		if !allowMethod(w, r, http.MethodGet) {
+			return
+		}
+		states := s.lifecycle.ListAgents()
+		resp := struct {
+			Statuses []daemonAgent `json:"statuses"`
+		}{Statuses: make([]daemonAgent, 0, len(states))}
+		for _, state := range states {
+			resp.Statuses = append(resp.Statuses, daemonAgent{
+				ID:                   state.ID,
+				Name:                 s.lifecycle.AgentName(state.ID),
+				Version:              state.Version,
+				Installed:            state.Install == lifecycle.InstallStateInstalled,
+				RuntimeState:         string(state.Runtime),
+				Health:               string(state.Health),
+				NeedsRemoteDiagnosis: state.NeedsRemoteDiagnosis,
+				LastError:            state.LastError,
+				UpdatedAt:            state.UpdatedAt.UTC().Format(time.RFC3339Nano),
+			})
+		}
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
@@ -104,17 +131,91 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch action {
+	case "install":
+		if !allowMethod(w, r, http.MethodPost) {
+			return
+		}
+		if err := s.lifecycle.Install(r.Context(), agentID); err != nil {
+			status, code, message := mapLifecycleError(err)
+			writeError(w, status, code, message)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"agentId": agentID, "installed": true})
+	case "start":
+		if !allowMethod(w, r, http.MethodPost) {
+			return
+		}
+		if err := s.lifecycle.Start(r.Context(), agentID); err != nil {
+			status, code, message := mapLifecycleError(err)
+			writeError(w, status, code, message)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"agentId": agentID, "started": true})
 	case "stop":
+		if !allowMethod(w, r, http.MethodPost) {
+			return
+		}
 		if err := s.lifecycle.Stop(r.Context(), agentID); err != nil {
 			status, code, message := mapLifecycleError(err)
 			writeError(w, status, code, message)
 			return
 		}
+		writeJSON(w, http.StatusOK, map[string]any{"agentId": agentID, "stopped": true})
+	case "status":
+		if !allowMethod(w, r, http.MethodGet) {
+			return
+		}
+		state, err := s.lifecycle.Status(agentID)
+		if err != nil {
+			status, code, message := mapLifecycleError(err)
+			writeError(w, status, code, message)
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"agentId": agentID,
-			"stopped": true,
+			"statuses": []daemonAgent{{
+				ID:                   state.ID,
+				Name:                 s.lifecycle.AgentName(state.ID),
+				Version:              state.Version,
+				Installed:            state.Install == lifecycle.InstallStateInstalled,
+				RuntimeState:         string(state.Runtime),
+				Health:               string(state.Health),
+				NeedsRemoteDiagnosis: state.NeedsRemoteDiagnosis,
+				LastError:            state.LastError,
+				UpdatedAt:            state.UpdatedAt.UTC().Format(time.RFC3339Nano),
+			}},
 		})
+	case "logs":
+		if !allowMethod(w, r, http.MethodGet) {
+			return
+		}
+		tail := 200
+		if raw := strings.TrimSpace(r.URL.Query().Get("tail")); raw != "" {
+			if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+				tail = parsed
+			}
+		}
+		lines, err := s.lifecycle.Logs(agentID, tail)
+		if err != nil {
+			status, code, message := mapLifecycleError(err)
+			writeError(w, status, code, message)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"lines": lines, "truncated": false})
+	case "diagnose":
+		if !allowMethod(w, r, http.MethodPost) {
+			return
+		}
+		artifactRef, err := s.lifecycle.Diagnose(agentID)
+		if err != nil {
+			status, code, message := mapLifecycleError(err)
+			writeError(w, status, code, message)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"artifactRef": artifactRef})
 	case "upgrade":
+		if !allowMethod(w, r, http.MethodPost) {
+			return
+		}
 		result, err := s.lifecycle.Upgrade(r.Context(), agentID)
 		if err != nil {
 			status, code, message := mapLifecycleError(err)
@@ -212,6 +313,49 @@ func (s *Server) handleVerifyConsumePairCode(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+type createDiagnosisHandoffRequest struct {
+	AgentID   string `json:"agentId"`
+	Consent   bool   `json:"consent"`
+	Actor     string `json:"actor"`
+	RequestID string `json:"requestId"`
+}
+
+func (s *Server) handleCreateDiagnosisHandoff(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodPost) {
+		return
+	}
+	if r.URL.Path != "/api/v1/diagnosis/handoffs" {
+		http.NotFound(w, r)
+		return
+	}
+
+	var req createDiagnosisHandoffRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "E_USAGE", err.Error())
+		return
+	}
+	if strings.TrimSpace(req.AgentID) == "" {
+		writeError(w, http.StatusBadRequest, "E_USAGE", "agentId is required")
+		return
+	}
+
+	handoff, err := s.lifecycle.CreateRemoteDiagnosisHandoff(req.AgentID, req.Consent, req.Actor, req.RequestID)
+	if err != nil {
+		status, code, message := mapLifecycleError(err)
+		writeError(w, status, code, message)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":          handoff.ID,
+		"agentId":     handoff.AgentID,
+		"consent":     handoff.Consent,
+		"artifactRef": handoff.ArtifactRef,
+		"status":      handoff.Status,
+		"createdAt":   handoff.CreatedAt.UTC().Format(time.RFC3339Nano),
+	})
+}
+
 func parseAgentActionPath(path string) (agentID string, action string, ok bool) {
 	const prefix = "/api/v1/agents/"
 	if !strings.HasPrefix(path, prefix) {
@@ -225,10 +369,23 @@ func parseAgentActionPath(path string) (agentID string, action string, ok bool) 
 	if len(parts) != 2 {
 		return "", "", false
 	}
-	if strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+	rawAgentID := strings.TrimSpace(parts[0])
+	action = strings.TrimSpace(parts[1])
+	if rawAgentID == "" || action == "" {
 		return "", "", false
 	}
-	return parts[0], parts[1], true
+	decoded, err := url.PathUnescape(rawAgentID)
+	if err != nil {
+		return "", "", false
+	}
+	decoded = strings.TrimSpace(decoded)
+	if decoded == "" || strings.Contains(decoded, "/") || strings.Contains(decoded, "\\") || strings.Contains(decoded, "..") {
+		return "", "", false
+	}
+	if !validAgentIDPattern.MatchString(decoded) {
+		return "", "", false
+	}
+	return decoded, action, true
 }
 
 func allowMethod(w http.ResponseWriter, r *http.Request, method string) bool {

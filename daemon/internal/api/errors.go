@@ -40,6 +40,8 @@ func mapLifecycleError(err error) (status int, code, message string) {
 		return http.StatusInternalServerError, "E_UPGRADE_FAILED", err.Error()
 	case errors.Is(err, lifecycle.ErrUpgradeStrategyUnsupported):
 		return http.StatusBadRequest, "E_UPGRADE_STRATEGY_UNSUPPORTED", err.Error()
+	case errors.Is(err, lifecycle.ErrRemoteDiagnosisNotNeeded):
+		return http.StatusConflict, "E_REMOTE_DIAG_NOT_NEEDED", err.Error()
 	default:
 		return http.StatusInternalServerError, "E_INTERNAL", err.Error()
 	}
