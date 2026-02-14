@@ -25,10 +25,9 @@ jobs:
             const prUrl = pr.html_url;
             const prTitle = pr.title;
 
-            const nbsRegex = /^\s*NBS:\s*(.+)\s*$/gmi;
-
             function extractNbsLines(text, source) {
               if (!text) return [];
+              const nbsRegex = /^\s*NBS:\s*(.+)\s*$/gmi;
               const out = [];
               let match;
               while ((match = nbsRegex.exec(text)) !== null) {
