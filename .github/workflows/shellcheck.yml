@@ -3,7 +3,7 @@ name: Shell Script Lint
 on:
   pull_request:
     paths:
-      - 'scripts/**/*.sh'
+      - '**/*.sh'
       - '.github/workflows/shellcheck.yml'
 
 permissions:
@@ -18,12 +18,12 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
-      - name: Run shellcheck on scripts
+      - name: Run shellcheck on tracked shell scripts
+        shell: bash
         run: |
-          shopt -s globstar nullglob
-          files=(scripts/**/*.sh)
+          mapfile -t files < <(git ls-files '*.sh')
           if [[ ${#files[@]} -eq 0 ]]; then
-            echo "No shell scripts found."
+            echo "No tracked shell scripts found."
             exit 0
           fi
           echo "Checking ${#files[@]} file(s)..."
