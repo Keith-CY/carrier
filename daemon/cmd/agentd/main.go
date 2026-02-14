@@ -287,7 +287,7 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v interface{}) bool {
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func writeJSONError(w http.ResponseWriter, status int, message string) {
