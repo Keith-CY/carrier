@@ -271,3 +271,115 @@ Discord 入口: <填写服务器/频道或私聊入口>
 PAIR_CODE 获取方式: <填写由谁提供、有效期多久>
 支持联系人: <填写姓名与联系方式>
 ```
+
+## Three-Platform Bot Management (Detailed Step-by-Step)
+
+This section is for users who operate only through chat apps.  
+Follow the steps exactly. No internal system knowledge is required.
+
+### Prerequisites (all required)
+
+Before starting, ask your project administrator for:
+
+1. Telegram bot entry (username or invite link)
+2. Discord bot entry (server + channel, or DM entry)
+3. Feishu bot entry (chat entry)
+4. One-time pairing code `PAIR_CODE` (example: `AB12CD34`)
+
+If any of the items above is missing, this flow cannot be completed.
+
+### Fixed rules (same for all platforms)
+
+1. Send commands to a bot account, not to a human account
+2. On each platform, run pairing first: `/pair <PAIR_CODE>`
+3. Only after pairing succeeds, run `/agents`, `/install openclaw`, and other commands
+4. If pairing code is invalid or expired, request a new `PAIR_CODE` from admin
+
+### Telegram (step by step)
+
+1. Open Telegram
+2. Search for the bot account provided by admin
+3. Open the bot chat window
+4. Send: `/pair <PAIR_CODE>`
+5. Wait for reply and confirm it includes `paired`
+6. Send: `/agents`
+7. Confirm response includes `openclaw`
+8. Send in order:
+   - `/install openclaw`
+   - `/start openclaw`
+   - `/status openclaw`
+9. Confirm status response includes `healthy`
+
+### Discord (step by step)
+
+1. Open Discord
+2. Enter the server/channel provided by admin (or bot DM)
+3. Confirm your message target is the bot account
+4. Send: `/pair <PAIR_CODE>`
+5. Wait for reply and confirm it includes `paired`
+6. Send: `/agents`
+7. Confirm response includes `openclaw`
+8. Send in order:
+   - `/install openclaw`
+   - `/start openclaw`
+   - `/status openclaw`
+9. Confirm status response includes `healthy`
+
+### Feishu (step by step)
+
+1. Open Feishu
+2. Enter the bot chat provided by admin
+3. Confirm this is a bot chat, not a human chat
+4. Send: `/pair <PAIR_CODE>`
+5. Wait for reply and confirm it includes `paired`
+6. Send: `/agents`
+7. Confirm response includes `openclaw`
+8. Send in order:
+   - `/install openclaw`
+   - `/start openclaw`
+   - `/status openclaw`
+9. Confirm status response includes `healthy`
+
+### Common commands (copy-paste)
+
+```text
+/pair <PAIR_CODE>
+/agents
+/install openclaw
+/start openclaw
+/status openclaw
+/logs openclaw 200
+/diagnose openclaw
+/stop openclaw
+```
+
+### Acceptance criteria (all 3 platforms)
+
+Configuration is successful only when all conditions are met:
+
+1. In Telegram, `/status openclaw` returns `healthy`
+2. In Discord, `/status openclaw` returns `healthy`
+3. In Feishu, `/status openclaw` returns `healthy`
+
+### Error handling (match exact message)
+
+1. `pairing code is invalid or expired`
+   - Action: pairing code is wrong or expired; request a new code and run `/pair <PAIR_CODE>` again
+2. `chat is not paired; run /pair <code> first`
+   - Action: current chat is not paired; run `/pair <PAIR_CODE>` first
+3. `E_NOT_INSTALLED`
+   - Action: run `/install openclaw` first, then run `/start openclaw`
+4. `E_ALREADY_RUNNING`
+   - Action: bot is already running; run `/status openclaw` directly
+5. No reply at all
+   - Action: usually wrong entry (not a bot account) or bot backend not connected; contact admin
+
+### Admin info template (recommended)
+
+```text
+Telegram Bot: <username or invite link>
+Discord Entry: <server/channel or DM entry>
+Feishu Entry: <bot chat entry>
+PAIR_CODE Process: <who provides it and expiration policy>
+Support Contact: <name and contact method>
+```
