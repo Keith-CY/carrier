@@ -18,6 +18,8 @@ import (
 	"carrier/daemon/internal/config"
 	"carrier/daemon/internal/lifecycle"
 	"carrier/daemon/internal/logging"
+
+	"net"
 )
 
 const shutdownTimeout = 30 * time.Second
@@ -57,12 +59,24 @@ func main() {
 		fmt.Printf("- %s (%s): %s\n", entry.Name, entry.ID, entry.Status)
 	}
 
+	// Validate security: refuse non-loopback binding without an API token.
+	if cfg.Server.APIToken == "" && !isLoopback(cfg.Server.Host) {
+		log.Fatalf("CARRIER_SERVER_API_TOKEN must be set when listening on non-loopback address %q", cfg.Server.Host)
+	}
+	if cfg.Server.APIToken == "" {
+		logger.Info("no API token configured; binding to loopback only")
+	}
+
 	// Build HTTP server
 	mux := buildHTTPMux(svc)
+	var handler http.Handler = mux
+	if cfg.Server.APIToken != "" {
+		handler = bearerAuthMiddleware(cfg.Server.APIToken, mux)
+	}
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	httpServer := &http.Server{
 		Addr:    addr,
-		Handler: mux,
+		Handler: handler,
 	}
 
 	go func() {
@@ -318,4 +332,28 @@ func stopAllAgents(svc *lifecycle.Service) error {
 		}
 	}
 	return firstErr
+}
+
+// bearerAuthMiddleware requires a valid Bearer token for /api/* routes.
+// Health-check endpoints (/healthz, /readyz) are exempt.
+func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			auth := r.Header.Get("Authorization")
+			if auth != "Bearer "+token {
+				writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isLoopback returns true when the host string resolves to a loopback address.
+func isLoopback(host string) bool {
+	if host == "" || host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
