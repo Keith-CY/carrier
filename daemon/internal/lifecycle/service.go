@@ -398,9 +398,15 @@ func (s *Service) Upgrade(agentID string) error {
 
 	s.mu.Lock()
 	state = s.states[agentID]
+	state.Runtime = RuntimeStateStopped
+	state.Health = HealthStateUnknown
 	state.LastError = ""
+	state.LastTriageSummary = ""
+	state.NeedsRemoteDiagnosis = false
 	state.UpdatedAt = s.now()
 	s.states[agentID] = state
+	s.restarts[agentID] = nil
+	delete(s.cooldowns, agentID)
 	s.mu.Unlock()
 
 	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_success backup=%q", backupPath))

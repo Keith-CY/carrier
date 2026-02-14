@@ -426,6 +426,62 @@ func TestUpgradeRejectsWhenAgentRunning(t *testing.T) {
 	}
 }
 
+func TestUpgradeResetsCrashLoopState(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{results: map[string]runResult{
+		"start-openclaw": {err: errors.New("boom")},
+	}}
+	checker := &fakeChecker{}
+	svc, clock := newServiceForTestWithClock(t, runner, checker)
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	// Trigger crash-loop
+	for i := 0; i < defaultCrashLoopThreshold; i++ {
+		_ = svc.Start("openclaw")
+	}
+
+	status, _ := svc.Status("openclaw")
+	if status.Runtime != RuntimeStateCrashing {
+		t.Fatalf("expected crashing, got %s", status.Runtime)
+	}
+
+	// Verify blocked by cooldown
+	blockedErr := svc.Start("openclaw")
+	if !errors.Is(blockedErr, ErrCrashLoop) {
+		t.Fatalf("expected ErrCrashLoop, got %v", blockedErr)
+	}
+
+	// Stop and upgrade should reset crash-loop state
+	clock.Advance(defaultCrashLoopCooldown + time.Second)
+	// Force state to stopped for upgrade
+	svc.Stop("openclaw")
+
+	runner.results["upgrade-openclaw"] = runResult{result: commandexec.Result{ExitCode: 0}}
+	if err := svc.Upgrade("openclaw"); err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+
+	status, _ = svc.Status("openclaw")
+	if status.Runtime != RuntimeStateStopped {
+		t.Fatalf("expected stopped after upgrade, got %s", status.Runtime)
+	}
+	if status.Health != HealthStateUnknown {
+		t.Fatalf("expected unknown health after upgrade, got %s", status.Health)
+	}
+	if status.LastError != "" {
+		t.Fatalf("expected empty LastError after upgrade, got %q", status.LastError)
+	}
+
+	// Verify can start without crash-loop blocking
+	runner.results["start-openclaw"] = runResult{result: commandexec.Result{ExitCode: 0}}
+	if err := svc.Start("openclaw"); err != nil {
+		t.Fatalf("expected start success after upgrade reset, got %v", err)
+	}
+}
+
 func TestUpgradeCreatesBackupAndPreservesMemoryAttachments(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	runner := &fakeRunner{}
