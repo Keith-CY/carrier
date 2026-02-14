@@ -11,19 +11,19 @@
   "runtime": {
     "type": "local_binary",
     "install": {
-      "command": "bash -c 'ARCH=$(uname -m) && BINARY=\"openclaw-v1.0.0-$(uname -s | tr \"[:upper:]\" \"[:lower:]\")-${ARCH}\" && TMPDIR=$(mktemp -d) && cd \"$TMPDIR\" && curl -fsSL -O \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/${BINARY}\" && curl -fsSL -O \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/${BINARY}.sha256\" && sha256sum -c \"${BINARY}.sha256\" && sudo install -m 755 \"${BINARY}\" /usr/local/bin/openclaw && cd - && rm -rf \"$TMPDIR\"'",
+      "command": "OPENCLAW_VERSION=1.0.0 sh ./catalog/scripts/install-openclaw.sh",
       "platforms": {
-        "linux": "bash -c 'ARCH=$(uname -m) && BINARY=\"openclaw-v1.0.0-linux-${ARCH}\" && TMPDIR=$(mktemp -d) && cd \"$TMPDIR\" && curl -fsSL -O \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/${BINARY}\" && curl -fsSL -O \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/${BINARY}.sha256\" && sha256sum -c \"${BINARY}.sha256\" && sudo install -m 755 \"${BINARY}\" /usr/local/bin/openclaw && cd - && rm -rf \"$TMPDIR\"'",
-        "darwin": "bash -c 'ARCH=$(uname -m) && BINARY=\"openclaw-v1.0.0-darwin-${ARCH}\" && TMPDIR=$(mktemp -d) && cd \"$TMPDIR\" && curl -fsSL -O \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/${BINARY}\" && curl -fsSL -O \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/${BINARY}.sha256\" && shasum -a 256 -c \"${BINARY}.sha256\" && sudo install -m 755 \"${BINARY}\" /usr/local/bin/openclaw && cd - && rm -rf \"$TMPDIR\"'",
-        "windows": "npm install -g openclaw"
+        "linux": "OPENCLAW_VERSION=1.0.0 sh ./catalog/scripts/install-openclaw.sh",
+        "darwin": "OPENCLAW_VERSION=1.0.0 sh ./catalog/scripts/install-openclaw.sh",
+        "windows": "npm install -g openclaw@1.0.0"
       }
     },
     "upgrade": {
-      "command": "bash -c 'ARCH=$(uname -m) && BINARY=\"openclaw-v1.0.0-$(uname -s | tr \"[:upper:]\" \"[:lower:]\")-${ARCH}\" && TMPDIR=$(mktemp -d) && cd \"$TMPDIR\" && curl -fsSL -O \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/${BINARY}\" && curl -fsSL -O \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/${BINARY}.sha256\" && sha256sum -c \"${BINARY}.sha256\" && sudo install -m 755 \"${BINARY}\" /usr/local/bin/openclaw && cd - && rm -rf \"$TMPDIR\"'",
+      "command": "OPENCLAW_VERSION=1.0.0 sh ./catalog/scripts/install-openclaw.sh",
       "platforms": {
-        "linux": "bash -c 'ARCH=$(uname -m) && BINARY=\"openclaw-v1.0.0-linux-${ARCH}\" && TMPDIR=$(mktemp -d) && cd \"$TMPDIR\" && curl -fsSL -O \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/${BINARY}\" && curl -fsSL -O \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/${BINARY}.sha256\" && sha256sum -c \"${BINARY}.sha256\" && sudo install -m 755 \"${BINARY}\" /usr/local/bin/openclaw && cd - && rm -rf \"$TMPDIR\"'",
-        "darwin": "bash -c 'ARCH=$(uname -m) && BINARY=\"openclaw-v1.0.0-darwin-${ARCH}\" && TMPDIR=$(mktemp -d) && cd \"$TMPDIR\" && curl -fsSL -O \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/${BINARY}\" && curl -fsSL -O \"https://github.com/Keith-CY/carrier/releases/download/v1.0.0/${BINARY}.sha256\" && shasum -a 256 -c \"${BINARY}.sha256\" && sudo install -m 755 \"${BINARY}\" /usr/local/bin/openclaw && cd - && rm -rf \"$TMPDIR\"'",
-        "windows": "npm update -g openclaw"
+        "linux": "OPENCLAW_VERSION=1.0.0 sh ./catalog/scripts/install-openclaw.sh",
+        "darwin": "OPENCLAW_VERSION=1.0.0 sh ./catalog/scripts/install-openclaw.sh",
+        "windows": "npm update -g openclaw@1.0.0"
       }
     },
     "start": {
