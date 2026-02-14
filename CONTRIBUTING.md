@@ -296,6 +296,14 @@ To find stale `[review-followup]` issues whose referenced PR is already merged:
 
 The script is report-only and does not modify any issues.
 
+When automation behavior or script flags change, include at least one concrete example in docs/changelog so future contributors can discover the new behavior quickly.
+
+Example (`CHANGELOG.md` under `CI` or `Docs`):
+
+```markdown
+- **Follow-up duplicate detector** — add report-only duplicate detection for review-followup automation and document expected output format ([#363](https://github.com/Keith-CY/carrier/pull/363))
+```
+
 ## Changelog Maintenance
 
 This project maintains a [`CHANGELOG.md`](./CHANGELOG.md) following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
