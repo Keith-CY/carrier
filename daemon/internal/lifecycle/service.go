@@ -70,6 +70,14 @@ func WithIDGenerator(gen func(prefix string) string) Option {
 	}
 }
 
+func WithHandoffRetention(ttl time.Duration) Option {
+	return func(s *Service) {
+		if ttl > 0 {
+			s.handoffTTL = ttl
+		}
+	}
+}
+
 type Service struct {
 	mu          sync.RWMutex
 	states      map[string]AgentState
@@ -82,6 +90,7 @@ type Service struct {
 	runner      commandexec.Runner
 	diagnoseDir string
 	logLimit    int
+	handoffTTL  time.Duration
 	now         func() time.Time
 	idCounter   uint64
 	idGenerator func(prefix string) string
@@ -103,6 +112,7 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		runner:      commandexec.NewShellRunner(),
 		diagnoseDir: filepath.Join(os.TempDir(), "agentd-diagnose"),
 		logLimit:    1000,
+		handoffTTL:  24 * time.Hour,
 		now:         time.Now,
 	}
 	svc.idGenerator = func(prefix string) string {
@@ -327,6 +337,25 @@ func (s *Service) DiagnosisHandoffs() []DiagnosisHandoff {
 		return out[i].CreatedAt.Before(out[j].CreatedAt)
 	})
 	return out
+}
+
+func (s *Service) CleanupExpiredDiagnosisHandoffs() int {
+	cutoff := s.now().Add(-s.handoffTTL)
+
+	s.mu.Lock()
+	removed := 0
+	for id, h := range s.handoffs {
+		if h.CreatedAt.Before(cutoff) {
+			delete(s.handoffs, id)
+			removed++
+		}
+	}
+	s.mu.Unlock()
+
+	if removed > 0 {
+		s.recordAudit("", "system", "handoff_cleanup", "diagnosis_handoffs", AuditResultSuccess, "", fmt.Sprintf("removed=%d", removed))
+	}
+	return removed
 }
 
 func (s *Service) Diagnose(agentID string) (string, error) {
