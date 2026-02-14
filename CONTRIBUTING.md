@@ -312,3 +312,12 @@ bash scripts/pr-check-summary.sh
 ```
 
 The script prints counts for green, pending, and failing PRs, and lists PR numbers for non-green entries. It uses `gh` JSON output and performs no write/mutation actions.
+## Pre-Flight Tool Check
+
+Before running repository scripts, verify required tools are installed:
+
+```bash
+bash scripts/check-tools.sh
+```
+
+The script checks for `gh`, `jq`, `go`, `bun`, and optionally `shellcheck`, printing actionable install hints for any missing tool.
