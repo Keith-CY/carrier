@@ -18,6 +18,20 @@ type Runner interface {
 	Run(ctx context.Context, command string) (Result, error)
 }
 
+// ValidateCommand checks that a command string is safe to execute.
+// It rejects empty commands and commands containing null bytes.
+func ValidateCommand(command string) error {
+	if strings.TrimSpace(command) == "" {
+		return errors.New("command must not be empty")
+	}
+	for i := 0; i < len(command); i++ {
+		if command[i] == 0 {
+			return errors.New("command must not contain null bytes")
+		}
+	}
+	return nil
+}
+
 type ShellRunner struct {
 	GOOS string
 }
@@ -27,6 +41,10 @@ func NewShellRunner() ShellRunner {
 }
 
 func (r ShellRunner) Run(ctx context.Context, command string) (Result, error) {
+	if err := ValidateCommand(command); err != nil {
+		return Result{ExitCode: -1}, fmt.Errorf("validate command: %w", err)
+	}
+
 	var cmd *exec.Cmd
 	if r.GOOS == "windows" {
 		cmd = exec.CommandContext(ctx, "wsl.exe", "bash", "-lc", command)
