@@ -381,6 +381,51 @@ func TestHandleFailureMarksRemoteDiagnosisNeed(t *testing.T) {
 	}
 }
 
+func TestUpgradeRejectsWhenNoUpgradeCommand(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := NewService(nil,
+		WithRunner(runner),
+		WithRuntimeChecker(checker),
+		WithDiagnoseDir(t.TempDir()),
+	)
+	// Register a manifest without upgrade command
+	m := sampleManifest()
+	m.Runtime.Upgrade = manifest.CommandSpec{}
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	err := svc.Upgrade("openclaw")
+	if !errors.Is(err, ErrUpgradeNotSupported) {
+		t.Fatalf("expected ErrUpgradeNotSupported, got %v", err)
+	}
+}
+
+func TestUpgradeRejectsWhenAgentRunning(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if err := svc.Start("openclaw"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	err := svc.Upgrade("openclaw")
+	if !errors.Is(err, ErrAgentRunning) {
+		t.Fatalf("expected ErrAgentRunning, got %v", err)
+	}
+}
+
 func TestUpgradeCreatesBackupAndPreservesMemoryAttachments(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	runner := &fakeRunner{}

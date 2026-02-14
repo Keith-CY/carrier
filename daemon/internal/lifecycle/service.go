@@ -32,6 +32,7 @@ var (
 	ErrAlreadyStopped           = errors.New("agent already stopped")
 	ErrCrashLoop                = errors.New("agent is in crash loop cooldown")
 	ErrAgentRunning             = errors.New("agent is running; stop it before upgrading")
+	ErrUpgradeNotSupported      = errors.New("agent manifest does not define an upgrade command")
 	ErrMissingRequiredEnv       = errors.New("missing required environment variables")
 	ErrPortConflict             = errors.New("port conflict detected")
 	ErrRuntimePrerequisites     = errors.New("runtime prerequisites failed")
@@ -375,6 +376,9 @@ func (s *Service) Upgrade(agentID string) error {
 	}
 	if state.Runtime == RuntimeStateRunning {
 		return ErrAgentRunning
+	}
+	if strings.TrimSpace(m.Runtime.Upgrade.Command) == "" {
+		return ErrUpgradeNotSupported
 	}
 
 	attachments := s.getMemoryAttachments(agentID)
@@ -841,12 +845,19 @@ func (s *Service) setMemoryAttachments(agentID string, attachments []string) {
 }
 
 func (s *Service) envVarKeys(m manifest.Manifest) []string {
+	seen := make(map[string]struct{}, len(m.Env.Required)+len(m.Env.Optional))
 	keys := make([]string, 0, len(m.Env.Required)+len(m.Env.Optional))
 	for _, envVar := range m.Env.Required {
-		keys = append(keys, envVar.Name)
+		if _, ok := seen[envVar.Name]; !ok {
+			seen[envVar.Name] = struct{}{}
+			keys = append(keys, envVar.Name)
+		}
 	}
 	for _, envVar := range m.Env.Optional {
-		keys = append(keys, envVar.Name)
+		if _, ok := seen[envVar.Name]; !ok {
+			seen[envVar.Name] = struct{}{}
+			keys = append(keys, envVar.Name)
+		}
 	}
 	sort.Strings(keys)
 	return keys
