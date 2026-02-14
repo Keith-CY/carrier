@@ -132,7 +132,7 @@ daemon/internal/logmgr/
 
 ### Dependencies
 
-- Use `gopkg.in/natefinke/lumberjack.v2` or equivalent for rotation mechanics (or implement minimal version).
+- Use `gopkg.in/natefinch/lumberjack.v2` or equivalent for rotation mechanics (or implement minimal version).
 - Use `syscall.Statfs` for disk space checks on Linux.
 
 ---
