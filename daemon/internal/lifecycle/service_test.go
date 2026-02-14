@@ -3,16 +3,20 @@ package lifecycle
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"carrier/daemon/internal/commandexec"
 	"carrier/daemon/internal/manifest"
+	"carrier/daemon/internal/redact"
 )
 
 type fakeRunner struct {
@@ -203,7 +207,7 @@ func TestStartFailsWhenPortIsInUse(t *testing.T) {
 func TestLogsAndDiagnoseArtifact(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	runner := &fakeRunner{results: map[string]runResult{
-		"install-openclaw": {result: commandexec.Result{CombinedOutput: "install-ok", ExitCode: 0}},
+		"install-openclaw": {result: commandexec.Result{CombinedOutput: "install-ok OPENAI_API_KEY=very-secret", ExitCode: 0}},
 	}}
 	checker := &fakeChecker{}
 	svc := newServiceForTest(t, runner, checker)
@@ -239,7 +243,7 @@ func TestLogsAndDiagnoseArtifact(t *testing.T) {
 		names = append(names, f.Name)
 	}
 	sort.Strings(names)
-	want := []string{"logs.txt", "manifest.json", "state.json"}
+	want := []string{"env.json", "logs.txt", "manifest.json", "metadata.json", "state.json"}
 	if len(names) != len(want) {
 		t.Fatalf("unexpected zip entry count: want %d got %d", len(want), len(names))
 	}
@@ -247,6 +251,49 @@ func TestLogsAndDiagnoseArtifact(t *testing.T) {
 		if names[i] != want[i] {
 			t.Fatalf("unexpected zip entry %d: want %q got %q", i, want[i], names[i])
 		}
+	}
+
+	envPayload := readZipEntry(t, zr.File, "env.json")
+	var env map[string]string
+	if err := json.Unmarshal(envPayload, &env); err != nil {
+		t.Fatalf("unmarshal env.json: %v", err)
+	}
+	if env["OPENAI_API_KEY"] != redact.RedactedValue {
+		t.Fatalf("expected OPENAI_API_KEY redacted, got %q", env["OPENAI_API_KEY"])
+	}
+
+	logPayload := string(readZipEntry(t, zr.File, "logs.txt"))
+	if strings.Contains(logPayload, "very-secret") {
+		t.Fatalf("expected logs to redact secrets, got %q", logPayload)
+	}
+	if !strings.Contains(logPayload, "OPENAI_API_KEY="+redact.RedactedValue) {
+		t.Fatalf("expected logs to contain redacted API key assignment, got %q", logPayload)
+	}
+
+	manifestPayload := readZipEntry(t, zr.File, "manifest.json")
+	statePayload := readZipEntry(t, zr.File, "state.json")
+	metadataPayload := readZipEntry(t, zr.File, "metadata.json")
+
+	var meta redact.ArtifactMetadata
+	if err := json.Unmarshal(metadataPayload, &meta); err != nil {
+		t.Fatalf("unmarshal metadata.json: %v", err)
+	}
+	fixedNow := time.Date(2026, 2, 14, 4, 20, 0, 0, time.UTC)
+	if !meta.CreatedAt.Equal(fixedNow) {
+		t.Fatalf("metadata created_at mismatch: got %s want %s", meta.CreatedAt, fixedNow)
+	}
+	if !meta.ExpiresAt.Equal(fixedNow.Add(24 * time.Hour)) {
+		t.Fatalf("metadata expires_at mismatch: got %s want %s", meta.ExpiresAt, fixedNow.Add(24*time.Hour))
+	}
+
+	wantChecksum := redact.ArtifactChecksum(map[string][]byte{
+		"state.json":    statePayload,
+		"manifest.json": manifestPayload,
+		"logs.txt":      []byte(logPayload),
+		"env.json":      envPayload,
+	})
+	if meta.SHA256 != wantChecksum {
+		t.Fatalf("metadata sha256 mismatch: got %q want %q", meta.SHA256, wantChecksum)
 	}
 }
 
@@ -439,3 +486,24 @@ var (
 	splitHostPort = net.SplitHostPort
 	atoi          = strconv.Atoi
 )
+
+func readZipEntry(t *testing.T, files []*zip.File, name string) []byte {
+	t.Helper()
+	for _, f := range files {
+		if f.Name != name {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatalf("open zip entry %s: %v", name, err)
+		}
+		defer rc.Close()
+		payload, err := io.ReadAll(rc)
+		if err != nil {
+			t.Fatalf("read zip entry %s: %v", name, err)
+		}
+		return payload
+	}
+	t.Fatalf("missing zip entry %s", name)
+	return nil
+}
