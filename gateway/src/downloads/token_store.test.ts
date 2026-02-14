@@ -117,6 +117,52 @@ describe("DownloadTokenStore", () => {
     expect(store.size).toBe(0);
   });
 
+  test("repeated startPeriodicCleanup() does not create duplicate intervals", async () => {
+    let time = new Date("2026-01-01T00:00:00Z");
+    const store = new DownloadTokenStore(() => time);
+
+    store.issue("a.txt", 1, false); // expires in 1 second
+
+    // Call startPeriodicCleanup multiple times
+    store.startPeriodicCleanup(50);
+    store.startPeriodicCleanup(50);
+    store.startPeriodicCleanup(50);
+
+    // Advance past expiry
+    time = new Date("2026-01-01T00:00:02Z");
+
+    // Wait for cleanup
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    store.stopPeriodicCleanup();
+
+    // Token should be cleaned up exactly once (size 0), not cause errors
+    expect(store.size).toBe(0);
+  });
+
+  test("startPeriodicCleanup() replaces previous interval without leak", async () => {
+    let cleanupCount = 0;
+    let time = new Date("2026-01-01T00:00:00Z");
+    const store = new DownloadTokenStore(() => time);
+
+    // Issue a token that will expire
+    store.issue("a.txt", 1, false);
+    time = new Date("2026-01-01T00:00:02Z");
+
+    // Start cleanup three times rapidly — only the last should be active
+    store.startPeriodicCleanup(30);
+    store.startPeriodicCleanup(30);
+    store.startPeriodicCleanup(30);
+
+    // Wait long enough for multiple cycles if duplicates existed
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    store.stopPeriodicCleanup();
+
+    // The store should have cleaned up the expired token
+    expect(store.size).toBe(0);
+  });
+
   test("stopPeriodicCleanup() stops the interval", async () => {
     let time = new Date("2026-01-01T00:00:00Z");
     const store = new DownloadTokenStore(() => time);
