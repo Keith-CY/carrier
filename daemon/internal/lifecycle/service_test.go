@@ -264,6 +264,64 @@ func TestHandleFailureMarksRemoteDiagnosisNeed(t *testing.T) {
 	}
 }
 
+func TestCreateRemoteDiagnosisHandoffRequiresNeedFlag(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	_, err := svc.CreateRemoteDiagnosisHandoff("openclaw", true, "user-1", "req-1")
+	if !errors.Is(err, ErrRemoteDiagnosisNotNeeded) {
+		t.Fatalf("expected ErrRemoteDiagnosisNotNeeded, got %v", err)
+	}
+}
+
+func TestCreateRemoteDiagnosisHandoffSuccessAndAudit(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	if err := svc.Install("openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if _, err := svc.HandleFailure(context.Background(), "openclaw", "cannot bind port"); err != nil {
+		t.Fatalf("handle failure: %v", err)
+	}
+
+	artifact, err := svc.Diagnose("openclaw")
+	if err != nil {
+		t.Fatalf("diagnose: %v", err)
+	}
+
+	handoff, err := svc.CreateRemoteDiagnosisHandoff("openclaw", true, "chat:123", "req-42")
+	if err != nil {
+		t.Fatalf("create handoff: %v", err)
+	}
+	if handoff.Status != HandoffStatusPending {
+		t.Fatalf("expected pending handoff, got %s", handoff.Status)
+	}
+	if handoff.ArtifactRef != artifact {
+		t.Fatalf("expected artifact %q, got %q", artifact, handoff.ArtifactRef)
+	}
+
+	audits := svc.AuditLogs()
+	if len(audits) == 0 {
+		t.Fatal("expected audit logs")
+	}
+	last := audits[len(audits)-1]
+	if last.Action != "remote_diagnosis_consent" {
+		t.Fatalf("expected last audit action remote_diagnosis_consent, got %s", last.Action)
+	}
+	if last.RequestID != "req-42" {
+		t.Fatalf("expected request id req-42, got %s", last.RequestID)
+	}
+}
+
 // Wrappers to keep tests explicit and avoid importing extra packages in each assertion block.
 var (
 	netListen     = net.Listen

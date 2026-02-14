@@ -21,6 +21,11 @@ Phase 1 scaffold for the Agent Installation Platform.
 - Start path validates required env vars and port conflicts before execution.
 - Logs tail retrieval and diagnose zip artifact generation are available in the lifecycle service.
 
+## M3 remote diagnosis scaffold status
+- Lifecycle service now stores audit logs for lifecycle, triage, diagnose, and consent actions.
+- Base Agent unresolved flow can create a remote diagnosis handoff placeholder with user consent.
+- Handoff records include consent flag, status, and diagnose artifact reference.
+
 ## Development flow
 - Start work from `origin/main` using a new `codex/*` branch and worktree.
 - Submit all feature updates via Pull Request.

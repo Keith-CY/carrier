@@ -40,3 +40,37 @@ type AgentState struct {
 	LastDiagnoseFile     string
 	UpdatedAt            time.Time
 }
+
+type HandoffStatus string
+
+const (
+	HandoffStatusPending  HandoffStatus = "pending"
+	HandoffStatusDeclined HandoffStatus = "declined"
+)
+
+type DiagnosisHandoff struct {
+	ID          string
+	AgentID     string
+	Consent     bool
+	ArtifactRef string
+	Status      HandoffStatus
+	CreatedAt   time.Time
+}
+
+type AuditResult string
+
+const (
+	AuditResultSuccess AuditResult = "success"
+	AuditResultFailure AuditResult = "failure"
+)
+
+type AuditLog struct {
+	RequestID string
+	Actor     string
+	Action    string
+	Target    string
+	Result    AuditResult
+	ErrorCode string
+	Message   string
+	Timestamp time.Time
+}
