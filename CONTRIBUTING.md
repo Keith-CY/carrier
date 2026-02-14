@@ -70,6 +70,17 @@ Before merging, the following required checks must be green:
 
 All required checks must pass before a PR can enter the merge queue.
 
+## Label Glossary
+
+The following labels are used for planning and priority triage:
+
+- **`1h`** — Task estimated to take ≤1 hour of focused work. Use for small, well-scoped changes (e.g., add a single test, fix a typo, update one doc section).
+- **`1h-Hotfix`** — Urgent fix that should take ≤1 hour and requires immediate attention. Use for production-impacting bugs or security patches (e.g., fix a nil-pointer crash in the start path).
+- **`1h-Decomposition`** — A task whose scope needs to be broken down into ≤1h sub-tasks before work begins. Use when an issue is directionally clear but too large to implement in one shot (e.g., "refactor lifecycle service" → split into file-split, test, and doc sub-issues).
+- **`Phase 1`** — Work required for Phase 1 delivery (OpenClaw full lifecycle). All Phase 1 PRs must be completed before candidate agent work begins.
+
+See also the [Scope Policy](#scope-policy) section for milestone rules.
+
 ## Review Convention (Non-Blocking Suggestions)
 
 For review comments, use the fixed keyword `NBS:` for each non-blocking suggestion.
