@@ -12,8 +12,22 @@ git worktree add -b codex/<topic> ../carrier-<topic> origin/main
 cd ../carrier-<topic>
 ```
 
-Branch naming:
-- Use `codex/` prefix for development branches.
+Branch naming convention:
+- Use `codex/` prefix for all development branches.
+- Pattern: `codex/issue-<id>-<short-slug>` for issue-driven work.
+- Pattern: `codex/<topic>` for ad-hoc maintenance or exploration.
+- **Never push directly to `main`.**
+
+### Branch Naming Examples
+
+| Issue type | Branch name |
+|------------|-------------|
+| Docs update (#270) | `codex/issue-270-branch-naming` |
+| Test addition (#245) | `codex/issue-245-reload-failure-tests` |
+| Script/chore (#323) | `codex/issue-323-review-followup-dupes` |
+| Ad-hoc refactor | `codex/refactor-session-store` |
+
+Keep slugs short and lowercase with hyphens. Avoid special characters.
 
 ## Pull Request Policy
 
@@ -103,6 +117,8 @@ Before opening or updating a PR, run the minimum local validation for your chang
 
 - **CI/workflow changes:** Test the workflow logic locally where possible. For GitHub Actions changes, verify YAML syntax with a linter (e.g., `actionlint`).
 
+- **Shell script changes:** Run `shellcheck scripts/*.sh` locally to catch portability/quoting issues before CI does.
+
 These are minimum checks. The full local validation suite is available via `./scripts/run-all-tests.sh`.
 ## CI Troubleshooting
 
@@ -177,6 +193,15 @@ git checkout main && git pull origin main
 ```
 
 > **Tip:** Branch names follow the pattern `codex/issue-<number>-<short-desc>`. Avoid `git branch -D` (force delete) unless you are certain the branch has been merged or abandoned.
+## ShellCheck (Local Lint)
+
+Run ShellCheck across all repository scripts to match CI behavior:
+
+```bash
+./scripts/run-shellcheck.sh
+```
+
+The script discovers all `scripts/**/*.sh` files and exits non-zero on any lint error.
 ## Stale Follow-Up Detection
 
 To find stale `[review-followup]` issues whose referenced PR is already merged:
@@ -207,7 +232,7 @@ This project maintains a [`CHANGELOG.md`](./CHANGELOG.md) following [Keep a Chan
 **Categories used in this repo:**
 - `Features` — new capabilities
 - `Bug Fixes` — corrections to existing behavior
-- `Security` — vulnerability fixes or hardening
+- `Security` — vulnerability fixes or hardening (see also [`docs/security-install-integrity.md`](./docs/security-install-integrity.md) for install/upgrade verification)
 - `Refactor` — internal restructuring without behavior change
 - `Docs` — documentation additions or updates
 - `Tests` — new or improved test coverage
@@ -220,6 +245,30 @@ This project maintains a [`CHANGELOG.md`](./CHANGELOG.md) following [Keep a Chan
 
 - **WebSocket support** — add real-time event streaming to gateway ([#999](https://github.com/Keith-CY/carrier/pull/999))
 ```
+
+## Re-Review Rule (Head SHA vs Review SHA)
+
+After new commits are pushed to a PR, determine whether re-review is needed by comparing the current head SHA against the SHA that was last reviewed.
+
+**Fetch the current PR head SHA:**
+
+```bash
+gh pr view <PR_NUMBER> --repo Keith-CY/carrier --json headRefOid --jq '.headRefOid'
+```
+
+**Fetch the SHA of the last reviewed commit:**
+
+```bash
+gh pr view <PR_NUMBER> --repo Keith-CY/carrier --json latestReviews \
+  --jq '.latestReviews[0].commit.oid'
+```
+
+**Decision flow:**
+
+1. If `headRefOid == latestReviews[].commit.oid` → **skip** (already reviewed at this commit).
+2. If they differ → **re-review required** (new commits since last approval).
+
+This rule applies to both manual review sweeps and automated review triggers.
 
 ## Review Convention (Non-Blocking Suggestions)
 
@@ -531,3 +580,46 @@ Before creating a sub-issue, verify:
 When in doubt, ask: "Can someone implement this in ≤1 hour with no design ambiguity?" If not, decompose further.
 gh pr view <PR_NUMBER> --repo Keith-CY/carrier --json mergeStateStatus -q '.mergeStateStatus'
 ```
+## PR Check Health Summary
+
+To get a quick overview of open PR check statuses:
+
+```bash
+bash scripts/pr-check-summary.sh
+```
+
+The script prints counts for green, pending, and failing PRs, and lists PR numbers for non-green entries. It uses `gh` JSON output and performs no write/mutation actions.
+## Local Validation Troubleshooting
+
+When GitHub Actions checks are green but local runs fail (or vice versa), use these diagnostics.
+
+> **Note:** CI status is the merge gate. Local failures should be triaged against CI SHA parity — ensure you are testing the same commit that CI tested.
+
+### `gh pr checks` API connectivity failures
+
+**Symptom:** `gh pr checks` returns an error or empty output.
+
+- Verify authentication: `gh auth status`
+- Check rate limit: `gh api rate_limit -q '.rate.remaining'`
+- Ensure network connectivity to `api.github.com`
+- Re-authenticate if needed: `gh auth login`
+
+### Go test `dyld: missing LC_UUID load command`
+
+**Symptom:** Daemon tests crash with `dyld` errors on macOS.
+
+- Likely cause: local Go toolchain version mismatch with `daemon/go.mod`.
+- Check your Go version: `go version`
+- Check required version: `head -3 daemon/go.mod`
+- Update Go: `brew upgrade go` (macOS) or download from [go.dev/dl](https://go.dev/dl/)
+- Clear test cache: `go clean -testcache`
+
+### `bun run check` TypeScript parse/version mismatch
+
+**Symptom:** Type check fails locally but passes in CI.
+
+- Check Bun version: `bun --version`
+- Check CI Bun version in `.github/workflows/ci.yml` (`bun-version` field)
+- Update Bun: `bun upgrade`
+- Reinstall dependencies: `rm -rf gateway/node_modules && cd gateway && bun install`
+- See [Bun docs](https://bun.sh/docs) for version-specific changes.
