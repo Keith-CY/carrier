@@ -98,4 +98,38 @@ describe("DownloadTokenStore", () => {
 
     expect(url).toBe(`/downloads/${tok.token}/artifact.zip`);
   });
+
+  test("startPeriodicCleanup() triggers cleanup on interval", async () => {
+    let time = new Date("2026-01-01T00:00:00Z");
+    const store = new DownloadTokenStore(() => time);
+
+    store.issue("a.txt", 1, false); // expires in 1 second
+
+    // Advance time past expiry
+    time = new Date("2026-01-01T00:00:02Z");
+
+    store.startPeriodicCleanup(50); // 50ms interval for fast test
+
+    // Wait for at least one cleanup cycle
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    store.stopPeriodicCleanup();
+    expect(store.size).toBe(0);
+  });
+
+  test("stopPeriodicCleanup() stops the interval", async () => {
+    let time = new Date("2026-01-01T00:00:00Z");
+    const store = new DownloadTokenStore(() => time);
+
+    store.startPeriodicCleanup(50);
+    store.stopPeriodicCleanup();
+
+    store.issue("a.txt", 1, false);
+    time = new Date("2026-01-01T00:00:02Z");
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    // Token should still be there since cleanup was stopped
+    expect(store.size).toBe(1);
+  });
 });
