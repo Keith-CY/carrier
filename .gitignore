@@ -1,2 +1,4 @@
 docs/Agent_Installation_Platform_PRD_extra.md
 node_modules/
+daemon/coverage.html
+daemon/coverage.out
