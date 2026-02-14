@@ -1,8 +1,10 @@
-import { describe, expect, test } from "bun:test";
-import { handleCommand, parseInput, type GatewayDependencies } from "./index";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { handleCommand, parseInput, ParseError, type GatewayDependencies } from "./index";
 import { InMemoryDaemonClient } from "./daemon/client";
 import { SessionStore } from "./session/store";
 import { DownloadTokenStore } from "./downloads/token_store";
+
+let deps: GatewayDependencies;
 
 function buildDeps(): GatewayDependencies {
   return {
@@ -12,14 +14,17 @@ function buildDeps(): GatewayDependencies {
   };
 }
 
-function pairChat(deps: GatewayDependencies, provider: "telegram" | "discord" | "feishu" = "telegram", chatId = "100"): void {
-  deps.sessions.registerPairCode("pair-ok", 300);
-  deps.sessions.pair({ provider, chatId, code: "pair-ok" });
+function pairChat(d: GatewayDependencies, provider: "telegram" | "discord" | "feishu" = "telegram", chatId = "100"): void {
+  d.sessions.registerPairCode("pair-ok", 300);
+  d.sessions.pair({ provider, chatId, code: "pair-ok" });
 }
 
 describe("command routing: /pair", () => {
+  beforeEach(() => {
+    deps = buildDeps();
+  });
+
   test("successful pairing returns session token", async () => {
-    const deps = buildDeps();
     deps.sessions.registerPairCode("my-code", 300);
 
     const res = await handleCommand(parseInput("telegram 100 req-1 /pair my-code"), deps);
@@ -29,8 +34,6 @@ describe("command routing: /pair", () => {
   });
 
   test("invalid code returns error", async () => {
-    const deps = buildDeps();
-
     const res = await handleCommand(parseInput("telegram 100 req-1 /pair bad-code"), deps);
 
     expect(res.result).toBe("error");
@@ -38,8 +41,6 @@ describe("command routing: /pair", () => {
   });
 
   test("missing code returns usage error", async () => {
-    const deps = buildDeps();
-
     const res = await handleCommand(parseInput("telegram 100 req-1 /pair"), deps);
 
     expect(res.result).toBe("error");
@@ -48,9 +49,11 @@ describe("command routing: /pair", () => {
 });
 
 describe("command routing: session requirement", () => {
-  test("unpaired chat gets E_SESSION_REQUIRED", async () => {
-    const deps = buildDeps();
+  beforeEach(() => {
+    deps = buildDeps();
+  });
 
+  test("unpaired chat gets E_SESSION_REQUIRED", async () => {
     const res = await handleCommand(parseInput("telegram 100 req-1 /agents"), deps);
 
     expect(res.result).toBe("error");
@@ -59,10 +62,12 @@ describe("command routing: session requirement", () => {
 });
 
 describe("command routing: /agents", () => {
-  test("lists agents for paired chat", async () => {
-    const deps = buildDeps();
+  beforeEach(() => {
+    deps = buildDeps();
     pairChat(deps);
+  });
 
+  test("lists agents for paired chat", async () => {
     const res = await handleCommand(parseInput("telegram 100 req-1 /agents"), deps);
 
     expect(res.result).toBe("ok");
@@ -71,51 +76,58 @@ describe("command routing: /agents", () => {
 });
 
 describe("command routing: /install", () => {
-  test("missing agent returns usage error", async () => {
-    const deps = buildDeps();
+  beforeEach(() => {
+    deps = buildDeps();
     pairChat(deps);
+  });
 
+  test("missing agent returns usage error", async () => {
     const res = await handleCommand(parseInput("telegram 100 req-1 /install"), deps);
 
     expect(res.result).toBe("error");
     expect(res.errorCode).toBe("E_USAGE");
   });
 
-  test("installs agent successfully", async () => {
-    const deps = buildDeps();
-    pairChat(deps);
-
+  test("installs agent successfully and updates state", async () => {
     const res = await handleCommand(parseInput("telegram 100 req-1 /install openclaw"), deps);
 
     expect(res.result).toBe("ok");
     expect(res.message).toContain("install completed");
+
+    // Verify agent state was updated
+    const statuses = await deps.daemon.getStatus("openclaw", { requestId: "verify", actor: "test" });
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0].installed).toBe(true);
   });
 });
 
 describe("command routing: /start", () => {
-  test("start uninstalled agent returns error", async () => {
-    const deps = buildDeps();
+  beforeEach(() => {
+    deps = buildDeps();
     pairChat(deps);
+  });
 
+  test("start uninstalled agent returns error", async () => {
     const res = await handleCommand(parseInput("telegram 100 req-1 /start openclaw"), deps);
 
     expect(res.result).toBe("error");
     expect(res.errorCode).toBe("E_NOT_INSTALLED");
   });
 
-  test("start installed agent succeeds", async () => {
-    const deps = buildDeps();
-    pairChat(deps);
+  test("start installed agent succeeds and agent becomes running", async () => {
     await handleCommand(parseInput("telegram 100 req-0 /install openclaw"), deps);
 
     const res = await handleCommand(parseInput("telegram 100 req-1 /start openclaw"), deps);
 
     expect(res.result).toBe("ok");
+
+    // Verify agent state
+    const statuses = await deps.daemon.getStatus("openclaw", { requestId: "verify", actor: "test" });
+    expect(statuses[0].runtimeState).toBe("running");
+    expect(statuses[0].health).toBe("healthy");
   });
 
   test("start already-running agent returns error", async () => {
-    const deps = buildDeps();
-    pairChat(deps);
     await handleCommand(parseInput("telegram 100 req-0 /install openclaw"), deps);
     await handleCommand(parseInput("telegram 100 req-0 /start openclaw"), deps);
 
@@ -127,33 +139,39 @@ describe("command routing: /start", () => {
 });
 
 describe("command routing: /stop", () => {
-  test("stop already-stopped agent returns error", async () => {
-    const deps = buildDeps();
+  beforeEach(() => {
+    deps = buildDeps();
     pairChat(deps);
+  });
 
+  test("stop already-stopped agent returns error", async () => {
     const res = await handleCommand(parseInput("telegram 100 req-1 /stop openclaw"), deps);
 
     expect(res.result).toBe("error");
     expect(res.errorCode).toBe("E_ALREADY_STOPPED");
   });
 
-  test("stop running agent succeeds", async () => {
-    const deps = buildDeps();
-    pairChat(deps);
+  test("stop running agent succeeds and agent becomes stopped", async () => {
     await handleCommand(parseInput("telegram 100 req-0 /install openclaw"), deps);
     await handleCommand(parseInput("telegram 100 req-0 /start openclaw"), deps);
 
     const res = await handleCommand(parseInput("telegram 100 req-1 /stop openclaw"), deps);
 
     expect(res.result).toBe("ok");
+
+    // Verify agent state
+    const statuses = await deps.daemon.getStatus("openclaw", { requestId: "verify", actor: "test" });
+    expect(statuses[0].runtimeState).toBe("stopped");
   });
 });
 
 describe("command routing: /status", () => {
-  test("returns status for paired chat", async () => {
-    const deps = buildDeps();
+  beforeEach(() => {
+    deps = buildDeps();
     pairChat(deps);
+  });
 
+  test("returns status for paired chat", async () => {
     const res = await handleCommand(parseInput("telegram 100 req-1 /status openclaw"), deps);
 
     expect(res.result).toBe("ok");
@@ -161,9 +179,6 @@ describe("command routing: /status", () => {
   });
 
   test("status with no agent id returns all", async () => {
-    const deps = buildDeps();
-    pairChat(deps);
-
     const res = await handleCommand(parseInput("telegram 100 req-1 /status"), deps);
 
     expect(res.result).toBe("ok");
@@ -171,10 +186,12 @@ describe("command routing: /status", () => {
 });
 
 describe("command routing: /logs", () => {
-  test("missing agent returns usage error", async () => {
-    const deps = buildDeps();
+  beforeEach(() => {
+    deps = buildDeps();
     pairChat(deps);
+  });
 
+  test("missing agent returns usage error", async () => {
     const res = await handleCommand(parseInput("telegram 100 req-1 /logs"), deps);
 
     expect(res.result).toBe("error");
@@ -182,9 +199,6 @@ describe("command routing: /logs", () => {
   });
 
   test("returns logs for agent", async () => {
-    const deps = buildDeps();
-    pairChat(deps);
-
     const res = await handleCommand(parseInput("telegram 100 req-1 /logs openclaw 10"), deps);
 
     expect(res.result).toBe("ok");
@@ -192,10 +206,12 @@ describe("command routing: /logs", () => {
 });
 
 describe("command routing: /upgrade", () => {
-  test("missing agent returns usage error", async () => {
-    const deps = buildDeps();
+  beforeEach(() => {
+    deps = buildDeps();
     pairChat(deps);
+  });
 
+  test("missing agent returns usage error", async () => {
     const res = await handleCommand(parseInput("telegram 100 req-1 /upgrade"), deps);
 
     expect(res.result).toBe("error");
@@ -203,9 +219,6 @@ describe("command routing: /upgrade", () => {
   });
 
   test("upgrade succeeds", async () => {
-    const deps = buildDeps();
-    pairChat(deps);
-
     const res = await handleCommand(parseInput("telegram 100 req-1 /upgrade openclaw"), deps);
 
     expect(res.result).toBe("ok");
@@ -214,10 +227,12 @@ describe("command routing: /upgrade", () => {
 });
 
 describe("command routing: /diagnose", () => {
-  test("missing agent returns usage error", async () => {
-    const deps = buildDeps();
+  beforeEach(() => {
+    deps = buildDeps();
     pairChat(deps);
+  });
 
+  test("missing agent returns usage error", async () => {
     const res = await handleCommand(parseInput("telegram 100 req-1 /diagnose"), deps);
 
     expect(res.result).toBe("error");
@@ -225,9 +240,6 @@ describe("command routing: /diagnose", () => {
   });
 
   test("diagnose returns download url", async () => {
-    const deps = buildDeps();
-    pairChat(deps);
-
     const res = await handleCommand(parseInput("telegram 100 req-1 /diagnose openclaw"), deps);
 
     expect(res.result).toBe("ok");
@@ -236,11 +248,11 @@ describe("command routing: /diagnose", () => {
 });
 
 describe("parseInput edge cases", () => {
-  test("unknown command throws", () => {
-    expect(() => parseInput("telegram 100 req-1 /unknown")).toThrow();
+  test("unknown command throws ParseError", () => {
+    expect(() => parseInput("telegram 100 req-1 /unknown")).toThrow(ParseError);
   });
 
-  test("too few parts throws", () => {
-    expect(() => parseInput("telegram 100")).toThrow();
+  test("too few parts throws ParseError", () => {
+    expect(() => parseInput("telegram 100")).toThrow(ParseError);
   });
 });
