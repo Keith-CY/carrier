@@ -492,3 +492,30 @@ gh pr view <PR_NUMBER> --repo Keith-CY/carrier --json mergeStateStatus -q '.merg
 ### Common "checks pending" case
 
 If auto-merge shows `BLOCKED` immediately after enabling, it usually means CI checks are still running. This is expected — auto-merge will proceed automatically once all required checks pass. Monitor with `gh pr checks`.
+## Issue Decomposition Guide
+
+When splitting large roadmap issues (e.g., `[L2]` / `[Round-1]`) into lightweight follow-up tasks, use the following checklist.
+
+### Splitting checklist
+
+Before creating a sub-issue, verify:
+1. **Independence** — Can it be implemented and reviewed without waiting for other sub-issues?
+2. **Risk** — Is the change low-risk (no architectural decisions, no breaking changes)?
+3. **Review size** — Will the PR be reviewable in one sitting (ideally <200 lines)?
+4. **Rollback safety** — Can the change be reverted without affecting other work?
+
+### Good lightweight follow-up examples
+
+| Type | Example title |
+|------|---------------|
+| Docs | `docs(contributing): add selective test-run quickstart` |
+| Test | `test(daemon): add reload-failure state-preservation regression tests` |
+| Refactor | `refactor(gateway): extract rate-limit config into separate module` |
+
+### Anti-patterns (too broad for lightweight assignment)
+
+- "Refactor the entire lifecycle service" — too many files, needs design discussion.
+- "Add provider support for WhatsApp" — new feature, not a follow-up.
+- "Redesign the session store interface" — architectural, affects multiple consumers.
+
+When in doubt, ask: "Can someone implement this in ≤1 hour with no design ambiguity?" If not, decompose further.
