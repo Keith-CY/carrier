@@ -1,6 +1,5 @@
 import type { GatewayCommand, GatewayResponse } from "./contracts/commands";
 import {
-  InMemoryDaemonClient,
   RemoteDiagnosisNotNeededError,
   type DaemonClient,
 } from "./daemon/client";
@@ -23,10 +22,10 @@ function parseConsentFlag(value: string | undefined): boolean | null {
     return null;
   }
   const normalized = value.toLowerCase();
-  if (normalized === "yes" || normalized === "y" || normalized === "true") {
+  if (["yes", "y", "true"].includes(normalized)) {
     return true;
   }
-  if (normalized === "no" || normalized === "n" || normalized === "false") {
+  if (["no", "n", "false"].includes(normalized)) {
     return false;
   }
   return null;
@@ -93,13 +92,3 @@ export async function handleCommand(cmd: GatewayCommand, daemon: DaemonClient): 
     };
   }
 }
-
-const daemon = new InMemoryDaemonClient();
-daemon.setRemoteDiagnosisState("openclaw", {
-  needsRemoteDiagnosis: true,
-  lastDiagnoseFile: "/tmp/openclaw-diagnose.zip",
-});
-
-const example = "telegram 123 req-1 /diagnose-consent openclaw yes";
-const response = await handleCommand(parseInput(example), daemon);
-console.log(JSON.stringify(response, null, 2));
