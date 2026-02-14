@@ -90,6 +90,75 @@ func TestGoRuntimeAddsWSLContextWhenWSLDetected(t *testing.T) {
 	}
 }
 
+func TestNpmRuntimeAddsWSLContextWhenWSLDetected(t *testing.T) {
+	checker := HostChecker{
+		GOOS: "linux",
+		Lookup: LookupFunc(func(name string) (string, error) {
+			if name == "npm" {
+				return "", errors.New("not found")
+			}
+			return "/bin/" + name, nil
+		}),
+		ReadFile: func(string) ([]byte, error) {
+			return []byte("Linux version x.y.z-microsoft-standard-WSL2"), nil
+		},
+	}
+
+	err := checker.Check(manifest.Manifest{Runtime: manifest.RuntimeSpec{Type: manifest.RuntimeTypeNpmCLI}})
+	if err == nil {
+		t.Fatal("expected npm prerequisite error")
+	}
+	if !strings.Contains(err.Error(), "WSL note") {
+		t.Fatalf("expected WSL context in error, got %v", err)
+	}
+}
+
+func TestNpmRuntimeNoWSLHintOnNonWSLLinux(t *testing.T) {
+	checker := HostChecker{
+		GOOS: "linux",
+		Lookup: LookupFunc(func(name string) (string, error) {
+			if name == "npm" {
+				return "", errors.New("not found")
+			}
+			return "/bin/" + name, nil
+		}),
+		ReadFile: func(string) ([]byte, error) {
+			return []byte("Linux version x.y.z-generic"), nil
+		},
+	}
+
+	err := checker.Check(manifest.Manifest{Runtime: manifest.RuntimeSpec{Type: manifest.RuntimeTypeNpmCLI}})
+	if err == nil {
+		t.Fatal("expected npm prerequisite error")
+	}
+	if strings.Contains(err.Error(), "WSL note") {
+		t.Fatalf("expected no WSL context in error, got %v", err)
+	}
+}
+
+func TestGoRuntimeNoWSLHintOnNonWSLLinux(t *testing.T) {
+	checker := HostChecker{
+		GOOS: "linux",
+		Lookup: LookupFunc(func(name string) (string, error) {
+			if name == "go" {
+				return "", errors.New("not found")
+			}
+			return "/bin/" + name, nil
+		}),
+		ReadFile: func(string) ([]byte, error) {
+			return []byte("Linux version x.y.z-generic"), nil
+		},
+	}
+
+	err := checker.Check(manifest.Manifest{Runtime: manifest.RuntimeSpec{Type: manifest.RuntimeTypeGoCLI}})
+	if err == nil {
+		t.Fatal("expected go prerequisite error")
+	}
+	if strings.Contains(err.Error(), "WSL note") {
+		t.Fatalf("expected no WSL context in error, got %v", err)
+	}
+}
+
 func TestLocalBinaryPassesWithoutToolingOnLinux(t *testing.T) {
 	checker := HostChecker{
 		GOOS: "linux",

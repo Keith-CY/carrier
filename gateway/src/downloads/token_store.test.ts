@@ -1,0 +1,56 @@
+import { describe, expect, test } from "bun:test";
+import { DownloadTokenStore } from "./token_store";
+
+describe("DownloadTokenStore", () => {
+  test("issue() returns a valid token with correct fileRef, expiresAt, singleUse", () => {
+    const base = new Date("2026-01-01T00:00:00Z");
+    const store = new DownloadTokenStore(() => base);
+
+    const tok = store.issue("builds/app.zip", 600, true);
+
+    expect(tok.token).toBeString();
+    expect(tok.fileRef).toBe("builds/app.zip");
+    expect(tok.singleUse).toBe(true);
+    expect(tok.expiresAt).toBe(new Date(base.getTime() + 600_000).toISOString());
+  });
+
+  test("consume() valid token returns the record", () => {
+    const store = new DownloadTokenStore(() => new Date("2026-01-01T00:00:00Z"));
+    const tok = store.issue("file.txt", 300, false);
+
+    const result = store.consume(tok.token);
+
+    expect(result).not.toBeNull();
+    expect(result!.fileRef).toBe("file.txt");
+    expect(result!.token).toBe(tok.token);
+  });
+
+  test("consume() expired token returns null", () => {
+    let time = new Date("2026-01-01T00:00:00Z");
+    const store = new DownloadTokenStore(() => time);
+
+    const tok = store.issue("file.txt", 60, false);
+
+    // Advance past expiry
+    time = new Date("2026-01-01T00:02:00Z");
+
+    expect(store.consume(tok.token)).toBeNull();
+  });
+
+  test("single-use token consumed twice → second returns null", () => {
+    const store = new DownloadTokenStore(() => new Date("2026-01-01T00:00:00Z"));
+    const tok = store.issue("file.txt", 300, true);
+
+    expect(store.consume(tok.token)).not.toBeNull();
+    expect(store.consume(tok.token)).toBeNull();
+  });
+
+  test("toDownloadURL() generates correct path format", () => {
+    const store = new DownloadTokenStore();
+    const tok = store.issue("some/path/artifact.zip");
+
+    const url = store.toDownloadURL(tok);
+
+    expect(url).toBe(`/downloads/${tok.token}/artifact.zip`);
+  });
+});
