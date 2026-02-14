@@ -17,7 +17,7 @@ permissions:
   contents: read
   issues: read
   pull-requests: read
-  projects: read
+  repository-projects: read
   discussions: write
 
 jobs:
@@ -39,9 +39,9 @@ jobs:
             const token = process.env.CARRIER_PROJECTS_TOKEN || process.env.GITHUB_TOKEN;
             // Fallback `github` comes from @actions/github and is a pre-authenticated Octokit client
             // scoped to the current repo context (default GITHUB_TOKEN), so graphql/rest calls still work.
-            const octokit = token ? github.getOctokit(token) : github;
+            const ghClient = token ? github.getOctokit(token) : github;
 
-            const repoMeta = await octokit.graphql(`
+            const repoMeta = await ghClient.graphql(`
               query($owner: String!, $repo: String!) {
                 repository(owner: $owner, name: $repo) {
                   id
@@ -69,7 +69,7 @@ jobs:
               return;
             }
 
-            const preflight = await octokit.graphql(`
+            const preflight = await ghClient.graphql(`
               query($projectId: ID!) {
                 node(id: $projectId) {
                   ... on ProjectV2 {
@@ -83,11 +83,9 @@ jobs:
                           dataType
                         }
                         ... on ProjectV2SingleSelectField {
-                          options(first: 50) {
-                            nodes {
-                              id
-                              name
-                            }
+                          options {
+                            id
+                            name
                           }
                         }
                       }
@@ -137,7 +135,7 @@ jobs:
               }
 
               if (String(existing.dataType) === 'SINGLE_SELECT' && Array.isArray(field.options)) {
-                const exists = new Set((existing.options?.nodes || []).map((o) => normalize(o.name)));
+                const exists = new Set((existing.options || []).map((o) => normalize(o.name)));
                 const missingOptions = field.options.filter((option) => !exists.has(normalize(option)));
                 if (missingOptions.length > 0) {
                   return {
@@ -313,11 +311,13 @@ jobs:
               renderViewTable(viewRows),
               '',
               '## 周度工作量快照（按未关闭 Issue/PR）',
-              `- 统计范围：
-  - 总未关闭项: **${totalItems}**
-  - 进行中: **${totalInProgress}**
-  - 待办: **${totalTodo}**
-  - 阻塞: **${totalBlocked}**（阻塞率 **${blockedRate}%**）`,
+              [
+                '- 统计范围：',
+                `  - 总未关闭项: **${totalItems}**`,
+                `  - 进行中: **${totalInProgress}**`,
+                `  - 待办: **${totalTodo}**`,
+                `  - 阻塞: **${totalBlocked}**（阻塞率 **${blockedRate}%**）`,
+              ].join('\n'),
               '',
               renderWorkload(workload),
               '',
@@ -364,7 +364,7 @@ jobs:
 
             const title = `Carrier Kanban：字段/视图配置与工作量报告 (${isoDate})`;
 
-            const resp = await octokit.graphql(createDiscussionMutation, {
+            const resp = await ghClient.graphql(createDiscussionMutation, {
               repositoryId: repoMeta.repository.id,
               categoryId: category.id,
               title,

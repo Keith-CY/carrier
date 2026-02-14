@@ -10,7 +10,7 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
-  projects: write
+  repository-projects: write
 
 jobs:
   sync:
@@ -35,7 +35,7 @@ jobs:
             const payload = context.payload;
             const token = process.env.CARRIER_PROJECTS_TOKEN || process.env.GITHUB_TOKEN;
             // Fallback `github` comes from @actions/github and uses the default GITHUB_TOKEN context.
-            const octokit = token ? github.getOctokit(token) : github;
+            const ghClient = token ? github.getOctokit(token) : github;
 
             const getStatusCandidates = (item, labels) => {
               const hasLabel = (target) => labels.includes(target.toLowerCase());
@@ -162,11 +162,9 @@ jobs:
                         dataType
                       }
                       ... on ProjectV2SingleSelectField {
-                        options(first: 100) {
-                          nodes {
-                            id
-                            name
-                          }
+                        options {
+                          id
+                          name
                         }
                       }
                     }
@@ -175,7 +173,7 @@ jobs:
               }
             }`;
 
-            const preflight = await octokit.graphql(preflightQuery, { projectId });
+            const preflight = await ghClient.graphql(preflightQuery, { projectId });
             if (!preflight?.node) {
               core.setFailed(`Unable to read project ${projectId}. Verify the token and projectId are valid.`);
               return;
@@ -205,15 +203,15 @@ jobs:
             const normalizeOption = (value) => String(value || '').trim().toLowerCase();
 
             const resolveOption = (field, value) => {
-              if (!field?.options?.nodes) {
+              if (!field?.options) {
                 return null;
               }
               const target = normalizeOption(value);
-              const direct = field.options.nodes.find((option) => normalizeOption(option.name) === target);
+              const direct = field.options.find((option) => normalizeOption(option.name) === target);
               if (direct) {
                 return direct.id;
               }
-              const numeric = field.options.nodes.find((option) => option.name === value);
+              const numeric = field.options.find((option) => option.name === value);
               return numeric ? numeric.id : null;
             };
 
@@ -342,7 +340,7 @@ jobs:
                 }
               }`;
 
-              const data = await octokit.graphql(query, { projectId, after: cursor });
+              const data = await ghClient.graphql(query, { projectId, after: cursor });
               const project = data.node;
 
               const found = project.items.nodes.find((entry) => {
@@ -374,7 +372,7 @@ jobs:
                 }
               }`;
 
-              const addResp = await octokit.graphql(addMutation, { projectId, contentId });
+              const addResp = await ghClient.graphql(addMutation, { projectId, contentId });
               return addResp.addProjectV2ItemById.item.id;
             };
 
@@ -418,7 +416,7 @@ jobs:
             for (const update of updates) {
               try {
                 if (update.kind === 'single_select') {
-                  await octokit.graphql(updateMutations.single_select, {
+                  await ghClient.graphql(updateMutations.single_select, {
                     projectId,
                     itemId: finalItemId,
                     fieldId: update.fieldId,
@@ -428,7 +426,7 @@ jobs:
                 }
 
                 if (update.kind === 'number') {
-                  await octokit.graphql(updateMutations.number, {
+                  await ghClient.graphql(updateMutations.number, {
                     projectId,
                     itemId: finalItemId,
                     fieldId: update.fieldId,
@@ -438,7 +436,7 @@ jobs:
                 }
 
                 if (update.kind === 'text') {
-                  await octokit.graphql(updateMutations.text, {
+                  await ghClient.graphql(updateMutations.text, {
                     projectId,
                     itemId: finalItemId,
                     fieldId: update.fieldId,
@@ -448,7 +446,7 @@ jobs:
                 }
 
                 if (update.kind === 'date') {
-                  await octokit.graphql(updateMutations.date, {
+                  await ghClient.graphql(updateMutations.date, {
                     projectId,
                     itemId: finalItemId,
                     fieldId: update.fieldId,
