@@ -36,6 +36,10 @@ Phase milestones define delivery scope and must be respected in all planning and
 - Every pull request must include a milestone label: `Phase 1` or `Phase 2`.
 - Candidate agents are blocked until Phase 1 exit criteria pass.
 
+## Skills Directory
+
+- Before proposing changes, read the `skills/` directory and follow any instructions there (especially `skills/pr-create/SKILL.md`).
+
 ## Testing Policy
 
 GitHub Actions is the source of truth for test status.
