@@ -27,9 +27,10 @@ Phase 1 scaffold for the Agent Installation Platform.
 - Handoff records include consent flag, status, and diagnose artifact reference.
 
 ## M4 gateway routing scaffold status
-- Gateway command layer now supports `/diagnose-consent <agent_id> <yes|no>`.
-- `/diagnose-consent` routes to a daemon client placeholder that matches `CreateRemoteDiagnosisHandoff`.
-- Gateway forwards `provider`, `chat_id`, and `request_id` as actor/request context for handoff creation.
+- Gateway now supports `pair/agents/install/start/stop/status/logs/upgrade/diagnose/diagnose-consent` routing scaffold.
+- `/pair <code>` binds provider chat sessions and enforces session checks before non-pair commands.
+- Gateway forwards `provider`, `chat_id`, and `request_id` into daemon request context for command handling.
+- Logs/diagnose responses can issue short-lived read-only download tokens and URLs.
 
 ## Development flow
 - Start work from `origin/main` using a new `codex/*` branch and worktree.
