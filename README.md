@@ -125,9 +125,11 @@ Without the required values above, Kanban operations workflow runs will fail ear
    - macOS/Linux: `./agentd`
    - Windows PowerShell: `.\agentd.exe`
 6. Get your pairing code from the daemon terminal output (it is generated when daemon/gateway pairing flow is ready).
+   - Note: `PAIR_CODE` has a short TTL (currently 10 minutes). If pairing fails due to expiration, restart the daemon or request a fresh code and retry `/pair <code>`.
 7. Use your chat provider flow (Telegram/Discord/Feishu) to pair and run commands:
    - `/pair <code>`
    - `/agents`
+   - If `/agents` returns an empty list, verify the daemon is running and successfully paired, then retry after a few seconds. If still empty, re-run `/pair <code>` with a fresh code.
    - `/install openclaw`
 8. Configure required OpenClaw environment (for example `OPENAI_API_KEY`) before start.
 9. Start and verify:
@@ -149,9 +151,11 @@ If install/start fails, run `/diagnose openclaw` and use the generated artifact 
    - macOS/Linux：`./agentd`
    - Windows PowerShell：`.\agentd.exe`
 6. 从 daemon 终端输出里获取配对码（pair code）。
+   - 说明：`PAIR_CODE` 有较短有效期（当前为 10 分钟）。若因过期导致配对失败，请重启 daemon 或重新获取新配对码后再执行 `/pair <code>`。
 7. 通过 Telegram/Discord/Feishu 配对后执行：
    - `/pair <code>`
    - `/agents`
+   - 若 `/agents` 返回空列表，请先确认 daemon 正在运行且已成功配对，等待数秒后重试；若仍为空，请用新的配对码重新执行 `/pair <code>`。
    - `/install openclaw`
 8. 启动前先配置 OpenClaw 必需环境变量（如 `OPENAI_API_KEY`）。
 9. 启动并检查：
