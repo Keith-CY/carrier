@@ -186,6 +186,30 @@ This project maintains a [`CHANGELOG.md`](./CHANGELOG.md) following [Keep a Chan
 - **WebSocket support** — add real-time event streaming to gateway ([#999](https://github.com/Keith-CY/carrier/pull/999))
 ```
 
+## Re-Review Rule (Head SHA vs Review SHA)
+
+After new commits are pushed to a PR, determine whether re-review is needed by comparing the current head SHA against the SHA that was last reviewed.
+
+**Fetch the current PR head SHA:**
+
+```bash
+gh pr view <PR_NUMBER> --repo Keith-CY/carrier --json headRefOid --jq '.headRefOid'
+```
+
+**Fetch the SHA of the last reviewed commit:**
+
+```bash
+gh pr view <PR_NUMBER> --repo Keith-CY/carrier --json latestReviews \
+  --jq '.latestReviews[0].commit.oid'
+```
+
+**Decision flow:**
+
+1. If `headRefOid == latestReviews[].commit.oid` → **skip** (already reviewed at this commit).
+2. If they differ → **re-review required** (new commits since last approval).
+
+This rule applies to both manual review sweeps and automated review triggers.
+
 ## Review Convention (Non-Blocking Suggestions)
 
 For review comments, use the fixed keyword `NBS:` for each non-blocking suggestion.
