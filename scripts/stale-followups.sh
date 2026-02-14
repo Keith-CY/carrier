@@ -15,12 +15,14 @@ THRESHOLD_DAYS=7
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --days)
-      if [[ -z "${2:-}" ]] || [[ "$2" =~ ^- ]]; then
-        echo "Error: --days requires a positive integer value" >&2
+      if [[ $# -lt 2 ]] || [[ "$2" == --* ]]; then
+        echo "Error: --days requires a positive integer value." >&2
+        echo "Usage: $0 [--days N]" >&2
         exit 1
       fi
       if ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
-        echo "Error: --days value must be a positive integer, got: $2" >&2
+        echo "Error: --days must be a positive integer, got: $2" >&2
+        echo "Usage: $0 [--days N]" >&2
         exit 1
       fi
       THRESHOLD_DAYS="$2"

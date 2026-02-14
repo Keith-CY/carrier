@@ -225,7 +225,8 @@ If install/start fails, run `/diagnose openclaw` and use the generated artifact 
 Use this as a quick pass/fail checklist when validating the README flow:
 
 1. **Download**
-   - Can locate matching ZIP + `.sha256` in Releases.
+   - Can locate matching ZIP + `.sha256` in [Releases](https://github.com/Keith-CY/carrier/releases).
+   - Artifact naming is expected as `carrier-<os>-<arch>.zip` with matching checksum file `carrier-<os>-<arch>.sha256`.
 2. **Checksum**
    - Verification command is available for your OS and returns success.
 3. **Daemon start**
@@ -243,7 +244,8 @@ Use this as a quick pass/fail checklist when validating the README flow:
 
 可用下面清单快速确认 README 流程是否可执行：
 
-1. **下载**：能在 Releases 找到匹配 ZIP 与 `.sha256`。
+1. **下载**：能在 [Releases](https://github.com/Keith-CY/carrier/releases) 找到匹配 ZIP 与 `.sha256`。
+   - 产物命名建议为 `carrier-<os>-<arch>.zip`，对应校验文件为 `carrier-<os>-<arch>.sha256`。
 2. **校验**：对应系统校验命令可用且结果成功。
 3. **启动 daemon**：`agentd` 启动后可看到可用 `PAIR_CODE`。
 4. **配对**：`/pair <code>` 在有效期内返回成功。
