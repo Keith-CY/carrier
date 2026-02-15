@@ -189,7 +189,10 @@ export async function handleCommand(
           message,
         };
         if (logs.truncated || logs.lines.length > 50) {
-          const token = deps.downloads.issue(`/tmp/${agentId}-logs-${cmd.requestId}.txt`);
+          const logFilePath = `/tmp/${agentId}-logs-${cmd.requestId}.txt`;
+          const logContent = logs.lines.join("\n");
+          await Bun.write(logFilePath, logContent);
+          const token = deps.downloads.issue(logFilePath);
           response.downloadUrl = deps.downloads.toDownloadURL(token);
         }
         return response;
