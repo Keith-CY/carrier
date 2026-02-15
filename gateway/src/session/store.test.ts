@@ -319,6 +319,28 @@ describe("SessionStore", () => {
       expect(loaded!.sessionToken).toBe(session!.sessionToken);
     });
 
+    test("touch persists updated lastSeenAt across reload", async () => {
+      const testPath = getTestPath("touch-persist");
+      let time = new Date("2026-01-01T00:00:00Z");
+      const store = new SessionStore(() => time, 30 * 24 * 60 * 60, testPath);
+
+      store.createSession({ provider: "telegram", chatId: "touch-1" });
+      await store.flush();
+      const before = store.getSession("telegram", "touch-1");
+
+      time = new Date("2026-01-01T00:05:00Z");
+      store.touch("telegram", "touch-1");
+      await store.flush();
+
+      const reloaded = new SessionStore(() => time, 30 * 24 * 60 * 60, testPath);
+      const after = reloaded.getSession("telegram", "touch-1");
+
+      expect(before).not.toBeNull();
+      expect(after).not.toBeNull();
+      expect(after!.lastSeenAt).toBe(time.toISOString());
+      expect(after!.lastSeenAt).not.toBe(before!.lastSeenAt);
+    });
+
     test("without persistence path, store works in-memory only", async () => {
       const store = new SessionStore(() => new Date("2026-01-01T00:00:00Z"));
       
