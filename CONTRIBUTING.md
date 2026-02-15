@@ -68,7 +68,7 @@ GitHub Actions is the source of truth for test status.
 To reduce CI churn, we enforce pre-push tests locally:
 - Enable the repo hook path once per clone:
   - `git config core.hooksPath .githooks`
-- The pre-push hook runs `./scripts/run-all-tests.sh`, which includes daemon tests, gateway tests/checks, and end-to-end hook.
+- The pre-push hook runs `./scripts/run-all-tests.sh`, which includes daemon tests, gateway tests/checks, `scripts/start_systemd_test.sh`, and end-to-end hook.
 
 Current CI checks:
 - Daemon Go tests
