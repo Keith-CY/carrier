@@ -362,7 +362,7 @@ async function parseCommandRequest(request: Request): Promise<ParsedCommandReque
   return result;
 }
 
-function injectSessionTokenIfMissing(commandInput: string, sessionToken: string | null): string {
+export function injectSessionTokenIfMissing(commandInput: string, sessionToken: string | null): string {
   if (!sessionToken) {
     return commandInput;
   }

@@ -13,6 +13,7 @@ import {
   requestIdMiddleware,
   startGatewayServer,
   parsePort,
+  injectSessionTokenIfMissing,
   type GatewayRequestContext,
 } from "./server";
 
@@ -830,5 +831,79 @@ describe("HTTP method mismatch handling", () => {
     expect(response.status).toBe(404);
     const payload = await response.json() as { errorCode?: string };
     expect(payload.errorCode).toBe("E_NOT_FOUND");
+  });
+});
+
+describe("injectSessionTokenIfMissing", () => {
+  test("passes through command when sessionToken is null", () => {
+    const commandInput = "telegram 100 req-1 /agents";
+    const result = injectSessionTokenIfMissing(commandInput, null);
+    expect(result).toBe(commandInput);
+  });
+
+  test("passes through command when sessionToken is empty string", () => {
+    const commandInput = "telegram 100 req-1 /agents";
+    const result = injectSessionTokenIfMissing(commandInput, "");
+    // Empty string is falsy, so it should pass through
+    expect(result).toBe(commandInput);
+  });
+
+  test("does not inject token when command already has token (4th token not starting with /)", () => {
+    const commandInput = "telegram 100 req-1 existing-token /agents list";
+    const result = injectSessionTokenIfMissing(commandInput, "new-token");
+    // Should not modify because 4th token doesn't start with /
+    expect(result).toBe(commandInput);
+  });
+
+  test("injects session token before command", () => {
+    const commandInput = "telegram 100 req-1 /agents";
+    const sessionToken = "test-session-token-123";
+    const result = injectSessionTokenIfMissing(commandInput, sessionToken);
+    expect(result).toBe("telegram 100 req-1 test-session-token-123 /agents");
+  });
+
+  test("injects session token before command with arguments", () => {
+    const commandInput = "telegram 100 req-1 /agents list all";
+    const sessionToken = "test-token";
+    const result = injectSessionTokenIfMissing(commandInput, sessionToken);
+    expect(result).toBe("telegram 100 req-1 test-token /agents list all");
+  });
+
+  test("passes through command with fewer than 4 parts", () => {
+    const commandInput = "telegram 100 req-1";
+    const sessionToken = "test-token";
+    const result = injectSessionTokenIfMissing(commandInput, sessionToken);
+    // Should not modify because command is too short
+    expect(result).toBe(commandInput);
+  });
+
+  test("handles command with extra whitespace", () => {
+    const commandInput = "  telegram   100   req-1   /agents  ";
+    const sessionToken = "test-token";
+    const result = injectSessionTokenIfMissing(commandInput, sessionToken);
+    // trim() and split(/\s+/) normalizes whitespace
+    expect(result).toBe("telegram 100 req-1 test-token /agents");
+  });
+
+  test("preserves command arguments after injection", () => {
+    const commandInput = "discord 12345 req-abc /install openclaw";
+    const sessionToken = "secure-token-xyz";
+    const result = injectSessionTokenIfMissing(commandInput, sessionToken);
+    expect(result).toBe("discord 12345 req-abc secure-token-xyz /install openclaw");
+  });
+
+  test("does not double-inject when token is already present", () => {
+    const commandInput = "telegram 100 req-1 my-token /agents";
+    const newToken = "different-token";
+    const result = injectSessionTokenIfMissing(commandInput, newToken);
+    // Should not inject because 4th token (my-token) doesn't start with /
+    expect(result).toBe(commandInput);
+  });
+
+  test("handles command with special characters in token", () => {
+    const commandInput = "telegram 100 req-1 /status";
+    const sessionToken = "token-with-special_chars.123";
+    const result = injectSessionTokenIfMissing(commandInput, sessionToken);
+    expect(result).toBe("telegram 100 req-1 token-with-special_chars.123 /status");
   });
 });

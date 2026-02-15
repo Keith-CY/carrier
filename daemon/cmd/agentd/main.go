@@ -112,7 +112,7 @@ func main() {
 
 	select {
 	case err := <-serverErrCh:
-		if err != nil && err != http.ErrServerClosed {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("http server error: %v", err)
 		}
 		return
