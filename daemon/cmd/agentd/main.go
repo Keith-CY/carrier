@@ -170,144 +170,63 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.Pai
 	})
 
 	register("/api/install", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		agentID, ok := extractAgentIDFromBody(w, r)
+		if !ok {
 			return
 		}
-		var body agentIDBody
-		if !decodeBody(w, r, &body) {
-			return
-		}
-		if err := validateAgentID(body.AgentID); err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if err := svc.Install(r.Context(), body.AgentID); err != nil {
-			writeServiceError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "installed"})
+		handleInstall(svc, agentID, w, r)
 	})
 
 	register("/api/start", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		agentID, ok := extractAgentIDFromBody(w, r)
+		if !ok {
 			return
 		}
-		var body agentIDBody
-		if !decodeBody(w, r, &body) {
-			return
-		}
-		if err := validateAgentID(body.AgentID); err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if err := svc.Start(r.Context(), body.AgentID); err != nil {
-			writeServiceError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
+		handleStart(svc, agentID, w, r)
 	})
 
 	register("/api/stop", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		agentID, ok := extractAgentIDFromBody(w, r)
+		if !ok {
 			return
 		}
-		var body agentIDBody
-		if !decodeBody(w, r, &body) {
-			return
-		}
-		if err := validateAgentID(body.AgentID); err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if err := svc.Stop(r.Context(), body.AgentID); err != nil {
-			writeServiceError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+		handleStop(svc, agentID, w, r)
 	})
 
 	register("/api/status/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
 		raw := trimPathByPrefixes(r.URL.Path, "/api/status/", "/api/v1/status/")
 		agentID, err := parsePathAgentID(raw)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		state, err := svc.Status(agentID)
-		if err != nil {
-			writeServiceError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, state)
+		handleStatus(svc, agentID, w, r)
 	})
 
 	register("/api/logs/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
 		raw := trimPathByPrefixes(r.URL.Path, "/api/logs/", "/api/v1/logs/")
 		agentID, err := parsePathAgentID(raw)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		tail := parseLogsTail(r.URL.Query().Get("tail"))
-		lines, err := svc.Logs(agentID, tail)
-		if err != nil {
-			writeServiceError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{"lines": lines})
+		handleLogs(svc, agentID, w, r)
 	})
 
 	register("/api/upgrade", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		agentID, ok := extractAgentIDFromBody(w, r)
+		if !ok {
 			return
 		}
-		var body agentIDBody
-		if !decodeBody(w, r, &body) {
-			return
-		}
-		if err := validateAgentID(body.AgentID); err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		result, err := svc.Upgrade(r.Context(), body.AgentID)
-		if err != nil {
-			writeServiceError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, result)
+		handleUpgrade(svc, agentID, w, r)
 	})
 
 	register("/api/diagnose", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		agentID, ok := extractAgentIDFromBody(w, r)
+		if !ok {
 			return
 		}
-		var body agentIDBody
-		if !decodeBody(w, r, &body) {
-			return
-		}
-		if err := validateAgentID(body.AgentID); err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		artifactRef, err := svc.Diagnose(body.AgentID)
-		if err != nil {
-			writeServiceError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"artifactRef": artifactRef})
+		handleDiagnose(svc, agentID, w, r)
 	})
 
 	// Pairing endpoints
@@ -367,99 +286,22 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.Pai
 			return
 		}
 
-		// Route to appropriate handler based on action
+		// Delegate to the shared lifecycle handlers
 		switch action {
 		case "install":
-			if r.Method != http.MethodPost {
-				writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			if err := svc.Install(r.Context(), agentID); err != nil {
-				writeServiceError(w, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]interface{}{"agentId": agentID, "installed": true})
-
+			handleInstall(svc, agentID, w, r)
 		case "start":
-			if r.Method != http.MethodPost {
-				writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			if err := svc.Start(r.Context(), agentID); err != nil {
-				writeServiceError(w, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]interface{}{"agentId": agentID, "started": true})
-
+			handleStart(svc, agentID, w, r)
 		case "stop":
-			if r.Method != http.MethodPost {
-				writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			if err := svc.Stop(r.Context(), agentID); err != nil {
-				writeServiceError(w, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]interface{}{"agentId": agentID, "stopped": true})
-
+			handleStop(svc, agentID, w, r)
 		case "status":
-			if r.Method != http.MethodGet {
-				writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			state, err := svc.Status(agentID)
-			if err != nil {
-				writeServiceError(w, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]interface{}{"statuses": []interface{}{state}})
-
+			handleStatus(svc, agentID, w, r)
 		case "logs":
-			if r.Method != http.MethodGet {
-				writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			tail := parseLogsTail(r.URL.Query().Get("tail"))
-			lines, err := svc.Logs(agentID, tail)
-			if err != nil {
-				writeServiceError(w, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]interface{}{"lines": lines, "truncated": false})
-
+			handleLogs(svc, agentID, w, r)
 		case "upgrade":
-			if r.Method != http.MethodPost {
-				writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			result, err := svc.Upgrade(r.Context(), agentID)
-			if err != nil {
-				writeServiceError(w, err)
-				return
-			}
-			resp := map[string]interface{}{
-				"agentId":     result.AgentID,
-				"fromVersion": result.FromVersion,
-				"toVersion":   result.ToVersion,
-				"backupPath":  result.BackupPath,
-			}
-			if strings.TrimSpace(result.BackupPath) != "" {
-				resp["rollbackHint"] = fmt.Sprintf("restore from %s before retrying upgrade", result.BackupPath)
-			}
-			writeJSON(w, http.StatusOK, resp)
-
+			handleUpgrade(svc, agentID, w, r)
 		case "diagnose":
-			if r.Method != http.MethodPost {
-				writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-				return
-			}
-			artifactRef, err := svc.Diagnose(agentID)
-			if err != nil {
-				writeServiceError(w, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]interface{}{"artifactRef": artifactRef})
-
+			handleDiagnose(svc, agentID, w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -504,6 +346,115 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.Pai
 	})
 
 	return mux
+}
+
+// extractAgentIDFromBody decodes an agent ID from a POST JSON body,
+// validates it, and writes an error response on failure.
+func extractAgentIDFromBody(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return "", false
+	}
+	var body agentIDBody
+	if !decodeBody(w, r, &body) {
+		return "", false
+	}
+	if err := validateAgentID(body.AgentID); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return "", false
+	}
+	return body.AgentID, true
+}
+
+// Shared lifecycle handlers used by both legacy and v1 routes.
+
+func handleInstall(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := svc.Install(r.Context(), agentID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "installed"})
+}
+
+func handleStart(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := svc.Start(r.Context(), agentID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
+}
+
+func handleStop(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := svc.Stop(r.Context(), agentID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+func handleStatus(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	state, err := svc.Status(agentID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
+}
+
+func handleLogs(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	tail := parseLogsTail(r.URL.Query().Get("tail"))
+	lines, err := svc.Logs(agentID, tail)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"lines": lines})
+}
+
+func handleUpgrade(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	result, err := svc.Upgrade(r.Context(), agentID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func handleDiagnose(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	artifactRef, err := svc.Diagnose(agentID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"artifactRef": artifactRef})
 }
 
 type agentIDBody struct {

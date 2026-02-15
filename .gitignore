@@ -5,3 +5,4 @@ daemon/coverage.out
 .worktree
 .worktrees/
 agentd
+!daemon/cmd/agentd/
