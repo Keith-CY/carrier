@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -31,6 +32,8 @@ const (
 	shutdownTimeout = 30 * time.Second
 	defaultLogsTail = 200
 	maxLogsTail     = 1000
+	// maxBodySize is the maximum allowed request body size (1 MB).
+	maxBodySize = 1 << 20
 )
 
 // agentIDPattern allows alphanumeric characters, hyphens, underscores, and dots.
@@ -511,8 +514,17 @@ type agentIDBody struct {
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, v interface{}) bool {
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+	// Cap request body to maxBodySize to prevent DoS.
+	limited := io.LimitReader(r.Body, maxBodySize+1)
+	dec := json.NewDecoder(limited)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return false
+	}
+	// Reject trailing JSON values (e.g. `{}{}`)
+	if dec.More() {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body: unexpected trailing data")
 		return false
 	}
 	return true
