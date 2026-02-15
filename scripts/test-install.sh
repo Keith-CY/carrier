@@ -20,17 +20,17 @@ TESTS_FAILED=0
 
 # Helper functions
 print_test() {
-    printf "${YELLOW}[TEST]${NC} %s\n" "$1"
+    printf '%s[TEST]%s %s\n' "$YELLOW" "$NC" "$1"
     TESTS_RUN=$((TESTS_RUN + 1))
 }
 
 print_pass() {
-    printf "${GREEN}[PASS]${NC} %s\n" "$1"
+    printf '%s[PASS]%s %s\n' "$GREEN" "$NC" "$1"
     TESTS_PASSED=$((TESTS_PASSED + 1))
 }
 
 print_fail() {
-    printf "${RED}[FAIL]${NC} %s\n" "$1"
+    printf '%s[FAIL]%s %s\n' "$RED" "$NC" "$1"
     TESTS_FAILED=$((TESTS_FAILED + 1))
 }
 
@@ -143,7 +143,9 @@ if command -v shellcheck >/dev/null 2>&1; then
     fi
 else
     # Run basic bashism check manually
-    if grep -qE '(\[\[|==|\$\(|function )' "$INSTALL_SCRIPT"; then
+    # Note: $(…) is POSIX-compliant, not a bashism
+    # Real bashisms: [[, function keyword, == in tests, $'...'
+    if grep -qE '(\[\[|function [a-z]|== )' "$INSTALL_SCRIPT"; then
         print_fail "Potential bashisms detected"
     else
         print_pass "No obvious bashisms (shellcheck not available for full check)"
@@ -161,9 +163,9 @@ echo "Failed: $TESTS_FAILED"
 echo "================================"
 
 if [ "$TESTS_FAILED" -eq 0 ]; then
-    printf "${GREEN}All tests passed!${NC}\n"
+    printf '%sAll tests passed!%s\n' "$GREEN" "$NC"
     exit 0
 else
-    printf "${RED}Some tests failed${NC}\n"
+    printf '%sSome tests failed%s\n' "$RED" "$NC"
     exit 1
 fi

@@ -29,8 +29,7 @@ case "$ARCH" in
     x86_64) ARCH="amd64" ;;
     aarch64) ARCH="arm64" ;;
     armv7l) ARCH="armv7" ;;
-    riscv64) ARCH="riscv64" ;;
-    *) ARCH="$ARCH" ;;
+    # riscv64, i386, etc. - keep as-is
 esac
 
 BINARY="openclaw-v${VERSION}-${OS}-${ARCH}"
