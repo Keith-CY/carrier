@@ -111,11 +111,21 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 		return ErrAlreadyStopped
 	}
 
+	// Mark as stopped before killing the process so that monitorProcess
+	// (which races on the same lock) won't overwrite the state to Crashing.
+	s.mu.Lock()
+	state = s.states[agentID]
+	state.Runtime = RuntimeStateStopped
+	state.UpdatedAt = s.now()
+	s.states[agentID] = state
+	s.mu.Unlock()
+
 	// Stop the process using ProcessManager
 	runErr := s.processManager.Stop(agentID)
 	if runErr != nil {
 		s.mu.Lock()
 		state = s.states[agentID]
+		state.Runtime = RuntimeStateRunning // revert — process may still be alive
 		state.LastError = runErr.Error()
 		state.UpdatedAt = s.now()
 		s.states[agentID] = state
@@ -131,7 +141,6 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 
 	s.mu.Lock()
 	state = s.states[agentID]
-	state.Runtime = RuntimeStateStopped
 	state.Health = HealthStateUnknown
 	state.LastError = ""
 	state.UpdatedAt = s.now()
