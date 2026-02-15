@@ -53,21 +53,9 @@ type healthzResponse struct {
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	uptime := time.Since(s.startTime)
-	count := 0
-	if s.agents != nil {
-		count = s.agents.RunningAgentsCount()
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(healthzResponse{
-		Status:        "ok",
-		Uptime:        uptime.Round(time.Second).String(),
-		UptimeSeconds: int64(uptime.Seconds()),
-		RunningAgents: count,
-		Version:       Version,
-	})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
