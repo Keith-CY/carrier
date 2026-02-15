@@ -51,6 +51,13 @@ func main() {
 		log.Fatalf("register openclaw manifest: %v", err)
 	}
 
+	// Create pairing store and issue initial code
+	pairStore := api.NewPairingCodeStore(nil)
+	pairRecord, err := pairStore.Issue(5 * time.Minute)
+	if err != nil {
+		log.Fatalf("generate initial pairing code: %v", err)
+	}
+
 	logger.Info("agentd scaffold booted")
 	fmt.Printf("agentd scaffold booted (listen=%s:%d log=%s/%s)\n",
 		cfg.Server.Host, cfg.Server.Port, cfg.Log.Level, cfg.Log.Format)
@@ -58,6 +65,7 @@ func main() {
 	for _, entry := range catalog.DefaultEntries() {
 		fmt.Printf("- %s (%s): %s\n", entry.Name, entry.ID, entry.Status)
 	}
+	fmt.Printf("\n  PAIR_CODE: %s\n  (expires in 5 minutes)\n\n", pairRecord.Code)
 
 	// Validate security: refuse non-loopback binding without an API token.
 	if cfg.Server.APIToken == "" && !isLoopback(cfg.Server.Host) {
@@ -72,7 +80,7 @@ func main() {
 	healthServer := health.NewServer(svc)
 	healthServer.SetReady(false)
 
-	handler := buildHTTPHandler(svc, healthServer)
+	handler := buildHTTPHandler(svc, healthServer, pairStore)
 	if cfg.Server.APIToken != "" {
 		handler = bearerAuthMiddleware(cfg.Server.APIToken, handler)
 	}
@@ -117,13 +125,13 @@ func main() {
 	fmt.Println("agentd stopped gracefully")
 }
 
-func buildHTTPHandler(svc *lifecycle.Service, healthServer *health.Server) http.Handler {
+func buildHTTPHandler(svc *lifecycle.Service, healthServer *health.Server, pairStore *api.PairingCodeStore) http.Handler {
 	root := http.NewServeMux()
 	healthMux := healthServer.Handler()
 	root.Handle("/healthz", healthMux)
 	root.Handle("/readyz", healthMux)
 
-	apiServer := api.NewServer(svc)
+	apiServer := api.NewServer(svc, api.WithPairingCodeStore(pairStore))
 	root.Handle("/api/v1/", apiServer.Handler())
 	return root
 }

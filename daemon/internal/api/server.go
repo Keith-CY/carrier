@@ -243,11 +243,20 @@ type issuePairCodeRequest struct {
 }
 
 func (s *Server) handleIssuePairCode(w http.ResponseWriter, r *http.Request) {
-	if !allowMethod(w, r, http.MethodPost) {
-		return
-	}
 	if r.URL.Path != "/api/v1/pairing/codes" {
 		http.NotFound(w, r)
+		return
+	}
+
+	// Handle GET request to list current codes
+	if r.Method == http.MethodGet {
+		codes := s.pairing.List()
+		writeJSON(w, http.StatusOK, map[string]any{"codes": codes})
+		return
+	}
+
+	// Handle POST request to issue/register new code
+	if !allowMethod(w, r, http.MethodPost) {
 		return
 	}
 

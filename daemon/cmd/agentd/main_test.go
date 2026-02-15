@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"carrier/daemon/internal/api"
 	"carrier/daemon/internal/baseagent"
 	"carrier/daemon/internal/catalog"
 	"carrier/daemon/internal/health"
@@ -46,7 +47,8 @@ func TestBuildHTTPHandlerMountsHealthAndAPI(t *testing.T) {
 	}
 	healthServer := health.NewServer(svc)
 	healthServer.SetReady(true)
-	handler := buildHTTPHandler(svc, healthServer)
+	pairStore := api.NewPairingCodeStore(nil)
+	handler := buildHTTPHandler(svc, healthServer, pairStore)
 
 	healthReq := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	healthRec := httptest.NewRecorder()
