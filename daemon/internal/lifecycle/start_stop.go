@@ -149,6 +149,8 @@ func (s *Service) monitorProcess(agentID string) {
 	err := s.processManager.Wait(agentID)
 
 	var logLine string
+	var shouldTriage bool
+	var errorMsg string
 
 	s.mu.Lock()
 	state, ok := s.states[agentID]
@@ -167,15 +169,24 @@ func (s *Service) monitorProcess(agentID string) {
 			state.LastError = "process exited unexpectedly"
 		}
 		logLine = state.LastError
+		errorMsg = state.LastError
 		state.UpdatedAt = s.now()
 		s.states[agentID] = state
 
 		// Record crash for crash-loop detection
 		s.recordRestart(agentID)
+		shouldTriage = true
 	}
 	s.mu.Unlock()
 
 	if logLine != "" {
 		s.appendLog(agentID, logLine)
+	}
+
+	// Trigger failure handling for unexpected exits
+	if shouldTriage {
+		if _, triageErr := s.HandleFailure(context.Background(), agentID, errorMsg); triageErr != nil {
+			s.appendLog(agentID, fmt.Sprintf("triage error: %v", triageErr))
+		}
 	}
 }
