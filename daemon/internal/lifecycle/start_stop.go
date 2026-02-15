@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"carrier/daemon/internal/runtimecheck"
 )
@@ -63,6 +64,18 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 	}
 
 	s.appendLog(agentID, fmt.Sprintf("started process with PID %d", pid))
+
+	// Detect immediate process exit (e.g., command not found) and treat as start failure.
+	time.Sleep(20 * time.Millisecond)
+	if !s.processManager.IsRunning(agentID) {
+		waitErr := s.processManager.Wait(agentID)
+		if waitErr == nil {
+			waitErr = fmt.Errorf("process exited immediately")
+		}
+		s.updateStateOnStartError(agentID, waitErr)
+		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_START_FAILED", waitErr.Error())
+		return waitErr
+	}
 
 	// Auto-mount memories linked to this agent.
 	s.autoMountMemories(agentID)
@@ -135,11 +148,12 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 func (s *Service) monitorProcess(agentID string) {
 	err := s.processManager.Wait(agentID)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var logLine string
 
+	s.mu.Lock()
 	state, ok := s.states[agentID]
 	if !ok {
+		s.mu.Unlock()
 		return
 	}
 
@@ -149,15 +163,19 @@ func (s *Service) monitorProcess(agentID string) {
 		state.Health = HealthStateUnhealthy
 		if err != nil {
 			state.LastError = fmt.Sprintf("process exited: %v", err)
-			s.appendLog(agentID, state.LastError)
 		} else {
 			state.LastError = "process exited unexpectedly"
-			s.appendLog(agentID, state.LastError)
 		}
+		logLine = state.LastError
 		state.UpdatedAt = s.now()
 		s.states[agentID] = state
 
 		// Record crash for crash-loop detection
 		s.recordRestart(agentID)
+	}
+	s.mu.Unlock()
+
+	if logLine != "" {
+		s.appendLog(agentID, logLine)
 	}
 }

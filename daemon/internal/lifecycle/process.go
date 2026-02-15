@@ -23,7 +23,8 @@ type processInfo struct {
 	pid      int
 	agentID  string
 	logFile  *os.File
-	done     chan error
+	done     chan struct{}
+	waitErr  error
 	stopOnce sync.Once
 }
 
@@ -83,13 +84,12 @@ func (pm *ProcessManager) Start(agentID string, command string, args []string) (
 		pid:     cmd.Process.Pid,
 		agentID: agentID,
 		logFile: logFile,
-		done:    make(chan error, 1),
+		done:    make(chan struct{}),
 	}
 
 	// Monitor process in background
 	go func() {
-		err := cmd.Wait()
-		info.done <- err
+		info.waitErr = cmd.Wait()
 		close(info.done)
 	}()
 
@@ -110,9 +110,9 @@ func (pm *ProcessManager) Stop(agentID string) error {
 
 	var stopErr error
 	info.stopOnce.Do(func() {
-		// Send SIGTERM
-		if err := info.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-			stopErr = fmt.Errorf("send SIGTERM: %w", err)
+		// Send SIGTERM to the full process group so child processes are terminated too.
+		if err := syscall.Kill(-info.pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
+			stopErr = fmt.Errorf("send SIGTERM to process group: %w", err)
 			return
 		}
 
@@ -122,9 +122,9 @@ func (pm *ProcessManager) Stop(agentID string) error {
 		case <-info.done:
 			// Process exited gracefully
 		case <-timeout:
-			// Force kill
-			if err := info.cmd.Process.Kill(); err != nil {
-				stopErr = fmt.Errorf("send SIGKILL: %w", err)
+			// Force kill the full process group.
+			if err := syscall.Kill(-info.pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+				stopErr = fmt.Errorf("send SIGKILL to process group: %w", err)
 				return
 			}
 			<-info.done // Wait for process to actually exit
@@ -164,7 +164,8 @@ func (pm *ProcessManager) Wait(agentID string) error {
 		return fmt.Errorf("agent %s is not running", agentID)
 	}
 
-	return <-info.done
+	<-info.done
+	return info.waitErr
 }
 
 // isProcessAlive checks if a process with the given PID exists.
@@ -190,6 +191,6 @@ func (pm *ProcessManager) Cleanup() {
 	pm.mu.Unlock()
 
 	for _, id := range agentIDs {
-		pm.Stop(id)
+		_ = pm.Stop(id)
 	}
 }

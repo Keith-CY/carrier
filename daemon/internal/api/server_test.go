@@ -65,7 +65,7 @@ func sampleManifest() manifest.Manifest {
 			Type:    manifest.RuntimeTypeLocalBinary,
 			Install: manifest.CommandSpec{Command: "install-openclaw"},
 			Upgrade: manifest.CommandSpec{Command: "upgrade-openclaw"},
-			Start:   manifest.CommandSpec{Command: "start-openclaw"},
+			Start:   manifest.CommandSpec{Command: "tail -f /dev/null"},
 			Stop:    manifest.CommandSpec{Command: "stop-openclaw"},
 		},
 		Network: manifest.NetworkSpec{

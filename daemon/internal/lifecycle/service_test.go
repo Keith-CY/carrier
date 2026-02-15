@@ -72,7 +72,7 @@ func sampleManifest() manifest.Manifest {
 			Type:    manifest.RuntimeTypeLocalBinary,
 			Install: manifest.CommandSpec{Command: "install-openclaw"},
 			Upgrade: manifest.CommandSpec{Command: "upgrade-openclaw"},
-			Start:   manifest.CommandSpec{Command: "start-openclaw"},
+			Start:   manifest.CommandSpec{Command: "tail -f /dev/null"},
 			Stop:    manifest.CommandSpec{Command: "stop-openclaw"},
 		},
 		Network: manifest.NetworkSpec{
@@ -141,7 +141,7 @@ func TestLifecycleInstallStartStop(t *testing.T) {
 	if checker.calls != 2 {
 		t.Fatalf("expected checker called twice (install/start), got %d", checker.calls)
 	}
-	wantCalls := []string{"install-openclaw", "start-openclaw", "stop-openclaw"}
+	wantCalls := []string{"install-openclaw"}
 	if len(runner.calls) != len(wantCalls) {
 		t.Fatalf("expected %d runner calls, got %d", len(wantCalls), len(runner.calls))
 	}
@@ -362,11 +362,15 @@ func TestStartFailsWhenPortIsInUse(t *testing.T) {
 
 func TestStartDetectsCrashLoopAndAppliesCooldown(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
-	runner := &fakeRunner{results: map[string]runResult{
-		"start-openclaw": {err: errors.New("boom")},
-	}}
+	runner := &fakeRunner{results: map[string]runResult{}}
 	checker := &fakeChecker{}
 	svc, clock := newServiceForTestWithClock(t, runner, checker)
+
+	m := sampleManifest()
+	m.Runtime.Start.Command = "missing-start-command"
+	if regErr := svc.RegisterManifest(m); regErr != nil {
+		t.Fatalf("re-register manifest: %v", regErr)
+	}
 
 	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
@@ -396,9 +400,16 @@ func TestStartDetectsCrashLoopAndAppliesCooldown(t *testing.T) {
 	}
 
 	clock.Advance(defaultCrashLoopCooldown + time.Second)
-	runner.results["start-openclaw"] = runResult{result: commandexec.Result{ExitCode: 0}}
+	svc.mu.Lock()
+	updated := svc.manifests["openclaw"]
+	updated.Runtime.Start.Command = "tail -f /dev/null"
+	svc.manifests["openclaw"] = updated
+	svc.mu.Unlock()
 	if err := svc.Start(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("expected start success after cooldown, got %v", err)
+	}
+	if err := svc.Stop(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("stop after recovery start: %v", err)
 	}
 }
 
@@ -570,11 +581,15 @@ func TestUpgradeRejectsWhenAgentRunning(t *testing.T) {
 
 func TestUpgradeResetsCrashLoopState(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
-	runner := &fakeRunner{results: map[string]runResult{
-		"start-openclaw": {err: errors.New("boom")},
-	}}
+	runner := &fakeRunner{results: map[string]runResult{}}
 	checker := &fakeChecker{}
 	svc, clock := newServiceForTestWithClock(t, runner, checker)
+
+	m := sampleManifest()
+	m.Runtime.Start.Command = "missing-start-command"
+	if regErr := svc.RegisterManifest(m); regErr != nil {
+		t.Fatalf("re-register manifest: %v", regErr)
+	}
 
 	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
@@ -626,9 +641,16 @@ func TestUpgradeResetsCrashLoopState(t *testing.T) {
 	}
 
 	// Verify can start without crash-loop blocking
-	runner.results["start-openclaw"] = runResult{result: commandexec.Result{ExitCode: 0}}
+	svc.mu.Lock()
+	updated := svc.manifests["openclaw"]
+	updated.Runtime.Start.Command = "tail -f /dev/null"
+	svc.manifests["openclaw"] = updated
+	svc.mu.Unlock()
 	if err := svc.Start(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("expected start success after upgrade reset, got %v", err)
+	}
+	if err := svc.Stop(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("stop after post-upgrade start: %v", err)
 	}
 }
 

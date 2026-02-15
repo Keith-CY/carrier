@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -52,7 +53,7 @@ func TestProcessManager_StartAlreadyRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Start failed: %v", err)
 	}
-	defer pm.Stop(agentID)
+	defer func() { _ = pm.Stop(agentID) }()
 
 	// Try to start again
 	_, err = pm.Start(agentID, "sleep", []string{"60"})
@@ -116,7 +117,7 @@ func TestProcessManager_IsRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
-	defer pm.Stop(agentID)
+	defer func() { _ = pm.Stop(agentID) }()
 
 	// After start
 	if !pm.IsRunning(agentID) {
@@ -127,7 +128,9 @@ func TestProcessManager_IsRunning(t *testing.T) {
 	pm.mu.RLock()
 	info := pm.processes[agentID]
 	pm.mu.RUnlock()
-	info.cmd.Process.Signal(syscall.SIGKILL)
+	if err := info.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+		t.Fatalf("failed to send SIGKILL: %v", err)
+	}
 	time.Sleep(100 * time.Millisecond)
 
 	if pm.IsRunning(agentID) {
@@ -171,6 +174,51 @@ func TestProcessManager_StopNotRunning(t *testing.T) {
 	if err == nil {
 		t.Error("expected error when stopping nonexistent agent")
 	}
+}
+
+func TestProcessManager_StopKillsChildProcessesViaProcessGroup(t *testing.T) {
+	tmpDir := t.TempDir()
+	pm := NewProcessManager(tmpDir)
+
+	pidFile := filepath.Join(tmpDir, "child.pid")
+	scriptPath := filepath.Join(tmpDir, "spawn-child.sh")
+	script := "#!/usr/bin/env bash\nset -euo pipefail\nsleep 60 &\necho $! > \"" + pidFile + "\"\nwait\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("create script: %v", err)
+	}
+
+	agentID := "test-agent-child-group"
+	if _, err := pm.Start(agentID, "bash", []string{scriptPath}); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	var childPID int
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(pidFile)
+		if err == nil {
+			if _, scanErr := fmt.Sscanf(string(data), "%d", &childPID); scanErr == nil && childPID > 0 {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if childPID <= 0 {
+		t.Fatalf("failed to capture child PID from %s", pidFile)
+	}
+
+	if err := pm.Stop(agentID); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(childPID, 0); err != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("expected child PID %d to be terminated", childPID)
 }
 
 func TestProcessManager_ForcedKillAfterTimeout(t *testing.T) {
@@ -228,7 +276,9 @@ func TestProcessManager_LogFileCreation(t *testing.T) {
 	}
 
 	// Wait for process to complete
-	pm.Wait(agentID)
+	if err := pm.Wait(agentID); err != nil {
+		t.Fatalf("Wait returned error: %v", err)
+	}
 
 	// Check log file exists and contains output
 	logPath := filepath.Join(tmpDir, agentID+".log")
