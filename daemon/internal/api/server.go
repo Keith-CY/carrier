@@ -423,6 +423,12 @@ func readJSON(r *http.Request, dst any) error {
 	if err := dec.Decode(dst); err != nil {
 		return fmt.Errorf("invalid json: %w", err)
 	}
+
+	var trailing struct{}
+	if err := dec.Decode(&trailing); err != io.EOF {
+		return fmt.Errorf("invalid json: trailing content after first json value")
+	}
+
 	return nil
 }
 

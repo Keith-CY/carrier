@@ -94,6 +94,11 @@ func doJSONRequest(t *testing.T, handler http.Handler, method, path string, body
 		payload = raw
 	}
 
+	return doRawJSONRequest(t, handler, method, path, payload)
+}
+
+func doRawJSONRequest(t *testing.T, handler http.Handler, method, path string, payload []byte) *httptest.ResponseRecorder {
+	t.Helper()
 	req := httptest.NewRequest(method, path, bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -313,6 +318,50 @@ func TestIssuePairCodeEndpointReturnsCodeAndExpiry(t *testing.T) {
 	}
 	if strings.TrimSpace(resp.ExpiresAt) == "" {
 		t.Fatal("expected expiresAt in response")
+	}
+}
+
+func TestVerifyConsumePairCodeRejectsTrailingJSONValues(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 2, 14, 17, 0, 0, 0, time.UTC)}
+	pairing := NewPairingCodeStore(clock.Now)
+	if _, err := pairing.Register("pair-test-code", 30*time.Second); err != nil {
+		t.Fatalf("register code: %v", err)
+	}
+
+	svc := newServiceForAPITest(t)
+	handler := NewServer(svc, WithPairingCodeStore(pairing)).Handler()
+
+	rr := doRawJSONRequest(t, handler, http.MethodPost, "/api/v1/pairing/verify-consume", []byte(`{"code":"pair-test-code"} {"code":"pair-other"}`))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var env errorEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	if env.Error.Code != "E_USAGE" {
+		t.Fatalf("unexpected error code: %q", env.Error.Code)
+	}
+}
+
+func TestIssuePairCodeRejectsTrailingGarbage(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 2, 14, 17, 0, 0, 0, time.UTC)}
+	pairing := NewPairingCodeStore(clock.Now)
+	svc := newServiceForAPITest(t)
+	handler := NewServer(svc, WithPairingCodeStore(pairing)).Handler()
+
+	rr := doRawJSONRequest(t, handler, http.MethodPost, "/api/v1/pairing/codes", []byte(`{"ttlSeconds":60} trailing`))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var env errorEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	if env.Error.Code != "E_USAGE" {
+		t.Fatalf("unexpected error code: %q", env.Error.Code)
 	}
 }
 
