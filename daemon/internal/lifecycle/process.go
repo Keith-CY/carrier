@@ -25,7 +25,7 @@ type processInfo struct {
 	logFile  *os.File
 	done     chan struct{}
 	waitErr  error
-	stopOnce sync.Once
+	stopping bool
 }
 
 // NewProcessManager creates a new process manager.
@@ -106,16 +106,18 @@ func (pm *ProcessManager) Stop(agentID string) error {
 		pm.mu.Unlock()
 		return fmt.Errorf("agent %s is not running", agentID)
 	}
+	if info.stopping {
+		pm.mu.Unlock()
+		return fmt.Errorf("agent %s is already stopping", agentID)
+	}
+	info.stopping = true
 	pm.mu.Unlock()
 
+	// Send SIGTERM to the full process group so child processes are terminated too.
 	var stopErr error
-	info.stopOnce.Do(func() {
-		// Send SIGTERM to the full process group so child processes are terminated too.
-		if err := syscall.Kill(-info.pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
-			stopErr = fmt.Errorf("send SIGTERM to process group: %w", err)
-			return
-		}
-
+	if err := syscall.Kill(-info.pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
+		stopErr = fmt.Errorf("send SIGTERM to process group: %w", err)
+	} else {
 		// Wait up to 10 seconds for graceful shutdown
 		timeout := time.After(10 * time.Second)
 		select {
@@ -125,14 +127,14 @@ func (pm *ProcessManager) Stop(agentID string) error {
 			// Force kill the full process group.
 			if err := syscall.Kill(-info.pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
 				stopErr = fmt.Errorf("send SIGKILL to process group: %w", err)
-				return
+			} else {
+				<-info.done // Wait for process to actually exit
 			}
-			<-info.done // Wait for process to actually exit
 		}
+	}
 
-		// Cleanup
-		info.logFile.Close()
-	})
+	// Cleanup
+	info.logFile.Close()
 
 	pm.mu.Lock()
 	delete(pm.processes, agentID)
