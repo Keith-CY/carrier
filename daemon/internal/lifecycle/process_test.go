@@ -53,7 +53,11 @@ func TestProcessManager_StartAlreadyRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Start failed: %v", err)
 	}
-	defer func() { _ = pm.Stop(agentID) }()
+	defer func() {
+		if err := pm.Stop(agentID); err != nil {
+			t.Logf("cleanup stop failed: %v", err)
+		}
+	}()
 
 	// Try to start again
 	_, err = pm.Start(agentID, "sleep", []string{"60"})
@@ -117,7 +121,11 @@ func TestProcessManager_IsRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
-	defer func() { _ = pm.Stop(agentID) }()
+	defer func() {
+		if err := pm.Stop(agentID); err != nil {
+			t.Logf("cleanup stop failed: %v", err)
+		}
+	}()
 
 	// After start
 	if !pm.IsRunning(agentID) {
