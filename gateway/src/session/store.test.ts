@@ -180,8 +180,6 @@ describe("SessionStore", () => {
       expect(session).not.toBeNull();
     });
 
-
-
     test("removes session exactly at stale-session TTL boundary", () => {
       let time = new Date("2026-01-01T00:00:00Z");
       const store = new SessionStore(() => time, 60);
@@ -201,8 +199,6 @@ describe("SessionStore", () => {
       expect(store.cleanup()).toBe(0);
     });
   });
-
-
 
   describe("periodic cleanup lifecycle", () => {
     test("startPeriodicCleanup and stopPeriodicCleanup are idempotent", () => {
