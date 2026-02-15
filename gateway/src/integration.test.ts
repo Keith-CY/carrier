@@ -13,8 +13,12 @@ function buildDeps(): GatewayDependencies {
 }
 
 function pair(deps: GatewayDependencies, provider = "telegram", chatId = "100"): void {
-  deps.sessions.registerPairCode("test-code", 300);
-  deps.sessions.pair({ provider: provider as "telegram", chatId, code: "test-code" });
+  // Register pair code with the daemon
+  if (deps.daemon instanceof InMemoryDaemonClient) {
+    deps.daemon.registerPairCode("test-code");
+  }
+  // Create the session directly
+  deps.sessions.createSession({ provider: provider as "telegram", chatId });
 }
 
 describe("E2E: pair → install → start → status → stop flow", () => {
@@ -22,7 +26,9 @@ describe("E2E: pair → install → start → status → stop flow", () => {
     const deps = buildDeps();
 
     // 1. Pair
-    deps.sessions.registerPairCode("my-code", 300);
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("my-code");
+    }
     const pairRes = await safeHandleCommand("telegram 100 req-pair /pair my-code", deps);
     expect(pairRes.result).toBe("ok");
     expect(pairRes.sessionToken).toBeDefined();
@@ -223,7 +229,9 @@ describe("E2E: logs and upgrade", () => {
 describe("E2E: multi-provider support", () => {
   test("discord provider works", async () => {
     const deps = buildDeps();
-    deps.sessions.registerPairCode("dc-code", 300);
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("dc-code");
+    }
     const res = await safeHandleCommand("discord guild-1 req-1 /pair dc-code", deps);
     expect(res.result).toBe("ok");
 
@@ -233,7 +241,9 @@ describe("E2E: multi-provider support", () => {
 
   test("feishu provider works", async () => {
     const deps = buildDeps();
-    deps.sessions.registerPairCode("fs-code", 300);
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("fs-code");
+    }
     const res = await safeHandleCommand("feishu chat-1 req-1 /pair fs-code", deps);
     expect(res.result).toBe("ok");
 

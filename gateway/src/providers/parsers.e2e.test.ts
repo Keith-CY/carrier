@@ -21,7 +21,9 @@ function buildDeps(): GatewayDependencies {
 describe("provider parser e2e", () => {
   test("telegram parser output is executable by gateway command path", async () => {
     const deps = buildDeps();
-    deps.sessions.registerPairCode("tg-code", 300);
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("tg-code");
+    }
 
     const normalized = parseTelegramUpdateToCommand({
       update_id: 2001,
@@ -40,7 +42,9 @@ describe("provider parser e2e", () => {
 
   test("discord parser output is executable by gateway command path", async () => {
     const deps = buildDeps();
-    deps.sessions.registerPairCode("dc-code", 300);
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("dc-code");
+    }
 
     const normalized = parseDiscordPayloadToCommand({
       id: "interaction-22",
@@ -60,7 +64,9 @@ describe("provider parser e2e", () => {
 
   test("feishu parser output is executable by gateway command path", async () => {
     const deps = buildDeps();
-    deps.sessions.registerPairCode("fs-code", 300);
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("fs-code");
+    }
 
     const normalized = parseFeishuEventToCommand({
       header: { event_id: "evt-20" },

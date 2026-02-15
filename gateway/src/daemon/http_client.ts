@@ -117,6 +117,15 @@ export class HttpDaemonClient implements DaemonClient {
     );
   }
 
+  async verifyPairCode(code: string, ctx: RequestContext): Promise<void> {
+    await this.requestJSON(
+      "POST",
+      "/api/v1/pairing/verify-consume",
+      { code },
+      ctx,
+    );
+  }
+
   private async requestJSON<T>(
     method: string,
     path: string,

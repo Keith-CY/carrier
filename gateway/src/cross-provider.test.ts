@@ -132,7 +132,9 @@ describe("cross-provider consistency", () => {
     const freshDeps = buildDeps();
     const results: GatewayResponse[] = [];
     for (const provider of PROVIDERS) {
-      freshDeps.sessions.registerPairCode(`p-${provider}`, 300);
+      if (freshDeps.daemon instanceof InMemoryDaemonClient) {
+        freshDeps.daemon.registerPairCode(`p-${provider}`);
+      }
       const input = `${provider} 200 req-${provider} /pair p-${provider}`;
       const res = await handleCommand(parseInput(input), freshDeps);
       results.push(res);

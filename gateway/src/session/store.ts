@@ -59,6 +59,21 @@ export class SessionStore {
     return session;
   }
 
+  createSession(request: { provider: Provider; chatId: string }): SessionRecord {
+    const existing = this.getSession(request.provider, request.chatId);
+    const createdAt = existing?.createdAt ?? this.now().toISOString();
+    const sessionToken = existing?.sessionToken ?? this.issueSessionToken();
+    const session: SessionRecord = {
+      provider: request.provider,
+      chatId: request.chatId,
+      sessionToken,
+      createdAt,
+      lastSeenAt: this.now().toISOString(),
+    };
+    this.sessions.set(sessionKey(request.provider, request.chatId), session);
+    return session;
+  }
+
   getSession(provider: Provider, chatId: string): SessionRecord | null {
     return this.sessions.get(sessionKey(provider, chatId)) ?? null;
   }

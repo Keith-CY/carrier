@@ -15,8 +15,10 @@ function buildDeps(): GatewayDependencies {
 }
 
 function pairChat(d: GatewayDependencies, provider: "telegram" | "discord" | "feishu" = "telegram", chatId = "100"): void {
-  d.sessions.registerPairCode("pair-ok", 300);
-  d.sessions.pair({ provider, chatId, code: "pair-ok" });
+  if (d.daemon instanceof InMemoryDaemonClient) {
+    d.daemon.registerPairCode("pair-ok");
+  }
+  d.sessions.createSession({ provider, chatId });
 }
 
 describe("command routing: /pair", () => {
@@ -25,7 +27,9 @@ describe("command routing: /pair", () => {
   });
 
   test("successful pairing returns session token", async () => {
-    deps.sessions.registerPairCode("my-code", 300);
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("my-code");
+    }
 
     const res = await handleCommand(parseInput("telegram 100 req-1 /pair my-code"), deps);
 
