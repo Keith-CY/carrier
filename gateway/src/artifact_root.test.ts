@@ -211,6 +211,27 @@ describe("ARTIFACT_ROOT security", () => {
     }).toThrow();
   });
 
+  test("allows ARTIFACT_ROOT under /root subdirectory", async () => {
+    // Scoped subdirectories of /root are legitimate in dev/CI environments.
+    // We test that the runtime doesn't throw during construction (validation
+    // passes), even though the directory may not exist on this host.
+    process.env.ARTIFACT_ROOT = "/root/project/artifacts";
+
+    const deps = makeDeps();
+    // Issue a token for a hypothetical file under /root/project/artifacts.
+    const testFile = "/root/project/artifacts/data.txt";
+    const token = deps.downloads.issue(testFile, 300, false);
+    const runtime = createGatewayRuntime({ deps });
+
+    // The request should NOT throw a security error. It will return 404
+    // because the file doesn't actually exist, which proves validation passed.
+    const response = await runtime.fetch(
+      new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`)
+    );
+
+    expect(response.status).toBe(404);
+  });
+
   test("resolves relative ARTIFACT_ROOT to absolute path", async () => {
     process.env.ARTIFACT_ROOT = "./test-artifacts";
     
