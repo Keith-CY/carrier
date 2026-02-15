@@ -455,10 +455,10 @@ func TestBearerAuthMiddlewareBoundaryCases(t *testing.T) {
 	h := bearerAuthMiddleware(token, base)
 
 	tests := []struct {
-		name   string
-		path   string
-		auth   string
-		want   int
+		name string
+		path string
+		auth string
+		want int
 	}{
 		{name: "api missing auth", path: "/api/v1/agents", auth: "", want: http.StatusUnauthorized},
 		{name: "api wrong scheme", path: "/api/v1/agents", auth: "Token secret-token", want: http.StatusUnauthorized},
