@@ -282,4 +282,14 @@ function jsonResponse(payload: unknown, status = 200): Response {
 if (import.meta.main) {
   const server = startGatewayServer();
   console.log(`gateway server listening on http://${server.hostname}:${server.port}`);
+
+  // Graceful shutdown on SIGTERM and SIGINT
+  const shutdown = () => {
+    console.log("shutting down gateway server...");
+    server.stop();
+    process.exit(0);
+  };
+
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 }
