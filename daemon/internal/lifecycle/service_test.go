@@ -1186,6 +1186,7 @@ func TestLoadPersistedState_KeepsRunningIfProcessAlive(t *testing.T) {
 	}
 
 	// Start the agent so there's an actual process running
+	t.Setenv("OPENAI_API_KEY", "test-key")
 	if err := svc.Start(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
