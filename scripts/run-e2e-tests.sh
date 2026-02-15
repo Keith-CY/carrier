@@ -24,7 +24,7 @@ if [[ ! -d "$repo_root/gateway/node_modules" ]]; then
   echo "gateway/node_modules not found; installing gateway dependencies..."
   (
     cd "$repo_root/gateway"
-    bun install --no-progress
+    bun install --frozen-lockfile --no-progress
   )
 fi
 

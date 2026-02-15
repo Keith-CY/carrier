@@ -12,7 +12,7 @@ printf '\n=== Daemon tests ===\n'
 printf '\n=== Gateway checks and tests ===\n'
 (
   cd "$repo_root/gateway"
-  bun install --no-progress
+  bun install --frozen-lockfile --no-progress
   bun run check
   bun test
 )
