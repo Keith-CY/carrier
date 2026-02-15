@@ -237,18 +237,17 @@ async function defaultReadFile(fileRef: string): Promise<Blob | null> {
     return null;
   }
 
-  // Resolve symlinks and verify the real path stays within the parent
-  // directory of the requested file.  This prevents symlink traversal to
-  // arbitrary locations (e.g. /etc/passwd) even when the logical path
-  // looks clean.
-  const { dirname } = await import("node:path");
+  // Resolve symlinks and verify the real path matches the requested path.
+  // This prevents symlink traversal to arbitrary locations (e.g. /etc/passwd)
+  // even when the logical path looks clean.  We use realpath to resolve all
+  // symlinks and then require the result to equal the original fileRef,
+  // effectively blocking any symlinked paths.
+  const { resolve: pathResolve } = await import("node:path");
   const { realpath: fsRealpath } = await import("node:fs/promises");
-  const allowedDir = dirname(fileRef);          // e.g. /data/artifacts
+  const canonicalRequested = pathResolve(fileRef);
   const resolvedPath = await fsRealpath(fileRef).catch(() => null);
-  // If realpath succeeds, verify the resolved path stays inside the parent directory.
-  // If it fails (e.g. exotic filenames), we rely on the earlier traversal checks above.
-  if (resolvedPath !== null && !resolvedPath.startsWith(allowedDir + "/") && resolvedPath !== allowedDir) {
-    console.warn(`[security] symlink traversal blocked: ${fileRef} resolves to ${resolvedPath} (outside ${allowedDir})`);
+  if (resolvedPath !== null && resolvedPath !== canonicalRequested) {
+    console.warn(`[security] symlink traversal blocked: ${fileRef} resolves to ${resolvedPath} (expected ${canonicalRequested})`);
     return null;
   }
 
