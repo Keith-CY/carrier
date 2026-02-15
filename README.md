@@ -124,7 +124,6 @@ If any command fails, install the missing tool before running automation scripts
 Optional local flow from repo root:
   - `cd gateway && bun install --frozen-lockfile && bun run check && cd ../daemon && go test ./...`
 
-
 ### Frozen lockfile policy (CI and automation)
 - CI/release automation must use lockfile-enforced installs for gateway dependencies:
   - `bun install --frozen-lockfile --no-progress`
