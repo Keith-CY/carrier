@@ -68,6 +68,10 @@ install_url: https://github.com/Keith-CY/carrier/releases/download/main-<sha>/ca
 # and pin expected SHA-256 separately (e.g., OPENCLAW_CHECKSUM or deployment metadata)
 ```
 
+Note: `catalog/scripts/install-openclaw.sh` currently targets `v${VERSION}` tags and
+`openclaw-v${VERSION}-${OS}-${ARCH}` artifact naming. Keep the installer and release
+workflow conventions aligned (or explicitly document intentional divergence).
+
 This ensures:
 - Exact binary version is known and auditable.
 - Upgrades are explicit.
