@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"log"
@@ -178,7 +179,9 @@ func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			auth := r.Header.Get("Authorization")
-			if auth != "Bearer "+token {
+			expected := "Bearer " + token
+			// Use constant-time comparison to prevent timing attacks
+			if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
