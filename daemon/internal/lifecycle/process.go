@@ -25,6 +25,7 @@ type processInfo struct {
 	logFile  *os.File
 	done     chan struct{}
 	waitErr  error
+	exitCode *int
 	stopping bool
 }
 
@@ -90,6 +91,15 @@ func (pm *ProcessManager) Start(agentID string, command string, args []string) (
 	// Monitor process in background
 	go func() {
 		info.waitErr = cmd.Wait()
+		// Extract exit code if available
+		if exitErr, ok := info.waitErr.(*exec.ExitError); ok {
+			code := exitErr.ExitCode()
+			info.exitCode = &code
+		} else if info.waitErr == nil {
+			// Process exited successfully (exit code 0)
+			code := 0
+			info.exitCode = &code
+		}
 		close(info.done)
 	}()
 
@@ -190,6 +200,19 @@ func (pm *ProcessManager) isProcessAlive(info *processInfo) bool {
 
 	err := info.cmd.Process.Signal(syscall.Signal(0))
 	return err == nil
+}
+
+// GetExitCode returns the exit code of a terminated process, or nil if not available.
+func (pm *ProcessManager) GetExitCode(agentID string) *int {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+
+	info, exists := pm.processes[agentID]
+	if !exists {
+		return nil
+	}
+
+	return info.exitCode
 }
 
 // Cleanup stops all running processes (for graceful shutdown).

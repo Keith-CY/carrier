@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"carrier/daemon/internal/baseagent"
 	"carrier/daemon/internal/commandexec"
 	"carrier/daemon/internal/manifest"
 	"carrier/daemon/internal/redact"
@@ -1538,4 +1539,148 @@ func TestService_ExponentialBackoff_MaxAttemptsExceeded(t *testing.T) {
 	if !strings.Contains(err.Error(), "crash-loop") {
 		t.Errorf("Error message should mention crash-loop, got: %v", err)
 	}
+}
+func TestHandleFailure_CollectsEvidence(t *testing.T) {
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	// Install and prepare agent
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	// Simulate some logs
+	svc.appendLog("openclaw", "Starting agent...")
+	svc.appendLog("openclaw", "Initializing components...")
+	svc.appendLog("openclaw", "Error: connection failed")
+
+	// Simulate an exit code
+	exitCode := 137
+	svc.exitCodes["openclaw"] = &exitCode
+
+	// Custom triager to capture the evidence passed to it
+	var capturedEvidence *baseagent.Evidence
+	customTriager := &fakeTriager{
+		onAnalyze: func(_ context.Context, e baseagent.Evidence) (baseagent.TriageResult, error) {
+			capturedEvidence = &e
+			return baseagent.TriageResult{
+				Resolved:                false,
+				Summary:                 "Evidence collected successfully",
+				SuggestedActions:        []string{"Check logs"},
+				RequiresRemoteDiagnosis: true,
+			}, nil
+		},
+	}
+	svc.triager = customTriager
+
+	// Trigger failure handling
+	triage, err := svc.HandleFailure(context.Background(), "openclaw", "process crashed")
+	if err != nil {
+		t.Fatalf("HandleFailure failed: %v", err)
+	}
+
+	if triage.Summary != "Evidence collected successfully" {
+		t.Errorf("unexpected triage summary: %s", triage.Summary)
+	}
+
+	// Verify evidence was collected
+	if capturedEvidence == nil {
+		t.Fatal("expected evidence to be captured by triager")
+	}
+
+	if capturedEvidence.AgentID != "openclaw" {
+		t.Errorf("expected AgentID 'openclaw', got %s", capturedEvidence.AgentID)
+	}
+
+	if capturedEvidence.LastError != "process crashed" {
+		t.Errorf("expected LastError 'process crashed', got %s", capturedEvidence.LastError)
+	}
+
+	if capturedEvidence.ExitCode == nil {
+		t.Fatal("expected exit code to be set")
+	}
+
+	if *capturedEvidence.ExitCode != 137 {
+		t.Errorf("expected exit code 137, got %d", *capturedEvidence.ExitCode)
+	}
+
+	// Log tail should contain at least our 3 manually added logs (plus install log)
+	if len(capturedEvidence.LogTail) < 3 {
+		t.Errorf("expected at least 3 log lines, got %d", len(capturedEvidence.LogTail))
+	}
+
+	// Check that our custom logs are present (they may have timestamps prepended)
+	logs := strings.Join(capturedEvidence.LogTail, "\n")
+	expectedSubstrings := []string{"Starting agent...", "Initializing components...", "Error: connection failed"}
+	for _, expected := range expectedSubstrings {
+		if !strings.Contains(logs, expected) {
+			t.Errorf("expected log to contain %q, but it didn't. Logs:\n%s", expected, logs)
+		}
+	}
+
+	if capturedEvidence.HealthProbe == "" {
+		t.Error("expected HealthProbe to be set")
+	}
+}
+
+func TestHandleFailure_CollectsEvidenceWithoutExitCode(t *testing.T) {
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	// Simulate logs but no exit code
+	svc.appendLog("openclaw", "Log line 1")
+
+	var capturedEvidence *baseagent.Evidence
+	customTriager := &fakeTriager{
+		onAnalyze: func(_ context.Context, e baseagent.Evidence) (baseagent.TriageResult, error) {
+			capturedEvidence = &e
+			return baseagent.TriageResult{
+				Resolved: false,
+				Summary:  "No exit code available",
+			}, nil
+		},
+	}
+	svc.triager = customTriager
+
+	_, err := svc.HandleFailure(context.Background(), "openclaw", "unknown error")
+	if err != nil {
+		t.Fatalf("HandleFailure failed: %v", err)
+	}
+
+	if capturedEvidence == nil {
+		t.Fatal("expected evidence to be captured")
+	}
+
+	if capturedEvidence.ExitCode != nil {
+		t.Errorf("expected exit code to be nil, got %v", capturedEvidence.ExitCode)
+	}
+
+	// Should have at least our log line (plus install log)
+	if len(capturedEvidence.LogTail) < 1 {
+		t.Errorf("expected at least 1 log line, got %d", len(capturedEvidence.LogTail))
+	}
+
+	// Verify our custom log is present
+	logs := strings.Join(capturedEvidence.LogTail, "\n")
+	if !strings.Contains(logs, "Log line 1") {
+		t.Errorf("expected log to contain 'Log line 1', got: %s", logs)
+	}
+}
+
+// fakeTriager allows custom behavior for testing
+type fakeTriager struct {
+	onAnalyze func(context.Context, baseagent.Evidence) (baseagent.TriageResult, error)
+}
+
+func (f *fakeTriager) Analyze(ctx context.Context, e baseagent.Evidence) (baseagent.TriageResult, error) {
+	if f.onAnalyze != nil {
+		return f.onAnalyze(ctx, e)
+	}
+	return baseagent.TriageResult{}, nil
 }
