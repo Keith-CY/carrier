@@ -21,7 +21,18 @@ else
   echo "  SKIP: shellcheck not installed"
 fi
 
-# Test 2: Uses git-tracked *.sh scope (inside and outside scripts/) and ignores untracked files.
+# Test 2: Missing shellcheck fails fast with a single prerequisite error.
+missing_output=$(PATH="/usr/bin:/bin" /usr/bin/bash "$SCRIPT_DIR/run-shellcheck.sh" 2>&1 || true)
+if echo "$missing_output" | grep -q "shellcheck is required but was not found in PATH" \
+  && [ "$(echo "$missing_output" | grep -c "not found")" -eq 1 ]; then
+  echo "  PASS: missing shellcheck exits early with one actionable message"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: missing shellcheck path was not reported clearly"
+  fail=$((fail + 1))
+fi
+
+# Test 3: Uses git-tracked *.sh scope (inside and outside scripts/) and ignores untracked files.
 tmpdir=$(mktemp -d)
 mkdir -p "$tmpdir/scripts" "$tmpdir/catalog" "$tmpdir/untracked"
 
@@ -72,7 +83,7 @@ else
   fail=$((fail + 1))
 fi
 
-# Test 3: No tracked shell script branch.
+# Test 4: No tracked shell script branch.
 empty_repo=$(mktemp -d)
 mkdir -p "$empty_repo/scripts"
 cp "$SCRIPT_DIR/run-shellcheck.sh" "$empty_repo/scripts/run-shellcheck.sh"

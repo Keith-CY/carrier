@@ -154,6 +154,7 @@ Runtime environment variables:
 #### CI coverage note (E2E execution policy)
 - `End-to-End Tests` in `.github/workflows/ci.yml` run only on `push` to `main` (`github.event_name == 'push' && github.ref == 'refs/heads/main'`).
 - Pull requests do not run E2E in `ci.yml`.
+- Docs-only changes run `.github/workflows/docs-consistency.yml`, which executes `scripts/check-doc-command-sync.sh`.
 - Release flow also enforces mandatory end-to-end validation in `.github/workflows/release.yml` (`End-to-End Tests (Deployment)`).
 
 ## Local workflow notes

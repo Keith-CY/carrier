@@ -5,6 +5,13 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+if ! command -v shellcheck >/dev/null 2>&1; then
+  echo "shellcheck is required but was not found in PATH."
+  echo "Install it first (e.g.: brew install shellcheck OR sudo apt-get install -y shellcheck),"
+  echo "or run scripts/check-tools.sh for dependency checks."
+  exit 1
+fi
+
 if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "Not inside a git work tree: $REPO_ROOT"
   exit 1
