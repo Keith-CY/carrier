@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"carrier/daemon/internal/api"
 	"carrier/daemon/internal/baseagent"
 	"carrier/daemon/internal/catalog"
 	"carrier/daemon/internal/config"
@@ -80,10 +81,15 @@ func main() {
 		logger.Info("no API token configured; forcing loopback-only bind (127.0.0.1)")
 	}
 
+	// Initialize pairing code store and issue initial code
+	pairStore := api.NewPairingCodeStore(nil)
+	pairRecord, _ := pairStore.Issue(5 * time.Minute)
+	fmt.Printf("\n  PAIR_CODE: %s\n  (expires in 5 minutes)\n\n", pairRecord.Code)
+
 	// Build HTTP server
 	ready := &atomic.Bool{}
 	ready.Store(false)
-	mux := buildHTTPMux(svc, ready)
+	mux := buildHTTPMux(svc, ready, pairStore)
 	var handler http.Handler = mux
 	if cfg.Server.APIToken != "" {
 		handler = bearerAuthMiddleware(cfg.Server.APIToken, mux)
@@ -128,7 +134,7 @@ func main() {
 	fmt.Println("agentd stopped gracefully")
 }
 
-func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool) *http.ServeMux {
+func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.PairingCodeStore) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Health checks
@@ -302,6 +308,41 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool) *http.ServeMux {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"artifactRef": artifactRef})
+	})
+
+	// Pairing endpoints
+	register("/api/pairing/codes", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			codes := pairStore.List()
+			writeJSON(w, http.StatusOK, map[string]interface{}{"codes": codes})
+			return
+		}
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+	})
+
+	register("/api/pairing/verify-consume", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body struct {
+			Code string `json:"code"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := pairStore.VerifyAndConsume(body.Code); err != nil {
+			if errors.Is(err, api.ErrPairCodeInvalid) {
+				writeJSONError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"code":     body.Code,
+			"consumed": true,
+		})
 	})
 
 	return mux
