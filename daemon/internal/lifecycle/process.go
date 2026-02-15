@@ -212,7 +212,13 @@ func (pm *ProcessManager) GetExitCode(agentID string) *int {
 		return nil
 	}
 
-	return info.exitCode
+	// Only read exitCode after the monitoring goroutine has finished writing it.
+	select {
+	case <-info.done:
+		return info.exitCode
+	default:
+		return nil
+	}
 }
 
 // Cleanup stops all running processes (for graceful shutdown).

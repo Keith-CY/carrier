@@ -273,15 +273,10 @@ func TestCollectSystemInfo(t *testing.T) {
 		t.Error("expected NumGoroutine to be positive")
 	}
 
-	// Memory values can be 0 in some test environments, so just check they're present
-	// (not negative)
-	if info.MemAllocMB < 0 {
-		t.Error("expected MemAllocMB to be non-negative")
-	}
-
-	if info.MemTotalMB < 0 {
-		t.Error("expected MemTotalMB to be non-negative")
-	}
+	// Memory values are uint64 so always non-negative; just verify they're present
+	// by confirming the struct fields were populated (no-op for unsigned types).
+	_ = info.MemAllocMB
+	_ = info.MemTotalMB
 }
 
 // Helper function
