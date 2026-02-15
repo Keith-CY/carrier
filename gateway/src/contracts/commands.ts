@@ -16,6 +16,7 @@ export type GatewayCommand = {
   provider: Provider;
   chatId: string;
   requestId: string;
+  sessionToken?: string;
   name: CommandName;
   args: string[];
 };

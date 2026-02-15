@@ -103,14 +103,17 @@ describe("E2E slash command test suite", () => {
   });
 
   describe("2. Agent lifecycle", () => {
+    let token: string;
+    
     beforeEach(async () => {
       // Pair the session first
       const code = issuePairCode(daemon, sessions);
-      await sendCommand(runtime, `telegram chat1 req-setup /pair ${code}`);
+      const pairResult = await sendCommand(runtime, `telegram chat1 req-setup /pair ${code}`);
+      token = pairResult.sessionToken!;
     });
 
     test("/agents lists available agents", async () => {
-      const result = await sendCommand(runtime, "telegram chat1 req-10 /agents");
+      const result = await sendCommand(runtime, `telegram chat1 req-10 ${token} /agents`);
       
       expect(result.result).toBe("ok");
       expect(result.message).toContain("listed");
@@ -118,31 +121,31 @@ describe("E2E slash command test suite", () => {
     });
 
     test("/install openclaw succeeds", async () => {
-      const result = await sendCommand(runtime, "telegram chat1 req-11 /install openclaw");
+      const result = await sendCommand(runtime, `telegram chat1 req-11 ${token} /install openclaw`);
       
       expect(result.result).toBe("ok");
       expect(result.message).toContain("install completed for openclaw");
     });
 
     test("/start openclaw after install succeeds", async () => {
-      await sendCommand(runtime, "telegram chat1 req-12a /install openclaw");
-      const result = await sendCommand(runtime, "telegram chat1 req-12 /start openclaw");
+      await sendCommand(runtime, `telegram chat1 req-12a ${token} /install openclaw`);
+      const result = await sendCommand(runtime, `telegram chat1 req-12 ${token} /start openclaw`);
       
       expect(result.result).toBe("ok");
       expect(result.message).toContain("start completed for openclaw");
     });
 
     test("/start without install fails", async () => {
-      const result = await sendCommand(runtime, "telegram chat1 req-13 /start openclaw");
+      const result = await sendCommand(runtime, `telegram chat1 req-13 ${token} /start openclaw`);
       
       expect(result.result).toBe("error");
       expect(result.errorCode).toBe("E_NOT_INSTALLED");
     });
 
     test("/status shows agent state", async () => {
-      await sendCommand(runtime, "telegram chat1 req-14a /install openclaw");
-      await sendCommand(runtime, "telegram chat1 req-14b /start openclaw");
-      const result = await sendCommand(runtime, "telegram chat1 req-14 /status openclaw");
+      await sendCommand(runtime, `telegram chat1 req-14a ${token} /install openclaw`);
+      await sendCommand(runtime, `telegram chat1 req-14b ${token} /start openclaw`);
+      const result = await sendCommand(runtime, `telegram chat1 req-14 ${token} /status openclaw`);
       
       expect(result.result).toBe("ok");
       expect(result.message).toContain("openclaw");
@@ -150,33 +153,33 @@ describe("E2E slash command test suite", () => {
     });
 
     test("/status without agent ID lists all agents", async () => {
-      const result = await sendCommand(runtime, "telegram chat1 req-15 /status");
+      const result = await sendCommand(runtime, `telegram chat1 req-15 ${token} /status`);
       
       expect(result.result).toBe("ok");
       expect(result.message).toContain("status");
     });
 
     test("/stop openclaw succeeds when running", async () => {
-      await sendCommand(runtime, "telegram chat1 req-16a /install openclaw");
-      await sendCommand(runtime, "telegram chat1 req-16b /start openclaw");
-      const result = await sendCommand(runtime, "telegram chat1 req-16 /stop openclaw");
+      await sendCommand(runtime, `telegram chat1 req-16a ${token} /install openclaw`);
+      await sendCommand(runtime, `telegram chat1 req-16b ${token} /start openclaw`);
+      const result = await sendCommand(runtime, `telegram chat1 req-16 ${token} /stop openclaw`);
       
       expect(result.result).toBe("ok");
       expect(result.message).toContain("stop completed for openclaw");
     });
 
     test("/stop when already stopped fails", async () => {
-      await sendCommand(runtime, "telegram chat1 req-17a /install openclaw");
-      const result = await sendCommand(runtime, "telegram chat1 req-17 /stop openclaw");
+      await sendCommand(runtime, `telegram chat1 req-17a ${token} /install openclaw`);
+      const result = await sendCommand(runtime, `telegram chat1 req-17 ${token} /stop openclaw`);
       
       expect(result.result).toBe("error");
       expect(result.errorCode).toBe("E_ALREADY_STOPPED");
     });
 
     test("/start when already running fails", async () => {
-      await sendCommand(runtime, "telegram chat1 req-18a /install openclaw");
-      await sendCommand(runtime, "telegram chat1 req-18b /start openclaw");
-      const result = await sendCommand(runtime, "telegram chat1 req-18 /start openclaw");
+      await sendCommand(runtime, `telegram chat1 req-18a ${token} /install openclaw`);
+      await sendCommand(runtime, `telegram chat1 req-18b ${token} /start openclaw`);
+      const result = await sendCommand(runtime, `telegram chat1 req-18 ${token} /start openclaw`);
       
       expect(result.result).toBe("error");
       expect(result.errorCode).toBe("E_ALREADY_RUNNING");
@@ -184,35 +187,38 @@ describe("E2E slash command test suite", () => {
   });
 
   describe("3. Logs & diagnose", () => {
+    let token: string;
+    
     beforeEach(async () => {
       const code = issuePairCode(daemon, sessions);
-      await sendCommand(runtime, `telegram chat1 req-setup /pair ${code}`);
-      await sendCommand(runtime, "telegram chat1 req-setup2 /install openclaw");
+      const pairResult = await sendCommand(runtime, `telegram chat1 req-setup /pair ${code}`);
+      token = pairResult.sessionToken!;
+      await sendCommand(runtime, `telegram chat1 req-setup2 ${token} /install openclaw`);
     });
 
     test("/logs openclaw returns log lines", async () => {
-      const result = await sendCommand(runtime, "telegram chat1 req-20 /logs openclaw");
+      const result = await sendCommand(runtime, `telegram chat1 req-20 ${token} /logs openclaw`);
       
       expect(result.result).toBe("ok");
       expect(result.message).toContain("openclaw");
     });
 
     test("/logs with tail parameter works", async () => {
-      const result = await sendCommand(runtime, "telegram chat1 req-21 /logs openclaw 50");
+      const result = await sendCommand(runtime, `telegram chat1 req-21 ${token} /logs openclaw 50`);
       
       expect(result.result).toBe("ok");
       expect(result.message).toContain("openclaw");
     });
 
     test("/logs without agent ID fails", async () => {
-      const result = await sendCommand(runtime, "telegram chat1 req-22 /logs");
+      const result = await sendCommand(runtime, `telegram chat1 req-22 ${token} /logs`);
       
       expect(result.result).toBe("error");
       expect(result.errorCode).toBe("E_USAGE");
     });
 
     test("/diagnose openclaw creates artifact", async () => {
-      const result = await sendCommand(runtime, "telegram chat1 req-23 /diagnose openclaw");
+      const result = await sendCommand(runtime, `telegram chat1 req-23 ${token} /diagnose openclaw`);
       
       expect(result.result).toBe("ok");
       expect(result.message).toContain("diagnose artifact prepared");
@@ -220,7 +226,7 @@ describe("E2E slash command test suite", () => {
     });
 
     test("/diagnose without agent ID fails", async () => {
-      const result = await sendCommand(runtime, "telegram chat1 req-24 /diagnose");
+      const result = await sendCommand(runtime, `telegram chat1 req-24 ${token} /diagnose`);
       
       expect(result.result).toBe("error");
       expect(result.errorCode).toBe("E_USAGE");
@@ -228,9 +234,9 @@ describe("E2E slash command test suite", () => {
 
     test("/diagnose-consent yes when needed succeeds", async () => {
       daemon.setRemoteDiagnosisState("openclaw", true);
-      await sendCommand(runtime, "telegram chat1 req-25a /diagnose openclaw");
+      await sendCommand(runtime, `telegram chat1 req-25a ${token} /diagnose openclaw`);
       
-      const result = await sendCommand(runtime, "telegram chat1 req-25 /diagnose-consent openclaw yes");
+      const result = await sendCommand(runtime, `telegram chat1 req-25 ${token} /diagnose-consent openclaw yes`);
       
       expect(result.result).toBe("ok");
       expect(result.message).toContain("consent recorded");
@@ -240,16 +246,16 @@ describe("E2E slash command test suite", () => {
 
     test("/diagnose-consent no when needed succeeds", async () => {
       daemon.setRemoteDiagnosisState("openclaw", true);
-      await sendCommand(runtime, "telegram chat1 req-26a /diagnose openclaw");
+      await sendCommand(runtime, `telegram chat1 req-26a ${token} /diagnose openclaw`);
       
-      const result = await sendCommand(runtime, "telegram chat1 req-26 /diagnose-consent openclaw no");
+      const result = await sendCommand(runtime, `telegram chat1 req-26 ${token} /diagnose-consent openclaw no`);
       
       expect(result.result).toBe("ok");
       expect(result.handoffStatus).toBe("declined");
     });
 
     test("/diagnose-consent when not needed fails", async () => {
-      const result = await sendCommand(runtime, "telegram chat1 req-27 /diagnose-consent openclaw yes");
+      const result = await sendCommand(runtime, `telegram chat1 req-27 ${token} /diagnose-consent openclaw yes`);
       
       expect(result.result).toBe("error");
       expect(result.errorCode).toBe("E_REMOTE_DIAG_NOT_NEEDED");
@@ -257,7 +263,7 @@ describe("E2E slash command test suite", () => {
 
     test("/diagnose-consent with invalid consent flag fails", async () => {
       daemon.setRemoteDiagnosisState("openclaw", true);
-      const result = await sendCommand(runtime, "telegram chat1 req-28 /diagnose-consent openclaw maybe");
+      const result = await sendCommand(runtime, `telegram chat1 req-28 ${token} /diagnose-consent openclaw maybe`);
       
       expect(result.result).toBe("error");
       expect(result.errorCode).toBe("E_CONSENT_FLAG_INVALID");
@@ -265,14 +271,17 @@ describe("E2E slash command test suite", () => {
   });
 
   describe("4. Upgrade", () => {
+    let token: string;
+    
     beforeEach(async () => {
       const code = issuePairCode(daemon, sessions);
-      await sendCommand(runtime, `telegram chat1 req-setup /pair ${code}`);
-      await sendCommand(runtime, "telegram chat1 req-setup2 /install openclaw");
+      const pairResult = await sendCommand(runtime, `telegram chat1 req-setup /pair ${code}`);
+      token = pairResult.sessionToken!;
+      await sendCommand(runtime, `telegram chat1 req-setup2 ${token} /install openclaw`);
     });
 
     test("/upgrade openclaw succeeds", async () => {
-      const result = await sendCommand(runtime, "telegram chat1 req-30 /upgrade openclaw");
+      const result = await sendCommand(runtime, `telegram chat1 req-30 ${token} /upgrade openclaw`);
       
       expect(result.result).toBe("ok");
       expect(result.message).toContain("upgrade completed");
@@ -282,14 +291,14 @@ describe("E2E slash command test suite", () => {
     });
 
     test("/upgrade without agent ID fails", async () => {
-      const result = await sendCommand(runtime, "telegram chat1 req-31 /upgrade");
+      const result = await sendCommand(runtime, `telegram chat1 req-31 ${token} /upgrade`);
       
       expect(result.result).toBe("error");
       expect(result.errorCode).toBe("E_USAGE");
     });
 
     test("/upgrade non-existent agent fails", async () => {
-      const result = await sendCommand(runtime, "telegram chat1 req-32 /upgrade nonexistent");
+      const result = await sendCommand(runtime, `telegram chat1 req-32 ${token} /upgrade nonexistent`);
       
       expect(result.result).toBe("error");
       expect(result.errorCode).toBe("E_AGENT_NOT_FOUND");
@@ -299,9 +308,10 @@ describe("E2E slash command test suite", () => {
   describe("5. Error cases", () => {
     test("unknown command fails", async () => {
       const code = issuePairCode(daemon, sessions);
-      await sendCommand(runtime, `telegram chat1 req-setup /pair ${code}`);
+      const pairResult = await sendCommand(runtime, `telegram chat1 req-setup /pair ${code}`);
+      const token = pairResult.sessionToken!;
       
-      const result = await sendCommand(runtime, "telegram chat1 req-40 /unknown");
+      const result = await sendCommand(runtime, `telegram chat1 req-40 ${token} /unknown`);
       
       expect(result.result).toBe("error");
       expect(result.errorCode).toBe("E_PARSE");
@@ -366,8 +376,9 @@ describe("E2E slash command test suite", () => {
       const code = issuePairCode(daemon, sessions);
       const pairResult = await sendCommand(runtime, `telegram chat-tg req-50 /pair ${code}`);
       expect(pairResult.result).toBe("ok");
+      const token = pairResult.sessionToken!;
       
-      const agentsResult = await sendCommand(runtime, "telegram chat-tg req-51 /agents");
+      const agentsResult = await sendCommand(runtime, `telegram chat-tg req-51 ${token} /agents`);
       expect(agentsResult.result).toBe("ok");
     });
 
@@ -375,8 +386,9 @@ describe("E2E slash command test suite", () => {
       const code = issuePairCode(daemon, sessions);
       const pairResult = await sendCommand(runtime, `discord chat-dc req-52 /pair ${code}`);
       expect(pairResult.result).toBe("ok");
+      const token = pairResult.sessionToken!;
       
-      const agentsResult = await sendCommand(runtime, "discord chat-dc req-53 /agents");
+      const agentsResult = await sendCommand(runtime, `discord chat-dc req-53 ${token} /agents`);
       expect(agentsResult.result).toBe("ok");
     });
 
@@ -384,8 +396,9 @@ describe("E2E slash command test suite", () => {
       const code = issuePairCode(daemon, sessions);
       const pairResult = await sendCommand(runtime, `feishu chat-fs req-54 /pair ${code}`);
       expect(pairResult.result).toBe("ok");
+      const token = pairResult.sessionToken!;
       
-      const agentsResult = await sendCommand(runtime, "feishu chat-fs req-55 /agents");
+      const agentsResult = await sendCommand(runtime, `feishu chat-fs req-55 ${token} /agents`);
       expect(agentsResult.result).toBe("ok");
     });
 
@@ -393,15 +406,17 @@ describe("E2E slash command test suite", () => {
       const code1 = issuePairCode(daemon, sessions);
       const code2 = issuePairCode(daemon, sessions);
       
-      await sendCommand(runtime, `telegram chat1 req-56 /pair ${code1}`);
-      await sendCommand(runtime, `discord chat1 req-57 /pair ${code2}`);
+      const tgResult = await sendCommand(runtime, `telegram chat1 req-56 /pair ${code1}`);
+      const dcResult = await sendCommand(runtime, `discord chat1 req-57 /pair ${code2}`);
+      const tgToken = tgResult.sessionToken!;
+      const dcToken = dcResult.sessionToken!;
       
       // telegram:chat1 should work
-      const result1 = await sendCommand(runtime, "telegram chat1 req-58 /agents");
+      const result1 = await sendCommand(runtime, `telegram chat1 req-58 ${tgToken} /agents`);
       expect(result1.result).toBe("ok");
       
       // discord:chat1 should work
-      const result2 = await sendCommand(runtime, "discord chat1 req-59 /agents");
+      const result2 = await sendCommand(runtime, `discord chat1 req-59 ${dcToken} /agents`);
       expect(result2.result).toBe("ok");
       
       // telegram:chat2 should fail (not paired)
@@ -421,49 +436,53 @@ describe("E2E slash command test suite", () => {
         const code = issuePairCode(daemon, sessions);
         const pairResult = await sendCommand(runtime, `${provider} ${chatId} req-${reqIdBase} /pair ${code}`);
         expect(pairResult.result).toBe("ok");
+        const token = pairResult.sessionToken!;
         
         // Install
-        const installResult = await sendCommand(runtime, `${provider} ${chatId} req-${reqIdBase + 1} /install openclaw`);
+        const installResult = await sendCommand(runtime, `${provider} ${chatId} req-${reqIdBase + 1} ${token} /install openclaw`);
         expect(installResult.result).toBe("ok");
         
         // Start
-        const startResult = await sendCommand(runtime, `${provider} ${chatId} req-${reqIdBase + 2} /start openclaw`);
+        const startResult = await sendCommand(runtime, `${provider} ${chatId} req-${reqIdBase + 2} ${token} /start openclaw`);
         expect(startResult.result).toBe("ok");
         
         // Status
-        const statusResult = await sendCommand(runtime, `${provider} ${chatId} req-${reqIdBase + 3} /status openclaw`);
+        const statusResult = await sendCommand(runtime, `${provider} ${chatId} req-${reqIdBase + 3} ${token} /status openclaw`);
         expect(statusResult.result).toBe("ok");
         expect(statusResult.message).toContain("running");
         
         // Stop
-        const stopResult = await sendCommand(runtime, `${provider} ${chatId} req-${reqIdBase + 4} /stop openclaw`);
+        const stopResult = await sendCommand(runtime, `${provider} ${chatId} req-${reqIdBase + 4} ${token} /stop openclaw`);
         expect(stopResult.result).toBe("ok");
       }
     });
   });
 
   describe("Additional edge cases", () => {
+    let token: string;
+    
     beforeEach(async () => {
       const code = issuePairCode(daemon, sessions);
-      await sendCommand(runtime, `telegram chat1 req-setup /pair ${code}`);
+      const pairResult = await sendCommand(runtime, `telegram chat1 req-setup /pair ${code}`);
+      token = pairResult.sessionToken!;
     });
 
     test("/install with missing agent ID fails", async () => {
-      const result = await sendCommand(runtime, "telegram chat1 req-100 /install");
+      const result = await sendCommand(runtime, `telegram chat1 req-100 ${token} /install`);
       
       expect(result.result).toBe("error");
       expect(result.errorCode).toBe("E_USAGE");
     });
 
     test("/start with missing agent ID fails", async () => {
-      const result = await sendCommand(runtime, "telegram chat1 req-101 /start");
+      const result = await sendCommand(runtime, `telegram chat1 req-101 ${token} /start`);
       
       expect(result.result).toBe("error");
       expect(result.errorCode).toBe("E_USAGE");
     });
 
     test("/stop with missing agent ID fails", async () => {
-      const result = await sendCommand(runtime, "telegram chat1 req-102 /stop");
+      const result = await sendCommand(runtime, `telegram chat1 req-102 ${token} /stop`);
       
       expect(result.result).toBe("error");
       expect(result.errorCode).toBe("E_USAGE");

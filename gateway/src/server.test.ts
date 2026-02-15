@@ -211,18 +211,16 @@ describe("gateway runtime routes", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ input: "telegram 100 req-1 /pair pair-ok" }),
     }));
-    const pairPayload = await pairResponse.json() as { result: string; sessionToken?: string };
+    const pairPayload = await pairResponse.json() as { result: string; sessionToken: string };
     expect(pairPayload.result).toBe("ok");
-    expect(pairPayload.sessionToken).toBeDefined();
-
-    const sessionToken = pairPayload.sessionToken as string;
+    const sessionToken = pairPayload.sessionToken;
     const agentsResponse = await runtime.fetch(new Request("http://gateway.local/command", {
       method: "POST",
       headers: { 
         "content-type": "application/json",
         "authorization": `Bearer ${sessionToken}`,
       },
-      body: JSON.stringify({ input: "telegram 100 req-2 /agents" }),
+      body: JSON.stringify({ input: `telegram 100 req-2 ${sessionToken} /agents` }),
     }));
     const agentsPayload = await agentsResponse.json() as { result: string; message: string };
     expect(agentsPayload.result).toBe("ok");

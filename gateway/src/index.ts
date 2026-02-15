@@ -46,10 +46,28 @@ export class ParseError extends Error {
 export function parseInput(input: string): GatewayCommand {
   const parts = input.trim().split(/\s+/);
   if (parts.length < 4) {
-    throw new ParseError("unknown", "usage: <provider> <chat_id> <request_id> <command> [...args]");
+    throw new ParseError("unknown", "usage: <provider> <chat_id> <request_id> [session_token] <command> [...args]");
   }
 
-  const [provider, chatId, requestId, name, ...args] = parts;
+  const [provider, chatId, requestId, fourth, ...rest] = parts;
+  
+  // Check if fourth field is a session token (starts with "session-")
+  // If so, the command is the next field; otherwise fourth is the command
+  let sessionToken: string | undefined;
+  let name: string;
+  let args: string[];
+  
+  if (fourth && fourth.startsWith("session-")) {
+    sessionToken = fourth;
+    [name, ...args] = rest;
+    if (!name) {
+      throw new ParseError(requestId, "usage: <provider> <chat_id> <request_id> <session_token> <command> [...args]");
+    }
+  } else {
+    name = fourth;
+    args = rest;
+  }
+  
   if (!COMMAND_NAMES.has(name as CommandName)) {
     throw new ParseError(requestId, `unknown command: ${name} (requestId=${requestId})`);
   }
@@ -58,6 +76,7 @@ export function parseInput(input: string): GatewayCommand {
     provider: provider as GatewayCommand["provider"],
     chatId,
     requestId,
+    sessionToken,
     name: name as GatewayCommand["name"],
     args,
   };
@@ -108,6 +127,24 @@ export async function handleCommand(
       "chat is not paired; run /pair <code> first",
     );
   }
+  
+  // Validate session token
+  if (!cmd.sessionToken) {
+    return errorResponse(
+      cmd.requestId,
+      "E_SESSION_TOKEN_MISSING",
+      "session token is required for authenticated commands",
+    );
+  }
+  
+  if (cmd.sessionToken !== session.sessionToken) {
+    return errorResponse(
+      cmd.requestId,
+      "E_SESSION_TOKEN_INVALID",
+      "session token is invalid",
+    );
+  }
+  
   deps.sessions.touch(cmd.provider, cmd.chatId);
 
   if (deps.rateLimiter) {
