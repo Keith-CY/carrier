@@ -27,12 +27,12 @@
     "ports": [
       {
         "name": "http",
-        "port": 8080
+        "port": 9090
       }
     ],
     "healthcheck": {
       "type": "http",
-      "url": "http://localhost:8080/health"
+      "url": "http://localhost:9090/healthz"
     }
   },
   "env": {
