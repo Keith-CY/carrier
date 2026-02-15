@@ -209,6 +209,46 @@ func TestAPIListAgentsV1(t *testing.T) {
 	}
 }
 
+func TestAPIStatusAndLogsV1Aliases(t *testing.T) {
+	svc := lifecycle.NewService(baseagent.NoopTriager{})
+	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
+		t.Fatal(err)
+	}
+	mux := buildTestMux(svc, true)
+
+	statusRec := httptest.NewRecorder()
+	mux.ServeHTTP(statusRec, httptest.NewRequest("GET", "/api/v1/status/openclaw", nil))
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("v1 status: expected 200, got %d: %s", statusRec.Code, statusRec.Body.String())
+	}
+
+	logsRec := httptest.NewRecorder()
+	mux.ServeHTTP(logsRec, httptest.NewRequest("GET", "/api/v1/logs/openclaw", nil))
+	if logsRec.Code != http.StatusOK {
+		t.Fatalf("v1 logs: expected 200, got %d: %s", logsRec.Code, logsRec.Body.String())
+	}
+}
+
+func TestAPIStatusAndLogsV1AliasesInvalidAgentID(t *testing.T) {
+	svc := lifecycle.NewService(baseagent.NoopTriager{})
+	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
+		t.Fatal(err)
+	}
+	mux := buildTestMux(svc, true)
+
+	statusRec := httptest.NewRecorder()
+	mux.ServeHTTP(statusRec, httptest.NewRequest("GET", "/api/v1/status/bad/id", nil))
+	if statusRec.Code != http.StatusBadRequest {
+		t.Fatalf("v1 status invalid id: expected 400, got %d", statusRec.Code)
+	}
+
+	logsRec := httptest.NewRecorder()
+	mux.ServeHTTP(logsRec, httptest.NewRequest("GET", "/api/v1/logs/bad/id", nil))
+	if logsRec.Code != http.StatusBadRequest {
+		t.Fatalf("v1 logs invalid id: expected 400, got %d", logsRec.Code)
+	}
+}
+
 func TestAPIInstallAndStart(t *testing.T) {
 	svc := lifecycle.NewService(
 		baseagent.NoopTriager{},
