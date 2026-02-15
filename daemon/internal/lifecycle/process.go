@@ -191,6 +191,9 @@ func (pm *ProcessManager) Cleanup() {
 	pm.mu.Unlock()
 
 	for _, id := range agentIDs {
-		_ = pm.Stop(id)
+		if err := pm.Stop(id); err != nil {
+			// Best-effort cleanup during shutdown; continue stopping other processes.
+			continue
+		}
 	}
 }
