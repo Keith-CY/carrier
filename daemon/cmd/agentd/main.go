@@ -228,7 +228,7 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool) *http.ServeMux {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		raw := strings.TrimPrefix(r.URL.Path, "/api/status/")
+		raw := trimPathByPrefixes(r.URL.Path, "/api/status/", "/api/v1/status/")
 		agentID, err := parsePathAgentID(raw)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -247,7 +247,7 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool) *http.ServeMux {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		raw := strings.TrimPrefix(r.URL.Path, "/api/logs/")
+		raw := trimPathByPrefixes(r.URL.Path, "/api/logs/", "/api/v1/logs/")
 		agentID, err := parsePathAgentID(raw)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
@@ -334,6 +334,15 @@ func validateAgentID(id string) error {
 		return fmt.Errorf("agent ID contains invalid characters")
 	}
 	return nil
+}
+
+func trimPathByPrefixes(path string, prefixes ...string) string {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(path, prefix) {
+			return strings.TrimPrefix(path, prefix)
+		}
+	}
+	return path
 }
 
 // parsePathAgentID extracts, URL-decodes, and validates an agent ID from a URL path segment.
