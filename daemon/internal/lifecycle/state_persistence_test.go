@@ -119,7 +119,7 @@ func TestStatePersistence_Crash(t *testing.T) {
 	clock.Advance(30 * time.Second)
 
 	// Kill the process to simulate a crash.
-	svc.processManager.Stop("openclaw")
+	_ = svc.processManager.Stop("openclaw")
 
 	// Wait for monitorProcess to detect the exit and persist state.
 	time.Sleep(200 * time.Millisecond)
