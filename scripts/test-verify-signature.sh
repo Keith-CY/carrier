@@ -42,7 +42,7 @@ run_test() {
 TEST_DIR=$(mktemp -d)
 trap 'rm -rf "$TEST_DIR"' EXIT
 
-cd "$TEST_DIR"
+cd "$TEST_DIR" || exit
 
 # Test 1: Missing artifact file
 run_test "Test 1: Missing artifact file should fail"
