@@ -4,10 +4,28 @@ import { InMemoryDaemonClient } from "./daemon/client";
 import { SessionStore } from "./session/store";
 import type { GatewayResponse } from "./contracts/commands";
 
-async function sendCommand(runtime: GatewayRuntime, input: string): Promise<GatewayResponse> {
+async function sendCommand(runtime: GatewayRuntime, input: string, sessionToken?: string | null): Promise<GatewayResponse> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  
+  // Auto-detect session token from SessionStore if not explicitly provided
+  if (sessionToken === undefined) {
+    const parts = input.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      const [provider, chatId] = parts;
+      const session = runtime.deps.sessions.getSession(provider as any, chatId);
+      if (session) {
+        sessionToken = session.sessionToken;
+      }
+    }
+  }
+  
+  if (sessionToken) {
+    headers["authorization"] = `Bearer ${sessionToken}`;
+  }
+  
   const response = await runtime.fetch(new Request("http://localhost/command", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify({ input }),
   }));
   return await response.json() as GatewayResponse;
