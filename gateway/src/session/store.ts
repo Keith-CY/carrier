@@ -3,6 +3,9 @@ import type {
   SessionRecord,
 } from "../contracts/session";
 import type { Provider } from "../contracts/commands";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, rename } from "node:fs/promises";
+import { dirname } from "node:path";
 
 type PairingCodeRecord = {
   code: string;
@@ -17,11 +20,17 @@ export class SessionStore {
   private readonly pairCodes = new Map<string, PairingCodeRecord>();
   private readonly sessions = new Map<string, SessionRecord>();
   private cleanupIntervalId: Timer | null = null;
+  private savePromise: Promise<void> | null = null;
 
   constructor(
     private readonly now: () => Date = () => new Date(),
-    private readonly sessionTTLSeconds: number = 30 * 24 * 60 * 60 // 30 days default
-  ) {}
+    private readonly sessionTTLSeconds: number = 30 * 24 * 60 * 60, // 30 days default
+    private readonly persistencePath?: string
+  ) {
+    if (this.persistencePath) {
+      this.loadSessions();
+    }
+  }
 
   issuePairCode(ttlSeconds = 300): PairingCodeRecord {
     const code = `pair-${crypto.randomUUID()}`;
@@ -60,6 +69,7 @@ export class SessionStore {
       lastSeenAt: this.now().toISOString(),
     };
     this.sessions.set(sessionKey(request.provider, request.chatId), session);
+    this.scheduleSave();
     return session;
   }
 
@@ -75,6 +85,7 @@ export class SessionStore {
       lastSeenAt: this.now().toISOString(),
     };
     this.sessions.set(sessionKey(request.provider, request.chatId), session);
+    this.scheduleSave();
     return session;
   }
 
@@ -106,11 +117,18 @@ export class SessionStore {
     
     // Clean up stale sessions (not seen within TTL)
     const sessionCutoff = nowMs - this.sessionTTLSeconds * 1000;
+    let sessionsRemoved = 0;
     for (const [key, session] of this.sessions) {
       if (Date.parse(session.lastSeenAt) <= sessionCutoff) {
         this.sessions.delete(key);
         removed += 1;
+        sessionsRemoved += 1;
       }
+    }
+    
+    // If any sessions were removed, persist the updated state
+    if (sessionsRemoved > 0) {
+      this.scheduleSave();
     }
     
     return removed;
@@ -140,6 +158,71 @@ export class SessionStore {
     if (this.cleanupIntervalId !== null) {
       clearInterval(this.cleanupIntervalId);
       this.cleanupIntervalId = null;
+    }
+  }
+
+  /** Wait for any pending save operation to complete. */
+  async flush(): Promise<void> {
+    if (this.savePromise !== null) {
+      await this.savePromise;
+    }
+  }
+
+  private loadSessions(): void {
+    if (!this.persistencePath || !existsSync(this.persistencePath)) {
+      return;
+    }
+
+    try {
+      const data = readFileSync(this.persistencePath, "utf-8");
+      const parsed = JSON.parse(data);
+      
+      if (Array.isArray(parsed)) {
+        for (const session of parsed) {
+          this.sessions.set(sessionKey(session.provider, session.chatId), session);
+        }
+      }
+    } catch (error) {
+      // If the file is corrupt or invalid, start fresh
+      console.error("Failed to load sessions from disk:", error);
+    }
+  }
+
+  private scheduleSave(): void {
+    if (!this.persistencePath) {
+      return;
+    }
+
+    // Debounce saves to avoid excessive I/O
+    if (this.savePromise !== null) {
+      return;
+    }
+
+    this.savePromise = this.saveSessions().finally(() => {
+      this.savePromise = null;
+    });
+  }
+
+  private async saveSessions(): Promise<void> {
+    if (!this.persistencePath) {
+      return;
+    }
+
+    try {
+      // Ensure the directory exists
+      const dir = dirname(this.persistencePath);
+      await mkdir(dir, { recursive: true });
+
+      // Convert sessions map to array
+      const sessions = Array.from(this.sessions.values());
+      const json = JSON.stringify(sessions, null, 2);
+
+      // Atomic write: write to temp file, then rename
+      const tempPath = `${this.persistencePath}.tmp`;
+      await Bun.write(tempPath, json);
+      await rename(tempPath, this.persistencePath);
+    } catch (error) {
+      console.error("Failed to save sessions to disk:", error);
     }
   }
 

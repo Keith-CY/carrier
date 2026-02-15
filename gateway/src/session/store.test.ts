@@ -223,4 +223,112 @@ describe("SessionStore", () => {
       expect(store.sessionCount).toBe(1);
     });
   });
+
+  describe("persistence", () => {
+    const testDir = "/tmp/carrier-session-test";
+    
+    // Helper to generate unique path for each test
+    function getTestPath(name: string): string {
+      return `${testDir}/${name}-${Date.now()}-${Math.random()}.json`;
+    }
+
+    test("creates session and persists to disk", async () => {
+      const testPath = getTestPath("create-persist");
+      const store = new SessionStore(() => new Date("2026-01-01T00:00:00Z"), 30 * 24 * 60 * 60, testPath);
+      
+      store.createSession({ provider: "telegram", chatId: "persist-1" });
+      
+      // Wait for async save to complete
+      await store.flush();
+
+      // Verify file exists and contains the session
+      const file = Bun.file(testPath);
+      const content = await file.text();
+      const sessions = JSON.parse(content);
+
+      expect(Array.isArray(sessions)).toBe(true);
+      expect(sessions.length).toBe(1);
+      expect(sessions[0].provider).toBe("telegram");
+      expect(sessions[0].chatId).toBe("persist-1");
+    });
+
+    test("loads sessions from disk on initialization", async () => {
+      const testPath = getTestPath("load-persist");
+      // First store creates and saves session
+      const store1 = new SessionStore(() => new Date("2026-01-01T00:00:00Z"), 30 * 24 * 60 * 60, testPath);
+      const session = store1.createSession({ provider: "discord", chatId: "persist-2" });
+      await store1.flush();
+
+      // Second store loads from disk
+      const store2 = new SessionStore(() => new Date("2026-01-01T00:01:00Z"), 30 * 24 * 60 * 60, testPath);
+      const loaded = store2.getSession("discord", "persist-2");
+
+      expect(loaded).not.toBeNull();
+      expect(loaded!.sessionToken).toBe(session.sessionToken);
+      expect(loaded!.createdAt).toBe(session.createdAt);
+    });
+
+    test("handles missing persistence file gracefully", () => {
+      const missingPath = "/tmp/carrier-session-test/nonexistent.json";
+      // Should not throw when file doesn't exist
+      const store = new SessionStore(() => new Date("2026-01-01T00:00:00Z"), 30 * 24 * 60 * 60, missingPath);
+      expect(store.sessionCount).toBe(0);
+    });
+
+    test("handles corrupt persistence file gracefully", async () => {
+      const corruptPath = `${testDir}/corrupt.json`;
+      await Bun.write(corruptPath, "{ this is not valid json");
+      
+      // Should not throw, just start fresh
+      const store = new SessionStore(() => new Date("2026-01-01T00:00:00Z"), 30 * 24 * 60 * 60, corruptPath);
+      expect(store.sessionCount).toBe(0);
+    });
+
+    test("persists multiple sessions", async () => {
+      const testPath = getTestPath("multi-persist");
+      const store = new SessionStore(() => new Date("2026-01-01T00:00:00Z"), 30 * 24 * 60 * 60, testPath);
+      
+      store.createSession({ provider: "telegram", chatId: "multi-1" });
+      store.createSession({ provider: "discord", chatId: "multi-2" });
+      store.createSession({ provider: "telegram", chatId: "multi-3" });
+      
+      await store.flush();
+
+      // Load in new store
+      const store2 = new SessionStore(() => new Date("2026-01-01T00:00:00Z"), 30 * 24 * 60 * 60, testPath);
+      expect(store2.sessionCount).toBe(3);
+      expect(store2.getSession("telegram", "multi-1")).not.toBeNull();
+      expect(store2.getSession("discord", "multi-2")).not.toBeNull();
+      expect(store2.getSession("telegram", "multi-3")).not.toBeNull();
+    });
+
+    test("pairing persists to disk", async () => {
+      const testPath = getTestPath("pair-persist");
+      const store = new SessionStore(() => new Date("2026-01-01T00:00:00Z"), 30 * 24 * 60 * 60, testPath);
+      
+      store.registerPairCode("pair-persist", 300);
+      const session = store.pair({ provider: "telegram", chatId: "paired-1", code: "pair-persist" });
+      
+      await store.flush();
+
+      // Verify persistence
+      const store2 = new SessionStore(() => new Date("2026-01-01T00:00:00Z"), 30 * 24 * 60 * 60, testPath);
+      const loaded = store2.getSession("telegram", "paired-1");
+
+      expect(loaded).not.toBeNull();
+      expect(loaded!.sessionToken).toBe(session!.sessionToken);
+    });
+
+    test("without persistence path, store works in-memory only", async () => {
+      const store = new SessionStore(() => new Date("2026-01-01T00:00:00Z"));
+      
+      store.createSession({ provider: "telegram", chatId: "memory-only" });
+      
+      // flush should be a no-op
+      await store.flush();
+      
+      // Session exists in memory
+      expect(store.getSession("telegram", "memory-only")).not.toBeNull();
+    });
+  });
 });
