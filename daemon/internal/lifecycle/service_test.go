@@ -452,7 +452,7 @@ func TestLogsAndDiagnoseArtifact(t *testing.T) {
 		names = append(names, f.Name)
 	}
 	sort.Strings(names)
-	want := []string{"env.json", "logs.txt", "manifest.json", "metadata.json", "state.json"}
+	want := []string{"agent_manifest.json", "env.json", "logs.txt", "manifest.json", "metadata.json", "state.json"}
 	if len(names) != len(want) {
 		t.Fatalf("unexpected zip entry count: want %d got %d", len(want), len(names))
 	}
@@ -479,7 +479,8 @@ func TestLogsAndDiagnoseArtifact(t *testing.T) {
 		t.Fatalf("expected logs to contain redacted API key assignment, got %q", logPayload)
 	}
 
-	manifestPayload := readZipEntry(t, zr.File, "manifest.json")
+	diagnoseManifestPayload := readZipEntry(t, zr.File, "manifest.json")
+	agentManifestPayload := readZipEntry(t, zr.File, "agent_manifest.json")
 	statePayload := readZipEntry(t, zr.File, "state.json")
 	metadataPayload := readZipEntry(t, zr.File, "metadata.json")
 
@@ -496,10 +497,11 @@ func TestLogsAndDiagnoseArtifact(t *testing.T) {
 	}
 
 	wantChecksum := redact.ArtifactChecksum(map[string][]byte{
-		"state.json":    statePayload,
-		"manifest.json": manifestPayload,
-		"logs.txt":      []byte(logPayload),
-		"env.json":      envPayload,
+		"manifest.json":       diagnoseManifestPayload,
+		"state.json":          statePayload,
+		"agent_manifest.json": agentManifestPayload,
+		"logs.txt":            []byte(logPayload),
+		"env.json":            envPayload,
 	})
 	if meta.SHA256 != wantChecksum {
 		t.Fatalf("metadata sha256 mismatch: got %q want %q", meta.SHA256, wantChecksum)

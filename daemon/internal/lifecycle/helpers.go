@@ -338,13 +338,20 @@ func (s *Service) writeDiagnoseZip(path string, m manifest.Manifest, state Agent
 
 	zipWriter := zip.NewWriter(file)
 
+	// Build structured diagnose manifest
+	diagnoseManifest := buildDiagnoseManifest(state.ID)
+	diagnoseManifestJSON, err := json.MarshalIndent(diagnoseManifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal diagnose manifest: %w", err)
+	}
+
 	stateJSON, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal state: %w", err)
 	}
-	manifestJSON, err := json.MarshalIndent(m, "", "  ")
+	agentManifestJSON, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal manifest: %w", err)
+		return fmt.Errorf("marshal agent manifest: %w", err)
 	}
 
 	redactedEnvJSON, err := json.MarshalIndent(redact.RedactEnviron(os.Environ()), "", "  ")
@@ -353,10 +360,11 @@ func (s *Service) writeDiagnoseZip(path string, m manifest.Manifest, state Agent
 	}
 
 	artifacts := map[string][]byte{
-		"state.json":    []byte(redact.RedactText(string(stateJSON))),
-		"manifest.json": []byte(redact.RedactText(string(manifestJSON))),
-		"logs.txt":      []byte(redact.RedactText(strings.Join(logs, "\n"))),
-		"env.json":      redactedEnvJSON,
+		"manifest.json":       diagnoseManifestJSON,
+		"state.json":          []byte(redact.RedactText(string(stateJSON))),
+		"agent_manifest.json": []byte(redact.RedactText(string(agentManifestJSON))),
+		"logs.txt":            []byte(redact.RedactText(strings.Join(logs, "\n"))),
+		"env.json":            redactedEnvJSON,
 	}
 
 	metadataJSON, err := redact.MetadataJSON(createdAt, 24*time.Hour, artifacts)
