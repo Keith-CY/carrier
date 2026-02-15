@@ -312,3 +312,159 @@ describe("parser edge cases: command-like prefixes that should fail", () => {
     expect(parsed).toBeNull();
   });
 });
+
+describe("Feishu edge cases: T021 normalization", () => {
+  test("URL verification challenge event returns null", () => {
+    const parsed = parseFeishuEventToCommand({
+      type: "url_verification",
+      challenge: "test-challenge-token-12345",
+      token: "verification-token",
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("non-text message (image) returns null", () => {
+    const parsed = parseFeishuEventToCommand({
+      header: { event_id: "evt-img-1" },
+      event: {
+        message: {
+          message_id: "msg-img-1",
+          chat_id: "oc_chat_img",
+          message_type: "image",
+          content: JSON.stringify({ image_key: "img_v2_12345" }),
+        },
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("non-text message (file) returns null", () => {
+    const parsed = parseFeishuEventToCommand({
+      header: { event_id: "evt-file-1" },
+      event: {
+        message: {
+          message_id: "msg-file-1",
+          chat_id: "oc_chat_file",
+          message_type: "file",
+          content: JSON.stringify({ file_key: "file_v2_67890" }),
+        },
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("non-text message (post/rich text) returns null", () => {
+    const parsed = parseFeishuEventToCommand({
+      header: { event_id: "evt-post-1" },
+      event: {
+        message: {
+          message_id: "msg-post-1",
+          chat_id: "oc_chat_post",
+          message_type: "post",
+          content: JSON.stringify({
+            post: {
+              zh_cn: {
+                title: "Title",
+                content: [["Some rich text"]],
+              },
+            },
+          }),
+        },
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("group mention with @bot prefix strips and parses command", () => {
+    const parsed = parseFeishuEventToCommand({
+      header: { event_id: "evt-mention-1" },
+      event: {
+        message: {
+          message_id: "msg-mention-1",
+          chat_id: "oc_chat_group",
+          content: JSON.stringify({ text: "@_user_1234567890 /status openclaw" }),
+        },
+      },
+    });
+    expect(parsed).not.toBeNull();
+    expect(parsed?.command).toBe("/status");
+    expect(parsed?.args).toEqual(["openclaw"]);
+  });
+
+  test("empty text content returns null", () => {
+    const parsed = parseFeishuEventToCommand({
+      header: { event_id: "evt-empty-1" },
+      event: {
+        message: {
+          message_id: "msg-empty-1",
+          chat_id: "oc_chat_empty",
+          content: JSON.stringify({ text: "" }),
+        },
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("whitespace-only text content returns null", () => {
+    const parsed = parseFeishuEventToCommand({
+      header: { event_id: "evt-ws-1" },
+      event: {
+        message: {
+          message_id: "msg-ws-1",
+          chat_id: "oc_chat_ws",
+          content: JSON.stringify({ text: "   \n\t  " }),
+        },
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("edited message with valid command is handled correctly", () => {
+    // Feishu edited messages may still arrive as message events
+    // The parser should handle them the same way as new messages
+    const parsed = parseFeishuEventToCommand({
+      header: { event_id: "evt-edit-1" },
+      event: {
+        message: {
+          message_id: "msg-edit-1",
+          chat_id: "oc_chat_edit",
+          content: JSON.stringify({ text: "/agents" }),
+          edit_time: "1234567890",
+        },
+      },
+    });
+    expect(parsed).not.toBeNull();
+    expect(parsed?.command).toBe("/agents");
+    expect(parsed?.args).toEqual([]);
+  });
+
+  test("mention-only text after stripping returns null", () => {
+    const parsed = parseFeishuEventToCommand({
+      header: { event_id: "evt-mention-only" },
+      event: {
+        message: {
+          message_id: "msg-mention-only",
+          chat_id: "oc_chat_mention",
+          content: JSON.stringify({ text: "@_user_1 @_user_2" }),
+        },
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("multiple mentions before command are all stripped", () => {
+    const parsed = parseFeishuEventToCommand({
+      header: { event_id: "evt-multi-mention" },
+      event: {
+        message: {
+          message_id: "msg-multi-mention",
+          chat_id: "oc_chat_multi",
+          content: JSON.stringify({ text: "@_bot @_user_a @_user_b /upgrade agent-prod" }),
+        },
+      },
+    });
+    expect(parsed).not.toBeNull();
+    expect(parsed?.command).toBe("/upgrade");
+    expect(parsed?.args).toEqual(["agent-prod"]);
+  });
+});
