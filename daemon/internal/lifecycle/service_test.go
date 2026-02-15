@@ -70,8 +70,10 @@ func (c *fakeClock) Advance(d time.Duration) {
 }
 
 type fakeProcessManager struct {
+	mu                 sync.Mutex
 	isRunning          map[string]bool
 	pids               map[string]int
+	waitChs            map[string]chan struct{}
 	nextPID            int
 	shouldStartSucceed bool
 }
@@ -80,30 +82,66 @@ func (f *fakeProcessManager) Start(agentID string, command string, args []string
 	if !f.shouldStartSucceed {
 		return 0, errors.New("start failed")
 	}
+	f.mu.Lock()
 	pid := f.nextPID
 	f.pids[agentID] = pid
 	f.isRunning[agentID] = true
+	if f.waitChs == nil {
+		f.waitChs = make(map[string]chan struct{})
+	}
+	f.waitChs[agentID] = make(chan struct{})
 	f.nextPID++
+	f.mu.Unlock()
 	return pid, nil
 }
 
 func (f *fakeProcessManager) Stop(agentID string) error {
+	f.mu.Lock()
 	delete(f.isRunning, agentID)
 	delete(f.pids, agentID)
+	ch := f.waitChs[agentID]
+	delete(f.waitChs, agentID)
+	f.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
 	return nil
 }
 
+// SimulateCrash simulates an unexpected process exit (not via Stop).
+func (f *fakeProcessManager) SimulateCrash(agentID string) {
+	f.mu.Lock()
+	f.isRunning[agentID] = false
+	ch := f.waitChs[agentID]
+	delete(f.waitChs, agentID)
+	f.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+}
+
 func (f *fakeProcessManager) IsRunning(agentID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.isRunning[agentID]
 }
 
 func (f *fakeProcessManager) Wait(agentID string) error {
+	f.mu.Lock()
+	ch := f.waitChs[agentID]
+	f.mu.Unlock()
+	if ch != nil {
+		<-ch
+	}
 	return nil
 }
 
 func (f *fakeProcessManager) Cleanup() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.isRunning = make(map[string]bool)
 	f.pids = make(map[string]int)
+	f.waitChs = make(map[string]chan struct{})
 }
 
 func sampleManifest() manifest.Manifest {
@@ -1333,8 +1371,8 @@ func TestService_ExponentialBackoff_Integration(t *testing.T) {
 
 	// Simulate crash after 2 seconds (< success threshold)
 	clock.Advance(2 * time.Second)
-	pm.isRunning["openclaw"] = false
-	svc.monitorProcess("openclaw")
+	pm.SimulateCrash("openclaw")
+	time.Sleep(50 * time.Millisecond) // let background goroutine process crash
 
 	// Verify backoff state after crash
 	svc.mu.Lock()
@@ -1368,8 +1406,8 @@ func TestService_ExponentialBackoff_Integration(t *testing.T) {
 
 	// Crash again after 3 seconds (still < success threshold)
 	clock.Advance(3 * time.Second)
-	pm.isRunning["openclaw"] = false
-	svc.monitorProcess("openclaw")
+	pm.SimulateCrash("openclaw")
+	time.Sleep(50 * time.Millisecond) // let background goroutine process crash
 
 	// Verify exponential increase in delay
 	svc.mu.Lock()
@@ -1392,8 +1430,8 @@ func TestService_ExponentialBackoff_Integration(t *testing.T) {
 
 	// Crash after 10 seconds (> success threshold) - should reset backoff
 	clock.Advance(10 * time.Second)
-	pm.isRunning["openclaw"] = false
-	svc.monitorProcess("openclaw")
+	pm.SimulateCrash("openclaw")
+	time.Sleep(50 * time.Millisecond) // let background goroutine process crash
 
 	svc.mu.Lock()
 	backoffState = svc.backoffStates["openclaw"]
@@ -1460,8 +1498,8 @@ func TestService_ExponentialBackoff_MaxAttemptsExceeded(t *testing.T) {
 
 		// Crash quickly (< success threshold)
 		clock.Advance(1 * time.Second)
-		pm.isRunning["openclaw"] = false
-		svc.monitorProcess("openclaw")
+		pm.SimulateCrash("openclaw")
+		time.Sleep(50 * time.Millisecond) // let background goroutine process crash
 
 		// Wait for backoff delay
 		svc.mu.Lock()
