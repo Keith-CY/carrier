@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,14 +53,19 @@ func (f *fakeChecker) Check(manifest.Manifest) error {
 }
 
 type fakeClock struct {
+	mu      sync.Mutex
 	current time.Time
 }
 
 func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.current
 }
 
 func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.current = c.current.Add(d)
 }
 
