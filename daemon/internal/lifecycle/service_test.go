@@ -1094,3 +1094,135 @@ func TestMemoryAttachmentsPreservedAcrossUpgrade(t *testing.T) {
 		t.Fatalf("attachments lost after upgrade: %v", got)
 	}
 }
+
+func TestLoadPersistedState_VerifiesProcessLiveness(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	// Create a service with state file enabled
+	runner := &fakeRunner{results: make(map[string]runResult)}
+	checker := &fakeChecker{}
+	clock := &fakeClock{current: time.Date(2026, 2, 15, 5, 0, 0, 0, time.UTC)}
+
+	svc := NewService(nil,
+		WithRunner(runner),
+		WithRuntimeChecker(checker),
+		WithNow(clock.Now),
+		WithStateFile(statePath),
+	)
+
+	// Register an agent
+	m := sampleManifest()
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+
+	// Create a persisted state file with RuntimeStateRunning
+	// but without actually starting the process
+	now := clock.Now()
+	persistedStates := map[string]PersistedAgentState{
+		"openclaw": {
+			ID:             "openclaw",
+			Installed:      true,
+			RuntimeState:   string(RuntimeStateRunning),
+			LastTransition: now,
+		},
+	}
+
+	data, err := json.MarshalIndent(persistedStates, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal persisted state: %v", err)
+	}
+
+	if err := os.WriteFile(statePath, data, 0o600); err != nil {
+		t.Fatalf("write state file: %v", err)
+	}
+
+	// Load the persisted state
+	if err := svc.loadPersistedState(); err != nil {
+		t.Fatalf("loadPersistedState failed: %v", err)
+	}
+
+	// Verify that the state was corrected from "running" to "stopped"
+	// because the process is not actually running
+	state, err := svc.Status("openclaw")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+
+	if state.Runtime != RuntimeStateStopped {
+		t.Errorf("expected runtime state to be corrected to %q, got %q", RuntimeStateStopped, state.Runtime)
+	}
+
+	if state.Install != InstallStateInstalled {
+		t.Errorf("expected install state %q, got %q", InstallStateInstalled, state.Install)
+	}
+}
+
+func TestLoadPersistedState_KeepsRunningIfProcessAlive(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	// Create a service with state file enabled
+	runner := &fakeRunner{results: make(map[string]runResult)}
+	checker := &fakeChecker{}
+	clock := &fakeClock{current: time.Date(2026, 2, 15, 5, 0, 0, 0, time.UTC)}
+
+	svc := NewService(nil,
+		WithRunner(runner),
+		WithRuntimeChecker(checker),
+		WithNow(clock.Now),
+		WithStateFile(statePath),
+	)
+
+	// Register and install the agent
+	m := sampleManifest()
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	// Start the agent so there's an actual process running
+	if err := svc.Start(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// Save the current state (which includes RuntimeStateRunning)
+	svc.saveState()
+
+	// Create a new service instance and load the persisted state
+	svc2 := NewService(nil,
+		WithRunner(runner),
+		WithRuntimeChecker(checker),
+		WithNow(clock.Now),
+		WithStateFile(statePath),
+		WithProcessLogDir(svc.processLogDir),
+	)
+	svc2.processManager = svc.processManager // Share the process manager so it sees the running process
+
+	if err := svc2.RegisterManifest(m); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+
+	if err := svc2.loadPersistedState(); err != nil {
+		t.Fatalf("loadPersistedState failed: %v", err)
+	}
+
+	// Verify that the state remains "running" because the process is actually alive
+	state, err := svc2.Status("openclaw")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+
+	if state.Runtime != RuntimeStateRunning {
+		t.Errorf("expected runtime state to remain %q, got %q", RuntimeStateRunning, state.Runtime)
+	}
+
+	// Clean up
+	if err := svc.Stop(context.Background(), "openclaw"); err != nil {
+		t.Logf("cleanup stop: %v", err)
+	}
+}
