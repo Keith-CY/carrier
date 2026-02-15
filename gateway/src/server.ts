@@ -2,6 +2,7 @@ import { safeHandleCommand, type GatewayDependencies } from "./index";
 import { HttpDaemonClient } from "./daemon/http_client";
 import { DownloadTokenStore } from "./downloads/token_store";
 import { SessionStore } from "./session/store";
+import { join } from "node:path";
 
 export type GatewayRequestContext = {
   request: Request;
@@ -56,9 +57,13 @@ export const requestIdMiddleware: GatewayMiddleware = async (ctx, next) => {
 };
 
 export function createRuntimeDependencies(overrides: Partial<GatewayDependencies> = {}): GatewayDependencies {
+  // Determine session persistence path from environment or use a default
+  const dataDir = process.env.SESSION_DATA_DIR ?? process.env.ARTIFACT_ROOT ?? process.cwd();
+  const sessionPersistencePath = join(dataDir, "sessions.json");
+  
   return {
     daemon: overrides.daemon ?? new HttpDaemonClient(),
-    sessions: overrides.sessions ?? new SessionStore(),
+    sessions: overrides.sessions ?? new SessionStore(undefined, undefined, sessionPersistencePath).startPeriodicCleanup(),
     downloads: overrides.downloads ?? new DownloadTokenStore().startPeriodicCleanup(),
     rateLimiter: overrides.rateLimiter,
   };
