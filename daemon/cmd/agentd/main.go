@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -79,7 +81,9 @@ func main() {
 	}
 
 	// Build HTTP server
-	mux := buildHTTPMux(svc)
+	ready := &atomic.Bool{}
+	ready.Store(false)
+	mux := buildHTTPMux(svc, ready)
 	var handler http.Handler = mux
 	if cfg.Server.APIToken != "" {
 		handler = bearerAuthMiddleware(cfg.Server.APIToken, mux)
@@ -90,19 +94,26 @@ func main() {
 		Handler: handler,
 	}
 
+	serverErrCh := make(chan error, 1)
 	go func() {
 		fmt.Printf("HTTP API listening on %s\n", addr)
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("http server error: %v", err)
-		}
+		serverErrCh <- httpServer.ListenAndServe()
 	}()
+	ready.Store(true)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	// Block until signal received
-	<-ctx.Done()
-	fmt.Println("shutdown signal received, stopping agents...")
+	select {
+	case err := <-serverErrCh:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatalf("http server error: %v", err)
+		}
+		return
+	case <-ctx.Done():
+		ready.Store(false)
+		fmt.Println("shutdown signal received, stopping agents...")
+	}
 
 	// Shutdown HTTP server
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -117,7 +128,7 @@ func main() {
 	fmt.Println("agentd stopped gracefully")
 }
 
-func buildHTTPMux(svc *lifecycle.Service) *http.ServeMux {
+func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Health checks
@@ -126,12 +137,24 @@ func buildHTTPMux(svc *lifecycle.Service) *http.ServeMux {
 		fmt.Fprintln(w, "ok")
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if ready == nil || !ready.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintln(w, "not ready")
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
 	})
 
+	register := func(path string, handler http.HandlerFunc) {
+		mux.HandleFunc(path, handler)
+		if strings.HasPrefix(path, "/api/") {
+			mux.HandleFunc("/api/v1"+strings.TrimPrefix(path, "/api"), handler)
+		}
+	}
+
 	// API routes
-	mux.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
+	register("/api/agents", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -140,7 +163,7 @@ func buildHTTPMux(svc *lifecycle.Service) *http.ServeMux {
 		writeJSON(w, http.StatusOK, agents)
 	})
 
-	mux.HandleFunc("/api/install", func(w http.ResponseWriter, r *http.Request) {
+	register("/api/install", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -160,7 +183,7 @@ func buildHTTPMux(svc *lifecycle.Service) *http.ServeMux {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "installed"})
 	})
 
-	mux.HandleFunc("/api/start", func(w http.ResponseWriter, r *http.Request) {
+	register("/api/start", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -180,7 +203,7 @@ func buildHTTPMux(svc *lifecycle.Service) *http.ServeMux {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
 	})
 
-	mux.HandleFunc("/api/stop", func(w http.ResponseWriter, r *http.Request) {
+	register("/api/stop", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -200,7 +223,7 @@ func buildHTTPMux(svc *lifecycle.Service) *http.ServeMux {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 	})
 
-	mux.HandleFunc("/api/status/", func(w http.ResponseWriter, r *http.Request) {
+	register("/api/status/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -219,7 +242,7 @@ func buildHTTPMux(svc *lifecycle.Service) *http.ServeMux {
 		writeJSON(w, http.StatusOK, state)
 	})
 
-	mux.HandleFunc("/api/logs/", func(w http.ResponseWriter, r *http.Request) {
+	register("/api/logs/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -239,7 +262,7 @@ func buildHTTPMux(svc *lifecycle.Service) *http.ServeMux {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"lines": lines})
 	})
 
-	mux.HandleFunc("/api/upgrade", func(w http.ResponseWriter, r *http.Request) {
+	register("/api/upgrade", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -260,7 +283,7 @@ func buildHTTPMux(svc *lifecycle.Service) *http.ServeMux {
 		writeJSON(w, http.StatusOK, result)
 	})
 
-	mux.HandleFunc("/api/diagnose", func(w http.ResponseWriter, r *http.Request) {
+	register("/api/diagnose", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
@@ -354,20 +377,20 @@ func writeJSONError(w http.ResponseWriter, status int, message string) {
 
 func writeServiceError(w http.ResponseWriter, err error) {
 	// Map known errors to HTTP status codes
-	switch err {
-	case lifecycle.ErrAgentNotFound:
+	switch {
+	case errors.Is(err, lifecycle.ErrAgentNotFound):
 		writeJSONError(w, http.StatusNotFound, err.Error())
-	case lifecycle.ErrNotInstalled:
+	case errors.Is(err, lifecycle.ErrNotInstalled):
 		writeJSONError(w, http.StatusConflict, err.Error())
-	case lifecycle.ErrAlreadyRunning:
+	case errors.Is(err, lifecycle.ErrAlreadyRunning):
 		writeJSONError(w, http.StatusConflict, err.Error())
-	case lifecycle.ErrAlreadyStopped:
+	case errors.Is(err, lifecycle.ErrAlreadyStopped):
 		writeJSONError(w, http.StatusConflict, err.Error())
-	case lifecycle.ErrCrashLoop:
+	case errors.Is(err, lifecycle.ErrCrashLoop):
 		writeJSONError(w, http.StatusConflict, err.Error())
-	case lifecycle.ErrAgentRunning:
+	case errors.Is(err, lifecycle.ErrAgentRunning):
 		writeJSONError(w, http.StatusConflict, err.Error())
-	case lifecycle.ErrUpgradeNotSupported:
+	case errors.Is(err, lifecycle.ErrUpgradeNotSupported):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 	default:
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
@@ -405,6 +428,7 @@ func stopAllAgents(svc *lifecycle.Service) error {
 			}
 		}
 	}
+	svc.Cleanup()
 	return firstErr
 }
 

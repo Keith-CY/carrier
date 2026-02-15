@@ -7,8 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"testing"
 	"sync"
+	"sync/atomic"
+	"testing"
 	"time"
 
 	"carrier/daemon/internal/baseagent"
@@ -45,6 +46,12 @@ func newFakeProcessManager() *fakeProcessManager {
 }
 
 var _ lifecycle.ProcessController = (*fakeProcessManager)(nil)
+
+func buildTestMux(svc *lifecycle.Service, ready bool) *http.ServeMux {
+	var readyFlag atomic.Bool
+	readyFlag.Store(ready)
+	return buildHTTPMux(svc, &readyFlag)
+}
 
 func (m *fakeProcessManager) Start(agentID string, _ string, _ []string) (int, error) {
 	m.mu.Lock()
@@ -131,7 +138,7 @@ func TestShutdownAgents_VeryShortTimeout(t *testing.T) {
 
 func TestHealthz(t *testing.T) {
 	svc := lifecycle.NewService(baseagent.NoopTriager{})
-	mux := buildHTTPMux(svc)
+	mux := buildTestMux(svc, true)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != http.StatusOK {
@@ -141,11 +148,21 @@ func TestHealthz(t *testing.T) {
 
 func TestReadyz(t *testing.T) {
 	svc := lifecycle.NewService(baseagent.NoopTriager{})
-	mux := buildHTTPMux(svc)
+	mux := buildTestMux(svc, true)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/readyz", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestReadyzNotReady(t *testing.T) {
+	svc := lifecycle.NewService(baseagent.NoopTriager{})
+	mux := buildTestMux(svc, false)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rec.Code)
 	}
 }
 
@@ -154,7 +171,7 @@ func TestAPIListAgents(t *testing.T) {
 	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
 		t.Fatal(err)
 	}
-	mux := buildHTTPMux(svc)
+	mux := buildTestMux(svc, true)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/agents", nil))
 	if rec.Code != http.StatusOK {
@@ -171,11 +188,24 @@ func TestAPIListAgents(t *testing.T) {
 
 func TestAPIStatusNotFound(t *testing.T) {
 	svc := lifecycle.NewService(baseagent.NoopTriager{})
-	mux := buildHTTPMux(svc)
+	mux := buildTestMux(svc, true)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/status/nonexistent", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestAPIListAgentsV1(t *testing.T) {
+	svc := lifecycle.NewService(baseagent.NoopTriager{})
+	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
+		t.Fatal(err)
+	}
+	mux := buildTestMux(svc, true)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/agents", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 }
 
@@ -189,7 +219,7 @@ func TestAPIInstallAndStart(t *testing.T) {
 	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
 		t.Fatal(err)
 	}
-	mux := buildHTTPMux(svc)
+	mux := buildTestMux(svc, true)
 
 	// Set required env
 	t.Setenv("OPENAI_API_KEY", "test-key")
@@ -218,11 +248,19 @@ func TestAPIInstallAndStart(t *testing.T) {
 
 func TestAPIMethodNotAllowed(t *testing.T) {
 	svc := lifecycle.NewService(baseagent.NoopTriager{})
-	mux := buildHTTPMux(svc)
+	mux := buildTestMux(svc, true)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/agents", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestWriteServiceErrorMapsWrappedErrors(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeServiceError(rec, fmt.Errorf("wrap: %w", lifecycle.ErrNotInstalled))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", rec.Code)
 	}
 }
 

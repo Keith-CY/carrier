@@ -17,10 +17,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Sync issue/pr to Projects Kanban
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
         with:
           script: |
-            const projectId = process.env.CARRIER_PROJECT_ID || 'PVT_kwHOAG7zoc4BPLc6';
+            const projectId = process.env.CARRIER_PROJECT_ID;
+            if (!projectId) {
+              core.setFailed('CARRIER_PROJECT_ID is required. Set it in repository/environment variables.');
+              return;
+            }
             const statusFieldNames = ['Status', '状态'];
             const fieldAliases = {
               priority: ['Priority', '优先级'],
@@ -212,7 +216,8 @@ jobs:
               if (direct) {
                 return direct.id;
               }
-              const numeric = options.find((option) => option.name === value);              return numeric ? numeric.id : null;
+              const numeric = options.find((option) => option.name === value);
+              return numeric ? numeric.id : null;
             };
 
             const statusField = findField(statusFieldNames);
