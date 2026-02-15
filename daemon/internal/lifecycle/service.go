@@ -362,6 +362,9 @@ func (s *Service) HandleFailure(ctx context.Context, agentID, lastError string) 
 	s.mu.Unlock()
 	s.recordAudit("", "base-agent", "triage", agentID, AuditResultSuccess, "", triage.Summary)
 
+	// Persist triage information to disk
+	s.saveState()
+
 	return triage, nil
 }
 
