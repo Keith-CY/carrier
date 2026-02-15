@@ -329,3 +329,105 @@ func TestProcessManager_Cleanup(t *testing.T) {
 		}
 	}
 }
+
+func TestProcessManager_GetExitCode(t *testing.T) {
+	tmpDir := t.TempDir()
+	pm := NewProcessManager(tmpDir)
+
+	t.Run("exit code 0 for successful process", func(t *testing.T) {
+		agentID := "exit-code-0"
+		_, err := pm.Start(agentID, "true", []string{})
+		if err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
+
+		// Wait for process to complete
+		if err := pm.Wait(agentID); err != nil {
+			t.Fatalf("Wait failed: %v", err)
+		}
+
+		// Give the goroutine time to set exit code
+		time.Sleep(100 * time.Millisecond)
+
+		exitCode := pm.GetExitCode(agentID)
+		if exitCode == nil {
+			t.Fatal("expected exit code to be set")
+		}
+
+		if *exitCode != 0 {
+			t.Errorf("expected exit code 0, got %d", *exitCode)
+		}
+	})
+
+	t.Run("exit code 1 for failed process", func(t *testing.T) {
+		agentID := "exit-code-1"
+		_, err := pm.Start(agentID, "false", []string{})
+		if err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
+
+		// Wait for process to complete (will return error)
+		_ = pm.Wait(agentID)
+
+		// Give the goroutine time to set exit code
+		time.Sleep(100 * time.Millisecond)
+
+		exitCode := pm.GetExitCode(agentID)
+		if exitCode == nil {
+			t.Fatal("expected exit code to be set")
+		}
+
+		if *exitCode != 1 {
+			t.Errorf("expected exit code 1, got %d", *exitCode)
+		}
+	})
+
+	t.Run("exit code 2 for command error", func(t *testing.T) {
+		agentID := "exit-code-2"
+		_, err := pm.Start(agentID, "sh", []string{"-c", "exit 2"})
+		if err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
+
+		// Wait for process to complete
+		_ = pm.Wait(agentID)
+
+		// Give the goroutine time to set exit code
+		time.Sleep(100 * time.Millisecond)
+
+		exitCode := pm.GetExitCode(agentID)
+		if exitCode == nil {
+			t.Fatal("expected exit code to be set")
+		}
+
+		if *exitCode != 2 {
+			t.Errorf("expected exit code 2, got %d", *exitCode)
+		}
+	})
+
+	t.Run("nil exit code for nonexistent agent", func(t *testing.T) {
+		exitCode := pm.GetExitCode("nonexistent")
+		if exitCode != nil {
+			t.Errorf("expected nil exit code for nonexistent agent, got %v", exitCode)
+		}
+	})
+
+	t.Run("nil exit code for running process", func(t *testing.T) {
+		agentID := "still-running"
+		_, err := pm.Start(agentID, "sleep", []string{"60"})
+		if err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
+		defer func() {
+			if err := pm.Stop(agentID); err != nil {
+				t.Logf("cleanup stop failed: %v", err)
+			}
+		}()
+
+		// Process is still running, exit code should not be set yet
+		exitCode := pm.GetExitCode(agentID)
+		if exitCode != nil {
+			t.Errorf("expected nil exit code for running process, got %v", exitCode)
+		}
+	})
+}

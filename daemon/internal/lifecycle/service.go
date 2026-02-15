@@ -191,6 +191,8 @@ type Service struct {
 	processLogDir      string
 	backoffPolicy      BackoffPolicy
 	backoffStates      map[string]BackoffState
+	exitCodes          map[string]*int
+	evidenceCollector  *EvidenceCollector
 }
 
 func NewService(triager baseagent.Triager, opts ...Option) *Service {
@@ -199,11 +201,14 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 	}
 
 	processLogDir := filepath.Join(os.TempDir(), "agentd-process-logs")
+	exitCodes := make(map[string]*int)
+	logs := make(map[string][]string)
+
 	svc := &Service{
 		states:             make(map[string]AgentState),
 		manifests:          make(map[string]manifest.Manifest),
 		memoryLinks:        make(map[string][]string),
-		logs:               make(map[string][]string),
+		logs:               logs,
 		handoffs:           make(map[string]DiagnosisHandoff),
 		auditLogs:          make([]AuditLog, 0, 128),
 		auditLogLimit:      1000,
@@ -222,8 +227,10 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		processLogDir:      processLogDir,
 		backoffPolicy:      DefaultBackoffPolicy(),
 		backoffStates:      make(map[string]BackoffState),
+		exitCodes:          exitCodes,
 	}
 	svc.processManager = NewProcessManager(processLogDir)
+	svc.evidenceCollector = NewEvidenceCollector(logs, exitCodes, 1000)
 	svc.idGenerator = func(prefix string) string {
 		next := atomic.AddUint64(&svc.idCounter, 1)
 		return fmt.Sprintf("%s-%d", prefix, next)
@@ -357,9 +364,20 @@ func (s *Service) HandleFailure(ctx context.Context, agentID, lastError string) 
 	state.LastError = lastError
 	state.UpdatedAt = s.now()
 	s.states[agentID] = state
+
+	// Collect exit code from process manager
+	if pm, ok := s.processManager.(*ProcessManager); ok {
+		if exitCode := pm.GetExitCode(agentID); exitCode != nil {
+			s.exitCodes[agentID] = exitCode
+		}
+	}
 	s.mu.Unlock()
 
-	triage, err := s.triager.Analyze(ctx, baseagent.Evidence{AgentID: agentID, LastError: lastError})
+	// Collect comprehensive evidence
+	evidence := s.evidenceCollector.Collect(agentID, lastError)
+	baseEvidence := evidence.ToBaseAgentEvidence(lastError)
+
+	triage, err := s.triager.Analyze(ctx, baseEvidence)
 	if err != nil {
 		return baseagent.TriageResult{}, err
 	}
