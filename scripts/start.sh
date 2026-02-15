@@ -5,8 +5,8 @@
 # Usage:
 #   ./start.sh                    # Start daemon in foreground
 #   ./start.sh --daemon           # Start daemon in background
-#   ./start.sh --systemd          # Create and enable systemd service
-#   ./start.sh --systemd --user   # Create user-level systemd service
+#   ./start.sh --systemd          # Create, enable, and start systemd service
+#   ./start.sh --systemd --user   # Create, enable, and start user-level systemd service
 #
 # Environment Variables:
 #   OPENCLAW_PORT       - HTTP port (default: 9090)
@@ -91,9 +91,11 @@ if [ "$MODE" = "systemd" ]; then
     if [ "$SYSTEMD_USER" = "--user" ]; then
         SERVICE_DIR="$HOME/.config/systemd/user"
         SYSTEMCTL_CMD="systemctl --user"
+        WANTED_BY_TARGET="default.target"
     else
         SERVICE_DIR="/etc/systemd/system"
         SYSTEMCTL_CMD="systemctl"
+        WANTED_BY_TARGET="multi-user.target"
         # Check for sudo if system-level
         if [ ! -w "$SERVICE_DIR" ] && [ -z "${DRY_RUN:-}" ]; then
             if ! command -v sudo >/dev/null 2>&1; then
@@ -148,7 +150,7 @@ Environment=OPENCLAW_LOG_LEVEL=${LOG_LEVEL}
 Environment=OPENCLAW_DATA_DIR=${DATA_DIR}
 
 [Install]
-WantedBy=multi-user.target"
+WantedBy=${WANTED_BY_TARGET}"
 
     if [ "${DRY_RUN:-}" ]; then
         echo "[DRY_RUN] Would write to: $SERVICE_FILE"
@@ -167,14 +169,12 @@ WantedBy=multi-user.target"
             printf "%s\n" "$SERVICE_CONTENT" | sudo tee "$SERVICE_FILE" > /dev/null
         fi
 
-        # Reload systemd
+        # Reload and activate service
         $SYSTEMCTL_CMD daemon-reload
+        $SYSTEMCTL_CMD enable openclaw-gateway.service
+        $SYSTEMCTL_CMD start openclaw-gateway.service
 
-        echo "Service created: openclaw-gateway.service"
-        echo ""
-        echo "To enable and start:"
-        echo "  ${SYSTEMCTL_CMD} enable openclaw-gateway.service"
-        echo "  ${SYSTEMCTL_CMD} start openclaw-gateway.service"
+        echo "Service created and started: openclaw-gateway.service"
         echo ""
         echo "To check status:"
         echo "  ${SYSTEMCTL_CMD} status openclaw-gateway.service"
