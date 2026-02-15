@@ -254,3 +254,183 @@ Check that:
 - [Sigstore GitHub Actions](https://github.com/sigstore/cosign-installer)
 - [GPG Documentation](https://gnupg.org/documentation/)
 - [GitHub OIDC Tokens](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect)
+## Verification Process (Users)
+
+### Automatic Verification (Installer)
+
+The OpenClaw installer (`daemon/internal/catalog/openclaw-installer.sh`) automatically verifies signatures when available:
+
+1. Downloads the artifact
+2. Verifies the checksum (mandatory)
+3. Downloads the signature file if available
+4. Verifies the signature using cosign or GPG (optional, warns on failure)
+
+**No user action required** - the installer handles verification automatically.
+
+### Manual Verification
+
+You can manually verify artifacts using the standalone verification script:
+
+```bash
+# Download the artifact and signature
+curl -LO https://github.com/openclaw/openclaw/releases/download/v1.0.0/openclaw-Linux-x86_64.tar.gz
+curl -LO https://github.com/openclaw/openclaw/releases/download/v1.0.0/openclaw-Linux-x86_64.tar.gz.sig
+
+# Verify using the script
+./scripts/verify-signature.sh openclaw-Linux-x86_64.tar.gz
+
+# Or specify the signature file explicitly
+./scripts/verify-signature.sh openclaw-Linux-x86_64.tar.gz openclaw-Linux-x86_64.tar.gz.sig
+```
+
+### Using cosign directly
+
+If you have cosign installed:
+
+```bash
+cosign verify-blob \
+  --certificate-identity "https://github.com/openclaw/openclaw/.github/workflows/release.yml@refs/heads/main" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  --signature openclaw-Linux-x86_64.tar.gz.sig \
+  openclaw-Linux-x86_64.tar.gz
+```
+
+### Using GPG directly
+
+If the artifact was signed with GPG:
+
+```bash
+# Import the public key (first time only)
+gpg --keyserver keyserver.ubuntu.com --recv-keys KEY_ID
+
+# Verify the signature
+gpg --verify openclaw-Linux-x86_64.tar.gz.sig openclaw-Linux-x86_64.tar.gz
+```
+
+## Exit Codes
+
+The `verify-signature.sh` script uses the following exit codes:
+
+- `0` - Signature verification PASSED
+- `1` - Signature verification FAILED (invalid signature)
+- `2` - Signature verification SKIPPED (no signature file or no verification tool available)
+
+## Security Considerations
+
+### Why Signature Verification?
+
+- **Authenticity**: Confirms the artifact was produced by the official OpenClaw release process
+- **Integrity**: Ensures the artifact hasn't been tampered with after signing
+- **Non-repudiation**: Provides cryptographic proof of origin
+
+### Checksum vs Signature
+
+- **Checksum** (SHA-256): Verifies integrity (no corruption during download)
+- **Signature**: Verifies authenticity (artifact came from trusted source)
+
+Both are important! Checksums are mandatory; signatures are optional but recommended.
+
+### cosign Keyless Signing
+
+cosign keyless signing provides several advantages:
+
+- No secret keys to manage or leak
+- OIDC tokens are short-lived and tied to the build environment
+- Certificate transparency log provides audit trail
+- Verification requires matching the expected identity and issuer
+
+The installer verifies that signatures come from:
+- **Identity**: `https://github.com/openclaw/openclaw/.github/workflows/release.yml@refs/heads/main`
+- **Issuer**: `https://token.actions.githubusercontent.com`
+
+This ensures artifacts were built by the official GitHub Actions workflow.
+
+## Installation Guide
+
+### Installing cosign
+
+**macOS**:
+```bash
+brew install cosign
+```
+
+**Linux**:
+```bash
+# Download the latest release
+COSIGN_VERSION=$(curl -s https://api.github.com/repos/sigstore/cosign/releases/latest | grep tag_name | cut -d '"' -f 4)
+curl -LO "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
+sudo install -m 755 cosign-linux-amd64 /usr/local/bin/cosign
+```
+
+**Windows**:
+```powershell
+# Using Chocolatey
+choco install cosign
+
+# Or download from https://github.com/sigstore/cosign/releases
+```
+
+### Installing GPG
+
+Most systems have GPG pre-installed. If not:
+
+**macOS**:
+```bash
+brew install gnupg
+```
+
+**Linux** (Debian/Ubuntu):
+```bash
+sudo apt-get install gnupg
+```
+
+**Windows**:
+Download from https://www.gnupg.org/download/
+
+## Troubleshooting
+
+### "Signature verification FAILED"
+
+If signature verification fails:
+
+1. **Verify the checksum first** - If the checksum fails, the download is corrupted
+2. **Check the certificate identity** - Ensure you're using the correct identity/issuer for cosign
+3. **Check cosign/GPG version** - Older versions may have compatibility issues
+4. **Verify network connectivity** - cosign requires internet access for certificate transparency logs
+
+### "No signature file available"
+
+Some older releases may not have signatures. This is expected and the installer will continue with checksum-only verification.
+
+### "No verification tool available"
+
+Install cosign or GPG to enable signature verification. The installer will continue without signature verification but will warn about the security risk.
+
+## CI/CD Integration
+
+For automated deployments, you can enforce signature verification:
+
+```bash
+# Fail if signature verification is not successful
+if ! ./scripts/verify-signature.sh artifact.tar.gz; then
+    echo "Signature verification required but failed or unavailable"
+    exit 1
+fi
+```
+
+Or make it optional but log the result:
+
+```bash
+# Warn but don't fail
+./scripts/verify-signature.sh artifact.tar.gz || {
+    echo "WARNING: Signature verification was not successful"
+    echo "Proceeding anyway (checksum verification passed)"
+}
+```
+
+## References
+
+- [cosign Documentation](https://docs.sigstore.dev/cosign/overview/)
+- [Sigstore Project](https://www.sigstore.dev/)
+- [GPG Documentation](https://www.gnupg.org/documentation/)
+- [GitHub OIDC for Actions](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect)
