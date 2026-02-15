@@ -70,6 +70,10 @@ func Default() Config {
 // Load reads configuration from the given JSON file path. If the file does
 // not exist, defaults are returned. Environment variables with the CARRIER_
 // prefix override file values.
+//
+// Relative paths are resolved from the current working directory of the process.
+// Use an absolute path to ensure consistent configuration loading regardless of
+// where the daemon is invoked.
 func Load(path string) (Config, error) {
 	cfg := Default()
 
