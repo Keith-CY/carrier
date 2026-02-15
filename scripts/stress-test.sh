@@ -17,7 +17,6 @@ DAEMON_URL="${CARRIER_DAEMON_URL:-http://127.0.0.1:9090}"
 AGENT_ID="openclaw"
 ITERATIONS=10
 QUIET=0
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Test results tracking
 declare -A TEST_RESULTS
