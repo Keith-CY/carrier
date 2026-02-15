@@ -45,7 +45,7 @@ func (pm *ProcessManager) Start(agentID string, command string, args []string) (
 
 	// Check if already running
 	if info, exists := pm.processes[agentID]; exists {
-		if pm.isProcessAlive(info.pid) {
+		if pm.isProcessAlive(info) {
 			return 0, fmt.Errorf("agent %s already running with PID %d", agentID, info.pid)
 		}
 		// Clean up stale entry
@@ -153,7 +153,7 @@ func (pm *ProcessManager) IsRunning(agentID string) bool {
 		return false
 	}
 
-	return pm.isProcessAlive(info.pid)
+	return pm.isProcessAlive(info)
 }
 
 // Wait blocks until the agent's process exits and returns the exit error.
@@ -170,16 +170,25 @@ func (pm *ProcessManager) Wait(agentID string) error {
 	return info.waitErr
 }
 
-// isProcessAlive checks if a process with the given PID exists.
+// isProcessAlive checks if the tracked process is still running.
 // Must be called with lock held.
-func (pm *ProcessManager) isProcessAlive(pid int) bool {
-	process, err := os.FindProcess(pid)
-	if err != nil {
+// Uses the stored *os.Process handle to avoid PID reuse issues.
+func (pm *ProcessManager) isProcessAlive(info *processInfo) bool {
+	// First check if the process has already exited (non-blocking)
+	select {
+	case <-info.done:
+		return false
+	default:
+	}
+
+	// Verify using signal 0 on the original Process handle (not a PID lookup)
+	// This guards against PID reuse because we're checking the specific
+	// Process object we created, not looking up a potentially recycled PID.
+	if info.cmd == nil || info.cmd.Process == nil {
 		return false
 	}
 
-	// Send signal 0 to check if process exists
-	err = process.Signal(syscall.Signal(0))
+	err := info.cmd.Process.Signal(syscall.Signal(0))
 	return err == nil
 }
 
