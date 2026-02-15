@@ -156,6 +156,12 @@ func WithProcessManager(pm ProcessController) Option {
 	}
 }
 
+func WithRepairConfig(config RepairConfig) Option {
+	return func(s *Service) {
+		s.repairConfig = config
+	}
+}
+
 type Service struct {
 	mu                 sync.RWMutex
 	states             map[string]AgentState
@@ -183,6 +189,8 @@ type Service struct {
 	stateFile          *StateFile
 	processManager     ProcessController
 	processLogDir      string
+	repairManager      *RepairManager
+	repairConfig       RepairConfig
 }
 
 func NewService(triager baseagent.Triager, opts ...Option) *Service {
@@ -212,6 +220,7 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		crashLoopWindow:    defaultCrashLoopWindow,
 		crashLoopCooldown:  defaultCrashLoopCooldown,
 		processLogDir:      processLogDir,
+		repairConfig:       DefaultRepairConfig(),
 	}
 	svc.processManager = NewProcessManager(processLogDir)
 	svc.idGenerator = func(prefix string) string {
@@ -221,6 +230,9 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 	for _, opt := range opts {
 		opt(svc)
 	}
+
+	// Initialize RepairManager after options are applied
+	svc.repairManager = NewRepairManager(svc, svc.repairConfig)
 
 	// Load persisted state if configured
 	if svc.stateFile != nil {
@@ -361,6 +373,34 @@ func (s *Service) HandleFailure(ctx context.Context, agentID, lastError string) 
 	s.states[agentID] = state
 	s.mu.Unlock()
 	s.recordAudit("", "base-agent", "triage", agentID, AuditResultSuccess, "", triage.Summary)
+
+	// Execute repair actions if not already resolved
+	if !triage.Resolved && s.repairManager != nil {
+		repairResult := s.repairManager.ExecuteRepair(ctx, agentID, triage)
+
+		// Log repair result
+		if repairResult.Success {
+			s.appendLog(agentID, fmt.Sprintf("repair: executed %s successfully", repairResult.Action))
+			s.recordAudit("", "repair-manager", "repair", agentID, AuditResultSuccess, "",
+				fmt.Sprintf("action=%s", repairResult.Action))
+		} else if repairResult.NeedsIntervention {
+			s.appendLog(agentID, "repair: all automated repair attempts exhausted, human intervention required")
+			s.recordAudit("", "repair-manager", "repair", agentID, AuditResultFailure, "E_REPAIR_EXHAUSTED",
+				"all repair attempts exhausted")
+
+			// Mark state as needs intervention
+			s.mu.Lock()
+			state = s.states[agentID]
+			state.NeedsRemoteDiagnosis = true
+			state.UpdatedAt = s.now()
+			s.states[agentID] = state
+			s.mu.Unlock()
+		} else if repairResult.Error != nil {
+			s.appendLog(agentID, fmt.Sprintf("repair: action %s failed: %v", repairResult.Action, repairResult.Error))
+			s.recordAudit("", "repair-manager", "repair", agentID, AuditResultFailure, "E_REPAIR_FAILED",
+				repairResult.Error.Error())
+		}
+	}
 
 	return triage, nil
 }

@@ -88,6 +88,7 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 	state.LastTriageSummary = ""
 	state.NeedsRemoteDiagnosis = false
 	state.UpdatedAt = s.now()
+	runningSince := s.now()
 	s.states[agentID] = state
 	delete(s.restarts, agentID)
 	delete(s.cooldowns, agentID)
@@ -96,6 +97,11 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 
 	// Monitor the process in background
 	go s.monitorProcess(agentID)
+
+	// Monitor for successful run to reset repair counters
+	if s.repairManager != nil {
+		go s.monitorSuccessfulRun(agentID, runningSince)
+	}
 
 	s.saveState()
 
@@ -197,5 +203,29 @@ func (s *Service) monitorProcess(agentID string) {
 		if _, triageErr := s.HandleFailure(context.Background(), agentID, errorMsg); triageErr != nil {
 			s.appendLog(agentID, fmt.Sprintf("triage error: %v", triageErr))
 		}
+	}
+}
+
+// monitorSuccessfulRun waits for the success threshold and resets repair counters
+// if the agent runs successfully for the configured duration.
+func (s *Service) monitorSuccessfulRun(agentID string, runningSince time.Time) {
+	threshold := s.repairConfig.SuccessThreshold
+
+	// Wait for the success threshold
+	time.Sleep(threshold)
+
+	// Check if agent is still running
+	s.mu.RLock()
+	state, ok := s.states[agentID]
+	s.mu.RUnlock()
+
+	if !ok {
+		return
+	}
+
+	if state.Runtime == RuntimeStateRunning {
+		// Agent has been running successfully, reset repair counters
+		s.repairManager.ResetOnSuccess(agentID, runningSince)
+		s.appendLog(agentID, fmt.Sprintf("repair: counters reset after %v of successful operation", threshold))
 	}
 }
