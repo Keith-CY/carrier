@@ -91,6 +91,7 @@ func (s *Service) updateStateOnStartError(agentID string, err error) {
 	if len(restarts) >= s.crashLoopThreshold {
 		cooldownUntil := now.Add(s.crashLoopCooldown)
 		s.cooldowns[agentID] = cooldownUntil
+		state.Runtime = RuntimeStateCrashLoop
 		state.LastError = fmt.Sprintf(
 			"crash-loop detected: %d restarts within %s; cooldown until %s; last error: %v",
 			len(restarts),
@@ -192,7 +193,7 @@ func (s *Service) blockIfCrashLoopCoolingDown(agentID string, state AgentState) 
 	}
 
 	restartCount := len(trimRestartHistory(s.restarts[agentID], now.Add(-s.crashLoopWindow)))
-	state.Runtime = RuntimeStateCrashing
+	state.Runtime = RuntimeStateCrashLoop
 	state.Health = HealthStateUnhealthy
 	state.LastError = fmt.Sprintf(
 		"crash-loop detected: %d restarts within %s; cooldown until %s",

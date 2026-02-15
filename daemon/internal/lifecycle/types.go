@@ -15,10 +15,11 @@ const (
 )
 
 const (
-	RuntimeStateStopped  RuntimeState = "stopped"
-	RuntimeStateStarting RuntimeState = "starting"
-	RuntimeStateRunning  RuntimeState = "running"
-	RuntimeStateCrashing RuntimeState = "crashing"
+	RuntimeStateStopped   RuntimeState = "stopped"
+	RuntimeStateStarting  RuntimeState = "starting"
+	RuntimeStateRunning   RuntimeState = "running"
+	RuntimeStateCrashing  RuntimeState = "crashing"
+	RuntimeStateCrashLoop RuntimeState = "crash_loop"
 )
 
 const (
