@@ -27,6 +27,7 @@ export class RateLimiter {
   private readonly config: RateLimitConfig;
   private readonly sessionWindows: Map<string, number[]> = new Map();
   private globalWindow: number[] = [];
+  private cleanupIntervalId: Timer | null = null;
 
   constructor(config?: Partial<RateLimitConfig>) {
     this.config = {
@@ -82,6 +83,46 @@ export class RateLimiter {
   reset(): void {
     this.sessionWindows.clear();
     this.globalWindow = [];
+  }
+
+  /** Remove expired windows from all sessions and global tracking. */
+  cleanup(now: number = Date.now()): number {
+    const cutoff = now - this.config.windowMs;
+    let removed = 0;
+
+    // Clean up global window
+    this.globalWindow = this.globalWindow.filter((t) => t > cutoff);
+
+    // Clean up session windows and remove empty sessions
+    for (const [key, timestamps] of this.sessionWindows) {
+      const filtered = timestamps.filter((t) => t > cutoff);
+      if (filtered.length === 0) {
+        this.sessionWindows.delete(key);
+        removed += 1;
+      } else {
+        this.sessionWindows.set(key, filtered);
+      }
+    }
+
+    return removed;
+  }
+
+  /** Start periodic cleanup of expired windows. */
+  startPeriodicCleanup(intervalMs?: number): this {
+    this.stopPeriodicCleanup();
+    const interval = intervalMs ?? this.config.windowMs;
+    this.cleanupIntervalId = setInterval(() => {
+      this.cleanup();
+    }, interval);
+    return this;
+  }
+
+  /** Stop the periodic cleanup interval. */
+  stopPeriodicCleanup(): void {
+    if (this.cleanupIntervalId !== null) {
+      clearInterval(this.cleanupIntervalId);
+      this.cleanupIntervalId = null;
+    }
   }
 
   /** Return current config (for inspection/testing). */
