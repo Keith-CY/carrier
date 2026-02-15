@@ -101,7 +101,7 @@ func TestProcessManager_StartRotatesLog(t *testing.T) {
 	if pid == 0 {
 		t.Fatal("expected non-zero PID")
 	}
-	defer pm.Stop(agentID)
+	defer func() { _ = pm.Stop(agentID) }()
 
 	// Backup should exist
 	if _, err := os.Stat(logPath + ".1"); err != nil {
