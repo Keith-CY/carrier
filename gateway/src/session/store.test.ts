@@ -180,9 +180,39 @@ describe("SessionStore", () => {
       expect(session).not.toBeNull();
     });
 
+
+
+    test("removes session exactly at stale-session TTL boundary", () => {
+      let time = new Date("2026-01-01T00:00:00Z");
+      const store = new SessionStore(() => time, 60);
+      store.registerPairCode("code-ttl", 300);
+      store.pair({ provider: "telegram", chatId: "ttl-chat", code: "code-ttl" });
+
+      // Exactly at TTL boundary should be treated as stale and removed.
+      time = new Date("2026-01-01T00:01:00Z");
+      const removed = store.cleanup();
+
+      expect(removed).toBe(1);
+      expect(store.getSession("telegram", "ttl-chat")).toBeNull();
+    });
+
     test("returns 0 when nothing to clean", () => {
       const store = new SessionStore(() => new Date("2026-01-01T00:00:00Z"));
       expect(store.cleanup()).toBe(0);
+    });
+  });
+
+
+
+  describe("periodic cleanup lifecycle", () => {
+    test("startPeriodicCleanup and stopPeriodicCleanup are idempotent", () => {
+      const store = new SessionStore();
+
+      // Should not throw when repeatedly started/stopped.
+      store.startPeriodicCleanup(10);
+      store.startPeriodicCleanup(10);
+      store.stopPeriodicCleanup();
+      store.stopPeriodicCleanup();
     });
   });
 
