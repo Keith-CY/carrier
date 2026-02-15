@@ -188,6 +188,11 @@ func (s *Service) monitorProcess(agentID string) {
 	}
 	s.mu.Unlock()
 
+	// Persist crash state to disk
+	if shouldTriage {
+		s.saveState()
+	}
+
 	if logLine != "" {
 		s.appendLog(agentID, logLine)
 	}
