@@ -313,6 +313,7 @@ describe("parser edge cases: command-like prefixes that should fail", () => {
   });
 });
 
+
 describe("Feishu edge cases: T021 normalization", () => {
   test("URL verification challenge event returns null", () => {
     const parsed = parseFeishuEventToCommand({
@@ -466,5 +467,266 @@ describe("Feishu edge cases: T021 normalization", () => {
     expect(parsed).not.toBeNull();
     expect(parsed?.command).toBe("/upgrade");
     expect(parsed?.args).toEqual(["agent-prod"]);
+  });
+});
+
+
+describe("Telegram edge cases (T019): non-message updates", () => {
+  test("returns null for callback_query update", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 4001,
+      callback_query: {
+        id: "callback-1",
+        from: { id: 123456 },
+        message: {
+          message_id: 999,
+          chat: { id: 123456 },
+          text: "/status",
+        },
+        data: "button_pressed",
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("returns null for inline_query update", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 4002,
+      inline_query: {
+        id: "inline-1",
+        from: { id: 123456 },
+        query: "/agents",
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("returns null for update with no message-like fields", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 4003,
+      my_chat_member: {
+        chat: { id: 123456 },
+        from: { id: 789 },
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+});
+
+describe("Telegram edge cases (T019): non-text messages", () => {
+  test("returns null for photo message without caption", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 5001,
+      message: {
+        message_id: 1100,
+        chat: { id: 123456 },
+        photo: [
+          { file_id: "photo-1", width: 100, height: 100 },
+        ],
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("parses photo message with command in caption", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 5002,
+      message: {
+        message_id: 1101,
+        chat: { id: 123456 },
+        photo: [
+          { file_id: "photo-2", width: 100, height: 100 },
+        ],
+        caption: "/analyze image",
+      },
+    });
+    expect(parsed?.command).toBe("/analyze");
+    expect(parsed?.args).toEqual(["image"]);
+  });
+
+  test("returns null for sticker message", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 5003,
+      message: {
+        message_id: 1102,
+        chat: { id: 123456 },
+        sticker: {
+          file_id: "sticker-1",
+          width: 512,
+          height: 512,
+        },
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("returns null for video message without caption", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 5004,
+      message: {
+        message_id: 1103,
+        chat: { id: 123456 },
+        video: {
+          file_id: "video-1",
+          width: 1920,
+          height: 1080,
+        },
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("returns null for document message without caption", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 5005,
+      message: {
+        message_id: 1104,
+        chat: { id: 123456 },
+        document: {
+          file_id: "doc-1",
+          file_name: "report.pdf",
+        },
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("returns null for audio message", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 5006,
+      message: {
+        message_id: 1105,
+        chat: { id: 123456 },
+        audio: {
+          file_id: "audio-1",
+          duration: 180,
+        },
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("returns null for voice message", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 5007,
+      message: {
+        message_id: 1106,
+        chat: { id: 123456 },
+        voice: {
+          file_id: "voice-1",
+          duration: 5,
+        },
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("returns null for location message", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 5008,
+      message: {
+        message_id: 1107,
+        chat: { id: 123456 },
+        location: {
+          latitude: 37.7749,
+          longitude: -122.4194,
+        },
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+});
+
+describe("Telegram edge cases (T019): empty and whitespace text", () => {
+  test("returns null for empty text string", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 6001,
+      message: {
+        message_id: 1200,
+        chat: { id: 123456 },
+        text: "",
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("returns null for whitespace-only text", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 6002,
+      message: {
+        message_id: 1201,
+        chat: { id: 123456 },
+        text: "   \t\n  ",
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("returns null for message with only bot mention", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 6003,
+      message: {
+        message_id: 1202,
+        chat: { id: 123456 },
+        text: "@CarrierBot",
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+
+  test("returns null for whitespace after stripping mentions", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 6004,
+      message: {
+        message_id: 1203,
+        chat: { id: 123456 },
+        text: "@bot1 @bot2   ",
+      },
+    });
+    expect(parsed).toBeNull();
+  });
+});
+
+describe("Telegram edge cases (T019): edited messages", () => {
+  test("parses edited_message with command", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 7001,
+      edited_message: {
+        message_id: 1300,
+        chat: { id: 123456 },
+        text: "/status updated",
+        edit_date: 1234567890,
+      },
+    });
+    expect(parsed?.command).toBe("/status");
+    expect(parsed?.args).toEqual(["updated"]);
+    expect(parsed?.requestId).toBe("tg-7001-1300");
+  });
+
+  test("parses channel_post with command", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 7002,
+      channel_post: {
+        message_id: 1301,
+        chat: { id: -100123456789, type: "channel" },
+        text: "/broadcast message",
+      },
+    });
+    expect(parsed?.command).toBe("/broadcast");
+    expect(parsed?.args).toEqual(["message"]);
+  });
+
+  test("parses edited_channel_post with command", () => {
+    const parsed = parseTelegramUpdateToCommand({
+      update_id: 7003,
+      edited_channel_post: {
+        message_id: 1302,
+        chat: { id: -100123456789, type: "channel" },
+        text: "/announce edited",
+        edit_date: 1234567890,
+      },
+    });
+    expect(parsed?.command).toBe("/announce");
+    expect(parsed?.args).toEqual(["edited"]);
   });
 });
