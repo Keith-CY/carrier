@@ -91,9 +91,11 @@ if [ "$MODE" = "systemd" ]; then
     if [ "$SYSTEMD_USER" = "--user" ]; then
         SERVICE_DIR="$HOME/.config/systemd/user"
         SYSTEMCTL_CMD="systemctl --user"
+        WANTED_BY_TARGET="default.target"
     else
         SERVICE_DIR="/etc/systemd/system"
         SYSTEMCTL_CMD="systemctl"
+        WANTED_BY_TARGET="multi-user.target"
         # Check for sudo if system-level
         if [ ! -w "$SERVICE_DIR" ] && [ -z "${DRY_RUN:-}" ]; then
             if ! command -v sudo >/dev/null 2>&1; then
@@ -112,6 +114,7 @@ if [ "$MODE" = "systemd" ]; then
     fi
 
     echo "Creating systemd service: $SERVICE_FILE"
+    echo "Using systemd install target: $WANTED_BY_TARGET"
 
     # Generate service unit
     SERVICE_CONTENT="[Unit]
@@ -148,7 +151,7 @@ Environment=OPENCLAW_LOG_LEVEL=${LOG_LEVEL}
 Environment=OPENCLAW_DATA_DIR=${DATA_DIR}
 
 [Install]
-WantedBy=multi-user.target"
+WantedBy=${WANTED_BY_TARGET}"
 
     if [ "${DRY_RUN:-}" ]; then
         echo "[DRY_RUN] Would write to: $SERVICE_FILE"
