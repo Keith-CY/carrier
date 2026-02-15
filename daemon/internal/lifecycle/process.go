@@ -23,7 +23,8 @@ type processInfo struct {
 	pid      int
 	agentID  string
 	logFile  *os.File
-	done     chan error
+	done     chan struct{}
+	waitErr  error
 	stopOnce sync.Once
 }
 
@@ -83,13 +84,12 @@ func (pm *ProcessManager) Start(agentID string, command string, args []string) (
 		pid:     cmd.Process.Pid,
 		agentID: agentID,
 		logFile: logFile,
-		done:    make(chan error, 1),
+		done:    make(chan struct{}),
 	}
 
 	// Monitor process in background
 	go func() {
-		err := cmd.Wait()
-		info.done <- err
+		info.waitErr = cmd.Wait()
 		close(info.done)
 	}()
 
@@ -164,7 +164,8 @@ func (pm *ProcessManager) Wait(agentID string) error {
 		return fmt.Errorf("agent %s is not running", agentID)
 	}
 
-	return <-info.done
+	<-info.done
+	return info.waitErr
 }
 
 // isProcessAlive checks if a process with the given PID exists.

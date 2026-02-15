@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"carrier/daemon/internal/runtimecheck"
 )
@@ -63,6 +64,18 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 	}
 
 	s.appendLog(agentID, fmt.Sprintf("started process with PID %d", pid))
+
+	// Detect immediate process exit (e.g., command not found) and treat as start failure.
+	time.Sleep(20 * time.Millisecond)
+	if !s.processManager.IsRunning(agentID) {
+		waitErr := s.processManager.Wait(agentID)
+		if waitErr == nil {
+			waitErr = fmt.Errorf("process exited immediately")
+		}
+		s.updateStateOnStartError(agentID, waitErr)
+		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_START_FAILED", waitErr.Error())
+		return waitErr
+	}
 
 	// Auto-mount memories linked to this agent.
 	s.autoMountMemories(agentID)
