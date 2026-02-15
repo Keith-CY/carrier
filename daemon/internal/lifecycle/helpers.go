@@ -330,7 +330,7 @@ func findProcessBySocketInode(inode string) (int, string, error) {
 }
 
 func (s *Service) writeDiagnoseZip(path string, m manifest.Manifest, state AgentState, logs []string, createdAt time.Time) error {
-	file, err := os.Create(path)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("create diagnose zip: %w", err)
 	}
