@@ -52,7 +52,7 @@ func TestProcessManager_StartAlreadyRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Start failed: %v", err)
 	}
-	defer pm.Stop(agentID)
+	defer func() { _ = pm.Stop(agentID) }()
 
 	// Try to start again
 	_, err = pm.Start(agentID, "sleep", []string{"60"})
@@ -116,7 +116,7 @@ func TestProcessManager_IsRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
-	defer pm.Stop(agentID)
+	defer func() { _ = pm.Stop(agentID) }()
 
 	// After start
 	if !pm.IsRunning(agentID) {
@@ -127,7 +127,9 @@ func TestProcessManager_IsRunning(t *testing.T) {
 	pm.mu.RLock()
 	info := pm.processes[agentID]
 	pm.mu.RUnlock()
-	info.cmd.Process.Signal(syscall.SIGKILL)
+	if err := info.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+		t.Fatalf("signal SIGKILL failed: %v", err)
+	}
 	time.Sleep(100 * time.Millisecond)
 
 	if pm.IsRunning(agentID) {
@@ -228,7 +230,9 @@ func TestProcessManager_LogFileCreation(t *testing.T) {
 	}
 
 	// Wait for process to complete
-	pm.Wait(agentID)
+	if err := pm.Wait(agentID); err != nil {
+		t.Fatalf("Wait failed: %v", err)
+	}
 
 	// Check log file exists and contains output
 	logPath := filepath.Join(tmpDir, agentID+".log")
