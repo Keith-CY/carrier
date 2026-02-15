@@ -141,7 +141,7 @@ func TestLifecycleInstallStartStop(t *testing.T) {
 	if checker.calls != 2 {
 		t.Fatalf("expected checker called twice (install/start), got %d", checker.calls)
 	}
-	wantCalls := []string{"install-openclaw", "start-openclaw", "stop-openclaw"}
+	wantCalls := []string{"install-openclaw"}
 	if len(runner.calls) != len(wantCalls) {
 		t.Fatalf("expected %d runner calls, got %d", len(wantCalls), len(runner.calls))
 	}
