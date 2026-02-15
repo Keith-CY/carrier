@@ -65,11 +65,11 @@ func DefaultEntries() []Entry {
 		},
 		{
 			ID:           "picoclaw",
-			Name:         "Pico Claw",
+			Name:         "PicoClaw",
 			Version:      "0.1.0",
-			Status:       StatusCandidate,
-			Capabilities: []string{"chat"},
-			Description:  "Minimal chat agent",
+			Status:       StatusActive,
+			Capabilities: []string{"chat", "code"},
+			Description:  "Go-based ultra-lightweight AI assistant",
 		},
 	}
 	sort.Slice(entries, func(i, j int) bool {

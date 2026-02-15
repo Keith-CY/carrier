@@ -20,6 +20,48 @@ func TestOpenClawManifestUsesDaemonHealthContract(t *testing.T) {
 	}
 }
 
+func TestPicoClawManifestValid(t *testing.T) {
+	m := PicoClawManifest()
+
+	if err := m.Validate(); err != nil {
+		t.Fatalf("PicoClawManifest().Validate() = %v", err)
+	}
+
+	if m.ID != "picoclaw" {
+		t.Fatalf("id = %q, want %q", m.ID, "picoclaw")
+	}
+	if m.Network.Healthcheck.Type != "process" {
+		t.Fatalf("healthcheck type = %q, want %q", m.Network.Healthcheck.Type, "process")
+	}
+	if m.Runtime.Stop.Command != "signal:term" {
+		t.Fatalf("stop command = %q, want %q", m.Runtime.Stop.Command, "signal:term")
+	}
+}
+
+func TestPicoClawBinaryName(t *testing.T) {
+	name := picoClawBinaryName()
+	if name == "" {
+		t.Fatal("picoClawBinaryName() returned empty string")
+	}
+	// Should contain picoclaw and current GOOS/GOARCH
+	if !contains(name, "picoclaw") {
+		t.Fatalf("binary name %q does not contain 'picoclaw'", name)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && searchSubstring(s, substr)
+}
+
+func searchSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCatalogJSONHealthcheckMatchesGeneratedManifest(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "catalog", "openclaw.manifest.json")
 	fileManifest, err := manifest.LoadFile(path)

@@ -65,6 +65,9 @@ func main() {
 	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
 		log.Fatalf("register openclaw manifest: %v", err)
 	}
+	if err := svc.RegisterManifest(catalog.PicoClawManifest()); err != nil {
+		log.Fatalf("register picoclaw manifest: %v", err)
+	}
 
 	logger.Info("agentd scaffold booted")
 	fmt.Printf("agentd scaffold booted (listen=%s:%d log=%s/%s)\n",
