@@ -58,8 +58,11 @@ func (pm *ProcessManager) Start(agentID string, command string, args []string) (
 		return 0, fmt.Errorf("create log dir: %w", err)
 	}
 
-	// Open log file
+	// Open log file (rotate first if oversized)
 	logPath := filepath.Join(pm.logDir, fmt.Sprintf("%s.log", agentID))
+	if err := rotateLogFile(logPath, maxLogSize); err != nil {
+		return 0, fmt.Errorf("rotate log file: %w", err)
+	}
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return 0, fmt.Errorf("open log file: %w", err)
@@ -219,6 +222,27 @@ func (pm *ProcessManager) GetExitCode(agentID string) *int {
 	default:
 		return nil
 	}
+}
+
+// maxLogSize is the size threshold (10 MB) at which a log file is rotated
+// before a new process start.
+const maxLogSize int64 = 10 * 1024 * 1024
+
+// rotateLogFile checks if the log file at path exceeds maxBytes and, if so,
+// renames it to path + ".1" (overwriting any previous backup) so a fresh
+// file can be created by the caller.
+func rotateLogFile(path string, maxBytes int64) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // nothing to rotate
+		}
+		return err
+	}
+	if fi.Size() < maxBytes {
+		return nil
+	}
+	return os.Rename(path, path+".1")
 }
 
 // Cleanup stops all running processes (for graceful shutdown).
