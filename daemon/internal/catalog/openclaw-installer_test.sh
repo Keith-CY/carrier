@@ -1,52 +1,55 @@
 #!/bin/bash
 # Test script for openclaw-installer.sh checksum verification
+# All tests run the installer in a subshell so that `exit` inside the
+# script does not kill the test runner.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALLER="$SCRIPT_DIR/openclaw-installer.sh"
+PASS=0
+FAIL=0
+
+pass() { echo "PASS: $1"; PASS=$((PASS + 1)); }
+fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 echo "Testing openclaw-installer.sh checksum verification..."
 
-# Test 1: Verify script fails when no checksum is provided
+# Test 1: No checksum at all → must exit non-zero
 echo "Test 1: Should fail when no checksum provided"
-if bash "$INSTALLER" "1.0.0" 2>/dev/null; then
-    echo "FAIL: Script should fail when no checksum provided"
-    exit 1
+if env -u OPENCLAW_CHECKSUM bash "$INSTALLER" "1.0.0" >/dev/null 2>&1; then
+    fail "Script should exit non-zero when no checksum provided"
+else
+    pass "Script rejects missing checksum"
 fi
-echo "PASS: Script fails when no checksum provided"
 
-# Test 2: Verify script fails when only version is provided (no $2, no env var)
-echo "Test 2: Should fail when checksum not in $2 or OPENCLAW_CHECKSUM"
-if VERSION="1.0.0" bash -c ". $INSTALLER" 2>/dev/null; then
-    echo "FAIL: Script should fail when checksum not provided"
-    exit 1
+# Test 2: Checksum via $2 → script proceeds (will fail at download, which is fine)
+echo "Test 2: Should accept checksum from second argument"
+OUT=$(bash "$INSTALLER" "1.0.0" "abc123" 2>&1 || true)
+if echo "$OUT" | grep -q "Downloading"; then
+    pass "Script accepts checksum from \$2 and reaches download step"
+else
+    fail "Script did not reach download step with \$2 checksum"
 fi
-echo "PASS: Script fails when checksum not provided via either method"
 
-# Test 3: Verify script accepts checksum from $2
-echo "Test 3: Should accept checksum from second argument"
-# We can't fully test download without mocking, but we can verify it starts with proper args
-if ! bash -c "VERSION=1.0.0; EXPECTED_CHECKSUM=abc123; set -e; . $INSTALLER 1.0.0 abc123" 2>&1 | grep -q "Downloading\|ERROR: no sha256sum"; then
-    echo "NOTE: Partial test - script accepts $2 argument (full download test requires network)"
+# Test 3: Checksum via OPENCLAW_CHECKSUM env var → same behaviour
+echo "Test 3: Should accept checksum from OPENCLAW_CHECKSUM env var"
+OUT=$(OPENCLAW_CHECKSUM="abc123" bash "$INSTALLER" "1.0.0" 2>&1 || true)
+if echo "$OUT" | grep -q "Downloading"; then
+    pass "Script accepts checksum from env var and reaches download step"
+else
+    fail "Script did not reach download step with env-var checksum"
 fi
-echo "PASS: Script structure accepts checksum from $2"
 
-# Test 4: Verify script accepts checksum from OPENCLAW_CHECKSUM env var
-echo "Test 4: Should accept checksum from OPENCLAW_CHECKSUM env var"
-if ! OPENCLAW_CHECKSUM="abc123" bash -c ". $INSTALLER 1.0.0" 2>&1 | grep -q "Downloading\|ERROR: no sha256sum"; then
-    echo "NOTE: Partial test - script accepts OPENCLAW_CHECKSUM env var (full download test requires network)"
+# Test 4: Error message mentions both input methods
+echo "Test 4: Error message should mention OPENCLAW_CHECKSUM"
+ERR=$(env -u OPENCLAW_CHECKSUM bash "$INSTALLER" "1.0.0" 2>&1 || true)
+if echo "$ERR" | grep -q "OPENCLAW_CHECKSUM"; then
+    pass "Error message mentions OPENCLAW_CHECKSUM"
+else
+    fail "Error message does not mention OPENCLAW_CHECKSUM"
 fi
-echo "PASS: Script structure accepts checksum from env var"
-
-# Test 5: Verify checksum verification error message
-echo "Test 5: Verify error message mentions both methods"
-ERROR_MSG=$(bash "$INSTALLER" "1.0.0" 2>&1 || true)
-if ! echo "$ERROR_MSG" | grep -q "OPENCLAW_CHECKSUM"; then
-    echo "FAIL: Error message should mention OPENCLAW_CHECKSUM env var"
-    exit 1
-fi
-echo "PASS: Error message mentions OPENCLAW_CHECKSUM"
 
 echo ""
-echo "All tests passed!"
+echo "Results: $PASS passed, $FAIL failed"
+[ "$FAIL" -eq 0 ]
