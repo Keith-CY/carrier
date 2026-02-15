@@ -97,8 +97,25 @@ jobs:
             };
 
             const inferType = (labels) => {
-              const match = findLabelMatch(labels, /^(bug|feature|infra|docs|refactor|release)$/);
-              return match ? match[1].replace(/^./, (c) => c.toUpperCase()) : null;
+              const typeMapping = {
+                bug: 'Bug',
+                enhancement: 'Enhancement',
+                documentation: 'Documentation',
+                feature: 'Enhancement',
+                docs: 'Documentation',
+                infra: 'Infra',
+                refactor: 'Refactor',
+                release: 'Release',
+              };
+
+              for (const label of labels) {
+                const normalized = String(label.name || '').trim().toLowerCase();
+                if (typeMapping[normalized]) {
+                  return typeMapping[normalized];
+                }
+              }
+
+              return null;
             };
 
             const inferIteration = (item, labels) => {
