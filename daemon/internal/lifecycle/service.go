@@ -434,6 +434,13 @@ func (s *Service) DiagnosisHandoffs() []DiagnosisHandoff {
 	return out
 }
 
+// Cleanup stops all managed processes for graceful shutdown.
+func (s *Service) Cleanup() {
+	if s.processManager != nil {
+		s.processManager.Cleanup()
+	}
+}
+
 func (s *Service) CleanupExpiredDiagnosisHandoffs() int {
 	cutoff := s.now().Add(-s.handoffTTL)
 

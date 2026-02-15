@@ -159,6 +159,8 @@ func stopAllAgents(svc *lifecycle.Service) error {
 			}
 		}
 	}
+	// Cleanup any remaining managed processes
+	svc.Cleanup()
 	return firstErr
 }
 
