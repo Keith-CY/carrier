@@ -207,6 +207,11 @@ async function handleDownloadRequest(
   const headers = new Headers();
   headers.set("content-type", blob.type || "application/octet-stream");
   headers.set("content-disposition", buildContentDisposition(normalizedExpected));
+
+  if (resolved.singleUse) {
+    ctx.deps.downloads.finalizeConsumed(resolved.token);
+  }
+
   return new Response(blob, {
     status: 200,
     headers,

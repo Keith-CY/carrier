@@ -241,7 +241,13 @@ export async function handleCommand(
           const logFilePath = `/tmp/${agentId}-logs-${cmd.requestId}.txt`;
           const logContent = logs.lines.join("\n");
           await Bun.write(logFilePath, logContent);
-          const token = deps.downloads.issue(logFilePath);
+          const token = deps.downloads.issue(logFilePath, 300, true, {
+            onCleanup: (fileRef) => {
+              Bun.file(fileRef).delete().catch((error) => {
+                console.warn(`[downloads] failed to delete temp log artifact ${fileRef}: ${error instanceof Error ? error.message : String(error)}`);
+              });
+            },
+          });
           response.downloadUrl = deps.downloads.toDownloadURL(token);
         }
         return response;

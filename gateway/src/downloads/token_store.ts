@@ -1,7 +1,12 @@
 import type { ReadOnlyDownloadToken } from "../contracts/session";
 
+export type DownloadTokenIssueOptions = {
+  onCleanup?: (fileRef: string, reason: "consumed" | "expired") => void;
+};
+
 type DownloadTokenRecord = ReadOnlyDownloadToken & {
   consumedAt?: string;
+  onCleanup?: DownloadTokenIssueOptions["onCleanup"];
 };
 
 export class DownloadTokenStore {
@@ -29,7 +34,7 @@ export class DownloadTokenStore {
     }
   }
 
-  issue(fileRef: string, ttlSeconds = 300, singleUse = true): ReadOnlyDownloadToken {
+  issue(fileRef: string, ttlSeconds = 300, singleUse = true, options: DownloadTokenIssueOptions = {}): ReadOnlyDownloadToken {
     const token = `dl-${crypto.randomUUID()}`;
     const expiresAt = new Date(this.now().getTime() + ttlSeconds * 1000).toISOString();
     const record: DownloadTokenRecord = {
@@ -37,9 +42,15 @@ export class DownloadTokenStore {
       fileRef,
       expiresAt,
       singleUse,
+      onCleanup: options.onCleanup,
     };
     this.tokens.set(token, record);
-    return record;
+    return {
+      token: record.token,
+      fileRef: record.fileRef,
+      expiresAt: record.expiresAt,
+      singleUse: record.singleUse,
+    };
   }
 
   /** Remove expired and consumed single-use tokens from the internal map. */
@@ -51,6 +62,7 @@ export class DownloadTokenStore {
       const consumed = record.singleUse && record.consumedAt !== undefined;
       if (expired || consumed) {
         this.tokens.delete(key);
+        record.onCleanup?.(record.fileRef, consumed ? "consumed" : "expired");
         removed += 1;
       }
     }
@@ -69,6 +81,7 @@ export class DownloadTokenStore {
     }
     if (Date.parse(record.expiresAt) <= this.now().getTime()) {
       this.tokens.delete(token);
+      record.onCleanup?.(record.fileRef, "expired");
       return null;
     }
     if (record.singleUse && record.consumedAt) {
@@ -84,6 +97,15 @@ export class DownloadTokenStore {
       expiresAt: record.expiresAt,
       singleUse: record.singleUse,
     };
+  }
+
+  finalizeConsumed(token: string): void {
+    const record = this.tokens.get(token);
+    if (!record || !record.singleUse || !record.consumedAt) {
+      return;
+    }
+    this.tokens.delete(token);
+    record.onCleanup?.(record.fileRef, "consumed");
   }
 
   toDownloadURL(token: ReadOnlyDownloadToken): string {
