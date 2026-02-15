@@ -462,6 +462,7 @@ func (s *Service) CleanupExpiredDiagnosisHandoffs() int {
 
 // loadPersistedState restores agent state from the state file.
 // Only restores Install and Runtime state for registered agents.
+// Verifies that processes marked as "running" are actually alive.
 func (s *Service) loadPersistedState() error {
 	if s.stateFile == nil {
 		return nil
@@ -483,7 +484,17 @@ func (s *Service) loadPersistedState() error {
 			} else {
 				state.Install = InstallStateNotInstalled
 			}
-			state.Runtime = RuntimeState(pState.RuntimeState)
+
+			// Restore runtime state, but verify process liveness
+			restoredState := RuntimeState(pState.RuntimeState)
+			if restoredState == RuntimeStateRunning {
+				// Verify the process is actually alive
+				if !s.processManager.IsRunning(id) {
+					// Process is not actually running, mark as stopped
+					restoredState = RuntimeStateStopped
+				}
+			}
+			state.Runtime = restoredState
 			state.UpdatedAt = pState.LastTransition
 			s.states[id] = state
 		}
