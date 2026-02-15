@@ -115,6 +115,25 @@ func (s *PairingCodeStore) Count() int {
 	return len(s.codes)
 }
 
+// List returns all current valid pairing codes.
+func (s *PairingCodeStore) List() []PairingCodeRecord {
+	now := s.now()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var records []PairingCodeRecord
+	for code, expiresAt := range s.codes {
+		if expiresAt.After(now) {
+			records = append(records, PairingCodeRecord{
+				Code:      code,
+				ExpiresAt: expiresAt.Format(time.RFC3339Nano),
+			})
+		}
+	}
+	return records
+}
+
 func newPairingCodeValue() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
