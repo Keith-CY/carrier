@@ -17,5 +17,8 @@ printf '\n=== Gateway checks and tests ===\n'
   bun test
 )
 
+printf '\n=== Start script systemd regression test ===\n'
+"$repo_root/scripts/start_systemd_test.sh"
+
 printf '\n=== End-to-end tests ===\n'
 "$repo_root/scripts/run-e2e-tests.sh"
