@@ -16,13 +16,46 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
       - name: Sync issue/pr to Projects Kanban
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        env:
+          CARRIER_PROJECT_ID: ${{ vars.CARRIER_PROJECT_ID }}
+          CARRIER_CANONICAL_PROJECT_ID: ${{ vars.CARRIER_CANONICAL_PROJECT_ID }}
         with:
+          github-token: ${{ secrets.CARRIER_PROJECTS_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
-            const projectId = process.env.CARRIER_PROJECT_ID;
+            const fs = require('fs');
+            const { resolveProjectIdFromCandidates } = require('./.github/scripts/kanban-project-id');
+
+            const configPath = '.github/kanban-config.json';
+            let configProjectId = '';
+            if (fs.existsSync(configPath)) {
+              try {
+                const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                configProjectId = config.projectId || '';
+              } catch (error) {
+                core.info(`Cannot parse ${configPath}: ${error?.message || error}`);
+              }
+            }
+
+            const resolveProjectCandidates = [
+              process.env.CARRIER_PROJECT_ID,
+              process.env.CARRIER_CANONICAL_PROJECT_ID,
+              configProjectId,
+            ];
+            const projectId = await resolveProjectIdFromCandidates(resolveProjectCandidates, {
+              graphql: github.graphql,
+              log: (message) => core.info(message),
+            });
+
             if (!projectId) {
-              core.warning('CARRIER_PROJECT_ID is not set; skipping Kanban sync for this run.');
+              core.warning('No project id resolved (CARRIER_PROJECT_ID / CARRIER_CANONICAL_PROJECT_ID / .github/kanban-config.json). Skipping Kanban sync for this run.');
               return;
             }
             const statusFieldNames = ['Status', '状态'];
