@@ -4,6 +4,8 @@ import (
 	"carrier/daemon/internal/manifest"
 	_ "embed"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 )
 
@@ -61,8 +63,7 @@ if [ -z "$CHECKSUM" ]; then
     echo "WARNING: Dev mode enabled - skipping checksum validation" >&2
     echo "Creating placeholder installation for development..." >&2
     mkdir -p "$HOME/.local/bin"
-    echo "#!/bin/sh" > "$HOME/.local/bin/openclaw"
-    echo "echo \"OpenClaw dev placeholder - version %s\"" >> "$HOME/.local/bin/openclaw"
+    echo "IyEvYmluL3NoCmlmIFsgIiQxIiA9ICJnYXRld2F5IiBdICYmIFsgIiQyIiA9ICJzdGFydCIgXTsgdGhlbgogIGVjaG8gIk9wZW5DbGF3IGRldiBwbGFjZWhvbGRlciBydW5uaW5nIChwaWQgJCQpIgogIHRyYXAgImV4aXQgMCIgVEVSTSBJTlQKICB3aGlsZSB0cnVlOyBkbyBzbGVlcCAxOyBkb25lCmVsaWYgWyAiJDEiID0gImdhdGV3YXkiIF0gJiYgWyAiJDIiID0gInN0b3AiIF07IHRoZW4KICBlY2hvICJPcGVuQ2xhdyBkZXYgc3RvcCIKZWxzZQogIGVjaG8gIk9wZW5DbGF3IGRldiBwbGFjZWhvbGRlciIKZmkK" | base64 -d > "$HOME/.local/bin/openclaw"
     chmod +x "$HOME/.local/bin/openclaw"
     echo "Dev placeholder created at $HOME/.local/bin/openclaw" >&2
     exit 0
@@ -78,11 +79,34 @@ cat > "$SCRIPT" << '\''INSTALLER_EOF'\''
 INSTALLER_EOF
 chmod 700 "$SCRIPT"
 "$SCRIPT" "%s" "$CHECKSUM"
-'`, checksum, openclawVersion, openclawInstallerScript, openclawVersion)
+'`, checksum, openclawInstallerScript, openclawVersion)
+}
+
+func getNetworkSpec() manifest.NetworkSpec {
+	spec := manifest.NetworkSpec{
+		Healthcheck: manifest.HealthcheckSpec{
+			Type: "http",
+			URL:  defaultDaemonHealthURL,
+		},
+	}
+	// Skip port declarations in dev mode to avoid port conflict with the daemon itself
+	if os.Getenv("CARRIER_DEV_MODE") != "1" {
+		spec.Ports = []manifest.PortSpec{{Name: "http", Port: defaultDaemonPort}}
+	}
+	return spec
+}
+
+func openclawBinPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = os.Getenv("HOME")
+	}
+	return filepath.Join(home, ".local", "bin", "openclaw")
 }
 
 func OpenClawManifest() manifest.Manifest {
 	installCmd := getInstallCommand()
+	bin := openclawBinPath()
 
 	return manifest.Manifest{
 		ID:           "openclaw",
@@ -94,16 +118,10 @@ func OpenClawManifest() manifest.Manifest {
 			Type:    manifest.RuntimeTypeLocalBinary,
 			Install: manifest.CommandSpec{Command: installCmd},
 			Upgrade: manifest.CommandSpec{Command: installCmd},
-			Start:   manifest.CommandSpec{Command: "openclaw gateway start"},
-			Stop:    manifest.CommandSpec{Command: "openclaw gateway stop"},
+			Start:   manifest.CommandSpec{Command: bin + " gateway start"},
+			Stop:    manifest.CommandSpec{Command: bin + " gateway stop"},
 		},
-		Network: manifest.NetworkSpec{
-			Ports: []manifest.PortSpec{{Name: "http", Port: defaultDaemonPort}},
-			Healthcheck: manifest.HealthcheckSpec{
-				Type: "http",
-				URL:  defaultDaemonHealthURL,
-			},
-		},
+		Network: getNetworkSpec(),
 		Env: manifest.EnvSpec{
 			Required: []manifest.EnvVar{{Name: "OPENAI_API_KEY", Secret: true, Description: "OpenAI API key for LLM access"}},
 			Optional: []manifest.EnvVar{{Name: "LOG_LEVEL", Default: "info", Description: "Logging verbosity level"}},
