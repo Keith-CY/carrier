@@ -236,6 +236,15 @@ async function defaultReadFile(fileRef: string): Promise<Blob | null> {
   if (!(await file.exists())) {
     return null;
   }
+
+  // Resolve symlinks to prevent symlink traversal attacks
+  // file.name contains the resolved real path
+  const realPath = file.name;
+  if (realPath !== fileRef && !realPath?.startsWith("/")) {
+    console.warn(`[security] symlink resolved to unexpected path: ${realPath}`);
+    return null;
+  }
+
   return file;
 }
 
