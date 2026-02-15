@@ -63,6 +63,43 @@ func (c *fakeClock) Advance(d time.Duration) {
 	c.current = c.current.Add(d)
 }
 
+type fakeProcessManager struct {
+	isRunning          map[string]bool
+	pids               map[string]int
+	nextPID            int
+	shouldStartSucceed bool
+}
+
+func (f *fakeProcessManager) Start(agentID string, command string, args []string) (int, error) {
+	if !f.shouldStartSucceed {
+		return 0, errors.New("start failed")
+	}
+	pid := f.nextPID
+	f.pids[agentID] = pid
+	f.isRunning[agentID] = true
+	f.nextPID++
+	return pid, nil
+}
+
+func (f *fakeProcessManager) Stop(agentID string) error {
+	delete(f.isRunning, agentID)
+	delete(f.pids, agentID)
+	return nil
+}
+
+func (f *fakeProcessManager) IsRunning(agentID string) bool {
+	return f.isRunning[agentID]
+}
+
+func (f *fakeProcessManager) Wait(agentID string) error {
+	return nil
+}
+
+func (f *fakeProcessManager) Cleanup() {
+	f.isRunning = make(map[string]bool)
+	f.pids = make(map[string]int)
+}
+
 func sampleManifest() manifest.Manifest {
 	return manifest.Manifest{
 		ID:      "openclaw",
@@ -1225,5 +1262,241 @@ func TestLoadPersistedState_KeepsRunningIfProcessAlive(t *testing.T) {
 	// Clean up
 	if err := svc.Stop(context.Background(), "openclaw"); err != nil {
 		t.Logf("cleanup stop: %v", err)
+	}
+}
+
+func TestService_ExponentialBackoff_Integration(t *testing.T) {
+	// Set required env var for test
+	oldEnv := os.Getenv("OPENAI_API_KEY")
+	os.Setenv("OPENAI_API_KEY", "test-key")
+	defer func() {
+		if oldEnv == "" {
+			os.Unsetenv("OPENAI_API_KEY")
+		} else {
+			os.Setenv("OPENAI_API_KEY", oldEnv)
+		}
+	}()
+
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	clock := &fakeClock{current: time.Date(2026, 2, 14, 10, 0, 0, 0, time.UTC)}
+
+	// Use a custom backoff policy for faster testing
+	backoffPolicy := BackoffPolicy{
+		InitialDelay:     1 * time.Second,
+		MaxDelay:         10 * time.Second,
+		Multiplier:       2.0,
+		MaxAttempts:      3,
+		SuccessThreshold: 5 * time.Second,
+	}
+
+	tmpDir := t.TempDir()
+	pm := &fakeProcessManager{isRunning: make(map[string]bool), pids: make(map[string]int)}
+
+	svc := NewService(nil,
+		WithRunner(runner),
+		WithRuntimeChecker(checker),
+		WithNow(clock.Now),
+		WithProcessLogDir(tmpDir),
+		WithProcessManager(pm),
+		WithBackoffPolicy(backoffPolicy),
+	)
+
+	m := sampleManifest()
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("RegisterManifest: %v", err)
+	}
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	// First start - should succeed
+	pm.shouldStartSucceed = true
+	pm.nextPID = 1001
+	if err := svc.Start(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("First Start: %v", err)
+	}
+
+	// Verify backoff state recorded start time
+	svc.mu.Lock()
+	backoffState := svc.backoffStates["openclaw"]
+	svc.mu.Unlock()
+	if backoffState.LastStartTime != clock.current {
+		t.Errorf("Expected LastStartTime = %v, got %v", clock.current, backoffState.LastStartTime)
+	}
+
+	// Simulate crash after 2 seconds (< success threshold)
+	clock.Advance(2 * time.Second)
+	pm.isRunning["openclaw"] = false
+	go func() {
+		// Trigger the monitor goroutine
+		time.Sleep(10 * time.Millisecond)
+		svc.monitorProcess("openclaw")
+	}()
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify backoff state after crash
+	svc.mu.Lock()
+	backoffState = svc.backoffStates["openclaw"]
+	svc.mu.Unlock()
+	if backoffState.Attempt != 1 {
+		t.Errorf("After first crash: Attempt = %v, want 1", backoffState.Attempt)
+	}
+	expectedRetryTime := clock.current.Add(1 * time.Second)
+	if !backoffState.NextRetryTime.Equal(expectedRetryTime) {
+		t.Errorf("After first crash: NextRetryTime = %v, want %v", backoffState.NextRetryTime, expectedRetryTime)
+	}
+
+	// Try to start immediately - should fail due to backoff
+	err := svc.Start(context.Background(), "openclaw")
+	if err == nil {
+		t.Fatal("Start during backoff should fail")
+	}
+	if !errors.Is(err, ErrCrashLoop) {
+		t.Errorf("Expected ErrCrashLoop, got %v", err)
+	}
+
+	// Advance past the backoff delay
+	clock.Advance(1 * time.Second)
+
+	// Second start - should succeed
+	pm.nextPID = 1002
+	if err := svc.Start(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("Second Start after backoff: %v", err)
+	}
+
+	// Crash again after 3 seconds (still < success threshold)
+	clock.Advance(3 * time.Second)
+	pm.isRunning["openclaw"] = false
+	svc.monitorProcess("openclaw")
+
+	// Verify exponential increase in delay
+	svc.mu.Lock()
+	backoffState = svc.backoffStates["openclaw"]
+	svc.mu.Unlock()
+	if backoffState.Attempt != 2 {
+		t.Errorf("After second crash: Attempt = %v, want 2", backoffState.Attempt)
+	}
+	expectedRetryTime = clock.current.Add(2 * time.Second) // 1s * 2^1
+	if !backoffState.NextRetryTime.Equal(expectedRetryTime) {
+		t.Errorf("After second crash: NextRetryTime = %v, want %v", backoffState.NextRetryTime, expectedRetryTime)
+	}
+
+	// Advance and start again
+	clock.Advance(2 * time.Second)
+	pm.nextPID = 1003
+	if err := svc.Start(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("Third Start after backoff: %v", err)
+	}
+
+	// Crash after 10 seconds (> success threshold) - should reset backoff
+	clock.Advance(10 * time.Second)
+	pm.isRunning["openclaw"] = false
+	svc.monitorProcess("openclaw")
+
+	svc.mu.Lock()
+	backoffState = svc.backoffStates["openclaw"]
+	svc.mu.Unlock()
+	if backoffState.Attempt != 0 {
+		t.Errorf("After successful run then crash: Attempt = %v, want 0 (reset)", backoffState.Attempt)
+	}
+	if backoffState.CrashLooping {
+		t.Errorf("After successful run: should not be crash looping")
+	}
+}
+
+func TestService_ExponentialBackoff_MaxAttemptsExceeded(t *testing.T) {
+	// Set required env var for test
+	oldEnv := os.Getenv("OPENAI_API_KEY")
+	os.Setenv("OPENAI_API_KEY", "test-key")
+	defer func() {
+		if oldEnv == "" {
+			os.Unsetenv("OPENAI_API_KEY")
+		} else {
+			os.Setenv("OPENAI_API_KEY", oldEnv)
+		}
+	}()
+
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	clock := &fakeClock{current: time.Date(2026, 2, 14, 10, 0, 0, 0, time.UTC)}
+
+	backoffPolicy := BackoffPolicy{
+		InitialDelay:     100 * time.Millisecond,
+		MaxDelay:         1 * time.Second,
+		Multiplier:       2.0,
+		MaxAttempts:      2,
+		SuccessThreshold: 5 * time.Second,
+	}
+
+	tmpDir := t.TempDir()
+	pm := &fakeProcessManager{isRunning: make(map[string]bool), pids: make(map[string]int)}
+
+	svc := NewService(nil,
+		WithRunner(runner),
+		WithRuntimeChecker(checker),
+		WithNow(clock.Now),
+		WithProcessLogDir(tmpDir),
+		WithProcessManager(pm),
+		WithBackoffPolicy(backoffPolicy),
+	)
+
+	m := sampleManifest()
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("RegisterManifest: %v", err)
+	}
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	// Start and crash twice
+	for i := 0; i < 2; i++ {
+		pm.shouldStartSucceed = true
+		pm.nextPID = 2000 + i
+		if err := svc.Start(context.Background(), "openclaw"); err != nil {
+			t.Fatalf("Start %d: %v", i+1, err)
+		}
+
+		// Crash quickly (< success threshold)
+		clock.Advance(1 * time.Second)
+		pm.isRunning["openclaw"] = false
+		svc.monitorProcess("openclaw")
+
+		// Wait for backoff delay
+		svc.mu.Lock()
+		nextRetry := svc.backoffStates["openclaw"].NextRetryTime
+		svc.mu.Unlock()
+		if !nextRetry.IsZero() {
+			waitDuration := nextRetry.Sub(clock.current)
+			if waitDuration > 0 {
+				clock.Advance(waitDuration)
+			}
+		}
+	}
+
+	// Verify crash looping state
+	svc.mu.Lock()
+	backoffState := svc.backoffStates["openclaw"]
+	svc.mu.Unlock()
+
+	if !backoffState.CrashLooping {
+		t.Errorf("Expected CrashLooping = true after exceeding max attempts")
+	}
+	if backoffState.Attempt != 2 {
+		t.Errorf("Expected Attempt = 2, got %v", backoffState.Attempt)
+	}
+
+	// Try to start - should fail permanently
+	err := svc.Start(context.Background(), "openclaw")
+	if err == nil {
+		t.Fatal("Start should fail when crash looping")
+	}
+	if !errors.Is(err, ErrCrashLoop) {
+		t.Errorf("Expected ErrCrashLoop, got %v", err)
+	}
+
+	// Verify error message mentions crash-loop
+	if !strings.Contains(err.Error(), "crash-loop") {
+		t.Errorf("Error message should mention crash-loop, got: %v", err)
 	}
 }

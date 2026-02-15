@@ -156,6 +156,12 @@ func WithProcessManager(pm ProcessController) Option {
 	}
 }
 
+func WithBackoffPolicy(policy BackoffPolicy) Option {
+	return func(s *Service) {
+		s.backoffPolicy = policy
+	}
+}
+
 type Service struct {
 	mu                 sync.RWMutex
 	states             map[string]AgentState
@@ -183,6 +189,8 @@ type Service struct {
 	stateFile          *StateFile
 	processManager     ProcessController
 	processLogDir      string
+	backoffPolicy      BackoffPolicy
+	backoffStates      map[string]BackoffState
 }
 
 func NewService(triager baseagent.Triager, opts ...Option) *Service {
@@ -212,6 +220,8 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		crashLoopWindow:    defaultCrashLoopWindow,
 		crashLoopCooldown:  defaultCrashLoopCooldown,
 		processLogDir:      processLogDir,
+		backoffPolicy:      DefaultBackoffPolicy(),
+		backoffStates:      make(map[string]BackoffState),
 	}
 	svc.processManager = NewProcessManager(processLogDir)
 	svc.idGenerator = func(prefix string) string {
@@ -257,6 +267,7 @@ func (s *Service) RegisterManifest(m manifest.Manifest) error {
 	s.logs[m.ID] = nil
 	s.restarts[m.ID] = nil
 	s.cooldowns[m.ID] = time.Time{}
+	s.backoffStates[m.ID] = BackoffState{}
 
 	return nil
 }
