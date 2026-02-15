@@ -94,7 +94,8 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
         return jsonResponse(authError, 401);
       }
       
-      const response = await safeHandleCommand(parsed.commandInput, deps);
+      const commandForExecution = attachSessionTokenIfMissing(parsed.commandInput, parsed.sessionToken);
+      const response = await safeHandleCommand(commandForExecution, deps);
       return jsonResponse(response);
     }
 
@@ -324,6 +325,25 @@ async function parseCommandRequest(request: Request): Promise<ParsedCommandReque
   }
   
   return result;
+}
+
+function attachSessionTokenIfMissing(commandInput: string, sessionToken: string | null): string {
+  if (!sessionToken) {
+    return commandInput;
+  }
+  const parts = commandInput.trim().split(/\s+/);
+  if (parts.length < 4) {
+    return commandInput;
+  }
+
+  const fourth = parts[3] ?? "";
+  if (fourth.startsWith("session-")) {
+    return commandInput;
+  }
+
+  const prefix = parts.slice(0, 3);
+  const suffix = parts.slice(3);
+  return [...prefix, sessionToken, ...suffix].join(" ");
 }
 
 function validateCommandAuth(
