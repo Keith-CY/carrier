@@ -183,7 +183,7 @@ func (s *Service) createUpgradeBackup(agentID string, m manifest.Manifest, state
 	if err != nil {
 		return "", fmt.Errorf("marshal upgrade backup: %w", err)
 	}
-	if err := os.WriteFile(filePath, content, 0o644); err != nil {
+	if err := os.WriteFile(filePath, content, 0o600); err != nil {
 		return "", fmt.Errorf("write upgrade backup: %w", err)
 	}
 
