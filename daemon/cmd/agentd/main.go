@@ -345,21 +345,9 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.Pai
 		})
 	})
 
-	// RESTful route: list all agents
-	mux.HandleFunc("/api/v1/agents", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/agents" {
-			http.NotFound(w, r)
-			return
-		}
-		if r.Method != http.MethodGet {
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		agents := svc.ListAgents()
-		writeJSON(w, http.StatusOK, map[string]interface{}{"agents": agents})
-	})
-
 	// RESTful agent action routes: /api/v1/agents/{id}/{action}
+	// Note: /api/v1/agents (exact match, list all) is already registered
+	// via the register() helper above from /api/agents.
 	mux.HandleFunc("/api/v1/agents/", func(w http.ResponseWriter, r *http.Request) {
 		// Handle special case: /api/v1/agents/status (all agents status)
 		if r.URL.Path == "/api/v1/agents/status" {
