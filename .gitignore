@@ -4,3 +4,4 @@ daemon/coverage.html
 daemon/coverage.out
 .worktree
 .worktrees/
+agentd
