@@ -365,14 +365,13 @@ func TestIssuePairCodeRejectsTrailingGarbage(t *testing.T) {
 	}
 }
 
-
 func TestParseAgentActionPathBoundaryCases(t *testing.T) {
 	tests := []struct {
-		name      string
-		path      string
-		wantID    string
+		name       string
+		path       string
+		wantID     string
 		wantAction string
-		wantOK    bool
+		wantOK     bool
 	}{
 		{name: "valid simple", path: "/api/v1/agents/openclaw/start", wantID: "openclaw", wantAction: "start", wantOK: true},
 		{name: "valid encoded id", path: "/api/v1/agents/openclaw%2Dbeta/status", wantID: "openclaw-beta", wantAction: "status", wantOK: true},

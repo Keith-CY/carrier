@@ -211,7 +211,7 @@ func (rm *RepairManager) ExecuteRepair(action RepairOutcome) error {
 // executeRestart stops and starts the agent.
 func (rm *RepairManager) executeRestart(action RepairOutcome) error {
 	ctx := context.Background()
-	
+
 	// Stop the agent (ignore error if already stopped)
 	_ = rm.service.Stop(ctx, action.AgentID)
 
@@ -250,7 +250,7 @@ func (rm *RepairManager) executeRollback(action RepairOutcome) error {
 	}
 
 	ctx := context.Background()
-	
+
 	// Stop the agent first
 	if err := rm.service.Stop(ctx, action.AgentID); err != nil && err != ErrAlreadyStopped {
 		return fmt.Errorf("rollback stop failed: %w", err)
