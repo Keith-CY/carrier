@@ -1328,12 +1328,7 @@ func TestService_ExponentialBackoff_Integration(t *testing.T) {
 	// Simulate crash after 2 seconds (< success threshold)
 	clock.Advance(2 * time.Second)
 	pm.isRunning["openclaw"] = false
-	go func() {
-		// Trigger the monitor goroutine
-		time.Sleep(10 * time.Millisecond)
-		svc.monitorProcess("openclaw")
-	}()
-	time.Sleep(50 * time.Millisecond)
+	svc.monitorProcess("openclaw")
 
 	// Verify backoff state after crash
 	svc.mu.Lock()
