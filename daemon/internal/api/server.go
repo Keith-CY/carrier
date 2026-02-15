@@ -425,7 +425,7 @@ func readJSON(r *http.Request, dst any) error {
 	}
 
 	var trailing struct{}
-	if err := dec.Decode(&trailing); err != io.EOF {
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return fmt.Errorf("invalid json: trailing content after first json value")
 	}
 
