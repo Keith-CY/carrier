@@ -160,7 +160,7 @@ export async function handleCommand(
     switch (cmd.name) {
       case "/agents": {
         const agents = await deps.daemon.listAgents(ctx);
-        const installed = agents.filter((agent) => agent.installed).length;
+        const installed = agents.filter((agent) => agent.installState === "installed").length;
         return {
           requestId: cmd.requestId,
           result: "ok",
