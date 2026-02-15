@@ -370,7 +370,7 @@ func parseAgentActionPath(path string) (agentID string, action string, ok bool) 
 	if !strings.HasPrefix(path, prefix) {
 		return "", "", false
 	}
-	rest := strings.TrimPrefix(path, prefix)
+	rest := path[len(prefix):]
 	if strings.Contains(rest, "//") {
 		return "", "", false
 	}
