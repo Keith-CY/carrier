@@ -47,6 +47,45 @@ if [ "$ACTUAL_CHECKSUM" != "$EXPECTED_CHECKSUM" ]; then
 fi
 echo "Checksum OK"
 
+# Verify signature if available (optional but recommended)
+SIGNATURE_FILE="${ARTIFACT}.sig"
+if curl -fsSL -o "$SIGNATURE_FILE" "${BASE_URL}/${SIGNATURE_FILE}" 2>/dev/null; then
+    echo "Signature file found, verifying..."
+    
+    # Try cosign first (preferred for GitHub releases)
+    if command -v cosign >/dev/null 2>&1; then
+        echo "Using cosign for signature verification..."
+        # Use GitHub Actions OIDC for keyless verification
+        if cosign verify-blob \
+            --certificate-identity "https://github.com/openclaw/openclaw/.github/workflows/release.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --signature "$SIGNATURE_FILE" \
+            "$ARTIFACT" >/dev/null 2>&1; then
+            echo "✓ Signature verification PASSED"
+        else
+            echo "WARNING: Signature verification FAILED" >&2
+            echo "  The artifact signature could not be verified." >&2
+            echo "  Installation will continue, but consider this a security risk." >&2
+        fi
+    # Fall back to GPG if available
+    elif command -v gpg >/dev/null 2>&1; then
+        echo "Using GPG for signature verification..."
+        if gpg --verify "$SIGNATURE_FILE" "$ARTIFACT" >/dev/null 2>&1; then
+            echo "✓ Signature verification PASSED"
+        else
+            echo "WARNING: Signature verification FAILED" >&2
+            echo "  The artifact signature could not be verified." >&2
+            echo "  Installation will continue, but consider this a security risk." >&2
+        fi
+    else
+        echo "WARNING: No signature verification tool available (cosign or gpg)" >&2
+        echo "  Consider installing cosign for enhanced security." >&2
+    fi
+else
+    echo "No signature file available for this release"
+    echo "  Signature verification skipped (checksum verification only)"
+fi
+
 # Extract
 echo "Extracting archive..."
 tar xzf "$ARTIFACT"
