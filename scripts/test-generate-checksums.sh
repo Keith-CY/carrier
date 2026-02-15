@@ -35,7 +35,9 @@ info() {
 }
 
 cleanup() {
+    # shellcheck disable=SC2317
     if [ -d "$TEST_DIR" ]; then
+        # shellcheck disable=SC2317
         rm -rf "$TEST_DIR"
     fi
 }
@@ -113,7 +115,7 @@ fi
 # Test 6: Verify checksum is correct
 info "Test 6: Verify checksum accuracy"
 TESTS_RUN=$((TESTS_RUN + 1))
-EXPECTED_HASH=$(cat "$CHECKSUM_FILE" | cut -d' ' -f1)
+EXPECTED_HASH=$(cut -d' ' -f1 < "$CHECKSUM_FILE")
 
 # Detect SHA command
 if command -v sha256sum &> /dev/null; then
