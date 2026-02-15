@@ -23,6 +23,10 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least-privilege default: CI only needs read access to repository contents.
+permissions:
+  contents: read
+
 jobs:
   daemon-tests:
     name: Daemon Tests
