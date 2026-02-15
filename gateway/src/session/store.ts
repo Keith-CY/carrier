@@ -101,12 +101,10 @@ export class SessionStore {
     }
 
     const lastSeenAt = this.now().toISOString();
-    if (session.lastSeenAt === lastSeenAt) {
-      return;
+    if (session.lastSeenAt !== lastSeenAt) {
+      this.sessions.set(key, { ...session, lastSeenAt });
+      this.scheduleSave();
     }
-
-    this.sessions.set(key, { ...session, lastSeenAt });
-    this.scheduleSave();
   }
 
   /** Remove expired pairing codes and stale sessions from the internal map. */
