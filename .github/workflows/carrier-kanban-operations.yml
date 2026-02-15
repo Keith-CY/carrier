@@ -30,9 +30,14 @@ jobs:
 
       - name: Publish Kanban field/view status to Discussion
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        env:
+          CARRIER_PROJECT_ID: ${{ vars.CARRIER_PROJECT_ID }}
+          CARRIER_CANONICAL_PROJECT_ID: ${{ vars.CARRIER_CANONICAL_PROJECT_ID }}
         with:
+          github-token: ${{ secrets.CARRIER_PROJECTS_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
+            const { resolveProjectIdFromCandidates } = require('./.github/scripts/kanban-project-id');
 
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -64,9 +69,18 @@ jobs:
             }
 
             const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-            const projectId = process.env.CARRIER_PROJECT_ID || (context.payload.inputs && context.payload.inputs.project_id) || config.projectId;
+            const resolveProjectCandidates = [
+              process.env.CARRIER_PROJECT_ID,
+              process.env.CARRIER_CANONICAL_PROJECT_ID,
+              (context.payload.inputs && context.payload.inputs.project_id) || '',
+              config.projectId || '',
+            ];
+            const projectId = await resolveProjectIdFromCandidates(resolveProjectCandidates, {
+              graphql: ghClient.graphql,
+              log: (message) => core.info(message),
+            });
             if (!projectId) {
-              core.setFailed('Missing projectId. Set CARRIER_PROJECT_ID secret or pass workflow input project_id.');
+              core.setFailed('Missing projectId. Set CARRIER_PROJECT_ID/CARRIER_CANONICAL_PROJECT_ID, pass workflow input project_id, or configure .github/kanban-config.json');
               return;
             }
 
