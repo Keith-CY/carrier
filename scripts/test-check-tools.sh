@@ -14,10 +14,7 @@ trap 'rm -rf "$TMP_BIN"' EXIT
 
 make_stub() {
   local tool="$1"
-  cat >"$TMP_BIN/$tool" <<'STUB'
-#!/usr/bin/env bash
-echo "stub 0.0.0"
-STUB
+  printf '#!/usr/bin/env bash\necho "stub 0.0.0"\n' >"$TMP_BIN/$tool"
   chmod +x "$TMP_BIN/$tool"
 }
 
