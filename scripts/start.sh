@@ -114,6 +114,7 @@ if [ "$MODE" = "systemd" ]; then
     fi
 
     echo "Creating systemd service: $SERVICE_FILE"
+    echo "Using systemd install target: $WANTED_BY_TARGET"
 
     # Generate service unit
     SERVICE_CONTENT="[Unit]
