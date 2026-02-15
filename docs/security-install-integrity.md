@@ -45,6 +45,21 @@ The manifest install command uses a two-tier strategy:
   a detached signature. Adding `cosign verify-blob` or GPG verification is a
   recommended future enhancement for high-security deployments.
 
+## Trust Model Note: Official Installer Execution
+
+Carrier now prefers invoking OpenClaw's upstream official installer script
+(`daemon/internal/catalog/openclaw-installer.sh`) instead of maintaining a
+fully in-repo pinned-checksum installer path. This changes the operational
+trust boundary:
+
+- **Before (pinned-checksum path)** — Carrier-owned install logic explicitly
+  fetched and verified pinned artifact/checksum pairs defined by this repo.
+- **Now (official installer path)** — Carrier delegates install logic to the
+  upstream installer, inheriting its verification controls and release process.
+
+For threat modeling and operator controls tied to this delegation model, see
+[`docs/security-fallback-trust-model.md`](./security-fallback-trust-model.md).
+
 ## Recommendations for Hardened Environments
 
 1. Pin a specific release version instead of `latest`.
