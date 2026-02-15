@@ -468,8 +468,8 @@ func TestStartDetectsCrashLoopAndAppliesCooldown(t *testing.T) {
 	if statusErr != nil {
 		t.Fatalf("status: %v", statusErr)
 	}
-	if status.Runtime != RuntimeStateCrashing {
-		t.Fatalf("expected runtime state crashing, got %s", status.Runtime)
+	if status.Runtime != RuntimeStateCrashLoop {
+		t.Fatalf("expected runtime state crash_loop, got %s", status.Runtime)
 	}
 	if !strings.Contains(status.LastError, "crash-loop detected") {
 		t.Fatalf("expected crash-loop reason, got %q", status.LastError)
@@ -689,8 +689,8 @@ func TestUpgradeResetsCrashLoopState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if status.Runtime != RuntimeStateCrashing {
-		t.Fatalf("expected crashing, got %s", status.Runtime)
+	if status.Runtime != RuntimeStateCrashLoop {
+		t.Fatalf("expected crash_loop, got %s", status.Runtime)
 	}
 
 	// Verify blocked by cooldown
