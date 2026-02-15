@@ -65,7 +65,7 @@ func (sf *StateFile) Save(agents map[string]*AgentState) error {
 
 	// Write atomically: write to .tmp, then rename
 	tmpPath := sf.path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
 		return fmt.Errorf("write temporary state file: %w", err)
 	}
 
