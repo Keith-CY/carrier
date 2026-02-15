@@ -87,10 +87,41 @@ func Load(path string) (Config, error) {
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			return cfg, fmt.Errorf("config: parse %s: %w", path, err)
 		}
+
+		// Check file permissions if config was loaded from disk
+		if err := checkConfigPermissions(path, &cfg); err != nil {
+			return cfg, err
+		}
 	}
 
 	applyEnvOverrides(&cfg)
 	return cfg, nil
+}
+
+// checkConfigPermissions verifies that the config file has appropriate
+// permissions when it contains sensitive data like API tokens.
+// Returns an error if the file is world-readable (perms > 0600) and
+// contains an API token.
+func checkConfigPermissions(path string, cfg *Config) error {
+	// Only check permissions if an API token is present in the config file
+	if cfg.Server.APIToken == "" {
+		return nil
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("config: stat %s: %w", path, err)
+	}
+
+	perm := info.Mode().Perm()
+
+	// Check if permissions are too permissive (more than 0600)
+	// 0600 = owner read/write only, no group or world access
+	if perm > 0o600 {
+		return fmt.Errorf("config: %s contains api_token but has insecure permissions %04o (should be 0600 or stricter)", path, perm)
+	}
+
+	return nil
 }
 
 // CrashWindowDuration parses the CrashWindow string as a time.Duration.
