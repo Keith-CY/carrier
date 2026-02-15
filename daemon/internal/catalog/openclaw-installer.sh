@@ -1,11 +1,18 @@
 #!/bin/sh
 # OpenClaw installer with pinned artifacts and checksum verification
-# Checksum MUST be provided as $2 (pinned in carrier manifest, not fetched remotely)
+# Checksum MUST be provided as $2 (pinned in carrier manifest) or via OPENCLAW_CHECKSUM env var
 
 set -e
 
 VERSION="${1:?VERSION required}"
-EXPECTED_CHECKSUM="${2:?EXPECTED_CHECKSUM required (pinned in manifest)}"
+# Support checksum from either $2 argument (daemon use) or OPENCLAW_CHECKSUM env var (standalone use)
+EXPECTED_CHECKSUM="${2:-${OPENCLAW_CHECKSUM:-}}"
+
+if [ -z "$EXPECTED_CHECKSUM" ]; then
+    echo "ERROR: Checksum required but not provided" >&2
+    echo "Provide checksum as second argument or set OPENCLAW_CHECKSUM environment variable" >&2
+    exit 1
+fi
 
 # Platform detection
 OS="$(uname -s)"
