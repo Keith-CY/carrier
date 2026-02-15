@@ -238,14 +238,16 @@ async function defaultReadFile(fileRef: string): Promise<Blob | null> {
   }
 
   // Resolve symlinks to prevent symlink traversal attacks.
-  // Ensure the real (resolved) path stays within the same parent directory.
-  const realPath = file.name;
-  if (realPath && realPath !== fileRef) {
-    const allowedDir = fileRef.substring(0, fileRef.lastIndexOf("/"));
-    if (!realPath.startsWith(allowedDir + "/")) {
-      console.warn(`[security] symlink resolved outside allowed directory: ${realPath}`);
-      return null;
-    }
+  // Ensure the real (resolved) path stays within the allowed parent directory.
+  const { realpath } = await import("node:fs/promises");
+  const resolvedPath = await realpath(fileRef).catch(() => null);
+  if (resolvedPath === null) {
+    return null;
+  }
+  const allowedDir = fileRef.substring(0, fileRef.lastIndexOf("/"));
+  if (!resolvedPath.startsWith(allowedDir + "/") && resolvedPath !== fileRef) {
+    console.warn(`[security] symlink resolved outside allowed directory: ${resolvedPath}`);
+    return null;
   }
 
   return file;
