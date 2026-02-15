@@ -33,6 +33,7 @@ var (
 	ErrRemoteDiagnosisNotNeeded   = errors.New("remote diagnosis is not required for this agent")
 	ErrUpgradeFailed              = errors.New("agent upgrade failed")
 	ErrUpgradeStrategyUnsupported = errors.New("upgrade strategy is not supported")
+	ErrAgentAlreadyRunning        = errors.New("cannot re-register manifest while agent is running")
 )
 
 const (
@@ -258,6 +259,21 @@ func (s *Service) RegisterManifest(m manifest.Manifest) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Guard: reject re-registration when the agent is currently running.
+	if existing, ok := s.states[m.ID]; ok && existing.Runtime == RuntimeStateRunning {
+		return ErrAgentAlreadyRunning
+	}
+
+	// Preserve runtime state for non-running agents that already exist.
+	if existing, ok := s.states[m.ID]; ok {
+		existing.Name = m.Name
+		existing.Version = m.Version
+		existing.UpdatedAt = s.now()
+		s.states[m.ID] = existing
+		s.manifests[m.ID] = m
+		return nil
+	}
 
 	s.manifests[m.ID] = m
 	s.states[m.ID] = AgentState{

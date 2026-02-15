@@ -1684,3 +1684,82 @@ func (f *fakeTriager) Analyze(ctx context.Context, e baseagent.Evidence) (baseag
 	}
 	return baseagent.TriageResult{}, nil
 }
+
+func TestRegisterManifest_RejectsRunningAgent(t *testing.T) {
+	svc := NewService(nil)
+	m := sampleManifest()
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("initial register: %v", err)
+	}
+
+	// Simulate running state
+	svc.mu.Lock()
+	st := svc.states[m.ID]
+	st.Runtime = RuntimeStateRunning
+	svc.states[m.ID] = st
+	svc.mu.Unlock()
+
+	m.Version = "2.0.0"
+	if err := svc.RegisterManifest(m); !errors.Is(err, ErrAgentAlreadyRunning) {
+		t.Fatalf("expected ErrAgentAlreadyRunning, got %v", err)
+	}
+
+	// Verify state was not overwritten
+	status, _ := svc.Status(m.ID)
+	if status.Version != "1.0.0" {
+		t.Fatalf("expected version 1.0.0 preserved, got %s", status.Version)
+	}
+	if status.Runtime != RuntimeStateRunning {
+		t.Fatalf("expected runtime still running, got %s", status.Runtime)
+	}
+}
+
+func TestRegisterManifest_UpdatesStoppedAgent(t *testing.T) {
+	svc := NewService(nil)
+	m := sampleManifest()
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("initial register: %v", err)
+	}
+
+	// Set to installed+stopped
+	svc.mu.Lock()
+	st := svc.states[m.ID]
+	st.Install = InstallStateInstalled
+	st.Runtime = RuntimeStateStopped
+	svc.states[m.ID] = st
+	svc.mu.Unlock()
+
+	m.Version = "2.0.0"
+	m.Name = "OpenClaw v2"
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("re-register stopped agent: %v", err)
+	}
+
+	status, _ := svc.Status(m.ID)
+	if status.Version != "2.0.0" {
+		t.Fatalf("expected version 2.0.0, got %s", status.Version)
+	}
+	if status.Install != InstallStateInstalled {
+		t.Fatalf("expected install state preserved, got %s", status.Install)
+	}
+}
+
+func TestRegisterManifest_FreshRegistration(t *testing.T) {
+	svc := NewService(nil)
+	m := sampleManifest()
+	m.ID = "brand-new-agent"
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("fresh register: %v", err)
+	}
+
+	status, err := svc.Status("brand-new-agent")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if status.Install != InstallStateNotInstalled {
+		t.Fatalf("expected not-installed, got %s", status.Install)
+	}
+	if status.Runtime != RuntimeStateStopped {
+		t.Fatalf("expected stopped, got %s", status.Runtime)
+	}
+}
