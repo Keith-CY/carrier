@@ -78,8 +78,8 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
     }
 
     if (ctx.request.method === "POST" && url.pathname === "/command") {
-      const commandInput = await parseCommandInput(ctx.request);
-      if (!commandInput) {
+      const parsed = await parseCommandRequest(ctx.request);
+      if (!parsed.commandInput) {
         return jsonResponse({
           requestId: ctx.requestId,
           result: "error",
@@ -87,7 +87,14 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
           message: "request body must provide command input",
         }, 400);
       }
-      const response = await safeHandleCommand(commandInput, deps);
+      
+      // Validate authentication for non-/pair commands
+      const authError = validateCommandAuth(parsed.commandInput, parsed.sessionToken, deps);
+      if (authError) {
+        return jsonResponse(authError, 401);
+      }
+      
+      const response = await safeHandleCommand(parsed.commandInput, deps);
       return jsonResponse(response);
     }
 
@@ -264,22 +271,111 @@ async function defaultReadFile(fileRef: string): Promise<Blob | null> {
   return file;
 }
 
-async function parseCommandInput(request: Request): Promise<string | null> {
+type ParsedCommandRequest = {
+  commandInput: string | null;
+  sessionToken: string | null;
+};
+
+async function parseCommandRequest(request: Request): Promise<ParsedCommandRequest> {
+  const result: ParsedCommandRequest = {
+    commandInput: null,
+    sessionToken: null,
+  };
+  
+  // Check Authorization header for session token
+  const authHeader = request.headers.get("authorization");
+  if (authHeader) {
+    const match = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (match && match[1]) {
+      result.sessionToken = match[1].trim();
+    }
+  }
+  
   const contentType = request.headers.get("content-type")?.toLowerCase() || "";
   if (contentType.includes("application/json")) {
     try {
-      const payload = await request.json() as { input?: unknown };
+      const payload = await request.json() as { input?: unknown; sessionToken?: unknown };
+      
+      // Extract command input
       if (typeof payload.input === "string" && payload.input.trim().length > 0) {
-        return payload.input;
+        result.commandInput = payload.input.trim();
       }
-      return null;
+      
+      // Extract session token from body (if not already set from header)
+      if (!result.sessionToken && typeof payload.sessionToken === "string" && payload.sessionToken.trim().length > 0) {
+        result.sessionToken = payload.sessionToken.trim();
+      }
+      
+      return result;
     } catch {
-      return null;
+      return result;
     }
   }
 
+  // For non-JSON requests, treat the entire body as command input
   const raw = (await request.text()).trim();
-  return raw.length > 0 ? raw : null;
+  if (raw.length > 0) {
+    result.commandInput = raw;
+  }
+  
+  return result;
+}
+
+function validateCommandAuth(
+  commandInput: string,
+  sessionToken: string | null,
+  deps: GatewayDependencies,
+): { requestId: string; result: "error"; errorCode: string; message: string } | null {
+  // Parse the command to extract provider, chatId, requestId, and command name
+  const parts = commandInput.trim().split(/\s+/);
+  
+  // For malformed commands (too few parts), skip auth validation and let the
+  // command parser return the appropriate E_PARSE error
+  if (parts.length < 4) {
+    return null;
+  }
+  
+  const [provider, chatId, requestId, commandName] = parts;
+  
+  // /pair command doesn't require authentication (it creates the session)
+  if (commandName === "/pair") {
+    return null;
+  }
+  
+  // Check if session exists first for better error messages
+  const session = deps.sessions.getSession(provider as any, chatId);
+  if (!session) {
+    // If no session exists, return E_SESSION_REQUIRED (backwards compatible)
+    // The token requirement is implicit - can't have a token without a session
+    return {
+      requestId,
+      result: "error",
+      errorCode: "E_SESSION_REQUIRED",
+      message: "chat is not paired; run /pair <code> first",
+    };
+  }
+  
+  // Session exists, now verify authentication token
+  if (!sessionToken) {
+    return {
+      requestId,
+      result: "error",
+      errorCode: "E_AUTH_REQUIRED",
+      message: "session token required (provide via Authorization header or sessionToken field)",
+    };
+  }
+  
+  if (session.sessionToken !== sessionToken) {
+    return {
+      requestId,
+      result: "error",
+      errorCode: "E_AUTH_INVALID",
+      message: "invalid session token",
+    };
+  }
+  
+  // Authentication successful
+  return null;
 }
 
 export function parsePort(raw: string | undefined, fallback: number): number {

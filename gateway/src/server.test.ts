@@ -211,12 +211,17 @@ describe("gateway runtime routes", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ input: "telegram 100 req-1 /pair pair-ok" }),
     }));
-    const pairPayload = await pairResponse.json() as { result: string };
+    const pairPayload = await pairResponse.json() as { result: string; sessionToken?: string };
     expect(pairPayload.result).toBe("ok");
+    expect(pairPayload.sessionToken).toBeDefined();
 
+    const sessionToken = pairPayload.sessionToken as string;
     const agentsResponse = await runtime.fetch(new Request("http://gateway.local/command", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { 
+        "content-type": "application/json",
+        "authorization": `Bearer ${sessionToken}`,
+      },
       body: JSON.stringify({ input: "telegram 100 req-2 /agents" }),
     }));
     const agentsPayload = await agentsResponse.json() as { result: string; message: string };
@@ -488,6 +493,187 @@ describe("port resolution fallback behavior", () => {
     } else {
       delete process.env.CARRIER_GATEWAY_PORT;
     }
+  });
+});
+
+describe("command authentication", () => {
+  test("rejects authenticated commands without session token", async () => {
+    const deps = makeDeps();
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request("http://gateway.local/command", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: "telegram 100 req-1 /agents" }),
+    }));
+
+    expect(response.status).toBe(401);
+    const payload = await response.json() as { errorCode?: string; message?: string };
+    expect(payload.errorCode).toBe("E_SESSION_REQUIRED");
+    expect(payload.message).toContain("not paired");
+  });
+
+  test("rejects commands with invalid session token", async () => {
+    const deps = makeDeps();
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("pair-code");
+    }
+    const runtime = createGatewayRuntime({ deps });
+
+    // Create a session via pairing
+    const pairResponse = await runtime.fetch(new Request("http://gateway.local/command", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: "telegram 100 req-1 /pair pair-code" }),
+    }));
+    const pairPayload = await pairResponse.json() as { result: string };
+    expect(pairPayload.result).toBe("ok");
+
+    // Try to use a wrong token
+    const response = await runtime.fetch(new Request("http://gateway.local/command", {
+      method: "POST",
+      headers: { 
+        "content-type": "application/json",
+        "authorization": "Bearer wrong-token",
+      },
+      body: JSON.stringify({ input: "telegram 100 req-2 /agents" }),
+    }));
+
+    expect(response.status).toBe(401);
+    const payload = await response.json() as { errorCode?: string; message?: string };
+    expect(payload.errorCode).toBe("E_AUTH_INVALID");
+    expect(payload.message).toContain("invalid session token");
+  });
+
+  test("accepts commands with valid session token in Authorization header", async () => {
+    const deps = makeDeps();
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("pair-code");
+    }
+    const runtime = createGatewayRuntime({ deps });
+
+    const pairResponse = await runtime.fetch(new Request("http://gateway.local/command", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: "telegram 100 req-1 /pair pair-code" }),
+    }));
+    const pairPayload = await pairResponse.json() as { result: string; sessionToken?: string };
+    expect(pairPayload.result).toBe("ok");
+
+    const sessionToken = pairPayload.sessionToken as string;
+    const response = await runtime.fetch(new Request("http://gateway.local/command", {
+      method: "POST",
+      headers: { 
+        "content-type": "application/json",
+        "authorization": `Bearer ${sessionToken}`,
+      },
+      body: JSON.stringify({ input: "telegram 100 req-2 /agents" }),
+    }));
+
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { result: string };
+    expect(payload.result).toBe("ok");
+  });
+
+  test("accepts commands with valid session token in request body", async () => {
+    const deps = makeDeps();
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("pair-code");
+    }
+    const runtime = createGatewayRuntime({ deps });
+
+    const pairResponse = await runtime.fetch(new Request("http://gateway.local/command", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: "telegram 100 req-1 /pair pair-code" }),
+    }));
+    const pairPayload = await pairResponse.json() as { result: string; sessionToken?: string };
+    expect(pairPayload.result).toBe("ok");
+
+    const sessionToken = pairPayload.sessionToken as string;
+    const response = await runtime.fetch(new Request("http://gateway.local/command", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ 
+        input: "telegram 100 req-2 /agents",
+        sessionToken,
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { result: string };
+    expect(payload.result).toBe("ok");
+  });
+
+  test("allows /pair command without session token", async () => {
+    const deps = makeDeps();
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("pair-code");
+    }
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request("http://gateway.local/command", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: "telegram 100 req-1 /pair pair-code" }),
+    }));
+
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { result: string; sessionToken?: string };
+    expect(payload.result).toBe("ok");
+    expect(payload.sessionToken).toBeDefined();
+  });
+
+  test("rejects commands for non-existent session", async () => {
+    const deps = makeDeps();
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request("http://gateway.local/command", {
+      method: "POST",
+      headers: { 
+        "content-type": "application/json",
+        "authorization": "Bearer fake-session-token",
+      },
+      body: JSON.stringify({ input: "telegram 999 req-1 /agents" }),
+    }));
+
+    expect(response.status).toBe(401);
+    const payload = await response.json() as { errorCode?: string; message?: string };
+    expect(payload.errorCode).toBe("E_SESSION_REQUIRED");
+    expect(payload.message).toContain("not paired");
+  });
+
+  test("rejects commands with mismatched provider/chatId", async () => {
+    const deps = makeDeps();
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("pair-code");
+    }
+    const runtime = createGatewayRuntime({ deps });
+
+    // Pair for telegram:100
+    const pairResponse = await runtime.fetch(new Request("http://gateway.local/command", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: "telegram 100 req-1 /pair pair-code" }),
+    }));
+    const pairPayload = await pairResponse.json() as { result: string; sessionToken?: string };
+    expect(pairPayload.result).toBe("ok");
+
+    const sessionToken = pairPayload.sessionToken as string;
+
+    // Try to use the token for telegram:200 (different chat, no session)
+    const response = await runtime.fetch(new Request("http://gateway.local/command", {
+      method: "POST",
+      headers: { 
+        "content-type": "application/json",
+        "authorization": `Bearer ${sessionToken}`,
+      },
+      body: JSON.stringify({ input: "telegram 200 req-2 /agents" }),
+    }));
+
+    expect(response.status).toBe(401);
+    const payload = await response.json() as { errorCode?: string };
+    expect(payload.errorCode).toBe("E_SESSION_REQUIRED");
   });
 });
 
