@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"carrier/daemon/internal/api"
 	"carrier/daemon/internal/baseagent"
 	"carrier/daemon/internal/catalog"
 	"carrier/daemon/internal/commandexec"
@@ -50,7 +51,8 @@ var _ lifecycle.ProcessController = (*fakeProcessManager)(nil)
 func buildTestMux(svc *lifecycle.Service, ready bool) *http.ServeMux {
 	var readyFlag atomic.Bool
 	readyFlag.Store(ready)
-	return buildHTTPMux(svc, &readyFlag)
+	pairStore := api.NewPairingCodeStore(nil)
+	return buildHTTPMux(svc, &readyFlag, pairStore)
 }
 
 func (m *fakeProcessManager) Start(agentID string, _ string, _ []string) (int, error) {
@@ -349,5 +351,98 @@ func TestValidateAgentID(t *testing.T) {
 		if (err != nil) != tt.wantErr {
 			t.Errorf("validateAgentID(%q) err=%v, wantErr=%v", tt.id, err, tt.wantErr)
 		}
+	}
+}
+
+func TestPairingCodesEndpoint(t *testing.T) {
+	svc := lifecycle.NewService(baseagent.NoopTriager{})
+	mux := buildTestMux(svc, true)
+
+	// Test GET /api/pairing/codes
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/pairing/codes", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/pairing/codes: expected 200, got %d", rec.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if _, ok := resp["codes"]; !ok {
+		t.Fatal("expected 'codes' field in response")
+	}
+
+	// Test GET /api/v1/pairing/codes
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/pairing/codes", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/pairing/codes: expected 200, got %d", rec.Code)
+	}
+}
+
+func TestPairingVerifyConsumeEndpoint(t *testing.T) {
+	svc := lifecycle.NewService(baseagent.NoopTriager{})
+	pairStore := api.NewPairingCodeStore(nil)
+
+	// Issue a pairing code
+	record, err := pairStore.Issue(5 * time.Minute)
+	if err != nil {
+		t.Fatalf("issue pairing code: %v", err)
+	}
+
+	var readyFlag atomic.Bool
+	readyFlag.Store(true)
+	mux := buildHTTPMux(svc, &readyFlag, pairStore)
+
+	// Test POST /api/pairing/verify-consume with valid code
+	body := fmt.Sprintf(`{"code":"%s"}`, record.Code)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/pairing/verify-consume", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/pairing/verify-consume: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["consumed"] != true {
+		t.Fatal("expected 'consumed' to be true")
+	}
+
+	// Test with invalid code (already consumed)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/pairing/verify-consume", strings.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/pairing/verify-consume (consumed): expected 400, got %d", rec.Code)
+	}
+
+	// Test POST /api/v1/pairing/verify-consume
+	record2, _ := pairStore.Issue(5 * time.Minute)
+	body2 := fmt.Sprintf(`{"code":"%s"}`, record2.Code)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/v1/pairing/verify-consume", strings.NewReader(body2)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/v1/pairing/verify-consume: expected 200, got %d", rec.Code)
+	}
+}
+
+func TestPairingMethodNotAllowed(t *testing.T) {
+	svc := lifecycle.NewService(baseagent.NoopTriager{})
+	mux := buildTestMux(svc, true)
+
+	// Test POST on codes endpoint (only GET allowed)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/pairing/codes", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /api/pairing/codes: expected 405, got %d", rec.Code)
+	}
+
+	// Test GET on verify-consume endpoint (only POST allowed)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/pairing/verify-consume", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET /api/pairing/verify-consume: expected 405, got %d", rec.Code)
 	}
 }
