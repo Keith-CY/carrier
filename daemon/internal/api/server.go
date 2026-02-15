@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"carrier/daemon/internal/lifecycle"
+	"carrier/daemon/internal/redact"
 )
 
 var validAgentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
@@ -69,6 +70,20 @@ type listAgentsResponse struct {
 	Agents []daemonAgent `json:"agents"`
 }
 
+func (s *Server) agentFromState(state lifecycle.AgentState) daemonAgent {
+	return daemonAgent{
+		ID:                   state.ID,
+		Name:                 s.lifecycle.AgentName(state.ID),
+		Version:              state.Version,
+		Installed:            state.Install == lifecycle.InstallStateInstalled,
+		RuntimeState:         string(state.Runtime),
+		Health:               string(state.Health),
+		NeedsRemoteDiagnosis: state.NeedsRemoteDiagnosis,
+		LastError:            redact.RedactText(state.LastError),
+		UpdatedAt:            state.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	}
+}
+
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodGet) {
 		return
@@ -83,17 +98,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		Agents: make([]daemonAgent, 0, len(states)),
 	}
 	for _, state := range states {
-		resp.Agents = append(resp.Agents, daemonAgent{
-			ID:                   state.ID,
-			Name:                 s.lifecycle.AgentName(state.ID),
-			Version:              state.Version,
-			Installed:            state.Install == lifecycle.InstallStateInstalled,
-			RuntimeState:         string(state.Runtime),
-			Health:               string(state.Health),
-			NeedsRemoteDiagnosis: state.NeedsRemoteDiagnosis,
-			LastError:            state.LastError,
-			UpdatedAt:            state.UpdatedAt.UTC().Format(time.RFC3339Nano),
-		})
+		resp.Agents = append(resp.Agents, s.agentFromState(state))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -108,17 +113,7 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 			Statuses []daemonAgent `json:"statuses"`
 		}{Statuses: make([]daemonAgent, 0, len(states))}
 		for _, state := range states {
-			resp.Statuses = append(resp.Statuses, daemonAgent{
-				ID:                   state.ID,
-				Name:                 s.lifecycle.AgentName(state.ID),
-				Version:              state.Version,
-				Installed:            state.Install == lifecycle.InstallStateInstalled,
-				RuntimeState:         string(state.Runtime),
-				Health:               string(state.Health),
-				NeedsRemoteDiagnosis: state.NeedsRemoteDiagnosis,
-				LastError:            state.LastError,
-				UpdatedAt:            state.UpdatedAt.UTC().Format(time.RFC3339Nano),
-			})
+			resp.Statuses = append(resp.Statuses, s.agentFromState(state))
 		}
 		writeJSON(w, http.StatusOK, resp)
 		return
@@ -172,17 +167,7 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"statuses": []daemonAgent{{
-				ID:                   state.ID,
-				Name:                 s.lifecycle.AgentName(state.ID),
-				Version:              state.Version,
-				Installed:            state.Install == lifecycle.InstallStateInstalled,
-				RuntimeState:         string(state.Runtime),
-				Health:               string(state.Health),
-				NeedsRemoteDiagnosis: state.NeedsRemoteDiagnosis,
-				LastError:            state.LastError,
-				UpdatedAt:            state.UpdatedAt.UTC().Format(time.RFC3339Nano),
-			}},
+			"statuses": []daemonAgent{s.agentFromState(state)},
 		})
 	case "logs":
 		if !allowMethod(w, r, http.MethodGet) {
@@ -200,7 +185,11 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 			writeError(w, status, code, message)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"lines": lines, "truncated": false})
+		redactedLines := make([]string, len(lines))
+		for i, line := range lines {
+			redactedLines[i] = redact.RedactText(line)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"lines": redactedLines, "truncated": false})
 	case "diagnose":
 		if !allowMethod(w, r, http.MethodPost) {
 			return
