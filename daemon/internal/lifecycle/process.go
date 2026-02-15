@@ -190,6 +190,8 @@ func (pm *ProcessManager) Cleanup() {
 	pm.mu.Unlock()
 
 	for _, id := range agentIDs {
-		pm.Stop(id)
+		if err := pm.Stop(id); err != nil {
+			continue
+		}
 	}
 }
