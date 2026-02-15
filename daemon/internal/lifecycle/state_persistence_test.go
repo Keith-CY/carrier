@@ -98,9 +98,9 @@ func TestStatePersistence_Crash(t *testing.T) {
 		WithStateFile(statePath),
 	)
 
-	// Create a manifest that exits immediately to simulate a crash
+	// Create a manifest with a command that exits quickly to simulate a crash
 	m := sampleManifest()
-	m.Runtime.Start.Command = "false" // command that exits immediately with error
+	m.Runtime.Start.Command = "sh -c 'sleep 0.01; exit 1'"
 	if err := svc.RegisterManifest(m); err != nil {
 		t.Fatalf("register manifest: %v", err)
 	}
@@ -110,14 +110,7 @@ func TestStatePersistence_Crash(t *testing.T) {
 		t.Fatalf("install: %v", err)
 	}
 
-	// Start a process that will exit immediately
-	// Use a simple command like "sleep 0.01" to exit quickly
-	m2 := sampleManifest()
-	m2.Runtime.Start.Command = "sh -c 'sleep 0.01; exit 1'" // exits after 10ms
-	if err := svc.RegisterManifest(m2); err != nil {
-		t.Fatalf("re-register manifest: %v", err)
-	}
-
+	// Start — the process will exit almost immediately, simulating a crash
 	if err := svc.Start(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
