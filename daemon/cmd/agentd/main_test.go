@@ -447,6 +447,66 @@ func TestPairingMethodNotAllowed(t *testing.T) {
 	}
 }
 
+func TestDecodeBodyMalformed(t *testing.T) {
+	svc := lifecycle.NewService(baseagent.NoopTriager{})
+	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
+		t.Fatal(err)
+	}
+	mux := buildTestMux(svc, true)
+
+	// We POST to /api/install which calls decodeBody then validateAgentID.
+	// For "valid" JSON the decode succeeds but install may fail downstream,
+	// so we only assert that bad bodies get 400 and valid ones do NOT get 400.
+	tests := []struct {
+		name    string
+		body    string
+		want400 bool
+	}{
+		{
+			name:    "valid baseline",
+			body:    `{"agentId":"openclaw"}`,
+			want400: false,
+		},
+		{
+			name:    "unknown field rejected",
+			body:    `{"agentId":"openclaw","extra":"bad"}`,
+			want400: true,
+		},
+		{
+			name:    "malformed JSON",
+			body:    `{agentId: openclaw}`,
+			want400: true,
+		},
+		{
+			name:    "trailing JSON object",
+			body:    `{"agentId":"openclaw"}{"agentId":"openclaw"}`,
+			want400: true,
+		},
+		{
+			name:    "empty body",
+			body:    ``,
+			want400: true,
+		},
+		{
+			name:    "oversized body",
+			body:    `{"agentId":"` + strings.Repeat("a", 1<<20+100) + `"}`,
+			want400: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("POST", "/api/install", strings.NewReader(tt.body))
+			mux.ServeHTTP(rec, req)
+			got400 := rec.Code == http.StatusBadRequest
+			if got400 != tt.want400 {
+				t.Fatalf("status=%d, want400=%v; body=%s", rec.Code, tt.want400, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestBearerAuthMiddlewareBoundaryCases(t *testing.T) {
 	token := "secret-token"
 	base := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
