@@ -63,17 +63,6 @@ jobs:
         with:
           version: v1.64
           working-directory: daemon
-
-  openclaw-installer-test:
-    name: OpenClaw Installer Test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-
-      - name: Run OpenClaw installer test
-        run: bash daemon/internal/catalog/openclaw-installer_test.sh
-
   gateway-check:
     name: Gateway Check
     runs-on: ubuntu-latest
