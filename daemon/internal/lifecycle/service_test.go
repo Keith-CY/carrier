@@ -640,11 +640,12 @@ func TestUpgradeResetsCrashLoopState(t *testing.T) {
 		t.Fatalf("expected empty LastError after upgrade, got %q", status.LastError)
 	}
 
-	// Verify can start without crash-loop blocking
+	// Verify can start without crash-loop blocking.
+	// Restore a valid start command so this assertion checks crash-loop reset behavior,
+	// not command validity.
+	m.Runtime.Start.Command = "tail -f /dev/null"
 	svc.mu.Lock()
-	updated := svc.manifests["openclaw"]
-	updated.Runtime.Start.Command = "tail -f /dev/null"
-	svc.manifests["openclaw"] = updated
+	svc.manifests["openclaw"] = m
 	svc.mu.Unlock()
 	if err := svc.Start(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("expected start success after upgrade reset, got %v", err)
