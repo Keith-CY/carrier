@@ -15,13 +15,16 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
       - name: Sync issue/pr to Projects Kanban
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
         with:
           script: |
-            const projectId = String(process.env.CARRIER_PROJECT_ID || '').trim();
+            const projectId = process.env.CARRIER_PROJECT_ID;
+            if (!projectId) {
+              core.setFailed('CARRIER_PROJECT_ID is required. Set it in repository/environment variables.');
+              return;
+            }
             const statusFieldNames = ['Status', '状态'];
             const fieldAliases = {
               priority: ['Priority', '优先级'],
@@ -34,10 +37,6 @@ jobs:
 
             const eventName = context.eventName;
             const payload = context.payload;
-            if (!projectId) {
-              core.warning('CARRIER_PROJECT_ID is not set; skipping Kanban sync for this run.');
-              return;
-            }
             const token = process.env.CARRIER_PROJECTS_TOKEN || process.env.GITHUB_TOKEN;
             // Fallback `github` comes from @actions/github and uses the default GITHUB_TOKEN context.
             const ghClient = token ? github.getOctokit(token) : github;
@@ -98,25 +97,8 @@ jobs:
             };
 
             const inferType = (labels) => {
-              const typeMapping = {
-                bug: 'Bug',
-                enhancement: 'Enhancement',
-                documentation: 'Documentation',
-                feature: 'Enhancement',
-                docs: 'Documentation',
-                infra: 'Infra',
-                refactor: 'Refactor',
-                release: 'Release',
-              };
-
-              for (const label of labels) {
-                const normalized = String(label.name || '').trim().toLowerCase();
-                if (typeMapping[normalized]) {
-                  return typeMapping[normalized];
-                }
-              }
-
-              return null;
+              const match = findLabelMatch(labels, /^(bug|feature|infra|docs|refactor|release)$/);
+              return match ? match[1].replace(/^./, (c) => c.toUpperCase()) : null;
             };
 
             const inferIteration = (item, labels) => {
@@ -195,21 +177,15 @@ jobs:
               }
             }`;
 
-            let preflight;
-            try {
-              preflight = await ghClient.graphql(preflightQuery, { projectId });
-            } catch (err) {
-              core.warning(`Skip Kanban sync: unable to read project ${projectId} (${err.message || err}).`);
-              return;
-            }
+            const preflight = await ghClient.graphql(preflightQuery, { projectId });
             if (!preflight?.node) {
-              core.warning(`Skip Kanban sync: project ${projectId} is not accessible.`);
+              core.setFailed(`Unable to read project ${projectId}. Verify the token and projectId are valid.`);
               return;
             }
 
             if (!preflight.node.viewerCanUpdate) {
-              core.warning([
-                'Skip Kanban sync: token does not have write access for this Project.',
+              core.setFailed([
+                'Project token does not have write access for this Project.',
                 'Use CARRIER_PROJECTS_TOKEN with project:write scope, then re-run.',
               ].join(' '));
               return;

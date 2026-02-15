@@ -93,9 +93,9 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
       if (authError) {
         return jsonResponse(authError, 401);
       }
-      
-      const commandForExecution = attachSessionTokenIfMissing(parsed.commandInput, parsed.sessionToken);
-      const response = await safeHandleCommand(commandForExecution, deps);
+
+      const commandInput = injectSessionTokenIfMissing(parsed.commandInput, parsed.sessionToken);
+      const response = await safeHandleCommand(commandInput, deps);
       return jsonResponse(response);
     }
 
@@ -327,23 +327,25 @@ async function parseCommandRequest(request: Request): Promise<ParsedCommandReque
   return result;
 }
 
-function attachSessionTokenIfMissing(commandInput: string, sessionToken: string | null): string {
+function injectSessionTokenIfMissing(commandInput: string, sessionToken: string | null): string {
   if (!sessionToken) {
     return commandInput;
   }
+
   const parts = commandInput.trim().split(/\s+/);
+  // provider chatId requestId /command ...
   if (parts.length < 4) {
     return commandInput;
   }
 
   const fourth = parts[3] ?? "";
-  if (fourth.startsWith("session-")) {
+  // If the 4th token is already not a command name, assume session token is inline.
+  if (!fourth.startsWith("/")) {
     return commandInput;
   }
 
-  const prefix = parts.slice(0, 3);
-  const suffix = parts.slice(3);
-  return [...prefix, sessionToken, ...suffix].join(" ");
+  const [provider, chatId, requestId, ...rest] = parts;
+  return [provider, chatId, requestId, sessionToken, ...rest].join(" ");
 }
 
 function validateCommandAuth(

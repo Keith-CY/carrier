@@ -1,9 +1,9 @@
-.PHONY: test test-daemon test-gateway lint build clean hooks help
+.PHONY: test test-daemon test-gateway test-openclaw-installer lint build clean hooks help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
 
-test: test-daemon test-gateway ## Run all tests
+test: test-daemon test-gateway test-openclaw-installer ## Run all tests
 
 test-daemon: ## Run daemon Go tests
 	cd daemon && go test ./...
@@ -11,6 +11,9 @@ test-daemon: ## Run daemon Go tests
 test-gateway: ## Run gateway TypeScript type check and tests
 	cd gateway && npx tsc --noEmit
 	cd gateway && npx bun test
+
+test-openclaw-installer: ## Run OpenClaw installer checksum regression test
+	cd daemon/internal/catalog && bash ./openclaw-installer_test.sh
 
 lint: ## Run linters (go vet + tsc)
 	cd daemon && go vet ./...
