@@ -135,11 +135,12 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 func (s *Service) monitorProcess(agentID string) {
 	err := s.processManager.Wait(agentID)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var logLine string
 
+	s.mu.Lock()
 	state, ok := s.states[agentID]
 	if !ok {
+		s.mu.Unlock()
 		return
 	}
 
@@ -149,15 +150,19 @@ func (s *Service) monitorProcess(agentID string) {
 		state.Health = HealthStateUnhealthy
 		if err != nil {
 			state.LastError = fmt.Sprintf("process exited: %v", err)
-			s.appendLog(agentID, state.LastError)
 		} else {
 			state.LastError = "process exited unexpectedly"
-			s.appendLog(agentID, state.LastError)
 		}
+		logLine = state.LastError
 		state.UpdatedAt = s.now()
 		s.states[agentID] = state
 
 		// Record crash for crash-loop detection
 		s.recordRestart(agentID)
+	}
+	s.mu.Unlock()
+
+	if logLine != "" {
+		s.appendLog(agentID, logLine)
 	}
 }
