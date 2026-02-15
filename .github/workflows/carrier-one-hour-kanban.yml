@@ -18,6 +18,7 @@ permissions:
 jobs:
   sync-1h-board:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Update 1h Kanban snapshot
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b

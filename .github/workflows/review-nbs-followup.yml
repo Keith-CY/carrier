@@ -13,6 +13,7 @@ jobs:
   create-followup-issues:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Create issues from NBS lines
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
