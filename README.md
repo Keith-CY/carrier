@@ -107,7 +107,7 @@ If any command fails, install the missing tool before running automation scripts
 - Daemon (Go): Go modules are loaded automatically when building or testing; no additional install command needed.
 - Gateway (TypeScript):
   - `cd gateway`
-  - `bun install`
+  - `bun install --frozen-lockfile`
 
 ### Run tests / checks
 - Daemon tests:
@@ -122,7 +122,14 @@ If any command fails, install the missing tool before running automation scripts
   - `./scripts/run-all-tests.sh`
 
 Optional local flow from repo root:
-  - `cd gateway && bun install && bun run check && cd ../daemon && go test ./...`
+  - `cd gateway && bun install --frozen-lockfile && bun run check && cd ../daemon && go test ./...`
+
+
+### Frozen lockfile policy (CI and automation)
+- CI/release automation must use lockfile-enforced installs for gateway dependencies:
+  - `bun install --frozen-lockfile --no-progress`
+- This guarantees deterministic dependency resolution from committed `gateway/bun.lock`.
+- If `gateway/package.json` and `gateway/bun.lock` drift, install must fail until lockfile is updated and committed.
 
 ### Gateway runtime server (Bun)
 
