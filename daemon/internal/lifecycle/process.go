@@ -190,6 +190,6 @@ func (pm *ProcessManager) Cleanup() {
 	pm.mu.Unlock()
 
 	for _, id := range agentIDs {
-		pm.Stop(id)
+		_ = pm.Stop(id)
 	}
 }
