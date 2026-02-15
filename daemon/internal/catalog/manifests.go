@@ -10,7 +10,12 @@ import (
 //go:embed openclaw-installer.sh
 var openclawInstallerScript string
 
-const openclawVersion = "1.0.0"
+const (
+	openclawVersion          = "1.0.0"
+	defaultDaemonPort        = 9090
+	defaultDaemonHealthzPath = "/healthz"
+	defaultDaemonHealthURL   = "http://localhost:9090/healthz"
+)
 
 // Pinned checksums for release artifacts, injected at build time via ldflags:
 //
@@ -82,10 +87,10 @@ func OpenClawManifest() manifest.Manifest {
 			Stop:    manifest.CommandSpec{Command: "openclaw gateway stop"},
 		},
 		Network: manifest.NetworkSpec{
-			Ports: []manifest.PortSpec{{Name: "http", Port: 8080}},
+			Ports: []manifest.PortSpec{{Name: "http", Port: defaultDaemonPort}},
 			Healthcheck: manifest.HealthcheckSpec{
 				Type: "http",
-				URL:  "http://localhost:8080/health",
+				URL:  defaultDaemonHealthURL,
 			},
 		},
 		Env: manifest.EnvSpec{
