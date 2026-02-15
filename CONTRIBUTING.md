@@ -113,7 +113,7 @@ Before opening or updating a PR, run the minimum local validation for your chang
   bun test
   ```
 
-- **Docs-only changes:** Verify markdown links render correctly in GitHub preview. No CI test run is required (CI skips docs-only changes via `paths-ignore`).
+- **Docs-only changes:** Verify markdown links render correctly in GitHub preview and ensure the **Docs Consistency** workflow passes (`scripts/check-doc-command-sync.sh` runs there).
 
 - **CI/workflow changes:** Test the workflow logic locally where possible. For GitHub Actions changes, verify YAML syntax with a linter (e.g., `actionlint`).
 
