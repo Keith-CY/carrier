@@ -48,7 +48,7 @@ export function composeMiddleware(middlewares: GatewayMiddleware[], handler: Gat
 }
 
 export const requestIdMiddleware: GatewayMiddleware = async (ctx, next) => {
-  const incoming = ctx.request.headers.get("x-request-id")?.trim();
+  const incoming = ctx.request.headers.get("x-request-id")?.trim().replace(/[\x00-\x1F\x7F]/g, "");
   ctx.requestId = incoming && incoming.length > 0 ? incoming : crypto.randomUUID();
   const response = await next();
   response.headers.set("x-request-id", ctx.requestId);
