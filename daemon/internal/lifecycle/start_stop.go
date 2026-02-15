@@ -19,6 +19,18 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 	if state.Runtime == RuntimeStateRunning {
 		return ErrAlreadyRunning
 	}
+
+	// Check exponential backoff policy
+	s.mu.Lock()
+	backoffState := s.backoffStates[agentID]
+	shouldRetry, backoffMsg := s.backoffPolicy.ShouldRetry(backoffState, s.now())
+	s.mu.Unlock()
+
+	if !shouldRetry {
+		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_BACKOFF_COOLDOWN", backoffMsg)
+		return fmt.Errorf("%w: %s", ErrCrashLoop, backoffMsg)
+	}
+
 	if err := s.blockIfCrashLoopCoolingDown(agentID, state); err != nil {
 		return err
 	}
@@ -91,6 +103,11 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 	s.states[agentID] = state
 	delete(s.restarts, agentID)
 	delete(s.cooldowns, agentID)
+
+	// Record successful start in backoff state
+	backoffState = s.backoffStates[agentID]
+	backoffState = s.backoffPolicy.RecordStart(backoffState, s.now())
+	s.backoffStates[agentID] = backoffState
 	s.mu.Unlock()
 	s.recordAudit("", "system", "start", agentID, AuditResultSuccess, "", fmt.Sprintf("start completed (PID %d)", pid))
 
@@ -182,8 +199,21 @@ func (s *Service) monitorProcess(agentID string) {
 		state.UpdatedAt = s.now()
 		s.states[agentID] = state
 
-		// Record crash for crash-loop detection
+		// Record crash for crash-loop detection (legacy)
 		s.recordRestart(agentID)
+
+		// Record crash for exponential backoff
+		backoffState := s.backoffStates[agentID]
+		backoffState = s.backoffPolicy.RecordCrash(backoffState, s.now())
+		s.backoffStates[agentID] = backoffState
+
+		// Update error message if crash looping
+		if backoffState.CrashLooping {
+			state.LastError = fmt.Sprintf("crash-loop: exceeded max retry attempts (%d); %s",
+				s.backoffPolicy.MaxAttempts, state.LastError)
+			s.states[agentID] = state
+		}
+
 		shouldTriage = true
 	}
 	s.mu.Unlock()
