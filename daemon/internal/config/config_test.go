@@ -118,3 +118,96 @@ func TestCrashDurations(t *testing.T) {
 		t.Errorf("expected 5m, got %v", c)
 	}
 }
+
+func TestConfigPermissionsSecure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	data := `{"server":{"api_token":"secret123"}}`
+
+	// Write with secure permissions (0600)
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error with secure permissions: %v", err)
+	}
+	if cfg.Server.APIToken != "secret123" {
+		t.Errorf("expected api_token secret123, got %s", cfg.Server.APIToken)
+	}
+}
+
+func TestConfigPermissionsInsecure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	data := `{"server":{"api_token":"secret123"}}`
+
+	// Write with insecure permissions (0644 - world readable)
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for insecure permissions with api_token")
+	}
+	// Check that error message mentions permissions
+	errMsg := err.Error()
+	if !contains(errMsg, "insecure permissions") && !contains(errMsg, "0644") {
+		t.Errorf("expected error about insecure permissions, got: %v", err)
+	}
+}
+
+func TestConfigPermissionsNoToken(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	data := `{"server":{"host":"0.0.0.0","port":8080}}`
+
+	// Write with world-readable permissions but no api_token
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error when no api_token present: %v", err)
+	}
+	if cfg.Server.Port != 8080 {
+		t.Errorf("expected port 8080, got %d", cfg.Server.Port)
+	}
+}
+
+func TestConfigPermissionsStricter(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	data := `{"server":{"api_token":"secret123"}}`
+
+	// Write with even stricter permissions (0400 - read-only)
+	if err := os.WriteFile(path, []byte(data), 0o400); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error with stricter permissions: %v", err)
+	}
+	if cfg.Server.APIToken != "secret123" {
+		t.Errorf("expected api_token secret123, got %s", cfg.Server.APIToken)
+	}
+}
+
+// Helper function to check if a string contains a substring
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
