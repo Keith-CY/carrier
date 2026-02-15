@@ -367,7 +367,7 @@ func scrubVolatile(v interface{}) {
 	switch val := v.(type) {
 	case map[string]interface{}:
 		for k, child := range val {
-			if k == "updatedAt" || k == "createdAt" {
+			if k == "updatedAt" || k == "createdAt" || k == "artifactRef" {
 				val[k] = "<scrubbed>"
 			} else {
 				scrubVolatile(child)
