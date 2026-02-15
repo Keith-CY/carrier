@@ -13,6 +13,13 @@ async function sendCommand(runtime: GatewayRuntime, input: string): Promise<Gate
   return await response.json() as GatewayResponse;
 }
 
+/** Issue a pair code known to both daemon and session store. */
+function issuePairCode(daemon: InMemoryDaemonClient, sessions: SessionStore): string {
+  const { code } = sessions.issuePairCode();
+  daemon.registerPairCode(code);
+  return code;
+}
+
 describe("E2E slash command test suite", () => {
   let runtime: GatewayRuntime;
   let daemon: InMemoryDaemonClient;
@@ -31,7 +38,7 @@ describe("E2E slash command test suite", () => {
 
   describe("1. Pairing", () => {
     test("/pair with valid code succeeds", async () => {
-      const code = sessions.issuePairCode().code;
+      const code = issuePairCode(daemon, sessions);
       const result = await sendCommand(runtime, `telegram chat1 req-1 /pair ${code}`);
       
       expect(result.result).toBe("ok");
@@ -80,7 +87,7 @@ describe("E2E slash command test suite", () => {
   describe("2. Agent lifecycle", () => {
     beforeEach(async () => {
       // Pair the session first
-      const code = sessions.issuePairCode().code;
+      const code = issuePairCode(daemon, sessions);
       await sendCommand(runtime, `telegram chat1 req-setup /pair ${code}`);
     });
 
@@ -160,7 +167,7 @@ describe("E2E slash command test suite", () => {
 
   describe("3. Logs & diagnose", () => {
     beforeEach(async () => {
-      const code = sessions.issuePairCode().code;
+      const code = issuePairCode(daemon, sessions);
       await sendCommand(runtime, `telegram chat1 req-setup /pair ${code}`);
       await sendCommand(runtime, "telegram chat1 req-setup2 /install openclaw");
     });
@@ -241,7 +248,7 @@ describe("E2E slash command test suite", () => {
 
   describe("4. Upgrade", () => {
     beforeEach(async () => {
-      const code = sessions.issuePairCode().code;
+      const code = issuePairCode(daemon, sessions);
       await sendCommand(runtime, `telegram chat1 req-setup /pair ${code}`);
       await sendCommand(runtime, "telegram chat1 req-setup2 /install openclaw");
     });
@@ -273,7 +280,7 @@ describe("E2E slash command test suite", () => {
 
   describe("5. Error cases", () => {
     test("unknown command fails", async () => {
-      const code = sessions.issuePairCode().code;
+      const code = issuePairCode(daemon, sessions);
       await sendCommand(runtime, `telegram chat1 req-setup /pair ${code}`);
       
       const result = await sendCommand(runtime, "telegram chat1 req-40 /unknown");
@@ -338,7 +345,7 @@ describe("E2E slash command test suite", () => {
 
   describe("6. Multi-provider", () => {
     test("telegram provider works", async () => {
-      const code = sessions.issuePairCode().code;
+      const code = issuePairCode(daemon, sessions);
       const pairResult = await sendCommand(runtime, `telegram chat-tg req-50 /pair ${code}`);
       expect(pairResult.result).toBe("ok");
       
@@ -347,7 +354,7 @@ describe("E2E slash command test suite", () => {
     });
 
     test("discord provider works", async () => {
-      const code = sessions.issuePairCode().code;
+      const code = issuePairCode(daemon, sessions);
       const pairResult = await sendCommand(runtime, `discord chat-dc req-52 /pair ${code}`);
       expect(pairResult.result).toBe("ok");
       
@@ -356,7 +363,7 @@ describe("E2E slash command test suite", () => {
     });
 
     test("feishu provider works", async () => {
-      const code = sessions.issuePairCode().code;
+      const code = issuePairCode(daemon, sessions);
       const pairResult = await sendCommand(runtime, `feishu chat-fs req-54 /pair ${code}`);
       expect(pairResult.result).toBe("ok");
       
@@ -365,8 +372,8 @@ describe("E2E slash command test suite", () => {
     });
 
     test("sessions are isolated by provider and chatId", async () => {
-      const code1 = sessions.issuePairCode().code;
-      const code2 = sessions.issuePairCode().code;
+      const code1 = issuePairCode(daemon, sessions);
+      const code2 = issuePairCode(daemon, sessions);
       
       await sendCommand(runtime, `telegram chat1 req-56 /pair ${code1}`);
       await sendCommand(runtime, `discord chat1 req-57 /pair ${code2}`);
@@ -393,7 +400,7 @@ describe("E2E slash command test suite", () => {
         const reqIdBase = provider === "telegram" ? 70 : provider === "discord" ? 80 : 90;
         
         // Pair
-        const code = sessions.issuePairCode().code;
+        const code = issuePairCode(daemon, sessions);
         const pairResult = await sendCommand(runtime, `${provider} ${chatId} req-${reqIdBase} /pair ${code}`);
         expect(pairResult.result).toBe("ok");
         
@@ -419,7 +426,7 @@ describe("E2E slash command test suite", () => {
 
   describe("Additional edge cases", () => {
     beforeEach(async () => {
-      const code = sessions.issuePairCode().code;
+      const code = issuePairCode(daemon, sessions);
       await sendCommand(runtime, `telegram chat1 req-setup /pair ${code}`);
     });
 
@@ -463,7 +470,7 @@ describe("E2E slash command test suite", () => {
 
     test("request ID is preserved in responses", async () => {
       const requestId = "custom-req-id-999";
-      const code = sessions.issuePairCode().code;
+      const code = issuePairCode(daemon, sessions);
       const result = await sendCommand(runtime, `telegram chat-new ${requestId} /pair ${code}`);
       
       expect(result.requestId).toBe(requestId);
