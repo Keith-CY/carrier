@@ -237,6 +237,34 @@ function buildContentDisposition(filename: string): string {
   return `attachment; filename="${escapedFilename}"`;
 }
 
+/**
+ * Validates and resolves the artifact root directory to prevent security issues.
+ * - Ensures the path is absolute
+ * - Blocks dangerous paths like `/`, `/etc`, `/usr`, `/var`, `/root`
+ * - Returns the resolved absolute path
+ */
+function validateAndResolveArtifactRoot(rootPath: string): string {
+  const { resolve: pathResolve, sep } = require("node:path");
+  
+  // Resolve to absolute path
+  const resolved = pathResolve(rootPath);
+  
+  // Block root directory
+  if (resolved === sep) {
+    throw new Error(`[security] ARTIFACT_ROOT cannot be system root: ${resolved}`);
+  }
+  
+  // Block critical system directories
+  const dangerousPaths = ["/etc", "/usr", "/var", "/root", "/bin", "/sbin", "/boot", "/sys", "/proc"];
+  for (const dangerous of dangerousPaths) {
+    if (resolved === dangerous || resolved.startsWith(dangerous + sep)) {
+      throw new Error(`[security] ARTIFACT_ROOT cannot be in system directory: ${resolved}`);
+    }
+  }
+  
+  return resolved;
+}
+
 async function defaultReadFile(fileRef: string): Promise<Blob | null> {
   const { resolve: pathResolve, sep } = await import("node:path");
   const { realpath: fsRealpath } = await import("node:fs/promises");
@@ -249,10 +277,12 @@ async function defaultReadFile(fileRef: string): Promise<Blob | null> {
   }
 
   // Enforce artifact-root boundary: the resolved canonical path must reside
-  // under a configured root directory.  Defaults to cwd when ARTIFACT_ROOT is
-  // not set.  This prevents reads of arbitrary absolute paths (e.g. /etc/hosts)
-  // even when they are not symlinks.
-  const artifactRoot = pathResolve(process.env.ARTIFACT_ROOT ?? process.cwd());
+  // under a configured root directory.  Defaults to ./artifacts subdirectory
+  // instead of cwd to limit exposure.  This prevents reads of arbitrary absolute
+  // paths (e.g. /etc/hosts) even when they are not symlinks.
+  const artifactRoot = validateAndResolveArtifactRoot(
+    process.env.ARTIFACT_ROOT ?? pathResolve(process.cwd(), "artifacts")
+  );
   const canonicalRequested = pathResolve(fileRef);
   const rootPrefix = artifactRoot.endsWith(sep) ? artifactRoot : artifactRoot + sep;
   if (canonicalRequested !== artifactRoot && !canonicalRequested.startsWith(rootPrefix)) {
