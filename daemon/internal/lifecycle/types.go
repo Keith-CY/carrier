@@ -30,16 +30,17 @@ const (
 )
 
 type AgentState struct {
-	ID                   string
-	Version              string
-	Install              InstallState
-	Runtime              RuntimeState
-	Health               HealthState
-	LastError            string
-	LastTriageSummary    string
-	NeedsRemoteDiagnosis bool
-	LastDiagnoseFile     string
-	UpdatedAt            time.Time
+	ID                   string       `json:"id"`
+	Name                 string       `json:"name"`
+	Version              string       `json:"version"`
+	Install              InstallState `json:"installState"`
+	Runtime              RuntimeState `json:"runtimeState"`
+	Health               HealthState  `json:"health"`
+	LastError            string       `json:"lastError,omitempty"`
+	LastTriageSummary    string       `json:"lastTriageSummary,omitempty"`
+	NeedsRemoteDiagnosis bool         `json:"needsRemoteDiagnosis"`
+	LastDiagnoseFile     string       `json:"lastDiagnoseFile,omitempty"`
+	UpdatedAt            time.Time    `json:"updatedAt"`
 }
 
 type UpgradeResult struct {

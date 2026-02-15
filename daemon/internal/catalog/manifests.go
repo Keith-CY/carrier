@@ -57,7 +57,18 @@ func getInstallCommand() string {
 set -e
 CHECKSUM="%s"
 if [ -z "$CHECKSUM" ]; then
+  if [ "${CARRIER_DEV_MODE:-0}" = "1" ]; then
+    echo "WARNING: Dev mode enabled - skipping checksum validation" >&2
+    echo "Creating placeholder installation for development..." >&2
+    mkdir -p "$HOME/.local/bin"
+    echo "#!/bin/sh" > "$HOME/.local/bin/openclaw"
+    echo "echo \"OpenClaw dev placeholder - version %s\"" >> "$HOME/.local/bin/openclaw"
+    chmod +x "$HOME/.local/bin/openclaw"
+    echo "Dev placeholder created at $HOME/.local/bin/openclaw" >&2
+    exit 0
+  fi
   echo "FATAL: no pinned checksum for this platform — binary was not built with release ldflags" >&2
+  echo "Set CARRIER_DEV_MODE=1 to bypass checksum validation for development" >&2
   exit 1
 fi
 SCRIPT="$(mktemp /tmp/openclaw-installer.XXXXXX.sh)"
@@ -67,7 +78,7 @@ cat > "$SCRIPT" << '\''INSTALLER_EOF'\''
 INSTALLER_EOF
 chmod 700 "$SCRIPT"
 "$SCRIPT" "%s" "$CHECKSUM"
-'`, checksum, openclawInstallerScript, openclawVersion)
+'`, checksum, openclawVersion, openclawInstallerScript, openclawVersion)
 }
 
 func OpenClawManifest() manifest.Manifest {

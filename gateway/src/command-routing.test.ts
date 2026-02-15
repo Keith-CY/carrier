@@ -106,7 +106,7 @@ describe("command routing: /install", () => {
     // Verify agent state was updated
     const statuses = await deps.daemon.getStatus("openclaw", { requestId: "verify", actor: "test" });
     expect(statuses).toHaveLength(1);
-    expect(statuses[0].installed).toBe(true);
+    expect(statuses[0].installState).toBe("installed");
   });
 });
 

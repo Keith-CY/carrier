@@ -262,6 +262,7 @@ func (s *Service) RegisterManifest(m manifest.Manifest) error {
 	s.manifests[m.ID] = m
 	s.states[m.ID] = AgentState{
 		ID:        m.ID,
+		Name:      m.Name,
 		Version:   m.Version,
 		Install:   InstallStateNotInstalled,
 		Runtime:   RuntimeStateStopped,

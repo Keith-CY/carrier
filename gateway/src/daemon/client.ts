@@ -9,7 +9,7 @@ export type DaemonAgentState = {
   id: string;
   name: string;
   version: string;
-  installed: boolean;
+  installState: "not_installed" | "installed" | "broken";
   runtimeState: "running" | "stopped";
   health: "healthy" | "unhealthy" | "unknown";
   needsRemoteDiagnosis: boolean;
@@ -85,7 +85,7 @@ type InMemoryAgentState = {
   id: string;
   name: string;
   version: string;
-  installed: boolean;
+  installState: "not_installed" | "installed" | "broken";
   runtimeState: "running" | "stopped";
   health: "healthy" | "unhealthy" | "unknown";
   needsRemoteDiagnosis: boolean;
@@ -119,7 +119,7 @@ export class InMemoryDaemonClient implements DaemonClient {
       id: "openclaw",
       name: "OpenClaw",
       version: "0.1.0",
-      installed: false,
+      installState: "not_installed",
       runtimeState: "stopped",
       health: "unknown",
       needsRemoteDiagnosis: false,
@@ -158,7 +158,7 @@ export class InMemoryDaemonClient implements DaemonClient {
     const state = this.requireAgent(agentId);
     this.upsertAgent({
       ...state,
-      installed: true,
+      installState: "installed",
       runtimeState: "stopped",
       health: "unknown",
       lastError: undefined,
@@ -170,7 +170,7 @@ export class InMemoryDaemonClient implements DaemonClient {
 
   async startAgent(agentId: string, ctx: RequestContext): Promise<void> {
     const state = this.requireAgent(agentId);
-    if (!state.installed) {
+    if (state.installState !== "installed") {
       throw new DaemonClientError("E_NOT_INSTALLED", "agent is not installed");
     }
     if (state.runtimeState === "running") {
@@ -342,7 +342,7 @@ export class InMemoryDaemonClient implements DaemonClient {
       id: state.id,
       name: state.name,
       version: state.version,
-      installed: state.installed,
+      installState: state.installState,
       runtimeState: state.runtimeState,
       health: state.health,
       needsRemoteDiagnosis: state.needsRemoteDiagnosis,
