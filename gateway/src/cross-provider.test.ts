@@ -23,11 +23,16 @@ function buildDeps(): GatewayDependencies {
   };
 }
 
-function pairAll(deps: GatewayDependencies, chatId = "100"): void {
+function pairAll(deps: GatewayDependencies, chatId = "100"): Map<Provider, string> {
+  const tokens = new Map<Provider, string>();
   for (const provider of PROVIDERS) {
     deps.sessions.registerPairCode(`code-${provider}`, 300);
-    deps.sessions.pair({ provider, chatId, code: `code-${provider}` });
+    const session = deps.sessions.pair({ provider, chatId, code: `code-${provider}` });
+    if (session) {
+      tokens.set(provider, session.sessionToken);
+    }
   }
+  return tokens;
 }
 
 /** Strip provider-specific bits from a response so we can compare across providers. */
@@ -38,12 +43,14 @@ function normalize(res: GatewayResponse): Omit<GatewayResponse, "requestId" | "s
 
 async function runAcrossProviders(
   deps: GatewayDependencies,
+  tokens: Map<Provider, string>,
   commandSuffix: string,
   chatId = "100",
 ): Promise<GatewayResponse[]> {
   const results: GatewayResponse[] = [];
   for (const provider of PROVIDERS) {
-    const input = `${provider} ${chatId} req-${provider} ${commandSuffix}`;
+    const token = tokens.get(provider) || "";
+    const input = `${provider} ${chatId} req-${provider} ${token} ${commandSuffix}`;
     const res = await handleCommand(parseInput(input), deps);
     results.push(res);
   }
@@ -59,58 +66,59 @@ function assertAllConsistent(results: GatewayResponse[]): void {
 
 describe("cross-provider consistency", () => {
   let deps: GatewayDependencies;
+  let tokens: Map<Provider, string>;
 
   beforeEach(() => {
     deps = buildDeps();
-    pairAll(deps);
+    tokens = pairAll(deps);
   });
 
   test("/agents returns same result across all providers", async () => {
-    const results = await runAcrossProviders(deps, "/agents");
+    const results = await runAcrossProviders(deps, tokens, "/agents");
     assertAllConsistent(results);
     expect(results[0].result).toBe("ok");
   });
 
   test("/install returns same result across all providers", async () => {
-    const results = await runAcrossProviders(deps, "/install myagent");
+    const results = await runAcrossProviders(deps, tokens, "/install myagent");
     assertAllConsistent(results);
   });
 
   test("/start error is consistent across all providers", async () => {
     // Without installing first, all providers should get the same error
-    const results = await runAcrossProviders(deps, "/start myagent");
+    const results = await runAcrossProviders(deps, tokens, "/start myagent");
     assertAllConsistent(results);
     expect(results[0].result).toBe("error");
   });
 
   test("/stop error is consistent across all providers", async () => {
-    const results = await runAcrossProviders(deps, "/stop myagent");
+    const results = await runAcrossProviders(deps, tokens, "/stop myagent");
     assertAllConsistent(results);
     expect(results[0].result).toBe("error");
   });
 
   test("/status returns same result across all providers", async () => {
-    const results = await runAcrossProviders(deps, "/status");
+    const results = await runAcrossProviders(deps, tokens, "/status");
     assertAllConsistent(results);
   });
 
   test("/logs returns same result across all providers", async () => {
-    const results = await runAcrossProviders(deps, "/logs myagent 10");
+    const results = await runAcrossProviders(deps, tokens, "/logs myagent 10");
     assertAllConsistent(results);
   });
 
   test("/upgrade returns same result across all providers", async () => {
-    const results = await runAcrossProviders(deps, "/upgrade myagent");
+    const results = await runAcrossProviders(deps, tokens, "/upgrade myagent");
     assertAllConsistent(results);
   });
 
   test("/diagnose returns same result shape across all providers", async () => {
-    const results = await runAcrossProviders(deps, "/diagnose myagent");
+    const results = await runAcrossProviders(deps, tokens, "/diagnose myagent");
     assertAllConsistent(results);
   });
 
   test("usage errors are identical across providers", async () => {
-    const results = await runAcrossProviders(deps, "/install");
+    const results = await runAcrossProviders(deps, tokens, "/install");
     assertAllConsistent(results);
     expect(results[0].result).toBe("error");
     expect(results[0].errorCode).toBe("E_USAGE");

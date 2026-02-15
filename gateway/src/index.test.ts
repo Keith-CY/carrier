@@ -12,9 +12,10 @@ function buildDeps(): GatewayDependencies {
   };
 }
 
-function pairTelegramChat(deps: GatewayDependencies, chatId = "100"): void {
+function pairTelegramChat(deps: GatewayDependencies, chatId = "100"): string {
   deps.sessions.registerPairCode("pair-ok", 300);
-  deps.sessions.pair({ provider: "telegram", chatId, code: "pair-ok" });
+  const session = deps.sessions.pair({ provider: "telegram", chatId, code: "pair-ok" });
+  return session?.sessionToken ?? "";
 }
 
 describe("gateway parseInput", () => {
@@ -51,40 +52,40 @@ describe("gateway parseInput", () => {
 describe("gateway diagnose-consent routing", () => {
   test("returns usage error when agent is missing", async () => {
     const deps = buildDeps();
-    pairTelegramChat(deps);
+    const token = pairTelegramChat(deps);
 
-    const res = await handleCommand(parseInput("telegram 100 req-1 /diagnose-consent"), deps);
+    const res = await handleCommand(parseInput(`telegram 100 req-1 ${token} /diagnose-consent`), deps);
     expect(res.result).toBe("error");
     expect(res.message).toContain("usage: /diagnose-consent");
   });
 
   test("returns validation error on invalid consent flag", async () => {
     const deps = buildDeps();
-    pairTelegramChat(deps);
+    const token = pairTelegramChat(deps);
 
-    const res = await handleCommand(parseInput("telegram 100 req-1 /diagnose-consent openclaw maybe"), deps);
+    const res = await handleCommand(parseInput(`telegram 100 req-1 ${token} /diagnose-consent openclaw maybe`), deps);
     expect(res.result).toBe("error");
     expect(res.errorCode).toBe("E_CONSENT_FLAG_INVALID");
   });
 
   test("maps not-needed error with code", async () => {
     const deps = buildDeps();
-    pairTelegramChat(deps);
+    const token = pairTelegramChat(deps);
 
-    const res = await handleCommand(parseInput("telegram 100 req-1 /diagnose-consent openclaw yes"), deps);
+    const res = await handleCommand(parseInput(`telegram 100 req-1 ${token} /diagnose-consent openclaw yes`), deps);
     expect(res.result).toBe("error");
     expect(res.errorCode).toBe("E_REMOTE_DIAG_NOT_NEEDED");
   });
 
   test("returns handoff payload on success", async () => {
     const deps = buildDeps();
-    pairTelegramChat(deps);
+    const token = pairTelegramChat(deps);
 
     const daemon = deps.daemon as InMemoryDaemonClient;
     daemon.setDiagnoseArtifact("openclaw", "/tmp/openclaw.zip");
     daemon.setRemoteDiagnosisState("openclaw", true);
 
-    const res = await handleCommand(parseInput("telegram 100 req-1 /diagnose-consent openclaw yes"), deps);
+    const res = await handleCommand(parseInput(`telegram 100 req-1 ${token} /diagnose-consent openclaw yes`), deps);
     expect(res.result).toBe("ok");
     expect(res.handoffId).toBeDefined();
     expect(res.handoffStatus).toBe("pending");
