@@ -345,6 +345,164 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.Pai
 		})
 	})
 
+	// RESTful agent action routes: /api/v1/agents/{id}/{action}
+	// Note: /api/v1/agents (exact match, list all) is already registered
+	// via the register() helper above from /api/agents.
+	mux.HandleFunc("/api/v1/agents/", func(w http.ResponseWriter, r *http.Request) {
+		// Handle special case: /api/v1/agents/status (all agents status)
+		if r.URL.Path == "/api/v1/agents/status" {
+			if r.Method != http.MethodGet {
+				writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			agents := svc.ListAgents()
+			writeJSON(w, http.StatusOK, map[string]interface{}{"statuses": agents})
+			return
+		}
+
+		// Parse agent ID and action from path
+		agentID, action, ok := parseAgentActionPath(r.URL.Path)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+
+		// Route to appropriate handler based on action
+		switch action {
+		case "install":
+			if r.Method != http.MethodPost {
+				writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			if err := svc.Install(r.Context(), agentID); err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"agentId": agentID, "installed": true})
+
+		case "start":
+			if r.Method != http.MethodPost {
+				writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			if err := svc.Start(r.Context(), agentID); err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"agentId": agentID, "started": true})
+
+		case "stop":
+			if r.Method != http.MethodPost {
+				writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			if err := svc.Stop(r.Context(), agentID); err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"agentId": agentID, "stopped": true})
+
+		case "status":
+			if r.Method != http.MethodGet {
+				writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			state, err := svc.Status(agentID)
+			if err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"statuses": []interface{}{state}})
+
+		case "logs":
+			if r.Method != http.MethodGet {
+				writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			tail := parseLogsTail(r.URL.Query().Get("tail"))
+			lines, err := svc.Logs(agentID, tail)
+			if err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"lines": lines, "truncated": false})
+
+		case "upgrade":
+			if r.Method != http.MethodPost {
+				writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			result, err := svc.Upgrade(r.Context(), agentID)
+			if err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			resp := map[string]interface{}{
+				"agentId":     result.AgentID,
+				"fromVersion": result.FromVersion,
+				"toVersion":   result.ToVersion,
+				"backupPath":  result.BackupPath,
+			}
+			if strings.TrimSpace(result.BackupPath) != "" {
+				resp["rollbackHint"] = fmt.Sprintf("restore from %s before retrying upgrade", result.BackupPath)
+			}
+			writeJSON(w, http.StatusOK, resp)
+
+		case "diagnose":
+			if r.Method != http.MethodPost {
+				writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			artifactRef, err := svc.Diagnose(agentID)
+			if err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"artifactRef": artifactRef})
+
+		default:
+			http.NotFound(w, r)
+		}
+	})
+
+	// Diagnosis handoffs endpoint
+	mux.HandleFunc("/api/v1/diagnosis/handoffs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body struct {
+			AgentID   string `json:"agentId"`
+			Consent   bool   `json:"consent"`
+			Actor     string `json:"actor"`
+			RequestID string `json:"requestId"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if strings.TrimSpace(body.AgentID) == "" {
+			writeJSONError(w, http.StatusBadRequest, "agentId is required")
+			return
+		}
+		if err := validateAgentID(body.AgentID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		handoff, err := svc.CreateRemoteDiagnosisHandoff(body.AgentID, body.Consent, body.Actor, body.RequestID)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"id":          handoff.ID,
+			"agentId":     handoff.AgentID,
+			"consent":     handoff.Consent,
+			"artifactRef": handoff.ArtifactRef,
+			"status":      handoff.Status,
+			"createdAt":   handoff.CreatedAt.UTC().Format(time.RFC3339Nano),
+		})
+	})
+
 	return mux
 }
 
@@ -399,6 +557,39 @@ func parsePathAgentID(raw string) (string, error) {
 		return "", err
 	}
 	return decoded, nil
+}
+
+// parseAgentActionPath extracts agent ID and action from /api/v1/agents/{id}/{action}
+func parseAgentActionPath(path string) (agentID string, action string, ok bool) {
+	const prefix = "/api/v1/agents/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	rest := path[len(prefix):]
+	if strings.Contains(rest, "//") {
+		return "", "", false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	rawAgentID := strings.TrimSpace(parts[0])
+	action = strings.TrimSpace(parts[1])
+	if rawAgentID == "" || action == "" {
+		return "", "", false
+	}
+	decoded, err := url.PathUnescape(rawAgentID)
+	if err != nil {
+		return "", "", false
+	}
+	decoded = strings.TrimSpace(decoded)
+	if decoded == "" || strings.Contains(decoded, "/") || strings.Contains(decoded, "\\") || strings.Contains(decoded, "..") {
+		return "", "", false
+	}
+	if !agentIDPattern.MatchString(decoded) {
+		return "", "", false
+	}
+	return decoded, action, true
 }
 
 func parseLogsTail(raw string) int {
