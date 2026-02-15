@@ -245,7 +245,7 @@ function buildContentDisposition(filename: string): string {
 /**
  * Validates and resolves the artifact root directory to prevent security issues.
  * - Ensures the path is absolute
- * - Blocks dangerous paths like `/`, `/etc`, `/usr`, `/var`, `/root`
+ * - Blocks dangerous paths like `/`, `/etc`, `/usr`, `/var`; `/root` exact only (subpaths allowed)
  * - Returns the resolved absolute path
  */
 function validateAndResolveArtifactRoot(rootPath: string): string {
@@ -260,9 +260,19 @@ function validateAndResolveArtifactRoot(rootPath: string): string {
   }
   
   // Block critical system directories
-  const dangerousPaths = ["/etc", "/usr", "/var", "/root", "/bin", "/sbin", "/boot", "/sys", "/proc"];
-  for (const dangerous of dangerousPaths) {
+  // Block critical system directories (exact match + subdirectories).
+  // /root is only blocked as exact match — scoped subdirectories like
+  // /root/project/artifacts are legitimate in dev/CI environments.
+  const blockedExactAndBelow = ["/etc", "/usr", "/var", "/bin", "/sbin", "/boot", "/sys", "/proc"];
+  const blockedExactOnly = ["/root"];
+
+  for (const dangerous of blockedExactAndBelow) {
     if (resolved === dangerous || resolved.startsWith(dangerous + sep)) {
+      throw new Error(`[security] ARTIFACT_ROOT cannot be in system directory: ${resolved}`);
+    }
+  }
+  for (const dangerous of blockedExactOnly) {
+    if (resolved === dangerous) {
       throw new Error(`[security] ARTIFACT_ROOT cannot be in system directory: ${resolved}`);
     }
   }
