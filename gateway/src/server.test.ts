@@ -3,6 +3,9 @@ import { InMemoryDaemonClient } from "./daemon/client";
 import { HttpDaemonClient } from "./daemon/http_client";
 import { DownloadTokenStore } from "./downloads/token_store";
 import { SessionStore } from "./session/store";
+
+// Tests create temporary files under /tmp; allow defaultReadFile to serve them.
+process.env.ARTIFACT_ROOT = "/tmp";
 import {
   composeMiddleware,
   createGatewayRuntime,

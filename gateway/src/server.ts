@@ -225,29 +225,39 @@ function buildContentDisposition(filename: string): string {
 }
 
 async function defaultReadFile(fileRef: string): Promise<Blob | null> {
+  const { resolve: pathResolve, sep } = await import("node:path");
+  const { realpath: fsRealpath } = await import("node:fs/promises");
+
   // Validate path to prevent traversal attacks - reject relative paths and .. components
   // Current callers are server-controlled, but this guards against future misuse
   if (!fileRef.startsWith("/") || fileRef.includes("/../") || fileRef.endsWith("/..")) {
     console.warn(`[security] rejected potentially unsafe fileRef: ${fileRef}`);
     return null;
   }
-  
+
+  // Enforce artifact-root boundary: the resolved canonical path must reside
+  // under a configured root directory.  Defaults to cwd when ARTIFACT_ROOT is
+  // not set.  This prevents reads of arbitrary absolute paths (e.g. /etc/hosts)
+  // even when they are not symlinks.
+  const artifactRoot = pathResolve(process.env.ARTIFACT_ROOT ?? process.cwd());
+  const canonicalRequested = pathResolve(fileRef);
+  const rootPrefix = artifactRoot.endsWith(sep) ? artifactRoot : artifactRoot + sep;
+  if (canonicalRequested !== artifactRoot && !canonicalRequested.startsWith(rootPrefix)) {
+    console.warn(`[security] path outside artifact root: ${fileRef} resolves to ${canonicalRequested} (root: ${artifactRoot})`);
+    return null;
+  }
+
   const file = Bun.file(fileRef);
   if (!(await file.exists())) {
     return null;
   }
 
-  // Resolve symlinks and verify the real path matches the requested path.
-  // This prevents symlink traversal to arbitrary locations (e.g. /etc/passwd)
-  // even when the logical path looks clean.  We use realpath to resolve all
-  // symlinks and then require the result to equal the original fileRef,
-  // effectively blocking any symlinked paths.
-  const { resolve: pathResolve } = await import("node:path");
-  const { realpath: fsRealpath } = await import("node:fs/promises");
-  const canonicalRequested = pathResolve(fileRef);
+  // Resolve symlinks and verify the real path stays within the artifact root.
+  // This prevents symlink traversal to arbitrary locations even when the
+  // logical path looks clean.
   const resolvedPath = await fsRealpath(fileRef).catch(() => null);
-  if (resolvedPath !== null && resolvedPath !== canonicalRequested) {
-    console.warn(`[security] symlink traversal blocked: ${fileRef} resolves to ${resolvedPath} (expected ${canonicalRequested})`);
+  if (resolvedPath !== null && resolvedPath !== artifactRoot && !resolvedPath.startsWith(rootPrefix)) {
+    console.warn(`[security] symlink traversal blocked: ${fileRef} resolves to ${resolvedPath} (root: ${artifactRoot})`);
     return null;
   }
 
