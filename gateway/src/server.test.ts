@@ -198,7 +198,9 @@ describe("gateway runtime routes", () => {
 
   test("command route executes command pipeline", async () => {
     const deps = makeDeps();
-    deps.sessions.registerPairCode("pair-ok", 300);
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("pair-ok");
+    }
     const runtime = createGatewayRuntime({ deps });
 
     const pairResponse = await runtime.fetch(new Request("http://gateway.local/command", {

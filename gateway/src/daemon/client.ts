@@ -61,6 +61,7 @@ export interface DaemonClient {
   upgradeAgent(agentId: string, ctx: RequestContext): Promise<UpgradeResult>;
   diagnoseAgent(agentId: string, ctx: RequestContext): Promise<DiagnoseResult>;
   createRemoteDiagnosisHandoff(input: CreateRemoteDiagnosisHandoffInput): Promise<RemoteDiagnosisHandoff>;
+  verifyPairCode(code: string, ctx: RequestContext): Promise<void>;
 }
 
 export class DaemonClientError extends Error {
@@ -111,6 +112,7 @@ export class InMemoryDaemonClient implements DaemonClient {
   private readonly agents = new Map<string, InMemoryAgentState>();
   private readonly logs = new Map<string, string[]>();
   private readonly auditEvents: DaemonAuditEvent[] = [];
+  private readonly validPairCodes = new Set<string>();
 
   constructor(private readonly now: () => Date = () => new Date()) {
     this.upsertAgent({
@@ -281,6 +283,20 @@ export class InMemoryDaemonClient implements DaemonClient {
       `consent=${input.consent} handoff=${handoff.id}`,
     );
     return handoff;
+  }
+
+  async verifyPairCode(code: string, ctx: RequestContext): Promise<void> {
+    if (!this.validPairCodes.has(code)) {
+      throw new DaemonClientError("E_PAIR_CODE_INVALID", "pairing code is invalid or expired");
+    }
+    // Consume the code (single use)
+    this.validPairCodes.delete(code);
+    this.recordAudit(ctx, "verify_pair_code", code, "verified and consumed");
+  }
+
+  // Test helper to register valid pair codes
+  registerPairCode(code: string): void {
+    this.validPairCodes.add(code);
   }
 
   private requireAgent(agentId: string): InMemoryAgentState {

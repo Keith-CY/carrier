@@ -72,14 +72,26 @@ export async function handleCommand(
     if (!code) {
       return usageError(cmd.requestId, "/pair <code>");
     }
-    const session = deps.sessions.pair({
+
+    // Verify the pairing code against the daemon
+    const reqCtx: RequestContext = {
+      actor: `${cmd.provider}:${cmd.chatId}`,
+      requestId: cmd.requestId,
+    };
+    try {
+      await deps.daemon.verifyPairCode(code, reqCtx);
+    } catch (err) {
+      if (err instanceof DaemonClientError) {
+        return errorResponse(cmd.requestId, err.code, err.message);
+      }
+      throw err;
+    }
+
+    // Create session after successful verification
+    const session = deps.sessions.createSession({
       provider: cmd.provider,
       chatId: cmd.chatId,
-      code,
     });
-    if (!session) {
-      return errorResponse(cmd.requestId, "E_PAIR_CODE_INVALID", "pairing code is invalid or expired");
-    }
     return {
       requestId: cmd.requestId,
       result: "ok",
