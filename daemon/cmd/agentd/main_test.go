@@ -446,3 +446,38 @@ func TestPairingMethodNotAllowed(t *testing.T) {
 		t.Fatalf("GET /api/pairing/verify-consume: expected 405, got %d", rec.Code)
 	}
 }
+
+func TestBearerAuthMiddlewareBoundaryCases(t *testing.T) {
+	token := "secret-token"
+	base := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	h := bearerAuthMiddleware(token, base)
+
+	tests := []struct {
+		name   string
+		path   string
+		auth   string
+		want   int
+	}{
+		{name: "api missing auth", path: "/api/v1/agents", auth: "", want: http.StatusUnauthorized},
+		{name: "api wrong scheme", path: "/api/v1/agents", auth: "Token secret-token", want: http.StatusUnauthorized},
+		{name: "api near miss token", path: "/api/v1/agents", auth: "Bearer secret-token ", want: http.StatusUnauthorized},
+		{name: "api correct token", path: "/api/v1/agents", auth: "Bearer secret-token", want: http.StatusOK},
+		{name: "healthz exempt", path: "/healthz", auth: "", want: http.StatusOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			if tt.auth != "" {
+				req.Header.Set("Authorization", tt.auth)
+			}
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+			if rr.Code != tt.want {
+				t.Fatalf("status=%d, want=%d; body=%s", rr.Code, tt.want, rr.Body.String())
+			}
+		})
+	}
+}

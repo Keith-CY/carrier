@@ -365,4 +365,37 @@ func TestIssuePairCodeRejectsTrailingGarbage(t *testing.T) {
 	}
 }
 
+
+func TestParseAgentActionPathBoundaryCases(t *testing.T) {
+	tests := []struct {
+		name      string
+		path      string
+		wantID    string
+		wantAction string
+		wantOK    bool
+	}{
+		{name: "valid simple", path: "/api/v1/agents/openclaw/start", wantID: "openclaw", wantAction: "start", wantOK: true},
+		{name: "valid encoded id", path: "/api/v1/agents/openclaw%2Dbeta/status", wantID: "openclaw-beta", wantAction: "status", wantOK: true},
+		{name: "reject encoded space", path: "/api/v1/agents/openclaw%20beta/start", wantOK: false},
+		{name: "reject dotdot", path: "/api/v1/agents/open..claw/start", wantOK: false},
+		{name: "reject missing action", path: "/api/v1/agents/openclaw/", wantOK: false},
+		{name: "reject extra segment", path: "/api/v1/agents/openclaw/start/now", wantOK: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotID, gotAction, gotOK := parseAgentActionPath(tt.path)
+			if gotOK != tt.wantOK {
+				t.Fatalf("ok = %v, want %v (id=%q action=%q)", gotOK, tt.wantOK, gotID, gotAction)
+			}
+			if !tt.wantOK {
+				return
+			}
+			if gotID != tt.wantID || gotAction != tt.wantAction {
+				t.Fatalf("parseAgentActionPath(%q) = (%q, %q), want (%q, %q)", tt.path, gotID, gotAction, tt.wantID, tt.wantAction)
+			}
+		})
+	}
+}
+
 var _ runtimecheck.Checker = (*fakeChecker)(nil)
