@@ -99,6 +99,47 @@ describe("DownloadTokenStore", () => {
     expect(url).toBe(`/downloads/${tok.token}/artifact.zip`);
   });
 
+  test("cleanup callback runs for consumed single-use tokens", () => {
+    const cleaned: Array<{ fileRef: string; reason: string }> = [];
+    const store = new DownloadTokenStore(() => new Date("2026-01-01T00:00:00Z"));
+    const tok = store.issue("temp.txt", 300, true, {
+      onCleanup: (fileRef, reason) => cleaned.push({ fileRef, reason }),
+    });
+
+    store.consume(tok.token);
+    store.cleanup();
+
+    expect(cleaned).toEqual([{ fileRef: "temp.txt", reason: "consumed" }]);
+  });
+
+  test("cleanup callback runs for expired tokens", () => {
+    let time = new Date("2026-01-01T00:00:00Z");
+    const cleaned: Array<{ fileRef: string; reason: string }> = [];
+    const store = new DownloadTokenStore(() => time);
+    store.issue("temp-expired.txt", 1, false, {
+      onCleanup: (fileRef, reason) => cleaned.push({ fileRef, reason }),
+    });
+
+    time = new Date("2026-01-01T00:00:02Z");
+    store.cleanup();
+
+    expect(cleaned).toEqual([{ fileRef: "temp-expired.txt", reason: "expired" }]);
+  });
+
+  test("finalizeConsumed() removes consumed single-use token immediately", () => {
+    const cleaned: string[] = [];
+    const store = new DownloadTokenStore(() => new Date("2026-01-01T00:00:00Z"));
+    const tok = store.issue("temp-now.txt", 300, true, {
+      onCleanup: (fileRef) => cleaned.push(fileRef),
+    });
+
+    store.consume(tok.token);
+    store.finalizeConsumed(tok.token);
+
+    expect(store.size).toBe(0);
+    expect(cleaned).toEqual(["temp-now.txt"]);
+  });
+
   test("startPeriodicCleanup() triggers cleanup on interval", async () => {
     let time = new Date("2026-01-01T00:00:00Z");
     const store = new DownloadTokenStore(() => time);

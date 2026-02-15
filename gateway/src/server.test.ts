@@ -164,6 +164,21 @@ describe("gateway runtime routes", () => {
     expect(payload.errorCode).toBe("E_DOWNLOAD_FILE_MISMATCH");
   });
 
+  test("download route triggers single-use cleanup callback after successful fetch", async () => {
+    const deps = makeDeps();
+    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}.txt`;
+    await Bun.write(filePath, "cleanup-content");
+    const cleaned: string[] = [];
+    const token = deps.downloads.issue(filePath, 300, true, {
+      onCleanup: (fileRef) => cleaned.push(fileRef),
+    });
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
+    expect(response.status).toBe(200);
+    expect(cleaned).toEqual([filePath]);
+  });
+
   test("download route rejects malformed percent-encoded filename path", async () => {
     const deps = makeDeps();
     const filePath = `/tmp/gateway-download-${crypto.randomUUID()}.txt`;
