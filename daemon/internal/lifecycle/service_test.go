@@ -641,9 +641,16 @@ func TestUpgradeResetsCrashLoopState(t *testing.T) {
 	}
 
 	// Verify can start without crash-loop blocking
-	runner.results["start-openclaw"] = runResult{result: commandexec.Result{ExitCode: 0}}
+	svc.mu.Lock()
+	updated := svc.manifests["openclaw"]
+	updated.Runtime.Start.Command = "tail -f /dev/null"
+	svc.manifests["openclaw"] = updated
+	svc.mu.Unlock()
 	if err := svc.Start(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("expected start success after upgrade reset, got %v", err)
+	}
+	if err := svc.Stop(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("stop after post-upgrade start: %v", err)
 	}
 }
 
