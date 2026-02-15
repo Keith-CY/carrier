@@ -110,9 +110,9 @@ func (pm *ProcessManager) Stop(agentID string) error {
 
 	var stopErr error
 	info.stopOnce.Do(func() {
-		// Send SIGTERM
-		if err := info.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-			stopErr = fmt.Errorf("send SIGTERM: %w", err)
+		// Send SIGTERM to the full process group so child processes are terminated too.
+		if err := syscall.Kill(-info.pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
+			stopErr = fmt.Errorf("send SIGTERM to process group: %w", err)
 			return
 		}
 
@@ -122,9 +122,9 @@ func (pm *ProcessManager) Stop(agentID string) error {
 		case <-info.done:
 			// Process exited gracefully
 		case <-timeout:
-			// Force kill
-			if err := info.cmd.Process.Kill(); err != nil {
-				stopErr = fmt.Errorf("send SIGKILL: %w", err)
+			// Force kill the full process group.
+			if err := syscall.Kill(-info.pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+				stopErr = fmt.Errorf("send SIGKILL to process group: %w", err)
 				return
 			}
 			<-info.done // Wait for process to actually exit
