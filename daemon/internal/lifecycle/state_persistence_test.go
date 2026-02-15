@@ -98,9 +98,9 @@ func TestStatePersistence_Crash(t *testing.T) {
 		WithStateFile(statePath),
 	)
 
-	// Create a manifest with a command that exits quickly to simulate a crash
+	// Create a manifest with a long-running command; we'll kill it to simulate a crash.
 	m := sampleManifest()
-	m.Runtime.Start.Command = "sh -c 'sleep 0.01; exit 1'"
+	m.Runtime.Start.Command = "sleep 60"
 	if err := svc.RegisterManifest(m); err != nil {
 		t.Fatalf("register manifest: %v", err)
 	}
@@ -110,16 +110,18 @@ func TestStatePersistence_Crash(t *testing.T) {
 		t.Fatalf("install: %v", err)
 	}
 
-	// Start — the process will exit almost immediately, simulating a crash
+	// Start the agent process
 	if err := svc.Start(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 
-	// Advance clock to simulate crash time
-	clock.current = clock.current.Add(30 * time.Second)
+	// Advance clock before killing so there's no data race with monitorProcess.
+	clock.Advance(30 * time.Second)
 
-	// Wait for the process to exit and monitorProcess to detect it
-	// The monitorProcess goroutine should detect the crash and save state
+	// Kill the process to simulate a crash.
+	svc.processManager.Stop("openclaw")
+
+	// Wait for monitorProcess to detect the exit and persist state.
 	time.Sleep(200 * time.Millisecond)
 
 	// Verify state file was written
