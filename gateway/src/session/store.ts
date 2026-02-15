@@ -16,8 +16,12 @@ function sessionKey(provider: Provider, chatId: string): string {
 export class SessionStore {
   private readonly pairCodes = new Map<string, PairingCodeRecord>();
   private readonly sessions = new Map<string, SessionRecord>();
+  private cleanupIntervalId: Timer | null = null;
 
-  constructor(private readonly now: () => Date = () => new Date()) {}
+  constructor(
+    private readonly now: () => Date = () => new Date(),
+    private readonly sessionTTLSeconds: number = 30 * 24 * 60 * 60 // 30 days default
+  ) {}
 
   issuePairCode(ttlSeconds = 300): PairingCodeRecord {
     const code = `pair-${crypto.randomUUID()}`;
@@ -72,16 +76,28 @@ export class SessionStore {
     this.sessions.set(key, { ...session, lastSeenAt: this.now().toISOString() });
   }
 
-  /** Remove expired pairing codes from the internal map. */
+  /** Remove expired pairing codes and stale sessions from the internal map. */
   cleanup(): number {
     let removed = 0;
     const nowMs = this.now().getTime();
+    
+    // Clean up expired pairing codes
     for (const [key, record] of this.pairCodes) {
       if (Date.parse(record.expiresAt) <= nowMs) {
         this.pairCodes.delete(key);
         removed += 1;
       }
     }
+    
+    // Clean up stale sessions (not seen within TTL)
+    const sessionCutoff = nowMs - this.sessionTTLSeconds * 1000;
+    for (const [key, session] of this.sessions) {
+      if (Date.parse(session.lastSeenAt) <= sessionCutoff) {
+        this.sessions.delete(key);
+        removed += 1;
+      }
+    }
+    
     return removed;
   }
 
@@ -93,6 +109,23 @@ export class SessionStore {
   /** Return the number of active sessions. */
   get sessionCount(): number {
     return this.sessions.size;
+  }
+
+  /** Start periodic cleanup of expired codes and stale sessions. */
+  startPeriodicCleanup(intervalMs = 60 * 60 * 1000): this {
+    this.stopPeriodicCleanup();
+    this.cleanupIntervalId = setInterval(() => {
+      this.cleanup();
+    }, intervalMs);
+    return this;
+  }
+
+  /** Stop the periodic cleanup interval. */
+  stopPeriodicCleanup(): void {
+    if (this.cleanupIntervalId !== null) {
+      clearInterval(this.cleanupIntervalId);
+      this.cleanupIntervalId = null;
+    }
   }
 
   private issueSessionToken(): string {
