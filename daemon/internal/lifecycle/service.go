@@ -48,6 +48,14 @@ var (
 
 type Option func(*Service)
 
+type ProcessController interface {
+	Start(agentID string, command string, args []string) (int, error)
+	Stop(agentID string) error
+	IsRunning(agentID string) bool
+	Wait(agentID string) error
+	Cleanup()
+}
+
 func WithRunner(r commandexec.Runner) Option {
 	return func(s *Service) { s.runner = r }
 }
@@ -140,6 +148,14 @@ func WithProcessLogDir(dir string) Option {
 	}
 }
 
+func WithProcessManager(pm ProcessController) Option {
+	return func(s *Service) {
+		if pm != nil {
+			s.processManager = pm
+		}
+	}
+}
+
 type Service struct {
 	mu                 sync.RWMutex
 	states             map[string]AgentState
@@ -165,7 +181,7 @@ type Service struct {
 	crashLoopCooldown  time.Duration
 	memoryStore        *memory.Store
 	stateFile          *StateFile
-	processManager     *ProcessManager
+	processManager     ProcessController
 	processLogDir      string
 }
 

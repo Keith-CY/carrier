@@ -1,12 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"sync"
 	"time"
 
 	"carrier/daemon/internal/baseagent"
@@ -28,6 +30,78 @@ type noopChecker struct{}
 func (noopChecker) Check(_ manifest.Manifest) error { return nil }
 
 var _ runtimecheck.Checker = noopChecker{}
+
+type fakeProcessManager struct {
+	mu      sync.Mutex
+	running map[string]bool
+	stopped map[string]chan struct{}
+}
+
+func newFakeProcessManager() *fakeProcessManager {
+	return &fakeProcessManager{
+		running: map[string]bool{},
+		stopped: map[string]chan struct{}{},
+	}
+}
+
+var _ lifecycle.ProcessController = (*fakeProcessManager)(nil)
+
+func (m *fakeProcessManager) Start(agentID string, _ string, _ []string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.running[agentID] {
+		return 0, fmt.Errorf("agent %s already running", agentID)
+	}
+	m.running[agentID] = true
+	m.stopped[agentID] = make(chan struct{})
+	return 12345, nil
+}
+
+func (m *fakeProcessManager) Stop(agentID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !m.running[agentID] {
+		return fmt.Errorf("agent %s is not running", agentID)
+	}
+
+	m.running[agentID] = false
+	close(m.stopped[agentID])
+	return nil
+}
+
+func (m *fakeProcessManager) IsRunning(agentID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.running[agentID]
+}
+
+func (m *fakeProcessManager) Wait(agentID string) error {
+	m.mu.Lock()
+	ch, exists := m.stopped[agentID]
+	running := m.running[agentID]
+	m.mu.Unlock()
+
+	if !exists || !running {
+		return fmt.Errorf("agent %s is not running", agentID)
+	}
+	<-ch
+	return nil
+}
+
+func (m *fakeProcessManager) Cleanup() {
+	m.mu.Lock()
+	agents := make([]string, 0, len(m.running))
+	for agentID := range m.running {
+		agents = append(agents, agentID)
+	}
+	m.mu.Unlock()
+
+	for _, agentID := range agents {
+		_ = m.Stop(agentID)
+	}
+}
 
 func TestStopAllAgents_NoRunning(t *testing.T) {
 	svc := lifecycle.NewService(baseagent.NoopTriager{})
@@ -106,7 +180,12 @@ func TestAPIStatusNotFound(t *testing.T) {
 }
 
 func TestAPIInstallAndStart(t *testing.T) {
-	svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithRunner(noopRunner{}), lifecycle.WithRuntimeChecker(noopChecker{}))
+	svc := lifecycle.NewService(
+		baseagent.NoopTriager{},
+		lifecycle.WithRunner(noopRunner{}),
+		lifecycle.WithRuntimeChecker(noopChecker{}),
+		lifecycle.WithProcessManager(newFakeProcessManager()),
+	)
 	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
 		t.Fatal(err)
 	}
