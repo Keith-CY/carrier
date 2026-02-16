@@ -18,6 +18,7 @@ const (
 	RuntimeStateStopped   RuntimeState = "stopped"
 	RuntimeStateStarting  RuntimeState = "starting"
 	RuntimeStateRunning   RuntimeState = "running"
+	RuntimeStateStopping  RuntimeState = "stopping"
 	RuntimeStateCrashing  RuntimeState = "crashing"
 	RuntimeStateCrashLoop RuntimeState = "crash_loop"
 )

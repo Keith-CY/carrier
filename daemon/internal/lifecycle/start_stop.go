@@ -116,19 +116,22 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 }
 
 func (s *Service) Stop(ctx context.Context, agentID string) error {
-	_, state, err := s.getManifestAndState(agentID)
-	if err != nil {
-		return err
+	// Atomically check preconditions and transition to RuntimeStateStopping in
+	// a single lock acquisition.  This closes the race window where
+	// monitorProcess() could observe RuntimeStateRunning between the old
+	// getManifestAndState (RLock) and the subsequent write-Lock, recording a
+	// false crash-loop restart.
+	s.mu.Lock()
+	if _, ok := s.manifests[agentID]; !ok {
+		s.mu.Unlock()
+		return ErrAgentNotFound
 	}
-	if state.Runtime == RuntimeStateStopped {
+	state := s.states[agentID]
+	if state.Runtime == RuntimeStateStopped || state.Runtime == RuntimeStateStopping {
+		s.mu.Unlock()
 		return ErrAlreadyStopped
 	}
-
-	// Mark as stopped before killing the process so that monitorProcess
-	// (which races on the same lock) won't overwrite the state to Crashing.
-	s.mu.Lock()
-	state = s.states[agentID]
-	state.Runtime = RuntimeStateStopped
+	state.Runtime = RuntimeStateStopping
 	state.UpdatedAt = s.now()
 	s.states[agentID] = state
 	s.mu.Unlock()
@@ -154,6 +157,7 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 
 	s.mu.Lock()
 	state = s.states[agentID]
+	state.Runtime = RuntimeStateStopped
 	state.Health = HealthStateUnknown
 	state.LastError = ""
 	state.UpdatedAt = s.now()
