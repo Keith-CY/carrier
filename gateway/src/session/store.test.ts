@@ -341,6 +341,54 @@ describe("SessionStore", () => {
       expect(after!.lastSeenAt).not.toBe(before!.lastSeenAt);
     });
 
+    test("skips records missing required fields", async () => {
+      const testPath = getTestPath("missing-fields");
+      const validRecord = {
+        provider: "telegram",
+        chatId: "good",
+        sessionToken: "session-abc",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastSeenAt: "2026-01-01T00:00:00.000Z",
+      };
+      const missingToken = {
+        provider: "telegram",
+        chatId: "bad-1",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastSeenAt: "2026-01-01T00:00:00.000Z",
+      };
+      const missingProvider = {
+        chatId: "bad-2",
+        sessionToken: "session-xyz",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastSeenAt: "2026-01-01T00:00:00.000Z",
+      };
+      const nullRecord = null;
+      const numberRecord = 42;
+
+      await Bun.write(testPath, JSON.stringify([validRecord, missingToken, missingProvider, nullRecord, numberRecord]));
+
+      const store = new SessionStore(() => new Date("2026-01-01T00:00:00Z"), 30 * 24 * 60 * 60, testPath);
+      expect(store.sessionCount).toBe(1);
+      expect(store.getSession("telegram", "good")).not.toBeNull();
+      expect(store.getSession("telegram", "bad-1")).toBeNull();
+    });
+
+    test("handles empty persistence file gracefully", async () => {
+      const testPath = getTestPath("empty-file");
+      await Bun.write(testPath, "");
+
+      const store = new SessionStore(() => new Date("2026-01-01T00:00:00Z"), 30 * 24 * 60 * 60, testPath);
+      expect(store.sessionCount).toBe(0);
+    });
+
+    test("handles non-array JSON gracefully", async () => {
+      const testPath = getTestPath("non-array");
+      await Bun.write(testPath, JSON.stringify({ not: "an array" }));
+
+      const store = new SessionStore(() => new Date("2026-01-01T00:00:00Z"), 30 * 24 * 60 * 60, testPath);
+      expect(store.sessionCount).toBe(0);
+    });
+
     test("without persistence path, store works in-memory only", async () => {
       const store = new SessionStore(() => new Date("2026-01-01T00:00:00Z"));
       
