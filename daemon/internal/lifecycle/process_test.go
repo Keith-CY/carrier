@@ -431,3 +431,104 @@ func TestProcessManager_GetExitCode(t *testing.T) {
 		}
 	})
 }
+
+func TestProcessManager_NaturalExitRetainsEntry(t *testing.T) {
+	tmpDir := t.TempDir()
+	pm := NewProcessManager(tmpDir)
+
+	agentID := "natural-exit-agent"
+
+	// Start a short-lived process
+	_, err := pm.Start(agentID, "sleep", []string{"0.1"})
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	// Wait for natural exit
+	_ = pm.Wait(agentID)
+
+	// Give the wait goroutine time to close the log
+	time.Sleep(200 * time.Millisecond)
+
+	// The process entry should still exist so callers can read exit code
+	pm.mu.RLock()
+	_, exists := pm.processes[agentID]
+	pm.mu.RUnlock()
+	if !exists {
+		t.Error("expected process entry to be retained after natural exit for exit code access")
+	}
+
+	// Exit code should be available
+	code := pm.GetExitCode(agentID)
+	if code == nil || *code != 0 {
+		t.Errorf("expected exit code 0, got %v", code)
+	}
+
+	// IsRunning should return false
+	if pm.IsRunning(agentID) {
+		t.Error("expected IsRunning to return false after natural exit")
+	}
+}
+
+func TestProcessManager_NaturalExitClosesLogFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	pm := NewProcessManager(tmpDir)
+
+	agentID := "fd-leak-agent"
+
+	// Start a short-lived process
+	_, err := pm.Start(agentID, "echo", []string{"hello"})
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	// Wait for natural exit
+	_ = pm.Wait(agentID)
+
+	// Give finalizeProcess goroutine time to run
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify the log file exists on disk
+	logPath := filepath.Join(tmpDir, agentID+".log")
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		t.Fatal("log file should exist")
+	}
+
+	// The entry should still be in the map (retained for exit code access)
+	pm.mu.RLock()
+	_, exists := pm.processes[agentID]
+	pm.mu.RUnlock()
+	if !exists {
+		t.Error("process entry should be retained after natural exit")
+	}
+}
+
+func TestProcessManager_RestartAfterNaturalExit(t *testing.T) {
+	tmpDir := t.TempDir()
+	pm := NewProcessManager(tmpDir)
+
+	agentID := "restart-agent"
+
+	// Start and let it exit naturally
+	_, err := pm.Start(agentID, "sleep", []string{"0.1"})
+	if err != nil {
+		t.Fatalf("first Start failed: %v", err)
+	}
+	_ = pm.Wait(agentID)
+	time.Sleep(200 * time.Millisecond)
+
+	// Restart the same agent — should succeed without errors
+	pid, err := pm.Start(agentID, "sleep", []string{"60"})
+	if err != nil {
+		t.Fatalf("second Start failed: %v", err)
+	}
+	defer func() { _ = pm.Stop(agentID) }()
+
+	if pid <= 0 {
+		t.Fatalf("expected positive PID, got %d", pid)
+	}
+
+	if !pm.IsRunning(agentID) {
+		t.Error("restarted process should be running")
+	}
+}
