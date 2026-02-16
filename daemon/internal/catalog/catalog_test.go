@@ -4,8 +4,8 @@ import "testing"
 
 func TestDefaultEntriesContainsOpenClawAsActive(t *testing.T) {
 	entries := DefaultEntries()
-	if len(entries) != 4 {
-		t.Fatalf("expected 4 entries, got %d", len(entries))
+	if len(entries) != 5 {
+		t.Fatalf("expected 5 entries, got %d", len(entries))
 	}
 
 	openclaw, ok := FindByID("openclaw")
@@ -32,18 +32,25 @@ func TestCandidateAgentsPresent(t *testing.T) {
 
 func TestListReturnsAllEntries(t *testing.T) {
 	all := List()
-	if len(all) != 4 {
-		t.Fatalf("expected 4 entries from List(), got %d", len(all))
+	if len(all) != 5 {
+		t.Fatalf("expected 5 entries from List(), got %d", len(all))
 	}
 }
 
 func TestListByStatusActive(t *testing.T) {
 	active := ListByStatus(StatusActive)
-	if len(active) != 1 {
-		t.Fatalf("expected 1 active entry, got %d", len(active))
+	if len(active) != 2 {
+		t.Fatalf("expected 2 active entries, got %d", len(active))
 	}
-	if active[0].ID != "openclaw" {
-		t.Fatalf("expected openclaw, got %s", active[0].ID)
+	activeIDs := map[string]bool{}
+	for _, a := range active {
+		activeIDs[a.ID] = true
+	}
+	if !activeIDs["openclaw"] {
+		t.Fatal("expected openclaw in active entries")
+	}
+	if !activeIDs["zeroclaw"] {
+		t.Fatal("expected zeroclaw in active entries")
 	}
 }
 
@@ -78,6 +85,25 @@ func TestEntryCapabilities(t *testing.T) {
 	}
 	if openclaw.HasCapability("nonexistent") {
 		t.Fatal("expected openclaw not to have nonexistent capability")
+	}
+}
+
+func TestZeroClawEntry(t *testing.T) {
+	entry, ok := FindByID("zeroclaw")
+	if !ok {
+		t.Fatal("expected zeroclaw in catalog")
+	}
+	if entry.Status != StatusActive {
+		t.Fatalf("expected zeroclaw status active, got %s", entry.Status)
+	}
+	if !entry.HasCapability("chat") {
+		t.Fatal("expected zeroclaw to have chat capability")
+	}
+	if !entry.HasCapability("code") {
+		t.Fatal("expected zeroclaw to have code capability")
+	}
+	if !entry.IsRunnable() {
+		t.Fatal("expected zeroclaw to be runnable")
 	}
 }
 

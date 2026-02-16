@@ -22,11 +22,12 @@ type processInfo struct {
 	cmd      *exec.Cmd
 	pid      int
 	agentID  string
-	logFile  *os.File
+	logFile  *cappedFileWriter
 	done     chan struct{}
 	waitErr  error
 	exitCode *int
 	stopping bool
+	closeLogOnce sync.Once
 }
 
 // NewProcessManager creates a new process manager.
@@ -49,7 +50,10 @@ func (pm *ProcessManager) Start(agentID string, command string, args []string) (
 		if pm.isProcessAlive(info) {
 			return 0, fmt.Errorf("agent %s already running with PID %d", agentID, info.pid)
 		}
-		// Clean up stale entry
+		// Clean up stale entry (close log file if not already closed)
+		info.closeLogOnce.Do(func() {
+			info.logFile.Close()
+		})
 		delete(pm.processes, agentID)
 	}
 
@@ -58,9 +62,9 @@ func (pm *ProcessManager) Start(agentID string, command string, args []string) (
 		return 0, fmt.Errorf("create log dir: %w", err)
 	}
 
-	// Open log file
+	// Open size-capped log file (rotates at 10 MB, keeps 1 old copy).
 	logPath := filepath.Join(pm.logDir, fmt.Sprintf("%s.log", agentID))
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := newCappedFileWriter(logPath, defaultMaxLogBytes)
 	if err != nil {
 		return 0, fmt.Errorf("open log file: %w", err)
 	}
