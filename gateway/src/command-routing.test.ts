@@ -138,6 +138,30 @@ describe("command routing: /start", () => {
     expect(statuses[0].health).toBe("healthy");
   });
 
+  test("start with port conflict returns E_PORT_CONFLICT", async () => {
+    await handleCommand(parseInput(`telegram 100 req-0 ${token} /install openclaw`), deps);
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.simulatePortConflict("openclaw");
+    }
+
+    const res = await handleCommand(parseInput(`telegram 100 req-1 ${token} /start openclaw`), deps);
+
+    expect(res.result).toBe("error");
+    expect(res.errorCode).toBe("E_PORT_CONFLICT");
+  });
+
+  test("start probe failure returns E_START_PROBE_FAILED", async () => {
+    await handleCommand(parseInput(`telegram 100 req-0 ${token} /install openclaw`), deps);
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.simulateStartProbeFailure("openclaw");
+    }
+
+    const res = await handleCommand(parseInput(`telegram 100 req-1 ${token} /start openclaw`), deps);
+
+    expect(res.result).toBe("error");
+    expect(res.errorCode).toBe("E_START_PROBE_FAILED");
+  });
+
   test("start already-running agent returns error", async () => {
     await handleCommand(parseInput(`telegram 100 req-0 ${token} /install openclaw`), deps);
     await handleCommand(parseInput(`telegram 100 req-0 ${token} /start openclaw`), deps);
