@@ -180,17 +180,40 @@ export class SessionStore {
 
     try {
       const data = readFileSync(this.persistencePath, "utf-8");
+      if (data.trim() === "") {
+        return;
+      }
       const parsed = JSON.parse(data);
       
       if (Array.isArray(parsed)) {
-        for (const session of parsed) {
-          this.sessions.set(sessionKey(session.provider, session.chatId), session);
+        for (const record of parsed) {
+          if (!this.isValidSessionRecord(record)) {
+            console.warn("Skipping malformed session record:", record);
+            continue;
+          }
+          this.sessions.set(sessionKey(record.provider, record.chatId), record);
         }
+      } else {
+        console.warn("Session persistence file does not contain an array, starting fresh");
       }
     } catch (error) {
       // If the file is corrupt or invalid, start fresh
       console.error("Failed to load sessions from disk:", error);
     }
+  }
+
+  private isValidSessionRecord(record: unknown): record is SessionRecord {
+    if (typeof record !== "object" || record === null) {
+      return false;
+    }
+    const r = record as Record<string, unknown>;
+    return (
+      typeof r.provider === "string" &&
+      typeof r.chatId === "string" &&
+      typeof r.sessionToken === "string" &&
+      typeof r.createdAt === "string" &&
+      typeof r.lastSeenAt === "string"
+    );
   }
 
   private scheduleSave(): void {
