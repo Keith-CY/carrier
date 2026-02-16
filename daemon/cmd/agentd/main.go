@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -623,7 +624,7 @@ func shutdownAgents(svc *lifecycle.Service, timeout time.Duration) error {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- stopAllAgents(svc)
+		done <- stopAllAgents(ctx, svc)
 	}()
 
 	select {
@@ -635,19 +636,33 @@ func shutdownAgents(svc *lifecycle.Service, timeout time.Duration) error {
 	}
 }
 
-func stopAllAgents(svc *lifecycle.Service) error {
+func stopAllAgents(ctx context.Context, svc *lifecycle.Service) error {
 	agents := svc.ListAgents()
-	var firstErr error
+
+	var (
+		mu       sync.Mutex
+		firstErr error
+		wg       sync.WaitGroup
+	)
+
 	for _, agent := range agents {
 		if agent.Runtime == lifecycle.RuntimeStateRunning {
-			if err := svc.Stop(context.Background(), agent.ID); err != nil {
-				fmt.Fprintf(os.Stderr, "failed to stop agent %s: %v\n", agent.ID, err)
-				if firstErr == nil {
-					firstErr = err
+			wg.Add(1)
+			go func(id string) {
+				defer wg.Done()
+				if err := svc.Stop(ctx, id); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to stop agent %s: %v\n", id, err)
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = err
+					}
+					mu.Unlock()
 				}
-			}
+			}(agent.ID)
 		}
 	}
+
+	wg.Wait()
 	svc.Cleanup()
 	return firstErr
 }
