@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -1683,6 +1684,42 @@ func (f *fakeTriager) Analyze(ctx context.Context, e baseagent.Evidence) (baseag
 		return f.onAnalyze(ctx, e)
 	}
 	return baseagent.TriageResult{}, nil
+}
+
+func TestHandoffIDUniquenessAcrossRestarts(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	// Simulate two independent service instances (as if daemon restarted)
+	// and verify their handoff IDs never collide.
+	ids := make(map[string]struct{})
+	const handoffsPerInstance = 50
+
+	for instance := 0; instance < 2; instance++ {
+		runner := &fakeRunner{}
+		checker := &fakeChecker{}
+		svc := newServiceForTest(t, runner, checker)
+		if err := svc.Install(context.Background(), "openclaw"); err != nil {
+			t.Fatalf("install: %v", err)
+		}
+		if _, err := svc.HandleFailure(context.Background(), "openclaw", "test failure"); err != nil {
+			t.Fatalf("handle failure: %v", err)
+		}
+		if _, err := svc.Diagnose("openclaw"); err != nil {
+			t.Fatalf("diagnose: %v", err)
+		}
+		for i := 0; i < handoffsPerInstance; i++ {
+			h, err := svc.CreateRemoteDiagnosisHandoff("openclaw", true, "actor", fmt.Sprintf("req-%d-%d", instance, i))
+			if err != nil {
+				t.Fatalf("instance %d, iter %d: %v", instance, i, err)
+			}
+			if _, dup := ids[h.ID]; dup {
+				t.Fatalf("duplicate handoff ID %q on instance %d, iter %d", h.ID, instance, i)
+			}
+			ids[h.ID] = struct{}{}
+		}
+	}
+	if len(ids) != 2*handoffsPerInstance {
+		t.Fatalf("expected %d unique IDs, got %d", 2*handoffsPerInstance, len(ids))
+	}
 }
 
 func TestRegisterManifest_RejectsRunningAgent(t *testing.T) {

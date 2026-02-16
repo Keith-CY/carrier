@@ -2,6 +2,8 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -9,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"carrier/daemon/internal/baseagent"
@@ -179,7 +180,6 @@ type Service struct {
 	logLimit           int
 	handoffTTL         time.Duration
 	now                func() time.Time
-	idCounter          uint64
 	idGenerator        func(prefix string) string
 	restarts           map[string][]time.Time
 	cooldowns          map[string]time.Time
@@ -233,8 +233,11 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 	svc.processManager = NewProcessManager(processLogDir)
 	svc.evidenceCollector = NewEvidenceCollector(logs, exitCodes, 1000)
 	svc.idGenerator = func(prefix string) string {
-		next := atomic.AddUint64(&svc.idCounter, 1)
-		return fmt.Sprintf("%s-%d", prefix, next)
+		var buf [16]byte
+		if _, err := rand.Read(buf[:]); err != nil {
+			panic("crypto/rand failed: " + err.Error())
+		}
+		return fmt.Sprintf("%s-%s", prefix, hex.EncodeToString(buf[:]))
 	}
 	for _, opt := range opts {
 		opt(svc)
