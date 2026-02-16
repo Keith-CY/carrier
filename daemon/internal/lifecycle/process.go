@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,9 @@ import (
 	"syscall"
 	"time"
 )
+
+// defaultGracePeriod is the default time to wait after SIGTERM before sending SIGKILL.
+const defaultGracePeriod = 10 * time.Second
 
 // ProcessManager tracks and manages running agent processes.
 type ProcessManager struct {
@@ -113,6 +117,13 @@ func (pm *ProcessManager) Start(agentID string, command string, args []string) (
 // Stop sends SIGTERM to the agent's process, waits up to 10 seconds,
 // then sends SIGKILL if still running.
 func (pm *ProcessManager) Stop(agentID string) error {
+	return pm.StopWithContext(context.Background(), agentID)
+}
+
+// StopWithContext sends SIGTERM to the agent's process. It waits until the
+// context expires (or defaultGracePeriod if the context has no deadline)
+// before escalating to SIGKILL.
+func (pm *ProcessManager) StopWithContext(ctx context.Context, agentID string) error {
 	pm.mu.Lock()
 	info, exists := pm.processes[agentID]
 	if !exists {

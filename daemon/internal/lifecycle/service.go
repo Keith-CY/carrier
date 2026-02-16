@@ -296,6 +296,14 @@ func (s *Service) RegisterManifest(m manifest.Manifest) error {
 	s.cooldowns[m.ID] = time.Time{}
 	s.backoffStates[m.ID] = BackoffState{}
 
+	// Apply any persisted state that was loaded before this manifest was registered.
+	if pState, ok := s.pendingPersistedState[m.ID]; ok {
+		state := s.states[m.ID]
+		s.applyPersistedState(m.ID, &state, pState)
+		s.states[m.ID] = state
+		delete(s.pendingPersistedState, m.ID)
+	}
+
 	return nil
 }
 

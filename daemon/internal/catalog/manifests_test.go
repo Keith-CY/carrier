@@ -223,3 +223,33 @@ func TestOpenClawManifest_InstallAndUpgradeMatch(t *testing.T) {
 			m.Runtime.Install.Command, m.Runtime.Upgrade.Command)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Drift-detection tests (issue #640)
+// ---------------------------------------------------------------------------
+
+// TestNoStaleInstallerScripts ensures catalog/scripts/ does not contain
+// unreferenced installer scripts. See issue #640.
+func TestNoStaleInstallerScripts(t *testing.T) {
+	staleDir := filepath.Join("..", "..", "..", "catalog", "scripts")
+	entries, err := os.ReadDir(staleDir)
+	if os.IsNotExist(err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("reading catalog/scripts: %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains(strings.ToLower(e.Name()), "install") {
+			t.Errorf("stale installer script found: catalog/scripts/%s", e.Name())
+		}
+	}
+}
+
+// TestInstallCommandUsesOfficialURL verifies the install command uses the official URL.
+func TestInstallCommandUsesOfficialURL(t *testing.T) {
+	m := OpenClawManifest()
+	if !strings.Contains(m.Runtime.Install.Command, "https://openclaw.ai/install") {
+		t.Fatalf("install command should reference official installer URL, got: %s", m.Runtime.Install.Command)
+	}
+}
