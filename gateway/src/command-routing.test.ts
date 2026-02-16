@@ -208,11 +208,11 @@ describe("command routing: /logs", () => {
     token = pairChat(deps);
   });
 
-  test("missing agent returns usage error", async () => {
+  test("missing agent returns merged logs", async () => {
     const res = await handleCommand(parseInput(`telegram 100 req-1 ${token} /logs`), deps);
 
-    expect(res.result).toBe("error");
-    expect(res.errorCode).toBe("E_USAGE");
+    expect(res.result).toBe("ok");
+    expect(res.message).toContain("all agents");
   });
 
   test("returns logs for agent", async () => {

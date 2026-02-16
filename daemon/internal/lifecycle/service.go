@@ -363,12 +363,47 @@ func (s *Service) Logs(agentID string, tail int) ([]string, error) {
 	if !ok {
 		return nil, ErrAgentNotFound
 	}
+	tail = boundTail(tail)
 	if tail <= 0 || tail >= len(logs) {
 		return append([]string(nil), logs...), nil
 	}
 
 	start := len(logs) - tail
 	return append([]string(nil), logs[start:]...), nil
+}
+
+// MergedLogs returns the last `tail` log lines merged from all agents, sorted
+// lexicographically (which equals chronological order for ISO-8601 prefixed
+// lines produced by the process logger).
+func (s *Service) MergedLogs(tail int) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	tail = boundTail(tail)
+
+	var merged []string
+	for _, lines := range s.logs {
+		merged = append(merged, lines...)
+	}
+	sort.Strings(merged)
+
+	if tail > 0 && tail < len(merged) {
+		merged = merged[len(merged)-tail:]
+	}
+	return merged
+}
+
+// MaxTailLines is the upper bound accepted for the tail parameter.
+const MaxTailLines = 1000
+
+func boundTail(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	if n > MaxTailLines {
+		return MaxTailLines
+	}
+	return n
 }
 
 func (s *Service) HandleFailure(ctx context.Context, agentID, lastError string) (baseagent.TriageResult, error) {

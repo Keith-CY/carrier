@@ -175,7 +175,7 @@ describe("E2E: error propagation", () => {
     const deps = buildDeps();
     const token = pair(deps);
 
-    const commands = ["/install", "/start", "/stop", "/logs", "/upgrade", "/diagnose"];
+    const commands = ["/install", "/start", "/stop", "/upgrade", "/diagnose"];
     for (const cmd of commands) {
       const res = await safeHandleCommand(`telegram 100 req-1 ${token} ${cmd}`, deps);
       expect(res.result).toBe("error");
