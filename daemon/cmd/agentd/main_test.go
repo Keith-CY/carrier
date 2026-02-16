@@ -18,6 +18,7 @@ import (
 	"carrier/daemon/internal/commandexec"
 	"carrier/daemon/internal/lifecycle"
 	"carrier/daemon/internal/manifest"
+	"carrier/daemon/internal/ratelimit"
 	"carrier/daemon/internal/runtimecheck"
 )
 
@@ -52,7 +53,7 @@ func buildTestMux(svc *lifecycle.Service, ready bool) *http.ServeMux {
 	var readyFlag atomic.Bool
 	readyFlag.Store(ready)
 	pairStore := api.NewPairingCodeStore(nil)
-	return buildHTTPMux(svc, &readyFlag, pairStore)
+	return buildHTTPMux(svc, &readyFlag, pairStore, ratelimit.New())
 }
 
 func (m *fakeProcessManager) Start(agentID string, _ string, _ []string) (int, error) {
@@ -393,7 +394,7 @@ func TestPairingVerifyConsumeEndpoint(t *testing.T) {
 
 	var readyFlag atomic.Bool
 	readyFlag.Store(true)
-	mux := buildHTTPMux(svc, &readyFlag, pairStore)
+	mux := buildHTTPMux(svc, &readyFlag, pairStore, ratelimit.New())
 
 	// Test POST /api/pairing/verify-consume with valid code
 	body := fmt.Sprintf(`{"code":"%s"}`, record.Code)
@@ -504,6 +505,51 @@ func TestDecodeBodyMalformed(t *testing.T) {
 				t.Fatalf("status=%d, want400=%v; body=%s", rec.Code, tt.want400, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestPairingVerifyRateLimit(t *testing.T) {
+	svc := lifecycle.NewService(baseagent.NoopTriager{})
+	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
+		t.Fatal(err)
+	}
+	pairStore := api.NewPairingCodeStore(nil)
+
+	var readyFlag atomic.Bool
+	readyFlag.Store(true)
+	limiter := ratelimit.New(ratelimit.WithMax(3), ratelimit.WithWindow(1*time.Minute))
+	mux := buildHTTPMux(svc, &readyFlag, pairStore, limiter)
+
+	// Make 3 requests (all allowed, even if codes are wrong)
+	for i := 0; i < 3; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/pairing/verify-consume", strings.NewReader(`{"code":"badcode1"}`))
+		req.RemoteAddr = "1.2.3.4:12345"
+		mux.ServeHTTP(rec, req)
+		if rec.Code == http.StatusTooManyRequests {
+			t.Fatalf("request %d should not be rate-limited", i+1)
+		}
+	}
+
+	// 4th request should be rate-limited
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/pairing/verify-consume", strings.NewReader(`{"code":"badcode1"}`))
+	req.RemoteAddr = "1.2.3.4:12345"
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") != "60" {
+		t.Fatal("expected Retry-After header")
+	}
+
+	// Different IP should still be allowed
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/pairing/verify-consume", strings.NewReader(`{"code":"badcode1"}`))
+	req.RemoteAddr = "5.6.7.8:12345"
+	mux.ServeHTTP(rec, req)
+	if rec.Code == http.StatusTooManyRequests {
+		t.Fatal("different IP should not be rate-limited")
 	}
 }
 
