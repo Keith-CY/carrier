@@ -22,12 +22,11 @@ type processInfo struct {
 	cmd      *exec.Cmd
 	pid      int
 	agentID  string
-	logFile  *cappedFileWriter
+	logFile  *os.File
 	done     chan struct{}
 	waitErr  error
 	exitCode *int
 	stopping bool
-	closeLogOnce sync.Once
 }
 
 // NewProcessManager creates a new process manager.
@@ -50,10 +49,7 @@ func (pm *ProcessManager) Start(agentID string, command string, args []string) (
 		if pm.isProcessAlive(info) {
 			return 0, fmt.Errorf("agent %s already running with PID %d", agentID, info.pid)
 		}
-		// Clean up stale entry (close log file if not already closed)
-		info.closeLogOnce.Do(func() {
-			info.logFile.Close()
-		})
+		// Clean up stale entry
 		delete(pm.processes, agentID)
 	}
 
@@ -62,9 +58,12 @@ func (pm *ProcessManager) Start(agentID string, command string, args []string) (
 		return 0, fmt.Errorf("create log dir: %w", err)
 	}
 
-	// Open size-capped log file (rotates at 10 MB, keeps 1 old copy).
+	// Open log file (rotate first if oversized)
 	logPath := filepath.Join(pm.logDir, fmt.Sprintf("%s.log", agentID))
-	logFile, err := newCappedFileWriter(logPath, defaultMaxLogBytes)
+	if err := rotateLogFile(logPath, maxLogSize); err != nil {
+		return 0, fmt.Errorf("rotate log file: %w", err)
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return 0, fmt.Errorf("open log file: %w", err)
 	}
@@ -223,6 +222,27 @@ func (pm *ProcessManager) GetExitCode(agentID string) *int {
 	default:
 		return nil
 	}
+}
+
+// maxLogSize is the size threshold (10 MB) at which a log file is rotated
+// before a new process start.
+const maxLogSize int64 = 10 * 1024 * 1024
+
+// rotateLogFile checks if the log file at path exceeds maxBytes and, if so,
+// renames it to path + ".1" (overwriting any previous backup) so a fresh
+// file can be created by the caller.
+func rotateLogFile(path string, maxBytes int64) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // nothing to rotate
+		}
+		return err
+	}
+	if fi.Size() < maxBytes {
+		return nil
+	}
+	return os.Rename(path, path+".1")
 }
 
 // Cleanup stops all running processes (for graceful shutdown).
