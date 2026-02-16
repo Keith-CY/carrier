@@ -188,6 +188,7 @@ type Service struct {
 	crashLoopCooldown  time.Duration
 	memoryStore        *memory.Store
 	stateFile          *StateFile
+	pendingPersisted   map[string]*PersistedAgentState // loaded on startup, applied during RegisterManifest
 	processManager     ProcessController
 	processLogDir      string
 	backoffPolicy      BackoffPolicy
@@ -292,9 +293,23 @@ func (s *Service) RegisterManifest(m manifest.Manifest) error {
 		s.memoryLinks[m.ID] = nil
 	}
 	s.logs[m.ID] = nil
-	s.restarts[m.ID] = nil
-	s.cooldowns[m.ID] = time.Time{}
 	s.backoffStates[m.ID] = BackoffState{}
+
+	// Apply any pending persisted state (crash-loop cooldown, restart timestamps)
+	// from a prior daemon run. If none exists, initialise to zero values.
+	if pState, ok := s.pendingPersisted[m.ID]; ok {
+		state := s.states[m.ID]
+		s.applyPersistedState(m.ID, pState, &state)
+		s.states[m.ID] = state
+		delete(s.pendingPersisted, m.ID)
+	} else {
+		if _, ok := s.restarts[m.ID]; !ok {
+			s.restarts[m.ID] = nil
+		}
+		if _, ok := s.cooldowns[m.ID]; !ok {
+			s.cooldowns[m.ID] = time.Time{}
+		}
+	}
 
 	return nil
 }
@@ -544,26 +559,14 @@ func (s *Service) loadPersistedState() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Stash persisted state so RegisterManifest can apply it when agents
+	// are registered (agents may not exist yet at this point).
+	s.pendingPersisted = persisted
+
 	for id, pState := range persisted {
 		// Only restore state for agents that have been registered
 		if state, ok := s.states[id]; ok {
-			if pState.Installed {
-				state.Install = InstallStateInstalled
-			} else {
-				state.Install = InstallStateNotInstalled
-			}
-
-			// Restore runtime state, but verify process liveness
-			restoredState := RuntimeState(pState.RuntimeState)
-			if restoredState == RuntimeStateRunning {
-				// Verify the process is actually alive
-				if !s.processManager.IsRunning(id) {
-					// Process is not actually running, mark as stopped
-					restoredState = RuntimeStateStopped
-				}
-			}
-			state.Runtime = restoredState
-			state.UpdatedAt = pState.LastTransition
+			s.applyPersistedState(id, pState, &state)
 			s.states[id] = state
 		}
 	}
@@ -571,22 +574,60 @@ func (s *Service) loadPersistedState() error {
 	return nil
 }
 
-// saveState persists the current agent states to disk.
+// applyPersistedState applies a single persisted record to the given AgentState
+// and restores crash-loop cooldown/restart data on the service. Caller must hold s.mu.
+func (s *Service) applyPersistedState(id string, pState *PersistedAgentState, state *AgentState) {
+	if pState.Installed {
+		state.Install = InstallStateInstalled
+	} else {
+		state.Install = InstallStateNotInstalled
+	}
+
+	restoredState := RuntimeState(pState.RuntimeState)
+	if restoredState == RuntimeStateRunning {
+		if !s.processManager.IsRunning(id) {
+			restoredState = RuntimeStateStopped
+		}
+	}
+	state.Runtime = restoredState
+	state.UpdatedAt = pState.LastTransition
+
+	// Restore crash-loop cooldown state
+	if len(pState.Restarts) > 0 {
+		s.restarts[id] = make([]time.Time, len(pState.Restarts))
+		copy(s.restarts[id], pState.Restarts)
+	}
+	if !pState.CooldownUntil.IsZero() {
+		s.cooldowns[id] = pState.CooldownUntil
+	}
+}
+
+// saveState persists the current agent states to disk, including crash-loop
+// cooldown and restart timestamps so they survive daemon restarts.
 func (s *Service) saveState() {
 	if s.stateFile == nil {
 		return
 	}
 
 	s.mu.RLock()
-	// Create a map of pointers for Save
-	agents := make(map[string]*AgentState, len(s.states))
-	for id := range s.states {
-		state := s.states[id]
-		agents[id] = &state
+	persisted := make(map[string]PersistedAgentState, len(s.states))
+	for id, state := range s.states {
+		p := PersistedAgentState{
+			ID:             state.ID,
+			Installed:      state.Install == InstallStateInstalled,
+			RuntimeState:   string(state.Runtime),
+			LastTransition: state.UpdatedAt,
+		}
+		if restarts, ok := s.restarts[id]; ok && len(restarts) > 0 {
+			p.Restarts = make([]time.Time, len(restarts))
+			copy(p.Restarts, restarts)
+		}
+		if cooldownUntil, ok := s.cooldowns[id]; ok && !cooldownUntil.IsZero() {
+			p.CooldownUntil = cooldownUntil
+		}
+		persisted[id] = p
 	}
 	s.mu.RUnlock()
 
-	// Save asynchronously to avoid blocking lifecycle operations
-	// In production, you might want to handle errors more carefully
-	_ = s.stateFile.Save(agents)
+	_ = s.stateFile.SavePersisted(persisted)
 }

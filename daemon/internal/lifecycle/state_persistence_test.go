@@ -157,6 +157,87 @@ func TestStatePersistence_Crash(t *testing.T) {
 	}
 }
 
+// TestStatePersistence_CrashLoopCooldownSurvivesRestart verifies that crash-loop
+// cooldown state is persisted and restored after a simulated daemon restart.
+func TestStatePersistence_CrashLoopCooldownSurvivesRestart(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	checker := &fakeChecker{}
+	clock := &fakeClock{current: time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)}
+
+	svc := NewService(nil,
+		WithRunner(&fakeRunner{}),
+		WithRuntimeChecker(checker),
+		WithDiagnoseDir(t.TempDir()),
+		WithNow(clock.Now),
+		WithStateFile(statePath),
+		WithCrashLoopConfig(3, 5*time.Minute, 5*time.Minute),
+	)
+
+	m := sampleManifest()
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	// Trigger crash-loop: 3 failures within window
+	for i := 0; i < 3; i++ {
+		clock.Advance(10 * time.Second)
+		svc.updateStateOnStartError("openclaw", errMockFailure)
+	}
+	// Persist state including crash-loop cooldown
+	svc.saveState()
+
+	// Verify cooldown is active in original service
+	svc.mu.RLock()
+	_, hasCooldown := svc.cooldowns["openclaw"]
+	svc.mu.RUnlock()
+	if !hasCooldown {
+		t.Fatal("expected cooldown to be active after crash-loop")
+	}
+
+	// Simulate daemon restart: create a new Service with the same state file.
+	svc2 := NewService(nil,
+		WithRunner(&fakeRunner{}),
+		WithRuntimeChecker(checker),
+		WithDiagnoseDir(t.TempDir()),
+		WithNow(clock.Now),
+		WithStateFile(statePath),
+		WithCrashLoopConfig(3, 5*time.Minute, 5*time.Minute),
+	)
+	if err := svc2.RegisterManifest(m); err != nil {
+		t.Fatalf("register manifest on restart: %v", err)
+	}
+
+	// Cooldown should still be enforced after daemon restart
+	_, stateCheck, err := svc2.getManifestAndState("openclaw")
+	if err != nil {
+		t.Fatalf("getManifestAndState: %v", err)
+	}
+	if err := svc2.blockIfCrashLoopCoolingDown("openclaw", stateCheck); err == nil {
+		t.Error("expected crash-loop cooldown to be enforced after daemon restart, but start was allowed")
+	}
+
+	// Verify restart timestamps were also restored
+	svc2.mu.RLock()
+	restartCount := len(svc2.restarts["openclaw"])
+	svc2.mu.RUnlock()
+	if restartCount != 3 {
+		t.Errorf("expected 3 restart timestamps after restore, got %d", restartCount)
+	}
+
+	// Advance past cooldown — should be allowed
+	clock.Advance(6 * time.Minute)
+	_, stateCheck, _ = svc2.getManifestAndState("openclaw")
+	if err := svc2.blockIfCrashLoopCoolingDown("openclaw", stateCheck); err != nil {
+		t.Errorf("expected cooldown to expire after waiting, got: %v", err)
+	}
+}
+
 // TestStatePersistence_MultipleAgents verifies state is persisted for multiple agents.
 func TestStatePersistence_MultipleAgents(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
