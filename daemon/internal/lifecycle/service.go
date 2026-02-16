@@ -286,6 +286,7 @@ func (s *Service) RegisterManifest(m manifest.Manifest) error {
 		Install:   InstallStateNotInstalled,
 		Runtime:   RuntimeStateStopped,
 		Health:    HealthStateUnknown,
+		Ports:     []int{},
 		UpdatedAt: s.now(),
 	}
 	if _, ok := s.memoryLinks[m.ID]; !ok {

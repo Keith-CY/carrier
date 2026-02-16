@@ -36,6 +36,9 @@ type AgentState struct {
 	Install              InstallState `json:"installState"`
 	Runtime              RuntimeState `json:"runtimeState"`
 	Health               HealthState  `json:"health"`
+	Ports                []int        `json:"ports"`
+	StartedAt            *time.Time   `json:"startedAt,omitempty"`
+	RestartCount         int          `json:"restartCount"`
 	LastError            string       `json:"lastError,omitempty"`
 	LastTriageSummary    string       `json:"lastTriageSummary,omitempty"`
 	NeedsRemoteDiagnosis bool         `json:"needsRemoteDiagnosis"`

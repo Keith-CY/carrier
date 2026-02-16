@@ -90,12 +90,26 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 
 	s.mu.Lock()
 	state = s.states[agentID]
+	now := s.now()
 	state.Runtime = RuntimeStateRunning
 	state.Health = HealthStateHealthy
 	state.LastError = ""
 	state.LastTriageSummary = ""
 	state.NeedsRemoteDiagnosis = false
-	state.UpdatedAt = s.now()
+	state.StartedAt = &now
+	if state.StartedAt != nil {
+		// Only count as a restart if the agent was previously started
+		state.RestartCount = state.RestartCount + 1
+	}
+	// Populate ports from manifest
+	if m, ok := s.manifests[agentID]; ok {
+		ports := make([]int, 0, len(m.Network.Ports))
+		for _, p := range m.Network.Ports {
+			ports = append(ports, p.Port)
+		}
+		state.Ports = ports
+	}
+	state.UpdatedAt = now
 	s.states[agentID] = state
 	delete(s.restarts, agentID)
 	delete(s.cooldowns, agentID)
@@ -156,6 +170,8 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 	state = s.states[agentID]
 	state.Health = HealthStateUnknown
 	state.LastError = ""
+	state.StartedAt = nil
+	state.Ports = nil
 	state.UpdatedAt = s.now()
 	s.states[agentID] = state
 	s.mu.Unlock()
