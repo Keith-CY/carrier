@@ -18,7 +18,7 @@ func TestDefaultEntriesContainsOpenClawAsActive(t *testing.T) {
 }
 
 func TestCandidateAgentsPresent(t *testing.T) {
-	ids := []string{"pi-mono", "nanoclaw", "picoclaw"}
+	ids := []string{"pi-mono", "nanoclaw"}
 	for _, id := range ids {
 		entry, ok := FindByID(id)
 		if !ok {
@@ -27,6 +27,38 @@ func TestCandidateAgentsPresent(t *testing.T) {
 		if entry.Status != StatusCandidate {
 			t.Fatalf("expected %s to be candidate, got %s", id, entry.Status)
 		}
+	}
+}
+
+func TestPicoClawIsActive(t *testing.T) {
+	entry, ok := FindByID("picoclaw")
+	if !ok {
+		t.Fatal("expected picoclaw in catalog")
+	}
+	if entry.Status != StatusActive {
+		t.Fatalf("expected picoclaw status active, got %s", entry.Status)
+	}
+	if !entry.HasCapability("chat") || !entry.HasCapability("code") {
+		t.Fatal("expected picoclaw to have chat and code capabilities")
+	}
+	if !entry.IsRunnable() {
+		t.Fatal("expected picoclaw to be runnable")
+	}
+}
+
+func TestZeroClawIsActive(t *testing.T) {
+	entry, ok := FindByID("zeroclaw")
+	if !ok {
+		t.Fatal("expected zeroclaw in catalog")
+	}
+	if entry.Status != StatusActive {
+		t.Fatalf("expected zeroclaw status active, got %s", entry.Status)
+	}
+	if !entry.HasCapability("chat") || !entry.HasCapability("code") {
+		t.Fatal("expected zeroclaw to have chat and code capabilities")
+	}
+	if !entry.IsRunnable() {
+		t.Fatal("expected zeroclaw to be runnable")
 	}
 }
 
@@ -39,25 +71,15 @@ func TestListReturnsAllEntries(t *testing.T) {
 
 func TestListByStatusActive(t *testing.T) {
 	active := ListByStatus(StatusActive)
-	if len(active) != 2 {
-		t.Fatalf("expected 2 active entries, got %d", len(active))
-	}
-	activeIDs := map[string]bool{}
-	for _, a := range active {
-		activeIDs[a.ID] = true
-	}
-	if !activeIDs["openclaw"] {
-		t.Fatal("expected openclaw in active entries")
-	}
-	if !activeIDs["zeroclaw"] {
-		t.Fatal("expected zeroclaw in active entries")
+	if len(active) != 3 {
+		t.Fatalf("expected 3 active entries, got %d", len(active))
 	}
 }
 
 func TestListByStatusCandidate(t *testing.T) {
 	candidates := ListByStatus(StatusCandidate)
-	if len(candidates) != 3 {
-		t.Fatalf("expected 3 candidate entries, got %d", len(candidates))
+	if len(candidates) != 2 {
+		t.Fatalf("expected 2 candidate entries, got %d", len(candidates))
 	}
 }
 
@@ -85,25 +107,6 @@ func TestEntryCapabilities(t *testing.T) {
 	}
 	if openclaw.HasCapability("nonexistent") {
 		t.Fatal("expected openclaw not to have nonexistent capability")
-	}
-}
-
-func TestZeroClawEntry(t *testing.T) {
-	entry, ok := FindByID("zeroclaw")
-	if !ok {
-		t.Fatal("expected zeroclaw in catalog")
-	}
-	if entry.Status != StatusActive {
-		t.Fatalf("expected zeroclaw status active, got %s", entry.Status)
-	}
-	if !entry.HasCapability("chat") {
-		t.Fatal("expected zeroclaw to have chat capability")
-	}
-	if !entry.HasCapability("code") {
-		t.Fatal("expected zeroclaw to have code capability")
-	}
-	if !entry.IsRunnable() {
-		t.Fatal("expected zeroclaw to be runnable")
 	}
 }
 

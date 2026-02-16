@@ -69,6 +69,9 @@ func main() {
 	if err := svc.RegisterManifest(catalog.ZeroClawManifest()); err != nil {
 		log.Fatalf("register zeroclaw manifest: %v", err)
 	}
+	if err := svc.RegisterManifest(catalog.PicoClawManifest()); err != nil {
+		log.Fatalf("register picoclaw manifest: %v", err)
+	}
 
 	logger.Info("agentd scaffold booted")
 	fmt.Printf("agentd scaffold booted (listen=%s:%d log=%s/%s)\n",
@@ -253,9 +256,8 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.Pai
 			return
 		}
 
-		// Rate-limit by remote IP.
 		ip := remoteIP(r)
-		if !pairLimiter.Allow(ip) {
+		if pairLimiter != nil && !pairLimiter.Allow(ip) {
 			w.Header().Set("Retry-After", "60")
 			writeJSONError(w, http.StatusTooManyRequests, "too many pairing attempts, try again later")
 			return
