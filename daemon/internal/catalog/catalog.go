@@ -64,6 +64,14 @@ func DefaultEntries() []Entry {
 			Description:  "Compact coding assistant",
 		},
 		{
+			ID:           "zeroclaw",
+			Name:         "ZeroClaw",
+			Version:      "0.1.0",
+			Status:       StatusActive,
+			Capabilities: []string{"chat", "code"},
+			Description:  "Rust-based AI assistant with chat and code capabilities",
+		},
+		{
 			ID:           "picoclaw",
 			Name:         "PicoClaw",
 			Version:      "0.1.0",

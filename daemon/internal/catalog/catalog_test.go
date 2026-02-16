@@ -4,8 +4,8 @@ import "testing"
 
 func TestDefaultEntriesContainsOpenClawAsActive(t *testing.T) {
 	entries := DefaultEntries()
-	if len(entries) != 4 {
-		t.Fatalf("expected 4 entries, got %d", len(entries))
+	if len(entries) != 5 {
+		t.Fatalf("expected 5 entries, got %d", len(entries))
 	}
 
 	openclaw, ok := FindByID("openclaw")
@@ -46,17 +46,33 @@ func TestPicoClawIsActive(t *testing.T) {
 	}
 }
 
+func TestZeroClawIsActive(t *testing.T) {
+	entry, ok := FindByID("zeroclaw")
+	if !ok {
+		t.Fatal("expected zeroclaw in catalog")
+	}
+	if entry.Status != StatusActive {
+		t.Fatalf("expected zeroclaw status active, got %s", entry.Status)
+	}
+	if !entry.HasCapability("chat") || !entry.HasCapability("code") {
+		t.Fatal("expected zeroclaw to have chat and code capabilities")
+	}
+	if !entry.IsRunnable() {
+		t.Fatal("expected zeroclaw to be runnable")
+	}
+}
+
 func TestListReturnsAllEntries(t *testing.T) {
 	all := List()
-	if len(all) != 4 {
-		t.Fatalf("expected 4 entries from List(), got %d", len(all))
+	if len(all) != 5 {
+		t.Fatalf("expected 5 entries from List(), got %d", len(all))
 	}
 }
 
 func TestListByStatusActive(t *testing.T) {
 	active := ListByStatus(StatusActive)
-	if len(active) != 2 {
-		t.Fatalf("expected 2 active entries, got %d", len(active))
+	if len(active) != 3 {
+		t.Fatalf("expected 3 active entries, got %d", len(active))
 	}
 }
 

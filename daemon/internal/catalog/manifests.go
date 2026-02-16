@@ -104,6 +104,107 @@ func getNetworkSpec() manifest.NetworkSpec {
 	return spec
 }
 
+// getZeroClawInstallCommand returns the install command for ZeroClaw.
+// ZeroClaw is installed via cargo (Rust toolchain required).
+// In dev mode, a placeholder script is created instead.
+func getZeroClawInstallCommand() string {
+	if os.Getenv("CARRIER_DEV_MODE") == "1" {
+		return getZeroClawDevInstallCommand()
+	}
+	return "cargo install --git https://github.com/theonlyhennygod/zeroclaw.git --force"
+}
+
+// getZeroClawDevInstallCommand creates a placeholder binary for development testing.
+func getZeroClawDevInstallCommand() string {
+	return `sh -c '
+mkdir -p "$HOME/.cargo/bin"
+cat > "$HOME/.cargo/bin/zeroclaw" << 'SCRIPT'
+#!/bin/sh
+if [ "$1" = "gateway" ] && [ "$2" = "start" ]; then
+  echo "ZeroClaw dev placeholder running (pid $$)"
+  trap "exit 0" TERM INT
+  while true; do sleep 1; done
+elif [ "$1" = "gateway" ] && [ "$2" = "stop" ]; then
+  echo "ZeroClaw dev stop"
+elif [ "$1" = "status" ]; then
+  echo "ZeroClaw dev placeholder: ok"
+else
+  echo "ZeroClaw dev placeholder"
+fi
+SCRIPT
+chmod +x "$HOME/.cargo/bin/zeroclaw"
+echo "Dev placeholder created at $HOME/.cargo/bin/zeroclaw" >&2
+'`
+}
+
+// getZeroClawStartCommand returns the start command for ZeroClaw.
+func getZeroClawStartCommand() string {
+	switch runtime.GOOS {
+	case "windows":
+		return "zeroclaw gateway start"
+	default:
+		home, err := os.UserHomeDir()
+		if err != nil {
+			home = os.Getenv("HOME")
+		}
+		return filepath.Join(home, ".cargo", "bin", "zeroclaw") + " gateway start"
+	}
+}
+
+// getZeroClawStopCommand returns the stop command for ZeroClaw.
+func getZeroClawStopCommand() string {
+	switch runtime.GOOS {
+	case "windows":
+		return "zeroclaw gateway stop"
+	default:
+		home, err := os.UserHomeDir()
+		if err != nil {
+			home = os.Getenv("HOME")
+		}
+		return filepath.Join(home, ".cargo", "bin", "zeroclaw") + " gateway stop"
+	}
+}
+
+// ZeroClawManifest returns the manifest for the ZeroClaw agent.
+func ZeroClawManifest() manifest.Manifest {
+	installCmd := getZeroClawInstallCommand()
+
+	return manifest.Manifest{
+		ID:           "zeroclaw",
+		Name:         "ZeroClaw",
+		Version:      "latest",
+		Description:  "Rust-based AI assistant with chat and code capabilities",
+		Capabilities: []string{"chat", "code"},
+		Runtime: manifest.RuntimeSpec{
+			Type:    manifest.RuntimeTypeLocalBinary,
+			Install: manifest.CommandSpec{Command: installCmd},
+			Upgrade: manifest.CommandSpec{Command: installCmd},
+			Start:   manifest.CommandSpec{Command: getZeroClawStartCommand()},
+			Stop:    manifest.CommandSpec{Command: getZeroClawStopCommand()},
+		},
+		Network: manifest.NetworkSpec{
+			Healthcheck: manifest.HealthcheckSpec{
+				Type: "process",
+			},
+		},
+		Env: manifest.EnvSpec{
+			Optional: []manifest.EnvVar{
+				{Name: "ZEROCLAW_API_KEY", Secret: true, Description: "API key for LLM provider"},
+				{Name: "ZEROCLAW_PROVIDER", Default: "openrouter", Description: "LLM provider name"},
+			},
+		},
+		Upgrade: manifest.UpgradeSpec{Channel: "stable", Strategy: "in_place_or_reinstall"},
+		Health: manifest.HealthSpec{
+			IntervalSeconds:   30,
+			TimeoutSeconds:    5,
+			Retries:           3,
+			RestartLoopWindow: 300,
+			RestartLoopMax:    5,
+		},
+		Diagnostics: manifest.Diagnostics{Include: []string{"runtime_logs", "process_state", "env_sanitized"}},
+	}
+}
+
 // picoClawBinaryName returns the platform-specific binary name for PicoClaw releases.
 func picoClawBinaryName() string {
 	goos := runtime.GOOS

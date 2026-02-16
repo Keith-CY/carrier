@@ -26,6 +26,7 @@ import (
 	"carrier/daemon/internal/config"
 	"carrier/daemon/internal/lifecycle"
 	"carrier/daemon/internal/logging"
+	"carrier/daemon/internal/ratelimit"
 )
 
 const (
@@ -65,6 +66,9 @@ func main() {
 	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
 		log.Fatalf("register openclaw manifest: %v", err)
 	}
+	if err := svc.RegisterManifest(catalog.ZeroClawManifest()); err != nil {
+		log.Fatalf("register zeroclaw manifest: %v", err)
+	}
 	if err := svc.RegisterManifest(catalog.PicoClawManifest()); err != nil {
 		log.Fatalf("register picoclaw manifest: %v", err)
 	}
@@ -95,7 +99,8 @@ func main() {
 	// Build HTTP server
 	ready := &atomic.Bool{}
 	ready.Store(false)
-	mux := buildHTTPMux(svc, ready, pairStore)
+	pairLimiter := ratelimit.New(ratelimit.WithMax(5), ratelimit.WithWindow(1*time.Minute))
+	mux := buildHTTPMux(svc, ready, pairStore, pairLimiter)
 	var handler http.Handler = mux
 	if cfg.Server.APIToken != "" {
 		handler = bearerAuthMiddleware(cfg.Server.APIToken, mux)
@@ -140,7 +145,7 @@ func main() {
 	fmt.Println("agentd stopped gracefully")
 }
 
-func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.PairingCodeStore) *http.ServeMux {
+func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.PairingCodeStore, pairLimiter *ratelimit.Limiter) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Health checks
@@ -250,6 +255,14 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.Pai
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
+
+		ip := remoteIP(r)
+		if pairLimiter != nil && !pairLimiter.Allow(ip) {
+			w.Header().Set("Retry-After", "60")
+			writeJSONError(w, http.StatusTooManyRequests, "too many pairing attempts, try again later")
+			return
+		}
+
 		var body struct {
 			Code string `json:"code"`
 		}
@@ -654,6 +667,20 @@ func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// remoteIP extracts the client IP from the request, preferring X-Forwarded-For.
+func remoteIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if parts := strings.SplitN(xff, ",", 2); len(parts) > 0 {
+			return strings.TrimSpace(parts[0])
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // isLoopback returns true when the host string resolves to a loopback address.

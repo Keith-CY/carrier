@@ -77,16 +77,12 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 
 	s.appendLog(agentID, fmt.Sprintf("started process with PID %d", pid))
 
-	// Detect immediate process exit (e.g., command not found) and treat as start failure.
-	time.Sleep(20 * time.Millisecond)
-	if !s.processManager.IsRunning(agentID) {
-		waitErr := s.processManager.Wait(agentID)
-		if waitErr == nil {
-			waitErr = fmt.Errorf("process exited immediately")
-		}
-		s.updateStateOnStartError(agentID, waitErr)
-		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_START_FAILED", waitErr.Error())
-		return waitErr
+	// Detect immediate process exit (e.g., command not found) by probing
+	// multiple times instead of relying on a fixed sleep duration.
+	if err := s.waitForStableStart(agentID); err != nil {
+		s.updateStateOnStartError(agentID, err)
+		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_START_FAILED", err.Error())
+		return err
 	}
 
 	// Auto-mount memories linked to this agent.
@@ -167,6 +163,30 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 
 	s.saveState()
 
+	return nil
+}
+
+// stableStartProbes is the number of consecutive alive-checks required to
+// consider a process stably started.
+const stableStartProbes = 3
+
+// stableStartInterval is the delay between successive alive-checks.
+const stableStartInterval = 10 * time.Millisecond
+
+// waitForStableStart probes the process multiple times to confirm it has not
+// exited immediately after being started. This replaces the previous fixed
+// sleep with a deterministic check: the process must be alive on every probe.
+func (s *Service) waitForStableStart(agentID string) error {
+	for i := 0; i < stableStartProbes; i++ {
+		time.Sleep(stableStartInterval)
+		if !s.processManager.IsRunning(agentID) {
+			waitErr := s.processManager.Wait(agentID)
+			if waitErr == nil {
+				waitErr = fmt.Errorf("process exited immediately")
+			}
+			return waitErr
+		}
+	}
 	return nil
 }
 

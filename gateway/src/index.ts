@@ -11,6 +11,7 @@ import {
 } from "./daemon/client";
 import { DownloadTokenStore } from "./downloads/token_store";
 import { RateLimiter } from "./ratelimit";
+import { redactErrorMessage } from "./redact";
 import { SessionStore } from "./session/store";
 
 const COMMAND_NAMES: ReadonlySet<CommandName> = new Set([
@@ -391,6 +392,6 @@ function errorResponse(requestId: string, errorCode: string, message: string): G
     requestId,
     result: "error",
     errorCode,
-    message,
+    message: redactErrorMessage(message),
   };
 }
