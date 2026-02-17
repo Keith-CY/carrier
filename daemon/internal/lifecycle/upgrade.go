@@ -148,10 +148,6 @@ func (s *Service) detectPostUpgradeVersion(_ string, _ manifest.Manifest, output
 // trustedVersionMarker matches the explicit marker emitted by upgrade scripts.
 var trustedVersionMarker = regexp.MustCompile(`CARRIER_INSTALLED_VERSION=(\d+\.\d+\.\d+)`)
 
-// versionOutputPattern matches semver-like version strings in command output.
-// Only used as a fallback for manifest version probe output (trusted source).
-var versionOutputPattern = regexp.MustCompile(`(?:^|[^0-9])(\d+\.\d+\.\d+)(?:[^0-9]|$)`)
-
 func (s *Service) formatUpgradeFailure(runErr error, backupPath string) error {
 	detail := fmt.Sprintf("upgrade failed: %v", runErr)
 	if backupPath != "" {
