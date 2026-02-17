@@ -23,7 +23,7 @@ fi
 
 # Test 2: Missing shellcheck fails fast with a single prerequisite error.
 bash_bin="$(command -v bash)"
-missing_output=$(PATH="/usr/bin:/bin" "$bash_bin" "$SCRIPT_DIR/run-shellcheck.sh" 2>&1 || true)
+missing_output=$(PATH="/nonexistent" "$bash_bin" "$SCRIPT_DIR/run-shellcheck.sh" 2>&1 || true)
 if echo "$missing_output" | grep -q "shellcheck is required but was not found in PATH" \
   && [ "$(echo "$missing_output" | grep -c "not found")" -eq 1 ]; then
   echo "  PASS: missing shellcheck exits early with one actionable message"

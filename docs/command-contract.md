@@ -22,6 +22,12 @@ When commands are sent via gateway HTTP (`POST /command`):
 - request body: `{ "input": "<provider> <chat_id> <request_id> <command> [...args]" }`
 - if `CARRIER_GATEWAY_API_TOKEN` is configured, include `Authorization: Bearer <gateway_api_token>`
 
+**Session token transport:** When `CARRIER_GATEWAY_API_TOKEN` is enabled, the
+`Authorization` header is reserved for the gateway API token. Session tokens
+must be sent via the `x-session-token` header or the `sessionToken` body field
+instead. When the gateway token is **not** configured, `Authorization: Bearer
+<session_token>` continues to work as a backward-compatible transport.
+
 ## Response Schema
 
 Every command returns a `GatewayResponse`:

@@ -82,6 +82,14 @@ This file (`docs/phase1-runtime-adr.md`) is the canonical runtime ADR for Phase 
 
 `docs/plans/adr-runtime-model.md` is retained as historical context and is superseded for decision authority.
 
+## Acceptance Metadata
+
+| Field            | Value                          |
+|-----------------|--------------------------------|
+| Effective date  | 2026-02-16                     |
+| ADR version     | 1.0                           |
+| Accepted by     | Phase 1 review (PR #1040)     |
+
 ## References
 
 - PRD source-of-truth scope: `docs/Agent_Installation_Platform_PRD.md`

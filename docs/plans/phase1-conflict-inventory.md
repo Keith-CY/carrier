@@ -1,6 +1,6 @@
 # Phase 1 Conflict Inventory (T001)
 
-Status: Drafted for issue #793  
+Status: Drafted for issue [#793](https://github.com/Keith-CY/carrier/issues/793)  
 Scope: README, PRD, Product Design, PRD_extra (missing in repo)
 
 ## Inventory Rules
@@ -38,5 +38,5 @@ Scope: README, PRD, Product Design, PRD_extra (missing in repo)
 
 ## Follow-up
 
-1. Restore/add `docs/Agent_Installation_Platform_PRD_extra.md` (or archive rationale that it is intentionally removed).
+1. Restore/add `docs/Agent_Installation_Platform_PRD_extra.md` (or archive rationale that it is intentionally removed) — see [#793](https://github.com/Keith-CY/carrier/issues/793).
 2. Re-run this inventory with PRD_extra included and convert any confirmed differences into T002 option matrix inputs.
