@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -674,8 +675,10 @@ func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			auth := r.Header.Get("Authorization")
 			expected := "Bearer " + token
-			// Use constant-time comparison to prevent timing attacks
-			if subtle.ConstantTimeCompare([]byte(auth), []byte(expected)) != 1 {
+			// Compare fixed-length digests to avoid early length-based differences.
+			authDigest := sha256.Sum256([]byte(auth))
+			expectedDigest := sha256.Sum256([]byte(expected))
+			if subtle.ConstantTimeCompare(authDigest[:], expectedDigest[:]) != 1 {
 				writeJSONError(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}
