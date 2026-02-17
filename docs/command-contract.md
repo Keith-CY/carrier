@@ -18,6 +18,10 @@ All commands are parsed from a single string with the format:
 | `command`   | `CommandName`                         | One of the commands listed below   |
 | `args`      | `string[]`                            | Positional arguments (space-split) |
 
+When commands are sent via gateway HTTP (`POST /command`):
+- request body: `{ "input": "<provider> <chat_id> <request_id> <command> [...args]" }`
+- if `CARRIER_GATEWAY_API_TOKEN` is configured, include `Authorization: Bearer <gateway_api_token>`
+
 ## Response Schema
 
 Every command returns a `GatewayResponse`:
@@ -41,6 +45,8 @@ type GatewayResponse = {
 |----------------------------|------------------------------------------------------|
 | `E_PARSE`                  | Input string could not be parsed                     |
 | `E_USAGE`                  | Missing required argument(s)                         |
+| `E_GATEWAY_AUTH_REQUIRED`  | Gateway API token is required for `/command` access  |
+| `E_GATEWAY_AUTH_INVALID`   | Provided gateway API token is invalid                |
 | `E_PAIR_CODE_INVALID`      | Pairing code is invalid or expired                   |
 | `E_SESSION_REQUIRED`       | Chat is not paired; must run `/pair` first           |
 | `E_NOT_INSTALLED`          | Agent is not installed                               |

@@ -3,6 +3,7 @@ import { HttpDaemonClient } from "./daemon/http_client";
 import { DownloadTokenStore } from "./downloads/token_store";
 import { SessionStore } from "./session/store";
 import { join } from "node:path";
+import { timingSafeEqual } from "node:crypto";
 
 export type GatewayRequestContext = {
   request: Request;
@@ -83,6 +84,11 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
     }
 
     if (ctx.request.method === "POST" && url.pathname === "/command") {
+      const gatewayAuthError = validateGatewayAPIToken(ctx.request, ctx.requestId);
+      if (gatewayAuthError) {
+        return jsonResponse(gatewayAuthError, 401);
+      }
+
       const parsed = await parseCommandRequest(ctx.request);
       if (!parsed.commandInput) {
         return jsonResponse({
@@ -142,6 +148,10 @@ export function startGatewayServer(options: StartGatewayServerOptions = {}): Ret
   });
   const port = options.port ?? parsePort(process.env.CARRIER_GATEWAY_PORT, 8787);
   const hostname = options.hostname ?? process.env.CARRIER_GATEWAY_HOST ?? "127.0.0.1";
+  const gatewayApiToken = loadGatewayAPIToken();
+  if (!gatewayApiToken && !isLoopbackHost(hostname)) {
+    throw new Error("CARRIER_GATEWAY_API_TOKEN is required when binding gateway to non-loopback host");
+  }
   return Bun.serve({
     port,
     hostname,
@@ -328,17 +338,26 @@ type ParsedCommandRequest = {
 };
 
 async function parseCommandRequest(request: Request): Promise<ParsedCommandRequest> {
+  const allowAuthorizationSessionToken = !loadGatewayAPIToken();
   const result: ParsedCommandRequest = {
     commandInput: null,
     sessionToken: null,
   };
-  
-  // Check Authorization header for session token
-  const authHeader = request.headers.get("authorization");
-  if (authHeader) {
-    const match = authHeader.match(/^Bearer\s+(.+)$/i);
-    if (match && match[1]) {
-      result.sessionToken = match[1].trim();
+
+  // Prefer an explicit session token header when present.
+  const sessionHeader = request.headers.get("x-session-token");
+  if (sessionHeader && sessionHeader.trim().length > 0) {
+    result.sessionToken = sessionHeader.trim();
+  }
+
+  // Backward-compatible session token transport: Authorization header.
+  if (!result.sessionToken && allowAuthorizationSessionToken) {
+    const authHeader = request.headers.get("authorization");
+    if (authHeader) {
+      const match = authHeader.match(/^Bearer\s+(.+)$/i);
+      if (match && match[1]) {
+        result.sessionToken = match[1].trim();
+      }
     }
   }
   
@@ -448,6 +467,58 @@ function validateCommandAuth(
   
   // Authentication successful
   return null;
+}
+
+function loadGatewayAPIToken(): string | null {
+  const token = process.env.CARRIER_GATEWAY_API_TOKEN?.trim() ?? "";
+  return token.length > 0 ? token : null;
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  return normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
+}
+
+function validateGatewayAPIToken(
+  request: Request,
+  requestId: string,
+): { requestId: string; result: "error"; errorCode: string; message: string } | null {
+  const expectedToken = loadGatewayAPIToken();
+  if (!expectedToken) {
+    return null;
+  }
+
+  const authHeader = request.headers.get("authorization");
+  const match = authHeader?.match(/^Bearer\s+(.+)$/i);
+  const providedToken = match?.[1]?.trim();
+  if (!providedToken) {
+    return {
+      requestId,
+      result: "error",
+      errorCode: "E_GATEWAY_AUTH_REQUIRED",
+      message: "gateway api token required",
+    };
+  }
+
+  if (!constantTimeTokenEquals(providedToken, expectedToken)) {
+    return {
+      requestId,
+      result: "error",
+      errorCode: "E_GATEWAY_AUTH_INVALID",
+      message: "invalid gateway api token",
+    };
+  }
+
+  return null;
+}
+
+function constantTimeTokenEquals(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left, "utf8");
+  const rightBuffer = Buffer.from(right, "utf8");
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+  return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 export function parsePort(raw: string | undefined, fallback: number): number {
