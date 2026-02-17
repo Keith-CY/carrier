@@ -234,8 +234,12 @@ jobs:
           git worktree add ../_base_cov "origin/${{ github.event.pull_request.base.ref }}"
           trap 'git worktree remove -f ../_base_cov || true' EXIT
 
-          (cd ../_base_cov/daemon && go test ./... -coverprofile=coverage.out && go tool cover -func=coverage.out > coverage-func.txt)
-          (cd ../_base_cov/gateway && bun install --frozen-lockfile --no-progress && bun test --coverage --coverage-reporter=lcov)
+          if [ -d ../_base_cov/daemon ]; then
+            (cd ../_base_cov/daemon && go test ./... -coverprofile=coverage.out && go tool cover -func=coverage.out > coverage-func.txt)
+          fi
+          if [ -d ../_base_cov/gateway ]; then
+            (cd ../_base_cov/gateway && bun install --frozen-lockfile --no-progress && bun test --coverage --coverage-reporter=lcov)
+          fi
 
       - name: Build markdown summary
         run: |
@@ -243,7 +247,10 @@ jobs:
           import re, pathlib
 
           def parse_go_total(path):
-            txt = pathlib.Path(path).read_text()
+            p = pathlib.Path(path)
+            if not p.exists():
+              return 0.0
+            txt = p.read_text()
             m = re.search(r'total:\s*\(statements\)\s*([0-9.]+)%', txt)
             return float(m.group(1)) if m else 0.0
 
@@ -284,6 +291,8 @@ jobs:
           ]
           if not lcov_path:
             lines += ['', '_Note: gateway lcov.info not found on PR head; gateway reported as 0.00% in this run._']
+          if not pathlib.Path('../_base_cov/daemon/coverage-func.txt').exists():
+            lines += ['', '_Note: base branch daemon coverage file not found; base daemon treated as 0.00%._']
           if not base_lcov_path:
             lines += ['', '_Note: base branch gateway lcov.info not found; base gateway treated as 0.00%._']
 
