@@ -2,6 +2,10 @@
 
 This document defines the unified input/output contract for all gateway commands. Every command MUST produce identical results regardless of which provider (Telegram, Discord, Feishu) delivers it.
 
+Related references:
+- Daemon payload examples: `docs/daemon-api-contract.md`
+- Cross-provider parity taxonomy: `docs/e2e-parity-taxonomy.md`
+
 ## Input Format
 
 All commands are parsed from a single string with the format:

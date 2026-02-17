@@ -8,6 +8,8 @@ Related runbooks:
 - Pairing lifecycle troubleshooting: `docs/runbooks/pairing-lifecycle.md`
 - CI first response: `docs/ci/first-response-playbook.md`
 
+For lifecycle state transitions, crash-loop behavior, and operator troubleshooting, see `docs/daemon-lifecycle-runtime.md`.
+
 ## Prerequisites
 
 - **Go 1.22+** (build from source) or a pre-built binary

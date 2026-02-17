@@ -26,6 +26,51 @@ This document defines the canonical daemon HTTP endpoint and method matrix align
 | Diagnose | `POST` | `/api/v1/agents/{agent_id}/diagnose` | Returns artifact metadata | #395 |
 | Diagnose consent / handoff | `POST` | `/api/v1/diagnosis/handoffs` | Remote diagnosis consent + handoff | Planned |
 
+## Response examples (quick validation)
+
+Lifecycle success example:
+
+```json
+{
+  "agents": [
+    {
+      "id": "openclaw",
+      "name": "OpenClaw",
+      "version": "0.1.0",
+      "installed": true,
+      "runtimeState": "running",
+      "health": "healthy",
+      "needsRemoteDiagnosis": false,
+      "updatedAt": "2026-02-14T04:20:00.000Z"
+    }
+  ]
+}
+```
+
+Standardized error envelope example:
+
+```json
+{
+  "error": {
+    "code": "E_NOT_INSTALLED",
+    "message": "agent is not installed"
+  }
+}
+```
+
+## Required vs optional fields
+
+`DaemonAgentState`:
+- Required: `id`, `name`, `version`, `installed`, `runtimeState`, `health`, `needsRemoteDiagnosis`, `updatedAt`
+- Optional: `lastError`
+
+`UpgradeResult`:
+- Required: `agentId`, `fromVersion`, `toVersion`
+- Optional: `backupPath`, `rollbackHint`
+
+`RemoteDiagnosisHandoff`:
+- Required: `id`, `agentId`, `consent`, `artifactRef`, `status`, `createdAt`
+
 ## Error Envelope
 
 All daemon API error responses MUST use one schema:
