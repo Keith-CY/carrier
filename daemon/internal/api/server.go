@@ -48,6 +48,7 @@ func (s *Server) Handler() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/agents", s.handleListAgents)
 	mux.HandleFunc("/api/v1/agents/", s.handleAgentAction)
+	mux.HandleFunc("/api/v1/logs", s.handleMergedLogs)
 	mux.HandleFunc("/api/v1/pairing/codes", s.handleIssuePairCode)
 	mux.HandleFunc("/api/v1/pairing/verify-consume", s.handleVerifyConsumePairCode)
 	mux.HandleFunc("/api/v1/diagnosis/handoffs", s.handleCreateDiagnosisHandoff)
@@ -101,6 +102,29 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		resp.Agents = append(resp.Agents, s.agentFromState(state))
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleMergedLogs(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodGet) {
+		return
+	}
+	if r.URL.Path != "/api/v1/logs" {
+		http.NotFound(w, r)
+		return
+	}
+
+	tail := 200
+	if raw := strings.TrimSpace(r.URL.Query().Get("tail")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			tail = parsed
+		}
+	}
+	lines := s.lifecycle.MergedLogs(tail)
+	redactedLines := make([]string, len(lines))
+	for i, line := range lines {
+		redactedLines[i] = redact.RedactText(line)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"lines": redactedLines, "truncated": false})
 }
 
 func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {

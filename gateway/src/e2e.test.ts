@@ -210,11 +210,11 @@ describe("E2E slash command test suite", () => {
       expect(result.message).toContain("openclaw");
     });
 
-    test("/logs without agent ID fails", async () => {
+    test("/logs without agent ID returns merged logs", async () => {
       const result = await sendCommand(runtime, `telegram chat1 req-22 ${token} /logs`);
       
-      expect(result.result).toBe("error");
-      expect(result.errorCode).toBe("E_USAGE");
+      expect(result.result).toBe("ok");
+      expect(result.message).toContain("all agents");
     });
 
     test("/diagnose openclaw creates artifact", async () => {

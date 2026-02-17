@@ -58,6 +58,7 @@ export interface DaemonClient {
   stopAgent(agentId: string, ctx: RequestContext): Promise<void>;
   getStatus(agentId: string | undefined, ctx: RequestContext): Promise<DaemonAgentState[]>;
   getLogs(agentId: string, tail: number, ctx: RequestContext): Promise<LogsResult>;
+  getMergedLogs(tail: number, ctx: RequestContext): Promise<LogsResult>;
   upgradeAgent(agentId: string, ctx: RequestContext): Promise<UpgradeResult>;
   diagnoseAgent(agentId: string, ctx: RequestContext): Promise<DiagnoseResult>;
   createRemoteDiagnosisHandoff(input: CreateRemoteDiagnosisHandoffInput): Promise<RemoteDiagnosisHandoff>;
@@ -215,11 +216,26 @@ export class InMemoryDaemonClient implements DaemonClient {
   async getLogs(agentId: string, tail: number, ctx: RequestContext): Promise<LogsResult> {
     this.requireAgent(agentId);
     const entries = this.logs.get(agentId) ?? [];
-    const safeTail = tail > 0 ? tail : 200;
+    const safeTail = boundTail(tail);
     const start = entries.length > safeTail ? entries.length - safeTail : 0;
     this.recordAudit(ctx, "logs", agentId, `tail=${safeTail}`);
     return {
       lines: entries.slice(start),
+      truncated: start > 0,
+    };
+  }
+
+  async getMergedLogs(tail: number, ctx: RequestContext): Promise<LogsResult> {
+    const safeTail = boundTail(tail);
+    const merged: string[] = [];
+    for (const entries of this.logs.values()) {
+      merged.push(...entries);
+    }
+    merged.sort();
+    const start = merged.length > safeTail ? merged.length - safeTail : 0;
+    this.recordAudit(ctx, "logs", "*", `merged tail=${safeTail}`);
+    return {
+      lines: merged.slice(start),
       truncated: start > 0,
     };
   }
@@ -350,6 +366,13 @@ export class InMemoryDaemonClient implements DaemonClient {
       updatedAt: state.updatedAt,
     };
   }
+}
+
+const MAX_TAIL_LINES = 1000;
+
+function boundTail(n: number): number {
+  if (!Number.isFinite(n) || n <= 0) return 200;
+  return Math.min(n, MAX_TAIL_LINES);
 }
 
 function bumpPatchVersion(version: string): string {

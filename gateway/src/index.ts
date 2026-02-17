@@ -224,22 +224,27 @@ export async function handleCommand(
         };
       }
       case "/logs": {
-        const [agentId, tailRaw] = cmd.args;
-        if (!agentId) {
-          return usageError(cmd.requestId, "/logs <agent_id> [tail]");
-        }
+        const [firstArg, secondArg] = cmd.args;
+        // When no args or first arg looks like a number → merged logs
+        const isMerged = !firstArg || /^\d+$/.test(firstArg);
+        const agentId = isMerged ? undefined : firstArg;
+        const tailRaw = isMerged ? (firstArg || undefined) : secondArg;
         const tail = parsePositiveInt(tailRaw, 200);
-        const logs = await deps.daemon.getLogs(agentId, tail, ctx);
+        const logs = agentId
+          ? await deps.daemon.getLogs(agentId, tail, ctx)
+          : await deps.daemon.getMergedLogs(tail, ctx);
+        const label = agentId ?? "all agents";
         const message = logs.lines.length === 0
-          ? `no logs for ${agentId}`
-          : `returned ${logs.lines.length} log lines for ${agentId}`;
+          ? `no logs for ${label}`
+          : `returned ${logs.lines.length} log lines for ${label}`;
         const response: GatewayResponse = {
           requestId: cmd.requestId,
           result: "ok",
           message,
         };
         if (logs.truncated || logs.lines.length > 50) {
-          const logFilePath = `/tmp/${agentId}-logs-${cmd.requestId}.txt`;
+          const fileLabel = agentId ?? "merged";
+          const logFilePath = `/tmp/${fileLabel}-logs-${cmd.requestId}.txt`;
           const logContent = logs.lines.join("\n");
           await Bun.write(logFilePath, logContent);
           const token = deps.downloads.issue(logFilePath, 300, true, {

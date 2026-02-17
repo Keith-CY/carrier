@@ -78,10 +78,20 @@ export class HttpDaemonClient implements DaemonClient {
   }
 
   async getLogs(agentId: string, tail: number, ctx: RequestContext): Promise<LogsResult> {
-    const safeTail = Number.isFinite(tail) && tail > 0 ? Math.floor(tail) : 200;
+    const safeTail = Number.isFinite(tail) && tail > 0 ? Math.min(Math.floor(tail), 1000) : 200;
     return await this.requestJSON<LogsResult>(
       "GET",
       `/api/v1/agents/${encodeURIComponent(agentId)}/logs?tail=${safeTail}`,
+      undefined,
+      ctx,
+    );
+  }
+
+  async getMergedLogs(tail: number, ctx: RequestContext): Promise<LogsResult> {
+    const safeTail = Number.isFinite(tail) && tail > 0 ? Math.min(Math.floor(tail), 1000) : 200;
+    return await this.requestJSON<LogsResult>(
+      "GET",
+      `/api/v1/logs?tail=${safeTail}`,
       undefined,
       ctx,
     );
