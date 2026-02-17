@@ -190,7 +190,7 @@ export class InMemoryDaemonClient implements DaemonClient {
       runtimeState: "running",
       health: "healthy",
       startedAt: this.now().toISOString(),
-      restartCount: state.startedAt ? state.restartCount + 1 : 0,
+      restartCount: state.startedAt ? state.restartCount + 1 : state.restartCount,
       lastError: undefined,
       updatedAt: this.now().toISOString(),
     });

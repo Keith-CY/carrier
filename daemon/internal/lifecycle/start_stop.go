@@ -96,11 +96,11 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 	state.LastError = ""
 	state.LastTriageSummary = ""
 	state.NeedsRemoteDiagnosis = false
-	state.StartedAt = &now
 	if state.StartedAt != nil {
 		// Only count as a restart if the agent was previously started
 		state.RestartCount = state.RestartCount + 1
 	}
+	state.StartedAt = &now
 	// Populate ports from manifest
 	if m, ok := s.manifests[agentID]; ok {
 		ports := make([]int, 0, len(m.Network.Ports))
@@ -171,7 +171,7 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 	state.Health = HealthStateUnknown
 	state.LastError = ""
 	state.StartedAt = nil
-	state.Ports = nil
+	state.Ports = []int{}
 	state.UpdatedAt = s.now()
 	s.states[agentID] = state
 	s.mu.Unlock()
