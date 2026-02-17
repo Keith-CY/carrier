@@ -514,22 +514,21 @@ func TestAuditLogsEndpointRejectsInvalidResultFilter(t *testing.T) {
 	}
 }
 
-func TestDecodeBodyRejectsUnknownFields(t *testing.T) {
+func TestDecodeBodyAllowsUnknownFields(t *testing.T) {
 	clock := &fakeClock{now: time.Date(2026, 2, 14, 17, 0, 0, 0, time.UTC)}
 	pairing := NewPairingCodeStore(clock.Now)
 	svc := newServiceForAPITest(t)
 	handler := NewServer(svc, WithPairingCodeStore(pairing)).Handler()
 
-	// Send a request with an unknown field "extra" — DisallowUnknownFields
-	// should cause a 400 rejection.
+	// Unknown fields should be silently ignored for forward compatibility.
+	// The request should proceed to normal validation (code is invalid).
 	rr := doRawJSONRequest(t, handler, http.MethodPost, "/api/v1/pairing/verify-consume",
 		[]byte(`{"code":"test","extra":"unknown"}`))
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
-	}
+	// Should NOT be a JSON parse error — the unknown field is tolerated.
+	// It should reach pairing validation and fail there instead.
 	body := rr.Body.String()
-	if !strings.Contains(body, "unknown field") {
-		t.Fatalf("expected unknown field error, got: %s", body)
+	if strings.Contains(body, "unknown field") {
+		t.Fatalf("decodeBody should allow unknown fields for forward compat, got: %s", body)
 	}
 }
 
