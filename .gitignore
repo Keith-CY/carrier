@@ -6,3 +6,4 @@ daemon/coverage.out
 .worktrees/
 agentd
 !daemon/cmd/agentd/
+.pr-review-state.json
