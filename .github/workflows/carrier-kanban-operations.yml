@@ -32,6 +32,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            const { loadKanbanConfig } = require('./scripts/ci/kanban-config.cjs');
 
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -62,7 +63,7 @@ jobs:
               return;
             }
 
-            const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            const config = loadKanbanConfig(configPath);
             const projectId = process.env.CARRIER_PROJECT_ID || (context.payload.inputs && context.payload.inputs.project_id) || config.projectId;
             if (!projectId) {
               core.setFailed('Missing projectId. Set CARRIER_PROJECT_ID secret or pass workflow input project_id.');

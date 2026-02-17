@@ -42,6 +42,7 @@ export class RateLimiter {
    */
   check(sessionKey: string, now: number = Date.now()): RateLimitResult {
     const cutoff = now - this.config.windowMs;
+    this.pruneExpiredSessions(cutoff);
 
     // Prune and check global
     this.globalWindow = this.globalWindow.filter((t) => t > cutoff);
@@ -87,6 +88,19 @@ export class RateLimiter {
   /** Return current config (for inspection/testing). */
   getConfig(): Readonly<RateLimitConfig> {
     return { ...this.config };
+  }
+
+  private pruneExpiredSessions(cutoff: number): void {
+    for (const [sessionKey, timestamps] of this.sessionWindows.entries()) {
+      const active = timestamps.filter((t) => t > cutoff);
+      if (active.length === 0) {
+        this.sessionWindows.delete(sessionKey);
+        continue;
+      }
+      if (active.length !== timestamps.length) {
+        this.sessionWindows.set(sessionKey, active);
+      }
+    }
   }
 }
 

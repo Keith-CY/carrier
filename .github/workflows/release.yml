@@ -24,7 +24,7 @@ jobs:
           go-version-file: daemon/go.mod
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
         with:
           bun-version: "1.1.8"
 
@@ -117,7 +117,7 @@ jobs:
           path: dist
 
       - name: Publish Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: main-${{ github.sha }}

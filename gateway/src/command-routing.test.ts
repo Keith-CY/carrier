@@ -203,6 +203,41 @@ describe("command routing: /logs", () => {
 
     expect(res.result).toBe("ok");
   });
+
+  test("malformed tail values fall back to the default", async () => {
+    const daemon = deps.daemon as InMemoryDaemonClient;
+    const malformedValues = [
+      "3000abc",
+      "+12",
+      "-5",
+      "1.5",
+      "999999999999999999999",
+    ];
+
+    for (const [idx, value] of malformedValues.entries()) {
+      const reqId = `req-bad-tail-${idx + 1}`;
+      const res = await handleCommand(parseInput(`telegram 100 ${reqId} /logs openclaw ${value}`), deps);
+      expect(res.result).toBe("ok");
+    }
+
+    const logAudits = daemon
+      .getAuditEvents()
+      .filter((event) => event.action === "logs")
+      .slice(-malformedValues.length);
+
+    expect(logAudits).toHaveLength(malformedValues.length);
+    for (const event of logAudits) {
+      expect(event.message).toBe("tail=200");
+    }
+  });
+
+  test("strict positive integer tail is accepted", async () => {
+    const daemon = deps.daemon as InMemoryDaemonClient;
+    const res = await handleCommand(parseInput("telegram 100 req-good-tail /logs openclaw 42"), deps);
+
+    expect(res.result).toBe("ok");
+    expect(daemon.getAuditEvents().at(-1)?.message).toBe("tail=42");
+  });
 });
 
 describe("command routing: /upgrade", () => {

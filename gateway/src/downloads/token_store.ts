@@ -87,7 +87,8 @@ export class DownloadTokenStore {
   }
 
   toDownloadURL(token: ReadOnlyDownloadToken): string {
-    const fileName = token.fileRef.split("/").pop() || "artifact.zip";
-    return `/downloads/${token.token}/${fileName}`;
+    const rawName = token.fileRef.split(/[\\/]/).pop()?.trim() ?? "";
+    const fileName = rawName.length > 0 ? rawName : "artifact.zip";
+    return `/downloads/${token.token}/${encodeURIComponent(fileName)}`;
   }
 }

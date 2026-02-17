@@ -48,7 +48,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
         with:
           bun-version: "1.1.8"
 
@@ -59,6 +59,24 @@ jobs:
       - name: Type check gateway
         working-directory: gateway
         run: bun run check
+
+  ci-guards:
+    name: CI Guard Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run CI guard unit tests
+        run: node --test scripts/ci/*.test.cjs
+
+      - name: Enforce workflow action pinning policy
+        run: node scripts/ci/check-action-pinning.cjs
 
   e2e-tests:
     name: End-to-End Tests
@@ -74,7 +92,7 @@ jobs:
           go-version-file: daemon/go.mod
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
         with:
           bun-version: "1.1.8"
 
