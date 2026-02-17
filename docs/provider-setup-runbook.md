@@ -22,8 +22,11 @@ This runbook covers end-to-end setup for all three gateway providers: Telegram, 
 
 ```bash
 curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
-  -d "url=https://<YOUR_GATEWAY_HOST>/webhook/telegram"
+  -d "url=https://<YOUR_GATEWAY_HOST>/webhook/telegram" \
+  -d "secret_token=<YOUR_WEBHOOK_SECRET>"
 ```
+
+Gateway-side verification should validate `X-Telegram-Bot-Api-Secret-Token` against `CARRIER_TELEGRAM_WEBHOOK_SECRET`.
 
 ### 1.3 Store Secrets
 

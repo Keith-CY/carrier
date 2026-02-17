@@ -1,4 +1,5 @@
 import type { Provider } from "../contracts/commands";
+import { timingSafeEqual } from "node:crypto";
 
 export type NormalizedGatewayCommand = {
   provider: Provider;
@@ -55,6 +56,23 @@ export function parseTelegramUpdateToCommand(payload: unknown): NormalizedGatewa
     args: parsed.args,
     rawText,
   };
+}
+
+export function verifyTelegramWebhookSecret(
+  providedSecret: string | null | undefined,
+  expectedSecret: string | null | undefined,
+): boolean {
+  const expected = expectedSecret?.trim() ?? "";
+  if (expected.length === 0) {
+    return true;
+  }
+
+  const provided = providedSecret?.trim() ?? "";
+  if (provided.length === 0) {
+    return false;
+  }
+
+  return constantTimeStringEquals(provided, expected);
 }
 
 export function parseDiscordPayloadToCommand(payload: unknown): NormalizedGatewayCommand | null {
@@ -277,4 +295,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+function constantTimeStringEquals(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left, "utf8");
+  const rightBuffer = Buffer.from(right, "utf8");
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+  return timingSafeEqual(leftBuffer, rightBuffer);
 }

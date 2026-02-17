@@ -3,6 +3,7 @@ import {
   parseDiscordPayloadToCommand,
   parseFeishuEventToCommand,
   parseTelegramUpdateToCommand,
+  verifyTelegramWebhookSecret,
   toGatewayInput,
 } from "./parsers";
 
@@ -48,6 +49,32 @@ describe("parseTelegramUpdateToCommand", () => {
       },
     });
     expect(parsed).toBeNull();
+  });
+});
+
+describe("verifyTelegramWebhookSecret", () => {
+  test("allows requests when expected secret is not configured", () => {
+    expect(verifyTelegramWebhookSecret(null, undefined)).toBe(true);
+    expect(verifyTelegramWebhookSecret("anything", "")).toBe(true);
+    expect(verifyTelegramWebhookSecret("anything", "   ")).toBe(true);
+  });
+
+  test("rejects requests without secret when expected secret is configured", () => {
+    expect(verifyTelegramWebhookSecret(null, "shared-secret")).toBe(false);
+    expect(verifyTelegramWebhookSecret("", "shared-secret")).toBe(false);
+  });
+
+  test("accepts exact secret token", () => {
+    expect(verifyTelegramWebhookSecret("shared-secret", "shared-secret")).toBe(true);
+  });
+
+  test("trims surrounding whitespace before compare", () => {
+    expect(verifyTelegramWebhookSecret(" shared-secret ", "shared-secret")).toBe(true);
+    expect(verifyTelegramWebhookSecret("shared-secret", " shared-secret ")).toBe(true);
+  });
+
+  test("rejects near-miss secret token", () => {
+    expect(verifyTelegramWebhookSecret("shared-secret-x", "shared-secret")).toBe(false);
   });
 });
 
