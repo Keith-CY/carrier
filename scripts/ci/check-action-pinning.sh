@@ -27,7 +27,7 @@ while IFS= read -r match; do
 
   [[ -z "$value" ]] && continue
   [[ "$value" == ./* ]] && continue
-  [[ "$value" == *'${{'* ]] && continue
+  [[ "$value" == *\$\{\{* ]] && continue
   [[ "$value" != *"@"* ]] && continue
 
   action="${value%@*}"
