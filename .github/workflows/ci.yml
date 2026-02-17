@@ -28,8 +28,60 @@ permissions:
   contents: read
 
 jobs:
+  classify-scope:
+    name: Classify Scope
+    runs-on: ubuntu-latest
+    outputs:
+      ci_only: ${{ steps.classify.outputs.ci_only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed files
+        id: classify
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ci_only=false
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+            head_sha="${{ github.event.pull_request.head.sha }}"
+            changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
+
+            ci_only=true
+            while IFS= read -r file; do
+              [[ -z "$file" ]] && continue
+              case "$file" in
+                .github/workflows/*|scripts/ci/*)
+                  ;;
+                *)
+                  ci_only=false
+                  break
+                  ;;
+              esac
+            done <<< "$changed_files"
+          fi
+
+          echo "ci_only=$ci_only" >> "$GITHUB_OUTPUT"
+          echo "CI-only scope: $ci_only"
+
+  action-pin-guard:
+    name: Action Pinning Guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Validate third-party action pinning
+        run: bash scripts/ci/check-action-pinning.sh
+
   daemon-tests:
     name: Daemon Tests
+    needs: classify-scope
+    if: github.event_name != 'pull_request' || needs.classify-scope.outputs.ci_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -47,6 +99,8 @@ jobs:
 
   daemon-lint:
     name: Daemon Lint
+    needs: classify-scope
+    if: github.event_name != 'pull_request' || needs.classify-scope.outputs.ci_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -63,8 +117,11 @@ jobs:
         with:
           version: v1.64
           working-directory: daemon
+
   gateway-check:
     name: Gateway Check
+    needs: classify-scope
+    if: github.event_name != 'pull_request' || needs.classify-scope.outputs.ci_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -89,6 +146,8 @@ jobs:
 
   provider-parity:
     name: Provider Parity (${{ matrix.scenario }})
+    needs: classify-scope
+    if: github.event_name != 'pull_request' || needs.classify-scope.outputs.ci_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -128,6 +187,7 @@ jobs:
           name: provider-parity-${{ matrix.scenario }}
           path: gateway/parity-artifacts/parity-${{ matrix.scenario }}.log
           if-no-files-found: error
+
   e2e-tests:
     name: End-to-End Tests
     runs-on: ubuntu-latest
