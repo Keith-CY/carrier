@@ -67,7 +67,19 @@ export interface DaemonClient {
   diagnoseAgent(agentId: string, ctx: RequestContext): Promise<DiagnoseResult>;
   createRemoteDiagnosisHandoff(input: CreateRemoteDiagnosisHandoffInput): Promise<RemoteDiagnosisHandoff>;
   verifyPairCode(code: string, ctx: RequestContext): Promise<void>;
+  getAgentRequirements(agentId: string, ctx: RequestContext): Promise<AgentRequirementsResult>;
 }
+
+export type AgentRequirementsResult = {
+  agent_id: string;
+  name: string;
+  description: string;
+  capabilities: string[];
+  env: {
+    required: { name: string; secret?: boolean; default?: string; description?: string }[];
+    optional: { name: string; secret?: boolean; default?: string; description?: string }[];
+  };
+};
 
 export class DaemonClientError extends Error {
   constructor(
@@ -335,6 +347,20 @@ export class InMemoryDaemonClient implements DaemonClient {
       `consent=${input.consent} handoff=${handoff.id}`,
     );
     return handoff;
+  }
+
+  async getAgentRequirements(agentId: string, ctx: RequestContext): Promise<AgentRequirementsResult> {
+    this.requireAgent(agentId);
+    this.recordAudit(ctx, "requirements", agentId, "fetched requirements");
+    // Return sensible defaults for in-memory client
+    const state = this.agents.get(agentId)!;
+    return {
+      agent_id: agentId,
+      name: state.name,
+      description: `${state.name} agent`,
+      capabilities: [],
+      env: { required: [], optional: [] },
+    };
   }
 
   async verifyPairCode(code: string, ctx: RequestContext): Promise<void> {

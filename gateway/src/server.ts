@@ -1,5 +1,6 @@
 import { safeHandleCommand, type GatewayDependencies } from "./index";
 import { ProviderSetupStore, type ProviderType } from "./providers/setup";
+import { OnboardStore, validateProvider as validateOnboardProvider, computeReadiness } from "./providers/onboard";
 import { HttpDaemonClient } from "./daemon/http_client";
 import {
   buildContentDisposition,
@@ -117,6 +118,7 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
   const maxBodyBytes = Number.isFinite(rawMax) && rawMax > 0 ? Math.floor(rawMax) : cachedMaxCommandBodyBytes;
 
     const providerSetup = new ProviderSetupStore();
+  const onboardStore = new OnboardStore();
 
   const router: GatewayHandler = async (ctx) => {
     const url = new URL(ctx.request.url);
@@ -193,6 +195,111 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
         result: "ok" as const,
         configured: providerSetup.isConfigured(),
         provider: redactedConfig,
+      });
+    }
+
+    // Onboard: POST /api/v1/onboard
+    if (ctx.request.method === "POST" && (url.pathname === "/api/v1/onboard")) {
+      const authErr = validateGatewayAPIToken(ctx.request, ctx.requestId);
+      if (authErr) return jsonResponse(authErr, 401);
+      try {
+        const body = await ctx.request.json() as {
+          provider?: string;
+          provider_token?: string;
+          provider_webhook_secret?: string;
+          env?: Record<string, string>;
+        };
+        if (!body.provider) {
+          return jsonResponse({ requestId: ctx.requestId, result: "error", errorCode: "E_MISSING_PROVIDER", message: "provider field is required" }, 400);
+        }
+        if (!validateOnboardProvider(body.provider)) {
+          return jsonResponse({ requestId: ctx.requestId, result: "error", errorCode: "E_INVALID_PROVIDER", message: `invalid provider: ${body.provider}` }, 400);
+        }
+        onboardStore.configure(body.provider as any, body.provider_token, body.env);
+
+        // Fetch agents from daemon and their requirements
+        const reqCtx = { actor: "onboard", requestId: ctx.requestId };
+        const agents = await ctx.deps.daemon.listAgents(reqCtx);
+        const requirements = new Map<string, any>();
+        for (const agent of agents) {
+          try {
+            const reqs = await ctx.deps.daemon.getAgentRequirements(agent.id, reqCtx);
+            if (reqs) requirements.set(agent.id, reqs);
+          } catch { /* skip agents whose requirements can't be fetched */ }
+        }
+        const providedEnv = onboardStore.getEnv();
+        const available = computeReadiness(agents, requirements, providedEnv);
+        return jsonResponse({
+          requestId: ctx.requestId,
+          status: "ready",
+          provider_configured: !!body.provider_token,
+          available_agents: available,
+        });
+      } catch {
+        return jsonResponse({ requestId: ctx.requestId, result: "error", errorCode: "E_BAD_REQUEST", message: "invalid JSON body" }, 400);
+      }
+    }
+
+    // Onboard: POST /api/v1/onboard/install
+    if (ctx.request.method === "POST" && url.pathname === "/api/v1/onboard/install") {
+      const authErr = validateGatewayAPIToken(ctx.request, ctx.requestId);
+      if (authErr) return jsonResponse(authErr, 401);
+      try {
+        const body = await ctx.request.json() as { agents?: string[]; instance_name?: string };
+        if (!body.agents || !Array.isArray(body.agents) || body.agents.length === 0) {
+          return jsonResponse({ requestId: ctx.requestId, result: "error", errorCode: "E_MISSING_AGENTS", message: "agents array is required" }, 400);
+        }
+        const reqCtx = { actor: "onboard", requestId: ctx.requestId };
+        const results = [];
+        for (const agentId of body.agents) {
+          const instanceId = body.instance_name ?? agentId;
+          let installStatus: "ok" | "error" = "ok";
+          let startStatus: "ok" | "error" = "ok";
+          let status = "running";
+          let error: string | undefined;
+          try {
+            await ctx.deps.daemon.installAgent(agentId, reqCtx);
+          } catch (e: any) {
+            installStatus = "error";
+            startStatus = "skipped" as any;
+            status = "install_failed";
+            error = e?.message ?? String(e);
+          }
+          if (installStatus === "ok") {
+            try {
+              await ctx.deps.daemon.startAgent(agentId, reqCtx);
+            } catch (e: any) {
+              startStatus = "error";
+              status = "start_failed";
+              error = e?.message ?? String(e);
+            }
+          }
+          results.push({ agent_id: agentId, instance_id: instanceId, install: installStatus, start: startStatus, status, ...(error ? { error } : {}) });
+        }
+        return jsonResponse({ requestId: ctx.requestId, results });
+      } catch {
+        return jsonResponse({ requestId: ctx.requestId, result: "error", errorCode: "E_BAD_REQUEST", message: "invalid JSON body" }, 400);
+      }
+    }
+
+    // Onboard: GET /api/v1/onboard/status
+    if (ctx.request.method === "GET" && url.pathname === "/api/v1/onboard/status") {
+      const authErr = validateGatewayAPIToken(ctx.request, ctx.requestId);
+      if (authErr) return jsonResponse(authErr, 401);
+      const state = onboardStore.getState();
+      const reqCtx = { actor: "onboard", requestId: ctx.requestId };
+      let agentStatuses: any[] = [];
+      try {
+        agentStatuses = await ctx.deps.daemon.listAgents(reqCtx);
+      } catch { /* daemon unavailable */ }
+      return jsonResponse({
+        requestId: ctx.requestId,
+        onboard: {
+          provider: state.provider,
+          provider_configured: state.provider_configured,
+          configured_at: state.configured_at,
+        },
+        agents: agentStatuses,
       });
     }
 

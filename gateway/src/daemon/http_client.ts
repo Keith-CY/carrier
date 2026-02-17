@@ -1,6 +1,7 @@
 import {
   DaemonClientError,
   RemoteDiagnosisNotNeededError,
+  type AgentRequirementsResult,
   type CreateRemoteDiagnosisHandoffInput,
   type DaemonAgentState,
   type DaemonClient,
@@ -138,6 +139,15 @@ export class HttpDaemonClient implements DaemonClient {
         actor: input.actor,
         requestId: input.requestId,
       },
+    );
+  }
+
+  async getAgentRequirements(agentId: string, ctx: RequestContext): Promise<AgentRequirementsResult> {
+    return await this.requestJSON<AgentRequirementsResult>(
+      "GET",
+      `/api/v1/agents/${encodeURIComponent(agentId)}/requirements`,
+      undefined,
+      ctx,
     );
   }
 

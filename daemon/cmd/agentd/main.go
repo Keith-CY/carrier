@@ -338,6 +338,8 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.Pai
 			handleUninstall(svc, agentID, w, r)
 		case "diagnose":
 			handleDiagnose(svc, agentID, w, r)
+		case "requirements":
+			handleRequirements(svc, agentID, w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -541,6 +543,42 @@ func handleDiagnose(svc *lifecycle.Service, agentID string, w http.ResponseWrite
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"artifactRef": artifactRef})
+}
+
+func handleRequirements(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	m, ok := svc.GetManifest(agentID)
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, "agent not found: "+agentID)
+		return
+	}
+	type envVarOut struct {
+		Name        string `json:"name"`
+		Secret      bool   `json:"secret,omitempty"`
+		Default     string `json:"default,omitempty"`
+		Description string `json:"description,omitempty"`
+	}
+	required := make([]envVarOut, 0, len(m.Env.Required))
+	for _, v := range m.Env.Required {
+		required = append(required, envVarOut{Name: v.Name, Secret: v.Secret, Default: v.Default, Description: v.Description})
+	}
+	optional := make([]envVarOut, 0, len(m.Env.Optional))
+	for _, v := range m.Env.Optional {
+		optional = append(optional, envVarOut{Name: v.Name, Secret: v.Secret, Default: v.Default, Description: v.Description})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"agent_id":     agentID,
+		"name":         m.Name,
+		"description":  m.Description,
+		"capabilities": m.Capabilities,
+		"env": map[string]interface{}{
+			"required": required,
+			"optional": optional,
+		},
+	})
 }
 
 type agentIDBody struct {

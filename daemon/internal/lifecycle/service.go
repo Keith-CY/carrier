@@ -288,6 +288,15 @@ func loadCommandTimeoutFromEnv(raw string) time.Duration {
 	return timeout
 }
 
+// GetManifest returns the manifest for the given agent ID.
+// Returns the manifest and true if found, or a zero manifest and false otherwise.
+func (s *Service) GetManifest(agentID string) (manifest.Manifest, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m, ok := s.manifests[agentID]
+	return m, ok
+}
+
 func (s *Service) RegisterManifest(m manifest.Manifest) error {
 	if err := m.Validate(); err != nil {
 		return err
