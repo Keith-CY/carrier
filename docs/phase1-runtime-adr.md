@@ -76,10 +76,16 @@ Accepted tradeoffs:
 3. **Risk**: Conflicting wording across docs
    - **Mitigation**: treat PRD as source of truth and keep docs aligned through micro tasks under #75.
 
+## Canonical Source Note
+
+This file (`docs/phase1-runtime-adr.md`) is the canonical runtime ADR for Phase 1.
+
+`docs/plans/adr-runtime-model.md` is retained as historical context and is superseded for decision authority.
+
 ## References
 
 - PRD source-of-truth scope: `docs/Agent_Installation_Platform_PRD.md`
 - Product design runtime model: `docs/Agent_Installation_Platform_Product_Design.md`
-- Existing ADR draft: `docs/plans/adr-runtime-model.md`
+- Historical (superseded) ADR context: `docs/plans/adr-runtime-model.md`
 - Parent plan: issue #74
 - Micro task: issue #796

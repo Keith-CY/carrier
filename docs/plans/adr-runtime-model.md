@@ -1,8 +1,11 @@
 # ADR: Phase 1 Runtime Model — Local-First, No Docker
 
+> Superseded for authority by `docs/phase1-runtime-adr.md`.
+> This file is kept as historical context from earlier planning drafts.
+
 ## Status
 
-**Accepted**
+**Superseded (historical)**
 
 ## Context
 
