@@ -1,99 +1,72 @@
-# ADR: Phase 1 Runtime Model Baseline
+# ADR-Phase1-001: Runtime Model Baseline (Local Host + WSL2, No Docker)
 
-Status: Accepted (Phase 1)
+- Status: Accepted
+- Date: 2026-02-17
+- Scope: Phase 1 runtime model and terminology baseline
+- Source issues: #74 #796
 
 ## Context
 
-Carrier Phase 1 must provide a reliable local-first runtime for daemon-managed agents while keeping installation and troubleshooting approachable for contributors and operators.
-
-Primary constraints:
-- Deterministic lifecycle behavior for install/start/stop/status/logs/diagnose
-- Minimal operational surface for Phase 1
-- Compatibility with desktop environments
+Phase 1 documentation previously referenced runtime behavior in multiple places (PRD, implementation plan, product design, README, and historical supplemental notes). To avoid drift, one canonical runtime baseline is required.
 
 ## Decision
 
-Phase 1 runtime model is:
-- **macOS/Linux**: local host runtime (native processes)
-- **Windows**: local runtime inside **WSL2**
-- **Docker runtime**: explicitly out of Phase 1 scope
+Phase 1 runtime is **local-first only**:
 
-OpenClaw is the only full-lifecycle target in Phase 1; other catalog entries remain candidates.
+- macOS/Linux: run agent processes on host.
+- Windows: run agent processes in WSL2.
+- Docker/container runtime: out of scope for Phase 1.
+
+The canonical reference chain is:
+
+1. `docs/Agent_Installation_Platform_PRD.md`
+2. `docs/phase1-runtime-adr.md` (this ADR)
+3. `docs/Agent_Installation_Platform_Implementation_Plan.md`
+4. `README.md`
 
 ## Alternatives Considered
 
-### A) Docker-first runtime
+1. Docker-first for all platforms.
+- Pros: environment consistency, easier dependency isolation.
+- Cons: extra operational complexity, conflicts with local-first onboarding goal, larger Phase 1 surface.
 
-Pros:
-- Better host isolation
-- Reproducible container environment
+2. Hybrid local + Docker in Phase 1.
+- Pros: gradual transition path.
+- Cons: doubles validation matrix, adds ambiguous operator guidance, increases troubleshooting burden.
 
-Cons:
-- Added complexity in networking/volumes/privilege model
-- Increased onboarding burden for non-technical users
-- Diverges from Phase 1 speed-to-healthy objective
-
-Decision: **Rejected for Phase 1**.
-
-### B) Windows native runtime (without WSL2)
-
-Pros:
-- Potentially fewer moving parts for users not using WSL2
-
-Cons:
-- Additional platform-specific process/service edge cases
-- Harder parity with Linux-oriented runtime tooling
-- Higher test matrix and maintenance cost in Phase 1
-
-Decision: **Deferred**.
-
-### C) Hybrid local+remote runtime in Phase 1
-
-Pros:
-- Flexibility for advanced deployment patterns
-
-Cons:
-- Significant policy/auth/diagnostics complexity increase
-- Dilutes focus from core lifecycle reliability
-
-Decision: **Rejected for Phase 1**.
+3. Platform-specific divergence (macOS/Linux local, Windows Docker).
+- Pros: avoids WSL2 dependency.
+- Cons: breaks cross-platform parity and complicates support runbooks.
 
 ## Tradeoffs
 
-Accepted tradeoffs:
-- Reduced platform breadth in exchange for predictable lifecycle behavior
-- WSL2 prerequisite on Windows in exchange for runtime consistency
-- No Docker convenience in exchange for lower orchestration complexity
+- Choosing local-first improves onboarding speed and Phase 1 focus.
+- Choosing local-first reduces environment abstraction and may expose host-level dependency drift.
+- Deferring Docker reduces immediate flexibility but keeps acceptance criteria testable.
 
 ## Risks and Mitigations
 
-1. **Risk**: Users expect Docker support immediately
-   - **Mitigation**: keep Docker explicitly documented as out-of-scope for Phase 1; revisit in later phase planning.
+1. Host dependency drift causes install/start failures.
+- Mitigation: strict runtime prerequisite checks and diagnose artifacts.
 
-2. **Risk**: WSL2 setup friction on Windows
-   - **Mitigation**: maintain WSL2 support matrix and prerequisite checks in daemon startup paths.
+2. WSL2 setup inconsistency on Windows.
+- Mitigation: explicit WSL2 support matrix and failure guidance.
 
-3. **Risk**: Conflicting wording across docs
-   - **Mitigation**: treat PRD as source of truth and keep docs aligned through micro tasks under #75.
+3. Future docs regress to mixed runtime language.
+- Mitigation: PR checklist gate: "Does this change affect runtime model?" and mandatory ADR reference.
 
-## Canonical Source Note
+## Consequences
 
-This file (`docs/phase1-runtime-adr.md`) is the canonical runtime ADR for Phase 1.
+- Manifest/runtime examples must describe host/WSL2 execution only in Phase 1.
+- Runtime-related docs must not introduce Docker commands or Docker-only assumptions.
+- Docker support, if added, requires a new ADR and explicit Phase 2+ scope change.
 
-`docs/plans/adr-runtime-model.md` is retained as historical context and is superseded for decision authority.
+## Required Update List for Runtime-Model Changes
 
-## Acceptance Metadata
+Any runtime-model change must update, in one PR:
 
-| Field            | Value                          |
-|-----------------|--------------------------------|
-| Effective date  | 2026-02-16                     |
-| ADR version     | 1.0                           |
-| Accepted by     | Phase 1 review (PR #1040)     |
-
-## References
-
-- PRD source-of-truth scope: `docs/Agent_Installation_Platform_PRD.md`
-- Product design runtime model: `docs/Agent_Installation_Platform_Product_Design.md`
-- Historical (superseded) ADR context: `docs/plans/adr-runtime-model.md`
-- Parent plan: issue #74
-- Micro task: issue #796
+1. `docs/phase1-runtime-adr.md`
+2. `docs/Agent_Installation_Platform_PRD.md`
+3. `docs/Agent_Installation_Platform_Implementation_Plan.md`
+4. `README.md`
+5. `.github/PULL_REQUEST_TEMPLATE.md`

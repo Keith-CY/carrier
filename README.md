@@ -2,8 +2,15 @@
 
 Phase 1 scaffold for the Agent Installation Platform.
 
+## Phase 1 source of truth
+
+- Runtime model ADR: `docs/phase1-runtime-adr.md`
+- Conflict inventory: `docs/phase1-runtime-conflict-inventory.md`
+- Canonical product scope: `docs/Agent_Installation_Platform_PRD.md`
+
 ## Current scope
 - Runtime: local host (macOS/Linux), WSL2 (Windows)
+- Runtime exclusions: Docker is out of scope for Phase 1
 - Full lifecycle target: OpenClaw
 - Candidate-only agents: Pi Mono, NanoClaw, Pico Claw
 - Memory model: Per-Agent, Shared, Public
@@ -75,16 +82,17 @@ Key topics covered:
 
 See `CONTRIBUTING.md` for command examples and required process. For security vulnerability reporting, see [`SECURITY.md`](./SECURITY.md). For install/upgrade integrity verification, see [`docs/security-install-integrity.md`](./docs/security-install-integrity.md).
 
-## Terminology (quick glossary)
-- **Runtime**: where agent processes run (macOS/Linux host, Windows via WSL2).
-- **Diagnose**: generate a sanitized diagnostic artifact for troubleshooting.
-- **Memory types**:
-  - **Per-Agent**: memory private to one agent instance.
-  - **Shared**: reusable memory across local agents (default read-only mount).
-  - **Public**: template memory packages (read-only).
-- **Priority levels**:
-  - **P0**: must-have for Phase 1 acceptance.
-  - **P1**: important but can follow after P0.
+## Terminology Mapping
+
+| Term | Mapping |
+|---|---|
+| Runtime | Local host (macOS/Linux) or WSL2 (Windows), no Docker path in Phase 1 |
+| Diagnose | Sanitized diagnostic artifact generation with optional remote diagnosis consent flow |
+| Per-Agent Memory | Memory private to one agent instance |
+| Shared Memory | Reusable memory across local agents (default read-only mount) |
+| Public Memory | Template memory packages (read-only) |
+| P0 | Must-have for Phase 1 acceptance |
+| P1 | Important priority after P0 |
 
 ## Installation and testing
 
@@ -164,6 +172,12 @@ Runtime environment variables:
 ## Local workflow notes
 
 - Before making changes, read the skill instructions under `skills/` (especially `skills/pr-review/SKILL.md` and `skills/review-followup/SKILL.md`) to follow repository-specific conventions.
+
+## Runbooks
+
+- Pairing lifecycle and troubleshooting matrix: `docs/runbooks/pairing-lifecycle.md`
+- Go-live checklist and rollback: `docs/runbooks/go-live-rollback.md`
+- CI first-response playbook: `docs/ci/first-response-playbook.md`
 
 ## Kanban workflow required secrets/env vars
 

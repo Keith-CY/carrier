@@ -2,6 +2,12 @@
 
 This guide covers deploying the Carrier daemon (`agentd`) and gateway in a production environment.
 
+Related runbooks:
+
+- Go-live + rollback: `docs/runbooks/go-live-rollback.md`
+- Pairing lifecycle troubleshooting: `docs/runbooks/pairing-lifecycle.md`
+- CI first response: `docs/ci/first-response-playbook.md`
+
 ## Prerequisites
 
 - **Go 1.22+** (build from source) or a pre-built binary

@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+env:
+  RELEASE_ARTIFACT_RETENTION_DAYS: "14"
+  MAIN_RELEASE_KEEP_COUNT: "20"
+
 jobs:
   e2e-deploy:
     name: End-to-End Tests (Deployment)
@@ -107,6 +111,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: carrier-${{ matrix.label }}
+          retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
           path: |
             dist/carrier-${{ github.sha }}-${{ matrix.label }}.${{ matrix.archive_ext }}
             dist/carrier-${{ github.sha }}-${{ matrix.label }}.${{ matrix.archive_ext }}.sha256
@@ -179,3 +184,39 @@ jobs:
             dist/**/*.zip
             dist/**/*.sha256
             dist/**/*.sig
+
+  prune-main-releases:
+    name: Prune Old main-* Releases
+    needs: release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Prune by count policy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEP_COUNT: ${{ env.MAIN_RELEASE_KEEP_COUNT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t tags < <(
+            gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+              --jq '.[] | select(.tag_name | startswith("main-")) | [.created_at, .tag_name] | @tsv' \
+              | sort -r \
+              | awk -F '\t' '{print $2}'
+          )
+
+          keep="${KEEP_COUNT}"
+          total="${#tags[@]}"
+
+          echo "Found ${total} main-* releases. Keep newest ${keep}."
+
+          if (( total <= keep )); then
+            echo "No release pruning required."
+            exit 0
+          fi
+
+          for tag in "${tags[@]:keep}"; do
+            echo "Deleting release/tag: ${tag}"
+            gh release delete "${tag}" --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag
+          done

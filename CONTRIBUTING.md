@@ -4,8 +4,6 @@
 
 All new development must start from `origin/main` and use a dedicated branch/worktree.
 
-Recommended flow:
-
 ```bash
 git fetch origin
 git worktree add -b codex/<topic> ../carrier-<topic> origin/main
@@ -33,8 +31,6 @@ Keep slugs short and lowercase with hyphens. Avoid special characters.
 
 Do not push feature work directly to `main`.
 
-Use PR flow:
-
 ```bash
 git add .
 git commit -m "<message>"
@@ -43,6 +39,7 @@ gh pr create --base main --head codex/<topic>
 ```
 
 For this repository we use Merge Queue:
+
 - Open the queue from the GitHub PR page after CI is green.
 - Do not use direct push-to-main flows except via merge queue/release process.
 
@@ -60,13 +57,13 @@ Before requesting review, include this checklist in your PR body:
 
 Phase milestones define delivery scope and must be respected in all planning and review.
 
-- Phase 1: Deliver the full lifecycle for OpenClaw only.
+- Phase 1: deliver the full lifecycle for OpenClaw only.
 - Every pull request must include a milestone label: `Phase 1` or `Phase 2`.
 - Candidate agents are blocked until Phase 1 exit criteria pass.
 
 ## Skills Directory
 
-- Before proposing changes, read the `skills/` directory and follow any instructions there (especially `skills/pr-review/SKILL.md` and `skills/review-followup/SKILL.md`).
+Before proposing changes, read the `skills/` directory and follow instructions there (especially `skills/pr-review/SKILL.md` and `skills/review-followup/SKILL.md`).
 
 ## Testing Policy
 
@@ -80,9 +77,130 @@ To reduce CI churn, we enforce pre-push tests locally:
   - `git config core.hooksPath .githooks`
 - The pre-push hook runs `./scripts/run-all-tests.sh`, which includes daemon tests, gateway tests/checks, `scripts/start_systemd_test.sh`, and end-to-end hook.
 
-Current CI checks:
-- Daemon Go tests
-- Gateway TypeScript type check
+```bash
+git config core.hooksPath .githooks
+```
+
+The pre-push hook runs `./scripts/run-all-tests.sh`.
+
+## CI Troubleshooting Docs
+
+- First response playbook: `docs/ci/first-response-playbook.md`
+- Flaky check triage: `docs/ci/flaky-checks.md`
+- Flaky rerun runbook: `docs/ci/flaky-rerun-runbook.md`
+- Failure log collection: `docs/ci-failure-log-collection.md`
+- Release artifact retention: `docs/ci/release-artifact-retention.md`
+
+## CI-only PR Check Surface
+
+For PRs that only touch `.github/workflows/**` and `scripts/ci/**`:
+
+- CI runs minimal checks (workflow/config guards).
+- Daemon and gateway test jobs are skipped intentionally.
+
+For PRs that touch daemon/gateway code:
+
+- Full required checks run (daemon tests + gateway type/tests).
+
+## Updating Pinned GitHub Action SHAs Safely
+
+Third-party actions must use immutable commit SHAs.
+
+Before:
+
+```yaml
+uses: oven-sh/setup-bun@v2
+```
+
+After:
+
+```yaml
+uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3
+```
+
+Safe update workflow:
+
+1. Resolve the upstream tag/ref you intend to adopt.
+2. Replace mutable third-party refs with the exact commit SHA.
+3. Re-run pinning guard locally:
+   ```bash
+   bash scripts/ci/check-action-pinning.sh
+   ```
+4. Push and confirm CI pinning guard passes.
+
+CI enforcement script:
+
+- `scripts/ci/check-action-pinning.sh`
+
+## Checklist for PRs Closing P0/P1 Issues
+
+- Include `Fixes #<issue>` (or `Closes #<issue>`) in PR body.
+- List exact validation commands you ran.
+- Include key command outputs or short evidence summary.
+- State rollback/safety note if behavior changed.
+- Confirm milestone label is present (`Phase 1`/`Phase 2`).
+- Do not merge with unresolved deterministic CI failures.
+
+Example snippet:
+
+```text
+Fixes #425
+Validation:
+- cd gateway && bun run check
+- cd gateway && bun test src/server.test.ts
+- bash scripts/ci/check-action-pinning.sh
+```
+
+## Issue Quality Checklist
+
+Use this checklist when creating or refining issues.
+
+Template:
+
+```text
+Problem:
+In scope:
+Out of scope:
+Acceptance Criteria:
+- [ ] measurable behavior/result
+- [ ] concrete file/path/surface
+Risk/Rollback (optional):
+```
+
+Before (weak):
+
+```text
+Improve CI docs.
+```
+
+After (testable):
+
+```text
+Problem: Contributors cannot quickly collect failed CI logs.
+In scope: Add docs/ci-failure-log-collection.md with gh run list/view examples.
+Out of scope: workflow changes.
+Acceptance Criteria:
+- [ ] includes gh run list command for PR branch
+- [ ] includes gh run view --log-failed example
+- [ ] linked from CONTRIBUTING.md
+Risk/Rollback: docs-only, revert file if guidance is incorrect.
+```
+
+## CODEOWNERS Review Note
+
+Security-sensitive paths are covered in `.github/CODEOWNERS`.
+
+When touching covered files:
+
+- request CODEOWNERS review early
+- avoid bundling unrelated refactors in the same PR
+- keep workflow/security changes small and auditable
+
+## Triage Utilities
+
+- Duplicate review-followup detector: `bun scripts/triage/detect-review-followup-duplicates.ts`
+- Unassigned issue report: `bash scripts/triage/unassigned-report.sh`
+- Triage runbook: `docs/triage.md`
 
 ### Required CI Check Names for PR Readiness
 
@@ -376,10 +494,12 @@ This rule applies to both manual review sweeps and automated review triggers.
 For review comments, use the fixed keyword `NBS:` for each non-blocking suggestion.
 
 Rules:
+
 - one suggestion per line
 - each line starts with `NBS:`
 
 Example:
+
 ```text
 NBS: Add edge-case test for missing request_id.
 NBS: Clarify fallback behavior in README.
