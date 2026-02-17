@@ -5,6 +5,7 @@ import { SessionStore } from "./session/store";
 import { join } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import {
+  asRecord,
   parseDiscordPayloadToCommand,
   parseFeishuEventToCommand,
   toGatewayInput,
@@ -165,6 +166,9 @@ export function startGatewayServer(options: StartGatewayServerOptions = {}): Ret
   });
   const port = options.port ?? parsePort(process.env.CARRIER_GATEWAY_PORT, 8787);
   const hostname = options.hostname ?? process.env.CARRIER_GATEWAY_HOST ?? "127.0.0.1";
+  if (!loadDiscordPublicKey()) {
+    console.warn("[gateway] CARRIER_DISCORD_PUBLIC_KEY is not set — all Discord webhook requests will be rejected (401)");
+  }
   const gatewayApiToken = loadGatewayAPIToken();
   if (!gatewayApiToken && !isLoopbackHost(hostname)) {
     throw new Error("CARRIER_GATEWAY_API_TOKEN is required when binding gateway to non-loopback host");
@@ -376,13 +380,6 @@ function extractFeishuURLVerificationChallenge(payload: unknown): string | null 
     return null;
   }
   return typeof record.challenge === "string" ? record.challenge : "";
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
 }
 
 function buildContentDisposition(filename: string): string {

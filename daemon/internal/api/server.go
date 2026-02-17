@@ -432,7 +432,8 @@ func readJSON(r *http.Request, dst any) error {
 	}
 
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
-	dec.DisallowUnknownFields()
+	// Allow unknown fields for forward compatibility — newer clients may send
+	// fields that this version doesn't know about yet.
 	if err := dec.Decode(dst); err != nil {
 		return fmt.Errorf("invalid json: %w", err)
 	}

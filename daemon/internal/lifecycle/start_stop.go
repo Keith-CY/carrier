@@ -32,6 +32,7 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 	}
 
 	if err := s.blockIfCrashLoopCoolingDown(agentID, state); err != nil {
+		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_CRASH_LOOP", err.Error())
 		return err
 	}
 

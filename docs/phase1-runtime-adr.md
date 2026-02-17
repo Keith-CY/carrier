@@ -2,6 +2,8 @@
 
 Status: Accepted (Phase 1)
 
+> Historical context: [`docs/plans/adr-runtime-model.md`](plans/adr-runtime-model.md)
+
 ## Context
 
 Carrier Phase 1 must provide a reliable local-first runtime for daemon-managed agents while keeping installation and troubleshooting approachable for contributors and operators.

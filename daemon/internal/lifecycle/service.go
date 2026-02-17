@@ -410,6 +410,8 @@ func (s *Service) MergedLogs(tail int) []string {
 }
 
 // MaxTailLines is the upper bound accepted for the tail parameter.
+// Set to 1000 as a memory/performance guard: higher values would require
+// buffering proportionally more log data in memory per request.
 const MaxTailLines = 1000
 
 func boundTail(n int) int {

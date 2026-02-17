@@ -1,6 +1,9 @@
 import type { Provider } from "../contracts/commands";
 import { createPublicKey, timingSafeEqual, verify } from "node:crypto";
 
+/** ASN.1 DER prefix for wrapping a raw 32-byte Ed25519 public key into SPKI format. */
+const ED25519_SPKI_PREFIX = "302a300506032b6570032100";
+
 export type NormalizedGatewayCommand = {
   provider: Provider;
   chatId: string;
@@ -160,7 +163,7 @@ export function verifyDiscordRequestSignature(input: DiscordSignatureVerificatio
     }
 
     // Discord public keys are raw 32-byte Ed25519 keys. Node verify() expects SPKI.
-    const spkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
+    const spkiPrefix = Buffer.from(ED25519_SPKI_PREFIX, "hex");
     const publicKey = createPublicKey({
       key: Buffer.concat([spkiPrefix, publicKeyRaw]),
       format: "der",
@@ -363,18 +366,20 @@ function toID(value: unknown): string | null {
   return null;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
+export function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
   return value as Record<string, unknown>;
 }
 
+/**
+ * Constant-time string comparison that does not leak length information.
+ * Both inputs are hashed before comparison to normalize length.
+ */
 function constantTimeStringEquals(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left, "utf8");
-  const rightBuffer = Buffer.from(right, "utf8");
-  if (leftBuffer.length !== rightBuffer.length) {
-    return false;
-  }
-  return timingSafeEqual(leftBuffer, rightBuffer);
+  const { createHash } = require("node:crypto");
+  const leftHash = createHash("sha256").update(left, "utf8").digest();
+  const rightHash = createHash("sha256").update(right, "utf8").digest();
+  return timingSafeEqual(leftHash, rightHash);
 }

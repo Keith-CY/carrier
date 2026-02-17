@@ -103,9 +103,9 @@ describe("HttpDaemonClient header propagation", () => {
     await client.listAgents({ actor: "discord:channel:12345", requestId: "req-list-1" });
 
     expect(capturedHeaders).toBeDefined();
-    const headers = capturedHeaders as Record<string, string>;
-    expect(headers["x-carrier-actor"]).toBe("discord:channel:12345");
-    expect(headers["x-carrier-request-id"]).toBe("req-list-1");
+    const headers = new Headers(capturedHeaders as HeadersInit);
+    expect(headers.get("x-carrier-actor")).toBe("discord:channel:12345");
+    expect(headers.get("x-carrier-request-id")).toBe("req-list-1");
   });
 
   test("startAgent propagates actor and request-id headers", async () => {
@@ -119,9 +119,9 @@ describe("HttpDaemonClient header propagation", () => {
     await client.startAgent("openclaw", { actor: "telegram:user:999", requestId: "req-start-1" });
 
     expect(capturedHeaders).toBeDefined();
-    const headers = capturedHeaders as Record<string, string>;
-    expect(headers["x-carrier-actor"]).toBe("telegram:user:999");
-    expect(headers["x-carrier-request-id"]).toBe("req-start-1");
+    const headers = new Headers(capturedHeaders as HeadersInit);
+    expect(headers.get("x-carrier-actor")).toBe("telegram:user:999");
+    expect(headers.get("x-carrier-request-id")).toBe("req-start-1");
   });
 
   test("stopAgent propagates actor and request-id headers", async () => {
@@ -135,9 +135,9 @@ describe("HttpDaemonClient header propagation", () => {
     await client.stopAgent("openclaw", { actor: "whatsapp:chat:777", requestId: "req-stop-1" });
 
     expect(capturedHeaders).toBeDefined();
-    const headers = capturedHeaders as Record<string, string>;
-    expect(headers["x-carrier-actor"]).toBe("whatsapp:chat:777");
-    expect(headers["x-carrier-request-id"]).toBe("req-stop-1");
+    const headers = new Headers(capturedHeaders as HeadersInit);
+    expect(headers.get("x-carrier-actor")).toBe("whatsapp:chat:777");
+    expect(headers.get("x-carrier-request-id")).toBe("req-stop-1");
   });
 
   test("installAgent propagates actor and request-id headers", async () => {
@@ -151,8 +151,8 @@ describe("HttpDaemonClient header propagation", () => {
     await client.installAgent("newagent", { actor: "cli:user:alice", requestId: "req-install-1" });
 
     expect(capturedHeaders).toBeDefined();
-    const headers = capturedHeaders as Record<string, string>;
-    expect(headers["x-carrier-actor"]).toBe("cli:user:alice");
-    expect(headers["x-carrier-request-id"]).toBe("req-install-1");
+    const headers = new Headers(capturedHeaders as HeadersInit);
+    expect(headers.get("x-carrier-actor")).toBe("cli:user:alice");
+    expect(headers.get("x-carrier-request-id")).toBe("req-install-1");
   });
 });
