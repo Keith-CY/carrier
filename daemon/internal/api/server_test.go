@@ -514,4 +514,22 @@ func TestAuditLogsEndpointRejectsInvalidResultFilter(t *testing.T) {
 	}
 }
 
+func TestDecodeBodyAllowsUnknownFields(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 2, 14, 17, 0, 0, 0, time.UTC)}
+	pairing := NewPairingCodeStore(clock.Now)
+	svc := newServiceForAPITest(t)
+	handler := NewServer(svc, WithPairingCodeStore(pairing)).Handler()
+
+	// Unknown fields should be silently ignored for forward compatibility.
+	// The request should proceed to normal validation (code is invalid).
+	rr := doRawJSONRequest(t, handler, http.MethodPost, "/api/v1/pairing/verify-consume",
+		[]byte(`{"code":"test","extra":"unknown"}`))
+	// Should NOT be a JSON parse error — the unknown field is tolerated.
+	// It should reach pairing validation and fail there instead.
+	body := rr.Body.String()
+	if strings.Contains(body, "unknown field") {
+		t.Fatalf("decodeBody should allow unknown fields for forward compat, got: %s", body)
+	}
+}
+
 var _ runtimecheck.Checker = (*fakeChecker)(nil)

@@ -34,8 +34,11 @@ while IFS= read -r match; do
   ref="${value##*@}"
   owner="${action%%/*}"
 
-  # Only enforce immutable SHA pinning for third-party actions.
-  if [[ "$owner" == "actions" ]]; then
+  # Trust boundary: first-party GitHub orgs (actions/*, github/*) are exempt
+  # from SHA pinning because they are maintained by GitHub and follow semver
+  # tag protection. If your threat model requires pinning these as well,
+  # remove the skip below.
+  if [[ "$owner" == "actions" || "$owner" == "github" ]]; then
     continue
   fi
 

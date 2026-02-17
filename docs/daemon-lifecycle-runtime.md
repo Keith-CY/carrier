@@ -77,7 +77,7 @@ Safe local reset procedure:
 
 ```bash
 sudo systemctl stop carrier-agentd
-sudo rm -f /var/lib/carrier/state.json
+sudo rm -f /var/lib/carrier/state.json   # NOTE: this discards pending diagnose-consent records
 sudo systemctl start carrier-agentd
 curl -s http://127.0.0.1:8081/healthz
 ```

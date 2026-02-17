@@ -52,6 +52,9 @@ export type GatewayRuntime = {
 
 const DEFAULT_MAX_COMMAND_BODY_BYTES = 64 * 1024;
 
+/** Cached at module load — env vars don't change at runtime. */
+const cachedMaxCommandBodyBytes = loadMaxCommandBodyBytes();
+
 class PayloadTooLargeError extends Error {
   constructor(readonly maxBytes: number) {
     super(`request body exceeds ${maxBytes} bytes`);
@@ -530,7 +533,7 @@ type ParsedCommandRequest = {
 
 async function parseCommandRequest(request: Request): Promise<ParsedCommandRequest> {
   const allowAuthorizationSessionToken = !loadGatewayAPIToken();
-  const rawBody = await readBodyWithLimit(request, loadMaxCommandBodyBytes());
+  const rawBody = await readBodyWithLimit(request, cachedMaxCommandBodyBytes);
   const result: ParsedCommandRequest = {
     commandInput: null,
     sessionToken: null,
