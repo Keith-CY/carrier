@@ -118,7 +118,7 @@ func TestStopAllAgents_NoRunning(t *testing.T) {
 	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
 		t.Fatal(err)
 	}
-	if err := stopAllAgents(svc); err != nil {
+	if err := stopAllAgents(context.Background(), svc); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 }
