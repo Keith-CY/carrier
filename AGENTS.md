@@ -8,3 +8,10 @@
 - Every non-blocking review suggestion must be marked with the fixed keyword prefix: `NBS:`.
 - Write one `NBS:` suggestion per line.
 - After merge, automation creates one follow-up issue per `NBS:` line.
+
+## Open PR Review Memory Rule
+- When reviewing open PRs, first check PR ownership and review state:
+  - If the PR is my own and it already contains any `BS:` findings, post an update review addressing or re-evaluating those findings.
+  - If the PR is not mine and I have already reviewed it with no remaining updates, skip re-review.
+  - If the PR is not mine and there are still unresolved or new findings, review it again.
+- Preserve existing `BS:` and `NBS:` labeling rules.
