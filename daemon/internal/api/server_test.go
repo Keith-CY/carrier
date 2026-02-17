@@ -514,4 +514,23 @@ func TestAuditLogsEndpointRejectsInvalidResultFilter(t *testing.T) {
 	}
 }
 
+func TestDecodeBodyRejectsUnknownFields(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 2, 14, 17, 0, 0, 0, time.UTC)}
+	pairing := NewPairingCodeStore(clock.Now)
+	svc := newServiceForAPITest(t)
+	handler := NewServer(svc, WithPairingCodeStore(pairing)).Handler()
+
+	// Send a request with an unknown field "extra" — DisallowUnknownFields
+	// should cause a 400 rejection.
+	rr := doRawJSONRequest(t, handler, http.MethodPost, "/api/v1/pairing/verify-consume",
+		[]byte(`{"code":"test","extra":"unknown"}`))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "unknown field") {
+		t.Fatalf("expected unknown field error, got: %s", body)
+	}
+}
+
 var _ runtimecheck.Checker = (*fakeChecker)(nil)

@@ -563,15 +563,27 @@ async function parseCommandRequest(request: Request): Promise<ParsedCommandReque
   return result;
 }
 
+let _cachedMaxCommandBodyBytes: number | undefined;
+
 function loadMaxCommandBodyBytes(env: Record<string, string | undefined> = process.env): number {
+  // Cache at module level since env vars don't change at runtime.
+  // Tests pass a custom env object which bypasses the cache.
+  if (env === process.env && _cachedMaxCommandBodyBytes !== undefined) {
+    return _cachedMaxCommandBodyBytes;
+  }
   const raw = env.CARRIER_MAX_COMMAND_BODY_BYTES?.trim();
   if (!raw) {
-    return DEFAULT_MAX_COMMAND_BODY_BYTES;
+    const value = DEFAULT_MAX_COMMAND_BODY_BYTES;
+    if (env === process.env) _cachedMaxCommandBodyBytes = value;
+    return value;
   }
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    return DEFAULT_MAX_COMMAND_BODY_BYTES;
+    const value = DEFAULT_MAX_COMMAND_BODY_BYTES;
+    if (env === process.env) _cachedMaxCommandBodyBytes = value;
+    return value;
   }
+  if (env === process.env) _cachedMaxCommandBodyBytes = parsed;
   return parsed;
 }
 

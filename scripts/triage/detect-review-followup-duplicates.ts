@@ -7,12 +7,20 @@ type Issue = {
   createdAt: string;
 };
 
+/**
+ * Normalize a review-followup issue title for duplicate detection.
+ *
+ * We strip the `[review-followup]` tag and the PR reference prefix
+ * (`PR #NNN: `) but keep punctuation intact so that issues with different
+ * semantic meaning but similar words are not grouped as false-positive
+ * duplicates.
+ */
 function normalizeTitle(title: string): string {
   return title
     .toLowerCase()
     .replace(/\[review-followup\]/g, "")
     .replace(/review-followup/g, "")
-    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/pr\s*#\d+:\s*/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
