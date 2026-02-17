@@ -22,6 +22,7 @@ This document defines the canonical daemon HTTP endpoint and method matrix align
 | Agent status (single) | `GET` | `/api/v1/agents/{agent_id}/status` | One-agent status | Planned |
 | Agent status (all) | `GET` | `/api/v1/agents/status` | Fleet status summary | Planned |
 | Logs | `GET` | `/api/v1/agents/{agent_id}/logs` | Query `tail` optional | Planned |
+| Audit logs query | `GET` | `/api/v1/audit/logs` | Query filters: `actor`, `action`, `request_id`, `result`, `limit` | #829 |
 | Upgrade | `POST` | `/api/v1/agents/{agent_id}/upgrade` | Returns version transition + rollback metadata | #394 |
 | Diagnose | `POST` | `/api/v1/agents/{agent_id}/diagnose` | Returns artifact metadata | #395 |
 | Diagnose consent / handoff | `POST` | `/api/v1/diagnosis/handoffs` | Remote diagnosis consent + handoff | Planned |
@@ -37,9 +38,13 @@ Lifecycle success example:
       "id": "openclaw",
       "name": "OpenClaw",
       "version": "0.1.0",
+      "installState": "installed",
       "installed": true,
       "runtimeState": "running",
       "health": "healthy",
+      "ports": [8080],
+      "restartCount": 1,
+      "lastTriageSummary": "crash loop not detected",
       "needsRemoteDiagnosis": false,
       "updatedAt": "2026-02-14T04:20:00.000Z"
     }
@@ -61,8 +66,14 @@ Standardized error envelope example:
 ## Required vs optional fields
 
 `DaemonAgentState`:
-- Required: `id`, `name`, `version`, `installed`, `runtimeState`, `health`, `needsRemoteDiagnosis`, `updatedAt`
-- Optional: `lastError`
+- Required: `id`, `name`, `version`, `installState`, `runtimeState`, `health`, `restartCount`, `needsRemoteDiagnosis`, `updatedAt`
+- Backward-compatible field: `installed` (deprecated; retained for old clients)
+- Optional: `ports`, `startedAt`, `lastError`, `lastTriageSummary`, `lastDiagnoseFile`
+
+`AuditLogRecord` (`GET /api/v1/audit/logs`):
+- Required: `requestId`, `actor`, `action`, `target`, `result`, `timestamp`
+- Optional: `errorCode`, `message`
+- Envelope: `{ "auditLogs": [...], "total": <matched-count> }`
 
 `UpgradeResult`:
 - Required: `agentId`, `fromVersion`, `toVersion`

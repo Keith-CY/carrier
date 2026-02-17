@@ -17,6 +17,40 @@ From `daemon/internal/lifecycle/types.go`:
 - `message`
 - `timestamp`
 
+## Query API
+
+Daemon audit logs can be queried via:
+
+- `GET /api/v1/audit/logs`
+
+Supported query filters:
+
+- `actor`
+- `action`
+- `request_id`
+- `result` (`success` | `failure` | `neutral`)
+- `limit` (positive integer, capped server-side)
+
+Response envelope:
+
+```json
+{
+  "auditLogs": [
+    {
+      "requestId": "req-100",
+      "actor": "operator",
+      "action": "remote_diagnosis_consent",
+      "target": "openclaw",
+      "result": "failure",
+      "errorCode": "E_REMOTE_DIAG_NOT_NEEDED",
+      "message": "remote diagnosis not required",
+      "timestamp": "2026-02-17T10:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
 ## Action Dictionary
 
 | Action | Target | Typical Result | Example Message |
