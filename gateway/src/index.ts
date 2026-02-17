@@ -11,6 +11,7 @@ import {
 } from "./daemon/client";
 import { DownloadTokenStore } from "./downloads/token_store";
 import { RateLimiter } from "./ratelimit";
+import { handleOnboardCommand, OnboardStore } from "./providers/onboard";
 import { redactErrorMessage } from "./redact";
 import { SessionStore } from "./session/store";
 
@@ -25,6 +26,7 @@ const COMMAND_NAMES: ReadonlySet<CommandName> = new Set([
   "/upgrade",
   "/diagnose",
   "/diagnose-consent",
+  "/onboard",
 ]);
 
 export type GatewayDependencies = {
@@ -32,6 +34,7 @@ export type GatewayDependencies = {
   sessions: SessionStore;
   downloads: DownloadTokenStore;
   rateLimiter?: RateLimiter;
+  onboardStore?: OnboardStore;
 };
 
 export class ParseError extends Error {
@@ -164,6 +167,13 @@ export async function handleCommand(
   const ctx = requestContext(cmd);
   try {
     switch (cmd.name) {
+      case "/onboard": {
+        const onboardStore = deps.onboardStore ?? new OnboardStore();
+        return await handleOnboardCommand(cmd, {
+          daemon: deps.daemon,
+          onboardStore,
+        });
+      }
       case "/agents": {
         const agents = await deps.daemon.listAgents(ctx);
         const installed = agents.filter((agent) => agent.installState === "installed").length;

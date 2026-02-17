@@ -10,7 +10,8 @@ export type CommandName =
   | "/logs"
   | "/upgrade"
   | "/diagnose"
-  | "/diagnose-consent";
+  | "/diagnose-consent"
+  | "/onboard";
 
 export type GatewayCommand = {
   provider: Provider;
