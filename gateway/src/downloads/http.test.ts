@@ -35,7 +35,10 @@ describe("filename normalization and mismatch checks", () => {
     expect(expectedFileNameFromRef("/tmp/build/artifact.zip")).toBe("artifact.zip");
     expect(expectedFileNameFromRef("/tmp/build/")).toBe("artifact.bin");
     expect(expectedFileNameFromRef("C:\\tmp\\build\\artifact.zip")).toBe("artifact.zip");
+    // Unix path with backslash in filename (valid on Unix) — only splits on /
     expect(expectedFileNameFromRef("/tmp/build/path\\file.txt")).toBe("path\\file.txt");
+    // Windows mixed separators split on both / and \
+    expect(expectedFileNameFromRef("C:\\tmp/build\\artifact.zip")).toBe("artifact.zip");
   });
 
   test("compares normalized requested filename against token artifact filename", () => {

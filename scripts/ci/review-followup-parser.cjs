@@ -14,6 +14,8 @@ function extractNbsLines(text, source) {
     return [];
   }
 
+  NBS_LINE_RE.lastIndex = 0;
+
   const out = [];
   let match;
   while ((match = NBS_LINE_RE.exec(text)) !== null) {

@@ -23,3 +23,7 @@ This document captures how the open `Phase 1` label issues are resolved in a sin
 | #598 | The old pinned-checksum fallback path no longer exists in catalog code. OpenClaw install now uses official installer URL in `daemon/internal/catalog/manifests.go`, with guard tests in `daemon/internal/catalog/manifests_test.go`. |
 | #600 | The previous empty `CHECKSUM` embedded-script failure mode is removed by the same installer architecture change; install command contract is validated in `daemon/internal/catalog/manifests_test.go`. |
 
+## Still open
+
+None — all Phase 1 labeled issues are resolved as of this batch.
+

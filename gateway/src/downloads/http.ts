@@ -33,6 +33,13 @@ export function normalizeDownloadFileName(fileName: string): string {
 }
 
 export function expectedFileNameFromRef(fileRef: string): string {
+  // For Windows-style paths (starting with drive letter), split on both / and \
+  // to handle mixed separators like C:\tmp/build\artifact.zip
+  if (/^[A-Za-z]:[\\/]/.test(fileRef)) {
+    const parts = fileRef.split(/[/\\]/);
+    return parts.pop() || "artifact.bin";
+  }
+  // Unix paths: only split on /
   if (fileRef.includes("/")) {
     return fileRef.split("/").pop() || "artifact.bin";
   }
