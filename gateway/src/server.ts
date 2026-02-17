@@ -1,5 +1,10 @@
 import { safeHandleCommand, type GatewayDependencies } from "./index";
 import { HttpDaemonClient } from "./daemon/http_client";
+import {
+  buildContentDisposition,
+  compareRequestedFileName,
+  parseDownloadPath,
+} from "./downloads/http";
 import { DownloadTokenStore } from "./downloads/token_store";
 import { RateLimiter } from "./ratelimit";
 import { SessionStore } from "./session/store";
@@ -9,12 +14,15 @@ import {
   asRecord,
   parseDiscordPayloadToCommand,
   parseFeishuEventToCommand,
+  parseTelegramUpdateToCommand,
   toGatewayInput,
   verifyDiscordRequestSignature,
   verifyFeishuEventToken,
+  verifyTelegramWebhookSecret,
 } from "./providers/parsers";
 import { renderDiscordResponse } from "./providers/renderers.discord";
 import { renderFeishuResponse } from "./providers/renderers.feishu";
+import { renderTelegramResponse } from "./providers/renderers";
 
 export type GatewayRequestContext = {
   request: Request;
@@ -151,6 +159,10 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
       return await handleFeishuWebhookRequest(ctx);
     }
 
+    if (ctx.request.method === "POST" && url.pathname === "/webhook/telegram") {
+      return await handleTelegramWebhookRequest(ctx);
+    }
+
     if (ctx.request.method === "GET" && url.pathname.startsWith("/downloads/")) {
       return await handleDownloadRequest(ctx, url, readFile);
     }
@@ -208,8 +220,8 @@ async function handleDownloadRequest(
   url: URL,
   readFile: ReadFileFn,
 ): Promise<Response> {
-  const parts = url.pathname.split("/").filter(Boolean);
-  if (parts.length !== 3 || parts[0] !== "downloads") {
+  const parsedPath = parseDownloadPath(url.pathname);
+  if (!parsedPath) {
     return jsonResponse({
       requestId: ctx.requestId,
       result: "error",
@@ -217,19 +229,7 @@ async function handleDownloadRequest(
       message: "invalid download path",
     }, 400);
   }
-
-  const token = parts[1] ?? "";
-  let requestedFileName: string;
-  try {
-    requestedFileName = decodeURIComponent(parts[2] ?? "");
-  } catch {
-    return jsonResponse({
-      requestId: ctx.requestId,
-      result: "error",
-      errorCode: "E_USAGE",
-      message: "invalid download path",
-    }, 400);
-  }
+  const { token, requestedFileName } = parsedPath;
 
   const resolved = ctx.deps.downloads.consume(token);
   if (!resolved) {
@@ -241,11 +241,11 @@ async function handleDownloadRequest(
     }, 404);
   }
 
-  const expectedFileName = resolved.fileRef.split("/").pop() || "artifact.bin";
-  const normalizedExpected = expectedFileName.trim();
-  const normalizedRequested = requestedFileName.trim();
-  
-  if (normalizedRequested !== normalizedExpected) {
+  const compareResult = compareRequestedFileName({
+    requestedFileName,
+    fileRef: resolved.fileRef,
+  });
+  if (!compareResult.matches) {
     return jsonResponse({
       requestId: ctx.requestId,
       result: "error",
@@ -266,7 +266,7 @@ async function handleDownloadRequest(
 
   const headers = new Headers();
   headers.set("content-type", blob.type || "application/octet-stream");
-  headers.set("content-disposition", buildContentDisposition(normalizedExpected));
+  headers.set("content-disposition", buildContentDisposition(compareResult.expectedFileName));
 
   if (resolved.singleUse) {
     ctx.deps.downloads.finalizeConsumed(resolved.token);
@@ -378,6 +378,43 @@ async function handleFeishuWebhookRequest(ctx: GatewayRequestContext): Promise<R
   return jsonResponse(renderFeishuResponse(response));
 }
 
+async function handleTelegramWebhookRequest(ctx: GatewayRequestContext): Promise<Response> {
+  const payload = await parseJSONBody(ctx.request);
+  if (!payload) {
+    return jsonResponse({
+      requestId: ctx.requestId,
+      result: "error",
+      errorCode: "E_USAGE",
+      message: "request body must be valid JSON",
+    }, 400);
+  }
+
+  const expectedSecret = loadTelegramWebhookSecret();
+  const providedSecret = ctx.request.headers.get("x-telegram-bot-api-secret-token");
+  if (!verifyTelegramWebhookSecret(providedSecret, expectedSecret)) {
+    return jsonResponse({
+      requestId: ctx.requestId,
+      result: "error",
+      errorCode: "E_TELEGRAM_VERIFICATION_FAILED",
+      message: "telegram webhook secret verification failed",
+    }, 401);
+  }
+
+  const normalized = parseTelegramUpdateToCommand(payload);
+  if (!normalized) {
+    return jsonResponse({
+      requestId: ctx.requestId,
+      result: "ok",
+      message: "ignored non-command telegram update",
+    });
+  }
+
+  const sessionToken = ctx.deps.sessions.getSession("telegram", normalized.chatId)?.sessionToken ?? null;
+  const commandInput = injectSessionTokenIfMissing(toGatewayInput(normalized), sessionToken);
+  const response = await safeHandleCommand(commandInput, ctx.deps);
+  return jsonResponse(renderTelegramResponse(response));
+}
+
 function parseJSONText(raw: string): unknown | null {
   try {
     return JSON.parse(raw) as unknown;
@@ -403,24 +440,6 @@ function extractFeishuURLVerificationChallenge(payload: unknown): string | null 
     return null;
   }
   return typeof record.challenge === "string" ? record.challenge : "";
-}
-
-function buildContentDisposition(filename: string): string {
-  // Check if filename contains non-ASCII characters
-  const hasNonASCII = /[^\x00-\x7F]/.test(filename);
-  
-  if (hasNonASCII) {
-    // For non-ASCII filenames, use an ASCII-safe fallback in filename parameter
-    // and the full UTF-8 filename in filename* parameter (RFC 5987)
-    const asciiFallback = filename.replace(/[^\x00-\x7F]/g, "_");
-    const escapedFallback = asciiFallback.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    const encodedFilename = encodeURIComponent(filename);
-    return `attachment; filename="${escapedFallback}"; filename*=UTF-8''${encodedFilename}`;
-  }
-  
-  // For ASCII filenames, just escape quotes and backslashes
-  const escapedFilename = filename.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  return `attachment; filename="${escapedFilename}"`;
 }
 
 /**
@@ -701,6 +720,11 @@ function loadDiscordPublicKey(): string | null {
 
 function loadFeishuVerificationToken(): string | null {
   const token = process.env.CARRIER_FEISHU_VERIFICATION_TOKEN?.trim() ?? "";
+  return token.length > 0 ? token : null;
+}
+
+function loadTelegramWebhookSecret(): string | null {
+  const token = process.env.CARRIER_TELEGRAM_WEBHOOK_SECRET?.trim() ?? "";
   return token.length > 0 ? token : null;
 }
 

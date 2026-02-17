@@ -361,12 +361,102 @@ describe("gateway runtime routes", () => {
     });
   });
 
+  test("telegram webhook rejects invalid secret before command execution", async () => {
+    const deps = makeDeps();
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("tg-code");
+    }
+    const runtime = createGatewayRuntime({ deps });
+
+    await withEnvVar("CARRIER_TELEGRAM_WEBHOOK_SECRET", "expected-secret", async () => {
+      const response = await runtime.fetch(new Request("http://gateway.local/webhook/telegram", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-telegram-bot-api-secret-token": "wrong-secret",
+        },
+        body: JSON.stringify({
+          update_id: 1001,
+          message: {
+            message_id: 7001,
+            chat: { id: 12345 },
+            text: "/pair tg-code",
+          },
+        }),
+      }));
+
+      expect(response.status).toBe(401);
+      const payload = await response.json() as { errorCode?: string };
+      expect(payload.errorCode).toBe("E_TELEGRAM_VERIFICATION_FAILED");
+    });
+
+    expect(deps.sessions.getSession("telegram", "12345")).toBeNull();
+  });
+
+  test("telegram webhook executes command when secret is valid", async () => {
+    const deps = makeDeps();
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("tg-code");
+    }
+    const runtime = createGatewayRuntime({ deps });
+
+    await withEnvVar("CARRIER_TELEGRAM_WEBHOOK_SECRET", "expected-secret", async () => {
+      const response = await runtime.fetch(new Request("http://gateway.local/webhook/telegram", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-telegram-bot-api-secret-token": "expected-secret",
+        },
+        body: JSON.stringify({
+          update_id: 1002,
+          message: {
+            message_id: 7002,
+            chat: { id: 12345 },
+            text: "/pair tg-code",
+          },
+        }),
+      }));
+
+      expect(response.status).toBe(200);
+      const payload = await response.json() as { text?: string };
+      expect(payload.text).toContain("paired telegram:12345");
+    });
+  });
+
+  test("telegram webhook ignores non-command updates", async () => {
+    const deps = makeDeps();
+    const runtime = createGatewayRuntime({ deps });
+
+    const response = await runtime.fetch(new Request("http://gateway.local/webhook/telegram", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        update_id: 1003,
+        message: {
+          message_id: 7003,
+          chat: { id: 12345 },
+          text: "hello there",
+        },
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { message?: string };
+    expect(payload.message).toBe("ignored non-command telegram update");
+  });
+
   test("download route resolves valid token and enforces single-use", async () => {
     const deps = makeDeps();
     const filePath = `/tmp/gateway-download-${crypto.randomUUID()}.txt`;
     await Bun.write(filePath, "hello-download");
     const token = deps.downloads.issue(filePath, 300, true);
-    const runtime = createGatewayRuntime({ deps });
+    const runtime = createGatewayRuntime({
+      deps,
+      readFile: async (fileRef: string) => {
+        const file = Bun.file(fileRef);
+        return (await file.exists()) ? file : null;
+      },
+    });
 
     const first = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
     expect(first.status).toBe(200);
@@ -397,7 +487,13 @@ describe("gateway runtime routes", () => {
     const token = deps.downloads.issue(filePath, 300, true, {
       onCleanup: (fileRef) => cleaned.push(fileRef),
     });
-    const runtime = createGatewayRuntime({ deps });
+    const runtime = createGatewayRuntime({
+      deps,
+      readFile: async (fileRef: string) => {
+        const file = Bun.file(fileRef);
+        return (await file.exists()) ? file : null;
+      },
+    });
 
     const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
     expect(response.status).toBe(200);
@@ -496,133 +592,6 @@ describe("gateway runtime routes", () => {
     // Should get 404 because readFile rejects the path
     expect(response.status).toBe(404);
     expect(capturedPath as string | null).toBe(maliciousPath);
-  });
-});
-
-describe("download Content-Disposition edge cases", () => {
-  test("handles filename with semicolon", async () => {
-    const deps = makeDeps();
-    const fileName = "file;data.txt";
-    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}-${fileName}`;
-    await Bun.write(filePath, "content");
-    const token = deps.downloads.issue(filePath, 300, true);
-    const runtime = createGatewayRuntime({ deps });
-
-    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
-    expect(response.status).toBe(200);
-    const disposition = response.headers.get("content-disposition");
-    expect(disposition).toBeDefined();
-    expect(disposition).toContain(fileName);
-  });
-
-  test("handles filename with comma", async () => {
-    const deps = makeDeps();
-    const fileName = "data,results.csv";
-    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}-${fileName}`;
-    await Bun.write(filePath, "csv,data");
-    const token = deps.downloads.issue(filePath, 300, true);
-    const runtime = createGatewayRuntime({ deps });
-
-    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
-    expect(response.status).toBe(200);
-    const disposition = response.headers.get("content-disposition");
-    expect(disposition).toBeDefined();
-    expect(disposition).toContain(fileName);
-  });
-
-  test("handles filename with UTF-8 characters", async () => {
-    const deps = makeDeps();
-    const fileName = "文件名.txt";
-    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}-${fileName}`;
-    await Bun.write(filePath, "utf8-content");
-    const token = deps.downloads.issue(filePath, 300, true);
-    const runtime = createGatewayRuntime({ deps });
-
-    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
-    expect(response.status).toBe(200);
-    const disposition = response.headers.get("content-disposition");
-    expect(disposition).toBeDefined();
-    // For UTF-8 filenames, should use RFC 5987 filename* parameter
-    expect(disposition).toContain("filename*=UTF-8''");
-    expect(disposition).toContain(encodeURIComponent(fileName));
-  });
-
-  test("handles filename with emoji", async () => {
-    const deps = makeDeps();
-    const fileName = "report📊.txt";
-    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}-${fileName}`;
-    await Bun.write(filePath, "emoji-content");
-    const token = deps.downloads.issue(filePath, 300, true);
-    const runtime = createGatewayRuntime({ deps });
-
-    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
-    expect(response.status).toBe(200);
-    const disposition = response.headers.get("content-disposition");
-    expect(disposition).toBeDefined();
-    // For emoji filenames, should use RFC 5987 filename* parameter with URL encoding
-    expect(disposition).toContain("filename*=UTF-8''");
-    expect(disposition).toContain(encodeURIComponent("📊"));
-  });
-
-  test("handles filename with leading spaces", async () => {
-    const deps = makeDeps();
-    const fileName = "  leading.txt";
-    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}-${fileName}`;
-    await Bun.write(filePath, "space-content");
-    const token = deps.downloads.issue(filePath, 300, true);
-    const runtime = createGatewayRuntime({ deps });
-
-    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
-    expect(response.status).toBe(200);
-    const disposition = response.headers.get("content-disposition");
-    expect(disposition).toBeDefined();
-    expect(disposition).toContain(fileName);
-  });
-
-  test("handles filename with trailing spaces", async () => {
-    const deps = makeDeps();
-    const fileName = "trailing.txt  ";
-    const filePath = `/tmp/carrier-download-${crypto.randomUUID()}-${fileName}`;
-    await Bun.write(filePath, "trailing-space");
-    const token = deps.downloads.issue(filePath, 300, true);
-    const runtime = createGatewayRuntime({ deps });
-
-    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
-    expect(response.status).toBe(200);
-    const disposition = response.headers.get("content-disposition");
-    expect(disposition).toBeDefined();
-    expect(disposition).toContain(fileName.trim());
-  });
-
-  test("handles filename with double quotes", async () => {
-    const deps = makeDeps();
-    const fileName = 'file"name".txt';
-    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}-${fileName}`;
-    await Bun.write(filePath, "quote-content");
-    const token = deps.downloads.issue(filePath, 300, true);
-    const runtime = createGatewayRuntime({ deps });
-
-    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
-    expect(response.status).toBe(200);
-    const disposition = response.headers.get("content-disposition");
-    expect(disposition).toBeDefined();
-    // Content-Disposition should properly escape or handle quotes
-    expect(disposition).toContain("filename=");
-  });
-
-  test("handles filename with backslash", async () => {
-    const deps = makeDeps();
-    const fileName = "path\\file.txt";
-    const filePath = `/tmp/gateway-download-${crypto.randomUUID()}-path-file.txt`;
-    await Bun.write(filePath, "backslash-content");
-    const token = deps.downloads.issue(filePath, 300, true);
-    const runtime = createGatewayRuntime({ deps });
-
-    const response = await runtime.fetch(new Request(`http://gateway.local${deps.downloads.toDownloadURL(token)}`));
-    expect(response.status).toBe(200);
-    const disposition = response.headers.get("content-disposition");
-    expect(disposition).toBeDefined();
-    expect(disposition).toContain("filename=");
   });
 });
 

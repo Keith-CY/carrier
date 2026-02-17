@@ -211,7 +211,7 @@ Implementation notes:
 
 ### English
 
-1. Open [**Releases**](https://github.com/Keith-CY/carrier/releases) for this repository. Artifacts follow the naming pattern `carrier-<os>-<arch>.zip` (e.g., `carrier-linux-x64.zip`, `carrier-darwin-arm64.zip`).
+1. Open [**Releases**](https://github.com/Keith-CY/carrier/releases) for this repository. Artifacts follow the naming pattern `carrier-<commit-sha>-<os>-<arch>.zip` (e.g., `carrier-1feeeb7-linux-x64.zip`, `carrier-1feeeb7-darwin-arm64.zip`).
 2. Download the ZIP package for your OS/CPU (for example: `linux-x64`, `darwin-arm64`, `windows-x64`).
 3. (Optional but recommended) Download the matching `.sha256` file and verify checksum:
    - Linux (GNU): `sha256sum -c carrier-*.sha256`
@@ -221,8 +221,8 @@ Implementation notes:
 5. Start the daemon from the extracted folder:
    - macOS/Linux: `./agentd`
    - Windows PowerShell: `.\agentd.exe`
-6. Get your pairing code from the daemon terminal output (it is generated when daemon/gateway pairing flow is ready).
-   - Note: `PAIR_CODE` has a short TTL (currently 10 minutes). If pairing fails due to expiration, restart the daemon or request a fresh code and retry `/pair <code>`.
+6. Get your pairing code from the daemon terminal output (format: `pair-<hex>`). If needed, you can also issue one via API: `curl -s -X POST http://127.0.0.1:9090/api/v1/pairing/codes`.
+   - Note: `PAIR_CODE` has a short TTL (currently 5 minutes). If pairing fails due to expiration, request a fresh code and retry `/pair <code>`.
 7. Use your chat provider flow (Telegram/Discord/Feishu) to pair and run commands:
    - `/pair <code>`
    - `/agents`
@@ -247,8 +247,8 @@ If install/start fails, run `/diagnose openclaw` and use the generated artifact 
 5. 运行解压目录里的 daemon：
    - macOS/Linux：`./agentd`
    - Windows PowerShell：`.\agentd.exe`
-6. 从 daemon 终端输出里获取配对码（pair code）。
-   - 说明：`PAIR_CODE` 有较短有效期（当前为 10 分钟）。若因过期导致配对失败，请重启 daemon 或重新获取新配对码后再执行 `/pair <code>`。
+6. 从 daemon 终端输出里获取配对码（格式：`pair-<hex>`）。如需手动申请，也可调用 API：`curl -s -X POST http://127.0.0.1:9090/api/v1/pairing/codes`。
+   - 说明：`PAIR_CODE` 有较短有效期（当前为 5 分钟）。若因过期导致配对失败，请重新获取新配对码后再执行 `/pair <code>`。
 7. 通过 Telegram/Discord/Feishu 配对后执行：
    - `/pair <code>`
    - `/agents`
@@ -267,7 +267,7 @@ Use this as a quick pass/fail checklist when validating the README flow:
 
 1. **Download**
    - Can locate matching ZIP + `.sha256` in [Releases](https://github.com/Keith-CY/carrier/releases).
-   - Artifact naming is expected as `carrier-<os>-<arch>.zip` with matching checksum file `carrier-<os>-<arch>.sha256`.
+   - Artifact naming is expected as `carrier-<commit-sha>-<os>-<arch>.zip` with matching checksum file `carrier-<commit-sha>-<os>-<arch>.zip.sha256`.
 2. **Checksum**
    - Verification command is available for your OS and returns success.
 3. **Daemon start**
@@ -286,7 +286,7 @@ Use this as a quick pass/fail checklist when validating the README flow:
 可用下面清单快速确认 README 流程是否可执行：
 
 1. **下载**：能在 [Releases](https://github.com/Keith-CY/carrier/releases) 找到匹配 ZIP 与 `.sha256`。
-   - 产物命名建议为 `carrier-<os>-<arch>.zip`，对应校验文件为 `carrier-<os>-<arch>.sha256`。
+   - 产物命名建议为 `carrier-<commit-sha>-<os>-<arch>.zip`，对应校验文件为 `carrier-<commit-sha>-<os>-<arch>.zip.sha256`。
 2. **校验**：对应系统校验命令可用且结果成功。
 3. **启动 daemon**：`agentd` 启动后可看到可用 `PAIR_CODE`。
 4. **配对**：`/pair <code>` 在有效期内返回成功。
@@ -306,7 +306,7 @@ Use this as a quick pass/fail checklist when validating the README flow:
 1. Telegram 机器人入口（用户名或邀请链接）
 2. Discord 机器人入口（服务器+频道，或私聊入口）
 3. 飞书机器人入口（会话入口）
-4. 一次性配对码 `PAIR_CODE`（示例：`AB12CD34`）
+4. 一次性配对码 `PAIR_CODE`（示例：`pair-4e72e19a9f2a`）
 
 如果缺少以上任意一项，本流程无法完成。
 
@@ -442,7 +442,7 @@ Before starting, ask your project administrator for:
 1. Telegram bot entry (username or invite link)
 2. Discord bot entry (server + channel, or DM entry)
 3. Feishu bot entry (chat entry)
-4. One-time pairing code `PAIR_CODE` (example: `AB12CD34`)
+4. One-time pairing code `PAIR_CODE` (example: `pair-4e72e19a9f2a`)
 
 If any of the items above is missing, this flow cannot be completed.
 
