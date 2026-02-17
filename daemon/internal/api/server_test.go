@@ -527,6 +527,9 @@ func TestDecodeBodyAllowsUnknownFields(t *testing.T) {
 	// Should NOT be a JSON parse error — the unknown field is tolerated.
 	// It should reach pairing validation and fail there instead.
 	body := rr.Body.String()
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (validation failure); body=%s", rr.Code, body)
+	}
 	if strings.Contains(body, "unknown field") {
 		t.Fatalf("decodeBody should allow unknown fields for forward compat, got: %s", body)
 	}
