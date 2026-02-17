@@ -75,6 +75,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
+      - name: Run CI guard parser tests
+        run: node --test scripts/ci/*.test.cjs
+
       - name: Validate third-party action pinning
         run: bash scripts/ci/check-action-pinning.sh
 

@@ -43,6 +43,13 @@ describe("RateLimiter", () => {
     expect(limiter.check("s1", 2001).allowed).toBe(true);
   });
 
+  it("treats requests at the exact cutoff boundary as expired", () => {
+    const limiter = new RateLimiter({ perSession: 1, global: 100, windowMs: 1000 });
+    expect(limiter.check("s1", 1000).allowed).toBe(true);
+    expect(limiter.check("s1", 1999).allowed).toBe(false);
+    expect(limiter.check("s1", 2000).allowed).toBe(true);
+  });
+
   it("isolates sessions from each other", () => {
     const limiter = new RateLimiter({ perSession: 1, global: 100, windowMs: 1000 });
     limiter.check("s1", 1000);
@@ -72,5 +79,18 @@ describe("RateLimiter", () => {
     expect(cfg.perSession).toBe(5);
     expect(cfg.global).toBe(50);
     expect(cfg.windowMs).toBe(2000);
+  });
+
+  it("prunes expired session windows to avoid unbounded growth", () => {
+    const limiter = new RateLimiter({ perSession: 1, global: 100, windowMs: 1000 });
+    limiter.check("s1", 1000);
+    limiter.check("s2", 1000);
+
+    const internal = limiter as unknown as { sessionWindows: Map<string, number[]> };
+    expect(internal.sessionWindows.size).toBe(2);
+
+    limiter.check("fresh", 2501);
+    expect(internal.sessionWindows.size).toBe(1);
+    expect(internal.sessionWindows.has("fresh")).toBe(true);
   });
 });

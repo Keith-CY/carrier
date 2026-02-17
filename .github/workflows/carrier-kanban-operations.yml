@@ -38,6 +38,7 @@ jobs:
           script: |
             const fs = require('fs');
             const { resolveProjectIdFromCandidates } = require('./.github/scripts/kanban-project-id');
+            const { loadKanbanConfig } = require('./scripts/ci/kanban-config.cjs');
 
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -68,7 +69,7 @@ jobs:
               return;
             }
 
-            const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            const config = loadKanbanConfig(configPath);
             const resolveProjectCandidates = [
               process.env.CARRIER_PROJECT_ID,
               process.env.CARRIER_CANONICAL_PROJECT_ID,
