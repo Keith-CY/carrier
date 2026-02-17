@@ -44,6 +44,54 @@ Phase milestones define delivery scope and must be respected in planning/review.
 
 Before proposing changes, read `skills/` and follow repository instructions (especially `skills/pr-review/SKILL.md` and `skills/review-followup/SKILL.md`).
 
+## Triage Helper Scripts
+
+From repo root, these scripts provide read-only issue triage summaries.
+
+### 1) Open issue summary
+
+```bash
+./scripts/triage/issue-summary.sh
+```
+
+Expected output sections:
+- `Total Open Issues`
+- `Open Unassigned Issues`
+- `Top Assignees by Open Count`
+- `Top Labels by Open Count`
+
+Optional env var:
+- `ISSUE_SUMMARY_LIMIT` (default `500`)
+
+### 2) Duplicate detector for review-followup issues
+
+```bash
+./scripts/triage/detect-review-followup-duplicates.sh
+```
+
+Matching priority (clear criteria):
+1. `nbs_marker` (exact hidden marker in issue body comment)
+2. `normalized_suggestion` (normalized text from `## Suggestion`)
+3. `normalized_title` (normalized title after stripping `[review-followup]` and `PR #...:` prefix)
+
+Optional env vars:
+- `ISSUE_DUP_STATE` (`open`/`closed`/`all`, default `open`)
+- `ISSUE_DUP_LIMIT` (default `500`)
+
+Deterministic output format example:
+
+```text
+Group 1 (2 issues)
+criterion: normalized_suggestion
+match_key: add focused unit tests for invalid consent flag parsing
+- #901 (PR #882): [review-followup] PR #882: Add focused unit tests...
+  https://github.com/Keith-CY/carrier/issues/901
+  snippet: Add focused unit tests for invalid consent flag parsing.
+- #905 (PR #882): [review-followup] PR #882: Add focused unit tests...
+  https://github.com/Keith-CY/carrier/issues/905
+  snippet: Add focused unit tests for invalid consent flag parsing.
+```
+
 ## Testing Policy
 
 GitHub Actions is the source of truth for merge readiness.
