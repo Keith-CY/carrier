@@ -636,3 +636,64 @@ func TestBearerAuthMiddlewareBoundaryCases(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeBody_EmptyBody(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(""))
+	rr := httptest.NewRecorder()
+	var out struct{ Name string }
+	ok := decodeBody(rr, req, &out)
+	if ok {
+		t.Fatal("expected false for empty body")
+	}
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestDecodeBody_InvalidJSON(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader("{invalid"))
+	rr := httptest.NewRecorder()
+	var out struct{ Name string }
+	ok := decodeBody(rr, req, &out)
+	if ok {
+		t.Fatal("expected false for invalid JSON")
+	}
+}
+
+func TestDecodeBody_OversizedContentLength(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader("{}"))
+	req.ContentLength = maxBodySize + 1
+	rr := httptest.NewRecorder()
+	var out struct{ Name string }
+	ok := decodeBody(rr, req, &out)
+	if ok {
+		t.Fatal("expected false for oversized content-length")
+	}
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestDecodeBody_TrailingData(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(`{}{}`))
+	rr := httptest.NewRecorder()
+	var out struct{ Name string }
+	ok := decodeBody(rr, req, &out)
+	if ok {
+		t.Fatal("expected false for trailing data")
+	}
+}
+
+func TestHandleUpgrade_NotInstalled(t *testing.T) {
+	svc := lifecycle.NewService(baseagent.NoopTriager{})
+	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
+		t.Fatal(err)
+	}
+	mux := buildTestMux(svc, false)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/openclaw/upgrade", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for upgrade of uninstalled agent, got %d", rr.Code)
+	}
+}
