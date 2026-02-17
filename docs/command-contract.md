@@ -171,6 +171,9 @@ The `handleCommand` function is the single command-processing entry point and is
 ## Feishu Rendering Notes
 
 Feishu adapter rendering should preserve response semantics in text-message format:
+- Success messages are prefixed with `✅`.
+- Error messages are prefixed with `❌ <errorCode>:`.
+- Optional fields (`downloadUrl`, `handoffId`) are appended as additional lines.
 
 ## Discord Rendering Notes
 
@@ -178,3 +181,10 @@ Discord adapter rendering should preserve response semantics while formatting fo
 - Success messages are prefixed with `✅`.
 - Error messages are prefixed with `❌ <errorCode>:`.
 - Optional fields (`downloadUrl`, `handoffId`) are appended as additional lines.
+
+## Telegram Rendering Notes
+
+Telegram adapter rendering should preserve response semantics while formatting for chat UX:
+- Success messages are prefixed with `✅`.
+- Error messages are prefixed with `❌ <errorCode>:`.
+- Optional fields (`sessionToken`, `downloadUrl`, `handoffId`) are appended as additional lines.
