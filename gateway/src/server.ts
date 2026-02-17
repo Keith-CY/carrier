@@ -4,6 +4,12 @@ import { DownloadTokenStore } from "./downloads/token_store";
 import { SessionStore } from "./session/store";
 import { join } from "node:path";
 import { timingSafeEqual } from "node:crypto";
+import {
+  parseDiscordPayloadToCommand,
+  toGatewayInput,
+  verifyDiscordRequestSignature,
+} from "./providers/parsers";
+import { renderDiscordResponse } from "./providers/renderers.discord";
 
 export type GatewayRequestContext = {
   request: Request;
@@ -108,6 +114,10 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
       const commandInput = injectSessionTokenIfMissing(parsed.commandInput, parsed.sessionToken);
       const response = await safeHandleCommand(commandInput, deps);
       return jsonResponse(response);
+    }
+
+    if (ctx.request.method === "POST" && url.pathname === "/webhook/discord") {
+      return await handleDiscordWebhookRequest(ctx);
     }
 
     if (ctx.request.method === "GET" && url.pathname.startsWith("/downloads/")) {
@@ -232,6 +242,80 @@ async function handleDownloadRequest(
     status: 200,
     headers,
   });
+}
+
+async function handleDiscordWebhookRequest(ctx: GatewayRequestContext): Promise<Response> {
+  const body = await ctx.request.text();
+  const signatureHex = ctx.request.headers.get("x-signature-ed25519");
+  const timestamp = ctx.request.headers.get("x-signature-timestamp");
+  const publicKeyHex = loadDiscordPublicKey();
+  const verified = verifyDiscordRequestSignature({
+    body,
+    signatureHex,
+    timestamp,
+    publicKeyHex,
+  });
+  if (!verified) {
+    return jsonResponse({
+      requestId: ctx.requestId,
+      result: "error",
+      errorCode: "E_DISCORD_SIGNATURE_INVALID",
+      message: "discord request signature verification failed",
+    }, 401);
+  }
+
+  const payload = parseJSONText(body);
+  if (!payload) {
+    return jsonResponse({
+      requestId: ctx.requestId,
+      result: "error",
+      errorCode: "E_USAGE",
+      message: "request body must be valid JSON",
+    }, 400);
+  }
+
+  const root = asRecord(payload);
+  if (typeof root?.type === "number" && root.type === 1) {
+    return jsonResponse({ type: 1 });
+  }
+
+  const normalized = parseDiscordPayloadToCommand(payload);
+  if (!normalized) {
+    return jsonResponse({
+      requestId: ctx.requestId,
+      result: "error",
+      errorCode: "E_USAGE",
+      message: "unsupported discord payload",
+    }, 400);
+  }
+
+  const sessionToken = ctx.deps.sessions.getSession("discord", normalized.chatId)?.sessionToken ?? null;
+  const commandInput = injectSessionTokenIfMissing(toGatewayInput(normalized), sessionToken);
+  const response = await safeHandleCommand(commandInput, ctx.deps);
+  const rendered = renderDiscordResponse(response);
+  if (typeof root?.type === "number" && root.type === 2) {
+    return jsonResponse({
+      type: 4,
+      data: rendered,
+    });
+  }
+
+  return jsonResponse(rendered);
+}
+
+function parseJSONText(raw: string): unknown | null {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
 }
 
 function buildContentDisposition(filename: string): string {
@@ -472,6 +556,11 @@ function validateCommandAuth(
 function loadGatewayAPIToken(): string | null {
   const token = process.env.CARRIER_GATEWAY_API_TOKEN?.trim() ?? "";
   return token.length > 0 ? token : null;
+}
+
+function loadDiscordPublicKey(): string | null {
+  const key = process.env.CARRIER_DISCORD_PUBLIC_KEY?.trim() ?? "";
+  return key.length > 0 ? key : null;
 }
 
 function isLoopbackHost(hostname: string): boolean {

@@ -3,6 +3,7 @@ import { InMemoryDaemonClient } from "./daemon/client";
 import { HttpDaemonClient } from "./daemon/http_client";
 import { DownloadTokenStore } from "./downloads/token_store";
 import { SessionStore } from "./session/store";
+import { generateKeyPairSync, sign } from "node:crypto";
 
 // Tests create temporary files under /tmp; allow defaultReadFile to serve them.
 process.env.ARTIFACT_ROOT = "/tmp";
@@ -23,6 +24,10 @@ function makeDeps() {
     sessions: new SessionStore(),
     downloads: new DownloadTokenStore(),
   };
+}
+
+function rawPublicKeyHexFromSpkiDer(der: Buffer): string {
+  return der.subarray(der.length - 32).toString("hex");
 }
 
 async function withEnvVar<T>(name: string, value: string | undefined, run: () => Promise<T> | T): Promise<T> {
@@ -153,6 +158,118 @@ describe("gateway runtime routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("x-request-id")).toBe("req-fixed");
+  });
+
+  test("discord webhook rejects invalid signature before command execution", async () => {
+    const deps = makeDeps();
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("dc-code");
+    }
+    const runtime = createGatewayRuntime({ deps });
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const publicKeyDer = publicKey.export({ type: "spki", format: "der" }) as Buffer;
+    const publicKeyHex = rawPublicKeyHexFromSpkiDer(publicKeyDer);
+    const payload = {
+      id: "interaction-1",
+      type: 2,
+      channel_id: "dc-chat",
+      data: {
+        name: "pair",
+        options: [{ name: "code", value: "dc-code" }],
+      },
+    };
+    const body = JSON.stringify(payload);
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const validSignatureHex = sign(null, Buffer.from(`${timestamp}${body}`), privateKey).toString("hex");
+    const invalidSignatureHex = `${validSignatureHex.slice(0, -2)}aa`;
+
+    await withEnvVar("CARRIER_DISCORD_PUBLIC_KEY", publicKeyHex, async () => {
+      const response = await runtime.fetch(new Request("http://gateway.local/webhook/discord", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-signature-ed25519": invalidSignatureHex,
+          "x-signature-timestamp": timestamp,
+        },
+        body,
+      }));
+
+      expect(response.status).toBe(401);
+      const responseBody = await response.json() as { errorCode?: string };
+      expect(responseBody.errorCode).toBe("E_DISCORD_SIGNATURE_INVALID");
+    });
+
+    expect(deps.sessions.getSession("discord", "dc-chat")).toBeNull();
+  });
+
+  test("discord webhook executes command when signature is valid", async () => {
+    const deps = makeDeps();
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("dc-code");
+    }
+    const runtime = createGatewayRuntime({ deps });
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const publicKeyDer = publicKey.export({ type: "spki", format: "der" }) as Buffer;
+    const publicKeyHex = rawPublicKeyHexFromSpkiDer(publicKeyDer);
+    const payload = {
+      id: "interaction-2",
+      type: 2,
+      channel_id: "dc-chat",
+      data: {
+        name: "pair",
+        options: [{ name: "code", value: "dc-code" }],
+      },
+    };
+    const body = JSON.stringify(payload);
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signatureHex = sign(null, Buffer.from(`${timestamp}${body}`), privateKey).toString("hex");
+
+    await withEnvVar("CARRIER_DISCORD_PUBLIC_KEY", publicKeyHex, async () => {
+      const response = await runtime.fetch(new Request("http://gateway.local/webhook/discord", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-signature-ed25519": signatureHex,
+          "x-signature-timestamp": timestamp,
+        },
+        body,
+      }));
+
+      expect(response.status).toBe(200);
+      const responseBody = await response.json() as {
+        type?: number;
+        data?: { content?: string };
+      };
+      expect(responseBody.type).toBe(4);
+      expect(responseBody.data?.content).toContain("paired discord:dc-chat");
+    });
+  });
+
+  test("discord webhook responds to ping interaction with pong", async () => {
+    const deps = makeDeps();
+    const runtime = createGatewayRuntime({ deps });
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const publicKeyDer = publicKey.export({ type: "spki", format: "der" }) as Buffer;
+    const publicKeyHex = rawPublicKeyHexFromSpkiDer(publicKeyDer);
+    const body = JSON.stringify({ type: 1 });
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signatureHex = sign(null, Buffer.from(`${timestamp}${body}`), privateKey).toString("hex");
+
+    await withEnvVar("CARRIER_DISCORD_PUBLIC_KEY", publicKeyHex, async () => {
+      const response = await runtime.fetch(new Request("http://gateway.local/webhook/discord", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-signature-ed25519": signatureHex,
+          "x-signature-timestamp": timestamp,
+        },
+        body,
+      }));
+
+      expect(response.status).toBe(200);
+      const responseBody = await response.json() as { type?: number };
+      expect(responseBody.type).toBe(1);
+    });
   });
 
   test("download route resolves valid token and enforces single-use", async () => {
