@@ -20,7 +20,7 @@ function normalizeTitle(title: string): string {
     .toLowerCase()
     .replace(/\[review-followup\]/g, "")
     .replace(/review-followup/g, "")
-    .replace(/^\s*pr\s*#\d+:\s*/g, "")
+    .replace(/^\s*pr\s*#\d+:\s*/, "")
     .replace(/\s+/g, " ")
     .trim();
 }
