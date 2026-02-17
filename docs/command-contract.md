@@ -188,3 +188,15 @@ Telegram adapter rendering should preserve response semantics while formatting f
 - Success messages are prefixed with `✅`.
 - Error messages are prefixed with `❌ <errorCode>:`.
 - Optional fields (`sessionToken`, `downloadUrl`, `handoffId`) are appended as additional lines.
+
+## Failure Parity Drift Reporting
+
+Failure parity checks are implemented in `gateway/src/parity/failure_parity.ts`.
+
+- `assertFailureParity` validates that all provider responses for a failure scenario:
+  - return `result: "error"`
+  - share the same `errorCode`
+  - share the same `message`
+- Drift output includes provider + field-level expected/actual values for fast diagnosis.
+
+These checks are exercised by `gateway/src/cross-provider.test.ts` and `gateway/src/parity/failure_parity.test.ts`.
