@@ -1,6 +1,6 @@
-# Daemon API Contract (Phase 1)
+# Daemon API Contract
 
-This document defines the gateway-facing daemon HTTP contract used in Phase 1.
+This document defines the gateway-facing daemon HTTP contract.
 
 Related reference:
 - Gateway command contract: `./command-contract.md`
@@ -19,7 +19,7 @@ Related reference:
 | List pairing codes | `GET` | `/api/v1/pairing/codes` | Lists issued pairing codes |
 | Issue pairing code | `POST` | `/api/v1/pairing/codes` | Issues one short-lived code |
 | Verify + consume pairing code | `POST` | `/api/v1/pairing/verify-consume` | One-time pairing code verification |
-| List agents | `GET` | `/api/v1/agents` | Returns all known agents |
+| List agents | `GET` | `/api/v1/agents` | Returns `{ "agents": [...] }` |
 | Install agent | `POST` | `/api/v1/agents/{agent_id}/install` | Lifecycle install |
 | Start agent | `POST` | `/api/v1/agents/{agent_id}/start` | Lifecycle start |
 | Stop agent | `POST` | `/api/v1/agents/{agent_id}/stop` | Lifecycle stop |
@@ -52,22 +52,24 @@ New clients should prefer `/api/v1/*`.
 List agents (`GET /api/v1/agents`):
 
 ```json
-[
-  {
-    "id": "openclaw",
-    "name": "OpenClaw",
-    "version": "1.0.0",
-    "installState": "installed",
-    "runtimeState": "running",
-    "health": "healthy",
-    "ports": [
-      9090
-    ],
-    "restartCount": 1,
-    "needsRemoteDiagnosis": false,
-    "updatedAt": "2026-02-17T08:00:00Z"
-  }
-]
+{
+  "agents": [
+    {
+      "id": "openclaw",
+      "name": "OpenClaw",
+      "version": "1.0.0",
+      "installState": "installed",
+      "runtimeState": "running",
+      "health": "healthy",
+      "ports": [
+        9090
+      ],
+      "restartCount": 1,
+      "needsRemoteDiagnosis": false,
+      "updatedAt": "2026-02-17T08:00:00Z"
+    }
+  ]
+}
 ```
 
 Fleet status (`GET /api/v1/agents/status`):

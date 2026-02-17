@@ -230,6 +230,7 @@ Restore flow:
 2. Deploy updated gateway source to `/opt/carrier/gateway`
 3. Reinstall gateway deps if lockfile changed:
    - `cd /opt/carrier/gateway && bun install --frozen-lockfile --no-progress`
+   - If this fails due to lockfile drift, regenerate and commit `gateway/bun.lock` from source before release.
 4. Restart services:
    - `sudo systemctl restart carrier-agentd carrier-gateway`
 5. Verify health and smoke-test `/pair` + `/agents`
