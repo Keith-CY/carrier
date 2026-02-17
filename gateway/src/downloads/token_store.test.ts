@@ -99,6 +99,33 @@ describe("DownloadTokenStore", () => {
     expect(url).toBe(`/downloads/${tok.token}/artifact.zip`);
   });
 
+  test("toDownloadURL() normalizes Windows path separators", () => {
+    const store = new DownloadTokenStore();
+    const tok = store.issue("builds\\nested\\artifact.zip");
+
+    const url = store.toDownloadURL(tok);
+
+    expect(url).toBe(`/downloads/${tok.token}/artifact.zip`);
+  });
+
+  test("toDownloadURL() URL-encodes spaces and unicode characters", () => {
+    const store = new DownloadTokenStore();
+    const tok = store.issue("artifacts/report 2026 ✅.zip");
+
+    const url = store.toDownloadURL(tok);
+
+    expect(url).toBe(`/downloads/${tok.token}/${encodeURIComponent("report 2026 ✅.zip")}`);
+  });
+
+  test("toDownloadURL() falls back to artifact.zip when filename is empty/whitespace", () => {
+    const store = new DownloadTokenStore();
+    const tok = store.issue("artifacts/   ");
+
+    const url = store.toDownloadURL(tok);
+
+    expect(url).toBe(`/downloads/${tok.token}/artifact.zip`);
+  });
+
   test("cleanup callback runs for consumed single-use tokens", () => {
     const cleaned: Array<{ fileRef: string; reason: string }> = [];
     const store = new DownloadTokenStore(() => new Date("2026-01-01T00:00:00Z"));
@@ -217,5 +244,69 @@ describe("DownloadTokenStore", () => {
 
     // Token should still be there since cleanup was stopped
     expect(store.size).toBe(1);
+  });
+
+  test("startPeriodicCleanup() is idempotent and replaces the previous timer", () => {
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+
+    const createdHandles: Array<{ id: number; unref: () => void }> = [];
+    const clearedHandleIDs: number[] = [];
+
+    try {
+      globalThis.setInterval = ((_: () => void, __?: number) => {
+        const handle = {
+          id: createdHandles.length + 1,
+          unref: () => undefined,
+        };
+        createdHandles.push(handle);
+        return handle as unknown as ReturnType<typeof setInterval>;
+      }) as typeof setInterval;
+
+      globalThis.clearInterval = ((handle: ReturnType<typeof setInterval>) => {
+        const id = (handle as unknown as { id?: number }).id;
+        if (typeof id === "number") {
+          clearedHandleIDs.push(id);
+        }
+      }) as typeof clearInterval;
+
+      const store = new DownloadTokenStore();
+      store.startPeriodicCleanup(1000);
+      store.startPeriodicCleanup(1000);
+      store.stopPeriodicCleanup();
+
+      expect(createdHandles).toHaveLength(2);
+      expect(clearedHandleIDs).toEqual([1, 2]);
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
+    }
+  });
+
+  test("stopPeriodicCleanup() is safe to call repeatedly", () => {
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+
+    let clearCalls = 0;
+
+    try {
+      globalThis.setInterval = ((_: () => void, __?: number) => {
+        return { unref: () => undefined } as unknown as ReturnType<typeof setInterval>;
+      }) as typeof setInterval;
+
+      globalThis.clearInterval = ((_: ReturnType<typeof setInterval>) => {
+        clearCalls += 1;
+      }) as typeof clearInterval;
+
+      const store = new DownloadTokenStore();
+      store.startPeriodicCleanup(1000);
+      store.stopPeriodicCleanup();
+      store.stopPeriodicCleanup();
+
+      expect(clearCalls).toBe(1);
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
+    }
   });
 });
