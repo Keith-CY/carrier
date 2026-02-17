@@ -6,10 +6,13 @@ import { join } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import {
   parseDiscordPayloadToCommand,
+  parseFeishuEventToCommand,
   toGatewayInput,
   verifyDiscordRequestSignature,
+  verifyFeishuEventToken,
 } from "./providers/parsers";
 import { renderDiscordResponse } from "./providers/renderers.discord";
+import { renderFeishuResponse } from "./providers/renderers.feishu";
 
 export type GatewayRequestContext = {
   request: Request;
@@ -118,6 +121,10 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
 
     if (ctx.request.method === "POST" && url.pathname === "/webhook/discord") {
       return await handleDiscordWebhookRequest(ctx);
+    }
+
+    if (ctx.request.method === "POST" && url.pathname === "/webhook/feishu") {
+      return await handleFeishuWebhookRequest(ctx);
     }
 
     if (ctx.request.method === "GET" && url.pathname.startsWith("/downloads/")) {
@@ -303,12 +310,72 @@ async function handleDiscordWebhookRequest(ctx: GatewayRequestContext): Promise<
   return jsonResponse(rendered);
 }
 
+async function handleFeishuWebhookRequest(ctx: GatewayRequestContext): Promise<Response> {
+  const payload = await parseJSONBody(ctx.request);
+  if (!payload) {
+    return jsonResponse({
+      requestId: ctx.requestId,
+      result: "error",
+      errorCode: "E_USAGE",
+      message: "request body must be valid JSON",
+    }, 400);
+  }
+
+  const expectedToken = loadFeishuVerificationToken();
+  if (!verifyFeishuEventToken(payload, expectedToken)) {
+    return jsonResponse({
+      requestId: ctx.requestId,
+      result: "error",
+      errorCode: "E_FEISHU_VERIFICATION_FAILED",
+      message: "feishu event token verification failed",
+    }, 401);
+  }
+
+  const challenge = extractFeishuURLVerificationChallenge(payload);
+  if (challenge !== null) {
+    return jsonResponse({ challenge });
+  }
+
+  const normalized = parseFeishuEventToCommand(payload);
+  if (!normalized) {
+    return jsonResponse({
+      requestId: ctx.requestId,
+      result: "ok",
+      message: "ignored non-command feishu event",
+    });
+  }
+
+  const sessionToken = ctx.deps.sessions.getSession("feishu", normalized.chatId)?.sessionToken ?? null;
+  const commandInput = injectSessionTokenIfMissing(toGatewayInput(normalized), sessionToken);
+  const response = await safeHandleCommand(commandInput, ctx.deps);
+  return jsonResponse(renderFeishuResponse(response));
+}
+
 function parseJSONText(raw: string): unknown | null {
   try {
     return JSON.parse(raw) as unknown;
   } catch {
     return null;
   }
+}
+
+async function parseJSONBody(request: Request): Promise<unknown | null> {
+  try {
+    return await request.json();
+  } catch {
+    return null;
+  }
+}
+
+function extractFeishuURLVerificationChallenge(payload: unknown): string | null {
+  const record = asRecord(payload);
+  if (!record) {
+    return null;
+  }
+  if (typeof record.type !== "string" || record.type !== "url_verification") {
+    return null;
+  }
+  return typeof record.challenge === "string" ? record.challenge : "";
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -561,6 +628,11 @@ function loadGatewayAPIToken(): string | null {
 function loadDiscordPublicKey(): string | null {
   const key = process.env.CARRIER_DISCORD_PUBLIC_KEY?.trim() ?? "";
   return key.length > 0 ? key : null;
+}
+
+function loadFeishuVerificationToken(): string | null {
+  const token = process.env.CARRIER_FEISHU_VERIFICATION_TOKEN?.trim() ?? "";
+  return token.length > 0 ? token : null;
 }
 
 function isLoopbackHost(hostname: string): boolean {
