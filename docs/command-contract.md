@@ -56,32 +56,32 @@ type GatewayResponse = {
 
 ## Error Codes
 
-| Code                          | Meaning                                                |
-|------------------------------|--------------------------------------------------------|
-| `E_PARSE`                    | Input string could not be parsed                       |
-| `E_USAGE`                    | Missing required argument(s) or invalid payload shape  |
-| `E_PAYLOAD_TOO_LARGE`        | `/command` request body exceeds size limit             |
-| `E_GATEWAY_AUTH_REQUIRED`    | Gateway API token is required for `/command` access    |
-| `E_GATEWAY_AUTH_INVALID`     | Provided gateway API token is invalid                  |
-| `E_AUTH_REQUIRED`            | Session token required for authenticated command        |
-| `E_AUTH_INVALID`             | Provided session token is invalid                      |
-| `E_PAIR_CODE_INVALID`        | Pairing code is invalid or expired                     |
-| `E_SESSION_REQUIRED`         | Chat is not paired; must run `/pair` first             |
-| `E_NOT_INSTALLED`            | Agent is not installed                                 |
-| `E_ALREADY_RUNNING`          | Agent is already running                               |
-| `E_ALREADY_STOPPED`          | Agent is already stopped                               |
-| `E_AGENT_NOT_FOUND`          | Target agent does not exist                            |
-| `E_CONSENT_FLAG_INVALID`     | Consent flag must be `yes` or `no`                     |
-| `E_REMOTE_DIAG_NOT_NEEDED`   | Remote diagnosis is not needed for this agent          |
-| `E_DOWNLOAD_TOKEN_INVALID`   | Download token is invalid or expired                   |
-| `E_DOWNLOAD_FILE_MISMATCH`   | Requested filename does not match token artifact       |
-| `E_DOWNLOAD_NOT_FOUND`       | Artifact file is missing                               |
-| `E_DISCORD_SIGNATURE_INVALID`| Discord webhook signature verification failed          |
-| `E_FEISHU_VERIFICATION_FAILED` | Feishu event token verification failed              |
-| `E_TELEGRAM_VERIFICATION_FAILED` | Telegram webhook secret verification failed        |
-| `E_NOT_FOUND`                | Route not found                                        |
-| `E_COMMAND_UNSUPPORTED`      | Command exists in parser but has no handler            |
-| `E_COMMAND_FAILED`           | Unexpected daemon/runtime error                        |
+| Code                             | Meaning                                               |
+|----------------------------------|-------------------------------------------------------|
+| `E_PARSE`                        | Input string could not be parsed                      |
+| `E_USAGE`                        | Missing required argument(s) or invalid payload shape |
+| `E_PAYLOAD_TOO_LARGE`            | `/command` request body exceeds size limit            |
+| `E_GATEWAY_AUTH_REQUIRED`        | Gateway API token is required for `/command` access   |
+| `E_GATEWAY_AUTH_INVALID`         | Provided gateway API token is invalid                 |
+| `E_AUTH_REQUIRED`                | Session token required for authenticated command      |
+| `E_AUTH_INVALID`                 | Provided session token is invalid                     |
+| `E_PAIR_CODE_INVALID`            | Pairing code is invalid or expired                    |
+| `E_SESSION_REQUIRED`             | Chat is not paired; must run `/pair` first            |
+| `E_NOT_INSTALLED`                | Agent is not installed                                |
+| `E_ALREADY_RUNNING`              | Agent is already running                              |
+| `E_ALREADY_STOPPED`              | Agent is already stopped                              |
+| `E_AGENT_NOT_FOUND`              | Target agent does not exist                           |
+| `E_CONSENT_FLAG_INVALID`         | Consent flag must be `yes` or `no`                    |
+| `E_REMOTE_DIAG_NOT_NEEDED`       | Remote diagnosis is not needed for this agent         |
+| `E_DOWNLOAD_TOKEN_INVALID`       | Download token is invalid or expired                  |
+| `E_DOWNLOAD_FILE_MISMATCH`       | Requested filename does not match token artifact      |
+| `E_DOWNLOAD_NOT_FOUND`           | Artifact file is missing                              |
+| `E_DISCORD_SIGNATURE_INVALID`    | Discord webhook signature verification failed         |
+| `E_FEISHU_VERIFICATION_FAILED`   | Feishu event token verification failed                |
+| `E_TELEGRAM_VERIFICATION_FAILED` | Telegram webhook secret verification failed           |
+| `E_NOT_FOUND`                    | Route not found                                       |
+| `E_COMMAND_UNSUPPORTED`          | Command exists in parser but has no handler           |
+| `E_COMMAND_FAILED`               | Unexpected daemon/runtime error                       |
 
 ## Commands
 
