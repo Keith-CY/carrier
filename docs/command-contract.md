@@ -167,3 +167,10 @@ Provider adapters MUST NOT:
 - Filter or transform `GatewayResponse` fields based on provider
 
 The `handleCommand` function is the single command-processing entry point and is provider-agnostic by design. The `provider` field in `GatewayCommand` is used only for session scoping (pairing is per-provider+chat), never for branching command logic.
+
+## Feishu Rendering Notes
+
+Feishu adapter rendering should preserve response semantics in text-message format:
+- Success messages are prefixed with `✅`.
+- Error messages are prefixed with `❌ <errorCode>:`.
+- Optional fields (`downloadUrl`, `handoffId`) are appended as additional lines.
