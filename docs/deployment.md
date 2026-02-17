@@ -1,73 +1,121 @@
 # Production Deployment Guide
 
-This guide covers deploying the Carrier daemon (`agentd`) and gateway in a production environment.
+This guide covers deploying Carrier daemon (`agentd`) and gateway on Linux with systemd.
 
 Related runbooks:
+- Go-live + rollback: `./runbooks/go-live-rollback.md`
+- Pairing lifecycle troubleshooting: `./runbooks/pairing-lifecycle.md`
+- CI first response: `./ci/first-response-playbook.md`
 
-- Go-live + rollback: `docs/runbooks/go-live-rollback.md`
-- Pairing lifecycle troubleshooting: `docs/runbooks/pairing-lifecycle.md`
-- CI first response: `docs/ci/first-response-playbook.md`
-
-For lifecycle state transitions, crash-loop behavior, and operator troubleshooting, see `docs/daemon-lifecycle-runtime.md`.
+For lifecycle behavior and operator troubleshooting, see `./daemon-lifecycle-runtime.md`.
 
 ## Prerequisites
 
-- **Go 1.22+** (build from source) or a pre-built binary
-- **Linux** (amd64 or arm64) — the daemon uses `/proc` for port-occupant detection
-- **systemd** (recommended for service management)
-- A dedicated non-root user (e.g., `carrier`)
+- Linux host (systemd available)
+- Go toolchain (`go version` should satisfy `daemon/go.mod`)
+- Bun runtime (for gateway service)
+- Dedicated non-root user, for example `carrier`
 
-## Build
+## Build Artifacts
+
+Build daemon binary from repository root:
 
 ```bash
 cd daemon
-go build -o agentd ./cmd/agentd
-
-cd ../gateway
-go build -o carrier-gateway .
+go build -o ../bin/agentd ./cmd/agentd
 ```
+
+Gateway is a Bun runtime service (TypeScript source), not a Go binary. Install dependencies:
+
+```bash
+cd ../gateway
+bun install --frozen-lockfile --no-progress
+```
+
+## Filesystem Layout (Recommended)
+
+```text
+/usr/local/bin/agentd
+/opt/carrier/gateway/...
+/etc/carrier/config.json
+/etc/carrier/agentd.env
+/etc/carrier/gateway.env
+/var/lib/carrier/...
+```
+
+Prepare directories and ownership:
+
+```bash
+sudo mkdir -p /etc/carrier /opt/carrier /var/lib/carrier
+sudo chown -R carrier:carrier /opt/carrier /var/lib/carrier
+```
+
+Install daemon binary:
+
+```bash
+sudo install -o root -g root -m 0755 bin/agentd /usr/local/bin/agentd
+```
+
+Sync gateway source into `/opt/carrier/gateway` (for example by checkout, rsync, or release unpack).
 
 ## Configuration
 
-The daemon reads configuration from a JSON file. Create `/etc/carrier/agentd.json`:
+`agentd` loads `config.json` from its working directory.
+Use `/etc/carrier/config.json` and run daemon service with `WorkingDirectory=/etc/carrier`.
+
+Example `/etc/carrier/config.json`:
 
 ```json
 {
-  "log_level": "info",
-  "log_format": "json",
-  "health_port": 8081,
-  "diagnose_dir": "/var/lib/carrier/diagnose",
-  "data_dir": "/var/lib/carrier/data"
+  "server": {
+    "host": "127.0.0.1",
+    "port": 9090
+  },
+  "log": {
+    "level": "info",
+    "format": "json"
+  },
+  "lifecycle": {
+    "crash_threshold": 3,
+    "crash_window": "5m",
+    "crash_cooldown": "5m"
+  }
 }
 ```
 
-Ensure the data and diagnose directories exist:
+Daemon env overrides (`/etc/carrier/agentd.env`) are optional:
 
 ```bash
-sudo mkdir -p /var/lib/carrier/{data,diagnose}
-sudo chown carrier:carrier /var/lib/carrier/{data,diagnose}
+# Bind/API auth
+CARRIER_SERVER_HOST=127.0.0.1
+CARRIER_SERVER_PORT=9090
+# Required if binding non-loopback host
+# CARRIER_SERVER_API_TOKEN=replace-me
+
+# Logging
+CARRIER_LOG_LEVEL=info
+CARRIER_LOG_FORMAT=json
 ```
 
-### Environment Variables
-
-Agent manifests may declare required environment variables. Set them in the systemd unit or a dedicated env file:
+Gateway env file (`/etc/carrier/gateway.env`) example:
 
 ```bash
-# /etc/carrier/agentd.env
-# Example — adjust per your agent manifests
-MY_AGENT_API_KEY=changeme
+CARRIER_DAEMON_BASE_URL=http://127.0.0.1:9090
+CARRIER_DAEMON_TIMEOUT_MS=30000
+CARRIER_GATEWAY_HOST=127.0.0.1
+CARRIER_GATEWAY_PORT=8787
+# Required when binding gateway to non-loopback host
+# CARRIER_GATEWAY_API_TOKEN=replace-me
+CARRIER_MAX_COMMAND_BODY_BYTES=65536
+
+# Persist session/download artifacts outside source tree
+SESSION_DATA_DIR=/var/lib/carrier
+ARTIFACT_ROOT=/var/lib/carrier
 ```
 
-## Installation
+## systemd Services
 
-```bash
-sudo install -o root -g root -m 0755 agentd /usr/local/bin/agentd
-sudo install -o root -g root -m 0755 carrier-gateway /usr/local/bin/carrier-gateway
-```
-
-## systemd Service
-
-### Daemon (`agentd`)
+### Daemon (`carrier-agentd.service`)
 
 Create `/etc/systemd/system/carrier-agentd.service`:
 
@@ -81,29 +129,29 @@ Wants=network-online.target
 Type=simple
 User=carrier
 Group=carrier
-ExecStart=/usr/local/bin/agentd --config /etc/carrier/agentd.json
+WorkingDirectory=/etc/carrier
 EnvironmentFile=-/etc/carrier/agentd.env
+ExecStart=/usr/local/bin/agentd
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=65536
 
-# Hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/carrier
+ReadWritePaths=/var/lib/carrier /etc/carrier
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-### Gateway
+### Gateway (`carrier-gateway.service`)
 
 Create `/etc/systemd/system/carrier-gateway.service`:
 
 ```ini
 [Unit]
-Description=Carrier Gateway
+Description=Carrier Gateway (Bun)
 After=network-online.target carrier-agentd.service
 Wants=network-online.target
 
@@ -111,7 +159,9 @@ Wants=network-online.target
 Type=simple
 User=carrier
 Group=carrier
-ExecStart=/usr/local/bin/carrier-gateway
+WorkingDirectory=/opt/carrier/gateway
+EnvironmentFile=-/etc/carrier/gateway.env
+ExecStart=/usr/bin/env bun run src/server.ts
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=65536
@@ -119,89 +169,76 @@ LimitNOFILE=65536
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/carrier
+ReadWritePaths=/var/lib/carrier /opt/carrier/gateway
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-### Enable and Start
+Enable and start:
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now carrier-agentd carrier-gateway
 ```
 
-## Health Monitoring
+## Health Checks
 
-The daemon exposes a health endpoint (default port 8081):
+Daemon:
 
 ```bash
-curl -s http://localhost:8081/healthz
+curl -s http://127.0.0.1:9090/healthz
+curl -s http://127.0.0.1:9090/readyz
 ```
 
-Integrate with your monitoring stack (Prometheus, Datadog, etc.):
+Gateway:
 
-- **Liveness**: `GET /healthz` — returns 200 when the daemon process is alive
-- **Readiness**: check that agents report `healthy` via the status API
-
-### Alerting Recommendations
-
-| Condition | Alert |
-|-----------|-------|
-| `/healthz` returns non-200 for >30s | Critical |
-| Agent in `crashing` state for >5m | Warning |
-| Audit buffer >80% full | Warning |
-| Disk usage on data dir >90% | Critical |
+```bash
+curl -s http://127.0.0.1:8787/healthz
+```
 
 ## Logging
 
-With structured logging enabled (`log_format: "json"`), logs are written to stdout and captured by journald:
+Tail service logs with journald:
 
 ```bash
-journalctl -u carrier-agentd -f --output=json
+journalctl -u carrier-agentd -f
+journalctl -u carrier-gateway -f
 ```
 
-Ship logs to your aggregation platform (ELK, Loki, etc.) via journald or a sidecar.
+## Backup and Restore
 
-## Backup
+Back up:
+- `/etc/carrier/` (config + env)
+- `/var/lib/carrier/` (sessions/artifacts and runtime data)
 
-### What to Back Up
-
-- `/etc/carrier/` — configuration files and env
-- `/var/lib/carrier/data/` — agent state, manifests, memory store
-- `/var/lib/carrier/diagnose/` — diagnostic bundles and upgrade backups
-
-### Backup Strategy
+Example:
 
 ```bash
-# Daily backup example (add to cron)
-tar czf /backup/carrier-$(date +%Y%m%d).tar.gz \
-  /etc/carrier/ \
-  /var/lib/carrier/data/
+tar czf /backup/carrier-$(date +%Y%m%d).tar.gz /etc/carrier /var/lib/carrier
 ```
 
-### Restore
-
-1. Stop services: `sudo systemctl stop carrier-agentd carrier-gateway`
+Restore flow:
+1. `sudo systemctl stop carrier-agentd carrier-gateway`
 2. Restore files from backup
-3. Start services: `sudo systemctl start carrier-agentd carrier-gateway`
-4. Verify health: `curl http://localhost:8081/healthz`
+3. `sudo systemctl start carrier-agentd carrier-gateway`
+4. Re-run health checks above
 
 ## Upgrade Procedure
 
-1. Build or download the new binary
-2. Stop the service: `sudo systemctl stop carrier-agentd`
-3. Replace the binary: `sudo install -o root -g root -m 0755 agentd /usr/local/bin/agentd`
-4. Start the service: `sudo systemctl start carrier-agentd`
-5. Verify: `curl http://localhost:8081/healthz`
+1. Deploy new daemon binary to `/usr/local/bin/agentd`
+2. Deploy updated gateway source to `/opt/carrier/gateway`
+3. Reinstall gateway deps if lockfile changed:
+   - `cd /opt/carrier/gateway && bun install --frozen-lockfile --no-progress`
+   - If this fails due to lockfile drift, regenerate and commit `gateway/bun.lock` from source before release.
+4. Restart services:
+   - `sudo systemctl restart carrier-agentd carrier-gateway`
+5. Verify health and smoke-test `/pair` + `/agents`
 
-For agent upgrades (managed via the lifecycle API), the daemon automatically creates pre-upgrade backups in the diagnose directory.
+## Security Notes
 
-## Security Considerations
-
-- Run as a non-root user with minimal privileges
-- Use `ProtectSystem=strict` and `NoNewPrivileges=true` in systemd
-- Rotate secrets in `/etc/carrier/agentd.env` regularly
-- The gateway uses crypto-secure tokens — do not downgrade to sequential generation
-- Review the [security audit](../docs/security-audit-command-execution.md) for command execution hardening
+- Run services as non-root user.
+- If daemon binds non-loopback, set `CARRIER_SERVER_API_TOKEN`.
+- If gateway binds non-loopback, set `CARRIER_GATEWAY_API_TOKEN`.
+- Rotate provider secrets and API tokens periodically.
+- Review command-execution hardening details in `./security-audit-command-execution.md`.
