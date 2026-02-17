@@ -4,6 +4,7 @@ import type { Provider, GatewayResponse } from "./contracts/commands";
 import { InMemoryDaemonClient } from "./daemon/client";
 import { SessionStore } from "./session/store";
 import { DownloadTokenStore } from "./downloads/token_store";
+import { assertFailureParity, type ProviderFailureResponse } from "./parity/failure_parity";
 
 /**
  * Cross-provider consistency tests.
@@ -40,18 +41,22 @@ async function runAcrossProviders(
   deps: GatewayDependencies,
   commandSuffix: string,
   chatId = "100",
-): Promise<GatewayResponse[]> {
-  const results: GatewayResponse[] = [];
+): Promise<ProviderFailureResponse[]> {
+  const results: ProviderFailureResponse[] = [];
   for (const provider of PROVIDERS) {
     const input = `${provider} ${chatId} req-${provider} ${commandSuffix}`;
     const res = await handleCommand(parseInput(input), deps);
-    results.push(res);
+    results.push({ provider, response: res });
   }
   return results;
 }
 
-function assertAllConsistent(results: GatewayResponse[]): void {
-  const normalized = results.map(normalize);
+function responses(results: ProviderFailureResponse[]): GatewayResponse[] {
+  return results.map((entry) => entry.response);
+}
+
+function assertAllConsistent(results: ProviderFailureResponse[]): void {
+  const normalized = responses(results).map(normalize);
   for (let i = 1; i < normalized.length; i++) {
     expect(normalized[i]).toEqual(normalized[0]);
   }
@@ -68,7 +73,7 @@ describe("cross-provider consistency", () => {
   test("/agents returns same result across all providers", async () => {
     const results = await runAcrossProviders(deps, "/agents");
     assertAllConsistent(results);
-    expect(results[0].result).toBe("ok");
+    expect(results[0].response.result).toBe("ok");
   });
 
   test("/install returns same result across all providers", async () => {
@@ -79,14 +84,16 @@ describe("cross-provider consistency", () => {
   test("/start error is consistent across all providers", async () => {
     // Without installing first, all providers should get the same error
     const results = await runAcrossProviders(deps, "/start myagent");
+    assertFailureParity(results);
     assertAllConsistent(results);
-    expect(results[0].result).toBe("error");
+    expect(results[0].response.result).toBe("error");
   });
 
   test("/stop error is consistent across all providers", async () => {
     const results = await runAcrossProviders(deps, "/stop myagent");
+    assertFailureParity(results);
     assertAllConsistent(results);
-    expect(results[0].result).toBe("error");
+    expect(results[0].response.result).toBe("error");
   });
 
   test("/status returns same result across all providers", async () => {
@@ -111,50 +118,53 @@ describe("cross-provider consistency", () => {
 
   test("usage errors are identical across providers", async () => {
     const results = await runAcrossProviders(deps, "/install");
+    assertFailureParity(results);
     assertAllConsistent(results);
-    expect(results[0].result).toBe("error");
-    expect(results[0].errorCode).toBe("E_USAGE");
+    expect(results[0].response.result).toBe("error");
+    expect(results[0].response.errorCode).toBe("E_USAGE");
   });
 
   test("session-required errors are identical across providers (unpaired)", async () => {
     const freshDeps = buildDeps();
-    const results: GatewayResponse[] = [];
+    const results: ProviderFailureResponse[] = [];
     for (const provider of PROVIDERS) {
       const input = `${provider} 999 req-${provider} /agents`;
       const res = await handleCommand(parseInput(input), freshDeps);
-      results.push(res);
+      results.push({ provider, response: res });
     }
+    assertFailureParity(results);
     assertAllConsistent(results);
-    expect(results[0].errorCode).toBe("E_SESSION_REQUIRED");
+    expect(results[0].response.errorCode).toBe("E_SESSION_REQUIRED");
   });
 
   test("/pair success is consistent across providers", async () => {
     const freshDeps = buildDeps();
-    const results: GatewayResponse[] = [];
+    const results: ProviderFailureResponse[] = [];
     for (const provider of PROVIDERS) {
       freshDeps.sessions.registerPairCode(`p-${provider}`, 300);
       const input = `${provider} 200 req-${provider} /pair p-${provider}`;
       const res = await handleCommand(parseInput(input), freshDeps);
-      results.push(res);
+      results.push({ provider, response: res });
     }
     // All should succeed with session tokens
-    for (const r of results) {
+    for (const r of responses(results)) {
       expect(r.result).toBe("ok");
       expect(r.sessionToken).toBeDefined();
     }
     // result field and errorCode should be the same
-    expect(results.map((r) => r.result)).toEqual(["ok", "ok", "ok"]);
+    expect(responses(results).map((r) => r.result)).toEqual(["ok", "ok", "ok"]);
   });
 
   test("/pair invalid code is consistent across providers", async () => {
     const freshDeps = buildDeps();
-    const results: GatewayResponse[] = [];
+    const results: ProviderFailureResponse[] = [];
     for (const provider of PROVIDERS) {
       const input = `${provider} 200 req-${provider} /pair bad-code`;
       const res = await handleCommand(parseInput(input), freshDeps);
-      results.push(res);
+      results.push({ provider, response: res });
     }
+    assertFailureParity(results);
     assertAllConsistent(results);
-    expect(results[0].errorCode).toBe("E_PAIR_CODE_INVALID");
+    expect(results[0].response.errorCode).toBe("E_PAIR_CODE_INVALID");
   });
 });
