@@ -155,11 +155,16 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
           body.token,
           body.webhook_secret,
         );
+        // Redact sensitive fields in the response — never echo secrets back
+        const redacted = {
+          provider: config.provider,
+          configured_at: config.configured_at,
+        };
         return jsonResponse({
           requestId: ctx.requestId,
           result: "ok" as const,
           message: `provider ${body.provider} configured`,
-          provider: config,
+          provider: redacted,
         });
       } catch {
         return jsonResponse({
