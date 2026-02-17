@@ -131,8 +131,14 @@ func TestListAgentsEndpointReturnsCatalogAndState(t *testing.T) {
 	if agent.Installed {
 		t.Fatalf("expected not installed, got installed=true")
 	}
+	if agent.InstallState != string(lifecycle.InstallStateNotInstalled) {
+		t.Fatalf("expected installState=%q, got %q", lifecycle.InstallStateNotInstalled, agent.InstallState)
+	}
 	if agent.RuntimeState != string(lifecycle.RuntimeStateStopped) {
 		t.Fatalf("unexpected runtime state: %q", agent.RuntimeState)
+	}
+	if agent.RestartCount != 0 {
+		t.Fatalf("expected restartCount=0, got %d", agent.RestartCount)
 	}
 }
 
@@ -421,6 +427,90 @@ func TestVerifyConsumePairCodeRejectsOversizedPayload(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(env.Error.Message), "too large") {
 		t.Fatalf("expected oversized payload error message, got %q", env.Error.Message)
+	}
+}
+
+func TestAuditLogsEndpointSupportsFilteringAndLimit(t *testing.T) {
+	svc := newServiceForAPITest(t)
+	handler := NewServer(svc).Handler()
+
+	// Generate two failure audit records with explicit request IDs.
+	for _, reqID := range []string{"req-audit-1", "req-audit-2"} {
+		rr := doJSONRequest(t, handler, http.MethodPost, "/api/v1/diagnosis/handoffs", map[string]any{
+			"agentId":   "openclaw",
+			"consent":   true,
+			"actor":     "telegram:100",
+			"requestId": reqID,
+		})
+		if rr.Code != http.StatusConflict {
+			t.Fatalf("handoff status = %d, want 409; body=%s", rr.Code, rr.Body.String())
+		}
+	}
+
+	filtered := doJSONRequest(t, handler, http.MethodGet, "/api/v1/audit/logs?action=remote_diagnosis_consent&actor=telegram:100&request_id=req-audit-1&result=failure", nil)
+	if filtered.Code != http.StatusOK {
+		t.Fatalf("filtered audit status = %d, want 200; body=%s", filtered.Code, filtered.Body.String())
+	}
+
+	var filteredResp struct {
+		AuditLogs []struct {
+			RequestID string `json:"requestId"`
+			Actor     string `json:"actor"`
+			Action    string `json:"action"`
+			Result    string `json:"result"`
+			ErrorCode string `json:"errorCode"`
+		} `json:"auditLogs"`
+		Total int `json:"total"`
+	}
+	if err := json.Unmarshal(filtered.Body.Bytes(), &filteredResp); err != nil {
+		t.Fatalf("decode filtered response: %v", err)
+	}
+	if filteredResp.Total != 1 || len(filteredResp.AuditLogs) != 1 {
+		t.Fatalf("expected exactly 1 filtered audit log, got total=%d len=%d", filteredResp.Total, len(filteredResp.AuditLogs))
+	}
+	log := filteredResp.AuditLogs[0]
+	if log.RequestID != "req-audit-1" || log.Action != "remote_diagnosis_consent" || log.Actor != "telegram:100" {
+		t.Fatalf("unexpected filtered audit log: %#v", log)
+	}
+	if log.Result != "failure" || log.ErrorCode != "E_REMOTE_DIAG_NOT_NEEDED" {
+		t.Fatalf("unexpected filtered audit result/code: %#v", log)
+	}
+
+	limited := doJSONRequest(t, handler, http.MethodGet, "/api/v1/audit/logs?action=remote_diagnosis_consent&limit=1", nil)
+	if limited.Code != http.StatusOK {
+		t.Fatalf("limited audit status = %d, want 200; body=%s", limited.Code, limited.Body.String())
+	}
+	var limitedResp struct {
+		AuditLogs []struct {
+			RequestID string `json:"requestId"`
+		} `json:"auditLogs"`
+		Total int `json:"total"`
+	}
+	if err := json.Unmarshal(limited.Body.Bytes(), &limitedResp); err != nil {
+		t.Fatalf("decode limited response: %v", err)
+	}
+	if limitedResp.Total != 2 {
+		t.Fatalf("expected total=2, got %d", limitedResp.Total)
+	}
+	if len(limitedResp.AuditLogs) != 1 || limitedResp.AuditLogs[0].RequestID != "req-audit-2" {
+		t.Fatalf("expected only latest audit record req-audit-2, got %#v", limitedResp.AuditLogs)
+	}
+}
+
+func TestAuditLogsEndpointRejectsInvalidResultFilter(t *testing.T) {
+	svc := newServiceForAPITest(t)
+	handler := NewServer(svc).Handler()
+
+	rr := doJSONRequest(t, handler, http.MethodGet, "/api/v1/audit/logs?result=invalid", nil)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+	var env errorEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	if env.Error.Code != "E_USAGE" {
+		t.Fatalf("unexpected error code: %q", env.Error.Code)
 	}
 }
 

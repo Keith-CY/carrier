@@ -50,6 +50,7 @@ func (s *Server) Handler() *http.ServeMux {
 	mux.HandleFunc("/api/v1/agents", s.handleListAgents)
 	mux.HandleFunc("/api/v1/agents/", s.handleAgentAction)
 	mux.HandleFunc("/api/v1/logs", s.handleMergedLogs)
+	mux.HandleFunc("/api/v1/audit/logs", s.handleAuditLogs)
 	mux.HandleFunc("/api/v1/pairing/codes", s.handleIssuePairCode)
 	mux.HandleFunc("/api/v1/pairing/verify-consume", s.handleVerifyConsumePairCode)
 	mux.HandleFunc("/api/v1/diagnosis/handoffs", s.handleCreateDiagnosisHandoff)
@@ -60,11 +61,17 @@ type daemonAgent struct {
 	ID                   string `json:"id"`
 	Name                 string `json:"name"`
 	Version              string `json:"version"`
+	InstallState         string `json:"installState"`
 	Installed            bool   `json:"installed"`
 	RuntimeState         string `json:"runtimeState"`
 	Health               string `json:"health"`
+	Ports                []int  `json:"ports,omitempty"`
+	StartedAt            string `json:"startedAt,omitempty"`
+	RestartCount         int    `json:"restartCount"`
 	NeedsRemoteDiagnosis bool   `json:"needsRemoteDiagnosis"`
 	LastError            string `json:"lastError,omitempty"`
+	LastTriageSummary    string `json:"lastTriageSummary,omitempty"`
+	LastDiagnoseFile     string `json:"lastDiagnoseFile,omitempty"`
 	UpdatedAt            string `json:"updatedAt"`
 }
 
@@ -73,15 +80,25 @@ type listAgentsResponse struct {
 }
 
 func (s *Server) agentFromState(state lifecycle.AgentState) daemonAgent {
+	startedAt := ""
+	if state.StartedAt != nil {
+		startedAt = state.StartedAt.UTC().Format(time.RFC3339Nano)
+	}
 	return daemonAgent{
 		ID:                   state.ID,
 		Name:                 s.lifecycle.AgentName(state.ID),
 		Version:              state.Version,
+		InstallState:         string(state.Install),
 		Installed:            state.Install == lifecycle.InstallStateInstalled,
 		RuntimeState:         string(state.Runtime),
 		Health:               string(state.Health),
+		Ports:                append([]int(nil), state.Ports...),
+		StartedAt:            startedAt,
+		RestartCount:         state.RestartCount,
 		NeedsRemoteDiagnosis: state.NeedsRemoteDiagnosis,
 		LastError:            redact.RedactText(state.LastError),
+		LastTriageSummary:    redact.RedactText(state.LastTriageSummary),
+		LastDiagnoseFile:     state.LastDiagnoseFile,
 		UpdatedAt:            state.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
 }
@@ -126,6 +143,103 @@ func (s *Server) handleMergedLogs(w http.ResponseWriter, r *http.Request) {
 		redactedLines[i] = redact.RedactText(line)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"lines": redactedLines, "truncated": false})
+}
+
+type auditLogRecord struct {
+	RequestID string `json:"requestId"`
+	Actor     string `json:"actor"`
+	Action    string `json:"action"`
+	Target    string `json:"target"`
+	Result    string `json:"result"`
+	ErrorCode string `json:"errorCode,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Timestamp string `json:"timestamp"`
+}
+
+const (
+	defaultAuditQueryLimit = 200
+	maxAuditQueryLimit     = 1000
+)
+
+func (s *Server) handleAuditLogs(w http.ResponseWriter, r *http.Request) {
+	if !allowMethod(w, r, http.MethodGet) {
+		return
+	}
+	if r.URL.Path != "/api/v1/audit/logs" {
+		http.NotFound(w, r)
+		return
+	}
+
+	actorFilter := strings.TrimSpace(r.URL.Query().Get("actor"))
+	actionFilter := strings.TrimSpace(r.URL.Query().Get("action"))
+	requestIDFilter := strings.TrimSpace(r.URL.Query().Get("request_id"))
+	resultFilterRaw := strings.TrimSpace(r.URL.Query().Get("result"))
+
+	var resultFilter lifecycle.AuditResult
+	if resultFilterRaw != "" {
+		switch resultFilterRaw {
+		case string(lifecycle.AuditResultSuccess):
+			resultFilter = lifecycle.AuditResultSuccess
+		case string(lifecycle.AuditResultFailure):
+			resultFilter = lifecycle.AuditResultFailure
+		case string(lifecycle.AuditResultNeutral):
+			resultFilter = lifecycle.AuditResultNeutral
+		default:
+			writeError(w, http.StatusBadRequest, "E_USAGE", "result must be one of success|failure|neutral")
+			return
+		}
+	}
+
+	limit := defaultAuditQueryLimit
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "E_USAGE", "limit must be a positive integer")
+			return
+		}
+		if parsed > maxAuditQueryLimit {
+			limit = maxAuditQueryLimit
+		} else {
+			limit = parsed
+		}
+	}
+
+	source := s.lifecycle.AuditLogs()
+	filtered := make([]auditLogRecord, 0, len(source))
+	for _, entry := range source {
+		if actorFilter != "" && entry.Actor != actorFilter {
+			continue
+		}
+		if actionFilter != "" && entry.Action != actionFilter {
+			continue
+		}
+		if requestIDFilter != "" && entry.RequestID != requestIDFilter {
+			continue
+		}
+		if resultFilterRaw != "" && entry.Result != resultFilter {
+			continue
+		}
+		filtered = append(filtered, auditLogRecord{
+			RequestID: entry.RequestID,
+			Actor:     entry.Actor,
+			Action:    entry.Action,
+			Target:    entry.Target,
+			Result:    string(entry.Result),
+			ErrorCode: entry.ErrorCode,
+			Message:   redact.RedactText(entry.Message),
+			Timestamp: entry.Timestamp.UTC().Format(time.RFC3339Nano),
+		})
+	}
+
+	total := len(filtered)
+	if total > limit {
+		filtered = filtered[total-limit:]
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"auditLogs": filtered,
+		"total":     total,
+	})
 }
 
 func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
