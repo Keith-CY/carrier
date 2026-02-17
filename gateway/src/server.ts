@@ -121,7 +121,7 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
   const router: GatewayHandler = async (ctx) => {
     const url = new URL(ctx.request.url);
 
-    // Provider setup endpoint
+    // Provider setup endpoint (requires gateway API token)
     if (ctx.request.method === "POST" && (url.pathname === "/api/v1/setup" || url.pathname === "/setup")) {
       const setupAuthError = validateGatewayAPIToken(ctx.request, ctx.requestId);
       if (setupAuthError) {
@@ -171,7 +171,7 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
       }
     }
 
-    // Provider setup status
+    // Provider setup status (requires gateway API token, redacts secrets)
     if (ctx.request.method === "GET" && (url.pathname === "/api/v1/setup" || url.pathname === "/setup")) {
       const setupGetAuthError = validateGatewayAPIToken(ctx.request, ctx.requestId);
       if (setupGetAuthError) {
