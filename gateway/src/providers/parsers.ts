@@ -1,5 +1,5 @@
 import type { Provider } from "../contracts/commands";
-import { timingSafeEqual } from "node:crypto";
+import { createPublicKey, timingSafeEqual, verify } from "node:crypto";
 
 export type NormalizedGatewayCommand = {
   provider: Provider;
@@ -126,6 +126,56 @@ export function parseDiscordPayloadToCommand(payload: unknown): NormalizedGatewa
     args: parsed.args,
     rawText: content,
   };
+}
+
+export type DiscordSignatureVerificationInput = {
+  body: string;
+  signatureHex: string | null | undefined;
+  timestamp: string | null | undefined;
+  publicKeyHex: string | null | undefined;
+  maxAgeSeconds?: number;
+  nowEpochSeconds?: number;
+};
+
+export function verifyDiscordRequestSignature(input: DiscordSignatureVerificationInput): boolean {
+  const signatureHex = input.signatureHex?.trim() ?? "";
+  const timestamp = input.timestamp?.trim() ?? "";
+  const publicKeyHex = input.publicKeyHex?.trim() ?? "";
+  if (!signatureHex || !timestamp || !publicKeyHex) {
+    return false;
+  }
+
+  const maxAgeSeconds = input.maxAgeSeconds ?? 300;
+  const nowEpochSeconds = input.nowEpochSeconds ?? Math.floor(Date.now() / 1000);
+  const ts = Number.parseInt(timestamp, 10);
+  if (!Number.isFinite(ts) || Math.abs(nowEpochSeconds - ts) > maxAgeSeconds) {
+    return false;
+  }
+
+  try {
+    const signature = Buffer.from(signatureHex, "hex");
+    const publicKeyRaw = Buffer.from(publicKeyHex, "hex");
+    if (signature.length !== 64 || publicKeyRaw.length !== 32) {
+      return false;
+    }
+
+    // Discord public keys are raw 32-byte Ed25519 keys. Node verify() expects SPKI.
+    const spkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
+    const publicKey = createPublicKey({
+      key: Buffer.concat([spkiPrefix, publicKeyRaw]),
+      format: "der",
+      type: "spki",
+    });
+
+    return verify(
+      null,
+      Buffer.from(`${timestamp}${input.body}`),
+      publicKey,
+      signature,
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function parseFeishuEventToCommand(payload: unknown): NormalizedGatewayCommand | null {

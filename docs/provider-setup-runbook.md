@@ -63,6 +63,8 @@ gh secret set CARRIER_TELEGRAM_BOT_TOKEN --body "<token>"
 2. Set **Interactions Endpoint URL** to: `https://<YOUR_GATEWAY_HOST>/webhook/discord`
 3. Discord will send a verification ping — the gateway must respond correctly.
 
+Gateway-side verification should validate `X-Signature-Ed25519` and `X-Signature-Timestamp` against `CARRIER_DISCORD_PUBLIC_KEY`.
+
 ### 2.3 Invite Bot to Server
 
 ```
