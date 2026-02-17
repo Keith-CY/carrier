@@ -33,17 +33,17 @@ export function normalizeDownloadFileName(fileName: string): string {
 }
 
 export function expectedFileNameFromRef(fileRef: string): string {
-  // For Windows-style paths (starting with drive letter), split on both / and \
-  // to handle mixed separators like C:\tmp/build\artifact.zip
+  let separator: string | RegExp;
   if (/^[A-Za-z]:[\\/]/.test(fileRef)) {
-    const parts = fileRef.split(/[/\\]/);
-    return parts.pop() || "artifact.bin";
+    // Windows paths may mix / and \, so split on both
+    separator = /[\/\\]/;
+  } else if (fileRef.includes("/")) {
+    separator = "/";
+  } else {
+    separator = "\\";
   }
-  // Unix paths: only split on /
-  if (fileRef.includes("/")) {
-    return fileRef.split("/").pop() || "artifact.bin";
-  }
-  return fileRef.split("\\").pop() || "artifact.bin";
+  const parts = fileRef.split(separator);
+  return parts.pop() || "artifact.bin";
 }
 
 export function compareRequestedFileName(input: {

@@ -98,6 +98,12 @@ export function createRuntimeDependencies(overrides: Partial<GatewayDependencies
   };
 }
 
+const webhookHandlers: Map<string, (ctx: GatewayRequestContext) => Promise<Response>> = new Map([
+  ["/webhook/discord", handleDiscordWebhookRequest],
+  ["/webhook/feishu", handleFeishuWebhookRequest],
+  ["/webhook/telegram", handleTelegramWebhookRequest],
+]);
+
 export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): GatewayRuntime {
   const deps = createRuntimeDependencies(options.deps);
   const readFile = options.readFile ?? defaultReadFile;
@@ -150,12 +156,6 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
       const response = await safeHandleCommand(commandInput, deps);
       return jsonResponse(response);
     }
-
-    const webhookHandlers: Map<string, (ctx: GatewayRequestContext) => Promise<Response>> = new Map([
-      ["/webhook/discord", handleDiscordWebhookRequest],
-      ["/webhook/feishu", handleFeishuWebhookRequest],
-      ["/webhook/telegram", handleTelegramWebhookRequest],
-    ]);
 
     if (ctx.request.method === "POST") {
       const webhookHandler = webhookHandlers.get(url.pathname);
