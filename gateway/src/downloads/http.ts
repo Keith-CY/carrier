@@ -33,7 +33,10 @@ export function normalizeDownloadFileName(fileName: string): string {
 }
 
 export function expectedFileNameFromRef(fileRef: string): string {
-  return fileRef.split("/").pop() || "artifact.bin";
+  if (fileRef.includes("/")) {
+    return fileRef.split("/").pop() || "artifact.bin";
+  }
+  return fileRef.split("\\").pop() || "artifact.bin";
 }
 
 export function compareRequestedFileName(input: {

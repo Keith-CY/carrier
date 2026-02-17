@@ -1,3 +1,4 @@
+import { describe, expect, test } from "bun:test";
 import {
   buildContentDisposition,
   compareRequestedFileName,
@@ -33,6 +34,8 @@ describe("filename normalization and mismatch checks", () => {
   test("extracts filename from artifact path", () => {
     expect(expectedFileNameFromRef("/tmp/build/artifact.zip")).toBe("artifact.zip");
     expect(expectedFileNameFromRef("/tmp/build/")).toBe("artifact.bin");
+    expect(expectedFileNameFromRef("C:\\tmp\\build\\artifact.zip")).toBe("artifact.zip");
+    expect(expectedFileNameFromRef("/tmp/build/path\\file.txt")).toBe("path\\file.txt");
   });
 
   test("compares normalized requested filename against token artifact filename", () => {
