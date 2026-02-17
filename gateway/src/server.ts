@@ -1,4 +1,5 @@
 import { safeHandleCommand, type GatewayDependencies } from "./index";
+import { ProviderSetupStore, type ProviderType } from "./providers/setup";
 import { HttpDaemonClient } from "./daemon/http_client";
 import {
   buildContentDisposition,
@@ -115,8 +116,81 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
   const rawMax = options.maxCommandBodyBytes ?? cachedMaxCommandBodyBytes;
   const maxBodyBytes = Number.isFinite(rawMax) && rawMax > 0 ? Math.floor(rawMax) : cachedMaxCommandBodyBytes;
 
+    const providerSetup = new ProviderSetupStore();
+
   const router: GatewayHandler = async (ctx) => {
     const url = new URL(ctx.request.url);
+
+    // Provider setup endpoint (requires gateway API token)
+    if (ctx.request.method === "POST" && (url.pathname === "/api/v1/setup" || url.pathname === "/setup")) {
+      const setupAuthError = validateGatewayAPIToken(ctx.request, ctx.requestId);
+      if (setupAuthError) {
+        return jsonResponse(setupAuthError, 401);
+      }
+      try {
+        const body = await ctx.request.json() as {
+          provider?: string;
+          token?: string;
+          webhook_secret?: string;
+        };
+        if (!body.provider) {
+          return jsonResponse({
+            requestId: ctx.requestId,
+            result: "error" as const,
+            errorCode: "E_MISSING_PROVIDER",
+            message: "provider field is required",
+          }, 400);
+        }
+        const validProviders = ["telegram", "discord", "feishu", "dummy"];
+        if (!validProviders.includes(body.provider)) {
+          return jsonResponse({
+            requestId: ctx.requestId,
+            result: "error" as const,
+            errorCode: "E_INVALID_PROVIDER",
+            message: `invalid provider: ${body.provider}; must be one of ${validProviders.join(", ")}`,
+          }, 400);
+        }
+        const config = providerSetup.configure(
+          body.provider as ProviderType,
+          body.token,
+          body.webhook_secret,
+        );
+        return jsonResponse({
+          requestId: ctx.requestId,
+          result: "ok" as const,
+          message: `provider ${body.provider} configured`,
+          provider: config,
+        });
+      } catch {
+        return jsonResponse({
+          requestId: ctx.requestId,
+          result: "error" as const,
+          errorCode: "E_BAD_REQUEST",
+          message: "invalid JSON body",
+        }, 400);
+      }
+    }
+
+    // Provider setup status (requires gateway API token, redacts secrets)
+    if (ctx.request.method === "GET" && (url.pathname === "/api/v1/setup" || url.pathname === "/setup")) {
+      const setupGetAuthError = validateGatewayAPIToken(ctx.request, ctx.requestId);
+      if (setupGetAuthError) {
+        return jsonResponse(setupGetAuthError, 401);
+      }
+      const rawConfig = providerSetup.getConfig();
+      // Redact sensitive fields — only expose provider type and configured_at
+      const redactedConfig = rawConfig ? {
+        provider: rawConfig.provider,
+        configured_at: rawConfig.configured_at,
+      } : null;
+      return jsonResponse({
+        requestId: ctx.requestId,
+        result: "ok" as const,
+        configured: providerSetup.isConfigured(),
+        provider: redactedConfig,
+      });
+    }
+
     if (ctx.request.method === "GET" && url.pathname === "/healthz") {
       return jsonResponse({
         status: "ok",

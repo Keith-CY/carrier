@@ -25,6 +25,11 @@ func List() []Entry {
 	return DefaultEntries()
 }
 
+// ActiveEntries returns only entries with StatusActive, suitable for runtime registration.
+func ActiveEntries() []Entry {
+	return ListByStatus(StatusActive)
+}
+
 // ListByStatus returns entries filtered by candidate status.
 func ListByStatus(status CandidateStatus) []Entry {
 	var result []Entry

@@ -83,9 +83,13 @@ func main() {
 	logger.Info("agentd scaffold booted")
 	fmt.Printf("agentd scaffold booted (listen=%s:%d log=%s/%s)\n",
 		cfg.Server.Host, cfg.Server.Port, cfg.Log.Level, cfg.Log.Format)
-	fmt.Println("catalog:")
-	for _, entry := range catalog.DefaultEntries() {
+	fmt.Println("catalog (active):")
+	for _, entry := range catalog.ActiveEntries() {
 		fmt.Printf("- %s (%s): %s\n", entry.Name, entry.ID, entry.Status)
+	}
+	fmt.Println("catalog (candidate, unlisted):")
+	for _, entry := range catalog.ListByStatus(catalog.StatusCandidate) {
+		fmt.Printf("- %s (%s): %s [candidate]\n", entry.Name, entry.ID, entry.Status)
 	}
 
 	// Validate security: refuse non-loopback binding without an API token.
@@ -330,6 +334,8 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.Pai
 			handleLogs(svc, agentID, w, r)
 		case "upgrade":
 			handleUpgrade(svc, agentID, w, r)
+		case "uninstall":
+			handleUninstall(svc, agentID, w, r)
 		case "diagnose":
 			handleDiagnose(svc, agentID, w, r)
 		default:
@@ -403,11 +409,61 @@ func handleInstall(svc *lifecycle.Service, agentID string, w http.ResponseWriter
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+
+	// Check if this is a base agent that supports creating instances.
+	// Accept optional instance_name from body.
+	var instanceName string
+	var wantsMultiInstance bool
+	if r.Body != nil && r.ContentLength != 0 {
+		var body struct {
+			AgentID       string `json:"agentId"`
+			InstanceName  string `json:"instance_name"`
+			MultiInstance bool   `json:"multi_instance"`
+		}
+		// Re-read body for instance_name (body may have been consumed for agentId)
+		bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
+		if len(bodyBytes) > 0 {
+			_ = json.Unmarshal(bodyBytes, &body)
+			instanceName = body.InstanceName
+			wantsMultiInstance = body.MultiInstance
+		}
+	}
+
+	// Multi-instance: create a new instance from an already-registered agent.
+	// Triggered when instance_name is provided, or multi_instance is true.
+	// When instance_name is omitted, a random suffix is generated automatically.
+	if instanceName != "" || wantsMultiInstance {
+		// Create a new instance from the base agent
+		instID, err := svc.RegisterInstance(agentID, instanceName)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		if err := svc.Install(r.Context(), instID); err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "installed", "instance_id": instID})
+		return
+	}
+
 	if err := svc.Install(r.Context(), agentID); err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "installed"})
+}
+
+func handleUninstall(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := svc.Uninstall(r.Context(), agentID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "uninstalled"})
 }
 
 func handleStart(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
