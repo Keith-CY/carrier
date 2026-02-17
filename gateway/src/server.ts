@@ -112,7 +112,8 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
   const deps = createRuntimeDependencies(options.deps);
   const readFile = options.readFile ?? defaultReadFile;
   const middlewares = options.middlewares ?? [requestIdMiddleware];
-  const maxBodyBytes = options.maxCommandBodyBytes ?? cachedMaxCommandBodyBytes;
+  const rawMax = options.maxCommandBodyBytes ?? cachedMaxCommandBodyBytes;
+  const maxBodyBytes = Number.isFinite(rawMax) && rawMax > 0 ? Math.floor(rawMax) : cachedMaxCommandBodyBytes;
 
   const router: GatewayHandler = async (ctx) => {
     const url = new URL(ctx.request.url);
