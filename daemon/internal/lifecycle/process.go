@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,9 @@ import (
 	"syscall"
 	"time"
 )
+
+// defaultGracePeriod is the default time to wait after SIGTERM before sending SIGKILL.
+const defaultGracePeriod = 10 * time.Second
 
 // ProcessManager tracks and manages running agent processes.
 type ProcessManager struct {
@@ -113,6 +117,13 @@ func (pm *ProcessManager) Start(agentID string, command string, args []string) (
 // Stop sends SIGTERM to the agent's process, waits up to 10 seconds,
 // then sends SIGKILL if still running.
 func (pm *ProcessManager) Stop(agentID string) error {
+	return pm.StopWithContext(context.Background(), agentID)
+}
+
+// StopWithContext sends SIGTERM to the agent's process. It waits until the
+// context expires (or defaultGracePeriod if the context has no deadline)
+// before escalating to SIGKILL.
+func (pm *ProcessManager) StopWithContext(ctx context.Context, agentID string) error {
 	pm.mu.Lock()
 	info, exists := pm.processes[agentID]
 	if !exists {
@@ -131,12 +142,19 @@ func (pm *ProcessManager) Stop(agentID string) error {
 	if err := syscall.Kill(-info.pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
 		stopErr = fmt.Errorf("send SIGTERM to process group: %w", err)
 	} else {
-		// Wait up to 10 seconds for graceful shutdown
-		timeout := time.After(10 * time.Second)
+		// If the context carries a deadline use it; otherwise fall back to
+		// the default grace period so callers without a deadline still get
+		// predictable behaviour.
+		waitCtx := ctx
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+			var cancel context.CancelFunc
+			waitCtx, cancel = context.WithTimeout(ctx, defaultGracePeriod)
+			defer cancel()
+		}
 		select {
 		case <-info.done:
 			// Process exited gracefully
-		case <-timeout:
+		case <-waitCtx.Done():
 			// Force kill the full process group.
 			if err := syscall.Kill(-info.pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
 				stopErr = fmt.Errorf("send SIGKILL to process group: %w", err)

@@ -6,24 +6,32 @@ OpenClaw runtime manifests define install and upgrade commands that fetch binari
 from GitHub Releases. This document describes the trust model and verification
 steps for those commands.
 
+## Authoritative Installer Path
+
+There is exactly **one** authoritative installer implementation:
+
+- **`daemon/internal/catalog/manifests.go`** — defines the install command via
+  `getInstallCommand()`, which delegates to the official upstream installer at
+  `https://openclaw.ai/install.sh` (Unix) or `https://openclaw.ai/install.ps1`
+  (Windows).
+
+No other installer scripts should exist in the repository. The previously
+duplicated `catalog/scripts/install-openclaw.sh` was removed in issue #640 to
+eliminate drift risk. Automated tests in `manifests_test.go` enforce this:
+
+- `TestNoStaleInstallerScripts` — fails if any installer script reappears under
+  `catalog/scripts/`.
+- `TestInstallCommandUsesOfficialURL` — asserts the manifest points to the
+  official URL.
+
 ## Install Flow
 
-The manifest install command uses a two-tier strategy:
+The manifest install command delegates to the official OpenClaw installer:
 
-1. **npm-first** — If `npm` is available, install via `npm install -g openclaw`.
-   This relies on npm's built-in integrity checks (sha512 in `package-lock.json`).
+- **Unix (Linux/macOS/WSL):** `curl -fsSL --proto "=https" --tlsv1.2 "https://openclaw.ai/install.sh" | bash`
+- **Windows:** `powershell -NoProfile -Command "irm 'https://openclaw.ai/install.ps1' | iex"`
 
-2. **Binary fallback** — If `npm` is not available, download a platform-specific
-   archive from GitHub Releases and verify its SHA-256 checksum:
-
-   ```bash
-   ARCHIVE="openclaw-$(uname -s)-$(uname -m).tar.gz"
-   curl -fsSL -o "$ARCHIVE" "https://github.com/openclaw/openclaw/releases/latest/download/$ARCHIVE"
-   curl -fsSL -o "$ARCHIVE.sha256" "https://github.com/openclaw/openclaw/releases/latest/download/$ARCHIVE.sha256"
-   sha256sum -c "$ARCHIVE.sha256"
-   tar xzf "$ARCHIVE"
-   install -m 755 openclaw /usr/local/bin/openclaw
-   ```
+Integrity verification is handled by the upstream installer.
 
 ## What Is Verified
 

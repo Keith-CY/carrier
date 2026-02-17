@@ -154,6 +154,7 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 
 	s.mu.Lock()
 	state = s.states[agentID]
+	state.Runtime = RuntimeStateStopped
 	state.Health = HealthStateUnknown
 	state.LastError = ""
 	state.UpdatedAt = s.now()
