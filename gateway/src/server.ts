@@ -43,6 +43,7 @@ export type GatewayRuntimeOptions = {
   deps?: Partial<GatewayDependencies>;
   middlewares?: GatewayMiddleware[];
   readFile?: ReadFileFn;
+  maxCommandBodyBytes?: number;
 };
 
 export type GatewayRuntime = {
@@ -51,6 +52,9 @@ export type GatewayRuntime = {
 };
 
 const DEFAULT_MAX_COMMAND_BODY_BYTES = 64 * 1024;
+
+/** Cached at module load — env vars don't change at runtime. */
+const cachedMaxCommandBodyBytes = loadMaxCommandBodyBytes();
 
 class PayloadTooLargeError extends Error {
   constructor(readonly maxBytes: number) {
@@ -108,6 +112,8 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
   const deps = createRuntimeDependencies(options.deps);
   const readFile = options.readFile ?? defaultReadFile;
   const middlewares = options.middlewares ?? [requestIdMiddleware];
+  const rawMax = options.maxCommandBodyBytes ?? cachedMaxCommandBodyBytes;
+  const maxBodyBytes = Number.isFinite(rawMax) && rawMax > 0 ? Math.floor(rawMax) : cachedMaxCommandBodyBytes;
 
   const router: GatewayHandler = async (ctx) => {
     const url = new URL(ctx.request.url);
@@ -125,7 +131,7 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
 
       let parsed: ParsedCommandRequest;
       try {
-        parsed = await parseCommandRequest(ctx.request);
+        parsed = await parseCommandRequest(ctx.request, maxBodyBytes);
       } catch (error) {
         if (error instanceof PayloadTooLargeError) {
           return jsonResponse({
@@ -528,9 +534,9 @@ type ParsedCommandRequest = {
   sessionToken: string | null;
 };
 
-async function parseCommandRequest(request: Request): Promise<ParsedCommandRequest> {
+async function parseCommandRequest(request: Request, maxBodyBytes: number = cachedMaxCommandBodyBytes): Promise<ParsedCommandRequest> {
   const allowAuthorizationSessionToken = !loadGatewayAPIToken();
-  const rawBody = await readBodyWithLimit(request, loadMaxCommandBodyBytes());
+  const rawBody = await readBodyWithLimit(request, maxBodyBytes);
   const result: ParsedCommandRequest = {
     commandInput: null,
     sessionToken: null,
