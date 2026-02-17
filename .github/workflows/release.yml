@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -11,14 +11,13 @@ permissions:
 
 env:
   RELEASE_ARTIFACT_RETENTION_DAYS: "14"
-  MAIN_RELEASE_KEEP_COUNT: "20"
 
 jobs:
   e2e-deploy:
     name: End-to-End Tests (Deployment)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -166,7 +165,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write  # Required for creating GitHub releases
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Download packages
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -177,46 +176,10 @@ jobs:
         uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: main-${{ github.sha }}
-          name: "main-${{ github.sha }}"
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
           generate_release_notes: true
           files: |
             dist/**/*.zip
             dist/**/*.sha256
             dist/**/*.sig
-
-  prune-main-releases:
-    name: Prune Old main-* Releases
-    needs: release
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    steps:
-      - name: Prune by count policy
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          KEEP_COUNT: ${{ env.MAIN_RELEASE_KEEP_COUNT }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mapfile -t tags < <(
-            gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
-              --jq '.[] | select(.tag_name | startswith("main-")) | [.created_at, .tag_name] | @tsv' \
-              | sort -r \
-              | awk -F '\t' '{print $2}'
-          )
-
-          keep="${KEEP_COUNT}"
-          total="${#tags[@]}"
-
-          echo "Found ${total} main-* releases. Keep newest ${keep}."
-
-          if (( total <= keep )); then
-            echo "No release pruning required."
-            exit 0
-          fi
-
-          for tag in "${tags[@]:keep}"; do
-            echo "Deleting release/tag: ${tag}"
-            gh release delete "${tag}" --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag
-          done

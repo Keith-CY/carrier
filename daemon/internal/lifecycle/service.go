@@ -41,6 +41,7 @@ const (
 	defaultCrashLoopThreshold = 3
 	defaultCrashLoopWindow    = 5 * time.Minute
 	defaultCrashLoopCooldown  = 5 * time.Minute
+	defaultCommandTimeout     = 5 * time.Minute
 )
 
 var (
@@ -164,6 +165,14 @@ func WithBackoffPolicy(policy BackoffPolicy) Option {
 	}
 }
 
+func WithCommandTimeout(timeout time.Duration) Option {
+	return func(s *Service) {
+		if timeout > 0 {
+			s.commandTimeout = timeout
+		}
+	}
+}
+
 type Service struct {
 	mu                 sync.RWMutex
 	states             map[string]AgentState
@@ -195,6 +204,7 @@ type Service struct {
 	backoffStates      map[string]BackoffState
 	exitCodes          map[string]*int
 	evidenceCollector  *EvidenceCollector
+	commandTimeout     time.Duration
 }
 
 func NewService(triager baseagent.Triager, opts ...Option) *Service {
@@ -230,6 +240,7 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		backoffPolicy:      DefaultBackoffPolicy(),
 		backoffStates:      make(map[string]BackoffState),
 		exitCodes:          exitCodes,
+		commandTimeout:     loadCommandTimeoutFromEnv(os.Getenv("CARRIER_COMMAND_TIMEOUT")),
 	}
 	svc.processManager = NewProcessManager(processLogDir)
 	svc.evidenceCollector = NewEvidenceCollector(logs, exitCodes, 1000)
@@ -254,6 +265,17 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 	}
 
 	return svc
+}
+
+func loadCommandTimeoutFromEnv(raw string) time.Duration {
+	if raw == "" {
+		return defaultCommandTimeout
+	}
+	timeout, err := time.ParseDuration(raw)
+	if err != nil || timeout <= 0 {
+		return defaultCommandTimeout
+	}
+	return timeout
 }
 
 func (s *Service) RegisterManifest(m manifest.Manifest) error {

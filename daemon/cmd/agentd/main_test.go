@@ -56,6 +56,27 @@ func buildTestMux(svc *lifecycle.Service, ready bool) *http.ServeMux {
 	return buildHTTPMux(svc, &readyFlag, pairStore, ratelimit.New())
 }
 
+func TestNewHTTPServerAppliesTimeouts(t *testing.T) {
+	handler := http.NewServeMux()
+	server := newHTTPServer("127.0.0.1:9090", handler)
+
+	if server.ReadHeaderTimeout != defaultReadHeaderTimeout {
+		t.Fatalf("ReadHeaderTimeout = %v, want %v", server.ReadHeaderTimeout, defaultReadHeaderTimeout)
+	}
+	if server.ReadTimeout != defaultReadTimeout {
+		t.Fatalf("ReadTimeout = %v, want %v", server.ReadTimeout, defaultReadTimeout)
+	}
+	if server.WriteTimeout != defaultWriteTimeout {
+		t.Fatalf("WriteTimeout = %v, want %v", server.WriteTimeout, defaultWriteTimeout)
+	}
+	if server.IdleTimeout != defaultIdleTimeout {
+		t.Fatalf("IdleTimeout = %v, want %v", server.IdleTimeout, defaultIdleTimeout)
+	}
+	if server.Handler != handler {
+		t.Fatal("handler mismatch")
+	}
+}
+
 func (m *fakeProcessManager) Start(agentID string, _ string, _ []string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

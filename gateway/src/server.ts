@@ -1,6 +1,7 @@
 import { safeHandleCommand, type GatewayDependencies } from "./index";
 import { HttpDaemonClient } from "./daemon/http_client";
 import { DownloadTokenStore } from "./downloads/token_store";
+import { RateLimiter } from "./ratelimit";
 import { SessionStore } from "./session/store";
 import { join } from "node:path";
 import { timingSafeEqual } from "node:crypto";
@@ -41,6 +42,15 @@ export type GatewayRuntime = {
   fetch: (request: Request) => Promise<Response>;
 };
 
+const DEFAULT_MAX_COMMAND_BODY_BYTES = 64 * 1024;
+
+class PayloadTooLargeError extends Error {
+  constructor(readonly maxBytes: number) {
+    super(`request body exceeds ${maxBytes} bytes`);
+    this.name = "PayloadTooLargeError";
+  }
+}
+
 export function composeMiddleware(middlewares: GatewayMiddleware[], handler: GatewayHandler): GatewayHandler {
   return async (ctx: GatewayRequestContext): Promise<Response> => {
     let index = -1;
@@ -76,7 +86,7 @@ export function createRuntimeDependencies(overrides: Partial<GatewayDependencies
     daemon: overrides.daemon ?? new HttpDaemonClient(),
     sessions: overrides.sessions ?? new SessionStore(undefined, undefined, sessionPersistencePath).startPeriodicCleanup(),
     downloads: overrides.downloads ?? new DownloadTokenStore().startPeriodicCleanup(),
-    rateLimiter: overrides.rateLimiter,
+    rateLimiter: overrides.rateLimiter ?? new RateLimiter().startPeriodicCleanup(),
   };
 }
 
@@ -99,7 +109,20 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
         return jsonResponse(gatewayAuthError, 401);
       }
 
-      const parsed = await parseCommandRequest(ctx.request);
+      let parsed: ParsedCommandRequest;
+      try {
+        parsed = await parseCommandRequest(ctx.request);
+      } catch (error) {
+        if (error instanceof PayloadTooLargeError) {
+          return jsonResponse({
+            requestId: ctx.requestId,
+            result: "error",
+            errorCode: "E_PAYLOAD_TOO_LARGE",
+            message: `request body exceeds ${error.maxBytes} bytes limit`,
+          }, 413);
+        }
+        throw error;
+      }
       if (!parsed.commandInput) {
         return jsonResponse({
           requestId: ctx.requestId,
@@ -487,6 +510,7 @@ type ParsedCommandRequest = {
 
 async function parseCommandRequest(request: Request): Promise<ParsedCommandRequest> {
   const allowAuthorizationSessionToken = !loadGatewayAPIToken();
+  const rawBody = await readBodyWithLimit(request, loadMaxCommandBodyBytes());
   const result: ParsedCommandRequest = {
     commandInput: null,
     sessionToken: null,
@@ -512,7 +536,7 @@ async function parseCommandRequest(request: Request): Promise<ParsedCommandReque
   const contentType = request.headers.get("content-type")?.toLowerCase() || "";
   if (contentType.includes("application/json")) {
     try {
-      const payload = await request.json() as { input?: unknown; sessionToken?: unknown };
+      const payload = JSON.parse(rawBody) as { input?: unknown; sessionToken?: unknown };
       
       // Extract command input
       if (typeof payload.input === "string" && payload.input.trim().length > 0) {
@@ -531,12 +555,60 @@ async function parseCommandRequest(request: Request): Promise<ParsedCommandReque
   }
 
   // For non-JSON requests, treat the entire body as command input
-  const raw = (await request.text()).trim();
+  const raw = rawBody.trim();
   if (raw.length > 0) {
     result.commandInput = raw;
   }
   
   return result;
+}
+
+function loadMaxCommandBodyBytes(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.CARRIER_MAX_COMMAND_BODY_BYTES?.trim();
+  if (!raw) {
+    return DEFAULT_MAX_COMMAND_BODY_BYTES;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_MAX_COMMAND_BODY_BYTES;
+  }
+  return parsed;
+}
+
+async function readBodyWithLimit(request: Request, maxBytes: number): Promise<string> {
+  const contentLength = request.headers.get("content-length");
+  if (contentLength) {
+    const parsed = Number.parseInt(contentLength, 10);
+    if (Number.isFinite(parsed) && parsed > maxBytes) {
+      throw new PayloadTooLargeError(maxBytes);
+    }
+  }
+
+  if (!request.body) {
+    return "";
+  }
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    if (!value) {
+      continue;
+    }
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new PayloadTooLargeError(maxBytes);
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  text += decoder.decode();
+  return text;
 }
 
 export function injectSessionTokenIfMissing(commandInput: string, sessionToken: string | null): string {

@@ -397,4 +397,31 @@ func TestParseAgentActionPathBoundaryCases(t *testing.T) {
 	}
 }
 
+func TestVerifyConsumePairCodeRejectsOversizedPayload(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 2, 14, 17, 0, 0, 0, time.UTC)}
+	pairing := NewPairingCodeStore(clock.Now)
+	if _, err := pairing.Register("pair-test-code", 30*time.Second); err != nil {
+		t.Fatalf("register code: %v", err)
+	}
+
+	svc := newServiceForAPITest(t)
+	handler := NewServer(svc, WithPairingCodeStore(pairing)).Handler()
+	oversizedCode := strings.Repeat("x", (1<<20)+32)
+	rr := doRawJSONRequest(t, handler, http.MethodPost, "/api/v1/pairing/verify-consume", []byte(`{"code":"`+oversizedCode+`"}`))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+
+	var env errorEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	if env.Error.Code != "E_USAGE" {
+		t.Fatalf("unexpected error code: %q", env.Error.Code)
+	}
+	if !strings.Contains(strings.ToLower(env.Error.Message), "too large") {
+		t.Fatalf("expected oversized payload error message, got %q", env.Error.Message)
+	}
+}
+
 var _ runtimecheck.Checker = (*fakeChecker)(nil)

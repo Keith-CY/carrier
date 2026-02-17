@@ -72,7 +72,10 @@ func (s *Service) Upgrade(ctx context.Context, agentID string) (UpgradeResult, e
 	}
 	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_start backup=%q command=%q", backupPath, m.Runtime.Upgrade.Command))
 
-	result, runErr := s.runner.Run(ctx, m.Runtime.Upgrade.Command)
+	opCtx, cancel := context.WithTimeout(ctx, s.commandTimeout)
+	defer cancel()
+
+	result, runErr := s.runner.Run(opCtx, m.Runtime.Upgrade.Command)
 	s.appendCommandLog(agentID, "upgrade", m.Runtime.Upgrade.Command, result, runErr)
 	if runErr != nil {
 		updateErr := s.formatUpgradeFailure(runErr, backupPath)

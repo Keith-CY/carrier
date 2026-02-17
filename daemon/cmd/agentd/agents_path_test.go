@@ -108,8 +108,8 @@ func TestAgentsPathHTTPRouting(t *testing.T) {
 		// Empty ID segment (double slash) → 301 (ServeMux cleans path)
 		{name: "empty_id_segment", method: "GET", path: "/api/v1/agents//status", wantStatus: http.StatusMovedPermanently},
 
-		// Special characters → 301 for traversal (ServeMux cleans ..), 404 for others
-		{name: "traversal_id", method: "GET", path: "/api/v1/agents/..%2F..%2Fetc/status", wantStatus: http.StatusMovedPermanently},
+		// Special characters → traversal payload is rejected as not found
+		{name: "traversal_id", method: "GET", path: "/api/v1/agents/..%2F..%2Fetc/status", wantStatus: http.StatusNotFound},
 		{name: "slash_encoded_id", method: "GET", path: "/api/v1/agents/a%2Fb/status", wantStatus: http.StatusNotFound},
 		{name: "leading_dot_id", method: "GET", path: "/api/v1/agents/.hidden/status", wantStatus: http.StatusNotFound},
 
