@@ -430,6 +430,10 @@ describe("gateway runtime routes", () => {
     const disposition = response.headers.get("content-disposition");
     // Should escape backslashes and quotes: test\"file\\\\name.txt
     expect(disposition).toBe('attachment; filename="test\\"file\\\\name.txt"');
+
+    // Clean up temporary directory
+    const { rmSync } = await import("node:fs");
+    rmSync(tmpDir, { recursive: true, force: true });
   });
 
   test("command route executes command pipeline", async () => {

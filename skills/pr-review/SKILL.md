@@ -8,7 +8,7 @@ Guide agents to review pull requests like a human collaborator — with inline c
    - Re-review mine only when existing `BS` findings are present.
    - Skip re-review of others when previous review is complete with no new updates.
    - Re-review others when unresolved/new findings remain.
-1. Check CI first via `gh pr checks <number> --repo Keith-CY/carrier`.
+2. Check CI first via `gh pr checks <number> --repo Keith-CY/carrier`.
 2. **Only perform formal code review after all required CI checks are green.**
 3. If CI is pending or failing:
    - Do not submit Approve/Request Changes review yet.

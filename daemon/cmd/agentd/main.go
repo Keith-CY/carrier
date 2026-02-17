@@ -113,10 +113,17 @@ func main() {
 		Handler: handler,
 	}
 
+	// Bind the listener first so we know the port is ready before setting
+	// the readiness flag — avoids a race where /readyz returns OK before
+	// the server is actually accepting connections (#576).
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("listen %s: %v", addr, err)
+	}
 	serverErrCh := make(chan error, 1)
 	go func() {
 		fmt.Printf("HTTP API listening on %s\n", addr)
-		serverErrCh <- httpServer.ListenAndServe()
+		serverErrCh <- httpServer.Serve(ln)
 	}()
 	ready.Store(true)
 

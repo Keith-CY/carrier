@@ -42,6 +42,9 @@ func NewPairingCodeStore(now func() time.Time) *PairingCodeStore {
 }
 
 func (s *PairingCodeStore) Issue(ttl time.Duration) (PairingCodeRecord, error) {
+	// Opportunistic cleanup to prevent unbounded memory growth.
+	s.CleanupExpired()
+
 	code, err := newPairingCodeValue()
 	if err != nil {
 		return PairingCodeRecord{}, err
