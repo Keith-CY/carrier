@@ -19,8 +19,9 @@ func init() {
 func validateHeredocSafety() {
 	// Check ZeroClaw dev install for 'SCRIPT' delimiter collision
 	zcDev := getZeroClawDevInstallCommand()
-	// The heredoc uses 'SCRIPT' as delimiter. Count occurrences — should be
-	// exactly 2 (open + close). If more, the embedded script contains the delimiter.
+	// The heredoc uses 'SCRIPT' as a delimiter. The closing delimiter is on its
+	// own line, matching "\nSCRIPT\n". We expect exactly one occurrence of this
+	// closing delimiter. If more are found, the embedded script contains the delimiter.
 	if strings.Count(zcDev, "\nSCRIPT\n") > 1 {
 		panic("catalog: ZeroClaw dev install script contains heredoc delimiter 'SCRIPT'")
 	}
