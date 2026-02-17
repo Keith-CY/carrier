@@ -569,6 +569,7 @@ func TestBearerAuthMiddlewareBoundaryCases(t *testing.T) {
 		{name: "api missing auth", path: "/api/v1/agents", auth: "", want: http.StatusUnauthorized},
 		{name: "api wrong scheme", path: "/api/v1/agents", auth: "Token secret-token", want: http.StatusUnauthorized},
 		{name: "api near miss token", path: "/api/v1/agents", auth: "Bearer secret-token ", want: http.StatusUnauthorized},
+		{name: "api length mismatch token", path: "/api/v1/agents", auth: "Bearer secret-token-x", want: http.StatusUnauthorized},
 		{name: "api correct token", path: "/api/v1/agents", auth: "Bearer secret-token", want: http.StatusOK},
 		{name: "healthz exempt", path: "/healthz", auth: "", want: http.StatusOK},
 	}
