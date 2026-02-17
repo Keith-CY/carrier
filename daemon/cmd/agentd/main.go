@@ -74,10 +74,10 @@ func main() {
 		log.Fatalf("register openclaw manifest: %v", err)
 	}
 	if err := svc.RegisterManifest(catalog.ZeroClawManifest()); err != nil {
-		log.Fatalf("register zeroclaw manifest: %v", err)
+		log.Printf("WARN: register zeroclaw manifest: %v (skipping)", err)
 	}
 	if err := svc.RegisterManifest(catalog.PicoClawManifest()); err != nil {
-		log.Fatalf("register picoclaw manifest: %v", err)
+		log.Printf("WARN: register picoclaw manifest: %v (skipping)", err)
 	}
 
 	logger.Info("agentd scaffold booted")

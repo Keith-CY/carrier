@@ -226,6 +226,10 @@ func ZeroClawManifest() manifest.Manifest {
 			RestartLoopWindow: 300,
 			RestartLoopMax:    5,
 		},
+		Memory: manifest.MemorySpec{
+			Supports:  []manifest.MemoryType{manifest.MemoryTypePerAgent},
+			MountPath: "./memory",
+		},
 		Diagnostics: manifest.Diagnostics{Include: []string{"runtime_logs", "process_state", "env_sanitized"}},
 	}
 }
