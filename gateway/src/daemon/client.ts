@@ -114,6 +114,8 @@ export class InMemoryDaemonClient implements DaemonClient {
   private readonly logs = new Map<string, string[]>();
   private readonly auditEvents: DaemonAuditEvent[] = [];
   private readonly validPairCodes = new Set<string>();
+  private portConflictAgents = new Set<string>();
+  private startProbeFailAgents = new Set<string>();
 
   constructor(private readonly now: () => Date = () => new Date()) {
     this.upsertAgent({
@@ -126,6 +128,22 @@ export class InMemoryDaemonClient implements DaemonClient {
       needsRemoteDiagnosis: false,
       updatedAt: this.now().toISOString(),
     });
+  }
+
+  simulatePortConflict(agentId: string): void {
+    this.portConflictAgents.add(agentId);
+  }
+
+  clearPortConflict(agentId: string): void {
+    this.portConflictAgents.delete(agentId);
+  }
+
+  simulateStartProbeFailure(agentId: string): void {
+    this.startProbeFailAgents.add(agentId);
+  }
+
+  clearStartProbeFailure(agentId: string): void {
+    this.startProbeFailAgents.delete(agentId);
   }
 
   setRemoteDiagnosisState(agentId: string, needsRemoteDiagnosis: boolean): void {
@@ -176,6 +194,12 @@ export class InMemoryDaemonClient implements DaemonClient {
     }
     if (state.runtimeState === "running") {
       throw new DaemonClientError("E_ALREADY_RUNNING", "agent is already running");
+    }
+    if (this.portConflictAgents.has(agentId)) {
+      throw new DaemonClientError("E_PORT_CONFLICT", `port conflict: a required port is already in use`);
+    }
+    if (this.startProbeFailAgents.has(agentId)) {
+      throw new DaemonClientError("E_START_PROBE_FAILED", "process exited immediately after start");
     }
     this.upsertAgent({
       ...state,
