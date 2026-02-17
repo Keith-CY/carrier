@@ -413,23 +413,28 @@ func handleInstall(svc *lifecycle.Service, agentID string, w http.ResponseWriter
 	// Check if this is a base agent that supports creating instances.
 	// Accept optional instance_name from body.
 	var instanceName string
+	var wantsMultiInstance bool
 	if r.Body != nil && r.ContentLength != 0 {
 		var body struct {
-			AgentID      string `json:"agentId"`
-			InstanceName string `json:"instance_name"`
+			AgentID       string `json:"agentId"`
+			InstanceName  string `json:"instance_name"`
+			MultiInstance bool   `json:"multi_instance"`
 		}
 		// Re-read body for instance_name (body may have been consumed for agentId)
 		bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 		if len(bodyBytes) > 0 {
 			_ = json.Unmarshal(bodyBytes, &body)
 			instanceName = body.InstanceName
+			wantsMultiInstance = body.MultiInstance
 		}
 	}
 
-	// If an instance_name is provided or the agent is a base agent (already registered),
-	// create a new instance from it.
-	_, statusErr := svc.Status(agentID)
-	if statusErr == nil && instanceName != "" {
+	// Multi-instance: create a new instance from an already-registered agent.
+	// Triggered when instance_name is provided, or multi_instance is true.
+	// When instance_name is omitted, a random suffix is generated automatically.
+	agentState, statusErr := svc.Status(agentID)
+	alreadyInstalled := statusErr == nil && agentState.Install == lifecycle.InstallStateInstalled
+	if instanceName != "" || (wantsMultiInstance && alreadyInstalled) {
 		// Create a new instance from the base agent
 		instID, err := svc.RegisterInstance(agentID, instanceName)
 		if err != nil {
