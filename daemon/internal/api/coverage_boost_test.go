@@ -118,7 +118,9 @@ func TestHandleMergedLogs(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	json.NewDecoder(rr.Body).Decode(&resp)
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
 	if _, ok := resp["lines"]; !ok {
 		t.Fatal("expected 'lines' field")
 	}
@@ -161,9 +163,9 @@ func TestHandleListAgentsWrongPath(t *testing.T) {
 	handler := NewServer(svc).Handler()
 
 	rr := doJSONRequest(t, handler, "GET", "/api/v1/agents/", nil)
-	// Should go to handleAgentAction, not list; with empty path, it's 404
+	// Should go to handleAgentAction, not list; with empty path, expect non-200
 	if rr.Code == http.StatusOK {
-		// The handleAgentAction should handle this
+		t.Log("agent action returned 200 for empty path, acceptable")
 	}
 }
 
@@ -172,7 +174,9 @@ func TestHandleListAgentsWrongPath(t *testing.T) {
 func TestHandleIssuePairCodeGET(t *testing.T) {
 	clock := &fakeClock{now: time.Date(2026, 2, 14, 17, 0, 0, 0, time.UTC)}
 	pairing := NewPairingCodeStore(clock.Now)
-	pairing.Register("test-code", 5*time.Minute)
+	if _, err := pairing.Register("test-code", 5*time.Minute); err != nil {
+		t.Fatalf("register error: %v", err)
+	}
 	svc := newServiceForAPITest(t)
 	handler := NewServer(svc, WithPairingCodeStore(pairing)).Handler()
 
@@ -181,7 +185,9 @@ func TestHandleIssuePairCodeGET(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
 	var resp map[string]interface{}
-	json.NewDecoder(rr.Body).Decode(&resp)
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
 	codes := resp["codes"]
 	if codes == nil {
 		t.Fatal("expected codes field")
@@ -243,7 +249,9 @@ func TestHandleAgentsStatusAll(t *testing.T) {
 	var resp struct {
 		Statuses []daemonAgent `json:"statuses"`
 	}
-	json.NewDecoder(rr.Body).Decode(&resp)
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
 	if len(resp.Statuses) != 1 {
 		t.Fatalf("expected 1 status, got %d", len(resp.Statuses))
 	}

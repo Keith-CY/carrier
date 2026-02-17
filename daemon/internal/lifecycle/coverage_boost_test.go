@@ -210,7 +210,9 @@ func TestCrashLoopCooldownPersistenceRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	var states map[string]PersistedAgentState
-	json.Unmarshal(data, &states)
+	if err = json.Unmarshal(data, &states); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
 	if !states["openclaw"].CooldownUntil.After(clock.Now()) {
 		t.Fatal("expected cooldown in persisted state")
 	}
