@@ -98,6 +98,12 @@ export function createRuntimeDependencies(overrides: Partial<GatewayDependencies
   };
 }
 
+const webhookHandlers: Map<string, (ctx: GatewayRequestContext) => Promise<Response>> = new Map([
+  ["/webhook/discord", handleDiscordWebhookRequest],
+  ["/webhook/feishu", handleFeishuWebhookRequest],
+  ["/webhook/telegram", handleTelegramWebhookRequest],
+]);
+
 export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): GatewayRuntime {
   const deps = createRuntimeDependencies(options.deps);
   const readFile = options.readFile ?? defaultReadFile;
@@ -151,16 +157,11 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
       return jsonResponse(response);
     }
 
-    if (ctx.request.method === "POST" && url.pathname === "/webhook/discord") {
-      return await handleDiscordWebhookRequest(ctx);
-    }
-
-    if (ctx.request.method === "POST" && url.pathname === "/webhook/feishu") {
-      return await handleFeishuWebhookRequest(ctx);
-    }
-
-    if (ctx.request.method === "POST" && url.pathname === "/webhook/telegram") {
-      return await handleTelegramWebhookRequest(ctx);
+    if (ctx.request.method === "POST") {
+      const webhookHandler = webhookHandlers.get(url.pathname);
+      if (webhookHandler) {
+        return await webhookHandler(ctx);
+      }
     }
 
     if (ctx.request.method === "GET" && url.pathname.startsWith("/downloads/")) {
