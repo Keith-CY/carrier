@@ -51,6 +51,11 @@ export function parseInput(input: string): GatewayCommand {
   }
 
   const [provider, chatId, requestId, fourth, ...rest] = parts;
+
+  const VALID_PROVIDERS: ReadonlySet<string> = new Set(["telegram", "discord", "feishu"]);
+  if (!VALID_PROVIDERS.has(provider)) {
+    throw new ParseError(requestId, `unknown provider: ${provider}`);
+  }
   
   // Check if fourth field is a session token (starts with "session-")
   // If so, the command is the next field; otherwise fourth is the command
