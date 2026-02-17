@@ -170,7 +170,6 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 	state = s.states[agentID]
 	state.Health = HealthStateUnknown
 	state.LastError = ""
-	state.StartedAt = nil
 	state.Ports = []int{}
 	state.UpdatedAt = s.now()
 	s.states[agentID] = state

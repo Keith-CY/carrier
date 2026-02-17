@@ -207,7 +207,6 @@ export class InMemoryDaemonClient implements DaemonClient {
       ...state,
       runtimeState: "stopped",
       health: "unknown",
-      startedAt: undefined,
       ports: [],
       updatedAt: this.now().toISOString(),
     });

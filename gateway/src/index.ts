@@ -216,7 +216,7 @@ export async function handleCommand(
         }
         const summary = statuses
           .map((status) => {
-            const uptime = status.startedAt
+            const uptime = status.runtimeState === "running" && status.startedAt
               ? formatUptime(Date.now() - new Date(status.startedAt).getTime())
               : "n/a";
             const ports = status.ports.length > 0 ? status.ports.join(",") : "none";
