@@ -25,6 +25,24 @@ function makeDeps() {
   };
 }
 
+async function withEnvVar<T>(name: string, value: string | undefined, run: () => Promise<T> | T): Promise<T> {
+  const previous = process.env[name];
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = previous;
+    }
+  }
+}
+
 describe("composeMiddleware", () => {
   test("runs middleware in deterministic order", async () => {
     const trace: string[] = [];
@@ -508,9 +526,124 @@ describe("port resolution fallback behavior", () => {
       delete process.env.CARRIER_GATEWAY_PORT;
     }
   });
+
+  test("rejects non-loopback host when gateway api token is missing", async () => {
+    await withEnvVar("CARRIER_GATEWAY_API_TOKEN", undefined, () => {
+      const deps = makeDeps();
+      expect(() => startGatewayServer({
+        deps,
+        hostname: "0.0.0.0",
+        port: 0,
+      })).toThrow("CARRIER_GATEWAY_API_TOKEN is required");
+    });
+  });
+
+  test("allows non-loopback host when gateway api token is configured", async () => {
+    await withEnvVar("CARRIER_GATEWAY_API_TOKEN", "gw-test-token", () => {
+      const deps = makeDeps();
+      const server = startGatewayServer({
+        deps,
+        hostname: "0.0.0.0",
+        port: 0,
+      });
+      expect(server.port).toBeGreaterThan(0);
+      server.stop();
+    });
+  });
 });
 
 describe("command authentication", () => {
+  test("requires gateway api token when configured", async () => {
+    await withEnvVar("CARRIER_GATEWAY_API_TOKEN", "gw-secret", async () => {
+      const deps = makeDeps();
+      if (deps.daemon instanceof InMemoryDaemonClient) {
+        deps.daemon.registerPairCode("pair-code");
+      }
+      const runtime = createGatewayRuntime({ deps });
+
+      const response = await runtime.fetch(new Request("http://gateway.local/command", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ input: "telegram 100 req-1 /pair pair-code" }),
+      }));
+
+      expect(response.status).toBe(401);
+      const payload = await response.json() as { errorCode?: string };
+      expect(payload.errorCode).toBe("E_GATEWAY_AUTH_REQUIRED");
+    });
+  });
+
+  test("rejects invalid gateway api token when configured", async () => {
+    await withEnvVar("CARRIER_GATEWAY_API_TOKEN", "gw-secret", async () => {
+      const deps = makeDeps();
+      if (deps.daemon instanceof InMemoryDaemonClient) {
+        deps.daemon.registerPairCode("pair-code");
+      }
+      const runtime = createGatewayRuntime({ deps });
+
+      const response = await runtime.fetch(new Request("http://gateway.local/command", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "authorization": "Bearer wrong-token",
+        },
+        body: JSON.stringify({ input: "telegram 100 req-1 /pair pair-code" }),
+      }));
+
+      expect(response.status).toBe(401);
+      const payload = await response.json() as { errorCode?: string };
+      expect(payload.errorCode).toBe("E_GATEWAY_AUTH_INVALID");
+    });
+  });
+
+  test("accepts valid gateway api token and keeps session auth in body", async () => {
+    await withEnvVar("CARRIER_GATEWAY_API_TOKEN", "gw-secret", async () => {
+      const deps = makeDeps();
+      if (deps.daemon instanceof InMemoryDaemonClient) {
+        deps.daemon.registerPairCode("pair-code");
+      }
+      const runtime = createGatewayRuntime({ deps });
+
+      const pairResponse = await runtime.fetch(new Request("http://gateway.local/command", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "authorization": "Bearer gw-secret",
+        },
+        body: JSON.stringify({ input: "telegram 100 req-1 /pair pair-code" }),
+      }));
+      expect(pairResponse.status).toBe(200);
+      const pairPayload = await pairResponse.json() as { result: string; sessionToken?: string };
+      expect(pairPayload.result).toBe("ok");
+      expect(pairPayload.sessionToken).toBeDefined();
+
+      const response = await runtime.fetch(new Request("http://gateway.local/command", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "authorization": "Bearer gw-secret",
+        },
+        body: JSON.stringify({
+          input: "telegram 100 req-2 /agents",
+          sessionToken: pairPayload.sessionToken,
+        }),
+      }));
+
+      expect(response.status).toBe(200);
+      const payload = await response.json() as { result: string };
+      expect(payload.result).toBe("ok");
+    });
+  });
+
+  test("healthz remains unauthenticated even when gateway api token is configured", async () => {
+    await withEnvVar("CARRIER_GATEWAY_API_TOKEN", "gw-secret", async () => {
+      const deps = makeDeps();
+      const runtime = createGatewayRuntime({ deps });
+      const response = await runtime.fetch(new Request("http://gateway.local/healthz"));
+      expect(response.status).toBe(200);
+    });
+  });
+
   test("rejects authenticated commands without session token", async () => {
     const deps = makeDeps();
     const runtime = createGatewayRuntime({ deps });

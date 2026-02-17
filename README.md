@@ -139,6 +139,7 @@ Optional local flow from repo root:
   - `GET /healthz`
 - Command ingress route:
   - `POST /command` with JSON body `{ "input": "<provider> <chat_id> <request_id> <command> [...args]" }`
+  - If `CARRIER_GATEWAY_API_TOKEN` is set, send `Authorization: Bearer <gateway_api_token>`
 - Artifact download route:
   - `GET /downloads/<token>/<filename>`
 
@@ -146,6 +147,7 @@ Runtime environment variables:
 - `CARRIER_DAEMON_BASE_URL` (default: `http://127.0.0.1:9090`)
 - `CARRIER_GATEWAY_HOST` (default: `127.0.0.1`)
 - `CARRIER_GATEWAY_PORT` (default: `8787`)
+- `CARRIER_GATEWAY_API_TOKEN` (optional on loopback; required for non-loopback bind)
 
 #### Merge Queue
 - This repository supports GitHub Merge Queue for `main`.
