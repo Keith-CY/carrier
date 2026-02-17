@@ -54,6 +54,8 @@ func (s *Service) persistAuditEntry(entry AuditLog) {
 		return
 	}
 	filePath := filepath.Join(s.auditLogDir, "audit.jsonl")
+	// Rotate if file exceeds 10 MB to prevent unbounded growth.
+	s.rotateAuditLogIfNeeded(filePath)
 	record := auditLogJSONL{
 		RequestID: entry.RequestID,
 		Actor:     entry.Actor,
@@ -79,6 +81,24 @@ func (s *Service) persistAuditEntry(entry AuditLog) {
 	defer f.Close()
 	if _, err := f.Write(data); err != nil {
 		fmt.Fprintf(os.Stderr, "[audit] failed to write audit entry: %v\n", err)
+	}
+}
+
+const maxAuditLogBytes = 10 * 1024 * 1024 // 10 MB
+
+// rotateAuditLogIfNeeded renames the current audit log when it exceeds the
+// size cap, keeping at most one rotated backup (.1). This bounds disk usage
+// to ~20 MB worst-case.
+func (s *Service) rotateAuditLogIfNeeded(filePath string) {
+	info, err := os.Stat(filePath)
+	if err != nil || info.Size() < maxAuditLogBytes {
+		return
+	}
+	rotated := filePath + ".1"
+	// Remove previous backup (best-effort).
+	_ = os.Remove(rotated)
+	if err := os.Rename(filePath, rotated); err != nil {
+		fmt.Fprintf(os.Stderr, "[audit] failed to rotate audit log: %v\n", err)
 	}
 }
 

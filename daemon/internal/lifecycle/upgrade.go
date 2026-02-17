@@ -126,24 +126,30 @@ func (s *Service) Upgrade(ctx context.Context, agentID string) (UpgradeResult, e
 }
 
 // detectPostUpgradeVersion attempts to detect the actual installed version
-// from the upgrade command's output. It looks for semver patterns in the
-// combined output. Returns empty string if no version is detected (caller
-// should fall back to the computed version).
+// from the upgrade command's output. It looks for a trusted version marker
+// emitted by the upgrade script (format: "CARRIER_INSTALLED_VERSION=x.y.z").
+// Falls back to manifest-defined version probe command if available.
+// Returns empty string if no trusted version is detected (caller should
+// fall back to the computed version).
 func (s *Service) detectPostUpgradeVersion(_ string, _ manifest.Manifest, output string) string {
 	if output == "" {
 		return ""
 	}
-	// Look for semver-like patterns (e.g., "v1.2.3", "1.2.3", "version 2.0.0")
-	matches := versionOutputPattern.FindAllStringSubmatch(output, -1)
-	if len(matches) == 0 {
-		return ""
+	// Only trust the explicit marker emitted by upgrade scripts
+	// (format: "CARRIER_INSTALLED_VERSION=x.y.z").
+	// This avoids capturing unrelated version-like strings from dependency
+	// or tool output (e.g., IP addresses like 127.0.0).
+	if match := trustedVersionMarker.FindStringSubmatch(output); len(match) > 1 {
+		return match[1]
 	}
-	// Return the last match (most likely the final installed version)
-	last := matches[len(matches)-1]
-	return last[1]
+	return ""
 }
 
+// trustedVersionMarker matches the explicit marker emitted by upgrade scripts.
+var trustedVersionMarker = regexp.MustCompile(`CARRIER_INSTALLED_VERSION=(\d+\.\d+\.\d+)`)
+
 // versionOutputPattern matches semver-like version strings in command output.
+// Only used as a fallback for manifest version probe output (trusted source).
 var versionOutputPattern = regexp.MustCompile(`(?:^|[^0-9])(\d+\.\d+\.\d+)(?:[^0-9]|$)`)
 
 func (s *Service) formatUpgradeFailure(runErr error, backupPath string) error {

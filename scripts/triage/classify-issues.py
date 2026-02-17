@@ -37,12 +37,14 @@ HEAVY_KEYWORDS = {
 
 def classify(title: str, body: str) -> tuple[str, str]:
     text = (title + " " + body).lower()
-    for reason, keywords in LIGHTWEIGHT_KEYWORDS.items():
-        if any(kw in text for kw in keywords):
-            return "LIGHTWEIGHT", reason
+    # Evaluate HEAVY/security signals first to avoid under-classification
+    # when an issue contains both lightweight and heavyweight keywords.
     for reason, keywords in HEAVY_KEYWORDS.items():
         if any(kw in text for kw in keywords):
             return "HEAVY", reason
+    for reason, keywords in LIGHTWEIGHT_KEYWORDS.items():
+        if any(kw in text for kw in keywords):
+            return "LIGHTWEIGHT", reason
     # Default: if short body, likely lightweight
     if len(body) < 300:
         return "LIGHTWEIGHT", "short-description"
