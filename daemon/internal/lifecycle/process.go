@@ -23,14 +23,15 @@ type ProcessManager struct {
 }
 
 type processInfo struct {
-	cmd      *exec.Cmd
-	pid      int
-	agentID  string
-	logFile  *os.File
-	done     chan struct{}
-	waitErr  error
-	exitCode *int
-	stopping bool
+	cmd          *exec.Cmd
+	pid          int
+	agentID      string
+	logFile      *os.File
+	done         chan struct{}
+	waitErr      error
+	exitCode     *int
+	stopping     bool
+	closeLogOnce sync.Once
 }
 
 // NewProcessManager creates a new process manager.
@@ -53,7 +54,10 @@ func (pm *ProcessManager) Start(agentID string, command string, args []string) (
 		if pm.isProcessAlive(info) {
 			return 0, fmt.Errorf("agent %s already running with PID %d", agentID, info.pid)
 		}
-		// Clean up stale entry
+		// Clean up stale entry (close log file if not already closed)
+		info.closeLogOnce.Do(func() {
+			info.logFile.Close()
+		})
 		delete(pm.processes, agentID)
 	}
 
@@ -108,6 +112,13 @@ func (pm *ProcessManager) Start(agentID string, command string, args []string) (
 			info.exitCode = &code
 		}
 		close(info.done)
+		// Close the log file but keep the process entry in the map so
+		// callers that unblock from Wait / GetExitCode can still read
+		// the exit code. The entry is removed lazily: either by Stop()
+		// or by a subsequent Start() for the same agentID.
+		info.closeLogOnce.Do(func() {
+			info.logFile.Close()
+		})
 	}()
 
 	pm.processes[agentID] = info
@@ -164,14 +175,25 @@ func (pm *ProcessManager) StopWithContext(ctx context.Context, agentID string) e
 		}
 	}
 
-	// Cleanup
-	info.logFile.Close()
-
-	pm.mu.Lock()
-	delete(pm.processes, agentID)
-	pm.mu.Unlock()
+	// Cleanup — finalizeProcess handles log close and map removal.
+	pm.finalizeProcess(agentID, info)
 
 	return stopErr
+}
+
+// finalizeProcess closes the log file (exactly once) and removes the process
+// entry from the map if it still points to the same processInfo.
+// Safe to call from both the wait goroutine and Stop.
+func (pm *ProcessManager) finalizeProcess(agentID string, info *processInfo) {
+	info.closeLogOnce.Do(func() {
+		info.logFile.Close()
+	})
+
+	pm.mu.Lock()
+	if cur, exists := pm.processes[agentID]; exists && cur == info {
+		delete(pm.processes, agentID)
+	}
+	pm.mu.Unlock()
 }
 
 // IsRunning checks if the agent's process is currently running.
