@@ -272,6 +272,88 @@ describe("gateway runtime routes", () => {
     });
   });
 
+  test("feishu webhook rejects invalid verification token before command execution", async () => {
+    const deps = makeDeps();
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("fs-code");
+    }
+    const runtime = createGatewayRuntime({ deps });
+
+    await withEnvVar("CARRIER_FEISHU_VERIFICATION_TOKEN", "expected-token", async () => {
+      const response = await runtime.fetch(new Request("http://gateway.local/webhook/feishu", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          header: { event_id: "evt-1", token: "wrong-token" },
+          event: {
+            message: {
+              message_id: "msg-1",
+              chat_id: "fs-chat",
+              content: JSON.stringify({ text: "/pair fs-code" }),
+            },
+          },
+        }),
+      }));
+
+      expect(response.status).toBe(401);
+      const payload = await response.json() as { errorCode?: string };
+      expect(payload.errorCode).toBe("E_FEISHU_VERIFICATION_FAILED");
+    });
+
+    expect(deps.sessions.getSession("feishu", "fs-chat")).toBeNull();
+  });
+
+  test("feishu webhook executes command when verification token is valid", async () => {
+    const deps = makeDeps();
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("fs-code");
+    }
+    const runtime = createGatewayRuntime({ deps });
+
+    await withEnvVar("CARRIER_FEISHU_VERIFICATION_TOKEN", "expected-token", async () => {
+      const response = await runtime.fetch(new Request("http://gateway.local/webhook/feishu", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          header: { event_id: "evt-2", token: "expected-token" },
+          event: {
+            message: {
+              message_id: "msg-2",
+              chat_id: "fs-chat",
+              content: JSON.stringify({ text: "/pair fs-code" }),
+            },
+          },
+        }),
+      }));
+
+      expect(response.status).toBe(200);
+      const payload = await response.json() as { msg_type?: string; content?: { text?: string } };
+      expect(payload.msg_type).toBe("text");
+      expect(payload.content?.text).toContain("paired feishu:fs-chat");
+    });
+  });
+
+  test("feishu webhook returns url verification challenge when token is valid", async () => {
+    const deps = makeDeps();
+    const runtime = createGatewayRuntime({ deps });
+
+    await withEnvVar("CARRIER_FEISHU_VERIFICATION_TOKEN", "expected-token", async () => {
+      const response = await runtime.fetch(new Request("http://gateway.local/webhook/feishu", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          type: "url_verification",
+          challenge: "challenge-123",
+          token: "expected-token",
+        }),
+      }));
+
+      expect(response.status).toBe(200);
+      const payload = await response.json() as { challenge?: string };
+      expect(payload.challenge).toBe("challenge-123");
+    });
+  });
+
   test("download route resolves valid token and enforces single-use", async () => {
     const deps = makeDeps();
     const filePath = `/tmp/gateway-download-${crypto.randomUUID()}.txt`;
