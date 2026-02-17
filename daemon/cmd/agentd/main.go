@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -491,16 +492,37 @@ type agentIDBody struct {
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, v interface{}) bool {
-	// Cap request body to maxBodySize to prevent DoS.
+	if r.ContentLength > maxBodySize {
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("request body too large: max %d bytes", maxBodySize))
+		return false
+	}
+
+	// Read with a hard cap so oversized bodies are rejected deterministically.
 	limited := io.LimitReader(r.Body, maxBodySize+1)
-	dec := json.NewDecoder(limited)
+	defer r.Body.Close()
+	raw, err := io.ReadAll(limited)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return false
+	}
+	if len(raw) > maxBodySize {
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("request body too large: max %d bytes", maxBodySize))
+		return false
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid request body: empty body")
+		return false
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return false
 	}
-	// Reject trailing JSON values (e.g. `{}{}`)
-	if dec.More() {
+	// Reject trailing JSON values (e.g. `{}{}`) and trailing garbage.
+	var trailing struct{}
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
 		writeJSONError(w, http.StatusBadRequest, "invalid request body: unexpected trailing data")
 		return false
 	}

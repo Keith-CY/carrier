@@ -505,8 +505,18 @@ func TestDecodeBodyMalformed(t *testing.T) {
 			want400: true,
 		},
 		{
+			name:    "trailing JSON primitive",
+			body:    `{"agentId":"openclaw"} 123`,
+			want400: true,
+		},
+		{
 			name:    "empty body",
 			body:    ``,
+			want400: true,
+		},
+		{
+			name:    "whitespace body",
+			body:    "   \n\t  ",
 			want400: true,
 		},
 		{
@@ -526,6 +536,23 @@ func TestDecodeBodyMalformed(t *testing.T) {
 				t.Fatalf("status=%d, want400=%v; body=%s", rec.Code, tt.want400, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestDecodeBodyRejectsOversizedContentLengthHeader(t *testing.T) {
+	svc := lifecycle.NewService(baseagent.NoopTriager{})
+	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
+		t.Fatal(err)
+	}
+	mux := buildTestMux(svc, true)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/install", strings.NewReader(`{"agentId":"openclaw"}`))
+	req.ContentLength = maxBodySize + 1
+
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want=400; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
