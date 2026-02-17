@@ -32,9 +32,13 @@ import (
 )
 
 const (
-	shutdownTimeout = 30 * time.Second
-	defaultLogsTail = 200
-	maxLogsTail     = 1000
+	shutdownTimeout          = 30 * time.Second
+	defaultReadHeaderTimeout = 10 * time.Second
+	defaultReadTimeout       = 30 * time.Second
+	defaultWriteTimeout      = 60 * time.Second
+	defaultIdleTimeout       = 120 * time.Second
+	defaultLogsTail          = 200
+	maxLogsTail              = 1000
 	// maxBodySize is the maximum allowed request body size (1 MB).
 	maxBodySize = 1 << 20
 )
@@ -108,10 +112,7 @@ func main() {
 		handler = bearerAuthMiddleware(cfg.Server.APIToken, mux)
 	}
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-	httpServer := &http.Server{
-		Addr:    addr,
-		Handler: handler,
-	}
+	httpServer := newHTTPServer(addr, handler)
 
 	// Bind the listener first so we know the port is ready before setting
 	// the readiness flag — avoids a race where /readyz returns OK before
@@ -623,6 +624,17 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 	default:
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
+	}
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: defaultReadHeaderTimeout,
+		ReadTimeout:       defaultReadTimeout,
+		WriteTimeout:      defaultWriteTimeout,
+		IdleTimeout:       defaultIdleTimeout,
 	}
 }
 

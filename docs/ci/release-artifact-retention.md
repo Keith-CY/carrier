@@ -9,12 +9,12 @@ Retention policy is enforced by release workflow and documented here for operato
 - CI artifacts uploaded by `release.yml` use `retention-days: 14`.
 - Applies to packaged ZIP and checksum artifacts uploaded by `actions/upload-artifact`.
 
-## Count-Based Retention
+## Release Trigger Policy
 
-- For `main-<sha>` releases, workflow keeps the newest `20` releases.
-- Older `main-*` releases are pruned automatically after a successful new release.
+- Release publication is tag-driven (`v*`) in `.github/workflows/release.yml`.
+- Main-branch pushes do not create GitHub Releases automatically.
 
-## Why both rules
+## Why this rule
 
 - Time-based retention limits storage for workflow artifacts.
-- Count-based retention limits release history growth while preserving rollback headroom.
+- Tag-driven releases prevent noisy non-release artifacts on routine main merges.

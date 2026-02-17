@@ -140,6 +140,13 @@ describe("runtime dependencies", () => {
     expect(deps.daemon).toBeInstanceOf(HttpDaemonClient);
     deps.downloads.stopPeriodicCleanup();
   });
+
+  test("instantiates rate limiter by default", () => {
+    const deps = createRuntimeDependencies();
+    expect(deps.rateLimiter).toBeDefined();
+    deps.rateLimiter?.stopPeriodicCleanup();
+    deps.downloads.stopPeriodicCleanup();
+  });
 });
 
 describe("gateway runtime routes", () => {
@@ -1024,6 +1031,105 @@ describe("command authentication", () => {
     expect(response.status).toBe(401);
     const payload = await response.json() as { errorCode?: string };
     expect(payload.errorCode).toBe("E_SESSION_REQUIRED");
+  });
+});
+
+describe("command route payload size limits", () => {
+  test("accepts JSON payload exactly at configured limit", async () => {
+    const deps = makeDeps();
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("pair-limit-json");
+    }
+    const runtime = createGatewayRuntime({ deps });
+    const body = JSON.stringify({ input: "telegram 100 req-json-limit /pair pair-limit-json" });
+
+    await withEnvVar("CARRIER_MAX_COMMAND_BODY_BYTES", String(Buffer.byteLength(body)), async () => {
+      const response = await runtime.fetch(new Request("http://gateway.local/command", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      }));
+      expect(response.status).toBe(200);
+      const payload = await response.json() as { result: string };
+      expect(payload.result).toBe("ok");
+    });
+  });
+
+  test("rejects JSON payload larger than configured limit", async () => {
+    const deps = makeDeps();
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("pair-limit-json-too-large");
+    }
+    const runtime = createGatewayRuntime({ deps });
+    const body = JSON.stringify({ input: "telegram 100 req-json-large /pair pair-limit-json-too-large" });
+
+    await withEnvVar("CARRIER_MAX_COMMAND_BODY_BYTES", String(Buffer.byteLength(body) - 1), async () => {
+      const response = await runtime.fetch(new Request("http://gateway.local/command", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      }));
+      expect(response.status).toBe(413);
+      const payload = await response.json() as { errorCode?: string };
+      expect(payload.errorCode).toBe("E_PAYLOAD_TOO_LARGE");
+    });
+  });
+
+  test("accepts text payload exactly at configured limit", async () => {
+    const deps = makeDeps();
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("pair-limit-text");
+    }
+    const runtime = createGatewayRuntime({ deps });
+    const command = "telegram 100 req-text-limit /pair pair-limit-text";
+
+    await withEnvVar("CARRIER_MAX_COMMAND_BODY_BYTES", String(Buffer.byteLength(command)), async () => {
+      const response = await runtime.fetch(new Request("http://gateway.local/command", {
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body: command,
+      }));
+      expect(response.status).toBe(200);
+      const payload = await response.json() as { result: string };
+      expect(payload.result).toBe("ok");
+    });
+  });
+
+  test("rejects text payload larger than configured limit", async () => {
+    const deps = makeDeps();
+    if (deps.daemon instanceof InMemoryDaemonClient) {
+      deps.daemon.registerPairCode("pair-limit-text-too-large");
+    }
+    const runtime = createGatewayRuntime({ deps });
+    const command = "telegram 100 req-text-large /pair pair-limit-text-too-large";
+
+    await withEnvVar("CARRIER_MAX_COMMAND_BODY_BYTES", String(Buffer.byteLength(command) - 1), async () => {
+      const response = await runtime.fetch(new Request("http://gateway.local/command", {
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body: command,
+      }));
+      expect(response.status).toBe(413);
+      const payload = await response.json() as { errorCode?: string };
+      expect(payload.errorCode).toBe("E_PAYLOAD_TOO_LARGE");
+    });
+  });
+
+  test("keeps malformed JSON behavior under size limit", async () => {
+    const deps = makeDeps();
+    const runtime = createGatewayRuntime({ deps });
+    const malformed = "{\"input\":";
+
+    await withEnvVar("CARRIER_MAX_COMMAND_BODY_BYTES", "1024", async () => {
+      const response = await runtime.fetch(new Request("http://gateway.local/command", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: malformed,
+      }));
+      expect(response.status).toBe(400);
+      const payload = await response.json() as { errorCode?: string };
+      expect(payload.errorCode).toBe("E_USAGE");
+    });
   });
 });
 

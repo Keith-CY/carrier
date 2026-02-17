@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DaemonClientError, RemoteDiagnosisNotNeededError } from "./client";
-import { HttpDaemonClient, loadDaemonBaseUrl } from "./http_client";
+import { HttpDaemonClient, loadDaemonBaseUrl, loadDaemonTimeoutMs } from "./http_client";
 
 function makeFetch(response: Response): typeof fetch {
   return (async () => response.clone()) as unknown as typeof fetch;
@@ -13,6 +13,22 @@ describe("loadDaemonBaseUrl", () => {
 
   test("trims trailing slash from env value", () => {
     expect(loadDaemonBaseUrl({ CARRIER_DAEMON_BASE_URL: "http://localhost:8080/" })).toBe("http://localhost:8080");
+  });
+});
+
+describe("loadDaemonTimeoutMs", () => {
+  test("uses default when env is missing", () => {
+    expect(loadDaemonTimeoutMs({})).toBe(30_000);
+  });
+
+  test("uses configured timeout when env value is valid", () => {
+    expect(loadDaemonTimeoutMs({ CARRIER_DAEMON_TIMEOUT_MS: "12000" })).toBe(12_000);
+  });
+
+  test("falls back to default when env value is invalid", () => {
+    expect(loadDaemonTimeoutMs({ CARRIER_DAEMON_TIMEOUT_MS: "0" })).toBe(30_000);
+    expect(loadDaemonTimeoutMs({ CARRIER_DAEMON_TIMEOUT_MS: "-1" })).toBe(30_000);
+    expect(loadDaemonTimeoutMs({ CARRIER_DAEMON_TIMEOUT_MS: "abc" })).toBe(30_000);
   });
 });
 
@@ -154,5 +170,18 @@ describe("HttpDaemonClient header propagation", () => {
     const headers = new Headers(capturedHeaders as HeadersInit);
     expect(headers.get("x-carrier-actor")).toBe("cli:user:alice");
     expect(headers.get("x-carrier-request-id")).toBe("req-install-1");
+  });
+
+  test("propagates an abort signal to enforce request timeout", async () => {
+    let capturedSignal: AbortSignal | null = null;
+    const fetchMock = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedSignal = (init?.signal ?? null) as AbortSignal | null;
+      return new Response(JSON.stringify({ agents: [] }), { status: 200 });
+    }) as typeof fetch;
+
+    const client = new HttpDaemonClient("http://daemon.local", fetchMock);
+    await client.listAgents({ actor: "telegram:100", requestId: "req-timeout-signal" });
+
+    expect(capturedSignal).not.toBeNull();
   });
 });

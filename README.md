@@ -154,9 +154,12 @@ Optional local flow from repo root:
 
 Runtime environment variables:
 - `CARRIER_DAEMON_BASE_URL` (default: `http://127.0.0.1:9090`)
+- `CARRIER_DAEMON_TIMEOUT_MS` (default: `30000`)
+- `CARRIER_COMMAND_TIMEOUT` (default: `5m`, daemon lifecycle install/upgrade command timeout)
 - `CARRIER_GATEWAY_HOST` (default: `127.0.0.1`)
 - `CARRIER_GATEWAY_PORT` (default: `8787`)
 - `CARRIER_GATEWAY_API_TOKEN` (optional on loopback; required for non-loopback bind)
+- `CARRIER_MAX_COMMAND_BODY_BYTES` (default: `65536`)
 
 #### Merge Queue
 - This repository supports GitHub Merge Queue for `main`.

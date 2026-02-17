@@ -21,6 +21,7 @@ All commands are parsed from a single string with the format:
 When commands are sent via gateway HTTP (`POST /command`):
 - request body: `{ "input": "<provider> <chat_id> <request_id> <command> [...args]" }`
 - if `CARRIER_GATEWAY_API_TOKEN` is configured, include `Authorization: Bearer <gateway_api_token>`
+- command request body is capped by `CARRIER_MAX_COMMAND_BODY_BYTES` (default: `65536`); oversized requests return `413 E_PAYLOAD_TOO_LARGE`
 
 **Session token transport:** When `CARRIER_GATEWAY_API_TOKEN` is enabled, the
 `Authorization` header is reserved for the gateway API token. Session tokens
@@ -51,6 +52,7 @@ type GatewayResponse = {
 |----------------------------|------------------------------------------------------|
 | `E_PARSE`                  | Input string could not be parsed                     |
 | `E_USAGE`                  | Missing required argument(s)                         |
+| `E_PAYLOAD_TOO_LARGE`      | `/command` request body exceeds size limit           |
 | `E_GATEWAY_AUTH_REQUIRED`  | Gateway API token is required for `/command` access  |
 | `E_GATEWAY_AUTH_INVALID`   | Provided gateway API token is invalid                |
 | `E_PAIR_CODE_INVALID`      | Pairing code is invalid or expired                   |

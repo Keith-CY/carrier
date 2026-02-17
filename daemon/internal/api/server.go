@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -420,18 +421,27 @@ func allowMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 }
 
 func readJSON(r *http.Request, dst any) error {
-	body := io.LimitReader(r.Body, 1<<20)
+	const maxJSONBodyBytes = 1 << 20
+
+	if r.ContentLength > maxJSONBodyBytes {
+		return fmt.Errorf("request body too large: max %d bytes", maxJSONBodyBytes)
+	}
+
+	body := io.LimitReader(r.Body, maxJSONBodyBytes+1)
 	defer r.Body.Close()
 
 	raw, err := io.ReadAll(body)
 	if err != nil {
 		return fmt.Errorf("read request body: %w", err)
 	}
-	if len(strings.TrimSpace(string(raw))) == 0 {
+	if len(raw) > maxJSONBodyBytes {
+		return fmt.Errorf("request body too large: max %d bytes", maxJSONBodyBytes)
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
 		return nil
 	}
 
-	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	// Allow unknown fields for forward compatibility — newer clients may send
 	// fields that this version doesn't know about yet.
 	if err := dec.Decode(dst); err != nil {

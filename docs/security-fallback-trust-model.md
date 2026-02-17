@@ -64,7 +64,7 @@ Operators who require deterministic, auditable deployments should pin exact rele
 install_url: https://github.com/Keith-CY/carrier/releases/latest/download/carrier-linux-x64.tar.gz
 
 # Prefer pinned release assets (example pattern):
-install_url: https://github.com/Keith-CY/carrier/releases/download/main-<sha>/carrier-<sha>-linux-x64.zip
+install_url: https://github.com/Keith-CY/carrier/releases/download/v<major.minor.patch>/carrier-<commit>-linux-x64.zip
 # and pin expected SHA-256 separately (e.g., OPENCLAW_CHECKSUM or deployment metadata)
 ```
 

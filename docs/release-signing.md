@@ -28,7 +28,7 @@ You can also verify manually:
 
 ```bash
 cosign verify-blob \
-  --certificate-identity "https://github.com/Keith-CY/carrier/.github/workflows/release.yml@refs/heads/main" \
+  --certificate-identity "https://github.com/Keith-CY/carrier/.github/workflows/release.yml@refs/tags/v<major.minor.patch>" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   --signature carrier-<commit>-linux-x64.zip.sig \
   carrier-<commit>-linux-x64.zip

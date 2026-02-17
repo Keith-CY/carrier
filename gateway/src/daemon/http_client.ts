@@ -12,6 +12,7 @@ import {
 } from "./client";
 
 const DEFAULT_DAEMON_BASE_URL = "http://127.0.0.1:9090";
+const DEFAULT_DAEMON_TIMEOUT_MS = 30_000;
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -35,10 +36,23 @@ export function loadDaemonBaseUrl(env: Record<string, string | undefined> = proc
   return raw.replace(/\/+$/, "");
 }
 
+export function loadDaemonTimeoutMs(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.CARRIER_DAEMON_TIMEOUT_MS?.trim();
+  if (!raw) {
+    return DEFAULT_DAEMON_TIMEOUT_MS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_DAEMON_TIMEOUT_MS;
+  }
+  return parsed;
+}
+
 export class HttpDaemonClient implements DaemonClient {
   constructor(
     private readonly baseUrl = loadDaemonBaseUrl(),
     private readonly fetchImpl: FetchLike = fetch,
+    private readonly requestTimeoutMs: number = loadDaemonTimeoutMs(),
   ) {}
 
   async listAgents(ctx: RequestContext): Promise<DaemonAgentState[]> {
@@ -151,6 +165,7 @@ export class HttpDaemonClient implements DaemonClient {
         "x-carrier-request-id": ctx.requestId,
       },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
     });
 
     if (!response.ok) {
