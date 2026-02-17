@@ -15,10 +15,12 @@ type StateFile struct {
 
 // PersistedAgentState represents the minimal state needed to restore agent lifecycle.
 type PersistedAgentState struct {
-	ID             string    `json:"id"`
-	Installed      bool      `json:"installed"`
-	RuntimeState   string    `json:"runtime_state"`
-	LastTransition time.Time `json:"last_transition"`
+	ID             string      `json:"id"`
+	Installed      bool        `json:"installed"`
+	RuntimeState   string      `json:"runtime_state"`
+	LastTransition time.Time   `json:"last_transition"`
+	Restarts       []time.Time `json:"restarts,omitempty"`
+	CooldownUntil  time.Time   `json:"cooldown_until,omitempty"`
 }
 
 // NewStateFile creates a StateFile with the given path.
@@ -33,11 +35,6 @@ func NewStateFile(path string) *StateFile {
 // Save writes the agent states to disk atomically.
 // It writes to a temporary file first, then renames to prevent partial writes.
 func (sf *StateFile) Save(agents map[string]*AgentState) error {
-	if sf == nil || sf.path == "" {
-		return nil // no-op if not configured
-	}
-
-	// Convert to persisted format
 	persisted := make(map[string]PersistedAgentState, len(agents))
 	for id, state := range agents {
 		if state == nil {
@@ -49,6 +46,14 @@ func (sf *StateFile) Save(agents map[string]*AgentState) error {
 			RuntimeState:   string(state.Runtime),
 			LastTransition: state.UpdatedAt,
 		}
+	}
+	return sf.SavePersisted(persisted)
+}
+
+// SavePersisted writes pre-built persisted state to disk atomically.
+func (sf *StateFile) SavePersisted(persisted map[string]PersistedAgentState) error {
+	if sf == nil || sf.path == "" {
+		return nil // no-op if not configured
 	}
 
 	// Marshal to JSON
