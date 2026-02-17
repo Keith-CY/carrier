@@ -469,14 +469,9 @@ function validateCommandAuth(
   return null;
 }
 
-/** Cached gateway API token, read once at startup to avoid repeated env lookups. */
-const cachedGatewayAPIToken: string | null = (() => {
+function loadGatewayAPIToken(): string | null {
   const token = process.env.CARRIER_GATEWAY_API_TOKEN?.trim() ?? "";
   return token.length > 0 ? token : null;
-})();
-
-function loadGatewayAPIToken(): string | null {
-  return cachedGatewayAPIToken;
 }
 
 function isLoopbackHost(hostname: string): boolean {
