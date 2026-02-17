@@ -432,9 +432,7 @@ func handleInstall(svc *lifecycle.Service, agentID string, w http.ResponseWriter
 	// Multi-instance: create a new instance from an already-registered agent.
 	// Triggered when instance_name is provided, or multi_instance is true.
 	// When instance_name is omitted, a random suffix is generated automatically.
-	agentState, statusErr := svc.Status(agentID)
-	alreadyInstalled := statusErr == nil && agentState.Install == lifecycle.InstallStateInstalled
-	if instanceName != "" || (wantsMultiInstance && alreadyInstalled) {
+	if instanceName != "" || wantsMultiInstance {
 		// Create a new instance from the base agent
 		instID, err := svc.RegisterInstance(agentID, instanceName)
 		if err != nil {

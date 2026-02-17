@@ -123,6 +123,10 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
 
     // Provider setup endpoint
     if (ctx.request.method === "POST" && (url.pathname === "/api/v1/setup" || url.pathname === "/setup")) {
+      const setupAuthError = validateGatewayAPIToken(ctx.request, ctx.requestId);
+      if (setupAuthError) {
+        return jsonResponse(setupAuthError, 401);
+      }
       try {
         const body = await ctx.request.json() as {
           provider?: string;
@@ -169,11 +173,21 @@ export function createGatewayRuntime(options: GatewayRuntimeOptions = {}): Gatew
 
     // Provider setup status
     if (ctx.request.method === "GET" && (url.pathname === "/api/v1/setup" || url.pathname === "/setup")) {
+      const setupGetAuthError = validateGatewayAPIToken(ctx.request, ctx.requestId);
+      if (setupGetAuthError) {
+        return jsonResponse(setupGetAuthError, 401);
+      }
+      const rawConfig = providerSetup.getConfig();
+      // Redact sensitive fields — only expose provider type and configured_at
+      const redactedConfig = rawConfig ? {
+        provider: rawConfig.provider,
+        configured_at: rawConfig.configured_at,
+      } : null;
       return jsonResponse({
         requestId: ctx.requestId,
         result: "ok" as const,
         configured: providerSetup.isConfigured(),
-        provider: providerSetup.getConfig(),
+        provider: redactedConfig,
       });
     }
 

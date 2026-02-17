@@ -4,7 +4,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 )
+
+// instanceNamePattern allows alphanumeric characters, hyphens, underscores, and dots.
+var instanceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 
 // RegisterInstance creates a new instance entry based on an existing agent manifest.
 // The instance gets its own independent lifecycle state and can be managed via instanceID.
@@ -19,6 +23,8 @@ func (s *Service) RegisterInstance(baseAgentID, instanceName string) (string, er
 
 	if instanceName == "" {
 		instanceName = generateInstanceName(baseAgentID)
+	} else if !instanceNamePattern.MatchString(instanceName) {
+		return "", fmt.Errorf("invalid instance name %q: must match [a-zA-Z0-9._-]", instanceName)
 	}
 
 	// Check for duplicate instance name
