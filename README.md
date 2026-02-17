@@ -12,8 +12,9 @@ Phase 1 scaffold for the Agent Installation Platform.
 ## Read order (single source of truth)
 For product scope/priority decisions, use this order:
 1. `docs/Agent_Installation_Platform_PRD.md` (source of truth for scope and requirements)
-2. `docs/Agent_Installation_Platform_Implementation_Plan.md` (execution sequence and delivery plan)
-3. `README.md` (quick orientation and current implementation status)
+2. `docs/phase1-runtime-adr.md` (canonical runtime-model ADR for Phase 1)
+3. `docs/Agent_Installation_Platform_Implementation_Plan.md` (execution sequence and delivery plan)
+4. `README.md` (quick orientation and current implementation status)
 
 
 ## Quick Navigation

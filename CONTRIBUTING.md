@@ -46,6 +46,16 @@ For this repository we use Merge Queue:
 - Open the queue from the GitHub PR page after CI is green.
 - Do not use direct push-to-main flows except via merge queue/release process.
 
+### PR checklist (required)
+
+Before requesting review, include this checklist in your PR body:
+
+- [ ] Scope is mapped to issue/phase labels.
+- [ ] Validation evidence is included (tests/checks/docs as applicable).
+- [ ] **Runtime-model impact is explicitly stated**:
+  - `none` (no runtime model change), or
+  - `yes` (describe what changed and why it is consistent with `docs/phase1-runtime-adr.md`).
+
 ## Scope Policy
 
 Phase milestones define delivery scope and must be respected in all planning and review.
