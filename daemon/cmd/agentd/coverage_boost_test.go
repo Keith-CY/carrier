@@ -47,7 +47,9 @@ func TestHandleUninstall(t *testing.T) {
 	}
 
 	var resp map[string]string
-	json.NewDecoder(rec.Body).Decode(&resp)
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 	if resp["status"] != "uninstalled" {
 		t.Fatalf("expected status=uninstalled, got %v", resp)
 	}
@@ -108,7 +110,9 @@ func TestHandleInstallMultiInstance(t *testing.T) {
 		t.Fatalf("named instance install: expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	var resp map[string]interface{}
-	json.NewDecoder(rec.Body).Decode(&resp)
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 	if resp["instance_id"] != "myinst1" {
 		t.Fatalf("expected instance_id=myinst1, got %v", resp["instance_id"])
 	}
