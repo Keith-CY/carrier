@@ -14,4 +14,8 @@
   - If the PR is my own and it already contains any `BS:` findings, post an update review addressing or re-evaluating those findings.
   - If the PR is not mine and I have already reviewed it with no remaining updates, skip re-review.
   - If the PR is not mine and there are still unresolved or new findings, review it again.
+- For every review, leave findings as inline code comments tied to file/line locations whenever possible.
 - Preserve existing `BS:` and `NBS:` labeling rules.
+- Review outcome rule:
+  - If any `BS:` finding is proposed, submit review with `request changes`.
+  - If no `BS:` findings are proposed, submit `approve`.
