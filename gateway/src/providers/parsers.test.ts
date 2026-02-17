@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { generateKeyPairSync, sign } from "node:crypto";
 import {
   parseDiscordPayloadToCommand,
   parseFeishuEventToCommand,
   parseTelegramUpdateToCommand,
   verifyTelegramWebhookSecret,
+  verifyDiscordRequestSignature,
   toGatewayInput,
 } from "./parsers";
 
@@ -128,6 +130,68 @@ describe("parseDiscordPayloadToCommand", () => {
       content: "just a text message",
     });
     expect(parsed).toBeNull();
+  });
+});
+
+describe("verifyDiscordRequestSignature", () => {
+  function rawPublicKeyHexFromSpkiDer(der: Buffer): string {
+    return der.subarray(der.length - 32).toString("hex");
+  }
+
+  test("accepts valid signature within timestamp window", () => {
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const body = JSON.stringify({ type: 2, data: { name: "status" } });
+    const now = Math.floor(Date.now() / 1000);
+    const timestamp = String(now);
+    const signatureHex = sign(null, Buffer.from(`${timestamp}${body}`), privateKey).toString("hex");
+    const publicKeyDer = publicKey.export({ type: "spki", format: "der" }) as Buffer;
+    const publicKeyHex = rawPublicKeyHexFromSpkiDer(publicKeyDer);
+
+    expect(verifyDiscordRequestSignature({
+      body,
+      timestamp,
+      signatureHex,
+      publicKeyHex,
+      nowEpochSeconds: now,
+    })).toBe(true);
+  });
+
+  test("rejects invalid signature", () => {
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const body = JSON.stringify({ type: 2, data: { name: "agents" } });
+    const now = Math.floor(Date.now() / 1000);
+    const timestamp = String(now);
+    const validSig = sign(null, Buffer.from(`${timestamp}${body}`), privateKey).toString("hex");
+    const invalidSig = `${validSig.slice(0, -2)}aa`;
+    const publicKeyDer = publicKey.export({ type: "spki", format: "der" }) as Buffer;
+    const publicKeyHex = rawPublicKeyHexFromSpkiDer(publicKeyDer);
+
+    expect(verifyDiscordRequestSignature({
+      body,
+      timestamp,
+      signatureHex: invalidSig,
+      publicKeyHex,
+      nowEpochSeconds: now,
+    })).toBe(false);
+  });
+
+  test("rejects stale timestamp", () => {
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const body = JSON.stringify({ type: 2, data: { name: "logs" } });
+    const now = Math.floor(Date.now() / 1000);
+    const staleTimestamp = String(now - 1000);
+    const signatureHex = sign(null, Buffer.from(`${staleTimestamp}${body}`), privateKey).toString("hex");
+    const publicKeyDer = publicKey.export({ type: "spki", format: "der" }) as Buffer;
+    const publicKeyHex = rawPublicKeyHexFromSpkiDer(publicKeyDer);
+
+    expect(verifyDiscordRequestSignature({
+      body,
+      timestamp: staleTimestamp,
+      signatureHex,
+      publicKeyHex,
+      nowEpochSeconds: now,
+      maxAgeSeconds: 300,
+    })).toBe(false);
   });
 });
 
