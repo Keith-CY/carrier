@@ -135,6 +135,9 @@ func (s *Server) handleMergedLogs(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(r.URL.Query().Get("tail")); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
 			tail = parsed
+			if tail > maxTailParam {
+				tail = maxTailParam
+			}
 		}
 	}
 	lines := s.lifecycle.MergedLogs(tail)
@@ -159,6 +162,9 @@ type auditLogRecord struct {
 const (
 	defaultAuditQueryLimit = 200
 	maxAuditQueryLimit     = 1000
+	// maxTailParam caps the tail query parameter to prevent excessive memory
+	// allocation from adversarial input (see issue #589).
+	maxTailParam = 10000
 )
 
 func (s *Server) handleAuditLogs(w http.ResponseWriter, r *http.Request) {
@@ -316,6 +322,9 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 		if raw := strings.TrimSpace(r.URL.Query().Get("tail")); raw != "" {
 			if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
 				tail = parsed
+				if tail > maxTailParam {
+					tail = maxTailParam
+				}
 			}
 		}
 		lines, err := s.lifecycle.Logs(agentID, tail)

@@ -28,12 +28,12 @@ extract_sync_blocks() {
   done < "$file"
 }
 
-readme_blocks=$(extract_sync_blocks "$README")
-contrib_blocks=$(extract_sync_blocks "$CONTRIBUTING")
+readme_blocks=$(extract_sync_blocks "$README" || true)
+contrib_blocks=$(extract_sync_blocks "$CONTRIBUTING" || true)
 
 # Get unique sync IDs from both files
-readme_ids=$(echo "$readme_blocks" | cut -d'|' -f1 | sort -u)
-contrib_ids=$(echo "$contrib_blocks" | cut -d'|' -f1 | sort -u)
+readme_ids=$(echo "$readme_blocks" | cut -d'|' -f1 | sort -u 2>/dev/null || true)
+contrib_ids=$(echo "$contrib_blocks" | cut -d'|' -f1 | sort -u 2>/dev/null || true)
 
 all_ids=$(printf '%s\n%s\n' "$readme_ids" "$contrib_ids" | sort -u | grep -v '^$' || true)
 
@@ -44,8 +44,8 @@ fi
 
 drift=0
 for id in $all_ids; do
-  readme_content=$(echo "$readme_blocks" | grep "^${id}|" | cut -d'|' -f2-)
-  contrib_content=$(echo "$contrib_blocks" | grep "^${id}|" | cut -d'|' -f2-)
+  readme_content=$(echo "$readme_blocks" | grep "^${id}|" | cut -d'|' -f2- || true)
+  contrib_content=$(echo "$contrib_blocks" | grep "^${id}|" | cut -d'|' -f2- || true)
 
   if [ -z "$readme_content" ] && [ -n "$contrib_content" ]; then
     echo "DRIFT: sync-id '$id' found in CONTRIBUTING.md but missing from README.md"

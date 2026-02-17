@@ -23,3 +23,9 @@ assignees: ""
 
 - [ ] Review follow-up tracking
   - [ ] Confirm non-blocking review suggestions (`NBS:`) were extracted and follow-up issues are created/tracked.
+
+## Acceptance Criteria
+
+- [ ] All checklist items above have been completed and verified.
+- [ ] No P0/P1 issues remain open for this release.
+- [ ] CI is green on the release branch.

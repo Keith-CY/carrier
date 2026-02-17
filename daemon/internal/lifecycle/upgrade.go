@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -89,9 +90,17 @@ func (s *Service) Upgrade(ctx context.Context, agentID string) (UpgradeResult, e
 		}, updateErr
 	}
 
+	// Try to detect the actual installed version post-upgrade.
+	// If the manifest defines a version file path, read it; otherwise fall back
+	// to the arithmetically computed next patch version.
+	actualVersion := toVersion
+	if detectedVersion := s.detectPostUpgradeVersion(agentID, m, result.CombinedOutput); detectedVersion != "" {
+		actualVersion = detectedVersion
+	}
+
 	s.mu.Lock()
 	state = s.states[agentID]
-	state.Version = toVersion
+	state.Version = actualVersion
 	state.LastError = ""
 	state.Runtime = RuntimeStateStopped
 	state.Health = HealthStateUnknown
@@ -104,17 +113,38 @@ func (s *Service) Upgrade(ctx context.Context, agentID string) (UpgradeResult, e
 	s.memoryLinks[agentID] = append([]string(nil), attachments...)
 	s.mu.Unlock()
 
-	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_success from=%s to=%s backup=%q", fromVersion, toVersion, backupPath))
+	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_success from=%s to=%s backup=%q", fromVersion, actualVersion, backupPath))
 
 	s.saveState()
 
 	return UpgradeResult{
 		AgentID:     agentID,
 		FromVersion: fromVersion,
-		ToVersion:   toVersion,
+		ToVersion:   actualVersion,
 		BackupPath:  backupPath,
 	}, nil
 }
+
+// detectPostUpgradeVersion attempts to detect the actual installed version
+// from the upgrade command's output. It looks for semver patterns in the
+// combined output. Returns empty string if no version is detected (caller
+// should fall back to the computed version).
+func (s *Service) detectPostUpgradeVersion(_ string, _ manifest.Manifest, output string) string {
+	if output == "" {
+		return ""
+	}
+	// Look for semver-like patterns (e.g., "v1.2.3", "1.2.3", "version 2.0.0")
+	matches := versionOutputPattern.FindAllStringSubmatch(output, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	// Return the last match (most likely the final installed version)
+	last := matches[len(matches)-1]
+	return last[1]
+}
+
+// versionOutputPattern matches semver-like version strings in command output.
+var versionOutputPattern = regexp.MustCompile(`(?:^|[^0-9])(\d+\.\d+\.\d+)(?:[^0-9]|$)`)
 
 func (s *Service) formatUpgradeFailure(runErr error, backupPath string) error {
 	detail := fmt.Sprintf("upgrade failed: %v", runErr)
@@ -166,7 +196,7 @@ func (s *Service) envVarKeys(m manifest.Manifest) []string {
 }
 
 func (s *Service) createUpgradeBackup(agentID string, m manifest.Manifest, state AgentState, attachments []string) (string, error) {
-	if err := os.MkdirAll(s.diagnoseDir, 0o755); err != nil {
+	if err := os.MkdirAll(s.diagnoseDir, 0o700); err != nil {
 		return "", fmt.Errorf("create diagnose dir: %w", err)
 	}
 

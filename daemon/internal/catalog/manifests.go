@@ -6,7 +6,31 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
+
+func init() {
+	// Validate that install command scripts do not contain their own heredoc
+	// delimiters, which could cause early termination and shell injection.
+	// See issue #619.
+	validateHeredocSafety()
+}
+
+func validateHeredocSafety() {
+	// Check ZeroClaw dev install for 'SCRIPT' delimiter collision
+	zcDev := getZeroClawDevInstallCommand()
+	// The heredoc uses 'SCRIPT' as delimiter. Count occurrences — should be
+	// exactly 2 (open + close). If more, the embedded script contains the delimiter.
+	if strings.Count(zcDev, "\nSCRIPT\n") > 1 {
+		panic("catalog: ZeroClaw dev install script contains heredoc delimiter 'SCRIPT'")
+	}
+
+	// Check PicoClaw dev install for 'DEVEOF' delimiter collision
+	pcDev := getPicoClawDevInstallCommand()
+	if strings.Count(pcDev, "DEVEOF") > 2 {
+		panic("catalog: PicoClaw dev install script contains heredoc delimiter 'DEVEOF'")
+	}
+}
 
 const (
 	defaultDaemonPort        = 9090

@@ -62,3 +62,23 @@ Keeping #<kept-issue-number> as the canonical thread for tracking and updates.
 1. Run duplicate detector.
 2. Group shows `#101`, `#134`, `#152` as same normalized title.
 3. Keep `#101` (oldest), close `#134` and `#152` using the template above.
+
+## Duplicate Open Issue Title Detector (Read-only)
+
+Run:
+
+```bash
+bash scripts/triage/detect-duplicate-titles.sh
+```
+
+Reports groups of open issues with matching normalized titles (case-insensitive, punctuation collapsed).
+
+## Lightweight/Heavy Issue Classifier (Read-only)
+
+Run:
+
+```bash
+python3 scripts/triage/classify-issues.py
+```
+
+Classifies unassigned open issues as LIGHTWEIGHT or HEAVY based on title/body heuristics. Each issue is tagged with a reason (e.g., `docs`, `tests`, `architecture`, `security-critical`).

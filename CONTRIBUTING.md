@@ -152,9 +152,37 @@ Safe update workflow:
    ```
 4. Push and verify CI guard is green.
 
-CI enforcement script:
+CI enforcement scripts:
 
-- `scripts/ci/check-action-pinning.sh`
+- `scripts/ci/check-action-pinning.sh` — verify third-party actions are pinned to SHAs
+- `scripts/ci/check-acceptance-criteria.sh` — verify issue templates have Acceptance Criteria headings
+
+Run actionlint locally:
+
+```bash
+# Install: https://github.com/rhysd/actionlint
+actionlint
+```
+
+Run markdown link check locally:
+
+```bash
+npm install -g markdown-link-check@3.12.2
+find . -name '*.md' -not -path './node_modules/*' -not -path './.git/*' | \
+  xargs -I {} markdown-link-check --quiet --retry {}
+```
+
+Run duplicate issue title detection:
+
+```bash
+bash scripts/triage/detect-duplicate-titles.sh
+```
+
+Run triage classifier:
+
+```bash
+python3 scripts/triage/classify-issues.py
+```
 
 ## Checklist for PRs Closing P0/P1 Issues
 

@@ -143,6 +143,14 @@ func WithStateFile(path string) Option {
 	}
 }
 
+func WithAuditLogDir(dir string) Option {
+	return func(s *Service) {
+		if dir != "" {
+			s.auditLogDir = dir
+		}
+	}
+}
+
 func WithProcessLogDir(dir string) Option {
 	return func(s *Service) {
 		if dir != "" {
@@ -186,6 +194,7 @@ type Service struct {
 	checker            runtimecheck.Checker
 	runner             commandexec.Runner
 	diagnoseDir        string
+	auditLogDir        string
 	logLimit           int
 	handoffTTL         time.Duration
 	now                func() time.Time
@@ -228,6 +237,7 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		checker:            runtimecheck.NewHostChecker(),
 		runner:             commandexec.NewShellRunner(),
 		diagnoseDir:        filepath.Join(os.TempDir(), "agentd-diagnose"),
+		auditLogDir:        filepath.Join(os.TempDir(), "agentd-audit"),
 		logLimit:           1000,
 		handoffTTL:         24 * time.Hour,
 		now:                time.Now,
@@ -505,7 +515,7 @@ func (s *Service) Diagnose(agentID string) (string, error) {
 	logs := append([]string(nil), s.logs[agentID]...)
 	s.mu.RUnlock()
 
-	if err := os.MkdirAll(s.diagnoseDir, 0o755); err != nil {
+	if err := os.MkdirAll(s.diagnoseDir, 0o700); err != nil {
 		s.recordAudit("", "system", "diagnose", agentID, AuditResultFailure, "E_DIAG_DIR", err.Error())
 		return "", fmt.Errorf("create diagnose dir: %w", err)
 	}
