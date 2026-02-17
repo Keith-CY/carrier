@@ -56,13 +56,8 @@ export class RateLimiter {
     }
 
     // Prune and check per-session
-    let timestamps = this.sessionWindows.get(sessionKey) ?? [];
-    timestamps = timestamps.filter((t) => t > cutoff);
-    if (timestamps.length === 0) {
-      this.sessionWindows.delete(sessionKey);
-    }
+    const timestamps = this.sessionWindows.get(sessionKey) ?? [];
     if (timestamps.length >= this.config.perSession) {
-      this.sessionWindows.set(sessionKey, timestamps);
       return {
         allowed: false,
         errorCode: "E_RATE_LIMITED",
