@@ -176,6 +176,96 @@ When touching covered files:
 - Unassigned issue report: `bash scripts/triage/unassigned-report.sh`
 - Triage runbook: `docs/triage.md`
 
+## Targeted test runs
+
+Use these from repository root:
+
+```bash
+# Daemon tests only
+cd daemon && go test ./...
+
+# Gateway check + tests only
+cd gateway && bun install --no-progress && bun run check && bun test
+
+# Full local validation (daemon + gateway + e2e hook)
+./scripts/run-all-tests.sh
+```
+
+## CI failure first-response runbook
+
+When a PR check fails, triage in this order:
+
+```bash
+# 1) See all checks on the PR
+gh pr checks <pr-number>
+
+# 2) See required checks only
+gh pr checks <pr-number> --required
+
+# 3) Find recent workflow runs for the branch
+gh run list --branch <branch-name> --limit 20
+
+# 4) Inspect failing logs from a specific run
+gh run view <run-id> --log-failed
+```
+
+Typical local re-run commands after log review:
+
+```bash
+cd daemon && go test ./...
+cd gateway && bun install --no-progress && bun run check && bun test
+./scripts/run-e2e-tests.sh
+```
+
+Notes:
+- Use `gh pr checks <pr-number> --required` to separate blocking checks from informational/non-required checks.
+- Docs-only pull requests may not trigger the default CI workflow because `.md` and `docs/**` are excluded there.
+
+## Installer source of truth and update workflow
+
+Canonical installer command source in this repository:
+- `catalog/openclaw.manifest.json` (`runtime.install.command` and `runtime.upgrade.command`)
+
+Do not duplicate installer command strings across scripts/docs as independent sources of truth.
+If installer behavior changes, update the manifest first, then update dependent documentation/workflows.
+
+Recommended verification sequence (from repository root):
+
+```bash
+# Verify manifest remains loadable
+go test ./daemon/internal/manifest -run TestLoadFileAcceptsCatalogManifest -count=1
+
+# Verify lifecycle install/upgrade flows still align with manifest commands
+go test ./daemon/internal/lifecycle -run 'TestLifecycleInstallStartStop|TestLifecycleUpgradeCreatesBackupAndBumpsVersion' -count=1
+
+# Verify release checksum generation path is still wired
+rg -n 'sha256sum "\\${package_file}" > "\\${package_file}\\.sha256"' .github/workflows/release.yml
+```
+
+## Installer pre-merge checklist (docs-only guard)
+
+For PRs that touch installer behavior, confirm before merge:
+- [ ] Only canonical installer command definitions were edited in `catalog/openclaw.manifest.json` (single-source update).
+- [ ] Any release/checksum documentation still matches `.github/workflows/release.yml` output path `dist/<archive>.zip.sha256`.
+- [ ] Verification commands above were run from repo root and output is clean.
+- [ ] If command strings changed, dependent docs reference the manifest path instead of re-stating command literals.
+
+## Label glossary
+
+Common labels and when to apply them:
+
+- `P0`: Must-fix now for current delivery gate. Use for release/security/availability blockers.
+- `P1`: Important next priority after P0. Use for high-impact work that is not an immediate gate blocker.
+- `P2`: Maintainability/performance/developer-experience improvements.
+- `P3`: Nice-to-have cleanup/polish.
+- `Phase 1`: Work that must stay within Phase 1 scope and acceptance criteria.
+- `enhancement`: Net-new capability or scope expansion.
+- `documentation`: Documentation-only or documentation-heavy updates.
+- `review-followup`: Use this as the issue title prefix (`[review-followup]`) for post-review non-blocking follow-up items.
+
+Example label combination for prioritization:
+- `Phase 1` + `P1` + `enhancement` means "important Phase 1 feature work, but behind P0 blockers."
+
 ## Review Convention (Non-Blocking Suggestions)
 
 For non-blocking review suggestions, use fixed prefix `NBS:`.

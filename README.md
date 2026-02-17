@@ -23,6 +23,12 @@ For product scope/priority decisions, use this order:
 3. `docs/Agent_Installation_Platform_Implementation_Plan.md` (execution sequence and delivery plan)
 4. `README.md` (quick orientation and current implementation status)
 
+## Contributor docs quick links
+- `CONTRIBUTING.md`
+- `docs/command-contract.md`
+- `docs/daemon-api-contract.md`
+- `docs/daemon-lifecycle-runtime.md`
+- `docs/e2e-parity-taxonomy.md`
 
 ## Quick Navigation
 
@@ -179,15 +185,22 @@ Runtime environment variables:
 - Go-live checklist and rollback: `docs/runbooks/go-live-rollback.md`
 - CI first-response playbook: `docs/ci/first-response-playbook.md`
 
-## Kanban workflow required secrets/env vars
+## Kanban workflow env vars
 
-For the Kanban workflows (`.github/workflows/carrier-kanban-operations.yml`, `.github/workflows/carrier-kanban-automation.yml`), configure these repository-level secrets/variables (see workflow files under [`.github/workflows/`](./.github/workflows/)):
+For `.github/workflows/carrier-kanban-operations.yml` (see [`.github/workflows/carrier-kanban-operations.yml`](./.github/workflows/carrier-kanban-operations.yml)):
 
-- `CARRIER_PROJECT_ID` (recommended): GitHub Project (v2) ID used by the workflow. If omitted, workflows try `.github/kanban-config.json` `projectId`.
-- `CARRIER_PROJECTS_TOKEN` (required to execute sync/report): token with project read/write permissions for user/org ProjectV2 operations.
+- `CARRIER_PROJECTS_TOKEN` (required): token with project read/write permissions for field/view operations.
+- `CARRIER_PROJECT_ID` (optional override): target project node ID override.
 - `CARRIER_DISCUSSION_CATEGORY_ID` (optional): discussion category override for workflow-generated discussion posts.
 
-Implementation note: workflows now skip with a warning when `CARRIER_PROJECTS_TOKEN` is missing or project access is unavailable, so unrelated CI checks are not blocked by Kanban configuration gaps.
+Target project resolution order:
+1. workflow dispatch input `project_id`
+2. `CARRIER_PROJECT_ID`
+3. repository workflow/config default
+
+Implementation notes:
+- `carrier-kanban-operations.yml` can fall back to the pre-authenticated `github` client from `@actions/github` for repository-scoped calls when an explicit token is not provided.
+- Kanban workflows skip with a warning when `CARRIER_PROJECTS_TOKEN` is missing or project access is unavailable, so unrelated CI checks are not blocked by Kanban configuration gaps.
 
 ## Install OpenClaw from release package (non-technical quick path)
 

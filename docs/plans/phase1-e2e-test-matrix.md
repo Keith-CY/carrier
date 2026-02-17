@@ -7,6 +7,7 @@
 - Define a comprehensive E2E test matrix covering happy paths, failure paths, and memory operations.
 - Ensure every Phase 1 feature has at least one E2E test.
 - Produce a machine-readable run report after each test suite execution.
+- Use the shared parity categories from `docs/e2e-parity-taxonomy.md` when writing cross-provider assertions.
 
 ## Non-Goals
 
