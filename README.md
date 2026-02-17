@@ -152,6 +152,7 @@ Runtime environment variables:
 - For merge operations, prefer queue-based merge from the GitHub UI.
 
 #### CI coverage note (E2E execution policy)
+- `Provider Parity (core/failure)` matrix in `.github/workflows/ci.yml` runs on PR and push, and uploads per-scenario log artifacts (`provider-parity-core`, `provider-parity-failure`) for drift diagnosis.
 - `End-to-End Tests` in `.github/workflows/ci.yml` run only on `push` to `main` (`github.event_name == 'push' && github.ref == 'refs/heads/main'`).
 - Pull requests do not run E2E in `ci.yml`.
 - Docs-only changes run `.github/workflows/docs-consistency.yml`, which executes `scripts/check-doc-command-sync.sh`.

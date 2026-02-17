@@ -86,6 +86,48 @@ jobs:
       - name: Gateway CI (type check + tests)
         working-directory: gateway
         run: bun run ci
+
+  provider-parity:
+    name: Provider Parity (${{ matrix.scenario }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scenario: core
+            pattern: "returns same result|returns same result shape|/pair success"
+          - scenario: failure
+            pattern: "error is consistent|usage errors|session-required|invalid code"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3
+        with:
+          bun-version: "1.1.8"
+
+      - name: Install gateway dependencies
+        working-directory: gateway
+        run: bun install --frozen-lockfile --no-progress
+
+      - name: Run parity scenario tests
+        working-directory: gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p parity-artifacts
+          bun test src/cross-provider.test.ts --test-name-pattern "${{ matrix.pattern }}" \
+            2>&1 | tee "parity-artifacts/parity-${{ matrix.scenario }}.log"
+
+      - name: Upload parity artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: provider-parity-${{ matrix.scenario }}
+          path: gateway/parity-artifacts/parity-${{ matrix.scenario }}.log
+          if-no-files-found: error
   e2e-tests:
     name: End-to-End Tests
     runs-on: ubuntu-latest
