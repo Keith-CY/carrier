@@ -101,6 +101,8 @@ export CARRIER_DISCORD_APP_ID="<app-id>"
 2. Set **Request URL** to: `https://<YOUR_GATEWAY_HOST>/webhook/feishu`
 3. Copy the **Verification Token** and **Encrypt Key** (if encryption is enabled).
 
+Gateway-side verification should validate incoming event token (`header.token` or `token`) against `CARRIER_FEISHU_VERIFICATION_TOKEN`.
+
 ### 3.3 Add Bot Capability
 
 1. Under **App Features**, enable **Bot**.

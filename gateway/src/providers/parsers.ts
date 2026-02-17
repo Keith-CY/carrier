@@ -220,6 +220,29 @@ export function parseFeishuEventToCommand(payload: unknown): NormalizedGatewayCo
   };
 }
 
+export function verifyFeishuEventToken(
+  payload: unknown,
+  expectedToken: string | null | undefined,
+): boolean {
+  const expected = expectedToken?.trim() ?? "";
+  if (expected.length === 0) {
+    return true;
+  }
+
+  const root = asRecord(payload);
+  if (!root) {
+    return false;
+  }
+
+  const header = asRecord(root.header);
+  const token = firstString(header?.token, root.token);
+  if (!token) {
+    return false;
+  }
+
+  return constantTimeStringEquals(token.trim(), expected);
+}
+
 type ParsedCommandText = {
   command: string;
   args: string[];

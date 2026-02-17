@@ -6,6 +6,7 @@ import {
   parseTelegramUpdateToCommand,
   verifyTelegramWebhookSecret,
   verifyDiscordRequestSignature,
+  verifyFeishuEventToken,
   toGatewayInput,
 } from "./parsers";
 
@@ -236,6 +237,34 @@ describe("parseFeishuEventToCommand", () => {
       challenge: "challenge-token",
     });
     expect(parsed).toBeNull();
+  });
+});
+
+describe("verifyFeishuEventToken", () => {
+  test("allows events when expected token is not configured", () => {
+    expect(verifyFeishuEventToken({}, undefined)).toBe(true);
+    expect(verifyFeishuEventToken({}, "")).toBe(true);
+  });
+
+  test("accepts matching token from event header", () => {
+    const payload = {
+      header: {
+        token: "verify-token-1",
+      },
+    };
+    expect(verifyFeishuEventToken(payload, "verify-token-1")).toBe(true);
+  });
+
+  test("accepts matching token from root token field", () => {
+    const payload = {
+      token: "verify-token-2",
+    };
+    expect(verifyFeishuEventToken(payload, "verify-token-2")).toBe(true);
+  });
+
+  test("rejects missing or mismatched token", () => {
+    expect(verifyFeishuEventToken({}, "verify-token-3")).toBe(false);
+    expect(verifyFeishuEventToken({ header: { token: "wrong-token" } }, "verify-token-3")).toBe(false);
   });
 });
 
