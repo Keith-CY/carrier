@@ -12,6 +12,10 @@ export type DaemonAgentState = {
   installState: "not_installed" | "installed" | "broken";
   runtimeState: "running" | "stopped";
   health: "healthy" | "unhealthy" | "unknown";
+  ports: number[];
+  /** ISO-8601 datetime string when the agent was last started. */
+  startedAt?: string;
+  restartCount: number;
   needsRemoteDiagnosis: boolean;
   lastError?: string;
   /** ISO-8601 datetime string (e.g. `"2026-01-15T08:30:00.000Z"`). */
@@ -89,6 +93,9 @@ type InMemoryAgentState = {
   installState: "not_installed" | "installed" | "broken";
   runtimeState: "running" | "stopped";
   health: "healthy" | "unhealthy" | "unknown";
+  ports: number[];
+  startedAt?: string;
+  restartCount: number;
   needsRemoteDiagnosis: boolean;
   lastError?: string;
   lastDiagnoseFile?: string;
@@ -125,6 +132,8 @@ export class InMemoryDaemonClient implements DaemonClient {
       installState: "not_installed",
       runtimeState: "stopped",
       health: "unknown",
+      ports: [],
+      restartCount: 0,
       needsRemoteDiagnosis: false,
       updatedAt: this.now().toISOString(),
     });
@@ -205,6 +214,8 @@ export class InMemoryDaemonClient implements DaemonClient {
       ...state,
       runtimeState: "running",
       health: "healthy",
+      startedAt: this.now().toISOString(),
+      restartCount: state.startedAt ? state.restartCount + 1 : state.restartCount,
       lastError: undefined,
       updatedAt: this.now().toISOString(),
     });
@@ -221,6 +232,7 @@ export class InMemoryDaemonClient implements DaemonClient {
       ...state,
       runtimeState: "stopped",
       health: "unknown",
+      ports: [],
       updatedAt: this.now().toISOString(),
     });
     this.appendLog(agentId, `[stop] request=${ctx.requestId} actor=${ctx.actor} stopped`);
@@ -385,6 +397,9 @@ export class InMemoryDaemonClient implements DaemonClient {
       installState: state.installState,
       runtimeState: state.runtimeState,
       health: state.health,
+      ports: state.ports ?? [],
+      startedAt: state.startedAt,
+      restartCount: state.restartCount ?? 0,
       needsRemoteDiagnosis: state.needsRemoteDiagnosis,
       lastError: state.lastError,
       updatedAt: state.updatedAt,
