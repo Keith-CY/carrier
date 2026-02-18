@@ -8,16 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 )
 
 // defaultGracePeriod is the default time to wait after SIGTERM before sending SIGKILL.
 const defaultGracePeriod = 10 * time.Second
-
-func isNoSuchProcess(err error) bool {
-	return err == nil || err == os.ErrProcessDone || err == syscall.ESRCH
-}
 
 // ProcessManager tracks and manages running agent processes.
 type ProcessManager struct {
@@ -152,7 +147,7 @@ func (pm *ProcessManager) StopWithContext(ctx context.Context, agentID string) e
 
 	// Send SIGTERM to the full process group so child processes are terminated too.
 	var stopErr error
-	if err := signalProcessGroup(info.pid, syscall.SIGTERM); err != nil && !isNoSuchProcess(err) {
+	if err := signalProcessGroup(info.pid, sigTERM); err != nil && !isNoSuchProcess(err) {
 		stopErr = fmt.Errorf("send SIGTERM to process group: %w", err)
 	} else {
 		// If the context carries a deadline use it; otherwise fall back to
@@ -169,7 +164,7 @@ func (pm *ProcessManager) StopWithContext(ctx context.Context, agentID string) e
 			// Process exited gracefully
 		case <-waitCtx.Done():
 			// Force kill the full process group.
-			if err := signalProcessGroup(info.pid, syscall.SIGKILL); err != nil && !isNoSuchProcess(err) {
+			if err := signalProcessGroup(info.pid, sigKILL); err != nil && !isNoSuchProcess(err) {
 				stopErr = fmt.Errorf("send SIGKILL to process group: %w", err)
 			} else {
 				<-info.done // Wait for process to actually exit
@@ -243,7 +238,7 @@ func (pm *ProcessManager) isProcessAlive(info *processInfo) bool {
 		return false
 	}
 
-	err := info.cmd.Process.Signal(syscall.Signal(0))
+	err := info.cmd.Process.Signal(signalZero)
 	return err == nil
 }
 
