@@ -1139,8 +1139,8 @@ func TestPrepareAgentMemorySamePriorityTiebreaker(t *testing.T) {
 	e1, _ := s.ImportMemory(pack1, ImportOptions{TargetRegion: TypeShared})
 	e2, _ := s.ImportMemory(pack2, ImportOptions{TargetRegion: TypeShared})
 
-	_ = s.AttachMemory("agent-1", e1.ID, AttachOptions{Priority: 0})
-	_ = s.AttachMemory("agent-1", e2.ID, AttachOptions{Priority: 0})
+	_, _ = s.AttachMemory("agent-1", e1.ID, AttachOptions{Priority: 0})
+	_, _ = s.AttachMemory("agent-1", e2.ID, AttachOptions{Priority: 0})
 
 	contract, err := s.PrepareAgentMemory("agent-1")
 	if err != nil {
@@ -1174,8 +1174,8 @@ func TestPrepareAgentMemoryDifferentPriority(t *testing.T) {
 	e1, _ := s.ImportMemory(pack1, ImportOptions{TargetRegion: TypeShared})
 	e2, _ := s.ImportMemory(pack2, ImportOptions{TargetRegion: TypeShared})
 
-	_ = s.AttachMemory("agent-1", e1.ID, AttachOptions{Priority: 1})
-	_ = s.AttachMemory("agent-1", e2.ID, AttachOptions{Priority: 10})
+	_, _ = s.AttachMemory("agent-1", e1.ID, AttachOptions{Priority: 1})
+	_, _ = s.AttachMemory("agent-1", e2.ID, AttachOptions{Priority: 10})
 
 	_, err := s.PrepareAgentMemory("agent-1")
 	if err != nil {
@@ -1197,9 +1197,9 @@ func TestExtractZipIntoDotEntrySkipped(t *testing.T) {
 	// "." entry should be skipped
 	header := &zip.FileHeader{Name: "./"}
 	header.SetMode(os.ModeDir | 0o755)
-	_ = zw.CreateHeader(header)
+	_, _ = zw.CreateHeader(header)
 	w, _ := zw.Create("file.txt")
-	_ = w.Write([]byte("data"))
+	_, _ = w.Write([]byte("data"))
 	zw.Close()
 	f.Close()
 
@@ -1234,7 +1234,7 @@ func TestExtractZipIntoEscapesRoot(t *testing.T) {
 	zw := zip.NewWriter(f)
 	// Create a header with absolute path (which cleanArchiveEntryPath rejects)
 	w, _ := zw.Create("normal.txt")
-	_ = w.Write([]byte("ok"))
+	_, _ = w.Write([]byte("ok"))
 	zw.Close()
 	f.Close()
 
@@ -1259,7 +1259,7 @@ func TestPrepareAgentMemoryBadCollection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	_ = s.AttachMemory("agent-1", entry.ID, AttachOptions{Collections: []string{"nonexistent-collection"}})
+	_, _ = s.AttachMemory("agent-1", entry.ID, AttachOptions{Collections: []string{"nonexistent-collection"}})
 	_, err = s.PrepareAgentMemory("agent-1")
 	if err == nil {
 		t.Fatal("expected error for bad collection")
@@ -1404,7 +1404,7 @@ func TestPrepareAgentMemoryMissingContentDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	_ = s.AttachMemory("agent-1", entry.ID, AttachOptions{})
+	_, _ = s.AttachMemory("agent-1", entry.ID, AttachOptions{})
 
 	// Delete just the content subdir to simulate missing content
 	installDir := s.installPath[entry.ID]
