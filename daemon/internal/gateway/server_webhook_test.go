@@ -81,7 +81,7 @@ func TestDownload_ValidToken(t *testing.T) {
 
 	// Create a test file
 	testFile := filepath.Join(tmpDir, "test-artifact.txt")
-	os.WriteFile(testFile, []byte("test content"), 0o644)
+	_ = os.WriteFile(testFile, []byte("test content"), 0o644)
 
 	// Issue a download token
 	tok := downloads.Issue(testFile, 5*time.Minute, false)
@@ -176,7 +176,7 @@ func TestTelegramWebhook_NonCommand(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var resp map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&resp)
+	_ = json.NewDecoder(w.Body).Decode(&resp)
 	if msg, ok := resp["message"].(string); ok && !strings.Contains(msg, "ignored") {
 		t.Errorf("expected ignored message, got %q", msg)
 	}
@@ -207,7 +207,7 @@ func TestFeishuWebhook_Challenge(t *testing.T) {
 		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&resp)
+	_ = json.NewDecoder(w.Body).Decode(&resp)
 	if resp["challenge"] != "test-challenge" {
 		t.Errorf("expected challenge echoed, got %v", resp)
 	}

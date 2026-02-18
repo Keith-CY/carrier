@@ -30,7 +30,7 @@ func newMockDaemon(handlers map[string]http.HandlerFunc) *httptest.Server {
 			}
 		}
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"error": map[string]string{"code": "E_AGENT_NOT_FOUND", "message": "not found"},
 		})
 	}))
@@ -155,7 +155,7 @@ func TestHandleCommand_InvalidSessionToken(t *testing.T) {
 func TestHandleCommand_Agents_Success(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
 		"GET /api/v1/agents": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"agents": []map[string]interface{}{
 					{"id": "a1", "installState": "installed"},
 					{"id": "a2", "installState": "available"},
@@ -291,7 +291,7 @@ func TestHandleCommand_Status_AllAgents(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
 		"GET /api/v1/agents/status": func(w http.ResponseWriter, r *http.Request) {
 			started := time.Now().Add(-1 * time.Hour).Format(time.RFC3339Nano)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"statuses": []map[string]interface{}{
 					{"id": "a1", "health": "healthy", "runtimeState": "running", "version": "1.0", "ports": []int{8080}, "restartCount": 0, "startedAt": started},
 				},

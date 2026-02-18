@@ -184,13 +184,13 @@ func TestDaemonClient_GetLogs_ClampsTail(t *testing.T) {
 
 	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
 	// tail=0 should default to 200
-	dc.GetLogs(context.Background(), "a1", 0, "actor", "req")
+	_, _ = dc.GetLogs(context.Background(), "a1", 0, "actor", "req")
 	if gotPath != "/api/v1/agents/a1/logs?tail=200" {
 		t.Errorf("tail=0: got path %q", gotPath)
 	}
 
 	// tail=5000 should clamp to 1000
-	dc.GetLogs(context.Background(), "a1", 5000, "actor", "req")
+	_, _ = dc.GetLogs(context.Background(), "a1", 5000, "actor", "req")
 	if gotPath != "/api/v1/agents/a1/logs?tail=1000" {
 		t.Errorf("tail=5000: got path %q", gotPath)
 	}
@@ -311,7 +311,7 @@ func TestDaemonClient_AuthHeader(t *testing.T) {
 	defer srv.Close()
 
 	dc := NewDaemonClient(srv.URL, "secret", 5*time.Second)
-	dc.VerifyPairCode(context.Background(), "code", "actor", "req")
+	_ = dc.VerifyPairCode(context.Background(), "code", "actor", "req")
 	if gotAuth != "Bearer secret" {
 		t.Errorf("expected 'Bearer secret', got %q", gotAuth)
 	}

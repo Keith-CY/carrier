@@ -39,7 +39,7 @@ func TestHealthz(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var body map[string]string
-	json.NewDecoder(w.Body).Decode(&body)
+	_ = json.NewDecoder(w.Body).Decode(&body)
 	if body["status"] != "ok" {
 		t.Errorf("expected status ok, got %q", body["status"])
 	}
@@ -121,7 +121,7 @@ func TestCommand_PairSuccess(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var resp GatewayResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	_ = json.NewDecoder(w.Body).Decode(&resp)
 	if resp.Result != "ok" {
 		t.Errorf("expected ok, got %s: %s", resp.Result, resp.Message)
 	}
