@@ -162,7 +162,7 @@ func TestListAttachments(t *testing.T) {
 		t.Fatalf("expected 0, got %d", len(atts))
 	}
 
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	_, _ = s.AttachMemory("agent-1", "m1", AttachOptions{Priority: 5})
 
 	atts = s.ListAttachments("agent-1")
@@ -178,7 +178,7 @@ func TestListAttachments(t *testing.T) {
 
 func TestAttachMemoryArchivedMemory(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	_ = s.Archive("m1")
 	_, err := s.AttachMemory("agent-1", "m1", AttachOptions{})
 	if err == nil {
@@ -191,7 +191,7 @@ func TestAttachMemoryArchivedMemory(t *testing.T) {
 
 func TestAttachMemoryOwnerMismatch(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypePerAgent, "agent-a")
+	_ = s.Create("m1", "A", "1.0.0", TypePerAgent, "agent-a")
 	_, err := s.AttachMemory("agent-b", "m1", AttachOptions{})
 	if err == nil {
 		t.Fatal("expected owner mismatch error")
@@ -208,7 +208,7 @@ func TestAttachMemoryNotFound(t *testing.T) {
 
 func TestAttachMemoryAlreadyAttached(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	_, _ = s.AttachMemory("agent-1", "m1", AttachOptions{})
 	_, err := s.AttachMemory("agent-1", "m1", AttachOptions{})
 	if err != ErrAlreadyMounted {
@@ -218,8 +218,8 @@ func TestAttachMemoryAlreadyAttached(t *testing.T) {
 
 func TestAttachMemoryPerAgentLimit(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypePerAgent, "agent-1")
-	s.Create("m2", "B", "1.0.0", TypePerAgent, "agent-1")
+	_ = s.Create("m1", "A", "1.0.0", TypePerAgent, "agent-1")
+	_ = s.Create("m2", "B", "1.0.0", TypePerAgent, "agent-1")
 	_, _ = s.AttachMemory("agent-1", "m1", AttachOptions{})
 	_, err := s.AttachMemory("agent-1", "m2", AttachOptions{})
 	if err != ErrPerAgentLimit {
@@ -239,7 +239,7 @@ func TestSetAttachmentsFromLinksNotFound(t *testing.T) {
 
 func TestSetAttachmentsFromLinksOwnerMismatch(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypePerAgent, "agent-a")
+	_ = s.Create("m1", "A", "1.0.0", TypePerAgent, "agent-a")
 	err := s.SetAttachmentsFromLinks("agent-b", []string{"m1"})
 	if err == nil {
 		t.Fatal("expected owner mismatch error")
@@ -248,8 +248,8 @@ func TestSetAttachmentsFromLinksOwnerMismatch(t *testing.T) {
 
 func TestSetAttachmentsFromLinksPerAgentLimit(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypePerAgent, "agent-1")
-	s.Create("m2", "B", "1.0.0", TypePerAgent, "agent-1")
+	_ = s.Create("m1", "A", "1.0.0", TypePerAgent, "agent-1")
+	_ = s.Create("m2", "B", "1.0.0", TypePerAgent, "agent-1")
 	err := s.SetAttachmentsFromLinks("agent-1", []string{"m1", "m2"})
 	if err != ErrPerAgentLimit {
 		t.Fatalf("expected ErrPerAgentLimit, got %v", err)
@@ -455,7 +455,7 @@ func TestValidateTransitionUnknownState(t *testing.T) {
 
 func TestUnmountAllWithNonMountedEntry(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	// Manually add a mount record for a memory not in mounted state
 	s.mu.Lock()
 	s.mounts = append(s.mounts, MountRecord{MemoryID: "m1", AgentID: "agent-1"})
@@ -472,7 +472,7 @@ func TestUnmountAllWithNonMountedEntry(t *testing.T) {
 
 func TestAgentMountsPopulatesMemoryType(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	s.mu.Lock()
 	s.mounts = append(s.mounts, MountRecord{MemoryID: "m1", AgentID: "agent-1", MemoryType: ""})
 	s.mu.Unlock()
@@ -828,7 +828,7 @@ func TestPrepareAgentMemoryWithCollections(t *testing.T) {
 func TestPrepareAgentMemorySkipsNoInstallPath(t *testing.T) {
 	s, _ := newMemoryStoreWithRoot(t)
 	// Create an entry directly without installing
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	_, _ = s.AttachMemory("agent-1", "m1", AttachOptions{})
 	// Should not error, just skip
 	_, err := s.PrepareAgentMemory("agent-1")
@@ -1006,7 +1006,7 @@ func TestPrepareAgentMemoryDefaultRuntimeTargets(t *testing.T) {
 
 func TestMountInvalidTransition(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	_ = s.Archive("m1")
 	_, err := s.Mount("m1", "agent-1", AccessReadOnly)
 	if err == nil {
@@ -1018,7 +1018,7 @@ func TestMountInvalidTransition(t *testing.T) {
 
 func TestUnmountInvalidTransition(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	// Manually put a mount record for a created-state entry (shouldn't normally happen)
 	s.mu.Lock()
 	e := s.entries["m1"]
@@ -1066,7 +1066,7 @@ func TestWriteMountMap(t *testing.T) {
 
 func TestMountValidateTransitionFails(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	// Mount it first
 	_, _ = s.Mount("m1", "agent-a", AccessReadOnly)
 	// Now try to mount again - it's in mounted state, policy rejects
@@ -1080,13 +1080,13 @@ func TestMountValidateTransitionFails(t *testing.T) {
 
 func TestUnmountAllEntryNotMounted(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	// Add mount record manually but entry is in created state
 	s.mu.Lock()
 	s.mounts = append(s.mounts, MountRecord{MemoryID: "m1", AgentID: "agent-1"})
 	s.mu.Unlock()
 	// Also add a mount for a different agent to cover the else branch
-	s.Create("m2", "B", "1.0.0", TypeShared, "")
+	_ = s.Create("m2", "B", "1.0.0", TypeShared, "")
 	s.mu.Lock()
 	s.mounts = append(s.mounts, MountRecord{MemoryID: "m2", AgentID: "agent-2"})
 	s.mu.Unlock()
@@ -1106,7 +1106,7 @@ func TestUnmountAllEntryNotMounted(t *testing.T) {
 
 func TestAgentMountsFiltersOtherAgents(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	s.mu.Lock()
 	s.mounts = append(s.mounts,
 		MountRecord{MemoryID: "m1", AgentID: "agent-1", MemoryType: TypeShared},
@@ -1334,7 +1334,7 @@ func TestListFilesEmpty(t *testing.T) {
 
 func TestAttachMemorySharedExplicitRW(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	att, err := s.AttachMemory("agent-1", "m1", AttachOptions{Mode: AccessReadWrite})
 	if err != nil {
 		t.Fatalf("attach: %v", err)
@@ -1358,7 +1358,7 @@ func TestRestoreMountRecordsError(t *testing.T) {
 
 func TestRestoreMountRecordsPartialErrors(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	// Create a valid one and an invalid one
 	records := []MountRecord{
 		{MemoryID: "m1", AgentID: "agent-1", AccessMode: AccessReadOnly},
@@ -1375,7 +1375,7 @@ func TestRestoreMountRecordsPartialErrors(t *testing.T) {
 func TestApplyMountStateWithRollbackBothFail(t *testing.T) {
 	s := newTestStore()
 	// Create but archive m1 so mounting fails
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	_ = s.Archive("m1")
 
 	desired := []Attachment{{MemoryID: "m1", Mode: AccessReadOnly}}
