@@ -147,6 +147,34 @@ jobs:
         working-directory: gateway
         run: bun run ci
 
+  gui-build:
+    name: GUI Build
+    needs: classify-scope
+    if: github.event_name != 'pull_request' || needs.classify-scope.outputs.ci_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+
+      - name: Install GUI dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev
+
+      - name: Build with GUI tag
+        run: go build -tags gui -o carrier ./cmd/carrier/
+
+      - name: Build headless (default)
+        run: go build -o carrier-headless ./cmd/carrier/
+
+      - name: Cross-compile GUI (Windows amd64)
+        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -tags gui -o carrier-windows.exe ./cmd/carrier/
+
+
   provider-parity:
     name: Provider Parity (${{ matrix.scenario }})
     needs: classify-scope
