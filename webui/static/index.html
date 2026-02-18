@@ -81,10 +81,31 @@
       </div>
     </section>
 
+    <section id="view-provider" class="view hidden">
+      <div class="steps-indicator" id="steps-indicator-p"></div>
+      <div class="card">
+        <h3>Step 3 — Select LLM Provider</h3>
+        <p class="text-dim" id="provider-agent-name"></p>
+        <div id="provider-loading" class="text-dim">Loading providers…</div>
+        <div id="provider-categories" class="hidden"></div>
+        <div id="provider-auth-section" class="hidden" style="margin-top:1rem">
+          <div id="provider-auth-label" class="text-dim"></div>
+          <input type="password" id="provider-api-key" placeholder="Paste API key here…" class="hidden" style="margin-top:0.5rem">
+          <div id="provider-auth-instructions" class="text-dim hidden" style="margin-top:0.5rem"></div>
+        </div>
+        <div class="btn-row" style="margin-top:1rem">
+          <button class="btn-secondary" id="provider-back">← Back</button>
+          <button id="provider-skip" class="btn-secondary">Skip →</button>
+          <button id="provider-next" disabled>Continue →</button>
+        </div>
+        <div id="provider-msg"></div>
+      </div>
+    </section>
+
     <section id="view-config" class="view hidden">
       <div class="steps-indicator" id="steps-indicator-3"></div>
       <div class="card">
-        <h3>Step 3 — Environment Variables</h3>
+        <h3>Step 4 — Environment Variables</h3>
         <p class="text-dim" id="config-agent-name"></p>
         <div id="env-fields"></div>
         <div class="btn-row">
@@ -101,7 +122,7 @@
     <section id="view-install" class="view hidden">
       <div class="steps-indicator" id="steps-indicator-4"></div>
       <div class="card center-card">
-        <h3>Step 4 — Confirm Installation</h3>
+        <h3>Step 5 — Confirm Installation</h3>
         <p id="install-summary"></p>
         <div class="btn-row">
           <button class="btn-secondary" id="install-back">← Back</button>

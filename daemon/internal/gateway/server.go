@@ -183,6 +183,30 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		}
 	})
 
+	// LLM provider catalog
+	mux.HandleFunc("/api/v1/providers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		requestID := requestIDFromCtx(r.Context())
+		byCategory := LLMProvidersByCategory()
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"requestId": requestID,
+			"result":    "ok",
+			"providers": ListLLMProviders(),
+			"by_category": map[string]interface{}{
+				"builtin": byCategory["builtin"],
+				"custom":  byCategory["custom"],
+				"local":   byCategory["local"],
+			},
+		})
+	})
+
 	// Serve WebUI static files at root (catch-all, after API routes).
 	// The handler is provided by webui_embed.go (with -tags webui) or
 	// webui_stub.go (returns 404 when built without the tag).
