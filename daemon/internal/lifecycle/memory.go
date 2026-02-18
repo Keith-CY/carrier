@@ -14,7 +14,23 @@ func (s *Service) autoMountMemories(agentID string) {
 	s.mu.RLock()
 	links := append([]string(nil), s.memoryLinks[agentID]...)
 	s.mu.RUnlock()
+	if len(links) == 0 {
+		return
+	}
 
+	// Preferred path for issue #1189: deterministic composed effective memory view.
+	if err := s.memoryStore.SetAttachmentsFromLinks(agentID, links); err != nil {
+		s.appendLog(agentID, fmt.Sprintf("memory attachment setup failed: %v", err))
+	} else {
+		contract, err := s.memoryStore.PrepareAgentMemory(agentID)
+		if err == nil {
+			s.appendLog(agentID, fmt.Sprintf("memory effective view prepared (digest=%s)", contract.ViewDigest))
+			return
+		}
+		s.appendLog(agentID, fmt.Sprintf("memory view compose failed, falling back to direct mounts: %v", err))
+	}
+
+	// Backwards-compatible path when view composition cannot run (for example, no root dir configured).
 	for _, memID := range links {
 		if _, err := s.memoryStore.Mount(memID, agentID, memory.AccessReadOnly); err != nil {
 			s.appendLog(agentID, fmt.Sprintf("memory auto-mount %s failed: %v", memID, err))
