@@ -637,9 +637,9 @@ func TestV1AgentStop_NotRunning(t *testing.T) {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
-	// Not running → conflict or error
-	if w.Code == http.StatusOK {
-		t.Fatal("expected error for stopping non-running agent")
+	// Not running → conflict
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d; body: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -663,9 +663,9 @@ func TestV1AgentUpgrade_NotSupported(t *testing.T) {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
-	// Upgrade may not be supported
-	if w.Code == 0 {
-		t.Fatal("expected non-zero status")
+	// Agent not installed → conflict
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d; body: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -677,9 +677,8 @@ func TestV1AgentDiagnose(t *testing.T) {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
-	// Diagnose may succeed or fail but should not crash
-	if w.Code == 0 {
-		t.Fatal("expected non-zero status")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -691,8 +690,8 @@ func TestV1AgentUninstall(t *testing.T) {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
-	if w.Code == 0 {
-		t.Fatal("expected non-zero status")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -763,8 +762,9 @@ func TestApiStop_NotRunning(t *testing.T) {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
-	if w.Code == http.StatusOK {
-		t.Fatal("expected error for stopping non-running agent")
+	// Not running → conflict
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d; body: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -776,8 +776,9 @@ func TestApiUpgrade_WithBody(t *testing.T) {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
-	if w.Code == 0 {
-		t.Fatal("expected non-zero status")
+	// Agent not installed → conflict
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d; body: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -789,8 +790,8 @@ func TestApiDiagnose_WithBody(t *testing.T) {
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
-	if w.Code == 0 {
-		t.Fatal("expected non-zero status")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
 	}
 }
 
