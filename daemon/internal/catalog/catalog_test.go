@@ -69,6 +69,34 @@ func TestListReturnsAllEntries(t *testing.T) {
 	}
 }
 
+func TestActiveEntriesOnlyReturnsActive(t *testing.T) {
+	active := ActiveEntries()
+	if len(active) != 3 {
+		t.Fatalf("expected 3 active entries from ActiveEntries(), got %d", len(active))
+	}
+	for _, e := range active {
+		if e.Status != StatusActive {
+			t.Fatalf("ActiveEntries() returned non-active entry: %s (%s)", e.ID, e.Status)
+		}
+	}
+}
+
+func TestActiveEntriesExcludesCandidates(t *testing.T) {
+	active := ActiveEntries()
+	for _, e := range active {
+		if e.ID == "nanoclaw" || e.ID == "pi-mono" {
+			t.Fatalf("ActiveEntries() should not include candidate %s", e.ID)
+		}
+	}
+}
+
+func TestFindByIDNotFound(t *testing.T) {
+	_, ok := FindByID("nonexistent-agent")
+	if ok {
+		t.Fatal("expected FindByID to return false for nonexistent agent")
+	}
+}
+
 func TestListByStatusActive(t *testing.T) {
 	active := ListByStatus(StatusActive)
 	if len(active) != 3 {
