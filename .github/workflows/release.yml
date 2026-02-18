@@ -125,7 +125,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-    if: needs.prepare.outputs.build_mode != 'pr-test'
+    if: github.event_name != 'pull_request'
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -250,7 +250,7 @@ jobs:
 
   sign-artifacts:
     needs: [prepare, build-packages]
-    if: needs.prepare.outputs.build_mode != 'pr-test'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -297,7 +297,7 @@ jobs:
   publish-release:
     name: Publish GitHub Release
     needs: [prepare, build-packages, sign-artifacts]
-    if: needs.prepare.outputs.build_mode == 'release' || needs.prepare.outputs.build_mode == 'prerelease'
+    if: github.event_name != 'pull_request' && needs.prepare.outputs.release_tag != ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -334,7 +334,7 @@ jobs:
   comment-pr-packages:
     name: Comment PR Test Packages
     needs: [prepare, build-packages]
-    if: needs.prepare.outputs.build_mode == 'pr-test'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       issues: write
