@@ -14,6 +14,14 @@ type Store struct {
 	mounts  []MountRecord    // active mounts
 	policy  Policy
 	now     func() time.Time
+
+	rootDir     string
+	manifests   map[string]PackageManifest // keyed by memory ID
+	installPath map[string]string          // keyed by memory ID
+	attachments map[string][]Attachment    // keyed by agent ID
+	views       map[string]ViewExplanation // keyed by agent ID
+	audits      []AuditEvent
+	auditLimit  int
 }
 
 // StoreOption configures a Store.
@@ -24,11 +32,31 @@ func WithNow(fn func() time.Time) StoreOption {
 	return func(s *Store) { s.now = fn }
 }
 
+// WithRootDir configures filesystem storage root for mempack import/export and composed views.
+func WithRootDir(root string) StoreOption {
+	return func(s *Store) { s.rootDir = root }
+}
+
+// WithAuditLimit configures the maximum number of retained memory audit records.
+func WithAuditLimit(limit int) StoreOption {
+	return func(s *Store) {
+		if limit > 0 {
+			s.auditLimit = limit
+		}
+	}
+}
+
 // NewStore creates an empty memory store.
 func NewStore(opts ...StoreOption) *Store {
 	s := &Store{
-		entries: make(map[string]Entry),
-		now:     time.Now,
+		entries:     make(map[string]Entry),
+		now:         time.Now,
+		manifests:   make(map[string]PackageManifest),
+		installPath: make(map[string]string),
+		attachments: make(map[string][]Attachment),
+		views:       make(map[string]ViewExplanation),
+		audits:      make([]AuditEvent, 0, 128),
+		auditLimit:  1000,
 	}
 	for _, o := range opts {
 		o(s)
