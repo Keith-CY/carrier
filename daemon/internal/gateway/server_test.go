@@ -11,10 +11,12 @@ import (
 	"time"
 )
 
-func buildTestMux(daemonHandlers map[string]http.HandlerFunc) (http.Handler, *httptest.Server, *SessionStore) {
+func buildTestMux(t *testing.T, daemonHandlers map[string]http.HandlerFunc) (http.Handler, *httptest.Server, *SessionStore) {
+	t.Helper()
 	srv := newMockDaemon(daemonHandlers)
 	dc := NewDaemonClient(srv.URL, "test-token", 5*time.Second)
 	sessions := NewSessionStore("", 0, nil)
+	t.Cleanup(sessions.Stop)
 	downloads := NewDownloadStore("", nil)
 	rl := NewGatewayRateLimiter(100, 1000, 1*time.Minute, nil)
 	onboard := NewOnboardStore()
@@ -28,7 +30,7 @@ func buildTestMux(daemonHandlers map[string]http.HandlerFunc) (http.Handler, *ht
 }
 
 func TestHealthz(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("GET", "/healthz", nil)
@@ -48,7 +50,7 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestCommand_MethodNotAllowed(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("GET", "/command", nil)
@@ -61,7 +63,7 @@ func TestCommand_MethodNotAllowed(t *testing.T) {
 }
 
 func TestCommand_NoToken(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("POST", "/command", strings.NewReader(`{"input":"telegram 123 r1 /pair abc"}`))
@@ -75,7 +77,7 @@ func TestCommand_NoToken(t *testing.T) {
 }
 
 func TestCommand_WrongToken(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("POST", "/command", strings.NewReader(`{"input":"telegram 123 r1 /pair abc"}`))
@@ -90,7 +92,7 @@ func TestCommand_WrongToken(t *testing.T) {
 }
 
 func TestCommand_EmptyInput(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("POST", "/command", strings.NewReader(`{"input":""}`))
@@ -105,7 +107,7 @@ func TestCommand_EmptyInput(t *testing.T) {
 }
 
 func TestCommand_PairSuccess(t *testing.T) {
-	mux, srv, _ := buildTestMux(map[string]http.HandlerFunc{
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
 		"POST /api/v1/pairing/verify-consume": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, `{"code":"abc","consumed":true}`)
@@ -130,7 +132,7 @@ func TestCommand_PairSuccess(t *testing.T) {
 }
 
 func TestCommand_PlainTextBody(t *testing.T) {
-	mux, srv, _ := buildTestMux(map[string]http.HandlerFunc{
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
 		"POST /api/v1/pairing/verify-consume": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, `{"code":"abc","consumed":true}`)
@@ -150,7 +152,7 @@ func TestCommand_PlainTextBody(t *testing.T) {
 }
 
 func TestCommand_AuthRequired_NoPair(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("POST", "/command", strings.NewReader(`{"input":"telegram 123 r1 /agents"}`))
@@ -165,7 +167,7 @@ func TestCommand_AuthRequired_NoPair(t *testing.T) {
 }
 
 func TestCommand_WithSessionToken(t *testing.T) {
-	mux, srv, sessions := buildTestMux(map[string]http.HandlerFunc{
+	mux, srv, sessions := buildTestMux(t, map[string]http.HandlerFunc{
 		"GET /api/v1/agents": func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"agents": []interface{}{}})
 		},
@@ -187,7 +189,7 @@ func TestCommand_WithSessionToken(t *testing.T) {
 }
 
 func TestCommand_TokenQueryParam(t *testing.T) {
-	mux, srv, _ := buildTestMux(map[string]http.HandlerFunc{
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
 		"POST /api/v1/pairing/verify-consume": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, `{}`)
@@ -206,7 +208,7 @@ func TestCommand_TokenQueryParam(t *testing.T) {
 }
 
 func TestSetup_Post(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("POST", "/api/v1/setup", strings.NewReader(`{"provider":"telegram","token":"tok123"}`))
@@ -221,7 +223,7 @@ func TestSetup_Post(t *testing.T) {
 }
 
 func TestSetup_Get(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("GET", "/api/v1/setup", nil)
@@ -235,7 +237,7 @@ func TestSetup_Get(t *testing.T) {
 }
 
 func TestSetup_MethodNotAllowed(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("DELETE", "/api/v1/setup", nil)
@@ -249,7 +251,7 @@ func TestSetup_MethodNotAllowed(t *testing.T) {
 }
 
 func TestSetup_InvalidProvider(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("POST", "/api/v1/setup", strings.NewReader(`{"provider":"invalid"}`))
@@ -264,7 +266,7 @@ func TestSetup_InvalidProvider(t *testing.T) {
 }
 
 func TestSetup_MissingProvider(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("POST", "/api/v1/setup", strings.NewReader(`{"token":"tok"}`))
@@ -279,7 +281,7 @@ func TestSetup_MissingProvider(t *testing.T) {
 }
 
 func TestSetup_LegacyAlias(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("GET", "/setup", nil)
@@ -293,7 +295,7 @@ func TestSetup_LegacyAlias(t *testing.T) {
 }
 
 func TestSSELogs_NoToken(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("GET", "/api/v1/logs/stream?agent=a1", nil)
@@ -306,7 +308,7 @@ func TestSSELogs_NoToken(t *testing.T) {
 }
 
 func TestSSELogs_MissingAgent(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("GET", "/api/v1/logs/stream", nil)
@@ -320,7 +322,7 @@ func TestSSELogs_MissingAgent(t *testing.T) {
 }
 
 func TestSSELogs_MethodNotAllowed(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("POST", "/api/v1/logs/stream?agent=a1", nil)
@@ -334,7 +336,7 @@ func TestSSELogs_MethodNotAllowed(t *testing.T) {
 }
 
 func TestDownloads_MethodNotAllowed(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("POST", "/downloads/something", nil)
@@ -347,7 +349,7 @@ func TestDownloads_MethodNotAllowed(t *testing.T) {
 }
 
 func TestDownloads_InvalidPath(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("GET", "/downloads/", nil)
@@ -361,7 +363,7 @@ func TestDownloads_InvalidPath(t *testing.T) {
 }
 
 func TestWebhook_MethodNotAllowed(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	for _, path := range []string{"/webhook/telegram", "/webhook/discord", "/webhook/feishu"} {
@@ -375,7 +377,7 @@ func TestWebhook_MethodNotAllowed(t *testing.T) {
 }
 
 func TestRequestIDMiddleware(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	// With custom request ID
@@ -398,7 +400,7 @@ func TestRequestIDMiddleware(t *testing.T) {
 }
 
 func TestRequestIDMiddleware_StripsControlChars(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("GET", "/healthz", nil)
@@ -462,6 +464,7 @@ func TestIsLoopbackGateway(t *testing.T) {
 
 func TestValidateCommandAuth(t *testing.T) {
 	sessions := NewSessionStore("", 0, nil)
+	t.Cleanup(sessions.Stop)
 	tok := pairAndGetSession(sessions, "telegram", "123")
 
 	tests := []struct {

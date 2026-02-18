@@ -21,7 +21,8 @@ func newTestService() *lifecycle.Service {
 	return lifecycle.NewService(baseagent.NoopTriager{})
 }
 
-func newTestServiceWithAgent() *lifecycle.Service {
+func newTestServiceWithAgent(t *testing.T) *lifecycle.Service {
+	t.Helper()
 	svc := lifecycle.NewService(baseagent.NoopTriager{})
 	m := manifest.Manifest{
 		ID:      "test-agent",
@@ -39,7 +40,7 @@ func newTestServiceWithAgent() *lifecycle.Service {
 		},
 	}
 	if err := svc.RegisterManifest(m); err != nil {
-		panic("register manifest: " + err.Error())
+		t.Fatalf("register manifest: %v", err)
 	}
 	return svc
 }
@@ -580,8 +581,9 @@ func TestNewHTTPServer(t *testing.T) {
 	}
 }
 
-func newTestMuxWithAgent() *http.ServeMux {
-	svc := newTestServiceWithAgent()
+func newTestMuxWithAgent(t *testing.T) *http.ServeMux {
+	t.Helper()
+	svc := newTestServiceWithAgent(t)
 	ready := &atomic.Bool{}
 	ready.Store(true)
 	pairStore := api.NewPairingCodeStore(nil)
@@ -590,7 +592,7 @@ func newTestMuxWithAgent() *http.ServeMux {
 }
 
 func TestV1AgentInstall(t *testing.T) {
-	mux := newTestMuxWithAgent()
+	mux := newTestMuxWithAgent(t)
 	body := `{"agentId":"test-agent"}`
 	req := httptest.NewRequest("POST", "/api/v1/agents/test-agent/install", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -603,7 +605,7 @@ func TestV1AgentInstall(t *testing.T) {
 }
 
 func TestV1AgentStatus(t *testing.T) {
-	mux := newTestMuxWithAgent()
+	mux := newTestMuxWithAgent(t)
 	req := httptest.NewRequest("GET", "/api/v1/agents/test-agent/status", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -614,7 +616,7 @@ func TestV1AgentStatus(t *testing.T) {
 }
 
 func TestV1AgentStart_NotInstalled(t *testing.T) {
-	mux := newTestMuxWithAgent()
+	mux := newTestMuxWithAgent(t)
 	body := `{"agentId":"test-agent"}`
 	req := httptest.NewRequest("POST", "/api/v1/agents/test-agent/start", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -628,7 +630,7 @@ func TestV1AgentStart_NotInstalled(t *testing.T) {
 }
 
 func TestV1AgentStop_NotRunning(t *testing.T) {
-	mux := newTestMuxWithAgent()
+	mux := newTestMuxWithAgent(t)
 	body := `{"agentId":"test-agent"}`
 	req := httptest.NewRequest("POST", "/api/v1/agents/test-agent/stop", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -642,7 +644,7 @@ func TestV1AgentStop_NotRunning(t *testing.T) {
 }
 
 func TestV1AgentLogs(t *testing.T) {
-	mux := newTestMuxWithAgent()
+	mux := newTestMuxWithAgent(t)
 	req := httptest.NewRequest("GET", "/api/v1/agents/test-agent/logs", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -654,7 +656,7 @@ func TestV1AgentLogs(t *testing.T) {
 }
 
 func TestV1AgentUpgrade_NotSupported(t *testing.T) {
-	mux := newTestMuxWithAgent()
+	mux := newTestMuxWithAgent(t)
 	body := `{"agentId":"test-agent"}`
 	req := httptest.NewRequest("POST", "/api/v1/agents/test-agent/upgrade", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -668,7 +670,7 @@ func TestV1AgentUpgrade_NotSupported(t *testing.T) {
 }
 
 func TestV1AgentDiagnose(t *testing.T) {
-	mux := newTestMuxWithAgent()
+	mux := newTestMuxWithAgent(t)
 	body := `{"agentId":"test-agent"}`
 	req := httptest.NewRequest("POST", "/api/v1/agents/test-agent/diagnose", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -682,7 +684,7 @@ func TestV1AgentDiagnose(t *testing.T) {
 }
 
 func TestV1AgentUninstall(t *testing.T) {
-	mux := newTestMuxWithAgent()
+	mux := newTestMuxWithAgent(t)
 	body := `{"agentId":"test-agent"}`
 	req := httptest.NewRequest("POST", "/api/v1/agents/test-agent/uninstall", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -695,7 +697,7 @@ func TestV1AgentUninstall(t *testing.T) {
 }
 
 func TestV1AgentInstall_MethodNotAllowed(t *testing.T) {
-	mux := newTestMuxWithAgent()
+	mux := newTestMuxWithAgent(t)
 	req := httptest.NewRequest("GET", "/api/v1/agents/test-agent/install", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -706,7 +708,7 @@ func TestV1AgentInstall_MethodNotAllowed(t *testing.T) {
 }
 
 func TestApiStatus_WithAgentID(t *testing.T) {
-	mux := newTestMuxWithAgent()
+	mux := newTestMuxWithAgent(t)
 	req := httptest.NewRequest("GET", "/api/status/test-agent", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -717,7 +719,7 @@ func TestApiStatus_WithAgentID(t *testing.T) {
 }
 
 func TestApiLogs_WithAgentID(t *testing.T) {
-	mux := newTestMuxWithAgent()
+	mux := newTestMuxWithAgent(t)
 	req := httptest.NewRequest("GET", "/api/logs/test-agent?tail=50", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -728,7 +730,7 @@ func TestApiLogs_WithAgentID(t *testing.T) {
 }
 
 func TestApiInstall_WithBody(t *testing.T) {
-	mux := newTestMuxWithAgent()
+	mux := newTestMuxWithAgent(t)
 	body := `{"agentId":"test-agent"}`
 	req := httptest.NewRequest("POST", "/api/install", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -741,7 +743,7 @@ func TestApiInstall_WithBody(t *testing.T) {
 }
 
 func TestApiStart_NotInstalled(t *testing.T) {
-	mux := newTestMuxWithAgent()
+	mux := newTestMuxWithAgent(t)
 	body := `{"agentId":"test-agent"}`
 	req := httptest.NewRequest("POST", "/api/start", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -754,7 +756,7 @@ func TestApiStart_NotInstalled(t *testing.T) {
 }
 
 func TestApiStop_NotRunning(t *testing.T) {
-	mux := newTestMuxWithAgent()
+	mux := newTestMuxWithAgent(t)
 	body := `{"agentId":"test-agent"}`
 	req := httptest.NewRequest("POST", "/api/stop", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -767,7 +769,7 @@ func TestApiStop_NotRunning(t *testing.T) {
 }
 
 func TestApiUpgrade_WithBody(t *testing.T) {
-	mux := newTestMuxWithAgent()
+	mux := newTestMuxWithAgent(t)
 	body := `{"agentId":"test-agent"}`
 	req := httptest.NewRequest("POST", "/api/upgrade", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -780,7 +782,7 @@ func TestApiUpgrade_WithBody(t *testing.T) {
 }
 
 func TestApiDiagnose_WithBody(t *testing.T) {
-	mux := newTestMuxWithAgent()
+	mux := newTestMuxWithAgent(t)
 	body := `{"agentId":"test-agent"}`
 	req := httptest.NewRequest("POST", "/api/diagnose", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

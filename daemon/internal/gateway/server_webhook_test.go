@@ -12,7 +12,7 @@ import (
 )
 
 func TestTelegramWebhook_InvalidSecret(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	body := `{"update_id":1,"message":{"chat":{"id":123},"text":"/pair abc"}}`
@@ -29,7 +29,7 @@ func TestTelegramWebhook_InvalidSecret(t *testing.T) {
 }
 
 func TestDiscordWebhook_InvalidSignature(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	body := `{"type":1}`
@@ -45,7 +45,7 @@ func TestDiscordWebhook_InvalidSignature(t *testing.T) {
 }
 
 func TestFeishuWebhook_InvalidToken(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	body := `{"event":{"message":{"chat_id":"123","content":"/pair abc"}}}`
@@ -66,6 +66,7 @@ func TestDownload_ValidToken(t *testing.T) {
 
 	dc := NewDaemonClient(srv.URL, "test-token", 5*time.Second)
 	sessions := NewSessionStore("", 0, nil)
+	t.Cleanup(sessions.Stop)
 
 	tmpDir := t.TempDir()
 	downloads := NewDownloadStore(tmpDir, nil)
@@ -102,7 +103,7 @@ func TestDownload_ValidToken(t *testing.T) {
 }
 
 func TestDownload_InvalidToken(t *testing.T) {
-	mux, srv, _ := buildTestMux(nil)
+	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest("GET", "/downloads/invalid-token/file.txt", nil)
@@ -158,6 +159,7 @@ func TestTelegramWebhook_NonCommand(t *testing.T) {
 
 	dc := NewDaemonClient(srv.URL, "test-token", 5*time.Second)
 	sessions := NewSessionStore("", 0, nil)
+	t.Cleanup(sessions.Stop)
 	downloads := NewDownloadStore("", nil)
 	rl := NewGatewayRateLimiter(100, 1000, 1*time.Minute, nil)
 	onboard := NewOnboardStore()
@@ -190,6 +192,7 @@ func TestFeishuWebhook_Challenge(t *testing.T) {
 
 	dc := NewDaemonClient(srv.URL, "test-token", 5*time.Second)
 	sessions := NewSessionStore("", 0, nil)
+	t.Cleanup(sessions.Stop)
 	downloads := NewDownloadStore("", nil)
 	rl := NewGatewayRateLimiter(100, 1000, 1*time.Minute, nil)
 	onboard := NewOnboardStore()

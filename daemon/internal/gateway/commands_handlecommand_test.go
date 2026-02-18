@@ -39,10 +39,12 @@ func newMockDaemon(handlers map[string]http.HandlerFunc) *httptest.Server {
 	}))
 }
 
-func setupTestEnv(handlers map[string]http.HandlerFunc) (*httptest.Server, *DaemonClient, *SessionStore, *DownloadStore, *OnboardStore) {
+func setupTestEnv(t *testing.T, handlers map[string]http.HandlerFunc) (*httptest.Server, *DaemonClient, *SessionStore, *DownloadStore, *OnboardStore) {
+	t.Helper()
 	srv := newMockDaemon(handlers)
 	dc := NewDaemonClient(srv.URL, "test-token", 5*time.Second)
 	sessions := NewSessionStore("", 0, nil)
+	t.Cleanup(sessions.Stop)
 	downloads := NewDownloadStore("", nil)
 	onboard := NewOnboardStore()
 	return srv, dc, sessions, downloads, onboard
@@ -54,7 +56,7 @@ func pairAndGetSession(sessions *SessionStore, provider, chatID string) string {
 }
 
 func TestHandleCommand_Pair_Success(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"POST /api/v1/pairing/verify-consume": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, `{"code":"abc","consumed":true}`)
@@ -76,7 +78,7 @@ func TestHandleCommand_Pair_Success(t *testing.T) {
 }
 
 func TestHandleCommand_Pair_NoArgs(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(nil)
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
 	defer srv.Close()
 
 	cmd := &GatewayCommand{
@@ -93,7 +95,7 @@ func TestHandleCommand_Pair_NoArgs(t *testing.T) {
 }
 
 func TestHandleCommand_Pair_DaemonError(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"POST /api/v1/pairing/verify-consume": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprint(w, `{"error":{"code":"E_USAGE","message":"invalid code"}}`)
@@ -112,7 +114,7 @@ func TestHandleCommand_Pair_DaemonError(t *testing.T) {
 }
 
 func TestHandleCommand_RequiresSession(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(nil)
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
 	defer srv.Close()
 
 	cmd := &GatewayCommand{
@@ -126,7 +128,7 @@ func TestHandleCommand_RequiresSession(t *testing.T) {
 }
 
 func TestHandleCommand_RequiresSessionToken(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(nil)
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
 	defer srv.Close()
 
 	pairAndGetSession(sessions, "telegram", "123")
@@ -141,7 +143,7 @@ func TestHandleCommand_RequiresSessionToken(t *testing.T) {
 }
 
 func TestHandleCommand_InvalidSessionToken(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(nil)
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
 	defer srv.Close()
 
 	pairAndGetSession(sessions, "telegram", "123")
@@ -156,7 +158,7 @@ func TestHandleCommand_InvalidSessionToken(t *testing.T) {
 }
 
 func TestHandleCommand_Agents_Success(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"GET /api/v1/agents": func(w http.ResponseWriter, r *http.Request) {
 			if err := json.NewEncoder(w).Encode(map[string]interface{}{
 				"agents": []map[string]interface{}{
@@ -189,7 +191,7 @@ func TestHandleCommand_Agents_Success(t *testing.T) {
 }
 
 func TestHandleCommand_Install_Success(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"POST /api/v1/agents/myagent/install": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, `{"status":"installed"}`)
@@ -209,7 +211,7 @@ func TestHandleCommand_Install_Success(t *testing.T) {
 }
 
 func TestHandleCommand_Install_NoArgs(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(nil)
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
 	defer srv.Close()
 
 	tok := pairAndGetSession(sessions, "telegram", "123")
@@ -224,7 +226,7 @@ func TestHandleCommand_Install_NoArgs(t *testing.T) {
 }
 
 func TestHandleCommand_Start_Success(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"POST /api/v1/agents/myagent/start": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, `{"status":"started"}`)
@@ -244,7 +246,7 @@ func TestHandleCommand_Start_Success(t *testing.T) {
 }
 
 func TestHandleCommand_Start_NoArgs(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(nil)
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
 	defer srv.Close()
 
 	tok := pairAndGetSession(sessions, "telegram", "123")
@@ -259,7 +261,7 @@ func TestHandleCommand_Start_NoArgs(t *testing.T) {
 }
 
 func TestHandleCommand_Stop_Success(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"POST /api/v1/agents/myagent/stop": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, `{"status":"stopped"}`)
@@ -279,7 +281,7 @@ func TestHandleCommand_Stop_Success(t *testing.T) {
 }
 
 func TestHandleCommand_Stop_NoArgs(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(nil)
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
 	defer srv.Close()
 
 	tok := pairAndGetSession(sessions, "telegram", "123")
@@ -294,7 +296,7 @@ func TestHandleCommand_Stop_NoArgs(t *testing.T) {
 }
 
 func TestHandleCommand_Status_AllAgents(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"GET /api/v1/agents/status": func(w http.ResponseWriter, r *http.Request) {
 			started := time.Now().Add(-1 * time.Hour).Format(time.RFC3339Nano)
 			if err := json.NewEncoder(w).Encode(map[string]interface{}{
@@ -324,7 +326,7 @@ func TestHandleCommand_Status_AllAgents(t *testing.T) {
 }
 
 func TestHandleCommand_Status_SingleAgent(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"GET /api/v1/agents/a1/status": func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"statuses": []map[string]interface{}{
@@ -347,7 +349,7 @@ func TestHandleCommand_Status_SingleAgent(t *testing.T) {
 }
 
 func TestHandleCommand_Status_Empty(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"GET /api/v1/agents/status": func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"statuses": []interface{}{}})
 		},
@@ -369,7 +371,7 @@ func TestHandleCommand_Status_Empty(t *testing.T) {
 }
 
 func TestHandleCommand_Logs_WithAgent(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"GET /api/v1/agents/a1/logs": func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"lines":     []string{"line1", "line2"},
@@ -394,7 +396,7 @@ func TestHandleCommand_Logs_WithAgent(t *testing.T) {
 }
 
 func TestHandleCommand_Logs_MergedWithTail(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"GET /api/v1/logs": func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"lines":     []string{},
@@ -419,7 +421,7 @@ func TestHandleCommand_Logs_MergedWithTail(t *testing.T) {
 }
 
 func TestHandleCommand_Logs_MergedDefault(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"GET /api/v1/logs": func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"lines":     []string{"hello"},
@@ -441,7 +443,7 @@ func TestHandleCommand_Logs_MergedDefault(t *testing.T) {
 }
 
 func TestHandleCommand_Upgrade_Success(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"POST /api/v1/agents/a1/upgrade": func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"agentId":      "a1",
@@ -472,7 +474,7 @@ func TestHandleCommand_Upgrade_Success(t *testing.T) {
 }
 
 func TestHandleCommand_Upgrade_NoArgs(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(nil)
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
 	defer srv.Close()
 
 	tok := pairAndGetSession(sessions, "telegram", "123")
@@ -487,7 +489,7 @@ func TestHandleCommand_Upgrade_NoArgs(t *testing.T) {
 }
 
 func TestHandleCommand_Diagnose_Success(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"POST /api/v1/agents/a1/diagnose": func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"artifactRef": "/tmp/diag.tar.gz",
@@ -508,7 +510,7 @@ func TestHandleCommand_Diagnose_Success(t *testing.T) {
 }
 
 func TestHandleCommand_Diagnose_NoArgs(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(nil)
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
 	defer srv.Close()
 
 	tok := pairAndGetSession(sessions, "telegram", "123")
@@ -523,7 +525,7 @@ func TestHandleCommand_Diagnose_NoArgs(t *testing.T) {
 }
 
 func TestHandleCommand_DiagnoseConsent_Success(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"POST /api/v1/diagnosis/handoffs": func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id":          "h1",
@@ -552,7 +554,7 @@ func TestHandleCommand_DiagnoseConsent_Success(t *testing.T) {
 }
 
 func TestHandleCommand_DiagnoseConsent_NoArgs(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(nil)
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
 	defer srv.Close()
 
 	tok := pairAndGetSession(sessions, "telegram", "123")
@@ -567,7 +569,7 @@ func TestHandleCommand_DiagnoseConsent_NoArgs(t *testing.T) {
 }
 
 func TestHandleCommand_DiagnoseConsent_InvalidConsent(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(nil)
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
 	defer srv.Close()
 
 	tok := pairAndGetSession(sessions, "telegram", "123")
@@ -582,7 +584,7 @@ func TestHandleCommand_DiagnoseConsent_InvalidConsent(t *testing.T) {
 }
 
 func TestHandleCommand_DiagnoseConsent_RemoteDiagNotNeeded(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"POST /api/v1/diagnosis/handoffs": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -604,7 +606,7 @@ func TestHandleCommand_DiagnoseConsent_RemoteDiagNotNeeded(t *testing.T) {
 }
 
 func TestHandleCommand_RateLimited(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"GET /api/v1/agents": func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"agents": []interface{}{}})
 		},
@@ -633,7 +635,7 @@ func TestHandleCommand_RateLimited(t *testing.T) {
 }
 
 func TestSafeHandleCommand_ParseError(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(nil)
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
 	defer srv.Close()
 
 	resp := SafeHandleCommand(context.Background(), "bad input", dc, sessions, downloads, nil, onboard)
@@ -646,7 +648,7 @@ func TestSafeHandleCommand_ParseError(t *testing.T) {
 }
 
 func TestSafeHandleCommand_Success(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"POST /api/v1/pairing/verify-consume": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, `{"code":"abc","consumed":true}`)
