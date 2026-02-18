@@ -38,11 +38,14 @@ func TestDaemonClient_ListAgents(t *testing.T) {
 		if r.Header.Get("X-Carrier-Actor") != "actor1" {
 			t.Errorf("missing actor header")
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"agents": []map[string]interface{}{
 				{"id": "a1", "installState": "installed"},
 			},
-		})
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer srv.Close()
 
@@ -58,9 +61,12 @@ func TestDaemonClient_ListAgents(t *testing.T) {
 
 func TestDaemonClient_ListAgents_DirectArray(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+		if err := json.NewEncoder(w).Encode([]map[string]interface{}{
 			{"id": "a1"},
-		})
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer srv.Close()
 
@@ -118,11 +124,14 @@ func TestDaemonClient_StopAgent(t *testing.T) {
 
 func TestDaemonClient_GetStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"statuses": []map[string]interface{}{
 				{"id": "a1", "health": "healthy"},
 			},
-		})
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer srv.Close()
 
@@ -141,7 +150,10 @@ func TestDaemonClient_GetStatus_AllAgents(t *testing.T) {
 		if r.URL.Path != "/api/v1/agents/status" {
 			t.Errorf("expected /api/v1/agents/status, got %s", r.URL.Path)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"statuses": []interface{}{}})
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{"statuses": []interface{}{}}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer srv.Close()
 
@@ -157,10 +169,13 @@ func TestDaemonClient_GetStatus_AllAgents(t *testing.T) {
 
 func TestDaemonClient_GetLogs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"lines":     []string{"line1", "line2"},
 			"truncated": true,
-		})
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer srv.Close()
 
@@ -178,7 +193,10 @@ func TestDaemonClient_GetLogs_ClampsTail(t *testing.T) {
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.String()
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"lines": []string{}, "truncated": false})
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{"lines": []string{}, "truncated": false}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer srv.Close()
 
@@ -202,7 +220,10 @@ func TestDaemonClient_GetLogs_ClampsTail(t *testing.T) {
 
 func TestDaemonClient_GetMergedLogs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"lines": []string{"merged"}, "truncated": false})
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{"lines": []string{"merged"}, "truncated": false}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer srv.Close()
 
@@ -218,9 +239,12 @@ func TestDaemonClient_GetMergedLogs(t *testing.T) {
 
 func TestDaemonClient_UpgradeAgent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"agentId": "a1", "fromVersion": "1.0", "toVersion": "2.0",
-		})
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer srv.Close()
 
@@ -236,7 +260,10 @@ func TestDaemonClient_UpgradeAgent(t *testing.T) {
 
 func TestDaemonClient_DiagnoseAgent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"artifactRef": "/tmp/diag.tar.gz"})
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{"artifactRef": "/tmp/diag.tar.gz"}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer srv.Close()
 
@@ -252,10 +279,13 @@ func TestDaemonClient_DiagnoseAgent(t *testing.T) {
 
 func TestDaemonClient_CreateHandoff(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"id": "h1", "agentId": "a1", "consent": true,
 			"status": "pending", "createdAt": time.Now().Format(time.RFC3339),
-		})
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer srv.Close()
 
@@ -286,9 +316,12 @@ func TestDaemonClient_VerifyPairCode(t *testing.T) {
 func TestDaemonClient_ErrorResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"error": map[string]string{"code": "E_AGENT_NOT_FOUND", "message": "agent not found"},
-		})
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer srv.Close()
 
@@ -355,9 +388,11 @@ func TestDaemonClient_StatusToCode(t *testing.T) {
 		{500, "E_COMMAND_FAILED"},
 	}
 	for _, tc := range tests {
-		got := dc.statusToCode(tc.status)
-		if got != tc.want {
-			t.Errorf("statusToCode(%d) = %q, want %q", tc.status, got, tc.want)
-		}
+		t.Run(fmt.Sprintf("status_%d", tc.status), func(t *testing.T) {
+			got := dc.statusToCode(tc.status)
+			if got != tc.want {
+				t.Errorf("statusToCode(%d) = %q, want %q", tc.status, got, tc.want)
+			}
+		})
 	}
 }

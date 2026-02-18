@@ -125,10 +125,12 @@ func TestExpectedFileName_Webhook(t *testing.T) {
 		{"simple.log", "simple.log"},
 	}
 	for _, tc := range tests {
-		got := ExpectedFileName(tc.fileRef)
-		if got != tc.want {
-			t.Errorf("ExpectedFileName(%q) = %q, want %q", tc.fileRef, got, tc.want)
-		}
+		t.Run(tc.fileRef, func(t *testing.T) {
+			got := ExpectedFileName(tc.fileRef)
+			if got != tc.want {
+				t.Errorf("ExpectedFileName(%q) = %q, want %q", tc.fileRef, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -180,7 +182,9 @@ func TestTelegramWebhook_NonCommand(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var resp map[string]interface{}
-	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 	if msg, ok := resp["message"].(string); ok && !strings.Contains(msg, "ignored") {
 		t.Errorf("expected ignored message, got %q", msg)
 	}
@@ -212,7 +216,9 @@ func TestFeishuWebhook_Challenge(t *testing.T) {
 		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
-	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 	if resp["challenge"] != "test-challenge" {
 		t.Errorf("expected challenge echoed, got %v", resp)
 	}

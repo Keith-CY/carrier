@@ -125,7 +125,9 @@ func TestCommand_PairSuccess(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var resp GatewayResponse
-	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 	if resp.Result != "ok" {
 		t.Errorf("expected ok, got %s: %s", resp.Result, resp.Message)
 	}
@@ -531,7 +533,10 @@ func TestWriteJSON(t *testing.T) {
 	if !strings.Contains(w.Header().Get("Content-Type"), "application/json") {
 		t.Error("expected application/json content type")
 	}
-	body, _ := io.ReadAll(w.Body)
+	body, err := io.ReadAll(w.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
 	if !strings.Contains(string(body), `"key":"value"`) {
 		t.Errorf("unexpected body: %s", body)
 	}
