@@ -24,12 +24,14 @@
     };
     if (token) opts.headers['Authorization'] = 'Bearer ' + token;
     if (body) opts.body = JSON.stringify(body);
-    return fetch(path, opts).then(r => {
+    return fetch(path, opts).then(async r => {
       if (r.status === 401) {
         clearToken();
         throw new Error('Unauthorized');
       }
-      return r.json();
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Request failed (' + r.status + ')');
+      return data;
     });
   }
 
