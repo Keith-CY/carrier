@@ -1,8 +1,8 @@
-// Carrier — unified binary for the Carrier agent platform.
+// Carrier — unified binary for the Carrier agent platform (Web UI mode).
 //
 // Usage:
 //
-//	carrier            Launch the desktop GUI (default)
+//	carrier            Start the daemon HTTP API server (default)
 //	carrier daemon     Start the daemon HTTP API server
 //	carrier --daemon   Same as above
 //	carrier --help     Show usage
@@ -15,16 +15,17 @@ import (
 	"carrier/daemon/server"
 )
 
-const usage = `Carrier — unified agent platform binary
+const usage = `Carrier — unified agent platform binary (Web UI)
 
 Usage:
-  carrier              Launch the desktop GUI (requires -tags gui build)
+  carrier              Start the daemon HTTP API server (default)
   carrier daemon       Start the daemon HTTP API server
   carrier --daemon     Start the daemon HTTP API server
   carrier --help       Show this help message
 
-Build with GUI:
-  go build -tags gui -o carrier ./cmd/carrier/
+Web UI architecture:
+  - Browser-based UI connects to daemon/gateway APIs over localhost.
+  - Desktop GUI runtime has been removed to keep runtime decoupled.
 `
 
 func main() {
@@ -43,6 +44,6 @@ func main() {
 		}
 	}
 
-	// Default: launch GUI
-	runGUI()
+	// Default: run daemon for browser Web UI clients.
+	server.Run()
 }

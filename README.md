@@ -567,3 +567,8 @@ Feishu Entry: <bot chat entry>
 PAIR_CODE Process: <who provides it and expiration policy>
 Support Contact: <name and contact method>
 ```
+
+
+## UI Direction
+
+Carrier now follows a browser Web UI architecture. The previous embedded desktop GUI runtime has been removed to keep runtime and presentation decoupled.
