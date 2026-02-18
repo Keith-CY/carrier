@@ -163,7 +163,7 @@ func TestListAttachments(t *testing.T) {
 	}
 
 	s.Create("m1", "A", "1.0.0", TypeShared, "")
-	_ = s.AttachMemory("agent-1", "m1", AttachOptions{Priority: 5})
+	_, _ = s.AttachMemory("agent-1", "m1", AttachOptions{Priority: 5})
 
 	atts = s.ListAttachments("agent-1")
 	if len(atts) != 1 {
@@ -209,7 +209,7 @@ func TestAttachMemoryNotFound(t *testing.T) {
 func TestAttachMemoryAlreadyAttached(t *testing.T) {
 	s := newTestStore()
 	s.Create("m1", "A", "1.0.0", TypeShared, "")
-	_ = s.AttachMemory("agent-1", "m1", AttachOptions{})
+	_, _ = s.AttachMemory("agent-1", "m1", AttachOptions{})
 	_, err := s.AttachMemory("agent-1", "m1", AttachOptions{})
 	if err != ErrAlreadyMounted {
 		t.Fatalf("expected ErrAlreadyMounted, got %v", err)
@@ -220,7 +220,7 @@ func TestAttachMemoryPerAgentLimit(t *testing.T) {
 	s := newTestStore()
 	s.Create("m1", "A", "1.0.0", TypePerAgent, "agent-1")
 	s.Create("m2", "B", "1.0.0", TypePerAgent, "agent-1")
-	_ = s.AttachMemory("agent-1", "m1", AttachOptions{})
+	_, _ = s.AttachMemory("agent-1", "m1", AttachOptions{})
 	_, err := s.AttachMemory("agent-1", "m2", AttachOptions{})
 	if err != ErrPerAgentLimit {
 		t.Fatalf("expected ErrPerAgentLimit, got %v", err)
@@ -586,7 +586,7 @@ func TestImportMemoryMissingManifest(t *testing.T) {
 	f, _ := os.Create(pack)
 	zw := zip.NewWriter(f)
 	w, _ := zw.Create("content/file.txt")
-	_ = w.Write([]byte("data"))
+	_, _ = w.Write([]byte("data"))
 	zw.Close()
 	f.Close()
 
@@ -829,7 +829,7 @@ func TestPrepareAgentMemorySkipsNoInstallPath(t *testing.T) {
 	s, _ := newMemoryStoreWithRoot(t)
 	// Create an entry directly without installing
 	s.Create("m1", "A", "1.0.0", TypeShared, "")
-	_ = s.AttachMemory("agent-1", "m1", AttachOptions{})
+	_, _ = s.AttachMemory("agent-1", "m1", AttachOptions{})
 	// Should not error, just skip
 	_, err := s.PrepareAgentMemory("agent-1")
 	if err != nil {
@@ -869,7 +869,7 @@ func TestZipEntryBytesMissing(t *testing.T) {
 	f, _ := os.Create(pack)
 	zw := zip.NewWriter(f)
 	w, _ := zw.Create("other.txt")
-	_ = w.Write([]byte("data"))
+	_, _ = w.Write([]byte("data"))
 	zw.Close()
 	f.Close()
 
@@ -890,10 +890,10 @@ func TestExtractZipIntoDirectoryEntry(t *testing.T) {
 	// Create a directory entry
 	header := &zip.FileHeader{Name: "subdir/"}
 	header.SetMode(os.ModeDir | 0o755)
-	_ = zw.CreateHeader(header)
+	_, _ = zw.CreateHeader(header)
 	// Create a file
 	w, _ := zw.Create("subdir/file.txt")
-	_ = w.Write([]byte("data"))
+	_, _ = w.Write([]byte("data"))
 	zw.Close()
 	f.Close()
 
@@ -992,7 +992,7 @@ func TestPrepareAgentMemoryDefaultRuntimeTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	_ = s.AttachMemory("agent-1", entry.ID, AttachOptions{})
+	_, _ = s.AttachMemory("agent-1", entry.ID, AttachOptions{})
 	contract, err := s.PrepareAgentMemory("agent-1")
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
@@ -1068,7 +1068,7 @@ func TestMountValidateTransitionFails(t *testing.T) {
 	s := newTestStore()
 	s.Create("m1", "A", "1.0.0", TypeShared, "")
 	// Mount it first
-	_ = s.Mount("m1", "agent-a", AccessReadOnly)
+	_, _ = s.Mount("m1", "agent-a", AccessReadOnly)
 	// Now try to mount again - it's in mounted state, policy rejects
 	_, err := s.Mount("m1", "agent-b", AccessReadOnly)
 	if err == nil {
