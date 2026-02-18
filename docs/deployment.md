@@ -24,7 +24,8 @@ cd daemon
 go build -o agentd ./cmd/agentd
 
 cd ../gateway
-go build -o carrier-gateway .
+bun install          # install dependencies
+bun run dev          # start the gateway server (TypeScript/Bun)
 ```
 
 ## Configuration

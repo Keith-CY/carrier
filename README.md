@@ -155,6 +155,7 @@ Optional local flow from repo root:
 - Command ingress route:
   - `POST /command` with JSON body `{ "input": "<provider> <chat_id> <request_id> <command> [...args]" }`
   - If `CARRIER_GATEWAY_API_TOKEN` is set, send `Authorization: Bearer <gateway_api_token>`
+  - For authenticated commands (non-`/pair`), provide session token via `x-session-token` header or `sessionToken` field in JSON body
 - Artifact download route:
   - `GET /downloads/<token>/<filename>`
 
