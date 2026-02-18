@@ -153,10 +153,9 @@ Optional local flow from repo root:
 - Health route:
   - `GET /healthz`
 - Command ingress route:
-  - `POST /command` with JSON body `{ "input": "<provider> <chat_id> <request_id> [session_token] <command> [...args]" }`
+  - `POST /command` with JSON body `{ "input": "<provider> <chat_id> <request_id> <command> [...args]" }`
   - If `CARRIER_GATEWAY_API_TOKEN` is set, send `Authorization: Bearer <gateway_api_token>`
-  - For non-`/pair` commands, provide session token via `x-session-token` header or JSON body `sessionToken`
-  - Backward-compatible session token transport: when `CARRIER_GATEWAY_API_TOKEN` is **not** set, `Authorization: Bearer <session_token>` is accepted
+  - For authenticated commands (non-`/pair`), provide session token via `x-session-token` header or `sessionToken` field in JSON body
 - Artifact download route:
   - `GET /downloads/<token>/<filename>`
 
