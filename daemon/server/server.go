@@ -87,7 +87,7 @@ func Run() {
 	fmt.Printf("agentd scaffold booted (listen=%s:%d log=%s/%s)\n",
 		cfg.Server.Host, cfg.Server.Port, cfg.Log.Level, cfg.Log.Format)
 	fmt.Println("catalog (active):")
-	for _, entry := range catalog.ActiveEntries() {
+	for _, entry := range catalog.ListByStatus(catalog.StatusActive) {
 		fmt.Printf("- %s (%s): %s\n", entry.Name, entry.ID, entry.Status)
 	}
 	fmt.Println("catalog (candidate, unlisted):")
