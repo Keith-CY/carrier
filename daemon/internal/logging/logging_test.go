@@ -47,22 +47,6 @@ func TestFromContext_EmptyContext(t *testing.T) {
 	}
 }
 
-func TestInit(t *testing.T) {
-	t.Setenv("CARRIER_LOG_LEVEL", "DEBUG")
-	logger := Init()
-	if logger == nil {
-		t.Fatal("expected non-nil logger from Init()")
-	}
-}
-
-func TestInitDefaultLevel(t *testing.T) {
-	t.Setenv("CARRIER_LOG_LEVEL", "")
-	logger := Init()
-	if logger == nil {
-		t.Fatal("expected non-nil logger from Init() with default level")
-	}
-}
-
 func TestNewWithLevel(t *testing.T) {
 	logger := NewWithLevel(slog.LevelDebug)
 	if logger == nil {

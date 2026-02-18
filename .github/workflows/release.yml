@@ -29,6 +29,15 @@ jobs:
         with:
           go-version-file: daemon/go.mod
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3
+        with:
+          bun-version: "1.1.8"
+
+      - name: Install gateway dependencies
+        working-directory: gateway
+        run: bun install --frozen-lockfile --no-progress
+
       - name: Run end-to-end tests
         run: ./scripts/run-e2e-tests.sh
 
@@ -94,7 +103,7 @@ jobs:
 
           (cd daemon && \
             CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
-              go build -tags webui -trimpath -ldflags="-s -w" -o "../${release_dir}/${binary_name}" ./cmd/agentd)
+              go build -trimpath -ldflags="-s -w" -o "../${release_dir}/${binary_name}" ./cmd/agentd)
 
           cp -R daemon catalog gateway docs README.md "${release_dir}/"
 

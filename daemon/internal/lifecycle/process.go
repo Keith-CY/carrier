@@ -15,10 +15,6 @@ import (
 // defaultGracePeriod is the default time to wait after SIGTERM before sending SIGKILL.
 const defaultGracePeriod = 10 * time.Second
 
-func isNoSuchProcess(err error) bool {
-	return err == nil || err == os.ErrProcessDone || err == syscall.ESRCH
-}
-
 // ProcessManager tracks and manages running agent processes.
 type ProcessManager struct {
 	mu        sync.RWMutex
@@ -84,7 +80,9 @@ func (pm *ProcessManager) Start(agentID string, command string, args []string) (
 	cmd := exec.Command(command, args...)
 	cmd.Stdout = io.MultiWriter(logFile, os.Stdout)
 	cmd.Stderr = io.MultiWriter(logFile, os.Stderr)
-	configureProcessGroup(cmd)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true, // Create new process group for clean signal handling
+	}
 
 	// Start process
 	if err := cmd.Start(); err != nil {
@@ -152,7 +150,7 @@ func (pm *ProcessManager) StopWithContext(ctx context.Context, agentID string) e
 
 	// Send SIGTERM to the full process group so child processes are terminated too.
 	var stopErr error
-	if err := signalProcessGroup(info.pid, syscall.SIGTERM); err != nil && !isNoSuchProcess(err) {
+	if err := syscall.Kill(-info.pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
 		stopErr = fmt.Errorf("send SIGTERM to process group: %w", err)
 	} else {
 		// If the context carries a deadline use it; otherwise fall back to
@@ -169,7 +167,7 @@ func (pm *ProcessManager) StopWithContext(ctx context.Context, agentID string) e
 			// Process exited gracefully
 		case <-waitCtx.Done():
 			// Force kill the full process group.
-			if err := signalProcessGroup(info.pid, syscall.SIGKILL); err != nil && !isNoSuchProcess(err) {
+			if err := syscall.Kill(-info.pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
 				stopErr = fmt.Errorf("send SIGKILL to process group: %w", err)
 			} else {
 				<-info.done // Wait for process to actually exit

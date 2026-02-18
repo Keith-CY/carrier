@@ -167,7 +167,7 @@ func TestCommand_AuthRequired_NoPair(t *testing.T) {
 func TestCommand_WithSessionToken(t *testing.T) {
 	mux, srv, sessions := buildTestMux(map[string]http.HandlerFunc{
 		"GET /api/v1/agents": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{"agents": []interface{}{}})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"agents": []interface{}{}})
 		},
 	})
 	defer srv.Close()

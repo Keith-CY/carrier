@@ -1,55 +1,35 @@
-# Daemon API Contract
+# Daemon API Contract (Phase 1)
 
-This document defines the gateway-facing daemon HTTP contract.
-
-Related reference:
-- Gateway command contract: `./command-contract.md`
+This document defines the canonical daemon HTTP endpoint and method matrix aligned with `docs/command-contract.md`.
 
 ## Base URL
 
-- Daemon API base path: `/api/v1`
+- Local daemon API base path: `/api/v1`
 - Health endpoints: `/healthz`, `/readyz`
 
 ## Endpoint Matrix
 
-| Capability | Method | Path | Notes |
-|---|---|---|---|
-| Liveness | `GET` | `/healthz` | Returns plain text `ok` when process is alive |
-| Readiness | `GET` | `/readyz` | Returns `200 ok` when ready, `503 not ready` during startup/shutdown |
-| List pairing codes | `GET` | `/api/v1/pairing/codes` | Lists issued pairing codes |
-| Issue pairing code | `POST` | `/api/v1/pairing/codes` | Issues one short-lived code |
-| Verify + consume pairing code | `POST` | `/api/v1/pairing/verify-consume` | One-time pairing code verification |
-| List agents | `GET` | `/api/v1/agents` | Returns `{ "agents": [...] }` |
-| Install agent | `POST` | `/api/v1/agents/{agent_id}/install` | Lifecycle install |
-| Start agent | `POST` | `/api/v1/agents/{agent_id}/start` | Lifecycle start |
-| Stop agent | `POST` | `/api/v1/agents/{agent_id}/stop` | Lifecycle stop |
-| Single-agent status | `GET` | `/api/v1/agents/{agent_id}/status` | One agent status |
-| Fleet status | `GET` | `/api/v1/agents/status` | All agents status |
-| Agent logs | `GET` | `/api/v1/agents/{agent_id}/logs?tail=<n>` | Tail defaults to 200, max 1000 |
-| Upgrade | `POST` | `/api/v1/agents/{agent_id}/upgrade` | Lifecycle upgrade |
-| Diagnose | `POST` | `/api/v1/agents/{agent_id}/diagnose` | Diagnostic artifact generation |
-| Remote diagnosis handoff | `POST` | `/api/v1/diagnosis/handoffs` | Consent + handoff creation |
+| Gateway Command / Capability | Method | Path | Notes | Implementation Issue |
+|---|---|---|---|---|
+| Health check (liveness) | `GET` | `/healthz` | Daemon process liveness and metadata | - |
+| Health check (readiness) | `GET` | `/readyz` | Readiness gate for traffic | - |
+| Pairing code generation | `POST` | `/api/v1/pairing/codes` | Issues short-lived code with TTL | #405 |
+| Pairing verify + consume | `POST` | `/api/v1/pairing/verify-consume` | Valid code is one-time and consumed on success | #407 |
+| List agents | `GET` | `/api/v1/agents` | Returns catalog + install/runtime state | #386 |
+| Install agent | `POST` | `/api/v1/agents/{agent_id}/install` | Lifecycle install path | Planned |
+| Start agent | `POST` | `/api/v1/agents/{agent_id}/start` | Lifecycle start path | Planned |
+| Stop agent | `POST` | `/api/v1/agents/{agent_id}/stop` | Lifecycle stop path | #389 |
+| Agent status (single) | `GET` | `/api/v1/agents/{agent_id}/status` | One-agent status | Planned |
+| Agent status (all) | `GET` | `/api/v1/agents/status` | Fleet status summary | Planned |
+| Logs | `GET` | `/api/v1/agents/{agent_id}/logs` | Query `tail` optional | Planned |
+| Audit logs query | `GET` | `/api/v1/audit/logs` | Query filters: `actor`, `action`, `request_id`, `result`, `limit` | #829 |
+| Upgrade | `POST` | `/api/v1/agents/{agent_id}/upgrade` | Returns version transition + rollback metadata | #394 |
+| Diagnose | `POST` | `/api/v1/agents/{agent_id}/diagnose` | Returns artifact metadata | #395 |
+| Diagnose consent / handoff | `POST` | `/api/v1/diagnosis/handoffs` | Remote diagnosis consent + handoff | Planned |
 
-## Legacy Alias Routes
+## Response examples (quick validation)
 
-The daemon currently keeps compatibility aliases under `/api/*` for existing clients:
-
-- `GET /api/agents`
-- `POST /api/install`
-- `POST /api/start`
-- `POST /api/stop`
-- `GET /api/status/{agent_id}`
-- `GET /api/logs/{agent_id}`
-- `POST /api/upgrade`
-- `POST /api/diagnose`
-- `GET|POST /api/pairing/codes`
-- `POST /api/pairing/verify-consume`
-
-New clients should prefer `/api/v1/*`.
-
-## Response Examples
-
-List agents (`GET /api/v1/agents`):
+Lifecycle success example:
 
 ```json
 {
@@ -57,87 +37,22 @@ List agents (`GET /api/v1/agents`):
     {
       "id": "openclaw",
       "name": "OpenClaw",
-      "version": "1.0.0",
+      "version": "0.1.0",
       "installState": "installed",
+      "installed": true,
       "runtimeState": "running",
       "health": "healthy",
-      "ports": [
-        9090
-      ],
+      "ports": [8080],
       "restartCount": 1,
+      "lastTriageSummary": "crash loop not detected",
       "needsRemoteDiagnosis": false,
-      "updatedAt": "2026-02-17T08:00:00Z"
+      "updatedAt": "2026-02-14T04:20:00.000Z"
     }
   ]
 }
 ```
 
-Fleet status (`GET /api/v1/agents/status`):
-
-```json
-{
-  "statuses": [
-    {
-      "id": "openclaw",
-      "name": "OpenClaw",
-      "version": "1.0.0",
-      "installState": "installed",
-      "runtimeState": "running",
-      "health": "healthy",
-      "ports": [
-        9090
-      ],
-      "restartCount": 1,
-      "needsRemoteDiagnosis": false,
-      "updatedAt": "2026-02-17T08:00:00Z"
-    }
-  ]
-}
-```
-
-Agent logs (`GET /api/v1/agents/openclaw/logs?tail=50`):
-
-```json
-{
-  "lines": [
-    "2026-02-17T08:00:00Z [openclaw] started",
-    "2026-02-17T08:00:10Z [openclaw] health=healthy"
-  ]
-}
-```
-
-Pairing verify/consume (`POST /api/v1/pairing/verify-consume`):
-
-Request body:
-
-```json
-{
-  "code": "pair-4e72e19a9f2a"
-}
-```
-
-Success response:
-
-```json
-{
-  "code": "pair-4e72e19a9f2a",
-  "consumed": true
-}
-```
-
-## Error Envelope Compatibility
-
-Current daemon behavior is mixed and clients must handle both patterns:
-
-1. Current native daemon errors (common today):
-
-```json
-{
-  "error": "agent is not installed"
-}
-```
-
-2. Structured error envelope (gateway-preferred shape):
+Standardized error envelope example:
 
 ```json
 {
@@ -148,17 +63,58 @@ Current daemon behavior is mixed and clients must handle both patterns:
 }
 ```
 
-Gateway transport (`gateway/src/daemon/http_client.ts`) first tries structured codes and falls back to HTTP-status mapping when only string errors are returned.
+## Required vs optional fields
 
-## `DaemonAgentState` Field Expectations
+`DaemonAgentState`:
+- Required: `id`, `name`, `version`, `installState`, `runtimeState`, `health`, `restartCount`, `needsRemoteDiagnosis`, `updatedAt`
+- Backward-compatible field: `installed` (deprecated; retained for old clients)
+- Optional: `ports`, `startedAt`, `lastError`, `lastTriageSummary`, `lastDiagnoseFile`
 
-Required fields:
-- `id`, `name`, `version`, `installState`, `runtimeState`, `health`, `restartCount`, `needsRemoteDiagnosis`, `updatedAt`
+`AuditLogRecord` (`GET /api/v1/audit/logs`):
+- Required: `requestId`, `actor`, `action`, `target`, `result`, `timestamp`
+- Optional: `errorCode`, `message`
+- Envelope: `{ "auditLogs": [...], "total": <matched-count> }`
 
-Optional fields:
-- `ports`, `startedAt`, `lastError`, `lastTriageSummary`, `lastDiagnoseFile`
+`UpgradeResult`:
+- Required: `agentId`, `fromVersion`, `toVersion`
+- Optional: `backupPath`, `rollbackHint`
+
+`RemoteDiagnosisHandoff`:
+- Required: `id`, `agentId`, `consent`, `artifactRef`, `status`, `createdAt`
+
+## Error Envelope
+
+All daemon API error responses MUST use one schema:
+
+```json
+{
+  "error": {
+    "code": "E_ERROR_CODE",
+    "message": "Human-readable message"
+  }
+}
+```
+
+## Error Code Mapping (Phase 1 Baseline)
+
+| Error Code | Typical HTTP Status | Meaning |
+|---|---|---|
+| `E_USAGE` | `400` | Request payload or arguments are invalid |
+| `E_PAIR_CODE_INVALID` | `400` | Pairing code is missing, expired, or invalid |
+| `E_AGENT_NOT_FOUND` | `404` | Agent ID not found |
+| `E_NOT_INSTALLED` | `409` | Agent must be installed first |
+| `E_ALREADY_RUNNING` | `409` | Agent is already running |
+| `E_ALREADY_STOPPED` | `409` | Agent is already stopped |
+| `E_AGENT_RUNNING` | `409` | Operation requires stopped agent |
+| `E_UPGRADE_NOT_SUPPORTED` | `400` | Upgrade command is not available for agent |
+| `E_RUNTIME_PREREQUISITES` | `422` | Runtime prerequisites check failed |
+| `E_MISSING_REQUIRED_ENV` | `422` | Required environment variable missing |
+| `E_PORT_CONFLICT` | `422` | Required port is unavailable |
+| `E_UPGRADE_FAILED` | `500` | Upgrade command failed after invocation |
+| `E_UPGRADE_STRATEGY_UNSUPPORTED` | `400` | Unsupported upgrade strategy in manifest |
+| `E_INTERNAL` | `500` | Unexpected internal server error |
 
 ## Versioning Rule
 
-- Backward-compatible changes: additive fields/endpoints/error codes.
-- Breaking changes: new versioned prefix (for example `/api/v2`).
+- Backward-compatible additions: add new fields, paths, or error codes without changing existing semantics.
+- Breaking changes: require a new API version prefix (for example `/api/v2`).
