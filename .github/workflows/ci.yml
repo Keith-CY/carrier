@@ -98,7 +98,21 @@ jobs:
 
       - name: Run daemon tests
         working-directory: daemon
-        run: go test -race -count=1 ./...
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: Generate coverage function summary
+        working-directory: daemon
+        run: go tool cover -func=coverage.out > coverage-func.txt
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-coverage
+          path: |
+            daemon/coverage.out
+            daemon/coverage-func.txt
+          retention-days: 7
 
   daemon-lint:
     name: Daemon Lint
@@ -169,6 +183,8 @@ jobs:
 
   coverage-comment:
     name: Coverage Comment
+    # Reuse coverage artifacts from daemon-tests instead of re-running tests (#1170).
+    needs: daemon-tests
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -183,12 +199,10 @@ jobs:
         with:
           go-version-file: daemon/go.mod
 
-      - name: Daemon coverage
-        working-directory: daemon
-        run: |
-          set -euo pipefail
-          go test ./... -coverprofile=coverage.out
-          go tool cover -func=coverage.out > coverage-func.txt
+      - name: Download daemon coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: daemon-coverage
 
       - name: Collect base branch coverage
         run: |
@@ -207,6 +221,7 @@ jobs:
           import re, pathlib
 
           def parse_go_total(path):
+            """Parse the 'total' line from 'go tool cover -func' output."""
             p = pathlib.Path(path)
             if not p.exists():
               return 0.0
@@ -243,16 +258,27 @@ jobs:
           marker='<!-- carrier-pr-coverage-report -->'
           pr='${{ github.event.pull_request.number }}'
           body=$(cat coverage-comment.md)
+
+          # Fetch all comment IDs that contain our marker (paginated).
+          # jq filters to comments containing the marker and extracts their IDs.
+          # Using jq -r with select() directly avoids the need for printf+sed
+          # to strip empty lines (#1175).
           ids=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" --paginate \
-            | jq -r --arg m "$marker" '.[] | select(.body | contains($m)) | .id')
-          existing_id=$(printf '%s\n' "$ids" | sed '/^$/d' | head -n1)
+            | jq -r --arg m "$marker" '[.[] | select(.body | contains($m)) | .id] | .[]')
+
+          # Take the first matching comment ID (if any) to update in place.
+          existing_id=$(echo "$ids" | head -n1)
+
           if [ -n "${existing_id:-}" ]; then
+            # Update the existing coverage comment with the new body.
             gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_id}" -f body="$body" >/dev/null
-            # clean up accidental duplicates, keep only the first marker comment
-            printf '%s\n' "$ids" | sed '/^$/d' | tail -n +2 | while read -r extra_id; do
+            # Remove any duplicate marker comments (keep only the first).
+            echo "$ids" | tail -n +2 | while read -r extra_id; do
+              [ -n "$extra_id" ] || continue
               gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/comments/${extra_id}" >/dev/null || true
             done
           else
+            # No existing comment found — create a new one.
             gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" -f body="$body" >/dev/null
           fi
 

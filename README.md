@@ -1,8 +1,8 @@
 # Carrier
 
-Phase 1 scaffold for the Agent Installation Platform.
+Scaffold for the Agent Installation Platform.
 
-## Phase 1 source of truth
+## Source of truth
 
 - Runtime model ADR: `docs/phase1-runtime-adr.md`
 - Conflict inventory: `docs/phase1-runtime-conflict-inventory.md`
