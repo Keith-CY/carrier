@@ -156,6 +156,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		ctx := r.Context()
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
+		var lastLineCount int
 		for {
 			select {
 			case <-ctx.Done():
@@ -163,13 +164,21 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			case <-ticker.C:
 				resp := SafeHandleCommand(ctx, "logs "+agentID, daemon, sessions, downloads, rl, onboard)
 				text := resp.Message
-				if text != "" {
-					for _, line := range strings.Split(text, "\n") {
-						fmt.Fprintf(w, "data: %s\n", line)
-					}
-					fmt.Fprint(w, "\n")
-					flusher.Flush()
+				if text == "" {
+					continue
 				}
+				lines := strings.Split(text, "\n")
+				// Only send new lines since last push
+				if len(lines) <= lastLineCount {
+					continue
+				}
+				newLines := lines[lastLineCount:]
+				lastLineCount = len(lines)
+				for _, line := range newLines {
+					fmt.Fprintf(w, "data: %s\n", line)
+				}
+				fmt.Fprint(w, "\n")
+				flusher.Flush()
 			}
 		}
 	})
@@ -490,6 +499,11 @@ func checkGatewayToken(r *http.Request, expected string) *apiErr {
 	provided := ""
 	if after, ok := strings.CutPrefix(auth, "Bearer "); ok {
 		provided = strings.TrimSpace(after)
+	}
+	// Fallback: check ?token= query param (needed for EventSource which
+	// cannot send custom headers).
+	if provided == "" {
+		provided = strings.TrimSpace(r.URL.Query().Get("token"))
 	}
 	if provided == "" {
 		return &apiErr{code: "E_GATEWAY_AUTH_REQUIRED", msg: "gateway api token required"}

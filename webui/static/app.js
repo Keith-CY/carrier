@@ -258,7 +258,7 @@
     const lines = text.split('\n').filter(l => l.trim());
     const result = [];
     for (const line of lines) {
-      const m = line.match(/^\s*[-•*]\s*(\S+)/);
+      const m = line.match(/^\s*(?:\d+\.\s+|[-•*]\s*)(\S+)/);
       if (m) result.push(m[1]);
     }
     if (result.length === 0 && text.trim()) {
@@ -496,7 +496,8 @@
     output.textContent = 'Connecting to logs for ' + agentId + '…\n';
 
     // Try SSE first
-    const sseUrl = '/api/v1/logs/stream?agent=' + encodeURIComponent(agentId);
+    let sseUrl = '/api/v1/logs/stream?agent=' + encodeURIComponent(agentId);
+    if (token) sseUrl += '&token=' + encodeURIComponent(token);
     try {
       const es = new EventSource(sseUrl);
       logSource = es;
