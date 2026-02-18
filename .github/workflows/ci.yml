@@ -245,13 +245,11 @@ jobs:
           body=$(cat coverage-comment.md)
           ids=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" --paginate \
             | jq -r --arg m "$marker" '.[] | select(.body | contains($m)) | .id')
-          existing_id=$(printf '%s
-' "$ids" | sed '/^$/d' | head -n1)
+          existing_id=$(printf '%s\n' "$ids" | sed '/^$/d' | head -n1)
           if [ -n "${existing_id:-}" ]; then
             gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_id}" -f body="$body" >/dev/null
             # clean up accidental duplicates, keep only the first marker comment
-            printf '%s
-' "$ids" | sed '/^$/d' | tail -n +2 | while read -r extra_id; do
+            printf '%s\n' "$ids" | sed '/^$/d' | tail -n +2 | while read -r extra_id; do
               gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/comments/${extra_id}" >/dev/null || true
             done
           else
