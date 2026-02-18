@@ -1,25 +1,135 @@
 name: Release
 
 on:
+  release:
+    types: [published]
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types: [opened, reopened, synchronize]
   workflow_dispatch:
 
+concurrency:
+  # Keep only the newest run per PR/ref/tag. Older runs can be safely cancelled
+  # because assets are keyed by the current commit and release uploads overwrite files.
+  group: release-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.event.release.tag_name }}
+  cancel-in-progress: true
+
 permissions:
-  contents: read  # Least privilege by default; only the release job escalates to write.
+  contents: write
+  issues: write
+  pull-requests: write
 
 env:
   RELEASE_ARTIFACT_RETENTION_DAYS: "14"
 
 jobs:
+  prepare:
+    name: Prepare Metadata
+    runs-on: ubuntu-latest
+    outputs:
+      build_mode: ${{ steps.meta.outputs.build_mode }}
+      package_prefix: ${{ steps.meta.outputs.package_prefix }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      release_name: ${{ steps.meta.outputs.release_name }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          event_name="${GITHUB_EVENT_NAME}"
+
+          if [[ "${event_name}" == "release" ]]; then
+            release_tag="$(jq -r '.release.tag_name' "${GITHUB_EVENT_PATH}")"
+            release_name="$(jq -r '.release.name // empty' "${GITHUB_EVENT_PATH}")"
+            release_prerelease="$(jq -r '.release.prerelease' "${GITHUB_EVENT_PATH}")"
+
+            if [[ -z "${release_name}" ]]; then
+              release_name="${release_tag}"
+            fi
+
+            echo "build_mode=release" >> "${GITHUB_OUTPUT}"
+            echo "package_prefix=carrier-${release_tag}" >> "${GITHUB_OUTPUT}"
+            echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+            echo "release_name=${release_name}" >> "${GITHUB_OUTPUT}"
+            echo "prerelease=${release_prerelease}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if [[ "${event_name}" == "push" && "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            release_tag="main-${GITHUB_SHA}"
+            release_name="main-${GITHUB_SHA}"
+
+            echo "build_mode=prerelease" >> "${GITHUB_OUTPUT}"
+            echo "package_prefix=carrier-${release_tag}" >> "${GITHUB_OUTPUT}"
+            echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+            echo "release_name=${release_name}" >> "${GITHUB_OUTPUT}"
+            echo "prerelease=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if [[ "${event_name}" == "pull_request" ]]; then
+            pr_number="$(jq -r '.pull_request.number' "${GITHUB_EVENT_PATH}")"
+
+            echo "build_mode=pr-test" >> "${GITHUB_OUTPUT}"
+            echo "package_prefix=carrier-pr${pr_number}-${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+            echo "release_tag=" >> "${GITHUB_OUTPUT}"
+            echo "release_name=" >> "${GITHUB_OUTPUT}"
+            echo "prerelease=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if [[ "${event_name}" == "workflow_dispatch" ]]; then
+            if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+              release_tag="${GITHUB_REF#refs/tags/}"
+              release_name="${release_tag}"
+
+              echo "build_mode=release" >> "${GITHUB_OUTPUT}"
+              echo "package_prefix=carrier-${release_tag}" >> "${GITHUB_OUTPUT}"
+              echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+              echo "release_name=${release_name}" >> "${GITHUB_OUTPUT}"
+              echo "prerelease=false" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+
+            if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+              release_tag="main-${GITHUB_SHA}"
+              release_name="main-${GITHUB_SHA}"
+
+              echo "build_mode=prerelease" >> "${GITHUB_OUTPUT}"
+              echo "package_prefix=carrier-${release_tag}" >> "${GITHUB_OUTPUT}"
+              echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+              echo "release_name=${release_name}" >> "${GITHUB_OUTPUT}"
+              echo "prerelease=true" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+
+            release_tag="manual-${GITHUB_REF_NAME//\//-}-${GITHUB_SHA}"
+            release_name="${release_tag}"
+
+            echo "build_mode=prerelease" >> "${GITHUB_OUTPUT}"
+            echo "package_prefix=carrier-${release_tag}" >> "${GITHUB_OUTPUT}"
+            echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+            echo "release_name=${release_name}" >> "${GITHUB_OUTPUT}"
+            echo "prerelease=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo "Unsupported event: ${event_name}" >&2
+          exit 1
+
   e2e-deploy:
     name: End-to-End Tests (Deployment)
+    needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name != 'pull_request'
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -33,7 +143,9 @@ jobs:
         run: ./scripts/run-e2e-tests.sh
 
   build-packages:
-    needs: e2e-deploy
+    name: Build Packages (${{ matrix.label }})
+    needs: [prepare, e2e-deploy]
+    if: always() && needs.prepare.result == 'success' && (needs.e2e-deploy.result == 'success' || needs.e2e-deploy.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -82,10 +194,11 @@ jobs:
           go-version-file: daemon/go.mod
 
       - name: Build release package
+        id: build
         shell: bash
         run: |
           set -euo pipefail
-          archive_name="carrier-${GITHUB_SHA}-${{ matrix.label }}"
+          archive_name="${{ needs.prepare.outputs.package_prefix }}-${{ matrix.label }}"
           binary_name="agentd${{ matrix.ext }}"
           release_dir="dist/${archive_name}"
           package_file="${archive_name}.${{ matrix.archive_ext }}"
@@ -101,22 +214,50 @@ jobs:
           (cd dist && zip -r "${package_file}" "${archive_name}")
           (cd dist && sha256sum "${package_file}" > "${package_file}.sha256")
 
+          echo "archive_name=${archive_name}" >> "${GITHUB_OUTPUT}"
+          echo "package_file=${package_file}" >> "${GITHUB_OUTPUT}"
+
       - name: Upload package
+        id: upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: carrier-${{ matrix.label }}
+          name: ${{ steps.build.outputs.archive_name }}
           retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
           path: |
-            dist/carrier-${{ github.sha }}-${{ matrix.label }}.${{ matrix.archive_ext }}
-            dist/carrier-${{ github.sha }}-${{ matrix.label }}.${{ matrix.archive_ext }}.sha256
+            dist/${{ steps.build.outputs.package_file }}
+            dist/${{ steps.build.outputs.package_file }}.sha256
+          if-no-files-found: error
+
+      - name: Save PR metadata
+        if: needs.prepare.outputs.build_mode == 'pr-test'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p pr-meta
+          jq -n \
+            --arg label "${{ matrix.label }}" \
+            --arg archive_name "${{ steps.build.outputs.archive_name }}" \
+            --arg package_file "${{ steps.build.outputs.package_file }}" \
+            --arg artifact_id "${{ steps.upload.outputs.artifact-id }}" \
+            '{label: $label, archive_name: $archive_name, package_file: $package_file, artifact_id: $artifact_id}' \
+            > "pr-meta/${{ matrix.label }}.json"
+
+      - name: Upload PR metadata
+        if: needs.prepare.outputs.build_mode == 'pr-test'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pr-meta-${{ matrix.label }}
+          retention-days: 7
+          path: pr-meta/${{ matrix.label }}.json
           if-no-files-found: error
 
   sign-artifacts:
-    needs: build-packages
+    needs: [prepare, build-packages]
+    if: always() && github.event_name != 'pull_request' && needs.build-packages.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      id-token: write   # Required for cosign keyless OIDC signing
+      id-token: write
       contents: read
     steps:
       - name: Checkout
@@ -126,9 +267,11 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: dist
+          pattern: ${{ needs.prepare.outputs.package_prefix }}-*
+          merge-multiple: true
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da
 
       - name: Sign release artifacts
         run: ./scripts/sign-artifacts.sh dist
@@ -138,7 +281,6 @@ jobs:
       - name: Verify signatures (spot-check)
         run: |
           set -euo pipefail
-          # Find the first .zip file and verify its signature
           first_zip=$(find dist -name '*.zip' -type f | head -n 1)
           if [[ -z "$first_zip" ]]; then
             echo "ERROR: No zip artifacts found to verify"
@@ -151,30 +293,123 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: carrier-signatures
+          retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
           path: dist/**/*.sig
           if-no-files-found: error
 
-  release:
-    needs: [build-packages, sign-artifacts]
+  publish-release:
+    name: Publish GitHub Release
+    needs: [prepare, build-packages, sign-artifacts]
+    if: always() && github.event_name != 'pull_request' && needs.prepare.outputs.release_tag != '' && needs.build-packages.result == 'success' && needs.sign-artifacts.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write  # Required for creating GitHub releases
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+      contents: write
     steps:
       - name: Download packages
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
+          path: dist
+          pattern: ${{ needs.prepare.outputs.package_prefix }}-*
+          merge-multiple: true
+
+      - name: Download signatures
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: carrier-signatures
           path: dist
 
       - name: Publish Release
         uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          name: ${{ needs.prepare.outputs.release_name }}
+          prerelease: ${{ needs.prepare.outputs.prerelease }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
+          overwrite_files: true
           files: |
             dist/**/*.zip
             dist/**/*.sha256
             dist/**/*.sig
+
+  comment-pr-packages:
+    name: Comment PR Test Packages
+    needs: [prepare, build-packages]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Download PR metadata
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: pr-meta
+          pattern: pr-meta-*
+          merge-multiple: true
+
+      - name: Build PR comment body
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          {
+            echo "<!-- carrier-pr-test-packages -->"
+            echo "## Test Packages"
+            echo
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Workflow run: [${GITHUB_RUN_ID}](${run_url})"
+            echo
+            echo "Download:"
+          } > pr-comment.md
+
+          while IFS= read -r file; do
+            label="$(jq -r '.label' "${file}")"
+            package_file="$(jq -r '.package_file' "${file}")"
+            artifact_id="$(jq -r '.artifact_id' "${file}")"
+            artifact_url="${run_url}/artifacts/${artifact_id}"
+            echo "- ${label}: [\`${package_file}\`](${artifact_url})" >> pr-comment.md
+          done < <(find pr-meta -type f -name '*.json' | sort)
+
+      - name: Upsert PR comment
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- carrier-pr-test-packages -->';
+            const body = fs.readFileSync('pr-comment.md', 'utf8');
+            const issue_number = context.payload.pull_request.number;
+            const { owner, repo } = context.repo;
+
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              { owner, repo, issue_number, per_page: 100 }
+            );
+
+            const existing = comments.find(
+              (comment) =>
+                comment.user &&
+                comment.user.type === 'Bot' &&
+                comment.body &&
+                comment.body.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body,
+            });
