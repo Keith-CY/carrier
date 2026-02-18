@@ -40,12 +40,12 @@ type StdinReader interface {
 // ExecCommandRunner is the default CommandRunner backed by os/exec.
 type ExecCommandRunner struct{}
 
-func (r ExecCommandRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
-	return exec.Command(name, args...).Output()
+func (r ExecCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).Output()
 }
 
-func (r ExecCommandRunner) RunInteractive(_ context.Context, stdout, stderr io.Writer, name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+func (r ExecCommandRunner) RunInteractive(ctx context.Context, stdout, stderr io.Writer, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	return cmd.Run()
@@ -55,19 +55,25 @@ func (r ExecCommandRunner) LookPath(name string) (string, error) {
 	return exec.LookPath(name)
 }
 
-// BufioStdinReader reads lines from os.Stdin.
-type BufioStdinReader struct{}
+// BufioStdinReader reads lines from os.Stdin, reusing a single bufio.Reader.
+type BufioStdinReader struct {
+	reader *bufio.Reader
+}
 
-func (r BufioStdinReader) ReadLine() (string, error) {
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
+// NewBufioStdinReader creates a BufioStdinReader backed by os.Stdin.
+func NewBufioStdinReader() *BufioStdinReader {
+	return &BufioStdinReader{reader: bufio.NewReader(os.Stdin)}
+}
+
+func (r *BufioStdinReader) ReadLine() (string, error) {
+	line, err := r.reader.ReadString('\n')
 	return strings.TrimSpace(line), err
 }
 
 // Package-level defaults used by the public API functions.
 var (
 	defaultRunner      CommandRunner = ExecCommandRunner{}
-	defaultStdinReader StdinReader   = BufioStdinReader{}
+	defaultStdinReader StdinReader   = NewBufioStdinReader()
 )
 
 // ---------------------------------------------------------------------------
@@ -122,7 +128,11 @@ func promptAndInstallBunWith(runner CommandRunner, reader StdinReader) (string, 
 	fmt.Println("⚠️  Bun runtime not found. The Carrier gateway requires Bun to run.")
 	fmt.Print("Install Bun automatically? [Y/n] ")
 
-	answer, _ := reader.ReadLine()
+	answer, err := reader.ReadLine()
+	if err != nil {
+		// Any error reading input (including EOF) is treated as declining.
+		return "", fmt.Errorf("failed to read input: %w", err)
+	}
 	answer = strings.ToLower(answer)
 
 	if answer != "" && answer != "y" && answer != "yes" {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -77,7 +78,7 @@ func TestDetectBunWith_NotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if got := err.Error(); !contains(got, "bun not found in PATH") {
+	if got := err.Error(); !strings.Contains(got, "bun not found in PATH") {
 		t.Errorf("error = %q, want to contain 'bun not found in PATH'", got)
 	}
 }
@@ -120,7 +121,7 @@ func TestInstallBunWith_Failure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !contains(err.Error(), "bun install failed") {
+	if !strings.Contains(err.Error(), "bun install failed") {
 		t.Errorf("error = %q, want to contain 'bun install failed'", err.Error())
 	}
 }
@@ -148,7 +149,7 @@ func TestEnsureBunWith_NotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !contains(err.Error(), "bun runtime not found") {
+	if !strings.Contains(err.Error(), "bun runtime not found") {
 		t.Errorf("error = %q, want to contain 'bun runtime not found'", err.Error())
 	}
 }
@@ -241,7 +242,7 @@ func TestPromptAndInstallBunWith_UserDeclines(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !contains(err.Error(), "declined") {
+	if !strings.Contains(err.Error(), "declined") {
 		t.Errorf("error = %q, want to contain 'declined'", err.Error())
 	}
 }
@@ -257,6 +258,20 @@ func TestPromptAndInstallBunWith_UserDeclinesOther(t *testing.T) {
 	}
 }
 
+func TestPromptAndInstallBunWith_ReadLineError(t *testing.T) {
+	r := &mockRunner{
+		lookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") },
+	}
+	reader := &mockStdinReader{line: "", err: fmt.Errorf("EOF")}
+	_, err := promptAndInstallBunWith(r, reader)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "failed to read input") {
+		t.Errorf("error = %q, want to contain 'failed to read input'", err.Error())
+	}
+}
+
 func TestPromptAndInstallBunWith_InstallFails(t *testing.T) {
 	r := &mockRunner{
 		lookPathFn: func(string) (string, error) { return "", fmt.Errorf("not found") },
@@ -269,7 +284,7 @@ func TestPromptAndInstallBunWith_InstallFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !contains(err.Error(), "bun install failed") {
+	if !strings.Contains(err.Error(), "bun install failed") {
 		t.Errorf("error = %q", err.Error())
 	}
 }
@@ -283,7 +298,7 @@ func TestPromptAndInstallBunWith_InstallSuccessButDetectFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !contains(err.Error(), "restart your shell") {
+	if !strings.Contains(err.Error(), "restart your shell") {
 		t.Errorf("error = %q, want to contain 'restart your shell'", err.Error())
 	}
 }
@@ -353,21 +368,4 @@ func TestPromptAndInstallBun_WithMock(t *testing.T) {
 	if path == "" {
 		t.Error("expected non-empty path")
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr)
-}
-
-func searchString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
