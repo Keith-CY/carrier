@@ -366,6 +366,11 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.Pai
 		})
 	})
 
+	// Serve WebUI static files at root (catch-all, after API routes).
+	// The handler is provided by webui_embed.go (with -tags webui) or
+	// webui_stub.go (returns 404 when built without the tag).
+	mux.Handle("/", webUIHandler())
+
 	return mux
 }
 

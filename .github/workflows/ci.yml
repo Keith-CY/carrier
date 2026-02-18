@@ -139,8 +139,8 @@ jobs:
         with:
           go-version-file: daemon/go.mod
 
-  gui-build:
-    name: GUI Build
+  webui-build:
+    name: WebUI Build
     needs: classify-scope
     if: github.event_name != 'pull_request' || needs.classify-scope.outputs.ci_only != 'true'
     runs-on: ubuntu-latest
@@ -154,17 +154,14 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install GUI dependencies
-        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev
+      - name: Build with WebUI tag
+        run: go build -tags webui -o carrier ./cmd/carrier/
 
-      - name: Build with GUI tag
-        run: go build -tags gui -o carrier ./cmd/carrier/
-
-      - name: Build headless (default)
+      - name: Build headless (default, no WebUI)
         run: go build -o carrier-headless ./cmd/carrier/
 
-      - name: Cross-compile GUI (Windows amd64)
-        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -tags gui -o carrier-windows.exe ./cmd/carrier/
+      - name: Cross-compile WebUI (Windows amd64)
+        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -tags webui -o carrier-windows.exe ./cmd/carrier/
 
       - name: Gateway tests
         working-directory: daemon

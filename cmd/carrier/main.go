@@ -2,10 +2,9 @@
 //
 // Usage:
 //
-//	carrier            Launch the desktop GUI (default)
-//	carrier daemon     Start the daemon HTTP API server
-//	carrier --daemon   Same as above
-//	carrier --help     Show usage
+//	carrier           Start the daemon HTTP API server (with WebUI)
+//	carrier daemon    Same as above
+//	carrier --help    Show usage
 package main
 
 import (
@@ -18,13 +17,11 @@ import (
 const usage = `Carrier — unified agent platform binary
 
 Usage:
-  carrier              Launch the desktop GUI (requires -tags gui build)
-  carrier daemon       Start the daemon HTTP API server
-  carrier --daemon     Start the daemon HTTP API server
+  carrier              Start the daemon HTTP API server (with WebUI)
+  carrier daemon       Same as above
   carrier --help       Show this help message
 
-Build with GUI:
-  go build -tags gui -o carrier ./cmd/carrier/
+The WebUI is served at http://localhost:<port>/ alongside the API.
 `
 
 func main() {
@@ -43,6 +40,6 @@ func main() {
 		}
 	}
 
-	// Default: launch GUI
-	runGUI()
+	// Default: start daemon (which includes WebUI)
+	server.Run()
 }

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Carrier — Agent Platform</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <!-- Login overlay -->
+  <div id="login-overlay" class="overlay hidden">
+    <div class="card login-card">
+      <h2>🔐 Carrier</h2>
+      <p class="text-dim">Enter your Gateway token to continue.</p>
+      <input type="password" id="login-token" placeholder="Gateway Token" autocomplete="off">
+      <div id="login-msg"></div>
+      <button id="login-btn">Connect</button>
+    </div>
+  </div>
+
+  <header id="header">
+    <div class="header-left">
+      <h1>🚀 Carrier</h1>
+      <nav id="nav" class="hidden">
+        <a href="#/dashboard" class="nav-link" data-route="dashboard">Dashboard</a>
+        <a href="#/logs" class="nav-link" data-route="logs">Logs</a>
+        <a href="#/chat" class="nav-link" data-route="chat">Chat</a>
+        <a href="#/settings" class="nav-link" data-route="settings">Settings</a>
+      </nav>
+    </div>
+    <div class="header-right">
+      <span id="health-badge" class="badge badge-unknown">⚪ checking…</span>
+      <button id="logout-btn" class="btn-sm btn-secondary hidden">Logout</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- Onboard wizard -->
+    <section id="view-welcome" class="view hidden">
+      <div class="card center-card">
+        <h2>Welcome to Carrier</h2>
+        <p class="text-dim">Detecting daemon connection…</p>
+        <div id="welcome-status"></div>
+        <button id="welcome-continue" class="hidden">Continue →</button>
+      </div>
+    </section>
+
+    <section id="view-setup" class="view hidden">
+      <div class="steps-indicator" id="steps-indicator"></div>
+      <div class="card">
+        <h3>Step 1 — Configure Provider</h3>
+        <label for="provider">Provider</label>
+        <select id="provider">
+          <option value="">Select…</option>
+          <option value="telegram">Telegram</option>
+          <option value="discord">Discord</option>
+          <option value="feishu">Feishu</option>
+        </select>
+        <label for="provider-token">Token</label>
+        <input type="password" id="provider-token" placeholder="Bot token">
+        <label for="webhook-secret">Webhook Secret <span class="text-dim">(optional)</span></label>
+        <input type="text" id="webhook-secret" placeholder="Webhook verification secret">
+        <div class="btn-row">
+          <button id="setup-btn">Continue →</button>
+        </div>
+        <div id="setup-msg"></div>
+      </div>
+    </section>
+
+    <section id="view-agents" class="view hidden">
+      <div class="steps-indicator" id="steps-indicator-2"></div>
+      <div class="card">
+        <h3>Step 2 — Select Agent</h3>
+        <ul class="agent-select-list" id="agent-pick"></ul>
+        <div class="btn-row">
+          <button class="btn-secondary" id="agents-back">← Back</button>
+          <button id="agents-next" disabled>Continue →</button>
+        </div>
+        <div id="agents-msg"></div>
+      </div>
+    </section>
+
+    <section id="view-config" class="view hidden">
+      <div class="steps-indicator" id="steps-indicator-3"></div>
+      <div class="card">
+        <h3>Step 3 — Environment Variables</h3>
+        <p class="text-dim" id="config-agent-name"></p>
+        <div id="env-fields"></div>
+        <div class="btn-row">
+          <button id="add-env" class="btn-secondary btn-sm">+ Add Env Var</button>
+        </div>
+        <div class="btn-row" style="margin-top:1rem">
+          <button class="btn-secondary" id="config-back">← Back</button>
+          <button id="config-next">Continue →</button>
+        </div>
+        <div id="config-msg"></div>
+      </div>
+    </section>
+
+    <section id="view-install" class="view hidden">
+      <div class="steps-indicator" id="steps-indicator-4"></div>
+      <div class="card center-card">
+        <h3>Step 4 — Confirm Installation</h3>
+        <p id="install-summary"></p>
+        <div class="btn-row">
+          <button class="btn-secondary" id="install-back">← Back</button>
+          <button id="install-confirm">Install & Start →</button>
+        </div>
+        <div id="install-msg"></div>
+      </div>
+    </section>
+
+    <section id="view-complete" class="view hidden">
+      <div class="card center-card">
+        <h2>✅ Setup Complete!</h2>
+        <p class="text-dim">Your agent is being installed and started.</p>
+        <button id="complete-dashboard">Go to Dashboard →</button>
+      </div>
+    </section>
+
+    <!-- Management panel -->
+    <section id="view-dashboard" class="view hidden">
+      <h2>Agent Dashboard</h2>
+      <div id="agent-list" class="agent-grid"></div>
+      <button id="refresh-agents" class="btn-sm btn-secondary" style="margin-top:1rem">↻ Refresh</button>
+    </section>
+
+    <section id="view-agent-detail" class="view hidden">
+      <div id="agent-detail-content"></div>
+    </section>
+
+    <section id="view-logs" class="view hidden">
+      <h2>Logs</h2>
+      <div class="log-controls">
+        <label for="log-agent">Agent:</label>
+        <select id="log-agent"></select>
+        <button id="log-connect" class="btn-sm">Connect</button>
+        <button id="log-clear" class="btn-sm btn-secondary">Clear</button>
+      </div>
+      <pre id="log-output" class="log-box"></pre>
+    </section>
+
+    <section id="view-chat" class="view hidden">
+      <h2>Chat</h2>
+      <div id="chat-messages" class="chat-messages"></div>
+      <div class="chat-input-row">
+        <input id="chat-input" type="text" placeholder="Type a message…" autocomplete="off">
+        <button id="chat-send">Send</button>
+      </div>
+    </section>
+
+    <section id="view-settings" class="view hidden">
+      <h2>Settings</h2>
+      <div class="card">
+        <h3>Provider Configuration</h3>
+        <div id="settings-provider" class="text-dim">Loading…</div>
+      </div>
+      <div class="card" style="margin-top:1rem">
+        <h3>Gateway</h3>
+        <p class="text-dim">Token: ••••••</p>
+        <button id="settings-logout" class="btn-sm btn-danger">Clear Token & Logout</button>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -127,6 +127,58 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		handleDownload(w, r, cfg, downloads)
 	})
 
+	// SSE logs streaming endpoint (polling fallback)
+	mux.HandleFunc("/api/v1/logs/stream", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		agentID := r.URL.Query().Get("agent")
+		if agentID == "" {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "agent query parameter required"))
+			return
+		}
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			writeJSON(w, http.StatusInternalServerError, gatewayErrBody("E_INTERNAL", "streaming not supported"))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
+
+		ctx := r.Context()
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				resp := SafeHandleCommand(ctx, "logs "+agentID, daemon, sessions, downloads, rl, onboard)
+				text := resp.Message
+				if text != "" {
+					for _, line := range strings.Split(text, "\n") {
+						fmt.Fprintf(w, "data: %s\n", line)
+					}
+					fmt.Fprint(w, "\n")
+					flusher.Flush()
+				}
+			}
+		}
+	})
+
+	// Serve WebUI static files at root (catch-all, after API routes).
+	// The handler is provided by webui_embed.go (with -tags webui) or
+	// webui_stub.go (returns 404 when built without the tag).
+	mux.Handle("/", webUIHandler())
+
 	// Wrap with request-ID middleware
 	return requestIDMiddleware(mux)
 }
@@ -398,7 +450,7 @@ func handleSetupPost(w http.ResponseWriter, r *http.Request, requestID string, s
 		"result":    "ok",
 		"message":   fmt.Sprintf("provider %s configured", req.Provider),
 		"provider": map[string]interface{}{
-			"provider":     cfg.Provider,
+			"provider":      cfg.Provider,
 			"configured_at": cfg.ConfiguredAt,
 		},
 	})
