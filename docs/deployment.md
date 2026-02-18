@@ -23,9 +23,10 @@ For lifecycle state transitions, crash-loop behavior, and operator troubleshooti
 cd daemon
 go build -o agentd ./cmd/agentd
 
-cd ../gateway
-bun install          # install dependencies
-bun run dev          # start the gateway server (TypeScript/Bun)
+## Gateway
+
+The gateway has been rewritten in Go and is now part of the daemon binary.
+No separate build step is required — the daemon serves the gateway API directly.
 ```
 
 ## Configuration
@@ -34,13 +35,25 @@ The daemon reads configuration from a JSON file. Create `/etc/carrier/agentd.jso
 
 ```json
 {
-  "log_level": "info",
-  "log_format": "json",
-  "health_port": 8081,
-  "diagnose_dir": "/var/lib/carrier/diagnose",
-  "data_dir": "/var/lib/carrier/data"
+  "server": {
+    "host": "127.0.0.1",
+    "port": 9090,
+    "api_token": ""
+  },
+  "log": {
+    "level": "info",
+    "format": "json"
+  },
+  "lifecycle": {
+    "crash_threshold": 3,
+    "crash_window": "5m",
+    "crash_cooldown": "5m"
+  }
 }
 ```
+
+> **Note:** If `api_token` is set, the config file must have restrictive permissions (`chmod 0600`).
+> See `daemon/internal/config/config.go` for all fields and environment variable overrides (`CARRIER_` prefix).
 
 Ensure the data and diagnose directories exist:
 
