@@ -252,7 +252,7 @@ jobs:
 
   sign-artifacts:
     needs: [prepare, build-packages]
-    if: github.event_name != 'pull_request'
+    if: always() && github.event_name != 'pull_request' && needs.build-packages.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -299,7 +299,7 @@ jobs:
   publish-release:
     name: Publish GitHub Release
     needs: [prepare, build-packages, sign-artifacts]
-    if: github.event_name != 'pull_request' && needs.prepare.outputs.release_tag != ''
+    if: always() && github.event_name != 'pull_request' && needs.prepare.outputs.release_tag != '' && needs.build-packages.result == 'success' && needs.sign-artifacts.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -336,7 +336,7 @@ jobs:
   comment-pr-packages:
     name: Comment PR Test Packages
     needs: [prepare, build-packages]
-    if: github.event_name == 'pull_request'
+    if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       issues: write
