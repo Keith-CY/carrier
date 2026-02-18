@@ -368,6 +368,8 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.Pai
 		})
 	})
 
+	mux.Handle("/", webUIHandler())
+
 	return mux
 }
 
