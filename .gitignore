@@ -6,3 +6,5 @@ daemon/coverage.out
 .worktrees/
 agentd
 !daemon/cmd/agentd/
+carrier
+agentd

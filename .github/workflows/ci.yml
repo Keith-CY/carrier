@@ -139,8 +139,8 @@ jobs:
         with:
           go-version-file: daemon/go.mod
 
-  gui-build:
-    name: GUI Build
+  webui-build:
+    name: WebUI Build
     needs: classify-scope
     if: github.event_name != 'pull_request' || needs.classify-scope.outputs.ci_only != 'true'
     runs-on: ubuntu-latest
@@ -154,17 +154,14 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install GUI dependencies
-        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev
+      - name: Build with WebUI tag
+        run: go build -tags webui -o carrier ./cmd/carrier/
 
-      - name: Build with GUI tag
-        run: go build -tags gui -o carrier ./cmd/carrier/
-
-      - name: Build headless (default)
+      - name: Build headless (default, no WebUI)
         run: go build -o carrier-headless ./cmd/carrier/
 
-      - name: Cross-compile GUI (Windows amd64)
-        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -tags gui -o carrier-windows.exe ./cmd/carrier/
+      - name: Cross-compile WebUI (Windows amd64)
+        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -tags webui -o carrier-windows.exe ./cmd/carrier/
 
       - name: Gateway tests
         working-directory: daemon
@@ -248,18 +245,61 @@ jobs:
           body=$(cat coverage-comment.md)
           ids=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" --paginate \
             | jq -r --arg m "$marker" '.[] | select(.body | contains($m)) | .id')
-          existing_id=$(printf '%s
-' "$ids" | sed '/^$/d' | head -n1)
+          existing_id=$(printf '%s\n' "$ids" | sed '/^$/d' | head -n1)
           if [ -n "${existing_id:-}" ]; then
             gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_id}" -f body="$body" >/dev/null
             # clean up accidental duplicates, keep only the first marker comment
-            printf '%s
-' "$ids" | sed '/^$/d' | tail -n +2 | while read -r extra_id; do
+            printf '%s\n' "$ids" | sed '/^$/d' | tail -n +2 | while read -r extra_id; do
               gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/comments/${extra_id}" >/dev/null || true
             done
           else
             gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" -f body="$body" >/dev/null
           fi
+
+  e2e-webui:
+    name: WebUI E2E Tests
+    needs: classify-scope
+    if: github.event_name != 'pull_request' || needs.classify-scope.outputs.ci_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: webui/e2e
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: webui/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        working-directory: webui/e2e
+        env:
+          SKIP_REAL_API: '1'
+        run: npx playwright test --update-snapshots
+
+      - name: Upload visual snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-snapshots
+          path: webui/e2e/tests/visual.spec.ts-snapshots/
+          retention-days: 30
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: webui/e2e/test-results/
+          retention-days: 7
 
   e2e-tests:
     name: End-to-End Tests
