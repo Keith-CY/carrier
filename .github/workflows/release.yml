@@ -13,6 +13,8 @@ on:
   workflow_dispatch:
 
 concurrency:
+  # Keep only the newest run per PR/ref/tag. Older runs can be safely cancelled
+  # because assets are keyed by the current commit and release uploads overwrite files.
   group: release-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.event.release.tag_name }}
   cancel-in-progress: true
 
@@ -232,14 +234,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p pr-meta
-          cat > "pr-meta/${{ matrix.label }}.json" <<'JSON'
-          {
-            "label": "${{ matrix.label }}",
-            "archive_name": "${{ steps.build.outputs.archive_name }}",
-            "package_file": "${{ steps.build.outputs.package_file }}",
-            "artifact_id": "${{ steps.upload.outputs.artifact-id }}"
-          }
-          JSON
+          jq -n \
+            --arg label "${{ matrix.label }}" \
+            --arg archive_name "${{ steps.build.outputs.archive_name }}" \
+            --arg package_file "${{ steps.build.outputs.package_file }}" \
+            --arg artifact_id "${{ steps.upload.outputs.artifact-id }}" \
+            '{label: $label, archive_name: $archive_name, package_file: $package_file, artifact_id: $artifact_id}' \
+            > "pr-meta/${{ matrix.label }}.json"
 
       - name: Upload PR metadata
         if: needs.prepare.outputs.build_mode == 'pr-test'
