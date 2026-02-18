@@ -281,7 +281,25 @@ jobs:
 
       - name: Run Playwright tests
         working-directory: webui/e2e
-        run: npx playwright test
+        env:
+          SKIP_REAL_API: '1'
+        run: npx playwright test --update-snapshots
+
+      - name: Upload visual snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-snapshots
+          path: webui/e2e/tests/visual.spec.ts-snapshots/
+          retention-days: 30
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: webui/e2e/test-results/
+          retention-days: 7
 
   e2e-tests:
     name: End-to-End Tests
