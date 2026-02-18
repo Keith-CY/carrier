@@ -22,7 +22,7 @@
       method,
       headers: { 'Content-Type': 'application/json' },
     };
-    if (token) opts.headers['X-Gateway-Token'] = token;
+    if (token) opts.headers['Authorization'] = 'Bearer ' + token;
     if (body) opts.body = JSON.stringify(body);
     return fetch(path, opts).then(r => {
       if (r.status === 401) {
@@ -31,10 +31,6 @@
       }
       return r.json();
     });
-  }
-
-  function command(input, args) {
-    return api('POST', '/command', { input: input, args: args || [] });
   }
 
   function clearToken() {
@@ -57,7 +53,7 @@
   // --- Health ---
   function checkHealth() {
     const opts = { headers: {} };
-    if (token) opts.headers['X-Gateway-Token'] = token;
+    if (token) opts.headers['Authorization'] = 'Bearer ' + token;
     fetch('/healthz', opts)
       .then(r => r.json())
       .then(d => {
@@ -157,7 +153,7 @@
       token = t;
       try {
         const r = await fetch('/healthz', {
-          headers: { 'X-Gateway-Token': t },
+          headers: { 'Authorization': 'Bearer ' + t },
         });
         if (r.ok) {
           localStorage.setItem('carrier_token', t);
@@ -190,7 +186,7 @@
     btn.classList.add('hidden');
 
     checkHealth();
-    fetch('/healthz', { headers: token ? { 'X-Gateway-Token': token } : {} })
+    fetch('/healthz', { headers: token ? { 'Authorization': 'Bearer ' + token } : {} })
       .then(r => r.json())
       .then(d => {
         if (d.status === 'ok') {
@@ -213,23 +209,8 @@
     renderSteps('#steps-indicator', 0, 5);
 
     $('#setup-btn').onclick = async () => {
-      const provider = $('#provider').value;
-      const provToken = $('#provider-token').value.trim();
-      const secret = $('#webhook-secret').value.trim();
-      if (!provider) { setMsg('#setup-msg', 'Please select a provider.', 'error'); return; }
-      if (!provToken) { setMsg('#setup-msg', 'Token is required.', 'error'); return; }
-      try {
-        const res = await api('POST', '/api/v1/setup', {
-          provider, token: provToken, webhook_secret: secret,
-        });
-        if (res.result === 'ok' || res.status === 'ok') {
-          location.hash = '#/agents';
-        } else {
-          setMsg('#setup-msg', res.message || 'Setup failed.', 'error');
-        }
-      } catch (e) {
-        setMsg('#setup-msg', 'Error: ' + e.message, 'error');
-      }
+      // Daemon mode: skip provider setup (gateway concept), go to agents.
+      location.hash = '#/agents';
     };
   }
 
@@ -243,24 +224,23 @@
     setMsg('#agents-msg', 'Loading agents…', 'info');
 
     try {
-      const res = await command('onboard', []);
-      const text = res.text || res.message || '';
-      const agents = parseAgentList(text);
+      const agents = await api('GET', '/api/v1/agents');
       setMsg('#agents-msg', '', 'info');
 
-      agents.forEach(a => {
+      (agents || []).forEach(a => {
+        const name = a.id || a.ID || a.name;
         const li = document.createElement('li');
-        li.textContent = a;
+        li.textContent = name;
         li.onclick = () => {
           $$('li', list).forEach(x => x.classList.remove('selected'));
           li.classList.add('selected');
-          selectedAgent = a;
+          selectedAgent = name;
           $('#agents-next').disabled = false;
         };
         list.appendChild(li);
       });
 
-      if (agents.length === 0) {
+      if (!agents || agents.length === 0) {
         setMsg('#agents-msg', 'No agents found.', 'error');
       }
     } catch (e) {
@@ -270,12 +250,7 @@
     $('#agents-back').onclick = () => { location.hash = '#/setup'; };
     $('#agents-next').onclick = async () => {
       if (!selectedAgent) return;
-      try {
-        await command('onboard', [selectedAgent]);
-        location.hash = '#/config';
-      } catch (e) {
-        setMsg('#agents-msg', 'Error: ' + e.message, 'error');
-      }
+      location.hash = '#/config';
     };
   }
 
@@ -308,20 +283,8 @@
     $('#add-env').onclick = addEnvRow;
     $('#config-back').onclick = () => { location.hash = '#/agents'; };
     $('#config-next').onclick = async () => {
-      try {
-        // Send env vars
-        const rows = $$('.env-row');
-        for (const row of rows) {
-          const inputs = $$('input', row);
-          const k = inputs[0].value.trim();
-          const v = inputs[1].value.trim();
-          if (k) await command('onboard', ['env', k + '=' + v]);
-        }
-        await command('onboard', ['done']);
-        location.hash = '#/install';
-      } catch (e) {
-        setMsg('#config-msg', 'Error: ' + e.message, 'error');
-      }
+      // Config is stored locally; proceed to install.
+      location.hash = '#/install';
     };
   }
 
@@ -348,7 +311,7 @@
     $('#install-confirm').onclick = async () => {
       setMsg('#install-msg', 'Installing…', 'info');
       try {
-        await command('onboard', ['yes']);
+        await api('POST', '/api/v1/agents/' + encodeURIComponent(selectedAgent) + '/install', {});
         location.hash = '#/complete';
       } catch (e) {
         setMsg('#install-msg', 'Error: ' + e.message, 'error');
@@ -374,12 +337,10 @@
     const el = $('#agent-list');
     el.textContent = 'Loading…';
     try {
-      const res = await command('onboard', ['status']);
-      const text = res.text || res.message || '';
-      const agents = parseAgentStatus(text);
+      const agents = await api('GET', '/api/v1/agents');
 
       el.textContent = '';
-      if (agents.length === 0) {
+      if (!agents || agents.length === 0) {
         el.textContent = 'No agents found.';
         return;
       }
@@ -387,14 +348,15 @@
       agents.forEach(a => {
         const card = document.createElement('div');
         card.className = 'agent-card';
-        card.onclick = () => { location.hash = '#/agents/' + encodeURIComponent(a.name); };
+        card.onclick = () => { location.hash = '#/agents/' + encodeURIComponent(a.id || a.ID); };
 
         const h = document.createElement('h4');
-        h.textContent = a.name;
+        h.textContent = a.id || a.ID || a.name;
 
+        const runtime = a.runtime || a.Runtime || 'unknown';
         const status = document.createElement('div');
         status.className = 'agent-status';
-        status.textContent = statusIcon(a.status) + ' ' + a.status;
+        status.textContent = statusIcon(runtime) + ' ' + runtime;
 
         const btnRow = document.createElement('div');
         btnRow.className = 'btn-row';
@@ -402,12 +364,12 @@
         const startBtn = document.createElement('button');
         startBtn.className = 'btn-sm';
         startBtn.textContent = '▶ Start';
-        startBtn.onclick = (e) => { e.stopPropagation(); agentAction(a.name, 'start'); };
+        startBtn.onclick = (e) => { e.stopPropagation(); agentAction(a.id || a.ID, 'start'); };
 
         const stopBtn = document.createElement('button');
         stopBtn.className = 'btn-sm btn-secondary';
         stopBtn.textContent = '⏹ Stop';
-        stopBtn.onclick = (e) => { e.stopPropagation(); agentAction(a.name, 'stop'); };
+        stopBtn.onclick = (e) => { e.stopPropagation(); agentAction(a.id || a.ID, 'stop'); };
 
         btnRow.appendChild(startBtn);
         btnRow.appendChild(stopBtn);
@@ -441,7 +403,7 @@
 
   async function agentAction(name, action) {
     try {
-      await command('onboard', [action, name]);
+      await api('POST', '/api/v1/agents/' + encodeURIComponent(name) + '/' + action, {});
       await refreshAgents();
     } catch (e) {
       // silent
@@ -455,8 +417,7 @@
     el.textContent = 'Loading ' + id + '…';
 
     try {
-      const res = await command('onboard', ['status']);
-      const text = res.text || res.message || '';
+      const state = await api('GET', '/api/v1/agents/' + encodeURIComponent(id) + '/status');
       el.textContent = '';
 
       const card = document.createElement('div');
@@ -468,7 +429,7 @@
 
       const pre = document.createElement('pre');
       pre.className = 'log-box';
-      pre.textContent = text;
+      pre.textContent = JSON.stringify(state, null, 2);
       card.appendChild(pre);
 
       const btnRow = document.createElement('div');
@@ -506,13 +467,12 @@
     agentSelect.textContent = '';
 
     // Populate agent list
-    command('onboard', ['status']).then(res => {
-      const text = res.text || res.message || '';
-      const agents = parseAgentStatus(text);
-      agents.forEach(a => {
+    api('GET', '/api/v1/agents').then(agents => {
+      (agents || []).forEach(a => {
+        const name = a.id || a.ID || a.name;
         const opt = document.createElement('option');
-        opt.value = a.name;
-        opt.textContent = a.name;
+        opt.value = name;
+        opt.textContent = name;
         agentSelect.appendChild(opt);
       });
     }).catch(() => {});
@@ -568,10 +528,10 @@
     const poll = async () => {
       if (!running) return;
       try {
-        const res = await command('onboard', ['logs', agentId]);
-        const text = res.text || res.message || '';
-        if (text) {
-          output.textContent += text + '\n';
+        const res = await api('GET', '/api/v1/agents/' + encodeURIComponent(agentId) + '/logs');
+        const lines = res.lines || [];
+        if (lines.length) {
+          output.textContent += lines.join('\n') + '\n';
           output.scrollTop = output.scrollHeight;
         }
       } catch (e) {
@@ -593,13 +553,8 @@
       if (!text) return;
       appendChat('You', text);
       input.value = '';
-      api('POST', '/command', { input: text })
-        .then(res => {
-          appendChat('Carrier', res.text || res.message || JSON.stringify(res));
-        })
-        .catch(e => {
-          appendChat('Error', e.message);
-        });
+      // Chat is not supported in daemon mode; show helpful message.
+      appendChat('Carrier', 'Chat is not available in daemon mode. Use the Dashboard to manage agents.');
     };
 
     $('#chat-send').onclick = send;
@@ -630,16 +585,7 @@
     showView('settings');
     $('#nav').classList.remove('hidden');
     const el = $('#settings-provider');
-    try {
-      const res = await api('GET', '/api/v1/setup');
-      if (res.provider) {
-        el.textContent = 'Provider: ' + res.provider + (res.configured ? ' (configured)' : '');
-      } else {
-        el.textContent = 'No provider configured.';
-      }
-    } catch (e) {
-      el.textContent = 'Could not load settings.';
-    }
+    el.textContent = 'Daemon mode — provider settings managed via config.json.';
   }
 
   // --- Init ---
@@ -652,7 +598,7 @@
 
     // Check if token is valid
     if (token) {
-      fetch('/healthz', { headers: { 'X-Gateway-Token': token } })
+      fetch('/healthz', { headers: { 'Authorization': 'Bearer ' + token } })
         .then(r => {
           if (r.ok) {
             hideLogin();

@@ -159,8 +159,7 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.Pai
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, "ok")
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		if ready == nil || !ready.Load() {
@@ -740,8 +739,16 @@ func stopAllAgents(ctx context.Context, svc *lifecycle.Service) error {
 
 func bearerAuthMiddleware(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
+		// Auth required for /api/ endpoints and /healthz (when token is set).
+		needsAuth := strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/healthz"
+		if needsAuth {
+			// Accept either "Authorization: Bearer <token>" or "X-Gateway-Token: <token>".
 			auth := r.Header.Get("Authorization")
+			if auth == "" {
+				if gt := r.Header.Get("X-Gateway-Token"); gt != "" {
+					auth = "Bearer " + gt
+				}
+			}
 			expected := "Bearer " + token
 			authDigest := sha256.Sum256([]byte(auth))
 			expectedDigest := sha256.Sum256([]byte(expected))
