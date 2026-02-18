@@ -46,31 +46,37 @@ jobs:
             label: linux-x64
             ext: ""
             archive_ext: zip
+            desktop_build: true
           - goos: linux
             goarch: arm64
             label: linux-arm64
             ext: ""
             archive_ext: zip
+            desktop_build: false
           - goos: darwin
             goarch: amd64
             label: darwin-x64
             ext: ""
             archive_ext: zip
+            desktop_build: false
           - goos: darwin
             goarch: arm64
             label: darwin-arm64
             ext: ""
             archive_ext: zip
+            desktop_build: false
           - goos: windows
             goarch: amd64
             label: windows-x64
             ext: ".exe"
             archive_ext: zip
+            desktop_build: false
           - goos: windows
             goarch: arm64
             label: windows-arm64
             ext: ".exe"
             archive_ext: zip
+            desktop_build: false
 
     steps:
       - name: Checkout
@@ -81,20 +87,49 @@ jobs:
         with:
           go-version-file: daemon/go.mod
 
+      - name: Install desktop (Gio) build dependencies
+        if: matrix.desktop_build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwayland-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxkbcommon-x11-dev \
+            libxkbcommon-dev \
+            libgles2-mesa-dev \
+            libegl1-mesa-dev \
+            libffi-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxi-dev \
+            libxxf86vm-dev \
+            pkg-config
+
       - name: Build release package
         shell: bash
         run: |
           set -euo pipefail
           archive_name="carrier-${GITHUB_SHA}-${{ matrix.label }}"
           binary_name="agentd${{ matrix.ext }}"
+          gui_binary_name="carrier-gui${{ matrix.ext }}"
           release_dir="dist/${archive_name}"
           package_file="${archive_name}.${{ matrix.archive_ext }}"
 
           mkdir -p "${release_dir}"
 
+          # Build daemon (agentd) — pure Go, no CGO needed
           (cd daemon && \
             CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
               go build -trimpath -ldflags="-s -w" -o "../${release_dir}/${binary_name}" ./cmd/agentd)
+
+          # Build desktop GUI (carrier-gui) — requires CGO for Gio
+          if [[ "${{ matrix.desktop_build }}" == "true" ]]; then
+            (cd desktop && \
+              CGO_ENABLED=1 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
+                go build -trimpath -ldflags="-s -w" -o "../${release_dir}/${gui_binary_name}" ./cmd/carrier-gui)
+          fi
 
           cp -R daemon catalog gateway docs README.md "${release_dir}/"
 
