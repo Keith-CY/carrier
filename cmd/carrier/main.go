@@ -18,10 +18,13 @@ import (
 const usage = `Carrier — unified agent platform binary
 
 Usage:
-  carrier              Launch the desktop GUI (default)
+  carrier              Launch the desktop GUI (requires -tags gui build)
   carrier daemon       Start the daemon HTTP API server
   carrier --daemon     Start the daemon HTTP API server
   carrier --help       Show this help message
+
+Build with GUI:
+  go build -tags gui -o carrier ./cmd/carrier/
 `
 
 func main() {
