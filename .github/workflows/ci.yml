@@ -187,7 +187,7 @@ jobs:
         working-directory: daemon
         run: |
           set -euo pipefail
-          go test ./... -coverprofile=coverage.out
+          go test ./... -coverprofile=coverage.out 2>&1 | tee test-output.txt || true
           go tool cover -func=coverage.out > coverage-func.txt
 
       - name: Collect base branch coverage
@@ -198,7 +198,7 @@ jobs:
           trap 'git worktree remove -f ../_base_cov || true' EXIT
 
           if [ -d ../_base_cov/daemon ]; then
-            (cd ../_base_cov/daemon && go test ./... -coverprofile=coverage.out && go tool cover -func=coverage.out > coverage-func.txt)
+            (cd ../_base_cov/daemon && go test ./... -coverprofile=coverage.out 2>&1 | tee test-output.txt || true && go tool cover -func=coverage.out > coverage-func.txt)
           fi
 
       - name: Build markdown summary
@@ -214,23 +214,79 @@ jobs:
             m = re.search(r'total:\s*\(statements\)\s*([0-9.]+)%', txt)
             return float(m.group(1)) if m else 0.0
 
-          daemon = parse_go_total('daemon/coverage-func.txt')
-          base_daemon = parse_go_total('../_base_cov/daemon/coverage-func.txt')
+          def parse_pkg_coverage(test_output_path, prefix=''):
+            """Parse per-package coverage from go test output."""
+            p = pathlib.Path(test_output_path)
+            if not p.exists():
+              return {}
+            pkgs = {}
+            for line in p.read_text().splitlines():
+              # ok  carrier/daemon/cmd/agentd 1.2s coverage: 79.5% of statements
+              m = re.match(r'^(?:ok|FAIL)\s+(\S+)\s+\S+(?:\s+coverage:\s*([0-9.]+)%)?', line)
+              if m:
+                pkg = m.group(1)
+                cov = float(m.group(2)) if m.group(2) else 0.0
+                # strip common prefix to get short name
+                if prefix and pkg.startswith(prefix):
+                  pkg = pkg[len(prefix):]
+                pkgs[pkg] = cov
+            return pkgs
+
+          # Determine module prefix from go.mod
+          go_mod = pathlib.Path('daemon/go.mod').read_text()
+          mod_match = re.search(r'^module\s+(\S+)', go_mod, re.MULTILINE)
+          mod_prefix = (mod_match.group(1) + '/') if mod_match else ''
+
+          head_pkgs = parse_pkg_coverage('daemon/test-output.txt', mod_prefix)
+          base_pkgs = parse_pkg_coverage('../_base_cov/daemon/test-output.txt', mod_prefix)
+
+          total = parse_go_total('daemon/coverage-func.txt')
+          base_total = parse_go_total('../_base_cov/daemon/coverage-func.txt')
+
+          all_pkg_names = sorted(set(list(head_pkgs.keys()) + list(base_pkgs.keys())))
 
           marker = '<!-- carrier-pr-coverage-report -->'
           lines = [
             marker,
             '### 📊 Coverage Report',
             '',
-            '| Module | Line Coverage | Δ vs base |',
-            '|---|---:|---:|',
-            f'| Daemon (Go) | {daemon:.2f}% | {(daemon-base_daemon):+.2f}% |',
-            '',
-            f'**Line coverage:** {daemon:.2f}%',
-            f'**Δ vs base:** {(daemon-base_daemon):+.2f}%',
+            '| Package | Coverage | Base | Δ |',
+            '|---|---:|---:|---:|',
           ]
-          if not pathlib.Path('../_base_cov/daemon/coverage-func.txt').exists():
-            lines += ['', '_Note: base branch daemon coverage file not found; base daemon treated as 0.00%._']
+
+          low_pkgs = []
+          for pkg in all_pkg_names:
+            cov = head_pkgs.get(pkg)
+            base = base_pkgs.get(pkg)
+            if cov is None:
+              cov_str = 'N/A'
+            else:
+              cov_str = f'{cov:.1f}%'
+            if base is None:
+              base_str = 'N/A'
+            else:
+              base_str = f'{base:.1f}%'
+            if cov is not None and base is not None:
+              delta = cov - base
+              warn = ' ⚠️' if delta < -5 else ''
+              delta_str = f'{delta:+.1f}%{warn}'
+            elif cov is not None:
+              delta_str = 'new'
+            else:
+              delta_str = 'removed'
+            lines.append(f'| {pkg} | {cov_str} | {base_str} | {delta_str} |')
+            if cov is not None and cov < 50.0:
+              low_pkgs.append(f'{pkg} ({cov:.1f}%)')
+
+          # Total row
+          delta_total = total - base_total
+          lines.append(f'| **Total** | **{total:.1f}%** | **{base_total:.1f}%** | **{delta_total:+.1f}%** |')
+
+          if low_pkgs:
+            lines += ['', f'⚠️ Packages below 50%: {", ".join(low_pkgs)}']
+
+          if not pathlib.Path('../_base_cov/daemon/test-output.txt').exists():
+            lines += ['', '_Note: base branch coverage not found; base treated as 0%._']
 
           pathlib.Path('coverage-comment.md').write_text('\n'.join(lines))
           PY2
