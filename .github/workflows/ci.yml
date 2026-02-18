@@ -256,6 +256,33 @@ jobs:
             gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" -f body="$body" >/dev/null
           fi
 
+  e2e-webui:
+    name: WebUI E2E Tests
+    needs: classify-scope
+    if: github.event_name != 'pull_request' || needs.classify-scope.outputs.ci_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: webui/e2e
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: webui/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        working-directory: webui/e2e
+        run: npx playwright test
+
   e2e-tests:
     name: End-to-End Tests
     runs-on: ubuntu-latest
