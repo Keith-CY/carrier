@@ -328,6 +328,9 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.Pai
 		}
 	})
 
+	// Serve embedded WebUI at root (SPA fallback).
+	mux.Handle("/", webUIHandler())
+
 	mux.HandleFunc("/api/v1/diagnosis/handoffs", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
