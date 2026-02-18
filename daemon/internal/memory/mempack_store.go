@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -62,29 +63,29 @@ func (s *Store) ImportMemory(mempackPath string, opts ImportOptions) (Entry, err
 
 	memoryID := memoryIDFor(region, owner, publisher, manifest.ID, manifest.Version)
 	installPath := installPathFor(root, region, owner, publisher, manifest.ID, manifest.Version)
-
-	s.mu.Lock()
-	if _, exists := s.entries[memoryID]; exists {
-		s.mu.Unlock()
-		s.recordAudit(opts.RequestID, opts.Actor, "import", memoryID, auditResultFailure, "memory already exists")
-		return Entry{}, fmt.Errorf("memory %q already exists", memoryID)
-	}
-	s.mu.Unlock()
-
-	if err := os.RemoveAll(installPath); err != nil {
-		s.recordAudit(opts.RequestID, opts.Actor, "import", memoryID, auditResultFailure, err.Error())
-		return Entry{}, fmt.Errorf("clear install path: %w", err)
-	}
-	if err := os.MkdirAll(installPath, 0o755); err != nil {
-		s.recordAudit(opts.RequestID, opts.Actor, "import", memoryID, auditResultFailure, err.Error())
-		return Entry{}, fmt.Errorf("create install path: %w", err)
-	}
-	if err := extractZipInto(&zr.Reader, installPath); err != nil {
+	if err := verifyMempackDigest(mempackPath, manifest.Provenance.Digest); err != nil {
 		s.recordAudit(opts.RequestID, opts.Actor, "import", memoryID, auditResultFailure, err.Error())
 		return Entry{}, err
 	}
 
-	if err := verifyMempackDigest(mempackPath, manifest.Provenance.Digest); err != nil {
+	tmpRoot := filepath.Join(root, "packages", ".tmp")
+	if err := os.MkdirAll(tmpRoot, 0o755); err != nil {
+		s.recordAudit(opts.RequestID, opts.Actor, "import", memoryID, auditResultFailure, err.Error())
+		return Entry{}, fmt.Errorf("create temporary import root: %w", err)
+	}
+	stagingPath, err := os.MkdirTemp(tmpRoot, "mempack-import-*")
+	if err != nil {
+		s.recordAudit(opts.RequestID, opts.Actor, "import", memoryID, auditResultFailure, err.Error())
+		return Entry{}, fmt.Errorf("create temporary import dir: %w", err)
+	}
+	staged := true
+	defer func() {
+		if staged {
+			_ = os.RemoveAll(stagingPath)
+		}
+	}()
+
+	if err := extractZipInto(&zr.Reader, stagingPath); err != nil {
 		s.recordAudit(opts.RequestID, opts.Actor, "import", memoryID, auditResultFailure, err.Error())
 		return Entry{}, err
 	}
@@ -102,6 +103,27 @@ func (s *Store) ImportMemory(mempackPath string, opts ImportOptions) (Entry, err
 	}
 
 	s.mu.Lock()
+	if _, exists := s.entries[memoryID]; exists {
+		s.mu.Unlock()
+		s.recordAudit(opts.RequestID, opts.Actor, "import", memoryID, auditResultFailure, "memory already exists")
+		return Entry{}, fmt.Errorf("memory %q already exists", memoryID)
+	}
+	if err := os.MkdirAll(filepath.Dir(installPath), 0o755); err != nil {
+		s.mu.Unlock()
+		s.recordAudit(opts.RequestID, opts.Actor, "import", memoryID, auditResultFailure, err.Error())
+		return Entry{}, fmt.Errorf("create install parent path: %w", err)
+	}
+	if err := os.RemoveAll(installPath); err != nil {
+		s.mu.Unlock()
+		s.recordAudit(opts.RequestID, opts.Actor, "import", memoryID, auditResultFailure, err.Error())
+		return Entry{}, fmt.Errorf("clear install path: %w", err)
+	}
+	if err := os.Rename(stagingPath, installPath); err != nil {
+		s.mu.Unlock()
+		s.recordAudit(opts.RequestID, opts.Actor, "import", memoryID, auditResultFailure, err.Error())
+		return Entry{}, fmt.Errorf("activate imported memory package: %w", err)
+	}
+	staged = false
 	s.entries[memoryID] = entry
 	s.manifests[memoryID] = manifest
 	s.installPath[memoryID] = installPath
@@ -147,9 +169,14 @@ func (s *Store) ExportMemory(memoryID string, opts ExportOptions) (string, error
 		return "", fmt.Errorf("create export artifact: %w", err)
 	}
 	defer f.Close()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(exportPath)
+		}
+	}()
 
 	zw := zip.NewWriter(f)
-	defer zw.Close()
 
 	files, err := listFiles(installPath)
 	if err != nil {
@@ -184,6 +211,7 @@ func (s *Store) ExportMemory(memoryID string, opts ExportOptions) (string, error
 		s.recordAudit(opts.RequestID, opts.Actor, "export", memoryID, auditResultFailure, err.Error())
 		return "", fmt.Errorf("close export artifact: %w", err)
 	}
+	cleanup = false
 
 	s.recordAudit(opts.RequestID, opts.Actor, "export", memoryID, auditResultSuccess, "memory exported")
 	return exportPath, nil
@@ -271,11 +299,14 @@ func zipEntryBytes(r *zip.Reader, name string) ([]byte, error) {
 
 func extractZipInto(r *zip.Reader, dstRoot string) error {
 	for _, f := range r.File {
-		name := filepath.Clean(f.Name)
-		if name == "." {
+		cleanArchivePath, err := cleanArchiveEntryPath(f.Name)
+		if err != nil {
+			return err
+		}
+		if cleanArchivePath == "." {
 			continue
 		}
-		target := filepath.Join(dstRoot, name)
+		target := filepath.Join(dstRoot, filepath.FromSlash(cleanArchivePath))
 		if !isWithinRoot(dstRoot, target) {
 			return fmt.Errorf("zip entry %q escapes destination", f.Name)
 		}
@@ -308,6 +339,30 @@ func extractZipInto(r *zip.Reader, dstRoot string) error {
 		}
 	}
 	return nil
+}
+
+func cleanArchiveEntryPath(raw string) (string, error) {
+	normalized := strings.ReplaceAll(raw, "\\", "/")
+	if strings.HasPrefix(normalized, "/") {
+		return "", fmt.Errorf("zip entry %q must be relative", raw)
+	}
+	if strings.Contains(normalized, "\x00") {
+		return "", fmt.Errorf("zip entry %q contains null byte", raw)
+	}
+	for _, segment := range strings.Split(normalized, "/") {
+		if segment == ".." {
+			return "", fmt.Errorf("zip entry %q contains parent traversal", raw)
+		}
+	}
+	clean := path.Clean(normalized)
+	if clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", fmt.Errorf("zip entry %q escapes destination", raw)
+	}
+	if len(clean) >= 2 && clean[1] == ':' &&
+		((clean[0] >= 'a' && clean[0] <= 'z') || (clean[0] >= 'A' && clean[0] <= 'Z')) {
+		return "", fmt.Errorf("zip entry %q contains a drive-letter path", raw)
+	}
+	return clean, nil
 }
 
 func listFiles(root string) ([]string, error) {

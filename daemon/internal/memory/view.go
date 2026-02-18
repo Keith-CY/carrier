@@ -156,14 +156,21 @@ func (s *Store) PrepareAgentMemory(agentID string) (RuntimeMemoryContract, error
 	entries := make(map[string]Entry, len(attachments))
 	manifests := make(map[string]PackageManifest, len(attachments))
 	installPaths := make(map[string]string, len(attachments))
+	runtimeReadTargetPath := s.runtimeReadTargetPath
+	runtimeWriteTargetPath := s.runtimeWriteTargetPath
 	for _, a := range attachments {
 		entries[a.MemoryID] = s.entries[a.MemoryID]
 		manifests[a.MemoryID] = s.manifests[a.MemoryID]
 		installPaths[a.MemoryID] = s.installPath[a.MemoryID]
 	}
 	s.mu.RUnlock()
-
-	s.UnmountAll(agentID)
+	if runtimeReadTargetPath == "" {
+		runtimeReadTargetPath = "/app/memory"
+	}
+	if runtimeWriteTargetPath == "" {
+		runtimeWriteTargetPath = "/app/memory_private"
+	}
+	previousMounts := s.MountsForAgent(agentID)
 
 	sorted := attachments
 	sort.SliceStable(sorted, func(i, j int) bool {
@@ -204,10 +211,6 @@ func (s *Store) PrepareAgentMemory(agentID string) (RuntimeMemoryContract, error
 		installPath := installPaths[att.MemoryID]
 		if installPath == "" {
 			continue
-		}
-
-		if _, err := s.Mount(att.MemoryID, agentID, att.Mode); err != nil {
-			return RuntimeMemoryContract{}, err
 		}
 
 		selectedCollections, err := resolveCollectionPaths(manifest, att.Collections)
@@ -272,14 +275,17 @@ func (s *Store) PrepareAgentMemory(agentID string) (RuntimeMemoryContract, error
 	if err := writeMountMap(explain); err != nil {
 		return RuntimeMemoryContract{}, err
 	}
+	if err := s.applyMountStateWithRollback(agentID, sorted, previousMounts); err != nil {
+		return RuntimeMemoryContract{}, err
+	}
 
 	s.mu.Lock()
 	s.views[agentID] = explain
 	s.mu.Unlock()
 
 	env := map[string]string{
-		"AGENTD_MEMORY_PATH":        "/app/memory",
-		"AGENTD_MEMORY_WRITE_PATH":  "/app/memory_private",
+		"AGENTD_MEMORY_PATH":        runtimeReadTargetPath,
+		"AGENTD_MEMORY_WRITE_PATH":  runtimeWriteTargetPath,
 		"AGENTD_MEMORY_VIEW_DIGEST": digest,
 	}
 	contract := RuntimeMemoryContract{
@@ -298,6 +304,34 @@ func (s *Store) PrepareAgentMemory(agentID string) (RuntimeMemoryContract, error
 
 	s.recordAudit("", "", "prepare", agentID, auditResultSuccess, fmt.Sprintf("digest=%s", digest))
 	return contract, nil
+}
+
+func (s *Store) applyMountStateWithRollback(agentID string, desired []Attachment, previous []MountRecord) error {
+	s.UnmountAll(agentID)
+
+	for _, att := range desired {
+		if _, err := s.Mount(att.MemoryID, agentID, att.Mode); err != nil {
+			s.UnmountAll(agentID)
+			if rollbackErr := s.restoreMountRecords(previous); rollbackErr != nil {
+				return fmt.Errorf("apply memory mounts failed: %v (rollback failed: %v)", err, rollbackErr)
+			}
+			return fmt.Errorf("apply memory mounts failed: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) restoreMountRecords(records []MountRecord) error {
+	var errs []string
+	for _, rec := range records {
+		if _, err := s.Mount(rec.MemoryID, rec.AgentID, rec.AccessMode); err != nil && err != ErrAlreadyMounted {
+			errs = append(errs, fmt.Sprintf("%s: %v", rec.MemoryID, err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 // ExplainView returns the latest view composition details for the agent.

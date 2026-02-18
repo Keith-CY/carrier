@@ -2,12 +2,15 @@ package memory
 
 import (
 	"archive/zip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -82,6 +85,14 @@ func readZipFile(t *testing.T, zipPath, fileName string) (string, bool) {
 }
 
 func baseManifest(region string) string {
+	return baseManifestWithDigest(region, "sha256:abc123")
+}
+
+func baseManifestWithDigest(region, digest string) string {
+	defaultMode := "ro"
+	if normalizeRegion(region) == TypePerAgent {
+		defaultMode = "rw"
+	}
 	return strings.TrimSpace(`
 schema_version: "1"
 id: team-style
@@ -93,7 +104,7 @@ publisher: acme
 provenance:
   source: market
   uri: https://example.com/team-style
-  digest: sha256:abc123
+  digest: `+digest+`
 collections:
   - id: prompts
     path: content/prompts
@@ -104,9 +115,19 @@ collections:
     sensitivity: low
     default_mount: /kb
 mount:
-  default_mode: ro
+  default_mode: `+defaultMode+`
   default_slot: default
 `) + "\n"
+}
+
+func fileSHA256Digest(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file for digest: %v", err)
+	}
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func TestImportMemoryInstallsMempackAndRegistersEntry(t *testing.T) {
@@ -276,7 +297,13 @@ func TestAttachPolicyForcedReadOnlyAndPerAgentLimit(t *testing.T) {
 
 	pub, _ := store.ImportMemory(publicPack, ImportOptions{TargetRegion: TypePublic, Publisher: "acme"})
 	privA, _ := store.ImportMemory(privatePackA, ImportOptions{TargetRegion: TypePerAgent, Owner: "agent-1"})
-	privB, _ := store.ImportMemory(privatePackB, ImportOptions{TargetRegion: TypePerAgent, Owner: "agent-1"})
+	if privA.ID == "" {
+		t.Fatal("expected private A import success")
+	}
+	privB, err := store.ImportMemory(privatePackB, ImportOptions{TargetRegion: TypePerAgent, Owner: "agent-1"})
+	if err != nil {
+		t.Fatalf("import private B: %v", err)
+	}
 
 	att, err := store.AttachMemory("agent-1", pub.ID, AttachOptions{Mode: AccessReadWrite})
 	if err != nil {
@@ -301,6 +328,85 @@ func TestImportInvalidManifestRejected(t *testing.T) {
 
 	if _, err := store.ImportMemory(pack, ImportOptions{TargetRegion: TypeShared}); err == nil {
 		t.Fatal("expected import error for invalid manifest")
+	}
+}
+
+func TestImportMemoryDigestVerificationMismatchBeforeExtraction(t *testing.T) {
+	store, root := newMemoryStoreWithRoot(t)
+	pack := filepath.Join(t.TempDir(), "digest-mismatch.mempack.zip")
+	invalidDigest := "sha256:" + strings.Repeat("f", 64)
+	writeMempack(t, pack, baseManifestWithDigest("shared", invalidDigest), map[string]string{
+		"content/prompts/system.md": "x",
+	})
+
+	if _, err := store.ImportMemory(pack, ImportOptions{TargetRegion: TypeShared}); err == nil {
+		t.Fatal("expected digest mismatch error")
+	}
+
+	installPath := filepath.Join(root, "packages", "shared", "team-style@1.0.0")
+	if _, err := os.Stat(installPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no extracted files on digest mismatch, got stat err=%v", err)
+	}
+}
+
+func TestVerifyMempackDigestSuccessPathCovered(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "artifact.bin")
+	if err := os.WriteFile(filePath, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	digest := fileSHA256Digest(t, filePath)
+
+	if err := verifyMempackDigest(filePath, digest); err != nil {
+		t.Fatalf("expected digest verification success, got %v", err)
+	}
+}
+
+func TestImportRejectsZipPathTraversalEntries(t *testing.T) {
+	store, _ := newMemoryStoreWithRoot(t)
+	pack := filepath.Join(t.TempDir(), "zip-traversal.mempack.zip")
+	writeMempack(t, pack, baseManifest("shared"), map[string]string{
+		"../evil.txt": "nope",
+	})
+
+	if _, err := store.ImportMemory(pack, ImportOptions{TargetRegion: TypeShared}); err == nil {
+		t.Fatal("expected traversal path rejection")
+	}
+}
+
+func TestImportMemoryConcurrentDuplicateOnlyOneSucceeds(t *testing.T) {
+	store, _ := newMemoryStoreWithRoot(t)
+	pack := filepath.Join(t.TempDir(), "duplicate-race.mempack.zip")
+	writeMempack(t, pack, baseManifest("shared"), map[string]string{
+		"content/prompts/system.md": "x",
+	})
+
+	var wg sync.WaitGroup
+	type result struct {
+		err error
+	}
+	results := make(chan result, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := store.ImportMemory(pack, ImportOptions{TargetRegion: TypeShared})
+			results <- result{err: err}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	success := 0
+	fail := 0
+	for r := range results {
+		if r.err == nil {
+			success++
+		} else {
+			fail++
+		}
+	}
+	if success != 1 || fail != 1 {
+		t.Fatalf("expected exactly one success and one failure, got success=%d fail=%d", success, fail)
 	}
 }
 
@@ -347,5 +453,77 @@ func TestExplainViewIncludesMountMapFile(t *testing.T) {
 	effectiveFile := filepath.Join(root, "views", "agent-1", "effective", "prompts", "system.md")
 	if _, err := os.Stat(effectiveFile); err != nil {
 		t.Fatalf("expected effective view file: %v", err)
+	}
+}
+
+func TestPrepareAgentMemoryRollbackKeepsExistingMountsOnFailure(t *testing.T) {
+	store, _ := newMemoryStoreWithRoot(t)
+	tmp := t.TempDir()
+
+	m1Pack := filepath.Join(tmp, "m1.mempack.zip")
+	writeMempack(t, m1Pack, strings.ReplaceAll(baseManifest("shared"), "id: team-style", "id: m1"), map[string]string{
+		"content/prompts/system.md": "m1",
+	})
+	m2Pack := filepath.Join(tmp, "m2.mempack.zip")
+	writeMempack(t, m2Pack, strings.ReplaceAll(baseManifest("shared"), "id: team-style", "id: m2"), map[string]string{
+		"content/prompts/system.md": "m2",
+	})
+
+	m1, err := store.ImportMemory(m1Pack, ImportOptions{TargetRegion: TypeShared})
+	if err != nil {
+		t.Fatalf("import m1: %v", err)
+	}
+	m2, err := store.ImportMemory(m2Pack, ImportOptions{TargetRegion: TypeShared})
+	if err != nil {
+		t.Fatalf("import m2: %v", err)
+	}
+	if _, err := store.Mount(m1.ID, "agent-1", AccessReadOnly); err != nil {
+		t.Fatalf("mount existing memory: %v", err)
+	}
+	if err := store.Archive(m2.ID); err != nil {
+		t.Fatalf("archive m2: %v", err)
+	}
+	if err := store.SetAttachmentsFromLinks("agent-1", []string{m2.ID}); err != nil {
+		t.Fatalf("set attachments: %v", err)
+	}
+
+	if _, err := store.PrepareAgentMemory("agent-1"); err == nil {
+		t.Fatal("expected prepare to fail when desired mount cannot be applied")
+	}
+
+	mounts := store.MountsForAgent("agent-1")
+	if len(mounts) != 1 || mounts[0].MemoryID != m1.ID {
+		t.Fatalf("expected previous mount restored, got %+v", mounts)
+	}
+}
+
+func TestPrepareAgentMemoryUsesConfiguredRuntimeTargets(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(
+		WithRootDir(root),
+		WithNow(func() time.Time { return time.Date(2026, 2, 18, 12, 0, 0, 0, time.UTC) }),
+		WithRuntimeMountTargets("/runtime/memory", "/runtime/memory_private"),
+	)
+	pack := filepath.Join(t.TempDir(), "shared.mempack.zip")
+	writeMempack(t, pack, baseManifest("shared"), map[string]string{
+		"content/prompts/system.md": "hello",
+	})
+	entry, err := store.ImportMemory(pack, ImportOptions{TargetRegion: TypeShared})
+	if err != nil {
+		t.Fatalf("import memory: %v", err)
+	}
+	if _, err := store.AttachMemory("agent-1", entry.ID, AttachOptions{}); err != nil {
+		t.Fatalf("attach memory: %v", err)
+	}
+
+	contract, err := store.PrepareAgentMemory("agent-1")
+	if err != nil {
+		t.Fatalf("prepare memory: %v", err)
+	}
+	if contract.Env["AGENTD_MEMORY_PATH"] != "/runtime/memory" {
+		t.Fatalf("unexpected runtime memory path: %q", contract.Env["AGENTD_MEMORY_PATH"])
+	}
+	if contract.Env["AGENTD_MEMORY_WRITE_PATH"] != "/runtime/memory_private" {
+		t.Fatalf("unexpected runtime write path: %q", contract.Env["AGENTD_MEMORY_WRITE_PATH"])
 	}
 }

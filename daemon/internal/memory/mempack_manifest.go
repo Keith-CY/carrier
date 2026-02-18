@@ -23,6 +23,8 @@ func parseManifest(data []byte) (PackageManifest, error) {
 			return PackageManifest{}, fmt.Errorf("%w: parse json manifest: %v", ErrManifestInvalid, err)
 		}
 	} else {
+		// YAML support intentionally targets a strict, line-oriented manifest subset.
+		// Keep memory.yaml examples inside this subset for deterministic parsing.
 		if err := parseYAMLManifest(trimmed, &m); err != nil {
 			return PackageManifest{}, err
 		}
@@ -243,10 +245,14 @@ func validateManifest(m *PackageManifest) error {
 		m.Mount.DefaultSlot = "default"
 	}
 	if m.Region == TypePublic {
-		m.Mount.DefaultMode = AccessReadOnly
+		if m.Mount.DefaultMode != AccessReadOnly {
+			return fmt.Errorf("%w: public region requires mount.default_mode=ro", ErrManifestInvalid)
+		}
 	}
 	if m.Region == TypePerAgent {
-		m.Mount.DefaultMode = AccessReadWrite
+		if m.Mount.DefaultMode != AccessReadWrite {
+			return fmt.Errorf("%w: private/per-agent region requires mount.default_mode=rw", ErrManifestInvalid)
+		}
 	}
 	return nil
 }
