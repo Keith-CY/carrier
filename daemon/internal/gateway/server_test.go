@@ -39,7 +39,9 @@ func TestHealthz(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var body map[string]string
-	_ = json.NewDecoder(w.Body).Decode(&body)
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
 	if body["status"] != "ok" {
 		t.Errorf("expected status ok, got %q", body["status"])
 	}

@@ -81,7 +81,9 @@ func TestDownload_ValidToken(t *testing.T) {
 
 	// Create a test file
 	testFile := filepath.Join(tmpDir, "test-artifact.txt")
-	_ = os.WriteFile(testFile, []byte("test content"), 0o644)
+	if err := os.WriteFile(testFile, []byte("test content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Issue a download token
 	tok := downloads.Issue(testFile, 5*time.Minute, false)
