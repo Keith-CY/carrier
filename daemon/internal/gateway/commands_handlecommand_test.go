@@ -326,7 +326,7 @@ func TestHandleCommand_Status_AllAgents(t *testing.T) {
 func TestHandleCommand_Status_SingleAgent(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
 		"GET /api/v1/agents/a1/status": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"statuses": []map[string]interface{}{
 					{"id": "a1", "health": "healthy", "runtimeState": "stopped", "version": "1.0", "restartCount": 2},
 				},
@@ -349,7 +349,7 @@ func TestHandleCommand_Status_SingleAgent(t *testing.T) {
 func TestHandleCommand_Status_Empty(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
 		"GET /api/v1/agents/status": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{"statuses": []interface{}{}})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"statuses": []interface{}{}})
 		},
 	})
 	defer srv.Close()
@@ -371,7 +371,7 @@ func TestHandleCommand_Status_Empty(t *testing.T) {
 func TestHandleCommand_Logs_WithAgent(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
 		"GET /api/v1/agents/a1/logs": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"lines":     []string{"line1", "line2"},
 				"truncated": false,
 			})
@@ -396,7 +396,7 @@ func TestHandleCommand_Logs_WithAgent(t *testing.T) {
 func TestHandleCommand_Logs_MergedWithTail(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
 		"GET /api/v1/logs": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"lines":     []string{},
 				"truncated": false,
 			})
@@ -421,7 +421,7 @@ func TestHandleCommand_Logs_MergedWithTail(t *testing.T) {
 func TestHandleCommand_Logs_MergedDefault(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
 		"GET /api/v1/logs": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"lines":     []string{"hello"},
 				"truncated": false,
 			})
@@ -443,7 +443,7 @@ func TestHandleCommand_Logs_MergedDefault(t *testing.T) {
 func TestHandleCommand_Upgrade_Success(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
 		"POST /api/v1/agents/a1/upgrade": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"agentId":      "a1",
 				"fromVersion":  "1.0",
 				"toVersion":    "2.0",
@@ -489,7 +489,7 @@ func TestHandleCommand_Upgrade_NoArgs(t *testing.T) {
 func TestHandleCommand_Diagnose_Success(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
 		"POST /api/v1/agents/a1/diagnose": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"artifactRef": "/tmp/diag.tar.gz",
 			})
 		},
@@ -525,7 +525,7 @@ func TestHandleCommand_Diagnose_NoArgs(t *testing.T) {
 func TestHandleCommand_DiagnoseConsent_Success(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
 		"POST /api/v1/diagnosis/handoffs": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id":          "h1",
 				"agentId":     "a1",
 				"consent":     true,
@@ -585,7 +585,7 @@ func TestHandleCommand_DiagnoseConsent_RemoteDiagNotNeeded(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
 		"POST /api/v1/diagnosis/handoffs": func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"error": map[string]string{"code": "E_REMOTE_DIAG_NOT_NEEDED", "message": "not needed"},
 			})
 		},
@@ -606,7 +606,7 @@ func TestHandleCommand_DiagnoseConsent_RemoteDiagNotNeeded(t *testing.T) {
 func TestHandleCommand_RateLimited(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(map[string]http.HandlerFunc{
 		"GET /api/v1/agents": func(w http.ResponseWriter, r *http.Request) {
-			json.NewEncoder(w).Encode(map[string]interface{}{"agents": []interface{}{}})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"agents": []interface{}{}})
 		},
 	})
 	defer srv.Close()
