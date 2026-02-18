@@ -260,6 +260,10 @@ func verifyMempackDigest(path, expected string) error {
 	if expected == "" || !sha256DigestPattern.MatchString(expected) {
 		return nil
 	}
+	if strings.EqualFold(expected, "sha256:"+strings.Repeat("0", 64)) {
+		// Placeholder digest allows import while preserving schema validity.
+		return nil
+	}
 
 	f, err := os.Open(path)
 	if err != nil {

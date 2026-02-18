@@ -4,34 +4,34 @@ import "time"
 
 // PackageManifest describes the memory.yaml metadata inside a mempack artifact.
 type PackageManifest struct {
-	SchemaVersion string           `json:"schema_version"`
-	ID            string           `json:"id"`
-	Name          string           `json:"name"`
-	Version       string           `json:"version"`
-	Region        Type             `json:"region"`
-	Kind          string           `json:"type"`
-	Publisher     string           `json:"publisher,omitempty"`
-	Provenance    Provenance       `json:"provenance"`
-	Collections   []CollectionSpec `json:"collections"`
-	Mount         MountDefaults    `json:"mount"`
+	SchemaVersion string           `json:"schema_version" yaml:"schema_version"`
+	ID            string           `json:"id" yaml:"id"`
+	Name          string           `json:"name" yaml:"name"`
+	Version       string           `json:"version" yaml:"version"`
+	Region        Type             `json:"region" yaml:"region"`
+	Kind          string           `json:"type" yaml:"type"`
+	Publisher     string           `json:"publisher,omitempty" yaml:"publisher,omitempty"`
+	Provenance    Provenance       `json:"provenance" yaml:"provenance"`
+	Collections   []CollectionSpec `json:"collections" yaml:"collections"`
+	Mount         MountDefaults    `json:"mount" yaml:"mount"`
 }
 
 type Provenance struct {
-	Source string `json:"source"`
-	URI    string `json:"uri"`
-	Digest string `json:"digest"`
+	Source string `json:"source" yaml:"source"`
+	URI    string `json:"uri" yaml:"uri"`
+	Digest string `json:"digest" yaml:"digest"`
 }
 
 type CollectionSpec struct {
-	ID           string `json:"id"`
-	Path         string `json:"path"`
-	Sensitivity  string `json:"sensitivity"`
-	DefaultMount string `json:"default_mount"`
+	ID           string `json:"id" yaml:"id"`
+	Path         string `json:"path" yaml:"path"`
+	Sensitivity  string `json:"sensitivity" yaml:"sensitivity"`
+	DefaultMount string `json:"default_mount" yaml:"default_mount"`
 }
 
 type MountDefaults struct {
-	DefaultMode AccessMode `json:"default_mode"`
-	DefaultSlot string     `json:"default_slot"`
+	DefaultMode AccessMode `json:"default_mode" yaml:"default_mode"`
+	DefaultSlot string     `json:"default_slot" yaml:"default_slot"`
 }
 
 type ImportOptions struct {

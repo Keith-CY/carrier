@@ -85,7 +85,7 @@ func readZipFile(t *testing.T, zipPath, fileName string) (string, bool) {
 }
 
 func baseManifest(region string) string {
-	return baseManifestWithDigest(region, "sha256:abc123")
+	return baseManifestWithDigest(region, "sha256:"+strings.Repeat("0", 64))
 }
 
 func baseManifestWithDigest(region, digest string) string {

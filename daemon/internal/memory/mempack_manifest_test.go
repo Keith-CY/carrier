@@ -17,7 +17,7 @@ publisher: acme
 provenance:
   source: market
   uri: "https://example.com/a:b?x=1"
-  digest: sha256:abc123
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
 collections:
   - id: prompts
     path: content/prompts
@@ -52,7 +52,7 @@ publisher: acme
 provenance:
   source: market
   uri: https://example.com/team-style # trailing comment
-  digest: sha256:abc123
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
 collections:
   - id: prompts
     path: content/prompts
@@ -83,7 +83,7 @@ func TestValidateManifestPublicRequiresReadOnlyDefaultMode(t *testing.T) {
 		Provenance: Provenance{
 			Source: "market",
 			URI:    "https://example.com",
-			Digest: "sha256:abc123",
+			Digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		},
 		Collections: []CollectionSpec{{ID: "prompts", Path: "content/prompts"}},
 		Mount:       MountDefaults{DefaultMode: AccessReadWrite, DefaultSlot: "default"},
@@ -105,7 +105,7 @@ func TestValidateManifestPrivateRequiresReadWriteDefaultMode(t *testing.T) {
 		Provenance: Provenance{
 			Source: "market",
 			URI:    "https://example.com",
-			Digest: "sha256:abc123",
+			Digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		},
 		Collections: []CollectionSpec{{ID: "prompts", Path: "content/prompts"}},
 		Mount:       MountDefaults{DefaultMode: AccessReadOnly, DefaultSlot: "default"},
