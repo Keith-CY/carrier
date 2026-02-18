@@ -163,7 +163,7 @@ func TestListAttachments(t *testing.T) {
 	}
 
 	s.Create("m1", "A", "1.0.0", TypeShared, "")
-	s.AttachMemory("agent-1", "m1", AttachOptions{Priority: 5})
+	_ = s.AttachMemory("agent-1", "m1", AttachOptions{Priority: 5})
 
 	atts = s.ListAttachments("agent-1")
 	if len(atts) != 1 {
@@ -179,7 +179,7 @@ func TestListAttachments(t *testing.T) {
 func TestAttachMemoryArchivedMemory(t *testing.T) {
 	s := newTestStore()
 	s.Create("m1", "A", "1.0.0", TypeShared, "")
-	s.Archive("m1")
+	_ = s.Archive("m1")
 	_, err := s.AttachMemory("agent-1", "m1", AttachOptions{})
 	if err == nil {
 		t.Fatal("expected error attaching archived memory")
@@ -209,7 +209,7 @@ func TestAttachMemoryNotFound(t *testing.T) {
 func TestAttachMemoryAlreadyAttached(t *testing.T) {
 	s := newTestStore()
 	s.Create("m1", "A", "1.0.0", TypeShared, "")
-	s.AttachMemory("agent-1", "m1", AttachOptions{})
+	_ = s.AttachMemory("agent-1", "m1", AttachOptions{})
 	_, err := s.AttachMemory("agent-1", "m1", AttachOptions{})
 	if err != ErrAlreadyMounted {
 		t.Fatalf("expected ErrAlreadyMounted, got %v", err)
@@ -220,7 +220,7 @@ func TestAttachMemoryPerAgentLimit(t *testing.T) {
 	s := newTestStore()
 	s.Create("m1", "A", "1.0.0", TypePerAgent, "agent-1")
 	s.Create("m2", "B", "1.0.0", TypePerAgent, "agent-1")
-	s.AttachMemory("agent-1", "m1", AttachOptions{})
+	_ = s.AttachMemory("agent-1", "m1", AttachOptions{})
 	_, err := s.AttachMemory("agent-1", "m2", AttachOptions{})
 	if err != ErrPerAgentLimit {
 		t.Fatalf("expected ErrPerAgentLimit, got %v", err)
@@ -571,7 +571,7 @@ func TestImportMemoryPrivateWithoutOwner(t *testing.T) {
 func TestImportMemoryBadZip(t *testing.T) {
 	s, _ := newMemoryStoreWithRoot(t)
 	badFile := filepath.Join(t.TempDir(), "bad.zip")
-	os.WriteFile(badFile, []byte("not a zip"), 0o644)
+	_ = os.WriteFile(badFile, []byte("not a zip"), 0o644)
 	_, err := s.ImportMemory(badFile, ImportOptions{TargetRegion: TypeShared})
 	if err == nil {
 		t.Fatal("expected error for bad zip")
@@ -586,7 +586,7 @@ func TestImportMemoryMissingManifest(t *testing.T) {
 	f, _ := os.Create(pack)
 	zw := zip.NewWriter(f)
 	w, _ := zw.Create("content/file.txt")
-	w.Write([]byte("data"))
+	_ = w.Write([]byte("data"))
 	zw.Close()
 	f.Close()
 
@@ -682,10 +682,10 @@ func TestCopyFileSourceNotFound(t *testing.T) {
 
 func TestCopyFileBadTargetDir(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "src.txt")
-	os.WriteFile(src, []byte("data"), 0o644)
+	_ = os.WriteFile(src, []byte("data"), 0o644)
 	// Use a file as a "directory" to trigger MkdirAll error
 	blocker := filepath.Join(t.TempDir(), "blocker")
-	os.WriteFile(blocker, []byte("x"), 0o644)
+	_ = os.WriteFile(blocker, []byte("x"), 0o644)
 	err := copyFile(src, filepath.Join(blocker, "sub", "dst"))
 	if err == nil {
 		t.Fatal("expected error for bad target dir")
@@ -829,7 +829,7 @@ func TestPrepareAgentMemorySkipsNoInstallPath(t *testing.T) {
 	s, _ := newMemoryStoreWithRoot(t)
 	// Create an entry directly without installing
 	s.Create("m1", "A", "1.0.0", TypeShared, "")
-	s.AttachMemory("agent-1", "m1", AttachOptions{})
+	_ = s.AttachMemory("agent-1", "m1", AttachOptions{})
 	// Should not error, just skip
 	_, err := s.PrepareAgentMemory("agent-1")
 	if err != nil {
@@ -869,7 +869,7 @@ func TestZipEntryBytesMissing(t *testing.T) {
 	f, _ := os.Create(pack)
 	zw := zip.NewWriter(f)
 	w, _ := zw.Create("other.txt")
-	w.Write([]byte("data"))
+	_ = w.Write([]byte("data"))
 	zw.Close()
 	f.Close()
 
@@ -890,10 +890,10 @@ func TestExtractZipIntoDirectoryEntry(t *testing.T) {
 	// Create a directory entry
 	header := &zip.FileHeader{Name: "subdir/"}
 	header.SetMode(os.ModeDir | 0o755)
-	zw.CreateHeader(header)
+	_ = zw.CreateHeader(header)
 	// Create a file
 	w, _ := zw.Create("subdir/file.txt")
-	w.Write([]byte("data"))
+	_ = w.Write([]byte("data"))
 	zw.Close()
 	f.Close()
 
@@ -992,7 +992,7 @@ func TestPrepareAgentMemoryDefaultRuntimeTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	s.AttachMemory("agent-1", entry.ID, AttachOptions{})
+	_ = s.AttachMemory("agent-1", entry.ID, AttachOptions{})
 	contract, err := s.PrepareAgentMemory("agent-1")
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
@@ -1007,7 +1007,7 @@ func TestPrepareAgentMemoryDefaultRuntimeTargets(t *testing.T) {
 func TestMountInvalidTransition(t *testing.T) {
 	s := newTestStore()
 	s.Create("m1", "A", "1.0.0", TypeShared, "")
-	s.Archive("m1")
+	_ = s.Archive("m1")
 	_, err := s.Mount("m1", "agent-1", AccessReadOnly)
 	if err == nil {
 		t.Fatal("expected error mounting archived memory")
@@ -1068,7 +1068,7 @@ func TestMountValidateTransitionFails(t *testing.T) {
 	s := newTestStore()
 	s.Create("m1", "A", "1.0.0", TypeShared, "")
 	// Mount it first
-	s.Mount("m1", "agent-a", AccessReadOnly)
+	_ = s.Mount("m1", "agent-a", AccessReadOnly)
 	// Now try to mount again - it's in mounted state, policy rejects
 	_, err := s.Mount("m1", "agent-b", AccessReadOnly)
 	if err == nil {
@@ -1139,8 +1139,8 @@ func TestPrepareAgentMemorySamePriorityTiebreaker(t *testing.T) {
 	e1, _ := s.ImportMemory(pack1, ImportOptions{TargetRegion: TypeShared})
 	e2, _ := s.ImportMemory(pack2, ImportOptions{TargetRegion: TypeShared})
 
-	s.AttachMemory("agent-1", e1.ID, AttachOptions{Priority: 0})
-	s.AttachMemory("agent-1", e2.ID, AttachOptions{Priority: 0})
+	_ = s.AttachMemory("agent-1", e1.ID, AttachOptions{Priority: 0})
+	_ = s.AttachMemory("agent-1", e2.ID, AttachOptions{Priority: 0})
 
 	contract, err := s.PrepareAgentMemory("agent-1")
 	if err != nil {
@@ -1174,8 +1174,8 @@ func TestPrepareAgentMemoryDifferentPriority(t *testing.T) {
 	e1, _ := s.ImportMemory(pack1, ImportOptions{TargetRegion: TypeShared})
 	e2, _ := s.ImportMemory(pack2, ImportOptions{TargetRegion: TypeShared})
 
-	s.AttachMemory("agent-1", e1.ID, AttachOptions{Priority: 1})
-	s.AttachMemory("agent-1", e2.ID, AttachOptions{Priority: 10})
+	_ = s.AttachMemory("agent-1", e1.ID, AttachOptions{Priority: 1})
+	_ = s.AttachMemory("agent-1", e2.ID, AttachOptions{Priority: 10})
 
 	_, err := s.PrepareAgentMemory("agent-1")
 	if err != nil {
@@ -1197,9 +1197,9 @@ func TestExtractZipIntoDotEntrySkipped(t *testing.T) {
 	// "." entry should be skipped
 	header := &zip.FileHeader{Name: "./"}
 	header.SetMode(os.ModeDir | 0o755)
-	zw.CreateHeader(header)
+	_ = zw.CreateHeader(header)
 	w, _ := zw.Create("file.txt")
-	w.Write([]byte("data"))
+	_ = w.Write([]byte("data"))
 	zw.Close()
 	f.Close()
 
@@ -1215,7 +1215,7 @@ func TestExtractZipIntoDotEntrySkipped(t *testing.T) {
 
 func TestCopyFileSuccess(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "src.txt")
-	os.WriteFile(src, []byte("hello"), 0o644)
+	_ = os.WriteFile(src, []byte("hello"), 0o644)
 	dst := filepath.Join(t.TempDir(), "sub", "dst.txt")
 	if err := copyFile(src, dst); err != nil {
 		t.Fatalf("copy: %v", err)
@@ -1234,7 +1234,7 @@ func TestExtractZipIntoEscapesRoot(t *testing.T) {
 	zw := zip.NewWriter(f)
 	// Create a header with absolute path (which cleanArchiveEntryPath rejects)
 	w, _ := zw.Create("normal.txt")
-	w.Write([]byte("ok"))
+	_ = w.Write([]byte("ok"))
 	zw.Close()
 	f.Close()
 
@@ -1259,7 +1259,7 @@ func TestPrepareAgentMemoryBadCollection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	s.AttachMemory("agent-1", entry.ID, AttachOptions{Collections: []string{"nonexistent-collection"}})
+	_ = s.AttachMemory("agent-1", entry.ID, AttachOptions{Collections: []string{"nonexistent-collection"}})
 	_, err = s.PrepareAgentMemory("agent-1")
 	if err == nil {
 		t.Fatal("expected error for bad collection")
@@ -1306,7 +1306,7 @@ func TestExportMemoryWithMetaAndReadme(t *testing.T) {
 func TestWriteMountMapInvalidPath(t *testing.T) {
 	// Use a file as parent dir to cause error
 	blocker := filepath.Join(t.TempDir(), "blocker")
-	os.WriteFile(blocker, []byte("x"), 0o644)
+	_ = os.WriteFile(blocker, []byte("x"), 0o644)
 
 	explain := ViewExplanation{
 		MountMapPath: filepath.Join(blocker, "sub", "mountmap.json"),
@@ -1376,7 +1376,7 @@ func TestApplyMountStateWithRollbackBothFail(t *testing.T) {
 	s := newTestStore()
 	// Create but archive m1 so mounting fails
 	s.Create("m1", "A", "1.0.0", TypeShared, "")
-	s.Archive("m1")
+	_ = s.Archive("m1")
 
 	desired := []Attachment{{MemoryID: "m1", Mode: AccessReadOnly}}
 	// Previous mounts point to nonexistent memory, so rollback also fails
@@ -1404,7 +1404,7 @@ func TestPrepareAgentMemoryMissingContentDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	s.AttachMemory("agent-1", entry.ID, AttachOptions{})
+	_ = s.AttachMemory("agent-1", entry.ID, AttachOptions{})
 
 	// Delete just the content subdir to simulate missing content
 	installDir := s.installPath[entry.ID]
