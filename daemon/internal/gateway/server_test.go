@@ -552,3 +552,92 @@ func TestNewGatewayHTTPServer(t *testing.T) {
 		t.Errorf("unexpected IdleTimeout: %v", srv.IdleTimeout)
 	}
 }
+
+// --- /api/v1/providers ---
+
+func TestProvidersEndpoint_OK(t *testing.T) {
+	mux, srv, _ := buildTestMux(t, nil)
+	defer srv.Close()
+
+	req := httptest.NewRequest("GET", "/api/v1/providers", nil)
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["result"] != "ok" {
+		t.Errorf("expected result ok, got %q", body["result"])
+	}
+	providers, ok := body["providers"].([]interface{})
+	if !ok || len(providers) == 0 {
+		t.Errorf("expected non-empty providers array, got %v", body["providers"])
+	}
+	byCategory, ok := body["by_category"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected by_category map, got %T", body["by_category"])
+	}
+	for _, cat := range []string{"builtin", "custom", "local"} {
+		if _, ok := byCategory[cat]; !ok {
+			t.Errorf("missing category %q in by_category", cat)
+		}
+	}
+}
+
+func TestProvidersEndpoint_Unauthorized(t *testing.T) {
+	mux, srv, _ := buildTestMux(t, nil)
+	defer srv.Close()
+
+	req := httptest.NewRequest("GET", "/api/v1/providers", nil)
+	// No auth header
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestProvidersEndpoint_MethodNotAllowed(t *testing.T) {
+	mux, srv, _ := buildTestMux(t, nil)
+	defer srv.Close()
+
+	req := httptest.NewRequest("POST", "/api/v1/providers", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestProvidersEndpoint_ContainsAnthropicAndOllama(t *testing.T) {
+	mux, srv, _ := buildTestMux(t, nil)
+	defer srv.Close()
+
+	req := httptest.NewRequest("GET", "/api/v1/providers", nil)
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "anthropic") {
+		t.Errorf("expected 'anthropic' in response body")
+	}
+	if !strings.Contains(body, "ollama") {
+		t.Errorf("expected 'ollama' in response body")
+	}
+	if !strings.Contains(body, "api_key") {
+		t.Errorf("expected 'api_key' auth mode in response body")
+	}
+	if !strings.Contains(body, "none") {
+		t.Errorf("expected 'none' auth mode in response body")
+	}
+}

@@ -59,6 +59,20 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
     }),
   );
 
+  await page.route('**/api/v1/providers', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        by_category: {
+          'API Key': [
+            { id: 'openai', name: 'OpenAI', auth_mode: 'api_key', env_var: 'OPENAI_API_KEY', example_model: 'openai/gpt-4o', description: 'OpenAI API' },
+          ],
+        },
+      }),
+    }),
+  );
+
   // SSE log stream — return a small SSE payload then close
   await page.route('**/api/v1/logs/stream*', (route) =>
     route.fulfill({

@@ -8,6 +8,8 @@
   // --- State ---
   let token = localStorage.getItem('carrier_token') || '';
   let selectedAgent = '';
+  let selectedProvider = null; // { id, name, auth_mode, env_var, example_model }
+  let providerApiKey = '';
   let logSource = null; // EventSource for SSE logs
 
   // --- Helpers ---
@@ -91,7 +93,7 @@
 
   // --- Routing ---
   const routes = [
-    'welcome', 'setup', 'agents', 'config', 'install', 'complete',
+    'welcome', 'setup', 'agents', 'provider', 'config', 'install', 'complete',
     'dashboard', 'agent-detail', 'logs', 'chat', 'settings',
   ];
 
@@ -120,6 +122,7 @@
       case 'welcome': initWelcome(); break;
       case 'setup': initSetup(); break;
       case 'agents': initAgents(); break;
+      case 'provider': initProvider(); break;
       case 'config': initConfig(); break;
       case 'install': initInstall(); break;
       case 'complete': initComplete(); break;
@@ -252,7 +255,7 @@
     $('#agents-back').onclick = () => { location.hash = '#/setup'; };
     $('#agents-next').onclick = async () => {
       if (!selectedAgent) return;
-      location.hash = '#/config';
+      location.hash = '#/provider';
     };
   }
 
@@ -272,18 +275,161 @@
     return result;
   }
 
+  // --- Provider selection ---
+  async function initProvider() {
+    showView('provider');
+    renderSteps('#steps-indicator-p', 2, 6);
+
+    $('#provider-agent-name').textContent = 'Configuring: ' + selectedAgent;
+    selectedProvider = null;
+    providerApiKey = '';
+    $('#provider-next').disabled = true;
+    $('#provider-auth-section').classList.add('hidden');
+
+    const loading = $('#provider-loading');
+    const catEl = $('#provider-categories');
+    loading.classList.remove('hidden');
+    catEl.classList.add('hidden');
+    catEl.textContent = '';
+    setMsg('#provider-msg', '', 'info');
+
+    try {
+      const data = await api('GET', '/api/v1/providers');
+      loading.classList.add('hidden');
+      catEl.classList.remove('hidden');
+
+      const categoryOrder = [
+        { key: 'builtin', label: '☁️ Built-in (API key)' },
+        { key: 'custom',  label: '🔐 Custom / OAuth' },
+        { key: 'local',   label: '🖥️ Local (no auth)' },
+      ];
+
+      categoryOrder.forEach(({ key, label }) => {
+        const providers = (data.by_category || {})[key] || [];
+        if (!providers.length) return;
+
+        const section = document.createElement('div');
+        section.className = 'provider-category';
+        const h = document.createElement('h4');
+        h.textContent = label;
+        section.appendChild(h);
+
+        const ul = document.createElement('ul');
+        ul.className = 'provider-list';
+        providers.forEach(p => {
+          const li = document.createElement('li');
+          li.className = 'provider-item';
+
+          const badge = authModeBadgeText(p.auth_mode);
+          li.innerHTML = '<strong>' + escapeHtml(p.name) + '</strong>' +
+            ' <code>' + escapeHtml(p.id) + '</code>' +
+            ' <span class="auth-badge">' + escapeHtml(badge) + '</span>';
+          if (p.example_model) {
+            li.innerHTML += '<br><span class="text-dim">e.g. ' + escapeHtml(p.example_model) + '</span>';
+          }
+
+          li.onclick = () => {
+            $$('.provider-item').forEach(x => x.classList.remove('selected'));
+            li.classList.add('selected');
+            selectedProvider = p;
+            showProviderAuth(p);
+          };
+          ul.appendChild(li);
+        });
+        section.appendChild(ul);
+        catEl.appendChild(section);
+      });
+    } catch (e) {
+      loading.classList.add('hidden');
+      setMsg('#provider-msg', 'Error loading providers: ' + e.message, 'error');
+    }
+
+    $('#provider-back').onclick = () => { location.hash = '#/agents'; };
+    $('#provider-skip').onclick = () => {
+      selectedProvider = null;
+      providerApiKey = '';
+      location.hash = '#/config';
+    };
+    $('#provider-next').onclick = () => {
+      if (!selectedProvider) return;
+      location.hash = '#/config';
+    };
+  }
+
+  function authModeBadgeText(mode) {
+    switch (mode) {
+      case 'api_key':            return '[API key]';
+      case 'oauth_device_code':  return '[OAuth device code]';
+      case 'oauth_plugin':       return '[OAuth plugin]';
+      case 'gcloud_adc':         return '[gcloud ADC]';
+      case 'none':               return '[no auth]';
+      default:                   return '';
+    }
+  }
+
+  function showProviderAuth(p) {
+    const section = $('#provider-auth-section');
+    const label = $('#provider-auth-label');
+    const keyInput = $('#provider-api-key');
+    const instructions = $('#provider-auth-instructions');
+
+    section.classList.remove('hidden');
+    keyInput.classList.add('hidden');
+    instructions.classList.add('hidden');
+    keyInput.value = '';
+    providerApiKey = '';
+
+    if (p.auth_mode === 'api_key') {
+      label.textContent = 'Paste your API key for ' + p.name + ' (' + p.env_var + '):';
+      keyInput.classList.remove('hidden');
+      keyInput.oninput = () => {
+        providerApiKey = keyInput.value.trim();
+        $('#provider-next').disabled = !providerApiKey;
+      };
+      $('#provider-next').disabled = true;
+    } else if (p.auth_mode === 'none') {
+      label.textContent = p.name + ' requires no authentication.';
+      $('#provider-next').disabled = false;
+    } else {
+      // OAuth or gcloud ADC — show instructions
+      const cmd = 'openclaw models auth login --provider ' + p.id;
+      label.textContent = p.name + ' requires external authentication:';
+      instructions.classList.remove('hidden');
+      instructions.innerHTML = 'Run: <code>' + escapeHtml(cmd) + '</code><br>Then click Continue.';
+      $('#provider-next').disabled = false;
+    }
+  }
+
   // --- Config ---
   function initConfig() {
     showView('config');
-    renderSteps('#steps-indicator-3', 2, 5);
+    renderSteps('#steps-indicator-3', 3, 6);
 
-    $('#config-agent-name').textContent = 'Configuring: ' + selectedAgent;
+    let agentLabel = 'Configuring: ' + selectedAgent;
+    if (selectedProvider) {
+      agentLabel += ' · Provider: ' + selectedProvider.name;
+    }
+    $('#config-agent-name').textContent = agentLabel;
     const fields = $('#env-fields');
     fields.textContent = '';
+
+    // Pre-populate API key env var if provider was selected and key provided
+    if (selectedProvider && selectedProvider.auth_mode === 'api_key' && providerApiKey && selectedProvider.env_var) {
+      const row = document.createElement('div');
+      row.className = 'env-row';
+      const k = document.createElement('input');
+      k.type = 'text'; k.value = selectedProvider.env_var; k.placeholder = 'KEY';
+      const v = document.createElement('input');
+      v.type = 'password'; v.value = providerApiKey; v.placeholder = 'VALUE';
+      row.appendChild(k);
+      row.appendChild(v);
+      fields.appendChild(row);
+    }
+
     addEnvRow();
 
     $('#add-env').onclick = addEnvRow;
-    $('#config-back').onclick = () => { location.hash = '#/agents'; };
+    $('#config-back').onclick = () => { location.hash = '#/provider'; };
     $('#config-next').onclick = async () => {
       // Config is stored locally; proceed to install.
       location.hash = '#/install';
@@ -305,9 +451,11 @@
   // --- Install ---
   function initInstall() {
     showView('install');
-    renderSteps('#steps-indicator-4', 3, 5);
+    renderSteps('#steps-indicator-4', 4, 6);
 
-    $('#install-summary').textContent = 'Agent: ' + selectedAgent;
+    let summary = 'Agent: ' + selectedAgent;
+    if (selectedProvider) summary += '\nProvider: ' + selectedProvider.name;
+    $('#install-summary').textContent = summary;
 
     $('#install-back').onclick = () => { location.hash = '#/config'; };
     $('#install-confirm').onclick = async () => {

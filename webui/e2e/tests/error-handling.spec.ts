@@ -49,6 +49,10 @@ test.describe('Error Handling', () => {
     await items.first().click();
     await page.click('#agents-next');
 
+    // Provider page → skip
+    await expect(page.locator('#view-provider')).toBeVisible();
+    await page.click('#provider-skip');
+
     // Config page → next
     await expect(page.locator('#view-config')).toBeVisible();
     await page.click('#config-next');

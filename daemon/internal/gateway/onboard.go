@@ -11,18 +11,21 @@ import (
 type OnboardStep string
 
 const (
-	OnboardIdle         OnboardStep = "idle"
-	OnboardAgentSelected OnboardStep = "agent_selected"
-	OnboardEnvConfigured OnboardStep = "env_configured"
-	OnboardInstalling   OnboardStep = "installing"
-	OnboardDone         OnboardStep = "done"
+	OnboardIdle             OnboardStep = "idle"
+	OnboardAgentSelected    OnboardStep = "agent_selected"
+	OnboardProviderSelected OnboardStep = "provider_selected"
+	OnboardAuthConfigured   OnboardStep = "auth_configured"
+	OnboardEnvConfigured    OnboardStep = "env_configured"
+	OnboardInstalling       OnboardStep = "installing"
+	OnboardDone             OnboardStep = "done"
 )
 
 // OnboardSession is the state for a single chat's onboard flow.
 type OnboardSession struct {
-	Step          OnboardStep
-	SelectedAgent string
-	EnvVars       map[string]string
+	Step             OnboardStep
+	SelectedAgent    string
+	SelectedProvider string // LLMProvider.ID
+	EnvVars          map[string]string
 }
 
 // OnboardStore tracks per-session onboard state.
@@ -145,6 +148,10 @@ func onboardReply(ctx context.Context, requestID, sessionKey string, args []stri
 	case OnboardIdle:
 		return onboardSelectAgent(ctx, requestID, sessionKey, input, daemon, store, actor)
 	case OnboardAgentSelected:
+		return onboardSelectProvider(requestID, sessionKey, input, store)
+	case OnboardProviderSelected:
+		return onboardHandleAuth(requestID, sessionKey, input, store)
+	case OnboardAuthConfigured:
 		return onboardEnvInput(requestID, sessionKey, input, store)
 	case OnboardEnvConfigured:
 		return onboardConfirm(ctx, requestID, sessionKey, input, daemon, store, actor)
@@ -179,14 +186,188 @@ func onboardSelectAgent(ctx context.Context, requestID, sessionKey, agentID stri
 		s.Step = OnboardAgentSelected
 		s.SelectedAgent = agentID
 	})
+
+	// Build provider list
+	return buildProviderListResponse(requestID, found)
+}
+
+// buildProviderListResponse constructs the provider selection prompt.
+func buildProviderListResponse(requestID string, agent *AgentState) GatewayResponse {
+	byCategory := LLMProvidersByCategory()
+
 	lines := []string{
-		fmt.Sprintf("Selected agent: **%s** (%s)", found.Name, found.ID),
+		fmt.Sprintf("Selected agent: **%s** (%s)", agent.Name, agent.ID),
 		"",
-		"Provide any environment variables as KEY=VALUE pairs (one per message).",
+		"**Step 2 — Choose an LLM Provider**",
+		"",
+	}
+
+	categoryOrder := []struct{ key, label string }{
+		{"builtin", "☁️  Built-in (API key)"},
+		{"custom", "🔐 Custom / OAuth"},
+		{"local", "🖥️  Local (no auth)"},
+	}
+
+	for _, cat := range categoryOrder {
+		providers := byCategory[cat.key]
+		if len(providers) == 0 {
+			continue
+		}
+		lines = append(lines, "**"+cat.label+"**")
+		for _, p := range providers {
+			authBadge := authModeBadge(p.AuthMode)
+			lines = append(lines, fmt.Sprintf("  • `%s` — %s %s", p.ID, p.Name, authBadge))
+		}
+		lines = append(lines, "")
+	}
+
+	lines = append(lines, "Reply with a provider ID (e.g. `/onboard anthropic`) to continue,")
+	lines = append(lines, "or reply `/onboard skip` to skip provider selection.")
+	return GatewayResponse{RequestID: requestID, Result: "ok", Message: strings.Join(lines, "\n")}
+}
+
+func authModeBadge(m AuthMode) string {
+	switch m {
+	case AuthModeAPIKey:
+		return "[API key]"
+	case AuthModeOAuthDeviceCode:
+		return "[OAuth device code]"
+	case AuthModeOAuthPlugin:
+		return "[OAuth plugin]"
+	case AuthModeGcloudADC:
+		return "[gcloud ADC]"
+	case AuthModeNone:
+		return "[no auth]"
+	default:
+		return ""
+	}
+}
+
+func onboardSelectProvider(requestID, sessionKey, input string, store *OnboardStore) GatewayResponse {
+	lower := strings.ToLower(strings.TrimSpace(input))
+
+	// User can skip provider selection
+	if lower == "skip" || lower == "done" {
+		store.update(sessionKey, func(s *OnboardSession) {
+			s.Step = OnboardAuthConfigured
+		})
+		return onboardPromptEnvVars(requestID, store.get(sessionKey))
+	}
+
+	providerID := lower
+	p := GetLLMProvider(providerID)
+	if p == nil {
+		return errResp(requestID, "E_PROVIDER_NOT_FOUND",
+			fmt.Sprintf("Provider %q not found. Reply with a valid provider ID or `/onboard skip` to skip.", input))
+	}
+
+	store.update(sessionKey, func(s *OnboardSession) {
+		s.Step = OnboardProviderSelected
+		s.SelectedProvider = p.ID
+	})
+
+	// For auth-mode none, auto-advance
+	if p.AuthMode == AuthModeNone {
+		store.update(sessionKey, func(s *OnboardSession) {
+			s.Step = OnboardAuthConfigured
+		})
+		lines := []string{
+			fmt.Sprintf("✅ Provider **%s** selected — no auth needed.", p.Name),
+			"",
+		}
+		if p.ExampleModel != "" {
+			lines = append(lines, fmt.Sprintf("Suggested model: `%s`", p.ExampleModel))
+			lines = append(lines, "")
+		}
+		sess := store.get(sessionKey)
+		lines = append(lines, onboardEnvVarsPromptLines(sess)...)
+		return GatewayResponse{RequestID: requestID, Result: "ok", Message: strings.Join(lines, "\n")}
+	}
+
+	// Otherwise, show auth prompt
+	prompt := BuildProviderAuthPrompt(p)
+	lines := []string{
+		fmt.Sprintf("✅ Provider **%s** selected.", p.Name),
+		"",
+		prompt,
+	}
+	if p.ExampleModel != "" {
+		lines = append(lines, "")
+		lines = append(lines, fmt.Sprintf("Suggested model: `%s`", p.ExampleModel))
+	}
+	return GatewayResponse{RequestID: requestID, Result: "ok", Message: strings.Join(lines, "\n")}
+}
+
+func onboardHandleAuth(requestID, sessionKey, input string, store *OnboardStore) GatewayResponse {
+	sess := store.get(sessionKey)
+	if sess == nil {
+		return errResp(requestID, "E_USAGE", "No active session. Run `/onboard` to start.")
+	}
+
+	// Skip / done shortcut
+	lower := strings.ToLower(strings.TrimSpace(input))
+	if lower == "skip" {
+		store.update(sessionKey, func(s *OnboardSession) {
+			s.Step = OnboardAuthConfigured
+		})
+		return onboardPromptEnvVars(requestID, store.get(sessionKey))
+	}
+
+	p := GetLLMProvider(sess.SelectedProvider)
+	if p == nil {
+		// No provider selected (edge case) — advance
+		store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardAuthConfigured })
+		return onboardPromptEnvVars(requestID, store.get(sessionKey))
+	}
+
+	result, err := HandleProviderAuthInput(p, input)
+	if err != nil {
+		return errResp(requestID, "E_AUTH_INPUT", err.Error())
+	}
+
+	if result.Done {
+		// Merge any env vars from auth result into session
+		if result.EnvVar != "" && result.Value != "" {
+			store.update(sessionKey, func(s *OnboardSession) {
+				s.EnvVars[result.EnvVar] = result.Value
+			})
+		}
+		store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardAuthConfigured })
+		sess = store.get(sessionKey)
+
+		lines := []string{"✅ Authentication configured.", ""}
+		lines = append(lines, onboardEnvVarsPromptLines(sess)...)
+		return GatewayResponse{RequestID: requestID, Result: "ok", Message: strings.Join(lines, "\n")}
+	}
+
+	// Not done yet (shouldn't happen given current implementation, but handle gracefully)
+	return GatewayResponse{RequestID: requestID, Result: "ok", Message: result.Instructions}
+}
+
+func onboardPromptEnvVars(requestID string, sess *OnboardSession) GatewayResponse {
+	if sess == nil {
+		return errResp(requestID, "E_USAGE", "No active session.")
+	}
+	return GatewayResponse{RequestID: requestID, Result: "ok", Message: strings.Join(onboardEnvVarsPromptLines(sess), "\n")}
+}
+
+func onboardEnvVarsPromptLines(sess *OnboardSession) []string {
+	lines := []string{
+		"**Step 3 — Environment Variables**",
+		"",
+		"Provide any additional environment variables as KEY=VALUE pairs (one per message).",
 		"When done, reply with `/onboard done`.",
 		"To skip env vars, reply `/onboard done` now.",
 	}
-	return GatewayResponse{RequestID: requestID, Result: "ok", Message: strings.Join(lines, "\n")}
+	if len(sess.EnvVars) > 0 {
+		keys := make([]string, 0, len(sess.EnvVars))
+		for k := range sess.EnvVars {
+			keys = append(keys, k)
+		}
+		lines = append(lines, "")
+		lines = append(lines, "Already set: "+strings.Join(keys, ", "))
+	}
+	return lines
 }
 
 func onboardEnvInput(requestID, sessionKey, input string, store *OnboardStore) GatewayResponse {
@@ -202,8 +383,14 @@ func onboardEnvInput(requestID, sessionKey, input string, store *OnboardStore) G
 		if len(keys) > 0 {
 			envSummary = "\nEnvironment variables: " + strings.Join(keys, ", ")
 		}
+
+		providerLine := ""
+		if sess.SelectedProvider != "" {
+			providerLine = fmt.Sprintf("\nLLM Provider: %s", sess.SelectedProvider)
+		}
+
 		lines := []string{
-			fmt.Sprintf("Ready to install **%s**?%s", sess.SelectedAgent, envSummary),
+			fmt.Sprintf("Ready to install **%s**?%s%s", sess.SelectedAgent, providerLine, envSummary),
 			"",
 			"Reply `/onboard yes` to proceed or `/onboard no` to go back.",
 		}
@@ -227,7 +414,7 @@ func onboardEnvInput(requestID, sessionKey, input string, store *OnboardStore) G
 func onboardConfirm(ctx context.Context, requestID, sessionKey, input string, daemon *DaemonClient, store *OnboardStore, actor string) GatewayResponse {
 	normalized := strings.ToLower(strings.TrimSpace(input))
 	if normalized == "no" || normalized == "back" {
-		store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardAgentSelected })
+		store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardAuthConfigured })
 		return GatewayResponse{RequestID: requestID, Result: "ok", Message: "Going back. Provide env vars as KEY=VALUE, or reply `/onboard done` to continue."}
 	}
 	if normalized != "yes" && normalized != "y" {
