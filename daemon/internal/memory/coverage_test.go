@@ -1332,15 +1332,15 @@ func TestListFilesEmpty(t *testing.T) {
 
 // ── AttachMemory with explicit mode ──
 
-func TestAttachMemorySharedExplicitRW(t *testing.T) {
+func TestAttachMemorySharedExplicitRWFailClosed(t *testing.T) {
 	s := newTestStore()
 	_, _ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	att, err := s.AttachMemory("agent-1", "m1", AttachOptions{Mode: AccessReadWrite})
 	if err != nil {
 		t.Fatalf("attach: %v", err)
 	}
-	if att.Mode != AccessReadWrite {
-		t.Fatalf("expected rw, got %s", att.Mode)
+	if att.Mode != AccessReadOnly {
+		t.Fatalf("expected ro (fail-closed), got %s", att.Mode)
 	}
 }
 

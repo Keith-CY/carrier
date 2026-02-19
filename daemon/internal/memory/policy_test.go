@@ -31,7 +31,7 @@ func TestPolicyResolveAccessMode(t *testing.T) {
 		{TypePerAgent, AccessReadOnly, AccessReadWrite}, // always rw
 		{TypePerAgent, AccessReadWrite, AccessReadWrite},
 		{TypeShared, AccessReadOnly, AccessReadOnly},
-		{TypeShared, AccessReadWrite, AccessReadWrite}, // explicit authorization
+		{TypeShared, AccessReadWrite, AccessReadOnly}, // fail-closed until ACL is implemented
 		{TypePublic, AccessReadOnly, AccessReadOnly},
 		{TypePublic, AccessReadWrite, AccessReadOnly}, // forced ro
 	}
