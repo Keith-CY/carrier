@@ -203,6 +203,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: daemon-coverage
+          path: daemon
 
       - name: Collect base branch coverage
         run: |
