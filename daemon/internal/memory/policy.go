@@ -74,6 +74,7 @@ func (p Policy) ResolveAccessMode(t Type, requested AccessMode) AccessMode {
 	if t == TypeShared {
 		// Fail-closed: shared memory is read-only until explicit RW authorization
 		// is implemented and wired through policy checks.
+		// TODO(acl): implement ACL-based write grants for shared memory (see #1219).
 		return AccessReadOnly
 	}
 	// per_agent — always rw
