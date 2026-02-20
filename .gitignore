@@ -8,3 +8,4 @@ agentd
 !daemon/cmd/agentd/
 carrier
 agentd
+.pr-review-state.json
