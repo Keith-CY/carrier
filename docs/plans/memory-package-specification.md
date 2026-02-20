@@ -1,6 +1,8 @@
 # Memory Package Specification and Validator
 
-> **Issue:** #77 · **Status:** Plan · **Track:** B1
+> **Issue:** #77 · **Status:** ⚠️ Superseded (diverged from implementation) · **Track:** B1
+>
+> **Note:** The schema described here (`id`, `version`, `type`, `owner`, `checksum`, `artifacts`) has diverged from the implemented code. The current implementation uses `PackageManifest` with `schema_version`, `region`, `kind`, `provenance`, `collections`, `mount` (see `daemon/internal/memory/mempack_types.go`). Refer to the code as the source of truth.
 
 ## Goals
 
