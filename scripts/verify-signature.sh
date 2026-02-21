@@ -70,15 +70,9 @@ fi
 
 BUNDLE_FILE="${COSIGN_BUNDLE_FILE:-${ARTIFACT_FILE}.sigstore.json}"
 
-HAS_SIGNATURE_FILE=false
-if [[ -f "$SIGNATURE_FILE" ]]; then
-    HAS_SIGNATURE_FILE=true
-fi
+[[ -f "$SIGNATURE_FILE" ]] && HAS_SIGNATURE_FILE=true || HAS_SIGNATURE_FILE=false
 
-HAS_BUNDLE_FILE=false
-if [[ -f "$BUNDLE_FILE" ]]; then
-    HAS_BUNDLE_FILE=true
-fi
+[[ -f "$BUNDLE_FILE" ]] && HAS_BUNDLE_FILE=true || HAS_BUNDLE_FILE=false
 
 if [[ "$HAS_SIGNATURE_FILE" == false && "$HAS_BUNDLE_FILE" == false ]]; then
     log_warn "Signature file not found: $SIGNATURE_FILE"
