@@ -343,6 +343,66 @@ func TestStorePersistsStateAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestPrepareAgentMemoryConcurrentSameAgent(t *testing.T) {
+	store, _ := newMemoryStoreWithRoot(t)
+	pack := filepath.Join(t.TempDir(), "shared.mempack.zip")
+	writeMempack(t, pack, baseManifest("shared"), map[string]string{
+		"content/prompts/system.md": "shared",
+		"content/kb/faq.txt":        "faq",
+	})
+
+	entry, err := store.ImportMemory(pack, ImportOptions{TargetRegion: TypeShared})
+	if err != nil {
+		t.Fatalf("import shared: %v", err)
+	}
+	if _, err := store.AttachMemory("agent-1", entry.ID, AttachOptions{Priority: 10}); err != nil {
+		t.Fatalf("attach shared: %v", err)
+	}
+
+	const workers = 8
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	digests := make(chan string, workers)
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			contract, err := store.PrepareAgentMemory("agent-1")
+			if err != nil {
+				errs <- err
+				return
+			}
+			digests <- contract.ViewDigest
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(errs)
+	close(digests)
+
+	for err := range errs {
+		t.Fatalf("unexpected prepare error: %v", err)
+	}
+
+	var first string
+	for d := range digests {
+		if d == "" {
+			t.Fatal("expected non-empty digest")
+		}
+		if first == "" {
+			first = d
+			continue
+		}
+		if d != first {
+			t.Fatalf("expected stable digest across concurrent prepares, got %s and %s", first, d)
+		}
+	}
+}
+
 func TestExportMemoryRespectsCollectionFilter(t *testing.T) {
 	store, _ := newMemoryStoreWithRoot(t)
 	pack := filepath.Join(t.TempDir(), "export-source.mempack.zip")
