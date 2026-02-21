@@ -122,7 +122,7 @@ func (s *Store) persistStateLocked() error {
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		s.lastStateErr = fmt.Errorf("sync memory state temp file: %w", err)
+		s.lastStateErr = fmt.Errorf("fsync memory state temp file: %w", err)
 		return s.lastStateErr
 	}
 	if err := tmp.Close(); err != nil {
