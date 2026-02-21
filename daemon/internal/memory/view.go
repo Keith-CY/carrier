@@ -15,41 +15,42 @@ import (
 // AttachMemory binds a memory package to an agent with explicit mode and priority.
 func (s *Store) AttachMemory(agentID, memoryID string, opts AttachOptions) (Attachment, error) {
 	s.mu.Lock()
+	att, auditMessage, err := s.attachMemoryLocked(agentID, memoryID, opts)
+	s.mu.Unlock()
 
+	if err != nil {
+		s.recordAudit(opts.RequestID, opts.Actor, "attach", memoryID, auditResultFailure, auditMessage)
+		return Attachment{}, err
+	}
+	s.recordAudit(opts.RequestID, opts.Actor, "attach", memoryID, auditResultSuccess, auditMessage)
+	return att, nil
+}
+
+func (s *Store) attachMemoryLocked(agentID, memoryID string, opts AttachOptions) (Attachment, string, error) {
 	entry, ok := s.entries[memoryID]
 	if !ok {
-		s.mu.Unlock()
-		s.recordAudit(opts.RequestID, opts.Actor, "attach", memoryID, auditResultFailure, ErrMemoryNotFound.Error())
-		return Attachment{}, ErrMemoryNotFound
+		return Attachment{}, ErrMemoryNotFound.Error(), ErrMemoryNotFound
 	}
 	if entry.State == StateArchived {
 		err := fmt.Errorf("cannot attach archived memory %s", memoryID)
-		s.mu.Unlock()
-		s.recordAudit(opts.RequestID, opts.Actor, "attach", memoryID, auditResultFailure, err.Error())
-		return Attachment{}, err
+		return Attachment{}, err.Error(), err
 	}
 
 	existing := s.attachments[agentID]
 	for _, a := range existing {
 		if a.MemoryID == memoryID {
-			s.mu.Unlock()
-			s.recordAudit(opts.RequestID, opts.Actor, "attach", memoryID, auditResultFailure, ErrAlreadyMounted.Error())
-			return Attachment{}, ErrAlreadyMounted
+			return Attachment{}, ErrAlreadyMounted.Error(), ErrAlreadyMounted
 		}
 		if entry.Type == TypePerAgent && a.MemoryID != memoryID {
 			if e, ok := s.entries[a.MemoryID]; ok && e.Type == TypePerAgent {
-				s.mu.Unlock()
-				s.recordAudit(opts.RequestID, opts.Actor, "attach", memoryID, auditResultFailure, ErrPerAgentLimit.Error())
-				return Attachment{}, ErrPerAgentLimit
+				return Attachment{}, ErrPerAgentLimit.Error(), ErrPerAgentLimit
 			}
 		}
 	}
 
 	if entry.Type == TypePerAgent && entry.Owner != "" && entry.Owner != agentID {
 		err := fmt.Errorf("%w: memory owner is %q, requester is %q", ErrOwnerMismatch, entry.Owner, agentID)
-		s.mu.Unlock()
-		s.recordAudit(opts.RequestID, opts.Actor, "attach", memoryID, auditResultFailure, err.Error())
-		return Attachment{}, err
+		return Attachment{}, err.Error(), err
 	}
 
 	effectiveMode := s.policy.DefaultAccessMode(entry.Type)
@@ -67,18 +68,15 @@ func (s *Store) AttachMemory(agentID, memoryID string, opts AttachOptions) (Atta
 	}
 	s.attachments[agentID] = append(existing, att)
 	if err := s.persistStateLocked(); err != nil {
-		s.mu.Unlock()
-		s.recordAudit(opts.RequestID, opts.Actor, "attach", memoryID, auditResultFailure, err.Error())
-		return Attachment{}, err
+		return Attachment{}, err.Error(), err
 	}
-	s.mu.Unlock()
-	s.recordAudit(opts.RequestID, opts.Actor, "attach", memoryID, auditResultSuccess, "memory attached")
-	return att, nil
+	return att, "memory attached", nil
 }
 
 // DetachMemory removes an attachment between an agent and memory package.
 func (s *Store) DetachMemory(agentID, memoryID string) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	attachments := s.attachments[agentID]
 	idx := -1
@@ -89,7 +87,6 @@ func (s *Store) DetachMemory(agentID, memoryID string) error {
 		}
 	}
 	if idx < 0 {
-		s.mu.Unlock()
 		return ErrAttachmentMissing
 	}
 
@@ -101,10 +98,8 @@ func (s *Store) DetachMemory(agentID, memoryID string) error {
 		}
 	}
 	if err := s.persistStateLocked(); err != nil {
-		s.mu.Unlock()
 		return err
 	}
-	s.mu.Unlock()
 	return nil
 }
 
@@ -122,26 +117,23 @@ func (s *Store) ListAttachments(agentID string) []Attachment {
 // The incoming order is preserved as ascending priority.
 func (s *Store) SetAttachmentsFromLinks(agentID string, memoryIDs []string) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	attachments := make([]Attachment, 0, len(memoryIDs))
 	hasPerAgent := false
 	for i, memoryID := range memoryIDs {
 		entry, ok := s.entries[memoryID]
 		if !ok {
-			s.mu.Unlock()
 			return fmt.Errorf("%w: %s", ErrMemoryNotFound, memoryID)
 		}
 		if entry.State == StateArchived {
-			s.mu.Unlock()
 			return fmt.Errorf("%w: %s is archived", ErrInvalidState, memoryID)
 		}
 		if entry.Type == TypePerAgent {
 			if entry.Owner != "" && entry.Owner != agentID {
-				s.mu.Unlock()
 				return fmt.Errorf("%w: memory owner is %q, requester is %q", ErrOwnerMismatch, entry.Owner, agentID)
 			}
 			if hasPerAgent {
-				s.mu.Unlock()
 				return ErrPerAgentLimit
 			}
 			hasPerAgent = true
@@ -158,10 +150,8 @@ func (s *Store) SetAttachmentsFromLinks(agentID string, memoryIDs []string) erro
 	}
 	s.attachments[agentID] = attachments
 	if err := s.persistStateLocked(); err != nil {
-		s.mu.Unlock()
 		return err
 	}
-	s.mu.Unlock()
 	return nil
 }
 
@@ -169,9 +159,8 @@ func (s *Store) SetAttachmentsFromLinks(agentID string, memoryIDs []string) erro
 func (s *Store) PrepareAgentMemory(agentID string) (RuntimeMemoryContract, error) {
 	// Serialize per-agent prepares so concurrent callers cannot race on
 	// effective view filesystem state or mount rollback bookkeeping.
-	prepareLock := s.prepareLockForAgent(agentID)
-	prepareLock.Lock()
-	defer prepareLock.Unlock()
+	releasePrepareLock := s.lockPrepareForAgent(agentID)
+	defer releasePrepareLock()
 
 	root, err := s.requireRootDir()
 	if err != nil {

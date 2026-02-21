@@ -31,7 +31,13 @@ type Store struct {
 	exportSlots            chan struct{}
 	statePath              string
 	lastStateErr           error
-	prepareLocks           sync.Map // keyed by agent ID, values are *sync.Mutex
+	prepareLocksMu         sync.Mutex
+	prepareLocks           map[string]*prepareLockEntry // keyed by agent ID
+}
+
+type prepareLockEntry struct {
+	mu   sync.Mutex
+	refs int
 }
 
 // StoreOption configures a Store.
@@ -112,6 +118,7 @@ func NewStore(opts ...StoreOption) *Store {
 		auditLimit:             1000,
 		exportMaxBytes:         512 * 1024 * 1024,
 		exportSlots:            make(chan struct{}, 3),
+		prepareLocks:           make(map[string]*prepareLockEntry),
 	}
 	for _, o := range opts {
 		o(s)
@@ -339,10 +346,29 @@ func (s *Store) LastStateError() error {
 	return s.lastStateErr
 }
 
-func (s *Store) prepareLockForAgent(agentID string) *sync.Mutex {
+func (s *Store) lockPrepareForAgent(agentID string) func() {
 	if agentID == "" {
 		agentID = "__default__"
 	}
-	lock, _ := s.prepareLocks.LoadOrStore(agentID, &sync.Mutex{})
-	return lock.(*sync.Mutex)
+
+	s.prepareLocksMu.Lock()
+	entry := s.prepareLocks[agentID]
+	if entry == nil {
+		entry = &prepareLockEntry{}
+		s.prepareLocks[agentID] = entry
+	}
+	entry.refs++
+	s.prepareLocksMu.Unlock()
+
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+
+		s.prepareLocksMu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(s.prepareLocks, agentID)
+		}
+		s.prepareLocksMu.Unlock()
+	}
 }

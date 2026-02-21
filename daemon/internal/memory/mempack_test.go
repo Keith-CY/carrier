@@ -401,6 +401,13 @@ func TestPrepareAgentMemoryConcurrentSameAgent(t *testing.T) {
 			t.Fatalf("expected stable digest across concurrent prepares, got %s and %s", first, d)
 		}
 	}
+
+	store.prepareLocksMu.Lock()
+	activePrepareLocks := len(store.prepareLocks)
+	store.prepareLocksMu.Unlock()
+	if activePrepareLocks != 0 {
+		t.Fatalf("expected prepare lock map to be cleaned, got %d active locks", activePrepareLocks)
+	}
 }
 
 func TestExportMemoryRespectsCollectionFilter(t *testing.T) {
