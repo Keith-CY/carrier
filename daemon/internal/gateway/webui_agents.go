@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -93,7 +94,7 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 			return
 		}
 		if syncErr := syncManagedInstanceByAgentAction(r, agentID, action); syncErr != nil {
-			writeJSON(w, http.StatusInternalServerError, gatewayErrBody("E_INTERNAL", syncErr.Error()))
+			writeStatePersistenceError(w, requestID, action, agentID, "", syncErr)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -111,19 +112,12 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 
 func writeDaemonAPIError(w http.ResponseWriter, err error) {
 	if de, ok := err.(*DaemonClientError); ok {
-		status := http.StatusBadGateway
-		switch de.Code {
-		case "E_AGENT_NOT_FOUND":
-			status = http.StatusNotFound
-		case "E_USAGE":
-			status = http.StatusBadRequest
-		case "E_SESSION_REQUIRED":
-			status = http.StatusUnauthorized
-		}
-		writeJSON(w, status, gatewayErrBody(de.Code, de.Message))
+		status, code, message := mapDaemonErrorToExternal(de.Code)
+		log.Printf("[gateway] daemon API error code=%s detail=%s", code, RedactErrorMessage(de.Message))
+		writeJSON(w, status, gatewayErrBody(code, message))
 		return
 	}
-	writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_COMMAND_FAILED", err.Error()))
+	writeInternalGatewayError(w, http.StatusBadGateway, "E_COMMAND_FAILED", "daemon command failed", "daemon API request failed", err)
 }
 
 func syncManagedInstanceByAgentAction(r *http.Request, agentID, action string) error {
@@ -193,7 +187,10 @@ func syncManagedInstanceByAgentAction(r *http.Request, agentID, action string) e
 		if idx < 0 {
 			return nil
 		}
-		_ = cleanupManagedInstanceFiles(instances[idx])
+		if err := cleanupManagedInstanceFiles(instances[idx]); err != nil {
+			// Non-critical: daemon uninstall already succeeded; keep instance-state cleanup best-effort.
+			log.Printf("[gateway] cleanup managed instance files failed (instance=%s): %s", instances[idx].ID, RedactErrorMessage(err.Error()))
+		}
 		instances = append(instances[:idx], instances[idx+1:]...)
 		return saveManagedInstances(path, instances)
 	default:

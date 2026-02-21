@@ -105,6 +105,18 @@ func Save(cfg *Config) (string, error) {
 	return path, nil
 }
 
+func setEnvIfUnset(key, value string) error {
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" || value == "" {
+		return nil
+	}
+	if _, exists := os.LookupEnv(key); exists {
+		return nil
+	}
+	return os.Setenv(key, value)
+}
+
 func ApplyGatewayEnvironment(cfg *Config) error {
 	if cfg == nil {
 		return nil
@@ -117,48 +129,32 @@ func ApplyGatewayEnvironment(cfg *Config) error {
 		}
 		switch strings.ToLower(strings.TrimSpace(ch.ID)) {
 		case "telegram":
-			if ch.BotToken != "" {
-				if err := os.Setenv("CARRIER_TELEGRAM_BOT_TOKEN", ch.BotToken); err != nil {
-					return err
-				}
+			if err := setEnvIfUnset("CARRIER_TELEGRAM_BOT_TOKEN", ch.BotToken); err != nil {
+				return err
 			}
-			if ch.WebhookSecret != "" {
-				if err := os.Setenv("CARRIER_TELEGRAM_WEBHOOK_SECRET", ch.WebhookSecret); err != nil {
-					return err
-				}
+			if err := setEnvIfUnset("CARRIER_TELEGRAM_WEBHOOK_SECRET", ch.WebhookSecret); err != nil {
+				return err
 			}
-			if ch.WebhookURL != "" {
-				if err := os.Setenv("CARRIER_TELEGRAM_WEBHOOK_URL", ch.WebhookURL); err != nil {
-					return err
-				}
+			if err := setEnvIfUnset("CARRIER_TELEGRAM_WEBHOOK_URL", ch.WebhookURL); err != nil {
+				return err
 			}
 			mode := strings.ToLower(strings.TrimSpace(ch.TransportMode))
-			if mode != "" {
-				if err := os.Setenv("CARRIER_TELEGRAM_TRANSPORT_MODE", mode); err != nil {
-					return err
-				}
+			if err := setEnvIfUnset("CARRIER_TELEGRAM_TRANSPORT_MODE", mode); err != nil {
+				return err
 			}
 		case "discord":
-			if ch.BotToken != "" {
-				if err := os.Setenv("CARRIER_DISCORD_BOT_TOKEN", ch.BotToken); err != nil {
-					return err
-				}
+			if err := setEnvIfUnset("CARRIER_DISCORD_BOT_TOKEN", ch.BotToken); err != nil {
+				return err
 			}
-			if ch.WebhookSecret != "" {
-				if err := os.Setenv("CARRIER_DISCORD_PUBLIC_KEY", ch.WebhookSecret); err != nil {
-					return err
-				}
+			if err := setEnvIfUnset("CARRIER_DISCORD_PUBLIC_KEY", ch.WebhookSecret); err != nil {
+				return err
 			}
 		case "feishu":
-			if ch.BotToken != "" {
-				if err := os.Setenv("CARRIER_FEISHU_APP_TOKEN", ch.BotToken); err != nil {
-					return err
-				}
+			if err := setEnvIfUnset("CARRIER_FEISHU_APP_TOKEN", ch.BotToken); err != nil {
+				return err
 			}
-			if ch.WebhookSecret != "" {
-				if err := os.Setenv("CARRIER_FEISHU_VERIFICATION_TOKEN", ch.WebhookSecret); err != nil {
-					return err
-				}
+			if err := setEnvIfUnset("CARRIER_FEISHU_VERIFICATION_TOKEN", ch.WebhookSecret); err != nil {
+				return err
 			}
 		}
 	}
@@ -169,7 +165,7 @@ func ApplyGatewayEnvironment(cfg *Config) error {
 			continue
 		}
 		if value, ok := loadCredential(m.CredentialRef); ok {
-			if err := os.Setenv(m.EnvVar, value); err != nil {
+			if err := setEnvIfUnset(m.EnvVar, value); err != nil {
 				return err
 			}
 		}
@@ -178,25 +174,17 @@ func ApplyGatewayEnvironment(cfg *Config) error {
 	// Expose default model context for components that need runtime inference.
 	defaultModel := pickDefaultModel(cfg)
 	if defaultModel != nil {
-		if strings.TrimSpace(defaultModel.ModelName) != "" {
-			if err := os.Setenv("CARRIER_DEFAULT_MODEL_NAME", strings.TrimSpace(defaultModel.ModelName)); err != nil {
-				return err
-			}
+		if err := setEnvIfUnset("CARRIER_DEFAULT_MODEL_NAME", defaultModel.ModelName); err != nil {
+			return err
 		}
-		if strings.TrimSpace(defaultModel.Model) != "" {
-			if err := os.Setenv("CARRIER_DEFAULT_MODEL_ID", strings.TrimSpace(defaultModel.Model)); err != nil {
-				return err
-			}
+		if err := setEnvIfUnset("CARRIER_DEFAULT_MODEL_ID", defaultModel.Model); err != nil {
+			return err
 		}
-		if strings.TrimSpace(defaultModel.ProviderID) != "" {
-			if err := os.Setenv("CARRIER_DEFAULT_PROVIDER_ID", strings.TrimSpace(defaultModel.ProviderID)); err != nil {
-				return err
-			}
+		if err := setEnvIfUnset("CARRIER_DEFAULT_PROVIDER_ID", defaultModel.ProviderID); err != nil {
+			return err
 		}
-		if strings.TrimSpace(defaultModel.EnvVar) != "" {
-			if err := os.Setenv("CARRIER_DEFAULT_PROVIDER_ENV", strings.TrimSpace(defaultModel.EnvVar)); err != nil {
-				return err
-			}
+		if err := setEnvIfUnset("CARRIER_DEFAULT_PROVIDER_ENV", defaultModel.EnvVar); err != nil {
+			return err
 		}
 	}
 	return nil

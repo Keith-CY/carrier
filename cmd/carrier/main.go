@@ -183,6 +183,7 @@ var daemonPairCodeFetcher = fetchDaemonPairCode
 var openBrowserFunc = openBrowserURL
 var runOnboardFlow = runOnboard
 var ensureWebUIServicesFlow = ensureWebUIServices
+var procFSRoot = "/proc"
 
 const usage = `Carrier — unified agent platform binary
 
@@ -523,9 +524,9 @@ func stopBackgroundService(
 		}
 		return false, "running but no pid file available"
 	}
-	stoppedByPort, portErr := stopServiceByPort(name, port)
+	stoppedByPort, stopSource, portErr := stopServiceByPort(name, port)
 	if portErr == nil && stoppedByPort > 0 {
-		return true, fmt.Sprintf("stopped (%d process via port %d)", stoppedByPort, port)
+		return true, fmt.Sprintf("stopped (%d process via %s on port %d)", stoppedByPort, stopSource, port)
 	}
 
 	if pidErr != nil {
@@ -601,47 +602,195 @@ func isProcessAlreadyGone(err error) bool {
 	return strings.Contains(msg, "finished") || strings.Contains(msg, "no such process") || strings.Contains(msg, "process already done")
 }
 
-func stopServiceByPort(name string, port int) (int, error) {
+func stopServiceByPort(name string, port int) (int, string, error) {
 	if port <= 0 {
-		return 0, errors.New("invalid port")
+		return 0, "", errors.New("invalid port")
 	}
 	if runtime.GOOS == "windows" {
-		return 0, errors.New("port-based stop is not supported on windows")
+		return 0, "", errors.New("port-based stop is not supported on windows")
 	}
-	lsofPath, err := exec.LookPath("lsof")
+
+	pids, source, err := lookupPIDsByPort(port)
 	if err != nil {
-		return 0, errors.New("lsof is not available")
+		return 0, source, err
 	}
-	cmd := exec.Command(lsofPath, "-nP", "-ti", fmt.Sprintf("tcp:%d", port))
-	out, err := cmd.Output()
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) == 0 {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("query pid by port %d: %w", port, err)
+	if len(pids) == 0 {
+		return 0, source, nil
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+
 	stopped := 0
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		pid, convErr := strconv.Atoi(strings.TrimSpace(line))
-		if convErr != nil || pid <= 0 {
-			continue
-		}
+	for _, pid := range pids {
 		ok, stopErr := stopPID(pid)
 		if stopErr == nil && ok {
 			stopped++
 		}
 	}
 	if stopped == 0 {
-		return 0, nil
+		return 0, source, nil
 	}
 	if pidPath := mustBootstrapPIDPath(name); strings.TrimSpace(pidPath) != "" {
 		_ = os.Remove(pidPath)
 	}
-	return stopped, nil
+	return stopped, source, nil
+}
+
+func lookupPIDsByPort(port int) ([]int, string, error) {
+	if lsofPath, err := exec.LookPath("lsof"); err == nil {
+		pids, lookupErr := lookupPIDsByPortViaLsof(lsofPath, port)
+		return pids, "lsof", lookupErr
+	}
+	if runtime.GOOS == "linux" {
+		pids, err := lookupPIDsByPortViaProc(port)
+		if err != nil {
+			return nil, "/proc fallback", err
+		}
+		return pids, "/proc fallback", nil
+	}
+	return nil, "", errors.New("lsof is not available")
+}
+
+func lookupPIDsByPortViaLsof(lsofPath string, port int) ([]int, error) {
+	cmd := exec.Command(lsofPath, "-nP", "-ti", fmt.Sprintf("tcp:%d", port))
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) == 0 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query pid by port %d: %w", port, err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	pids := make([]int, 0, len(lines))
+	seen := map[int]struct{}{}
+	for _, line := range lines {
+		pid, convErr := strconv.Atoi(strings.TrimSpace(line))
+		if convErr != nil || pid <= 0 {
+			continue
+		}
+		if _, ok := seen[pid]; ok {
+			continue
+		}
+		seen[pid] = struct{}{}
+		pids = append(pids, pid)
+	}
+	sort.Ints(pids)
+	return pids, nil
+}
+
+func lookupPIDsByPortViaProc(port int) ([]int, error) {
+	inode, err := lookupListeningSocketInode(port)
+	if err != nil {
+		return nil, err
+	}
+	pids, err := lookupPIDsBySocketInode(inode)
+	if err != nil {
+		return nil, err
+	}
+	sort.Ints(pids)
+	return pids, nil
+}
+
+func lookupListeningSocketInode(port int) (string, error) {
+	for _, procFile := range []string{
+		filepath.Join(procFSRoot, "net", "tcp"),
+		filepath.Join(procFSRoot, "net", "tcp6"),
+	} {
+		inode, err := lookupListeningSocketInodeInFile(procFile, port)
+		if err == nil && strings.TrimSpace(inode) != "" {
+			return inode, nil
+		}
+	}
+	return "", errors.New("listening socket not found")
+}
+
+func lookupListeningSocketInodeInFile(path string, port int) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	firstLine := true
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if firstLine {
+			firstLine = false
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 10 {
+			continue
+		}
+		localAddress := fields[1]
+		state := fields[3]
+		if state != "0A" {
+			continue
+		}
+		_, localPortHex, ok := strings.Cut(localAddress, ":")
+		if !ok {
+			continue
+		}
+		parsedPort, parseErr := strconv.ParseInt(localPortHex, 16, 32)
+		if parseErr != nil || int(parsedPort) != port {
+			continue
+		}
+		inode := strings.TrimSpace(fields[9])
+		if inode != "" {
+			return inode, nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return "", errors.New("socket inode not found")
+}
+
+func lookupPIDsBySocketInode(inode string) ([]int, error) {
+	if strings.TrimSpace(inode) == "" {
+		return nil, errors.New("socket inode is empty")
+	}
+	target := "socket:[" + strings.TrimSpace(inode) + "]"
+	entries, err := os.ReadDir(procFSRoot)
+	if err != nil {
+		return nil, err
+	}
+	pids := make([]int, 0)
+	seen := map[int]struct{}{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		pid, convErr := strconv.Atoi(entry.Name())
+		if convErr != nil || pid <= 0 {
+			continue
+		}
+		fdDir := filepath.Join(procFSRoot, entry.Name(), "fd")
+		fds, fdErr := os.ReadDir(fdDir)
+		if fdErr != nil {
+			continue
+		}
+		found := false
+		for _, fd := range fds {
+			linkPath := filepath.Join(fdDir, fd.Name())
+			linkTarget, linkErr := os.Readlink(linkPath)
+			if linkErr != nil {
+				continue
+			}
+			if linkTarget == target {
+				found = true
+				break
+			}
+		}
+		if found {
+			if _, ok := seen[pid]; ok {
+				continue
+			}
+			seen[pid] = struct{}{}
+			pids = append(pids, pid)
+		}
+	}
+	return pids, nil
 }
 
 func portFromBaseURL(baseURL string) int {
@@ -835,6 +984,60 @@ func printRuntimeSummary(out io.Writer) {
 			}
 		}
 	}
+
+	if gatewayReady {
+		if transport, err := fetchGatewayTelegramTransportStatus(gatewayURL); err == nil && strings.TrimSpace(transport.SelectedMode) != "" && transport.SelectedMode != "unknown" {
+			line := fmt.Sprintf("- telegram transport: %s", transport.SelectedMode)
+			if strings.TrimSpace(transport.ReasonCode) != "" {
+				line += fmt.Sprintf(" (reason_code=%s)", transport.ReasonCode)
+			}
+			_, _ = fmt.Fprintln(out, line)
+			if strings.EqualFold(strings.TrimSpace(transport.SelectedMode), "polling") && strings.TrimSpace(transport.Reason) != "" {
+				_, _ = fmt.Fprintf(out, "  reason: %s\n", transport.Reason)
+			}
+			if strings.TrimSpace(transport.Hint) != "" {
+				_, _ = fmt.Fprintf(out, "  hint: %s\n", transport.Hint)
+			}
+		}
+	}
+}
+
+type gatewayTelegramTransportStatus struct {
+	SelectedMode string `json:"selected_mode"`
+	ReasonCode   string `json:"reason_code"`
+	Reason       string `json:"reason"`
+	Hint         string `json:"hint"`
+}
+
+func fetchGatewayTelegramTransportStatus(gatewayURL string) (gatewayTelegramTransportStatus, error) {
+	target := strings.TrimRight(strings.TrimSpace(gatewayURL), "/") + "/api/v1/telegram/transport"
+	req, err := http.NewRequest(http.MethodGet, target, nil)
+	if err != nil {
+		return gatewayTelegramTransportStatus{}, err
+	}
+	if token := strings.TrimSpace(os.Getenv("CARRIER_GATEWAY_API_TOKEN")); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return gatewayTelegramTransportStatus{}, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return gatewayTelegramTransportStatus{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return gatewayTelegramTransportStatus{}, fmt.Errorf("transport status request failed with status %d", resp.StatusCode)
+	}
+	var payload struct {
+		Transport gatewayTelegramTransportStatus `json:"transport"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return gatewayTelegramTransportStatus{}, err
+	}
+	return payload.Transport, nil
 }
 
 func statusText(ready bool) string {
@@ -938,11 +1141,21 @@ func runOnboard(in io.Reader, out io.Writer, startGateway func() error) error {
 
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "Step 2/4: Configure LLM provider")
-	provider, err := pickMinimalProvider()
+	provider, providerReason, err := pickMinimalProviderWithReason()
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "Using provider: %s (%s)\n", provider.Name, provider.ID)
+	_, _ = fmt.Fprintf(out, "Auto-selected provider: %s (%s)\n", provider.Name, provider.ID)
+	_, _ = fmt.Fprintf(out, "Selection reason: %s\n", providerReason)
+	provider, override, err := promptMinimalProviderOverride(reader, out, provider)
+	if err != nil {
+		return err
+	}
+	if override {
+		_, _ = fmt.Fprintf(out, "Provider override selected: %s (%s)\n", provider.Name, provider.ID)
+	} else {
+		_, _ = fmt.Fprintf(out, "Using provider: %s (%s)\n", provider.Name, provider.ID)
+	}
 	providerEnv, providerCredentialProvided, err := promptProviderAuthMinimal(reader, out, provider)
 	if err != nil {
 		return err
@@ -1008,57 +1221,17 @@ func runOnboard(in io.Reader, out io.Writer, startGateway func() error) error {
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "Ensuring daemon is running...")
 
-	daemonURL := daemonProbeBaseURL()
-	if daemonHealthProbe(daemonURL) {
-		_, _ = fmt.Fprintf(out, "Daemon already running at %s, reusing existing process.\n", daemonURL)
-	} else {
-		_, _ = fmt.Fprintf(out, "Daemon not detected at %s, starting in background...\n", daemonURL)
-		if err := daemonBackgroundStarter(); err != nil {
-			return fmt.Errorf("start daemon in background: %w", err)
-		}
-		if err := waitForDaemonHealthy(daemonURL, daemonBootTimeout); err != nil {
-			return fmt.Errorf("daemon failed to become healthy at %s within %s: %w", daemonURL, daemonBootTimeout, err)
-		}
-		_, _ = fmt.Fprintf(out, "Daemon started and healthy at %s.\n", daemonURL)
-	}
-
-	pairCode, pairCodeExpiresAt, err := daemonPairCodeFetcher(daemonURL)
+	daemonURL, err := ensureDaemonRunning(out)
 	if err != nil {
-		_, _ = fmt.Fprintf(out, "Warning: failed to fetch pair code from daemon: %v\n", err)
-	} else if strings.TrimSpace(pairCode) != "" {
-		_, _ = fmt.Fprintln(out, "")
-		_, _ = fmt.Fprintf(out, "PAIR_CODE: %s\n", pairCode)
-		if strings.TrimSpace(pairCodeExpiresAt) != "" {
-			if expiry, parseErr := time.Parse(time.RFC3339Nano, pairCodeExpiresAt); parseErr == nil {
-				remaining := time.Until(expiry)
-				if remaining < 0 {
-					remaining = 0
-				}
-				_, _ = fmt.Fprintf(out, "(expires in %s)\n", remaining.Round(time.Second))
-			} else {
-				_, _ = fmt.Fprintf(out, "(expiresAt: %s)\n", pairCodeExpiresAt)
-			}
-		}
+		return err
 	}
+	printDaemonPairCode(out, daemonURL)
 
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "Starting gateway...")
 	_, _ = fmt.Fprintln(out, buildSlashCommandGuide(channel))
 
-	gatewayURL := gatewayProbeBaseURL()
-	if gatewayHealthProbe(gatewayURL) {
-		_, _ = fmt.Fprintf(out, "Gateway already running at %s, reusing existing process.\n", gatewayURL)
-		return nil
-	}
-
-	if err := startGateway(); err != nil {
-		if isAddressInUseError(err) && gatewayHealthProbe(gatewayURL) {
-			_, _ = fmt.Fprintf(out, "Gateway already running at %s, reusing existing process.\n", gatewayURL)
-			return nil
-		}
-		if isAddressInUseError(err) {
-			return fmt.Errorf("gateway port is already in use; stop the conflicting process or set CARRIER_GATEWAY_PORT (probe: %s): %w", gatewayURL, err)
-		}
+	if _, err := ensureGatewayRunning(out, startGateway); err != nil {
 		return err
 	}
 	return nil
@@ -1100,51 +1273,24 @@ func runAddWebUI(out io.Writer, agentID string) error {
 }
 
 func ensureWebUIServices(out io.Writer) (string, error) {
-
-	daemonURL := daemonProbeBaseURL()
-	if daemonHealthProbe(daemonURL) {
-		_, _ = fmt.Fprintf(out, "Daemon already running at %s, reusing existing process.\n", daemonURL)
-	} else {
-		_, _ = fmt.Fprintf(out, "Daemon not detected at %s, starting in background...\n", daemonURL)
-		if err := daemonBackgroundStarter(); err != nil {
-			return "", fmt.Errorf("start daemon in background: %w", err)
-		}
-		if err := waitForDaemonHealthy(daemonURL, daemonBootTimeout); err != nil {
-			return "", fmt.Errorf("daemon failed to become healthy at %s within %s: %w", daemonURL, daemonBootTimeout, err)
-		}
-		_, _ = fmt.Fprintf(out, "Daemon started and healthy at %s.\n", daemonURL)
-	}
-
-	pairCode, pairCodeExpiresAt, err := daemonPairCodeFetcher(daemonURL)
+	daemonURL, err := ensureDaemonRunning(out)
 	if err != nil {
-		_, _ = fmt.Fprintf(out, "Warning: failed to fetch pair code from daemon: %v\n", err)
-	} else if strings.TrimSpace(pairCode) != "" {
-		_, _ = fmt.Fprintln(out, "")
-		_, _ = fmt.Fprintf(out, "PAIR_CODE: %s\n", pairCode)
-		if strings.TrimSpace(pairCodeExpiresAt) != "" {
-			if expiry, parseErr := time.Parse(time.RFC3339Nano, pairCodeExpiresAt); parseErr == nil {
-				remaining := time.Until(expiry)
-				if remaining < 0 {
-					remaining = 0
-				}
-				_, _ = fmt.Fprintf(out, "(expires in %s)\n", remaining.Round(time.Second))
-			} else {
-				_, _ = fmt.Fprintf(out, "(expiresAt: %s)\n", pairCodeExpiresAt)
-			}
-		}
+		return "", err
 	}
+	printDaemonPairCode(out, daemonURL)
 
-	gatewayURL := gatewayProbeBaseURL()
-	if gatewayHealthProbe(gatewayURL) {
-		_, _ = fmt.Fprintf(out, "\nGateway already running at %s.\n", gatewayURL)
-	} else {
-		_, _ = fmt.Fprintf(out, "\nGateway not detected at %s, starting in background...\n", gatewayURL)
+	probeURL := gatewayProbeBaseURL()
+	gatewayURL, err := ensureGatewayRunning(out, func() error {
 		if err := gatewayBackgroundStarter(); err != nil {
-			return "", fmt.Errorf("start gateway in background: %w", err)
+			return fmt.Errorf("start gateway in background: %w", err)
 		}
-		if err := waitForGatewayHealthy(gatewayURL, gatewayBootTimeout); err != nil {
-			return "", fmt.Errorf("gateway failed to become healthy at %s within %s: %w", gatewayURL, gatewayBootTimeout, err)
+		if err := waitForGatewayHealthy(probeURL, gatewayBootTimeout); err != nil {
+			return fmt.Errorf("gateway failed to become healthy at %s within %s: %w", probeURL, gatewayBootTimeout, err)
 		}
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
 
 	if !checkWebUIReady(gatewayURL) {
@@ -1196,11 +1342,21 @@ func runAddTUI(in io.Reader, out io.Writer, agentID string) error {
 
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "Step 2/4: Configure LLM provider")
-	provider, err := pickMinimalProvider()
+	provider, providerReason, err := pickMinimalProviderWithReason()
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "Using provider: %s (%s)\n", provider.Name, provider.ID)
+	_, _ = fmt.Fprintf(out, "Auto-selected provider: %s (%s)\n", provider.Name, provider.ID)
+	_, _ = fmt.Fprintf(out, "Selection reason: %s\n", providerReason)
+	provider, override, err := promptMinimalProviderOverride(reader, out, provider)
+	if err != nil {
+		return err
+	}
+	if override {
+		_, _ = fmt.Fprintf(out, "Provider override selected: %s (%s)\n", provider.Name, provider.ID)
+	} else {
+		_, _ = fmt.Fprintf(out, "Using provider: %s (%s)\n", provider.Name, provider.ID)
+	}
 	_, _ = fmt.Fprintln(out, "Saved provider credential will be reused automatically when available.")
 	providerEnv, _, err := promptProviderAuthMinimal(reader, out, provider)
 	if err != nil {
@@ -1314,6 +1470,51 @@ func ensureDaemonRunning(out io.Writer) (string, error) {
 	}
 	_, _ = fmt.Fprintf(out, "Daemon started and healthy at %s.\n", daemonURL)
 	return daemonURL, nil
+}
+
+func printDaemonPairCode(out io.Writer, daemonURL string) {
+	pairCode, pairCodeExpiresAt, err := daemonPairCodeFetcher(daemonURL)
+	if err != nil {
+		_, _ = fmt.Fprintf(out, "Warning: failed to fetch pair code from daemon: %v\n", err)
+		return
+	}
+	if strings.TrimSpace(pairCode) == "" {
+		return
+	}
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintf(out, "PAIR_CODE: %s\n", pairCode)
+	if strings.TrimSpace(pairCodeExpiresAt) == "" {
+		return
+	}
+	if expiry, parseErr := time.Parse(time.RFC3339Nano, pairCodeExpiresAt); parseErr == nil {
+		remaining := time.Until(expiry)
+		if remaining < 0 {
+			remaining = 0
+		}
+		_, _ = fmt.Fprintf(out, "(expires in %s)\n", remaining.Round(time.Second))
+		return
+	}
+	_, _ = fmt.Fprintf(out, "(expiresAt: %s)\n", pairCodeExpiresAt)
+}
+
+func ensureGatewayRunning(out io.Writer, startGateway func() error) (string, error) {
+	gatewayURL := gatewayProbeBaseURL()
+	if gatewayHealthProbe(gatewayURL) {
+		_, _ = fmt.Fprintf(out, "Gateway already running at %s, reusing existing process.\n", gatewayURL)
+		return gatewayURL, nil
+	}
+	_, _ = fmt.Fprintf(out, "Gateway not detected at %s, starting in background...\n", gatewayURL)
+	if err := startGateway(); err != nil {
+		if isAddressInUseError(err) && gatewayHealthProbe(gatewayURL) {
+			_, _ = fmt.Fprintf(out, "Gateway already running at %s, reusing existing process.\n", gatewayURL)
+			return gatewayURL, nil
+		}
+		if isAddressInUseError(err) {
+			return "", fmt.Errorf("gateway port is already in use; stop the conflicting process or set CARRIER_GATEWAY_PORT (probe: %s): %w", gatewayURL, err)
+		}
+		return "", err
+	}
+	return gatewayURL, nil
 }
 
 func daemonAgentAction(agentID, action string) error {
@@ -1472,21 +1673,18 @@ func preparePicoclawAddArtifacts(instanceID, channelID, channelToken string, pro
 		"model_name": modelName,
 		"model":      modelID,
 	}
-	providerItem := map[string]interface{}{}
+	providerItem := map[string]interface{}{
+		"credential_ref": provider.ID,
+	}
 	token := pickProviderTokenForPicoclaw(provider, envVars)
 	if strings.EqualFold(provider.ID, "openai-codex") {
 		modelItem["auth_method"] = "oauth"
 		providerItem["auth_method"] = "oauth"
-		if token != "" {
-			modelItem["api_key"] = token
-			providerItem["api_key"] = token
-		}
 		accountID := extractOpenAIAccountIDFromToken(token)
 		if err := savePicoclawAuthCredential(home, "openai", token, accountID); err != nil {
 			return nil, fmt.Errorf("write picoclaw auth store: %w", err)
 		}
 	} else if token != "" {
-		modelItem["api_key"] = token
 		providerItem["api_key"] = token
 	}
 
@@ -1690,19 +1888,55 @@ func openBrowserURL(targetURL string) error {
 }
 
 func pickMinimalProvider() (choiceOption, error) {
+	provider, _, err := pickMinimalProviderWithReason()
+	return provider, err
+}
+
+func pickMinimalProviderWithReason() (choiceOption, string, error) {
 	defaultID := strings.ToLower(strings.TrimSpace(os.Getenv("CARRIER_DEFAULT_PROVIDER_ID")))
 	if defaultID != "" {
 		if p, ok := resolveChoice(defaultID, providerOptions); ok {
-			return p, nil
+			return p, fmt.Sprintf("environment default from CARRIER_DEFAULT_PROVIDER_ID=%s", defaultID), nil
 		}
 	}
 	if p, ok := resolveChoice("openai-codex", providerOptions); ok {
-		return p, nil
+		return p, "fallback to openai-codex for minimal OAuth onboarding", nil
 	}
 	if len(providerOptions) == 0 {
-		return choiceOption{}, errors.New("no provider available")
+		return choiceOption{}, "", errors.New("no provider available")
 	}
-	return providerOptions[0], nil
+	return providerOptions[0], "fallback to first available provider", nil
+}
+
+func promptMinimalProviderOverride(reader *bufio.Reader, out io.Writer, selected choiceOption) (choiceOption, bool, error) {
+	if reader == nil {
+		return selected, false, nil
+	}
+	_, _ = fmt.Fprint(out, "Press Enter to keep this provider, or type another provider ID to override: ")
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				return selected, false, nil
+			}
+			override, ok := resolveChoice(trimmed, providerOptions)
+			if !ok {
+				return choiceOption{}, false, fmt.Errorf("unknown provider override %q", trimmed)
+			}
+			return override, true, nil
+		}
+		return choiceOption{}, false, err
+	}
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return selected, false, nil
+	}
+	override, ok := resolveChoice(trimmed, providerOptions)
+	if !ok {
+		return choiceOption{}, false, fmt.Errorf("unknown provider override %q", trimmed)
+	}
+	return override, true, nil
 }
 
 func promptChannelCredentialsMinimal(reader *bufio.Reader, out io.Writer, channel choiceOption) (map[string]string, configv2.Channel, error) {

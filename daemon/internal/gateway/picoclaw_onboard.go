@@ -169,21 +169,18 @@ func preparePicoclawManagedOnboard(sess *OnboardSession, actor string) (*picocla
 		"model_name": modelName,
 		"model":      modelID,
 	}
-	providerItem := map[string]interface{}{}
+	providerItem := map[string]interface{}{
+		"credential_ref": provider.ID,
+	}
 	token := pickProviderToken(provider, sess.EnvVars)
 	if strings.EqualFold(provider.ID, "openai-codex") {
 		modelItem["auth_method"] = "oauth"
 		providerItem["auth_method"] = "oauth"
-		if token != "" {
-			modelItem["api_key"] = token
-			providerItem["api_key"] = token
-		}
 		accountID := extractOpenAIAccountID(token)
 		if err := savePicoclawAuthCredential(home, "openai", token, accountID); err != nil {
 			return nil, fmt.Errorf("write picoclaw auth store: %w", err)
 		}
 	} else if token != "" {
-		modelItem["api_key"] = token
 		providerItem["api_key"] = token
 	}
 

@@ -126,6 +126,18 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		}
 		handleTelegramPairWait(w, r, requestID, cfg, telegramPairs)
 	})
+	mux.HandleFunc("/api/v1/telegram/transport", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleTelegramTransportStatus(w, r, requestID)
+	})
 	mux.HandleFunc("/api/v1/pairing/sessions", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
 		if r.Method != http.MethodGet {
@@ -643,6 +655,10 @@ type apiErr struct {
 }
 
 func gatewayErrBody(code, msg string) map[string]interface{} {
+	msg = strings.TrimSpace(RedactErrorMessage(msg))
+	if msg == "" {
+		msg = "request failed"
+	}
 	return map[string]interface{}{
 		"result":    "error",
 		"errorCode": code,

@@ -100,6 +100,9 @@ func TestPreparePicoclawManagedOnboard_WritesConfigAndRecord(t *testing.T) {
 	if model["auth_method"] != "oauth" {
 		t.Fatalf("unexpected auth_method: %v", model["auth_method"])
 	}
+	if _, hasAPIKey := model["api_key"]; hasAPIKey {
+		t.Fatalf("did not expect oauth model api_key to be persisted, got %#v", model["api_key"])
+	}
 	agents, ok := cfg["agents"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("expected agents object, got %#v", cfg["agents"])
@@ -161,6 +164,10 @@ func TestPreparePicoclawManagedOnboard_WritesConfigAndRecord(t *testing.T) {
 	}
 	if record["workspace_path"] != result.WorkspacePath {
 		t.Fatalf("record workspace_path mismatch: got %v want %s", record["workspace_path"], result.WorkspacePath)
+	}
+	recordText := string(recordRaw)
+	if strings.Contains(recordText, "codex-token-value") || strings.Contains(recordText, "telegram-token-abc") {
+		t.Fatalf("managed record should not contain secret token values: %s", recordText)
 	}
 }
 

@@ -20,7 +20,20 @@ const (
 	telegramTransportAuto    = "auto"
 	telegramTransportWebhook = "webhook"
 	telegramTransportPolling = "polling"
+
+	telegramFallbackTokenMissing         = "TOKEN_MISSING"
+	telegramFallbackWebhookURLInvalid    = "WEBHOOK_URL_INVALID"
+	telegramFallbackWebhookSetupFailed   = "WEBHOOK_SETUP_FAILED"
+	telegramFallbackWebhookVerifyFailed  = "WEBHOOK_VERIFY_FAILED"
+	telegramFallbackWebhookCleanupFailed = "WEBHOOK_CLEANUP_FAILED"
 )
+
+type telegramTransportDecision struct {
+	Mode       string
+	ReasonCode string
+	Reason     string
+	Hint       string
+}
 
 type telegramAPI interface {
 	SetWebhook(ctx context.Context, webhookURL, webhookSecret string) error
@@ -178,36 +191,40 @@ func startTelegramTransport(
 	token := strings.TrimSpace(cfg.TelegramBotToken)
 	if token == "" {
 		if mode == telegramTransportAuto {
+			setTelegramTransportStatus(mode, "disabled", telegramFallbackTokenMissing, "telegram bot token is missing", "Set CARRIER_TELEGRAM_BOT_TOKEN to enable telegram transport.")
 			log.Printf("[gateway/telegram] transport disabled: missing CARRIER_TELEGRAM_BOT_TOKEN")
 			return nil
 		}
+		setTelegramTransportStatus(mode, "error", telegramFallbackTokenMissing, "telegram bot token is missing", "Set CARRIER_TELEGRAM_BOT_TOKEN for explicit transport mode.")
 		return fmt.Errorf("telegram transport mode %q requires CARRIER_TELEGRAM_BOT_TOKEN", mode)
 	}
 
 	api := newTelegramBotAPI(token, cfg.TelegramAPIBaseURL, nil)
-	selectedMode, reason, err := resolveTelegramTransportMode(ctx, cfg, api)
+	decision, err := resolveTelegramTransportMode(ctx, cfg, api)
 	if err != nil {
+		setTelegramTransportStatus(mode, "error", "RESOLUTION_FAILED", err.Error(), "Verify telegram transport configuration.")
 		return err
 	}
+	setTelegramTransportStatus(mode, decision.Mode, decision.ReasonCode, decision.Reason, decision.Hint)
 
-	switch selectedMode {
+	switch decision.Mode {
 	case telegramTransportWebhook:
 		log.Printf("[gateway/telegram] transport=webhook url=%s", strings.TrimSpace(cfg.TelegramWebhookURL))
 		return nil
 	case telegramTransportPolling:
-		if strings.TrimSpace(reason) != "" {
-			log.Printf("[gateway/telegram] transport=polling (fallback reason: %s)", reason)
+		if strings.TrimSpace(decision.ReasonCode) != "" || strings.TrimSpace(decision.Reason) != "" {
+			log.Printf("[gateway/telegram] transport=polling reason_code=%s reason=%s hint=%s", decision.ReasonCode, decision.Reason, decision.Hint)
 		} else {
 			log.Printf("[gateway/telegram] transport=polling")
 		}
 		go runTelegramPollingLoop(ctx, cfg, api, daemon, sessions, downloads, rl, onboard)
 		return nil
 	default:
-		return fmt.Errorf("unknown telegram transport mode resolved: %s", selectedMode)
+		return fmt.Errorf("unknown telegram transport mode resolved: %s", decision.Mode)
 	}
 }
 
-func resolveTelegramTransportMode(ctx context.Context, cfg *GatewayConfig, api telegramAPI) (mode string, reason string, err error) {
+func resolveTelegramTransportMode(ctx context.Context, cfg *GatewayConfig, api telegramAPI) (telegramTransportDecision, error) {
 	requestedMode := strings.ToLower(strings.TrimSpace(cfg.TelegramTransportMode))
 	if requestedMode == "" {
 		requestedMode = telegramTransportAuto
@@ -220,53 +237,83 @@ func resolveTelegramTransportMode(ctx context.Context, cfg *GatewayConfig, api t
 			if setErr := api.SetWebhook(ctx, webhookURL, cfg.TelegramWebhookSecret); setErr == nil {
 				info, infoErr := api.GetWebhookInfo(ctx)
 				if infoErr == nil && strings.TrimSpace(info.URL) == webhookURL {
-					return telegramTransportWebhook, "", nil
+					return telegramTransportDecision{Mode: telegramTransportWebhook}, nil
+				}
+				decision := telegramTransportDecision{
+					Mode:       telegramTransportPolling,
+					ReasonCode: telegramFallbackWebhookVerifyFailed,
+					Hint:       "Confirm CARRIER_TELEGRAM_WEBHOOK_URL is publicly reachable and matches Telegram webhook info.",
 				}
 				if infoErr != nil {
-					reason = fmt.Sprintf("webhook verification failed: %v", infoErr)
+					decision.Reason = fmt.Sprintf("webhook verification failed: %v", infoErr)
 				} else {
-					reason = fmt.Sprintf("webhook verification failed: expected %q, got %q", webhookURL, strings.TrimSpace(info.URL))
+					decision.Reason = fmt.Sprintf("webhook verification failed: expected %q, got %q", webhookURL, strings.TrimSpace(info.URL))
 				}
+				if delErr := api.DeleteWebhook(ctx); delErr != nil {
+					decision.ReasonCode = telegramFallbackWebhookCleanupFailed
+					decision.Reason = decision.Reason + "; deleteWebhook failed: " + delErr.Error()
+					decision.Hint = "Fix webhook URL/secret mismatch and ensure Telegram API calls succeed."
+				}
+				return decision, nil
 			} else {
-				reason = fmt.Sprintf("setWebhook failed: %v", setErr)
+				decision := telegramTransportDecision{
+					Mode:       telegramTransportPolling,
+					ReasonCode: telegramFallbackWebhookSetupFailed,
+					Reason:     fmt.Sprintf("setWebhook failed: %v", setErr),
+					Hint:       "Ensure webhook URL is reachable over HTTPS and webhook secret matches gateway config.",
+				}
+				if delErr := api.DeleteWebhook(ctx); delErr != nil {
+					decision.ReasonCode = telegramFallbackWebhookCleanupFailed
+					decision.Reason = decision.Reason + "; deleteWebhook failed: " + delErr.Error()
+					decision.Hint = "Resolve Telegram webhook API failures and retry auto mode."
+				}
+				return decision, nil
 			}
 		} else {
-			reason = webhookErr.Error()
-		}
-		if delErr := api.DeleteWebhook(ctx); delErr != nil {
-			if reason == "" {
-				reason = fmt.Sprintf("deleteWebhook failed: %v", delErr)
-			} else {
-				reason = reason + "; deleteWebhook failed: " + delErr.Error()
+			decision := telegramTransportDecision{
+				Mode:       telegramTransportPolling,
+				ReasonCode: telegramFallbackWebhookURLInvalid,
+				Reason:     webhookErr.Error(),
+				Hint:       "Set a public HTTPS CARRIER_TELEGRAM_WEBHOOK_URL, or force polling mode explicitly.",
 			}
+			if delErr := api.DeleteWebhook(ctx); delErr != nil {
+				decision.ReasonCode = telegramFallbackWebhookCleanupFailed
+				decision.Reason = decision.Reason + "; deleteWebhook failed: " + delErr.Error()
+				decision.Hint = "Fix webhook URL and Telegram API connectivity before retrying auto mode."
+			}
+			return decision, nil
 		}
-		return telegramTransportPolling, reason, nil
 
 	case telegramTransportWebhook:
 		webhookURL, webhookErr := normalizeTelegramWebhookURL(cfg.TelegramWebhookURL)
 		if webhookErr != nil {
-			return "", "", fmt.Errorf("telegram webhook mode requires a valid public HTTPS CARRIER_TELEGRAM_WEBHOOK_URL: %w", webhookErr)
+			return telegramTransportDecision{}, fmt.Errorf("telegram webhook mode requires a valid public HTTPS CARRIER_TELEGRAM_WEBHOOK_URL: %w", webhookErr)
 		}
 		if err := api.SetWebhook(ctx, webhookURL, cfg.TelegramWebhookSecret); err != nil {
-			return "", "", fmt.Errorf("telegram webhook setup failed: %w", err)
+			return telegramTransportDecision{}, fmt.Errorf("telegram webhook setup failed: %w", err)
 		}
 		info, err := api.GetWebhookInfo(ctx)
 		if err != nil {
-			return "", "", fmt.Errorf("telegram webhook verification failed: %w", err)
+			return telegramTransportDecision{}, fmt.Errorf("telegram webhook verification failed: %w", err)
 		}
 		if strings.TrimSpace(info.URL) != webhookURL {
-			return "", "", fmt.Errorf("telegram webhook verification failed: expected %q, got %q", webhookURL, strings.TrimSpace(info.URL))
+			return telegramTransportDecision{}, fmt.Errorf("telegram webhook verification failed: expected %q, got %q", webhookURL, strings.TrimSpace(info.URL))
 		}
-		return telegramTransportWebhook, "", nil
+		return telegramTransportDecision{Mode: telegramTransportWebhook}, nil
 
 	case telegramTransportPolling:
 		if err := api.DeleteWebhook(ctx); err != nil {
 			log.Printf("[gateway/telegram] warning: deleteWebhook before polling failed: %v", err)
 		}
-		return telegramTransportPolling, "", nil
+		return telegramTransportDecision{
+			Mode:       telegramTransportPolling,
+			ReasonCode: "POLLING_FORCED",
+			Reason:     "polling mode forced by configuration",
+			Hint:       "Set CARRIER_TELEGRAM_TRANSPORT_MODE=auto to retry webhook automatically.",
+		}, nil
 
 	default:
-		return "", "", fmt.Errorf("invalid CARRIER_TELEGRAM_TRANSPORT_MODE %q (expected auto|webhook|polling)", requestedMode)
+		return telegramTransportDecision{}, fmt.Errorf("invalid CARRIER_TELEGRAM_TRANSPORT_MODE %q (expected auto|webhook|polling)", requestedMode)
 	}
 }
 

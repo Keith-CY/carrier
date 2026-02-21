@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -583,9 +584,12 @@ func onboardViaGUIOnlyResp(requestID string) GatewayResponse {
 
 func daemonErrResp(requestID string, err error) GatewayResponse {
 	if de, ok := err.(*DaemonClientError); ok {
-		return errResp(requestID, de.Code, de.Message)
+		_, code, message := mapDaemonErrorToExternal(de.Code)
+		log.Printf("[gateway] daemon command error code=%s detail=%s", code, RedactErrorMessage(de.Message))
+		return errResp(requestID, code, message)
 	}
-	return errResp(requestID, "E_COMMAND_FAILED", err.Error())
+	log.Printf("[gateway] daemon command error detail=%s", RedactErrorMessage(err.Error()))
+	return errResp(requestID, "E_COMMAND_FAILED", "daemon command failed")
 }
 
 func parsePositiveInt(s string, fallback int) int {

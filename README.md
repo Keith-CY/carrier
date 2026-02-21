@@ -164,6 +164,13 @@ Runtime environment variables:
 - `CARRIER_GATEWAY_API_TOKEN` (optional on loopback; required for non-loopback bind)
 - `CARRIER_MAX_COMMAND_BODY_BYTES` (default: `65536`)
 
+### Managed PicoClaw Secret Persistence
+
+- Managed instance record files (`~/.carrier/agents/*.json`) do not store channel/provider secret values.
+- Shared provider credentials are loaded from the credential store (`CARRIER_CREDENTIAL_STORE`, with keychain/file fallback logic in code).
+- For OAuth provider flows (for example `openai-codex`), tokens are persisted in `~/.picoclaw/auth.json`; generated `config.json` keeps auth metadata/reference fields and avoids duplicating OAuth token values in model entries.
+- API-key providers keep a single provider-level credential entry in generated PicoClaw config instead of duplicating the same key across multiple config nodes.
+
 #### Merge Queue
 - This repository supports GitHub Merge Queue for `main`.
 - For merge operations, prefer queue-based merge from the GitHub UI.
