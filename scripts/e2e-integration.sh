@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# End-to-end integration test: boots daemon + gateway and exercises full command flow.
+# End-to-end integration test: boots carrier daemon + gateway and exercises full command flow.
 # Usage: bash scripts/e2e-integration.sh
-# Requires: Go toolchain, Bun
+# Requires: Go toolchain, curl, python3
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
@@ -23,22 +23,21 @@ find_port() {
 
 DAEMON_PORT=$(find_port)
 GATEWAY_PORT=$(find_port)
-PAIR_CODE="e2e-test-$(date +%s)"
 TMPDIR="$(mktemp -d)"
 
 echo "[e2e] Daemon port: $DAEMON_PORT, Gateway port: $GATEWAY_PORT"
 echo "[e2e] Temp dir: $TMPDIR"
 
-# Build and start daemon
-echo "[e2e] Building daemon..."
-cd "$repo_root/daemon"
-go build -o "$TMPDIR/agentd" ./cmd/agentd
+# Build carrier binary
+echo "[e2e] Building carrier binary..."
+cd "$repo_root"
+go build -o "$TMPDIR/carrier" ./cmd/carrier
 
 echo "[e2e] Starting daemon on port $DAEMON_PORT..."
 CARRIER_SERVER_PORT="$DAEMON_PORT" \
 CARRIER_SERVER_HOST="127.0.0.1" \
 CARRIER_DEV_MODE=1 \
-  "$TMPDIR/agentd" &
+  "$TMPDIR/carrier" daemon &
 DAEMON_PID=$!
 cleanup_pids+=("$DAEMON_PID")
 
@@ -56,18 +55,13 @@ for i in $(seq 1 30); do
   sleep 0.5
 done
 
-# Install gateway deps and start gateway
+# Start gateway
 echo "[e2e] Starting gateway on port $GATEWAY_PORT..."
-cd "$repo_root/gateway"
-if [[ ! -d node_modules ]]; then
-  bun install --frozen-lockfile --no-progress
-fi
-
 CARRIER_GATEWAY_PORT="$GATEWAY_PORT" \
 CARRIER_GATEWAY_HOST="127.0.0.1" \
-CARRIER_DAEMON_URL="http://127.0.0.1:$DAEMON_PORT" \
+CARRIER_DAEMON_BASE_URL="http://127.0.0.1:$DAEMON_PORT" \
 SESSION_DATA_DIR="$TMPDIR" \
-  bun run src/server.ts &
+  "$TMPDIR/carrier" gateway &
 GATEWAY_PID=$!
 cleanup_pids+=("$GATEWAY_PID")
 
@@ -88,6 +82,13 @@ done
 # Helper to send commands
 send_cmd() {
   local input="$1"
+  local session_token="${2:-}"
+  if [[ -n "$session_token" ]]; then
+    curl -sf -X POST "http://127.0.0.1:$GATEWAY_PORT/command" \
+      -H "Content-Type: application/json" \
+      -d "{\"input\": \"$input\", \"sessionToken\": \"$session_token\"}"
+    return
+  fi
   curl -sf -X POST "http://127.0.0.1:$GATEWAY_PORT/command" \
     -H "Content-Type: application/json" \
     -d "{\"input\": \"$input\"}"
@@ -121,11 +122,14 @@ assert_error() {
 echo ""
 echo "[e2e] === Running E2E Tests ==="
 
-# Register a pairing code with the daemon
-echo "[e2e] Registering pairing code with daemon..."
-curl -sf -X POST "http://127.0.0.1:$DAEMON_PORT/api/v1/pairing/codes" \
-  -H "Content-Type: application/json" \
-  -d "{\"code\": \"$PAIR_CODE\", \"ttlSeconds\": 300}" >/dev/null
+# Read current pairing code from daemon
+echo "[e2e] Fetching pairing code from daemon..."
+PAIR_CODE=$(curl -sf "http://127.0.0.1:$DAEMON_PORT/api/v1/pairing/codes" | python3 -c 'import json,sys; data=json.load(sys.stdin); codes=data.get("codes") or []; print((codes[0] or {}).get("code","") if codes else "")')
+if [[ -z "$PAIR_CODE" ]]; then
+  echo "[e2e] ERROR: No pairing code available from daemon" >&2
+  exit 1
+fi
+echo "[e2e] Pairing code: ${PAIR_CODE:0:20}..."
 
 # Test: /pair
 RESP=$(send_cmd "telegram test-chat req-1 /pair $PAIR_CODE")
@@ -139,27 +143,27 @@ fi
 echo "[e2e] Session token: ${SESSION_TOKEN:0:20}..."
 
 # Test: /agents
-RESP=$(send_cmd "telegram test-chat req-2 $SESSION_TOKEN /agents")
+RESP=$(send_cmd "telegram test-chat req-2 /agents" "$SESSION_TOKEN")
 assert_ok "/agents" "$RESP"
 
 # Test: /status
-RESP=$(send_cmd "telegram test-chat req-3 $SESSION_TOKEN /status")
+RESP=$(send_cmd "telegram test-chat req-3 /status" "$SESSION_TOKEN")
 assert_ok "/status" "$RESP"
 
 # Test: /install (openclaw agent)
-RESP=$(send_cmd "telegram test-chat req-4 $SESSION_TOKEN /install openclaw")
+RESP=$(send_cmd "telegram test-chat req-4 /install openclaw" "$SESSION_TOKEN")
 assert_ok "/install openclaw" "$RESP"
 
 # Test: /status after install
-RESP=$(send_cmd "telegram test-chat req-5 $SESSION_TOKEN /status openclaw")
+RESP=$(send_cmd "telegram test-chat req-5 /status openclaw" "$SESSION_TOKEN")
 assert_ok "/status after install" "$RESP"
 
 # Test: /logs
-RESP=$(send_cmd "telegram test-chat req-6 $SESSION_TOKEN /logs")
-assert_ok "/logs" "$RESP"
+RESP=$(send_cmd "telegram test-chat req-6 /logs openclaw" "$SESSION_TOKEN")
+assert_ok "/logs openclaw" "$RESP"
 
 # Test: unknown command (should error)
-RESP=$(send_cmd "telegram test-chat req-7 $SESSION_TOKEN /unknown")
+RESP=$(send_cmd "telegram test-chat req-7 /unknown" "$SESSION_TOKEN")
 assert_error "unknown command" "$RESP"
 
 echo ""

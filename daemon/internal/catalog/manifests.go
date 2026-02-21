@@ -44,6 +44,7 @@ const (
 
 	// PicoClaw release URL pattern
 	picoClawReleaseBaseURL = "https://github.com/sipeed/picoclaw/releases/latest/download"
+	picoClawReleaseAPIURL  = "https://api.github.com/repos/sipeed/picoclaw/releases/latest"
 )
 
 // getInstallCommand returns the platform-appropriate install command.
@@ -234,18 +235,53 @@ func ZeroClawManifest() manifest.Manifest {
 	}
 }
 
-// picoClawBinaryName returns the platform-specific binary name for PicoClaw releases.
+// picoClawBinaryName returns the installed executable name.
 func picoClawBinaryName() string {
-	goos := runtime.GOOS
-	goarch := runtime.GOARCH
-	if goos == "windows" {
-		return fmt.Sprintf("picoclaw-%s-%s.exe", goos, goarch)
+	if runtime.GOOS == "windows" {
+		return "picoclaw.exe"
 	}
-	return fmt.Sprintf("picoclaw-%s-%s", goos, goarch)
+	return "picoclaw"
+}
+
+func picoClawReleaseOS() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "Darwin"
+	case "linux":
+		return "Linux"
+	case "freebsd":
+		return "Freebsd"
+	case "windows":
+		return "Windows"
+	default:
+		return strings.Title(runtime.GOOS)
+	}
+}
+
+func picoClawReleaseArch() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "x86_64"
+	case "arm64":
+		return "arm64"
+	case "arm":
+		return "armv6"
+	default:
+		return runtime.GOARCH
+	}
+}
+
+// picoClawReleaseBundleName returns the release archive name in GitHub assets.
+func picoClawReleaseBundleName() string {
+	ext := ".tar.gz"
+	if runtime.GOOS == "windows" {
+		ext = ".zip"
+	}
+	return fmt.Sprintf("picoclaw_%s_%s%s", picoClawReleaseOS(), picoClawReleaseArch(), ext)
 }
 
 // getPicoClawInstallCommand returns the install command for PicoClaw.
-// It downloads the release binary and sha256sums.txt, verifies the checksum,
+// It downloads the release archive, verifies checksum when available,
 // and installs to ~/.local/bin/picoclaw.
 func getPicoClawInstallCommand() string {
 	if os.Getenv("CARRIER_DEV_MODE") == "1" {
@@ -253,6 +289,7 @@ func getPicoClawInstallCommand() string {
 	}
 
 	binary := picoClawBinaryName()
+	bundle := picoClawReleaseBundleName()
 	destName := "picoclaw"
 	if runtime.GOOS == "windows" {
 		destName = "picoclaw.exe"
@@ -262,28 +299,87 @@ func getPicoClawInstallCommand() string {
 	case "windows":
 		return fmt.Sprintf(`powershell -NoProfile -Command "
 $ErrorActionPreference = 'Stop'
-$bin = '%s'; $dest = \"$env:USERPROFILE\.local\bin\%s\"
+$bundle = '%s'; $bin = '%s'; $dest = \"$env:USERPROFILE\.local\bin\%s\"
 New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
-Invoke-WebRequest -Uri '%s/%s' -OutFile $dest
-Invoke-WebRequest -Uri '%s/sha256sums.txt' -OutFile \"$env:TEMP\sha256sums.txt\"
-$expected = (Get-Content \"$env:TEMP\sha256sums.txt\" | Select-String $bin).ToString().Split(' ')[0]
-$actual = (Get-FileHash $dest -Algorithm SHA256).Hash.ToLower()
-if ($actual -ne $expected) { Remove-Item $dest; throw \"checksum mismatch\" }
-"`, binary, destName, picoClawReleaseBaseURL, binary, picoClawReleaseBaseURL)
+$release = Invoke-RestMethod -Uri '%s'
+$asset = ($release.assets | Where-Object { $_.name -eq $bundle } | Select-Object -First 1)
+$url = if ($asset) { $asset.browser_download_url } else { '%s/' + $bundle }
+$archive = Join-Path $env:TEMP $bundle
+$tmp = Join-Path $env:TEMP ('picoclaw_extract_' + [guid]::NewGuid().ToString())
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+Invoke-WebRequest -Uri $url -OutFile $archive
+$checksumAsset = ($release.assets | Where-Object { $_.name -match 'checksums.*\.txt$' } | Select-Object -First 1)
+if ($checksumAsset) {
+  $sumsPath = Join-Path $env:TEMP 'picoclaw_checksums.txt'
+  Invoke-WebRequest -Uri $checksumAsset.browser_download_url -OutFile $sumsPath
+  $line = Get-Content $sumsPath | Select-String $bundle | Select-Object -First 1
+  if ($line) {
+    $expected = ($line.ToString().Trim() -split '\s+')[0].ToLower()
+    $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+    if ($actual -ne $expected) { Remove-Item $archive -ErrorAction SilentlyContinue; throw \"checksum mismatch\" }
+  }
+}
+Expand-Archive -Path $archive -DestinationPath $tmp -Force
+$extracted = Get-ChildItem -Path $tmp -Recurse -File | Where-Object { $_.Name -eq $bin } | Select-Object -First 1
+if (-not $extracted) { throw \"extracted binary not found: $bin\" }
+Copy-Item -Path $extracted.FullName -Destination $dest -Force
+"`, bundle, binary, destName, picoClawReleaseAPIURL, picoClawReleaseBaseURL)
 	default:
 		return fmt.Sprintf(`sh -c '
 set -e
+BUNDLE="%s"
 BINARY="%s"
 DEST="$HOME/.local/bin/%s"
+RELEASE_API_URL="%s"
 mkdir -p "$HOME/.local/bin"
-curl -fsSL -o "$DEST" "%s/%s"
-curl -fsSL -o /tmp/picoclaw-sha256sums.txt "%s/sha256sums.txt"
-EXPECTED=$(grep "$BINARY" /tmp/picoclaw-sha256sums.txt | cut -d" " -f1)
-ACTUAL=$(sha256sum "$DEST" | cut -d" " -f1)
-if [ "$EXPECTED" != "$ACTUAL" ]; then rm -f "$DEST"; echo "checksum mismatch" >&2; exit 1; fi
-chmod +x "$DEST"
-rm -f /tmp/picoclaw-sha256sums.txt
-'`, binary, destName, picoClawReleaseBaseURL, binary, picoClawReleaseBaseURL)
+TMPDIR=$(mktemp -d)
+cleanup() { rm -rf "$TMPDIR"; }
+trap cleanup EXIT
+download() {
+  url="$1"
+  out="$2"
+  if ! curl -fsSL -o "$out" "$url"; then
+    echo "download failed: $url" >&2
+    exit 1
+  fi
+}
+
+RELEASE_JSON="$TMPDIR/release.json"
+download "$RELEASE_API_URL" "$RELEASE_JSON"
+
+ASSET_URL=$(grep -Eo "\"browser_download_url\":[[:space:]]*\"[^\"]*\"" "$RELEASE_JSON" | sed -E "s/.*\"([^\"]+)\"/\\1/" | grep "/$BUNDLE$" | head -n1)
+if [ -z "$ASSET_URL" ]; then ASSET_URL="%s/$BUNDLE"; fi
+
+CHECKSUM_URL=$(grep -Eo "\"browser_download_url\":[[:space:]]*\"[^\"]*checksums[^\"]*\.txt\"" "$RELEASE_JSON" | sed -E "s/.*\"([^\"]+)\"/\\1/" | head -n1)
+
+ARCHIVE="$TMPDIR/$BUNDLE"
+download "$ASSET_URL" "$ARCHIVE"
+
+if [ -n "$CHECKSUM_URL" ]; then
+  SUMS="$TMPDIR/checksums.txt"
+  download "$CHECKSUM_URL" "$SUMS"
+  EXPECTED=$(awk -v f="$BUNDLE" "\$2==f {print \$1; exit}" "$SUMS")
+  if [ -z "$EXPECTED" ]; then EXPECTED=$(grep -E "[ *]$BUNDLE$" "$SUMS" | head -n1 | awk "{print \$1}"); fi
+  if [ -n "$EXPECTED" ]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+      ACTUAL=$(sha256sum "$ARCHIVE" | awk "{print \$1}")
+    elif command -v shasum >/dev/null 2>&1; then
+      ACTUAL=$(shasum -a 256 "$ARCHIVE" | awk "{print \$1}")
+    elif command -v openssl >/dev/null 2>&1; then
+      ACTUAL=$(openssl dgst -sha256 "$ARCHIVE" | awk "{print \$NF}")
+    else
+      echo "no sha256 tool available (need sha256sum, shasum, or openssl)" >&2
+      exit 1
+    fi
+    if [ "$EXPECTED" != "$ACTUAL" ]; then echo "checksum mismatch" >&2; exit 1; fi
+  fi
+fi
+
+tar -xzf "$ARCHIVE" -C "$TMPDIR"
+EXTRACTED=$(find "$TMPDIR" -type f -name "$BINARY" | head -n1)
+if [ -z "$EXTRACTED" ]; then echo "extracted binary not found: $BINARY" >&2; exit 1; fi
+install -m 0755 "$EXTRACTED" "$DEST"
+'`, bundle, binary, destName, picoClawReleaseAPIURL, picoClawReleaseBaseURL)
 	}
 }
 

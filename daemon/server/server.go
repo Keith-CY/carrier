@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -32,6 +33,7 @@ import (
 	"carrier/daemon/internal/config"
 	"carrier/daemon/internal/lifecycle"
 	"carrier/daemon/internal/logging"
+	"carrier/daemon/internal/memory"
 	"carrier/daemon/internal/ratelimit"
 )
 
@@ -71,7 +73,15 @@ func Run() {
 	}
 	opts = append(opts, lifecycle.WithCrashLoopConfig(cfg.Lifecycle.CrashThreshold, window, cooldown))
 
+	memRoot, err := defaultMemoryRoot()
+	if err != nil {
+		log.Fatalf("resolve memory root: %v", err)
+	}
+	memStore := memory.NewStore(memory.WithRootDir(memRoot))
+	opts = append(opts, lifecycle.WithMemoryStore(memStore))
+
 	svc := lifecycle.NewService(baseagent.NoopTriager{}, opts...)
+	baseRuntime := baseagent.NewRuntime(newLifecycleAgentServiceAdapter(svc), memStore)
 
 	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
 		log.Fatalf("register openclaw manifest: %v", err)
@@ -110,7 +120,7 @@ func Run() {
 	ready := &atomic.Bool{}
 	ready.Store(false)
 	pairLimiter := ratelimit.New(ratelimit.WithMax(5), ratelimit.WithWindow(1*time.Minute))
-	mux := buildHTTPMux(svc, ready, pairStore, pairLimiter)
+	mux := buildHTTPMuxWithBaseAgent(svc, baseRuntime, ready, pairStore, pairLimiter)
 	var handler http.Handler = mux
 	if cfg.Server.APIToken != "" {
 		handler = bearerAuthMiddleware(cfg.Server.APIToken, mux)
@@ -155,7 +165,22 @@ func Run() {
 	fmt.Println("agentd stopped gracefully")
 }
 
-func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.PairingCodeStore, pairLimiter *ratelimit.Limiter) *http.ServeMux {
+func buildHTTPMux(
+	svc *lifecycle.Service,
+	ready *atomic.Bool,
+	pairStore *api.PairingCodeStore,
+	pairLimiter *ratelimit.Limiter,
+) *http.ServeMux {
+	return buildHTTPMuxWithBaseAgent(svc, nil, ready, pairStore, pairLimiter)
+}
+
+func buildHTTPMuxWithBaseAgent(
+	svc *lifecycle.Service,
+	baseRuntime *baseagent.Runtime,
+	ready *atomic.Bool,
+	pairStore *api.PairingCodeStore,
+	pairLimiter *ratelimit.Limiter,
+) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -289,6 +314,31 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.Pai
 		})
 	})
 
+	register("/api/base-agent/chat", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if baseRuntime == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime is unavailable")
+			return
+		}
+		var body baseagent.ChatRequest
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if strings.TrimSpace(body.Message) == "" {
+			writeJSONError(w, http.StatusBadRequest, "message is required")
+			return
+		}
+		resp, err := baseRuntime.Chat(r.Context(), body)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
+
 	mux.HandleFunc("/api/v1/agents/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/agents/status" {
 			if r.Method != http.MethodGet {
@@ -368,6 +418,77 @@ func buildHTTPMux(svc *lifecycle.Service, ready *atomic.Bool, pairStore *api.Pai
 	mux.Handle("/", webUIHandler())
 
 	return mux
+}
+
+type lifecycleAgentServiceAdapter struct {
+	svc *lifecycle.Service
+}
+
+func newLifecycleAgentServiceAdapter(svc *lifecycle.Service) *lifecycleAgentServiceAdapter {
+	return &lifecycleAgentServiceAdapter{svc: svc}
+}
+
+func (a *lifecycleAgentServiceAdapter) ListAgents() []baseagent.AgentState {
+	states := a.svc.ListAgents()
+	out := make([]baseagent.AgentState, 0, len(states))
+	for _, s := range states {
+		out = append(out, toBaseAgentState(s))
+	}
+	return out
+}
+
+func (a *lifecycleAgentServiceAdapter) Install(ctx context.Context, agentID string) error {
+	return a.svc.Install(ctx, agentID)
+}
+
+func (a *lifecycleAgentServiceAdapter) Uninstall(ctx context.Context, agentID string) error {
+	return a.svc.Uninstall(ctx, agentID)
+}
+
+func (a *lifecycleAgentServiceAdapter) Start(ctx context.Context, agentID string) error {
+	return a.svc.Start(ctx, agentID)
+}
+
+func (a *lifecycleAgentServiceAdapter) Stop(ctx context.Context, agentID string) error {
+	return a.svc.Stop(ctx, agentID)
+}
+
+func (a *lifecycleAgentServiceAdapter) Status(agentID string) (baseagent.AgentState, error) {
+	state, err := a.svc.Status(agentID)
+	if err != nil {
+		return baseagent.AgentState{}, err
+	}
+	return toBaseAgentState(state), nil
+}
+
+func (a *lifecycleAgentServiceAdapter) Logs(agentID string, tail int) ([]string, error) {
+	return a.svc.Logs(agentID, tail)
+}
+
+func (a *lifecycleAgentServiceAdapter) Upgrade(ctx context.Context, agentID string) (baseagent.UpgradeResult, error) {
+	result, err := a.svc.Upgrade(ctx, agentID)
+	if err != nil {
+		return baseagent.UpgradeResult{}, err
+	}
+	return baseagent.UpgradeResult{
+		AgentID:     result.AgentID,
+		FromVersion: result.FromVersion,
+		ToVersion:   result.ToVersion,
+	}, nil
+}
+
+func (a *lifecycleAgentServiceAdapter) Diagnose(agentID string) (string, error) {
+	return a.svc.Diagnose(agentID)
+}
+
+func toBaseAgentState(s lifecycle.AgentState) baseagent.AgentState {
+	return baseagent.AgentState{
+		ID:           s.ID,
+		Install:      string(s.Install),
+		Runtime:      string(s.Runtime),
+		Health:       string(s.Health),
+		RestartCount: s.RestartCount,
+	}
 }
 
 func extractAgentIDFromBody(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -777,4 +898,15 @@ func isLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func defaultMemoryRoot() (string, error) {
+	if raw := strings.TrimSpace(os.Getenv("CARRIER_MEMORY_ROOT")); raw != "" {
+		return raw, nil
+	}
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "carrier", "memory"), nil
 }

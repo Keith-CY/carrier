@@ -211,7 +211,7 @@ Telegram adapter rendering should preserve response semantics while formatting f
 
 ## Failure Parity Drift Reporting
 
-Failure parity checks are implemented in `gateway/src/parity/failure_parity.ts`.
+Failure parity checks are implemented in gateway contract tests under `daemon/internal/gateway/`.
 
 - `assertFailureParity` validates that all provider responses for a failure scenario:
   - return `result: "error"`
@@ -219,4 +219,4 @@ Failure parity checks are implemented in `gateway/src/parity/failure_parity.ts`.
   - share the same `message`
 - Drift output includes provider + field-level expected/actual values for fast diagnosis.
 
-These checks are exercised by `gateway/src/cross-provider.test.ts` and `gateway/src/parity/failure_parity.test.ts`.
+These checks are exercised by `daemon/internal/gateway/providers_test.go` and `daemon/internal/gateway/server_test.go`.

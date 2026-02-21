@@ -100,7 +100,7 @@ Response envelope:
 
 ## Gateway Test-Harness Audit Notes
 
-`gateway/src/daemon/client.ts` also records in-memory audit events for test flows with fields:
+Gateway tests under `daemon/internal/gateway/` also validate request metadata propagation for test flows with fields:
 
 - `requestId`, `actor`, `action`, `target`, `message`, `timestamp`
 

@@ -19,18 +19,18 @@ const (
 
 // AgentState mirrors the daemon's agent status.
 type AgentState struct {
-	ID                  string  `json:"id"`
-	Name                string  `json:"name"`
-	Version             string  `json:"version"`
-	InstallState        string  `json:"installState"`
-	Runtime             string  `json:"runtimeState"`
-	Health              string  `json:"health"`
-	Ports               []int   `json:"ports"`
-	StartedAt           *string `json:"startedAt,omitempty"`
-	RestartCount        int     `json:"restartCount"`
-	NeedsRemoteDiagnosis bool   `json:"needsRemoteDiagnosis"`
-	LastError           *string `json:"lastError,omitempty"`
-	UpdatedAt           string  `json:"updatedAt"`
+	ID                   string  `json:"id"`
+	Name                 string  `json:"name"`
+	Version              string  `json:"version"`
+	InstallState         string  `json:"installState"`
+	Runtime              string  `json:"runtimeState"`
+	Health               string  `json:"health"`
+	Ports                []int   `json:"ports"`
+	StartedAt            *string `json:"startedAt,omitempty"`
+	RestartCount         int     `json:"restartCount"`
+	NeedsRemoteDiagnosis bool    `json:"needsRemoteDiagnosis"`
+	LastError            *string `json:"lastError,omitempty"`
+	UpdatedAt            string  `json:"updatedAt"`
 }
 
 // LogsResult holds log lines from the daemon.
@@ -69,6 +69,13 @@ type RemoteDiagnosisHandoff struct {
 	ArtifactRef string        `json:"artifactRef"`
 	Status      HandoffStatus `json:"status"`
 	CreatedAt   string        `json:"createdAt"`
+}
+
+type BaseAgentChatResult struct {
+	Message    string `json:"message"`
+	Action     string `json:"action,omitempty"`
+	SelfHealed bool   `json:"selfHealed,omitempty"`
+	BackupRef  string `json:"backupRef,omitempty"`
 }
 
 // DaemonClientError is returned when the daemon returns a non-2xx response.
@@ -157,6 +164,12 @@ func (c *DaemonClient) StartAgent(ctx context.Context, agentID, actor, requestID
 // StopAgent stops an agent.
 func (c *DaemonClient) StopAgent(ctx context.Context, agentID, actor, requestID string) error {
 	_, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/stop", nil, actor, requestID)
+	return err
+}
+
+// UninstallAgent uninstalls an agent.
+func (c *DaemonClient) UninstallAgent(ctx context.Context, agentID, actor, requestID string) error {
+	_, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/uninstall", nil, actor, requestID)
 	return err
 }
 
@@ -284,6 +297,31 @@ func (c *DaemonClient) VerifyPairCode(ctx context.Context, code, actor, requestI
 	body := map[string]string{"code": code}
 	_, err := c.request(ctx, http.MethodPost, "/api/v1/pairing/verify-consume", body, actor, requestID)
 	return err
+}
+
+func (c *DaemonClient) ChatBaseAgent(
+	ctx context.Context,
+	provider string,
+	chatID string,
+	requestID string,
+	message string,
+	actor string,
+) (*BaseAgentChatResult, error) {
+	body := map[string]string{
+		"provider":  provider,
+		"chatId":    chatID,
+		"requestId": requestID,
+		"message":   message,
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/base-agent/chat", body, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result BaseAgentChatResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("base-agent chat response: %w", err)
+	}
+	return &result, nil
 }
 
 func (c *DaemonClient) request(ctx context.Context, method, path string, body interface{}, actor, requestID string) ([]byte, error) {

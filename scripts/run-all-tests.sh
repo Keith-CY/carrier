@@ -9,12 +9,10 @@ printf '\n=== Daemon tests ===\n'
   go test ./...
 )
 
-printf '\n=== Gateway checks and tests ===\n'
+printf '\n=== Gateway tests ===\n'
 (
-  cd "$repo_root/gateway"
-  bun install --frozen-lockfile --no-progress
-  bun run check
-  bun test
+  cd "$repo_root/daemon"
+  go test ./internal/gateway/...
 )
 
 printf '\n=== Start script systemd regression test ===\n'

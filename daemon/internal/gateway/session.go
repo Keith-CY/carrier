@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -101,6 +103,49 @@ func (s *SessionStore) GetSession(provider, chatID string) *SessionRecord {
 	}
 	copy := *rec
 	return &copy
+}
+
+// ListSessions returns a copy of current sessions filtered by provider (if non-empty),
+// sorted by LastSeenAt (desc) then CreatedAt (desc).
+func (s *SessionStore) ListSessions(provider string) []*SessionRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	filter := strings.ToLower(strings.TrimSpace(provider))
+	records := make([]*SessionRecord, 0, len(s.sessions))
+	for _, rec := range s.sessions {
+		if rec == nil {
+			continue
+		}
+		if filter != "" && strings.ToLower(strings.TrimSpace(rec.Provider)) != filter {
+			continue
+		}
+		cp := *rec
+		records = append(records, &cp)
+	}
+
+	sort.Slice(records, func(i, j int) bool {
+		ti := parseSessionTime(records[i].LastSeenAt)
+		tj := parseSessionTime(records[j].LastSeenAt)
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		ci := parseSessionTime(records[i].CreatedAt)
+		cj := parseSessionTime(records[j].CreatedAt)
+		if !ci.Equal(cj) {
+			return ci.After(cj)
+		}
+		return sessionKey(records[i].Provider, records[i].ChatID) < sessionKey(records[j].Provider, records[j].ChatID)
+	})
+	return records
+}
+
+func parseSessionTime(raw string) time.Time {
+	ts, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(raw))
+	if err != nil {
+		return time.Time{}
+	}
+	return ts
 }
 
 // Touch updates the LastSeenAt timestamp.

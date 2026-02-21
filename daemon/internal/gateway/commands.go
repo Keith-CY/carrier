@@ -17,8 +17,10 @@ type CommandName string
 
 const (
 	CmdPair            CommandName = "/pair"
+	CmdChat            CommandName = "/chat"
 	CmdAgents          CommandName = "/agents"
 	CmdInstall         CommandName = "/install"
+	CmdUninstall       CommandName = "/uninstall"
 	CmdStart           CommandName = "/start"
 	CmdStop            CommandName = "/stop"
 	CmdStatus          CommandName = "/status"
@@ -31,8 +33,10 @@ const (
 
 var validCommands = map[CommandName]struct{}{
 	CmdPair:            {},
+	CmdChat:            {},
 	CmdAgents:          {},
 	CmdInstall:         {},
+	CmdUninstall:       {},
 	CmdStart:           {},
 	CmdStop:            {},
 	CmdStatus:          {},
@@ -160,11 +164,15 @@ func HandleCommand(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClien
 
 	switch cmd.Name {
 	case CmdOnboard:
-		return handleOnboard(ctx, cmd, daemon, onboard)
+		return onboardViaGUIOnlyResp(cmd.RequestID)
+	case CmdChat:
+		return handleChat(ctx, cmd, daemon, actor)
 	case CmdAgents:
 		return handleAgents(ctx, cmd, daemon, actor)
 	case CmdInstall:
-		return handleInstall(ctx, cmd, daemon, actor)
+		return handleInstall(ctx, cmd, daemon, actor, onboard)
+	case CmdUninstall:
+		return handleUninstall(ctx, cmd, daemon, actor)
 	case CmdStart:
 		return handleStart(ctx, cmd, daemon, actor)
 	case CmdStop:
@@ -238,10 +246,40 @@ func handlePair(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, 
 	}
 }
 
+func handleChat(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, actor string) GatewayResponse {
+	if len(cmd.Args) == 0 {
+		return usageResp(cmd.RequestID, "/chat <message>")
+	}
+	message := strings.TrimSpace(strings.Join(cmd.Args, " "))
+	if message == "" {
+		return usageResp(cmd.RequestID, "/chat <message>")
+	}
+	chatResult, err := daemon.ChatBaseAgent(ctx, cmd.Provider, cmd.ChatID, cmd.RequestID, message, actor)
+	if err != nil {
+		return daemonErrResp(cmd.RequestID, err)
+	}
+	respMessage := strings.TrimSpace(chatResult.Message)
+	if respMessage == "" {
+		respMessage = "base agent completed with no output"
+	}
+	return GatewayResponse{
+		RequestID: cmd.RequestID,
+		Result:    "ok",
+		Message:   respMessage,
+	}
+}
+
 func handleAgents(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, actor string) GatewayResponse {
 	agents, err := daemon.ListAgents(ctx, actor, cmd.RequestID)
 	if err != nil {
 		return daemonErrResp(cmd.RequestID, err)
+	}
+	if len(agents) == 0 {
+		return GatewayResponse{
+			RequestID: cmd.RequestID,
+			Result:    "ok",
+			Message:   "listed 0 agents (0 installed)",
+		}
 	}
 	installed := 0
 	for _, a := range agents {
@@ -249,25 +287,60 @@ func handleAgents(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient
 			installed++
 		}
 	}
+	lines := []string{fmt.Sprintf("listed %d agents (%d installed)", len(agents), installed)}
+	for _, a := range agents {
+		name := strings.TrimSpace(a.Name)
+		if name == "" {
+			name = a.ID
+		}
+		installState := strings.TrimSpace(a.InstallState)
+		if installState == "" {
+			installState = "unknown"
+		}
+		runtime := strings.TrimSpace(a.Runtime)
+		if runtime == "" {
+			runtime = "unknown"
+		}
+		health := strings.TrimSpace(a.Health)
+		if health == "" {
+			health = "unknown"
+		}
+		emoji := "⚪"
+		if installState != "installed" {
+			emoji = "🟡"
+		} else if runtime == "running" && health == "healthy" {
+			emoji = "🟢"
+		} else if runtime == "running" {
+			emoji = "🟠"
+		}
+		lines = append(lines, fmt.Sprintf("%s %s (%s): %s, %s, health=%s", emoji, name, a.ID, installState, runtime, health))
+	}
+	if installed < len(agents) {
+		lines = append(lines, "Tip: install/onboard in Carrier GUI. Chat supports management commands only.")
+	}
 	return GatewayResponse{
 		RequestID: cmd.RequestID,
 		Result:    "ok",
-		Message:   fmt.Sprintf("listed %d agents (%d installed)", len(agents), installed),
+		Message:   strings.Join(lines, "\n"),
 	}
 }
 
-func handleInstall(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, actor string) GatewayResponse {
+func handleInstall(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, actor string, onboard *OnboardStore) GatewayResponse {
+	return installViaGUIOnlyResp(cmd.RequestID)
+}
+
+func handleUninstall(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, actor string) GatewayResponse {
 	if len(cmd.Args) == 0 {
-		return usageResp(cmd.RequestID, "/install <agent_id>")
+		return usageResp(cmd.RequestID, "/uninstall <agent_id>")
 	}
 	agentID := cmd.Args[0]
-	if err := daemon.InstallAgent(ctx, agentID, actor, cmd.RequestID); err != nil {
+	if err := daemon.UninstallAgent(ctx, agentID, actor, cmd.RequestID); err != nil {
 		return daemonErrResp(cmd.RequestID, err)
 	}
 	return GatewayResponse{
 		RequestID: cmd.RequestID,
 		Result:    "ok",
-		Message:   fmt.Sprintf("install completed for %s", agentID),
+		Message:   fmt.Sprintf("uninstall completed for %s", agentID),
 	}
 }
 
@@ -498,6 +571,14 @@ func errResp(requestID, code, message string) GatewayResponse {
 
 func usageResp(requestID, usage string) GatewayResponse {
 	return errResp(requestID, "E_USAGE", "usage: "+usage)
+}
+
+func installViaGUIOnlyResp(requestID string) GatewayResponse {
+	return errResp(requestID, "E_INSTALL_GUI_ONLY", "Installation is disabled in chat to protect credentials. Open Carrier GUI to install/onboard agents. Chat is for management commands only.")
+}
+
+func onboardViaGUIOnlyResp(requestID string) GatewayResponse {
+	return errResp(requestID, "E_ONBOARD_GUI_ONLY", "Onboarding is disabled in chat to protect credentials. Open Carrier GUI to complete onboarding and credential setup.")
 }
 
 func daemonErrResp(requestID string, err error) GatewayResponse {

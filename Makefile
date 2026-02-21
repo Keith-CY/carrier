@@ -8,9 +8,8 @@ test: test-daemon test-gateway test-openclaw-installer test-start-systemd ## Run
 test-daemon: ## Run daemon Go tests
 	cd daemon && go test ./...
 
-test-gateway: ## Run gateway TypeScript type check and tests
-	cd gateway && npx tsc --noEmit
-	cd gateway && npx bun test
+test-gateway: ## Run gateway Go tests
+	cd daemon && go test ./internal/gateway/...
 
 test-openclaw-installer: ## Run OpenClaw installer checksum regression test
 	cd daemon/internal/catalog && bash ./openclaw-installer_test.sh
@@ -18,9 +17,8 @@ test-openclaw-installer: ## Run OpenClaw installer checksum regression test
 test-start-systemd: ## Run start.sh systemd target regression test
 	bash scripts/start_systemd_test.sh
 
-lint: ## Run linters (go vet + tsc)
+lint: ## Run linters (go vet)
 	cd daemon && go vet ./...
-	cd gateway && npx tsc --noEmit
 
 build: ## Build daemon binary
 	cd daemon && go build -o ../bin/agentd ./cmd/agentd

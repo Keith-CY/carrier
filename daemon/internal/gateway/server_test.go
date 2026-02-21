@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 
 func buildTestMux(t *testing.T, daemonHandlers map[string]http.HandlerFunc) (http.Handler, *httptest.Server, *SessionStore) {
 	t.Helper()
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(t.TempDir(), "instances.json"))
 	srv := newMockDaemon(daemonHandlers)
 	dc := NewDaemonClient(srv.URL, "test-token", 5*time.Second)
 	sessions := NewSessionStore("", 0, nil)
@@ -24,6 +27,7 @@ func buildTestMux(t *testing.T, daemonHandlers map[string]http.HandlerFunc) (htt
 	cfg := &GatewayConfig{
 		APIToken:            "test-gateway-token",
 		MaxCommandBodyBytes: 64 * 1024,
+		TelegramAPIBaseURL:  srv.URL,
 	}
 	mux := buildGatewayMux(cfg, dc, sessions, downloads, rl, onboard, setup)
 	return mux, srv, sessions
@@ -639,5 +643,708 @@ func TestProvidersEndpoint_ContainsAnthropicAndOllama(t *testing.T) {
 	}
 	if !strings.Contains(body, "none") {
 		t.Errorf("expected 'none' auth mode in response body")
+	}
+}
+
+func TestProvidersEndpoint_CarrierDefaultProviderReusable(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "openai-codex")
+	if _, err := saveProviderCredential("openai-codex", "codex-token-test"); err != nil {
+		t.Fatalf("saveProviderCredential: %v", err)
+	}
+
+	mux, srv, _ := buildTestMux(t, nil)
+	defer srv.Close()
+
+	req := httptest.NewRequest("GET", "/api/v1/providers", nil)
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	defaultProvider, ok := body["carrier_default_provider"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected carrier_default_provider map, got %T", body["carrier_default_provider"])
+	}
+	if configured, _ := defaultProvider["configured"].(bool); !configured {
+		t.Fatalf("expected configured=true, got %#v", defaultProvider)
+	}
+	if reusable, _ := defaultProvider["reusable"].(bool); !reusable {
+		t.Fatalf("expected reusable=true, got %#v", defaultProvider)
+	}
+	if id := fmt.Sprintf("%v", defaultProvider["id"]); id != "openai-codex" {
+		t.Fatalf("expected default id openai-codex, got %s", id)
+	}
+}
+
+func TestAgentsEndpoint_ListSuccess(t *testing.T) {
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"GET /api/v1/agents": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"agents":[{"id":"openclaw","runtimeState":"running"}]}`)
+		},
+	})
+	defer srv.Close()
+
+	req := httptest.NewRequest("GET", "/api/v1/agents", nil)
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "openclaw") {
+		t.Fatalf("expected openclaw in response, got %s", w.Body.String())
+	}
+}
+
+func TestAgentsEndpoint_StatusSuccess(t *testing.T) {
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"GET /api/v1/agents/openclaw/status": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"statuses":[{"id":"openclaw","runtimeState":"running"}]}`)
+		},
+	})
+	defer srv.Close()
+
+	req := httptest.NewRequest("GET", "/api/v1/agents/openclaw/status", nil)
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "openclaw") {
+		t.Fatalf("expected openclaw in response, got %s", w.Body.String())
+	}
+}
+
+func TestAgentsEndpoint_StartActionSuccess(t *testing.T) {
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/openclaw/start": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{}`)
+		},
+	})
+	defer srv.Close()
+
+	req := httptest.NewRequest("POST", "/api/v1/agents/openclaw/start", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"action":"start"`) {
+		t.Fatalf("expected action=start in response, got %s", w.Body.String())
+	}
+}
+
+func TestInstancesEndpoint_ListSuccess(t *testing.T) {
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"GET /api/v1/agents/picoclaw/status": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"statuses":[{"id":"picoclaw","runtimeState":"running"}]}`)
+		},
+	})
+	defer srv.Close()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := upsertManagedInstance(managedAgentInstance{
+		ID:           "picoclaw-abc12345",
+		Type:         "picoclaw",
+		AgentID:      "picoclaw",
+		GatewayURL:   "http://127.0.0.1:8787",
+		RuntimeState: "running",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("upsertManagedInstance: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/v1/instances", nil)
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "picoclaw-abc12345") {
+		t.Fatalf("expected instance id in response, got %s", w.Body.String())
+	}
+}
+
+func TestInstancesEndpoint_StopSuccess(t *testing.T) {
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/picoclaw/stop": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{}`)
+		},
+	})
+	defer srv.Close()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := upsertManagedInstance(managedAgentInstance{
+		ID:           "picoclaw-xyz98765",
+		Type:         "picoclaw",
+		AgentID:      "picoclaw",
+		GatewayURL:   "http://127.0.0.1:8787",
+		RuntimeState: "running",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("upsertManagedInstance: %v", err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/v1/instances/picoclaw-xyz98765/stop", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	instances, _, err := loadManagedInstances()
+	if err != nil {
+		t.Fatalf("loadManagedInstances: %v", err)
+	}
+	if len(instances) != 1 || instances[0].RuntimeState != "stopped" {
+		t.Fatalf("expected stopped instance persisted, got %+v", instances)
+	}
+}
+
+func TestInstancesEndpoint_BackfillFromDaemonInstalledAgent(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"GET /api/v1/agents": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"agents":[{"id":"picoclaw","installState":"installed","runtimeState":"stopped"}]}`)
+		},
+		"GET /api/v1/agents/picoclaw/status": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"statuses":[{"id":"picoclaw","runtimeState":"stopped"}]}`)
+		},
+	})
+	defer srv.Close()
+
+	req := httptest.NewRequest("GET", "/api/v1/instances", nil)
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "picoclaw-default") {
+		t.Fatalf("expected backfilled instance id in response, got %s", w.Body.String())
+	}
+	instances, _, err := loadManagedInstances()
+	if err != nil {
+		t.Fatalf("loadManagedInstances: %v", err)
+	}
+	if len(instances) != 1 {
+		t.Fatalf("expected 1 backfilled instance, got %d", len(instances))
+	}
+	if instances[0].AgentID != "picoclaw" {
+		t.Fatalf("expected backfilled agentID=picoclaw, got %+v", instances[0])
+	}
+}
+
+func TestAgentsEndpoint_InstallCreatesManagedInstance(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/openclaw/install": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{}`)
+		},
+	})
+	defer srv.Close()
+
+	req := httptest.NewRequest("POST", "/api/v1/agents/openclaw/install", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	instances, _, err := loadManagedInstances()
+	if err != nil {
+		t.Fatalf("loadManagedInstances: %v", err)
+	}
+	if len(instances) != 1 {
+		t.Fatalf("expected 1 managed instance, got %d", len(instances))
+	}
+	if instances[0].AgentID != "openclaw" {
+		t.Fatalf("expected managed instance for openclaw, got %+v", instances[0])
+	}
+}
+
+// --- /api/v1/add ---
+
+func TestAddEndpoint_MethodNotAllowed(t *testing.T) {
+	mux, srv, _ := buildTestMux(t, nil)
+	defer srv.Close()
+
+	req := httptest.NewRequest("GET", "/api/v1/add", nil)
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestAddEndpoint_PicoClawSuccess(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/picoclaw/install": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"installed"}`)
+		},
+		"POST /api/v1/agents/picoclaw/start": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"running"}`)
+		},
+		"GET /api/v1/agents/picoclaw/logs": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"lines":["PAIR_CODE: pair-0123456789abcdef0123456789abcdef"],"truncated":false}`)
+		},
+	})
+	defer srv.Close()
+
+	body := `{
+		"agentId":"picoclaw",
+		"channel":"telegram",
+		"channelToken":"tg-token",
+		"providerId":"openai",
+		"providerToken":"sk-test-token",
+		"reuseCredential":false,
+		"envVars":{"FOO":"bar"}
+	}`
+	req := httptest.NewRequest("POST", "/api/v1/add", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"result":"ok"`) {
+		t.Fatalf("expected ok result, got %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"pairCode":"pair-0123456789abcdef0123456789abcdef"`) {
+		t.Fatalf("expected pairCode in response, got %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"pairRequired":true`) {
+		t.Fatalf("expected pairRequired=true in response, got %s", w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse add response: %v", err)
+	}
+	instanceID, _ := resp["instanceId"].(string)
+	if strings.TrimSpace(instanceID) == "" {
+		t.Fatalf("expected non-empty instanceId, got %v", resp["instanceId"])
+	}
+	instances, _, err := loadManagedInstances()
+	if err != nil {
+		t.Fatalf("loadManagedInstances: %v", err)
+	}
+	if len(instances) != 1 {
+		t.Fatalf("expected 1 managed instance, got %d", len(instances))
+	}
+	if instances[0].ID != instanceID {
+		t.Fatalf("instance id mismatch: store=%s response=%s", instances[0].ID, instanceID)
+	}
+	if !instances[0].PairRequired {
+		t.Fatalf("expected instance pair_required=true, got %+v", instances[0])
+	}
+	if instances[0].RuntimeState != "pending_pair" {
+		t.Fatalf("expected runtime_state pending_pair, got %+v", instances[0])
+	}
+}
+
+func TestAddEndpoint_PicoClawSuccess_ReuseSavedOpenAICodexCredential(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+
+	if _, err := saveProviderCredential("openai-codex", "codex-saved-token"); err != nil {
+		t.Fatalf("saveProviderCredential: %v", err)
+	}
+
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/picoclaw/install": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"installed"}`)
+		},
+		"POST /api/v1/agents/picoclaw/start": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"running"}`)
+		},
+		"GET /api/v1/agents/picoclaw/logs": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"lines":[],"truncated":false}`)
+		},
+	})
+	defer srv.Close()
+
+	body := `{
+		"agentId":"picoclaw",
+		"channel":"telegram",
+		"channelToken":"tg-token",
+		"channelChatId":"418258935",
+		"providerId":"openai-codex",
+		"reuseCredential":true,
+		"envVars":{"FOO":"bar"}
+	}`
+	req := httptest.NewRequest("POST", "/api/v1/add", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"result":"ok"`) {
+		t.Fatalf("expected ok result, got %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"pairRequired":false`) {
+		t.Fatalf("expected pairRequired=false in response, got %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"pairedChatId":"418258935"`) {
+		t.Fatalf("expected pairedChatId in response, got %s", w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse add response: %v", err)
+	}
+	envKeysRaw, ok := resp["envKeys"].([]interface{})
+	if !ok {
+		t.Fatalf("expected envKeys array, got %#v", resp["envKeys"])
+	}
+	envKeySet := map[string]bool{}
+	for _, item := range envKeysRaw {
+		envKeySet[fmt.Sprintf("%v", item)] = true
+	}
+	for _, key := range []string{"FOO", "OPENAI_CODEX_TOKEN", "OPENAI_API_KEY"} {
+		if !envKeySet[key] {
+			t.Fatalf("expected envKeys to include %s, got %#v", key, envKeysRaw)
+		}
+	}
+
+	instances, _, err := loadManagedInstances()
+	if err != nil {
+		t.Fatalf("loadManagedInstances: %v", err)
+	}
+	if len(instances) != 1 {
+		t.Fatalf("expected 1 managed instance, got %d", len(instances))
+	}
+	inst := instances[0]
+	if inst.Provider != "openai-codex" {
+		t.Fatalf("expected provider=openai-codex, got %+v", inst)
+	}
+	if inst.PairedChatID != "418258935" || inst.PairRequired {
+		t.Fatalf("expected pre-paired chat state, got %+v", inst)
+	}
+	if inst.RuntimeState != "running" {
+		t.Fatalf("expected runtime_state running, got %+v", inst)
+	}
+
+	cfgPath := filepath.Join(tmp, ".picoclaw", "config.json")
+	cfgRaw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read picoclaw config: %v", err)
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(cfgRaw, &cfg); err != nil {
+		t.Fatalf("parse picoclaw config: %v", err)
+	}
+	modelList, ok := cfg["model_list"].([]interface{})
+	if !ok || len(modelList) != 1 {
+		t.Fatalf("expected one model entry, got %#v", cfg["model_list"])
+	}
+	model, ok := modelList[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected model entry object, got %#v", modelList[0])
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", model["auth_method"])); got != "oauth" {
+		t.Fatalf("expected auth_method oauth, got %q", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", model["api_key"])); got != "codex-saved-token" {
+		t.Fatalf("expected model api_key from saved credential, got %q", got)
+	}
+
+	authPath := filepath.Join(tmp, ".picoclaw", "auth.json")
+	authRaw, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatalf("read picoclaw auth store: %v", err)
+	}
+	if !strings.Contains(string(authRaw), "codex-saved-token") {
+		t.Fatalf("expected auth store to contain saved codex token")
+	}
+}
+
+func TestAddEndpoint_PicoClawSuccess_WithEnvFallbackChannelAndToken(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+	t.Setenv("CARRIER_TELEGRAM_BOT_TOKEN", "tg-fallback-token")
+
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/picoclaw/install": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"installed"}`)
+		},
+		"POST /api/v1/agents/picoclaw/start": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"running"}`)
+		},
+		"GET /api/v1/agents/picoclaw/logs": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"lines":[],"truncated":false}`)
+		},
+	})
+	defer srv.Close()
+
+	body := `{
+		"agentId":"picoclaw",
+		"providerId":"openai",
+		"providerToken":"sk-test-token",
+		"reuseCredential":false,
+		"envVars":{"FOO":"bar"}
+	}`
+	req := httptest.NewRequest("POST", "/api/v1/add", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"result":"ok"`) {
+		t.Fatalf("expected ok result, got %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"pairRequired":true`) {
+		t.Fatalf("expected pairRequired=true in response, got %s", w.Body.String())
+	}
+}
+
+func TestAddEndpoint_PicoClawSuccess_WithPrefetchedTelegramChatID(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/picoclaw/install": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"installed"}`)
+		},
+		"POST /api/v1/agents/picoclaw/start": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"running"}`)
+		},
+		"POST /bottg-prefetched/getUpdates": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"ok":true,"result":[]}`)
+		},
+		"GET /api/v1/agents/picoclaw/logs": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"lines":[],"truncated":false}`)
+		},
+	})
+	defer srv.Close()
+
+	body := `{
+		"agentId":"picoclaw",
+		"channel":"telegram",
+		"channelToken":"tg-prefetched",
+		"channelChatId":"418258935",
+		"providerId":"openai",
+		"providerToken":"sk-test-token",
+		"reuseCredential":false,
+		"envVars":{"FOO":"bar"}
+	}`
+	req := httptest.NewRequest("POST", "/api/v1/add", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"pairRequired":false`) {
+		t.Fatalf("expected pairRequired=false in response, got %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"pairedChatId":"418258935"`) {
+		t.Fatalf("expected pairedChatId in response, got %s", w.Body.String())
+	}
+
+	instances, _, err := loadManagedInstances()
+	if err != nil {
+		t.Fatalf("loadManagedInstances: %v", err)
+	}
+	if len(instances) != 1 {
+		t.Fatalf("expected 1 managed instance, got %d", len(instances))
+	}
+	if instances[0].PairRequired {
+		t.Fatalf("expected pair_required=false, got %+v", instances[0])
+	}
+	if instances[0].PairedChatID != "418258935" {
+		t.Fatalf("expected paired chat id 418258935, got %+v", instances[0])
+	}
+	if instances[0].RuntimeState != "running" {
+		t.Fatalf("expected runtime_state running, got %+v", instances[0])
+	}
+
+	cfgPath := filepath.Join(tmp, ".picoclaw", "config.json")
+	cfgRaw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read picoclaw config: %v", err)
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(cfgRaw, &cfg); err != nil {
+		t.Fatalf("parse picoclaw config: %v", err)
+	}
+	channels, ok := cfg["channels"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected channels object, got %#v", cfg["channels"])
+	}
+	telegram, ok := channels["telegram"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected channels.telegram object, got %#v", channels["telegram"])
+	}
+	allowFrom, ok := telegram["allow_from"].([]interface{})
+	if !ok {
+		t.Fatalf("expected allow_from list, got %#v", telegram["allow_from"])
+	}
+	if len(allowFrom) != 1 || fmt.Sprintf("%v", allowFrom[0]) != "418258935" {
+		t.Fatalf("expected allow_from [418258935], got %#v", allowFrom)
+	}
+}
+
+func TestTelegramPairInitAndWait_Success(t *testing.T) {
+	var pairCode string
+	callCount := 0
+
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"POST /bottg-test-token/getUpdates": func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			w.WriteHeader(http.StatusOK)
+			if callCount == 1 {
+				fmt.Fprint(w, `{"ok":true,"result":[{"update_id":100,"message":{"chat":{"id":999},"text":"old message"}}]}`)
+				return
+			}
+			fmt.Fprintf(w, `{"ok":true,"result":[{"update_id":101,"message":{"chat":{"id":418258935},"text":"/pair %s"}}]}`, pairCode)
+		},
+	})
+	defer srv.Close()
+
+	initReq := httptest.NewRequest("POST", "/api/v1/telegram/pair/init", strings.NewReader(`{"token":"tg-test-token"}`))
+	initReq.Header.Set("Authorization", "Bearer test-gateway-token")
+	initReq.Header.Set("Content-Type", "application/json")
+	initRec := httptest.NewRecorder()
+	mux.ServeHTTP(initRec, initReq)
+	if initRec.Code != http.StatusOK {
+		t.Fatalf("pair init expected 200, got %d: %s", initRec.Code, initRec.Body.String())
+	}
+	var initResp map[string]interface{}
+	if err := json.Unmarshal(initRec.Body.Bytes(), &initResp); err != nil {
+		t.Fatalf("parse pair init response: %v", err)
+	}
+	sessionID, _ := initResp["sessionId"].(string)
+	pairCode, _ = initResp["pairCode"].(string)
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(pairCode) == "" {
+		t.Fatalf("expected sessionId and pairCode, got %v", initResp)
+	}
+
+	waitReq := httptest.NewRequest("POST", "/api/v1/telegram/pair/wait", strings.NewReader(fmt.Sprintf(`{"sessionId":%q}`, sessionID)))
+	waitReq.Header.Set("Authorization", "Bearer test-gateway-token")
+	waitReq.Header.Set("Content-Type", "application/json")
+	waitRec := httptest.NewRecorder()
+	mux.ServeHTTP(waitRec, waitReq)
+	if waitRec.Code != http.StatusOK {
+		t.Fatalf("pair wait expected 200, got %d: %s", waitRec.Code, waitRec.Body.String())
+	}
+	var waitResp map[string]interface{}
+	if err := json.Unmarshal(waitRec.Body.Bytes(), &waitResp); err != nil {
+		t.Fatalf("parse pair wait response: %v", err)
+	}
+	if paired, _ := waitResp["paired"].(bool); !paired {
+		t.Fatalf("expected paired=true, got %v", waitResp)
+	}
+	if chatID := fmt.Sprintf("%v", waitResp["chatId"]); chatID != "418258935" {
+		t.Fatalf("expected chat id 418258935, got %s", chatID)
+	}
+}
+
+func TestPairingSessionsEndpoint_ReturnsLatestFirst(t *testing.T) {
+	mux, srv, sessions := buildTestMux(t, nil)
+	defer srv.Close()
+
+	sessions.CreateSession("telegram", "1001")
+	time.Sleep(2 * time.Millisecond)
+	sessions.CreateSession("telegram", "1002")
+	sessions.CreateSession("discord", "2001")
+
+	req := httptest.NewRequest("GET", "/api/v1/pairing/sessions?provider=telegram", nil)
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Sessions []struct {
+			Provider string `json:"provider"`
+			ChatID   string `json:"chatId"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if len(resp.Sessions) != 2 {
+		t.Fatalf("expected 2 telegram sessions, got %#v", resp.Sessions)
+	}
+	if resp.Sessions[0].ChatID != "1002" {
+		t.Fatalf("expected latest chat id first (1002), got %#v", resp.Sessions)
+	}
+	if resp.Sessions[0].Provider != "telegram" || resp.Sessions[1].Provider != "telegram" {
+		t.Fatalf("expected provider telegram for all sessions, got %#v", resp.Sessions)
 	}
 }

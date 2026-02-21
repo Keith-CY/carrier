@@ -4,6 +4,7 @@ import (
 	"carrier/daemon/internal/manifest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -80,6 +81,44 @@ func TestPicoClawBinaryName(t *testing.T) {
 	// Should contain picoclaw and current GOOS/GOARCH
 	if !contains(name, "picoclaw") {
 		t.Fatalf("binary name %q does not contain 'picoclaw'", name)
+	}
+}
+
+func TestPicoClawReleaseBundleName(t *testing.T) {
+	name := picoClawReleaseBundleName()
+	if !strings.HasPrefix(name, "picoclaw_") {
+		t.Fatalf("bundle name %q should start with picoclaw_", name)
+	}
+	if runtime.GOOS == "windows" {
+		if !strings.HasSuffix(name, ".zip") {
+			t.Fatalf("windows bundle should end with .zip, got %q", name)
+		}
+	} else {
+		if !strings.HasSuffix(name, ".tar.gz") {
+			t.Fatalf("unix bundle should end with .tar.gz, got %q", name)
+		}
+	}
+}
+
+func TestPicoClawInstallCommand_UnixUsesArchiveFlow(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix install command test")
+	}
+	t.Setenv("CARRIER_DEV_MODE", "")
+
+	cmd := getPicoClawInstallCommand()
+	for _, want := range []string{
+		picoClawReleaseAPIURL,
+		"checksums",
+		"shasum -a 256",
+		"tar -xzf",
+		"find \"$TMPDIR\" -type f -name \"$BINARY\"",
+		"install -m 0755",
+		picoClawReleaseBundleName(),
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("install command missing %q\ngot: %s", want, cmd)
+		}
 	}
 }
 

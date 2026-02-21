@@ -37,4 +37,4 @@ If log shows stable Go test failure under `daemon/...`, push a test/code fix.
 gh run view <run-id> --repo Keith-CY/carrier --log-failed
 ```
 
-If log shows repeatable TypeScript error under `gateway/src/...`, push a code fix.
+If log shows repeatable Go test failure under `daemon/internal/gateway/...`, push a code fix.

@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -314,7 +316,11 @@ func TestOnboardHandleAuth_Skip(t *testing.T) {
 	}
 }
 
-func TestOnboardHandleAuth_OAuth_Confirm(t *testing.T) {
+func TestOnboardHandleAuth_OAuthDeviceCode_Token(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+
 	s := NewOnboardStore()
 	key := "telegram:10"
 	s.start(key)
@@ -324,17 +330,87 @@ func TestOnboardHandleAuth_OAuth_Confirm(t *testing.T) {
 		sess.SelectedProvider = "openai-codex"
 	})
 
-	resp := onboardHandleAuth("req-1", key, "confirm", s)
+	resp := onboardHandleAuth("req-1", key, "codex-token-1", s)
 	if resp.Result != "ok" {
-		t.Errorf("expected ok after confirm, got: %+v", resp)
+		t.Errorf("expected ok after token input, got: %+v", resp)
 	}
 	sess := s.get(key)
 	if sess.Step != OnboardAuthConfigured {
 		t.Errorf("expected auth_configured, got %q", sess.Step)
 	}
+	if sess.EnvVars["OPENAI_CODEX_TOKEN"] != "codex-token-1" {
+		t.Fatalf("expected OPENAI_CODEX_TOKEN to be set, got %v", sess.EnvVars)
+	}
+}
+
+func TestOnboardHandleAuth_OAuthDeviceCode_Reuse(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+
+	s := NewOnboardStore()
+	key := "telegram:10-reuse"
+	s.start(key)
+	s.update(key, func(sess *OnboardSession) {
+		sess.Step = OnboardProviderSelected
+		sess.SelectedAgent = "openclaw"
+		sess.SelectedProvider = "openai-codex"
+	})
+	if resp := onboardHandleAuth("req-1", key, "codex-token-2", s); resp.Result != "ok" {
+		t.Fatalf("seed token should succeed: %+v", resp)
+	}
+
+	key2 := "telegram:10-reuse-2"
+	s.start(key2)
+	s.update(key2, func(sess *OnboardSession) {
+		sess.Step = OnboardProviderSelected
+		sess.SelectedAgent = "openclaw"
+		sess.SelectedProvider = "openai-codex"
+	})
+	resp := onboardHandleAuth("req-2", key2, "reuse", s)
+	if resp.Result != "ok" {
+		t.Fatalf("reuse should succeed: %+v", resp)
+	}
+	sess2 := s.get(key2)
+	if sess2.EnvVars["OPENAI_CODEX_TOKEN"] != "codex-token-2" {
+		t.Fatalf("expected reused OPENAI_CODEX_TOKEN, got %v", sess2.EnvVars)
+	}
+	if !strings.Contains(resp.Message, "Reused saved credential") {
+		t.Fatalf("expected reuse message, got %q", resp.Message)
+	}
+}
+
+func TestOnboardHandleAuth_OAuthDeviceCode_ConfirmRejected(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+
+	s := NewOnboardStore()
+	key := "telegram:10-confirm"
+	s.start(key)
+	s.update(key, func(sess *OnboardSession) {
+		sess.Step = OnboardProviderSelected
+		sess.SelectedAgent = "openclaw"
+		sess.SelectedProvider = "openai-codex"
+	})
+
+	resp := onboardHandleAuth("req-1", key, "confirm", s)
+	if resp.Result != "error" {
+		t.Fatalf("expected error for confirm-only input, got %+v", resp)
+	}
+	if resp.ErrorCode != "E_AUTH_INPUT" {
+		t.Fatalf("expected E_AUTH_INPUT, got %q", resp.ErrorCode)
+	}
+	if !strings.Contains(resp.Message, "OPENAI_CODEX_TOKEN") {
+		t.Fatalf("expected token guidance, got %q", resp.Message)
+	}
 }
 
 func TestOnboardHandleAuth_OAuth_BadInput(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+
 	s := NewOnboardStore()
 	key := "telegram:11"
 	s.start(key)
@@ -344,9 +420,9 @@ func TestOnboardHandleAuth_OAuth_BadInput(t *testing.T) {
 		sess.SelectedProvider = "qwen-portal"
 	})
 
-	resp := onboardHandleAuth("req-1", key, "randomtext", s)
+	resp := onboardHandleAuth("req-1", key, "", s)
 	if resp.Result != "error" {
-		t.Errorf("expected error for invalid OAuth input, got: %+v", resp)
+		t.Errorf("expected error for empty OAuth token input, got: %+v", resp)
 	}
 }
 
@@ -391,5 +467,17 @@ func TestOnboardStoreNewSteps(t *testing.T) {
 	s.update(key, func(sess *OnboardSession) { sess.Step = OnboardAuthConfigured })
 	if !s.hasActive(key) {
 		t.Error("auth_configured should be active")
+	}
+}
+
+func TestApplyOnboardEnvVars(t *testing.T) {
+	const key = "CARRIER_ONBOARD_ENV_TEST"
+	t.Setenv(key, "old")
+
+	if err := applyOnboardEnvVars(map[string]string{key: "new"}); err != nil {
+		t.Fatalf("applyOnboardEnvVars returned error: %v", err)
+	}
+	if got := os.Getenv(key); got != "new" {
+		t.Fatalf("env %s = %q, want %q", key, got, "new")
 	}
 }

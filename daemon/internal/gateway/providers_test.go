@@ -152,6 +152,26 @@ func TestParseTelegramUpdate_NonCommand(t *testing.T) {
 	}
 }
 
+func TestParseTelegramMessage_NonCommand(t *testing.T) {
+	payload := map[string]interface{}{
+		"update_id": float64(1),
+		"message": map[string]interface{}{
+			"text": "Hello world",
+			"chat": map[string]interface{}{"id": float64(1)},
+		},
+	}
+	msg := ParseTelegramMessage(payload)
+	if msg == nil {
+		t.Fatal("expected normalized message for non-command text")
+	}
+	if msg.Command != nil {
+		t.Fatalf("expected nil command for non-command text, got %+v", msg.Command)
+	}
+	if msg.RawText != "Hello world" {
+		t.Fatalf("raw text = %q, want %q", msg.RawText, "Hello world")
+	}
+}
+
 // --- Feishu ---
 
 func TestVerifyFeishuToken(t *testing.T) {
@@ -218,6 +238,30 @@ func TestParseFeishuEvent(t *testing.T) {
 	}
 }
 
+func TestParseFeishuMessage_NonCommand(t *testing.T) {
+	payload := map[string]interface{}{
+		"header": map[string]interface{}{
+			"event_id": "ev2",
+		},
+		"event": map[string]interface{}{
+			"message": map[string]interface{}{
+				"chat_id": "chat-456",
+				"content": `{"text":"hello"}`,
+			},
+		},
+	}
+	msg := ParseFeishuMessage(payload)
+	if msg == nil {
+		t.Fatal("expected normalized message for non-command text")
+	}
+	if msg.Command != nil {
+		t.Fatalf("expected nil command for non-command text, got %+v", msg.Command)
+	}
+	if msg.ChatID != "chat-456" {
+		t.Fatalf("chatID = %q, want %q", msg.ChatID, "chat-456")
+	}
+}
+
 // --- Discord payload parsing ---
 
 func TestParseDiscordPayload_MessageCreate(t *testing.T) {
@@ -256,6 +300,24 @@ func TestParseDiscordPayload_SlashCommand(t *testing.T) {
 	}
 }
 
+func TestParseDiscordMessage_NonCommand(t *testing.T) {
+	payload := map[string]interface{}{
+		"id":         "msg-2",
+		"channel_id": "ch-non-command",
+		"content":    "hello",
+	}
+	msg := ParseDiscordMessage(payload)
+	if msg == nil {
+		t.Fatal("expected normalized message for non-command text")
+	}
+	if msg.Command != nil {
+		t.Fatalf("expected nil command for non-command text, got %+v", msg.Command)
+	}
+	if msg.RawText != "hello" {
+		t.Fatalf("raw text = %q, want %q", msg.RawText, "hello")
+	}
+}
+
 // --- Renderers ---
 
 func TestRenderTelegramResponse_OK(t *testing.T) {
@@ -289,6 +351,26 @@ func TestRenderTelegramResponse_Error(t *testing.T) {
 	}
 	if !strings.Contains(text, "E_SESSION_REQUIRED") {
 		t.Errorf("should contain error code: %q", text)
+	}
+}
+
+func TestRenderTelegramWebhookResponse_OK(t *testing.T) {
+	resp := GatewayResponse{
+		RequestID:    "r1",
+		Result:       "ok",
+		Message:      "paired telegram:123",
+		SessionToken: "session-abc",
+	}
+	rendered := RenderTelegramWebhookResponse(resp, "123")
+	if rendered["method"] != "sendMessage" {
+		t.Fatalf("expected method sendMessage, got %v", rendered["method"])
+	}
+	if rendered["chat_id"] != "123" {
+		t.Fatalf("expected chat_id=123, got %v", rendered["chat_id"])
+	}
+	text, _ := rendered["text"].(string)
+	if !strings.Contains(text, "session-abc") {
+		t.Fatalf("expected session token in text, got %q", text)
 	}
 }
 

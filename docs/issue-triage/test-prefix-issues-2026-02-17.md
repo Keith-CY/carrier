@@ -4,7 +4,7 @@ This document records the pass over all open issues with titles starting with `t
 
 | Issue | Status | Notes |
 | --- | --- | --- |
-| #557 | Already covered on main | `gateway/src/server.test.ts` contains consolidated HTTP method mismatch coverage. |
+| #557 | Already covered on main | `daemon/internal/gateway/server_test.go` contains consolidated HTTP method mismatch coverage. |
 | #566 | Already covered on main | Missing-signature/header validation tests are present across provider/server parser tests. |
 | #569 | Already covered on main | `daemon/internal/lifecycle/service_test.go` includes `loadPersistedState` restoration coverage. |
 | #582 | Already covered on main | Process monitoring and deadlock-regression style coverage exists in lifecycle process/state tests. |
@@ -21,9 +21,9 @@ This document records the pass over all open issues with titles starting with `t
 | #643 | Already covered on main | `daemon/cmd/agentd/main_test.go` covers HTTP mux routes and auth/error branches. |
 | #644 | Already covered on main | `daemon/internal/catalog/manifests_test.go` now covers manifest/install command helpers. |
 | #645 | Already covered on main | Lifecycle option and service API coverage exists across lifecycle test suite. |
-| #646 | Already covered on main | `gateway/src/daemon/http_client.test.ts` covers HttpDaemonClient transport branches. |
-| #647 | Already covered on main | `gateway/src/server.test.ts` has broad route/path/error coverage. |
-| #648 | Already covered on main | `gateway/src/providers/parsers.test.ts` contains extensive edge-case parser coverage. |
+| #646 | Already covered on main | `daemon/internal/gateway/daemonclient_test.go` covers daemon transport branches. |
+| #647 | Already covered on main | `daemon/internal/gateway/server_test.go` has broad route/path/error coverage. |
+| #648 | Already covered on main | `daemon/internal/gateway/providers_test.go` contains extensive edge-case parser coverage. |
 | #649 | Already covered on main | `daemon/internal/api/server_test.go` and `daemon/cmd/agentd/main_test.go` cover API handlers. |
 | #650 | Addressed in this PR | Added rate-limiter boundary and expired-window pruning tests; implemented expired session pruning. |
 | #652 | Addressed in this PR | Added idempotency tests for `startPeriodicCleanup()`/`stopPeriodicCleanup()`. |

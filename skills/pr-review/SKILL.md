@@ -48,7 +48,7 @@ CI is a hard gate for review decisions:
 
 Optional local verification when needed:
 - **Daemon (Go)**: `cd daemon && go test ./...`
-- **Gateway (TypeScript)**: `cd gateway && bun run check`
+- **Gateway (Go)**: `cd daemon && go test ./internal/gateway/...`
 
 ## Automation Trigger
 This skill is intended to be executed by repository automation (for example cron-driven sweeps). Keep cadence details in the automation configuration/prompt as the source of truth.

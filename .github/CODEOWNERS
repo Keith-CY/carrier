@@ -5,10 +5,9 @@
 /daemon/internal/redact/** @Keith-CY @Akane-CN
 
 # Security-sensitive gateway paths
-/gateway/src/server.ts @Keith-CY @Akane-CN
-/gateway/src/index.ts @Keith-CY @Akane-CN
-/gateway/src/session/** @Keith-CY @Akane-CN
-/gateway/src/daemon/client.ts @Keith-CY @Akane-CN
+/daemon/internal/gateway/** @Keith-CY @Akane-CN
+/daemon/gateway/** @Keith-CY @Akane-CN
+/cmd/carrier/main.go @Keith-CY @Akane-CN
 
 # Release and CI workflow controls
 /.github/workflows/release.yml @Keith-CY @Akane-CN

@@ -11,7 +11,7 @@
   <!-- Login overlay -->
   <div id="login-overlay" class="overlay hidden">
     <div class="card login-card">
-      <h2>🔐 Carrier</h2>
+      <h2>Carrier</h2>
       <p class="text-dim">Enter your Gateway token to continue.</p>
       <input type="password" id="login-token" placeholder="Gateway Token" autocomplete="off">
       <div id="login-msg"></div>
@@ -21,7 +21,7 @@
 
   <header id="header">
     <div class="header-left">
-      <h1>🚀 Carrier</h1>
+      <h1>Carrier</h1>
       <nav id="nav" class="hidden">
         <a href="#/dashboard" class="nav-link" data-route="dashboard">Dashboard</a>
         <a href="#/logs" class="nav-link" data-route="logs">Logs</a>
@@ -49,18 +49,26 @@
     <section id="view-setup" class="view hidden">
       <div class="steps-indicator" id="steps-indicator"></div>
       <div class="card">
-        <h3>Step 1 — Configure Provider</h3>
-        <label for="provider">Provider</label>
+        <h3 id="setup-title">Step 1 — Configure Provider</h3>
+        <label for="provider" id="setup-provider-label">Provider</label>
         <select id="provider">
           <option value="">Select…</option>
           <option value="telegram">Telegram</option>
           <option value="discord">Discord</option>
           <option value="feishu">Feishu</option>
         </select>
-        <label for="provider-token">Token</label>
+        <label for="provider-token" id="setup-token-label">Token</label>
         <input type="password" id="provider-token" placeholder="Bot token">
         <label for="webhook-secret">Webhook Secret <span class="text-dim">(optional)</span></label>
         <input type="text" id="webhook-secret" placeholder="Webhook verification secret">
+        <div id="setup-telegram-pair" class="hidden">
+          <p class="text-dim" id="setup-pair-instruction"></p>
+          <div class="btn-row">
+            <button id="setup-pair-use-carrier" type="button" class="btn-sm hidden">Use Carrier paired user (Recommended)</button>
+            <button id="setup-pair-start" type="button" class="btn-secondary btn-sm">Start Pairing</button>
+          </div>
+          <div id="setup-pair-msg"></div>
+        </div>
         <div class="btn-row">
           <button id="setup-btn">Continue →</button>
         </div>
@@ -87,7 +95,16 @@
         <h3>Step 3 — Select LLM Provider</h3>
         <p class="text-dim" id="provider-agent-name"></p>
         <div id="provider-loading" class="text-dim">Loading providers…</div>
-        <div id="provider-categories" class="hidden"></div>
+        <div id="provider-add-choice" class="hidden">
+          <h4>Carrier Provider</h4>
+          <p id="provider-default-summary" class="text-dim"></p>
+          <div class="btn-row">
+            <button id="provider-use-default-continue" class="btn-sm hidden">Use Carrier Provider (Recommended) →</button>
+          </div>
+        </div>
+        <div id="provider-other-wrap" class="hidden">
+          <div id="provider-categories" class="hidden"></div>
+        </div>
         <div id="provider-auth-section" class="hidden" style="margin-top:1rem">
           <div id="provider-auth-label" class="text-dim"></div>
           <input type="password" id="provider-api-key" placeholder="Paste API key here…" class="hidden" style="margin-top:0.5rem">
@@ -134,17 +151,24 @@
 
     <section id="view-complete" class="view hidden">
       <div class="card center-card">
-        <h2>✅ Setup Complete!</h2>
+        <h2 id="complete-title">✅ Setup Complete!</h2>
         <p class="text-dim">Your agent is being installed and started.</p>
+        <p class="text-dim" id="complete-detail"></p>
         <button id="complete-dashboard">Go to Dashboard →</button>
       </div>
     </section>
 
     <!-- Management panel -->
     <section id="view-dashboard" class="view hidden">
-      <h2>Agent Dashboard</h2>
-      <div id="agent-list" class="agent-grid"></div>
-      <button id="refresh-agents" class="btn-sm btn-secondary" style="margin-top:1rem">↻ Refresh</button>
+      <div class="section-head">
+        <h2>Installed Agents</h2>
+        <div class="section-actions">
+          <button id="dashboard-add-agent">Add Agent</button>
+          <button id="refresh-instances" class="btn-sm btn-secondary">Refresh</button>
+        </div>
+      </div>
+      <p id="instance-summary" class="text-dim"></p>
+      <div id="instance-list" class="agent-grid"></div>
     </section>
 
     <section id="view-agent-detail" class="view hidden">
@@ -184,6 +208,18 @@
       </div>
     </section>
   </main>
+
+  <div id="add-agent-overlay" class="overlay hidden">
+    <div class="card modal-card">
+      <h3>Select Agent</h3>
+      <p class="text-dim">Choose an agent to configure and install.</p>
+      <ul id="add-agent-options" class="agent-select-list"></ul>
+      <div class="btn-row">
+        <button id="add-agent-cancel" class="btn-secondary">Cancel</button>
+      </div>
+      <div id="add-agent-msg"></div>
+    </div>
+  </div>
 </div>
 <script src="app.js"></script>
 </body>

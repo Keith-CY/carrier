@@ -198,8 +198,8 @@ Example:
 ```text
 Fixes #425
 Validation:
-- cd gateway && bun run check
-- cd gateway && bun test src/server.test.ts
+- cd daemon && go test ./internal/gateway/... -count=1
+- cd daemon && go test ./... -count=1
 - bash scripts/ci/check-action-pinning.sh
 ```
 
@@ -260,8 +260,8 @@ Use these from repository root:
 # Daemon tests only
 cd daemon && go test ./...
 
-# Gateway check + tests only
-cd gateway && bun install --no-progress && bun run check && bun test
+# Gateway tests only
+cd daemon && go test ./internal/gateway/...
 
 # Full local validation (daemon + gateway + e2e hook)
 ./scripts/run-all-tests.sh
@@ -289,7 +289,7 @@ Typical local re-run commands after log review:
 
 ```bash
 cd daemon && go test ./...
-cd gateway && bun install --no-progress && bun run check && bun test
+cd daemon && go test ./internal/gateway/...
 ./scripts/run-e2e-tests.sh
 ```
 
