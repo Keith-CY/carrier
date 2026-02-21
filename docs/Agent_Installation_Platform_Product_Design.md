@@ -203,7 +203,7 @@ diagnostics:
 
 ### 7.2 Suggested storage layout
 ```text
-~/.agentd/memories/
+~/.carrier/memories/
   public/
     persona-product-manager@1.2.0/
       memory.yaml
