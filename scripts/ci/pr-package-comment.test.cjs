@@ -47,6 +47,36 @@ test("loadPackageMetadata reads sorted metadata and enforces zip package names",
   });
 });
 
+test("loadPackageMetadata discovers metadata files recursively", () => {
+  withTempDir((dir) => {
+    const nested = path.join(dir, "nested", "outputs");
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(
+      path.join(nested, "z.json"),
+      JSON.stringify({
+        label: "linux-x64",
+        package_file: "carrier-linux-x64.zip",
+        artifact_id: "99",
+      }),
+    );
+    fs.writeFileSync(
+      path.join(dir, "a.json"),
+      JSON.stringify({
+        label: "darwin-arm64",
+        package_file: "carrier-darwin-arm64.zip",
+        artifact_id: "11",
+      }),
+    );
+
+    const metadata = loadPackageMetadata(dir);
+    assert.equal(metadata.length, 2);
+    assert.deepEqual(
+      metadata.map((item) => item.artifactId),
+      ["11", "99"],
+    );
+  });
+});
+
 test("loadPackageMetadata fails when package_file does not end with .zip", () => {
   withTempDir((dir) => {
     fs.writeFileSync(

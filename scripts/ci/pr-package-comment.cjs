@@ -5,16 +5,27 @@ const path = require("node:path");
 
 const COMMENT_MARKER = "<!-- carrier-pr-test-packages -->";
 
+function collectMetadataFiles(dir, out) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      collectMetadataFiles(fullPath, out);
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith(".json")) {
+      out.push(fullPath);
+    }
+  }
+}
+
 function listMetadataFiles(metadataDir) {
   if (!fs.existsSync(metadataDir)) {
     return [];
   }
 
-  return fs
-    .readdirSync(metadataDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => path.join(metadataDir, entry.name))
-    .sort();
+  const files = [];
+  collectMetadataFiles(metadataDir, files);
+  return files.sort();
 }
 
 function parseMetadataFile(filePath) {
@@ -29,6 +40,7 @@ function parseMetadataFile(filePath) {
   if (!packageFile) {
     throw new Error(`Missing "package_file" in ${filePath}`);
   }
+  // Release workflows currently publish .zip artifacts only.
   if (!packageFile.endsWith(".zip")) {
     throw new Error(`Expected "package_file" to end with .zip in ${filePath}, got "${packageFile}"`);
   }

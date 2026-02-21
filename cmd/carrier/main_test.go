@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,5 +72,77 @@ func TestLookupPIDsByPortViaProc(t *testing.T) {
 	}
 	if len(pids) != 1 || pids[0] != 111 {
 		t.Fatalf("pids = %v, want [111]", pids)
+	}
+}
+
+func TestPersistBackgroundProcessRejectsInvalidProcess(t *testing.T) {
+	if err := persistBackgroundProcess("daemon", nil); err == nil {
+		t.Fatal("expected error for nil process")
+	}
+	if err := persistBackgroundProcess("daemon", &os.Process{Pid: 0}); err == nil {
+		t.Fatal("expected error for empty pid")
+	}
+}
+
+func TestPersistBackgroundProcessCleansUpAfterPIDWriteFailure(t *testing.T) {
+	origWrite := writeBootstrapPIDFileFunc
+	origTerminate := terminateBackgroundProcessFunc
+	t.Cleanup(func() {
+		writeBootstrapPIDFileFunc = origWrite
+		terminateBackgroundProcessFunc = origTerminate
+	})
+
+	writeBootstrapPIDFileFunc = func(name string, pid int) error {
+		if name != "daemon" {
+			t.Fatalf("name = %q, want daemon", name)
+		}
+		if pid != 321 {
+			t.Fatalf("pid = %d, want 321", pid)
+		}
+		return errors.New("disk full")
+	}
+
+	cleanupCalled := false
+	terminateBackgroundProcessFunc = func(proc *os.Process) error {
+		cleanupCalled = true
+		if proc == nil || proc.Pid != 321 {
+			t.Fatalf("cleanup process = %#v, want pid 321", proc)
+		}
+		return nil
+	}
+
+	err := persistBackgroundProcess("daemon", &os.Process{Pid: 321})
+	if err == nil {
+		t.Fatal("expected pid write error")
+	}
+	if !strings.Contains(err.Error(), "write bootstrap pid file") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cleanupCalled {
+		t.Fatal("expected cleanup to run after pid write failure")
+	}
+}
+
+func TestPersistBackgroundProcessIncludesCleanupFailure(t *testing.T) {
+	origWrite := writeBootstrapPIDFileFunc
+	origTerminate := terminateBackgroundProcessFunc
+	t.Cleanup(func() {
+		writeBootstrapPIDFileFunc = origWrite
+		terminateBackgroundProcessFunc = origTerminate
+	})
+
+	writeBootstrapPIDFileFunc = func(string, int) error {
+		return errors.New("write failed")
+	}
+	terminateBackgroundProcessFunc = func(*os.Process) error {
+		return errors.New("cleanup failed")
+	}
+
+	err := persistBackgroundProcess("gateway", &os.Process{Pid: 444})
+	if err == nil {
+		t.Fatal("expected combined error")
+	}
+	if !strings.Contains(err.Error(), "cleanup failed") {
+		t.Fatalf("expected cleanup context, got %v", err)
 	}
 }

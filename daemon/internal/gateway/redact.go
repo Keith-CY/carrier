@@ -6,9 +6,10 @@ import (
 	"carrier/daemon/internal/redact"
 )
 
-// RedactErrorMessage redacts sensitive information from error messages.
-// Delegates to the shared redact package for consistent behavior across
-// daemon and gateway.
+// RedactErrorMessage redacts sensitive details from user-facing errors.
+// It masks key/value tokens (API_KEY/SECRET/TOKEN/PASSWORD/CREDENTIAL) and
+// URL-embedded credentials, then delegates to the shared redact package so
+// daemon/gateway apply the same redaction boundary.
 func RedactErrorMessage(message string) string {
 	return redact.RedactText(message)
 }
