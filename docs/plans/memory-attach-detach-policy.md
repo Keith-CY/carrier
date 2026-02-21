@@ -2,7 +2,8 @@
 
 > **Status:** ⚠️ Superseded (diverged from implementation)
 >
-> **Note:** This plan describes REST APIs (`POST /agents/{agentId}/memory/attach`). The current implementation uses direct Go method calls (`Store.AttachMemory` / `Store.DetachMemory` in `daemon/internal/memory/store.go`) with policy enforcement in `policy.go`. Refer to the code as the source of truth.
+> **Note:** This is a historical planning document.
+> For current behavior, use [`docs/current-architecture.md`](../current-architecture.md), [`daemon/internal/lifecycle/memory.go`](../../daemon/internal/lifecycle/memory.go), [`daemon/internal/memory/store.go`](../../daemon/internal/memory/store.go), and [`daemon/internal/memory/policy.go`](../../daemon/internal/memory/policy.go).
 
 ## Overview
 

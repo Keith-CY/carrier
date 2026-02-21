@@ -2,6 +2,7 @@
 
 > Superseded for authority by [`docs/phase1-runtime-adr.md`](../phase1-runtime-adr.md).
 > This file is kept as historical context from earlier planning drafts.
+> For canonical navigation, see [`docs/current-architecture.md`](../current-architecture.md).
 
 ## Status
 
