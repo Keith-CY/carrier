@@ -288,7 +288,7 @@ jobs:
           echo "Spot-checking signature for: $first_zip"
           ./scripts/verify-signature.sh "$first_zip"
         env:
-          COSIGN_CERT_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/heads/main
+          COSIGN_CERT_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
           COSIGN_OIDC_ISSUER: https://token.actions.githubusercontent.com
 
       - name: Upload signatures
