@@ -167,6 +167,12 @@ func (s *Store) SetAttachmentsFromLinks(agentID string, memoryIDs []string) erro
 
 // PrepareAgentMemory composes an effective memory view with deterministic precedence.
 func (s *Store) PrepareAgentMemory(agentID string) (RuntimeMemoryContract, error) {
+	// Serialize per-agent prepares so concurrent callers cannot race on
+	// effective view filesystem state or mount rollback bookkeeping.
+	prepareLock := s.prepareLockForAgent(agentID)
+	prepareLock.Lock()
+	defer prepareLock.Unlock()
+
 	root, err := s.requireRootDir()
 	if err != nil {
 		return RuntimeMemoryContract{}, err

@@ -31,6 +31,7 @@ type Store struct {
 	exportSlots            chan struct{}
 	statePath              string
 	lastStateErr           error
+	prepareLocks           sync.Map // keyed by agent ID, values are *sync.Mutex
 }
 
 // StoreOption configures a Store.
@@ -336,4 +337,12 @@ func (s *Store) LastStateError() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.lastStateErr
+}
+
+func (s *Store) prepareLockForAgent(agentID string) *sync.Mutex {
+	if agentID == "" {
+		agentID = "__default__"
+	}
+	lock, _ := s.prepareLocks.LoadOrStore(agentID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
