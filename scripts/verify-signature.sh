@@ -14,6 +14,10 @@ set -euo pipefail
 
 ARTIFACT_FILE="${1:-}"
 SIGNATURE_FILE="${2:-}"
+SIGNATURE_FILE_EXPLICIT=false
+if [[ -n "$SIGNATURE_FILE" ]]; then
+    SIGNATURE_FILE_EXPLICIT=true
+fi
 
 # Colors for output
 RED='\033[0;31m'
@@ -50,6 +54,7 @@ usage() {
     echo "Examples:"
     echo "  $0 carrier-linux-x64.zip"
     echo "  $0 carrier-linux-x64.zip carrier-linux-x64.zip.sig"
+    echo "  # For cosign, explicit signature-file requires COSIGN_CERT_FILE"
     echo "  VERIFICATION_METHOD=gpg $0 artifact.zip"
     exit "$exit_code"
 }
@@ -73,6 +78,11 @@ BUNDLE_FILE="${COSIGN_BUNDLE_FILE:-${ARTIFACT_FILE}.sigstore.json}"
 [[ -f "$SIGNATURE_FILE" ]] && HAS_SIGNATURE_FILE=true || HAS_SIGNATURE_FILE=false
 
 [[ -f "$BUNDLE_FILE" ]] && HAS_BUNDLE_FILE=true || HAS_BUNDLE_FILE=false
+
+if [[ "$SIGNATURE_FILE_EXPLICIT" == true && "$HAS_SIGNATURE_FILE" == false ]]; then
+    log_error "Signature file not found: $SIGNATURE_FILE"
+    exit 1
+fi
 
 if [[ "$HAS_SIGNATURE_FILE" == false && "$HAS_BUNDLE_FILE" == false ]]; then
     log_warn "Signature file not found: $SIGNATURE_FILE"
@@ -119,7 +129,7 @@ case "$VERIFICATION_METHOD" in
             --certificate-oidc-issuer "$CERT_ISSUER"
         )
 
-        if [[ "$HAS_BUNDLE_FILE" == true ]]; then
+        if [[ "$SIGNATURE_FILE_EXPLICIT" == false && "$HAS_BUNDLE_FILE" == true ]]; then
             log_info "Using Sigstore bundle: $(basename "$BUNDLE_FILE")"
             COSIGN_ARGS+=(--bundle "$BUNDLE_FILE")
         else
@@ -130,9 +140,15 @@ case "$VERIFICATION_METHOD" in
 
             CERT_FILE="${COSIGN_CERT_FILE:-${ARTIFACT_FILE}.pem}"
             if [[ ! -f "$CERT_FILE" ]]; then
-                log_error "Cosign keyless verification requires a bundle or certificate."
-                log_error "Expected bundle: $BUNDLE_FILE"
-                log_error "Or provide certificate via COSIGN_CERT_FILE (default path: $CERT_FILE)"
+                if [[ "$SIGNATURE_FILE_EXPLICIT" == true ]]; then
+                    log_error "Explicit signature file requires a certificate for cosign verification."
+                    log_error "Provide COSIGN_CERT_FILE (or place certificate at $CERT_FILE),"
+                    log_error "or omit the signature-file argument to use bundle verification."
+                else
+                    log_error "Cosign keyless verification requires a bundle or certificate."
+                    log_error "Expected bundle: $BUNDLE_FILE"
+                    log_error "Or provide certificate via COSIGN_CERT_FILE (default path: $CERT_FILE)"
+                fi
                 exit 1
             fi
 

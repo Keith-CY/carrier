@@ -245,6 +245,92 @@ else
     log_fail "Bundle-based cosign verification should succeed"
 fi
 
+# Test 10: Explicit signature argument takes precedence over bundle
+run_test "Test 10: Explicit signature-file should bypass bundle mode"
+mkdir -p "$TEST_DIR/mock-bin-explicit"
+cat > "$TEST_DIR/mock-bin-explicit/cosign" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+
+saw_bundle=false
+sig=""
+cert=""
+identity=""
+issuer=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    verify-blob)
+      shift
+      ;;
+    --bundle)
+      saw_bundle=true
+      shift 2
+      ;;
+    --signature)
+      sig="${2:-}"
+      shift 2
+      ;;
+    --certificate)
+      cert="${2:-}"
+      shift 2
+      ;;
+    --certificate-identity)
+      identity="${2:-}"
+      shift 2
+      ;;
+    --certificate-oidc-issuer)
+      issuer="${2:-}"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+if [[ "$saw_bundle" == true ]]; then
+  exit 1
+fi
+if [[ "$sig" == "explicit.sig" && "$cert" == "explicit.pem" && -n "$identity" && -n "$issuer" ]]; then
+  exit 0
+fi
+exit 1
+MOCK
+chmod +x "$TEST_DIR/mock-bin-explicit/cosign"
+
+echo "payload" > explicit-artifact.bin
+echo "signature" > explicit.sig
+echo "bundle data" > explicit-artifact.bin.sigstore.json
+echo "certificate" > explicit.pem
+
+if PATH="$TEST_DIR/mock-bin-explicit:$PATH" \
+  VERIFICATION_METHOD=cosign \
+  COSIGN_CERT_IDENTITY="https://example.com/workflow" \
+  COSIGN_OIDC_ISSUER="https://token.actions.githubusercontent.com" \
+  COSIGN_CERT_FILE="explicit.pem" \
+  "$VERIFY_SCRIPT" explicit-artifact.bin explicit.sig >/dev/null 2>&1; then
+    log_pass "Explicit signature-file correctly bypasses bundle verification"
+else
+    log_fail "Expected explicit signature-file to take precedence over bundle"
+fi
+
+# Test 11: Missing explicit signature should fail even if bundle exists
+run_test "Test 11: Missing explicit signature-file should fail"
+echo "payload" > missing-explicit-artifact.bin
+echo "bundle data" > missing-explicit-artifact.bin.sigstore.json
+
+if VERIFICATION_METHOD=none "$VERIFY_SCRIPT" missing-explicit-artifact.bin missing.sig >/dev/null 2>&1; then
+    log_fail "Expected failure when explicit signature-file is missing"
+else
+    EXIT_CODE=$?
+    if [[ $EXIT_CODE -eq 1 ]]; then
+        log_pass "Missing explicit signature-file correctly fails with exit code 1"
+    else
+        log_fail "Wrong exit code for missing explicit signature-file: $EXIT_CODE"
+    fi
+fi
+
 # Summary
 echo ""
 echo "========================================="
