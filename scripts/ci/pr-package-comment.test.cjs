@@ -62,6 +62,32 @@ test("loadPackageMetadata fails when package_file does not end with .zip", () =>
   });
 });
 
+test("loadPackageMetadata discovers JSON files in nested directories", () => {
+  withTempDir((dir) => {
+    const sub = path.join(dir, "sub");
+    fs.mkdirSync(sub);
+    fs.writeFileSync(
+      path.join(sub, "nested.json"),
+      JSON.stringify({
+        label: "linux-arm64",
+        package_file: "carrier-linux-arm64.zip",
+        artifact_id: "33",
+      }),
+    );
+    fs.writeFileSync(
+      path.join(dir, "top.json"),
+      JSON.stringify({
+        label: "linux-x64",
+        package_file: "carrier-linux-x64.zip",
+        artifact_id: "11",
+      }),
+    );
+
+    const metadata = loadPackageMetadata(dir);
+    assert.equal(metadata.length, 2);
+  });
+});
+
 test("buildPrPackagesComment renders markdown body with artifact links", () => {
   const body = buildPrPackagesComment({
     repository: "Keith-CY/carrier",

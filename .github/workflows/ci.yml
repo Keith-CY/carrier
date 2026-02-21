@@ -300,7 +300,8 @@ jobs:
                       ["git", "diff", "--name-only", base_sha, head_sha],
                       text=True,
                   )
-              except subprocess.CalledProcessError:
+              except subprocess.CalledProcessError as exc:
+                  print(f"::debug::git diff failed ({exc}), falling back to all modules")
                   return []
               files = [f.strip() for f in output.splitlines() if f.strip()]
               selected = set()

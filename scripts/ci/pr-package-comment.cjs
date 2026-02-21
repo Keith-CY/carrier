@@ -10,11 +10,19 @@ function listMetadataFiles(metadataDir) {
     return [];
   }
 
-  return fs
-    .readdirSync(metadataDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => path.join(metadataDir, entry.name))
-    .sort();
+  const results = [];
+  function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile() && entry.name.endsWith(".json")) {
+        results.push(full);
+      }
+    }
+  }
+  walk(metadataDir);
+  return results.sort();
 }
 
 function parseMetadataFile(filePath) {
