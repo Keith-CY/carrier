@@ -221,7 +221,8 @@ jobs:
         id: upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: ${{ steps.build.outputs.archive_name }}
+          # Include .zip suffix in the artifact filename downloaded from the web UI.
+          name: ${{ steps.build.outputs.package_file }}
           retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
           path: |
             dist/${{ steps.build.outputs.package_file }}
@@ -343,6 +344,9 @@ jobs:
       issues: write
       pull-requests: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
       - name: Download PR metadata
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -354,25 +358,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-
-          {
-            echo "<!-- carrier-pr-test-packages -->"
-            echo "## Test Packages"
-            echo
-            echo "- Commit: \`${GITHUB_SHA}\`"
-            echo "- Workflow run: [${GITHUB_RUN_ID}](${run_url})"
-            echo
-            echo "Download:"
-          } > pr-comment.md
-
-          while IFS= read -r file; do
-            label="$(jq -r '.label' "${file}")"
-            package_file="$(jq -r '.package_file' "${file}")"
-            artifact_id="$(jq -r '.artifact_id' "${file}")"
-            artifact_url="${run_url}/artifacts/${artifact_id}"
-            echo "- ${label}: [\`${package_file}\`](${artifact_url})" >> pr-comment.md
-          done < <(find pr-meta -type f -name '*.json' | sort)
+          node scripts/ci/pr-package-comment.cjs \
+            --metadata-dir pr-meta \
+            --repository "${GITHUB_REPOSITORY}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --commit-sha "${GITHUB_SHA}" \
+            --output pr-comment.md
 
       - name: Upsert PR comment
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
