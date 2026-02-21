@@ -119,6 +119,20 @@ assert_error() {
   fi
 }
 
+assert_error_code() {
+  local desc="$1"
+  local response="$2"
+  local expected_code="$3"
+  if echo "$response" | grep -q '"result":"error"' && echo "$response" | grep -q "\"errorCode\":\"$expected_code\""; then
+    echo "[e2e] PASS: $desc (expected error code: $expected_code)"
+  else
+    echo "[e2e] FAIL: $desc"
+    echo "  Expected error code: $expected_code"
+    echo "  Response: $response"
+    ERRORS=$((ERRORS + 1))
+  fi
+}
+
 echo ""
 echo "[e2e] === Running E2E Tests ==="
 
@@ -150,13 +164,13 @@ assert_ok "/agents" "$RESP"
 RESP=$(send_cmd "telegram test-chat req-3 /status" "$SESSION_TOKEN")
 assert_ok "/status" "$RESP"
 
-# Test: /install (openclaw agent)
+# Test: /install is blocked in chat (GUI-only onboarding)
 RESP=$(send_cmd "telegram test-chat req-4 /install openclaw" "$SESSION_TOKEN")
-assert_ok "/install openclaw" "$RESP"
+assert_error_code "/install openclaw blocked in chat" "$RESP" "E_INSTALL_GUI_ONLY"
 
-# Test: /status after install
+# Test: /status after install attempt
 RESP=$(send_cmd "telegram test-chat req-5 /status openclaw" "$SESSION_TOKEN")
-assert_ok "/status after install" "$RESP"
+assert_ok "/status after install attempt" "$RESP"
 
 # Test: /logs
 RESP=$(send_cmd "telegram test-chat req-6 /logs openclaw" "$SESSION_TOKEN")
