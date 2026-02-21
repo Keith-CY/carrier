@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -336,7 +337,8 @@ func onboardSelectProvider(requestID, sessionKey, input string, store *OnboardSt
 		})
 		value, backend, ok, err := loadProviderCredential(p.ID)
 		if err != nil {
-			return errResp(requestID, "E_AUTH_INPUT", fmt.Sprintf("failed to load saved credential for %s: %v", p.Name, err))
+			log.Printf("[gateway] onboarding: load saved credential failed provider=%s detail=%s", p.ID, RedactErrorMessage(err.Error()))
+			return errResp(requestID, "E_AUTH_INPUT", "failed to load saved credential for selected provider")
 		}
 		if ok && p.EnvVar != "" && strings.TrimSpace(value) != "" {
 			store.update(sessionKey, func(s *OnboardSession) {
@@ -576,7 +578,8 @@ func onboardConfirm(ctx context.Context, requestID, sessionKey, input string, da
 		result, err := preparePicoclawManagedOnboard(sess, actor)
 		if err != nil {
 			store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardEnvConfigured })
-			return errResp(requestID, "E_ENV", fmt.Sprintf("failed to prepare picoclaw onboarding artifacts: %v", err))
+			log.Printf("[gateway] onboarding: prepare picoclaw artifacts failed detail=%s", RedactErrorMessage(err.Error()))
+			return errResp(requestID, "E_ENV", "failed to prepare picoclaw onboarding artifacts")
 		}
 		setupNotes = append(setupNotes, fmt.Sprintf("PicoClaw workspace: %s", result.WorkspacePath))
 		setupNotes = append(setupNotes, fmt.Sprintf("PicoClaw config: %s", result.ConfigPath))
@@ -584,7 +587,8 @@ func onboardConfirm(ctx context.Context, requestID, sessionKey, input string, da
 	}
 	if err := applyOnboardEnvVars(sess.EnvVars); err != nil {
 		store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardEnvConfigured })
-		return errResp(requestID, "E_ENV", fmt.Sprintf("failed to apply environment variables: %v", err))
+		log.Printf("[gateway] onboarding: apply env vars failed detail=%s", RedactErrorMessage(err.Error()))
+		return errResp(requestID, "E_ENV", "failed to apply environment variables")
 	}
 
 	if err := daemon.InstallAgent(ctx, agentID, actor, requestID); err != nil {
@@ -594,7 +598,8 @@ func onboardConfirm(ctx context.Context, requestID, sessionKey, input string, da
 	if err := daemon.StartAgent(ctx, agentID, actor, requestID); err != nil {
 		store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardDone })
 		if de, ok := err.(*DaemonClientError); ok {
-			return GatewayResponse{RequestID: requestID, Result: "ok", Message: fmt.Sprintf("%s installed but failed to start: %s", agentID, de.Message)}
+			_, _, msg := mapDaemonErrorToExternal(de.Code)
+			return GatewayResponse{RequestID: requestID, Result: "ok", Message: fmt.Sprintf("%s installed but failed to start: %s", agentID, msg)}
 		}
 		return daemonErrResp(requestID, err)
 	}

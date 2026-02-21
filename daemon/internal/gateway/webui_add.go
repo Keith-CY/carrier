@@ -41,17 +41,17 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		if instanceID == "" {
 			generatedID, genErr := generateManagedInstanceID(agentID)
 			if genErr != nil {
-				writeJSON(w, http.StatusInternalServerError, gatewayErrBody("E_INTERNAL", genErr.Error()))
+				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to allocate instance id", "generate managed instance id", genErr)
 				return
 			}
 			instanceID = generatedID
 		}
 		if err := daemon.InstallAgent(r.Context(), agentID, actor, requestID); err != nil {
-			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_COMMAND_FAILED", err.Error()))
+			writeDaemonAPIError(w, err)
 			return
 		}
 		if err := daemon.StartAgent(r.Context(), agentID, actor, requestID); err != nil {
-			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_COMMAND_FAILED", err.Error()))
+			writeDaemonAPIError(w, err)
 			return
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -64,9 +64,9 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}
-		warning := ""
 		if err := upsertManagedInstance(inst); err != nil {
-			warning = err.Error()
+			writeStatePersistenceError(w, requestID, "add", agentID, instanceID, err)
+			return
 		}
 		payload := map[string]interface{}{
 			"requestId":  requestID,
@@ -74,9 +74,6 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 			"message":    fmt.Sprintf("%s installed and started", agentID),
 			"agentId":    agentID,
 			"instanceId": instanceID,
-		}
-		if warning != "" {
-			payload["warning"] = warning
 		}
 		writeJSON(w, http.StatusOK, payload)
 		return
@@ -113,11 +110,11 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		if token == "" || req.ReuseCredential {
 			value, _, hasSaved, err := loadProviderCredential(provider.ID)
 			if err != nil {
-				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_AUTH_INPUT", fmt.Sprintf("load saved credential failed: %v", err)))
+				writeInternalGatewayError(w, http.StatusBadRequest, "E_AUTH_INPUT", "failed to read saved credential for selected provider", "load saved provider credential", err)
 				return
 			}
 			if !hasSaved {
-				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_AUTH_INPUT", fmt.Sprintf("no saved credential for provider %s", provider.ID)))
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_AUTH_INPUT", "saved credential is required for the selected provider"))
 				return
 			}
 			token = strings.TrimSpace(value)
@@ -142,7 +139,7 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 	if instanceID == "" {
 		generatedID, genErr := generateManagedInstanceID("picoclaw")
 		if genErr != nil {
-			writeJSON(w, http.StatusInternalServerError, gatewayErrBody("E_INTERNAL", genErr.Error()))
+			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to allocate instance id", "generate picoclaw instance id", genErr)
 			return
 		}
 		instanceID = generatedID
@@ -163,19 +160,19 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 
 	result, err := preparePicoclawManagedOnboard(sess, actor)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_ENV", fmt.Sprintf("prepare picoclaw config failed: %v", err)))
+		writeInternalGatewayError(w, http.StatusBadRequest, "E_ENV", "failed to prepare picoclaw configuration", "prepare picoclaw managed onboarding artifacts", err)
 		return
 	}
 	if err := applyOnboardEnvVars(sess.EnvVars); err != nil {
-		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_ENV", fmt.Sprintf("apply env vars failed: %v", err)))
+		writeInternalGatewayError(w, http.StatusBadRequest, "E_ENV", "failed to apply environment variables", "apply onboarding environment", err)
 		return
 	}
 	if err := daemon.InstallAgent(r.Context(), "picoclaw", actor, requestID); err != nil {
-		writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_COMMAND_FAILED", err.Error()))
+		writeDaemonAPIError(w, err)
 		return
 	}
 	if err := daemon.StartAgent(r.Context(), "picoclaw", actor, requestID); err != nil {
-		writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_COMMAND_FAILED", err.Error()))
+		writeDaemonAPIError(w, err)
 		return
 	}
 
@@ -217,9 +214,9 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
-	warning := ""
 	if err := upsertManagedInstance(inst); err != nil {
-		warning = err.Error()
+		writeStatePersistenceError(w, requestID, "add", "picoclaw", instanceID, err)
+		return
 	}
 	payload := map[string]interface{}{
 		"requestId":     requestID,
@@ -234,9 +231,6 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		"configPath":    result.ConfigPath,
 		"recordPath":    result.RecordPath,
 		"envKeys":       envKeys,
-	}
-	if warning != "" {
-		payload["warning"] = warning
 	}
 	writeJSON(w, http.StatusOK, payload)
 }

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -15,21 +16,29 @@ func handleWebUIInstances(w http.ResponseWriter, r *http.Request, requestID stri
 	}
 	instances, path, err := loadManagedInstances()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, gatewayErrBody("E_INTERNAL", err.Error()))
+		writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load managed instances", "load managed instances", err)
 		return
 	}
+	persistDirty := false
 	if len(instances) > 0 {
 		updated := mergeManagedRuntimeState(r, daemon, instances, requestID)
 		if updated {
-			_ = saveManagedInstances(path, instances)
+			persistDirty = true
 		}
 	}
 	instances, updated, backfillErr := backfillManagedInstancesFromDaemon(r, daemon, instances, requestID)
-	if backfillErr == nil && updated {
-		_ = saveManagedInstances(path, instances)
+	if backfillErr != nil {
+		log.Printf("[gateway] managed instance backfill skipped: %s", RedactErrorMessage(backfillErr.Error()))
+	} else if updated {
+		persistDirty = true
 	}
 	if updatePairingStateFromLogs(r, daemon, instances, requestID) {
-		_ = saveManagedInstances(path, instances)
+		persistDirty = true
+	}
+	if persistDirty {
+		if saveErr := saveManagedInstances(path, instances); saveErr != nil {
+			log.Printf("[gateway] managed instances sync persist skipped: %s", RedactErrorMessage(saveErr.Error()))
+		}
 	}
 
 	sort.Slice(instances, func(i, j int) bool {
@@ -200,7 +209,7 @@ func handleWebUIInstance(w http.ResponseWriter, r *http.Request, requestID strin
 
 	instances, path, err := loadManagedInstances()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, gatewayErrBody("E_INTERNAL", err.Error()))
+		writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load managed instances", "load managed instance by id", err)
 		return
 	}
 	idx := findManagedInstanceIndex(instances, instanceID)
@@ -259,7 +268,7 @@ func handleWebUIInstance(w http.ResponseWriter, r *http.Request, requestID strin
 		instances[idx].RuntimeState = "running"
 		instances[idx].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		if err := saveManagedInstances(path, instances); err != nil {
-			writeJSON(w, http.StatusInternalServerError, gatewayErrBody("E_INTERNAL", err.Error()))
+			writeStatePersistenceError(w, requestID, action, inst.AgentID, inst.ID, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -277,7 +286,7 @@ func handleWebUIInstance(w http.ResponseWriter, r *http.Request, requestID strin
 		instances[idx].RuntimeState = "stopped"
 		instances[idx].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		if err := saveManagedInstances(path, instances); err != nil {
-			writeJSON(w, http.StatusInternalServerError, gatewayErrBody("E_INTERNAL", err.Error()))
+			writeStatePersistenceError(w, requestID, action, inst.AgentID, inst.ID, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -298,7 +307,7 @@ func handleWebUIInstance(w http.ResponseWriter, r *http.Request, requestID strin
 		}
 		instances = append(instances[:idx], instances[idx+1:]...)
 		if err := saveManagedInstances(path, instances); err != nil {
-			writeJSON(w, http.StatusInternalServerError, gatewayErrBody("E_INTERNAL", err.Error()))
+			writeStatePersistenceError(w, requestID, action, inst.AgentID, inst.ID, err)
 			return
 		}
 

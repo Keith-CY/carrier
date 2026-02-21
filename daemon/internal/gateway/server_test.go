@@ -300,6 +300,28 @@ func TestSetup_LegacyAlias(t *testing.T) {
 	}
 }
 
+func TestTelegramTransportStatusEndpoint(t *testing.T) {
+	mux, srv, _ := buildTestMux(t, nil)
+	defer srv.Close()
+
+	setTelegramTransportStatus("auto", "polling", telegramFallbackWebhookSetupFailed, "setWebhook failed: timeout", "Check webhook URL reachability.")
+
+	req := httptest.NewRequest("GET", "/api/v1/telegram/transport", nil)
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `"selected_mode":"polling"`) {
+		t.Fatalf("expected polling mode in response, got %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"reason_code":"WEBHOOK_SETUP_FAILED"`) {
+		t.Fatalf("expected reason code in response, got %s", w.Body.String())
+	}
+}
+
 func TestSSELogs_NoToken(t *testing.T) {
 	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
@@ -752,6 +774,39 @@ func TestAgentsEndpoint_StartActionSuccess(t *testing.T) {
 	}
 }
 
+func TestAgentsEndpoint_StartActionPersistenceFailureReturnsPartialSuccess(t *testing.T) {
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/openclaw/start": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{}`)
+		},
+	})
+	defer srv.Close()
+
+	tmp := t.TempDir()
+	badStore := filepath.Join(tmp, "instances.json")
+	if err := os.MkdirAll(badStore, 0o700); err != nil {
+		t.Fatalf("prepare bad instance store path: %v", err)
+	}
+	t.Setenv("CARRIER_INSTANCE_STORE", badStore)
+
+	req := httptest.NewRequest("POST", "/api/v1/agents/openclaw/start", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"errorCode":"E_STATE_PERSISTENCE"`) {
+		t.Fatalf("expected E_STATE_PERSISTENCE, got %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"partialSuccess":true`) {
+		t.Fatalf("expected partialSuccess=true, got %s", w.Body.String())
+	}
+}
+
 func TestInstancesEndpoint_ListSuccess(t *testing.T) {
 	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
 		"GET /api/v1/agents/picoclaw/status": func(w http.ResponseWriter, r *http.Request) {
@@ -912,6 +967,72 @@ func TestAddEndpoint_MethodNotAllowed(t *testing.T) {
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", w.Code)
+	}
+}
+
+func TestAddEndpoint_DaemonErrorIsSanitized(t *testing.T) {
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/openclaw/install": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"error":{"code":"E_COMMAND_FAILED","message":"install failed OPENAI_API_KEY=sk-secret-123"}}`)
+		},
+	})
+	defer srv.Close()
+
+	body := `{"agentId":"openclaw"}`
+	req := httptest.NewRequest("POST", "/api/v1/add", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "sk-secret-123") {
+		t.Fatalf("response should not leak secret token: %s", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "install failed") {
+		t.Fatalf("response should not expose internal daemon detail: %s", w.Body.String())
+	}
+}
+
+func TestAddEndpoint_StatePersistenceFailureReturnsPartialSuccess(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	badStore := filepath.Join(tmp, "instances.json")
+	if err := os.MkdirAll(badStore, 0o700); err != nil {
+		t.Fatalf("prepare bad instance store path: %v", err)
+	}
+
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/openclaw/install": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"installed"}`)
+		},
+		"POST /api/v1/agents/openclaw/start": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"running"}`)
+		},
+	})
+	defer srv.Close()
+	t.Setenv("CARRIER_INSTANCE_STORE", badStore)
+
+	body := `{"agentId":"openclaw"}`
+	req := httptest.NewRequest("POST", "/api/v1/add", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"errorCode":"E_STATE_PERSISTENCE"`) {
+		t.Fatalf("expected E_STATE_PERSISTENCE, got %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"partialSuccess":true`) {
+		t.Fatalf("expected partialSuccess=true, got %s", w.Body.String())
 	}
 }
 
@@ -1101,8 +1222,8 @@ func TestAddEndpoint_PicoClawSuccess_ReuseSavedOpenAICodexCredential(t *testing.
 	if got := strings.TrimSpace(fmt.Sprintf("%v", model["auth_method"])); got != "oauth" {
 		t.Fatalf("expected auth_method oauth, got %q", got)
 	}
-	if got := strings.TrimSpace(fmt.Sprintf("%v", model["api_key"])); got != "codex-saved-token" {
-		t.Fatalf("expected model api_key from saved credential, got %q", got)
+	if _, hasAPIKey := model["api_key"]; hasAPIKey {
+		t.Fatalf("did not expect oauth model api_key to be persisted, got %#v", model["api_key"])
 	}
 
 	authPath := filepath.Join(tmp, ".picoclaw", "auth.json")

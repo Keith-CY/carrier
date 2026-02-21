@@ -1416,7 +1416,20 @@
     showView('settings');
     $('#nav').classList.remove('hidden');
     const el = $('#settings-provider');
-    el.textContent = 'Daemon mode — provider settings managed via config.json.';
+    const lines = ['Daemon mode — provider settings managed via config.json.'];
+    try {
+      const transport = await api('GET', '/api/v1/telegram/transport');
+      const info = transport && transport.transport ? transport.transport : null;
+      if (info && info.selected_mode) {
+        let summary = 'Telegram transport: ' + info.selected_mode;
+        if (info.reason_code) summary += ' (reason: ' + info.reason_code + ')';
+        lines.push(summary);
+        if (info.hint) lines.push('Hint: ' + info.hint);
+      }
+    } catch (_) {
+      lines.push('Telegram transport status unavailable.');
+    }
+    el.textContent = lines.join(' ');
   }
 
   // --- Init ---

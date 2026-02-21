@@ -79,15 +79,15 @@ func TestResolveTelegramTransportMode_AutoWebhookSuccess(t *testing.T) {
 		TelegramWebhookURL:    "https://public.example.com/webhook/telegram",
 	}
 
-	mode, reason, err := resolveTelegramTransportMode(context.Background(), cfg, fake)
+	decision, err := resolveTelegramTransportMode(context.Background(), cfg, fake)
 	if err != nil {
 		t.Fatalf("resolveTelegramTransportMode error: %v", err)
 	}
-	if mode != telegramTransportWebhook {
-		t.Fatalf("mode = %q, want %q", mode, telegramTransportWebhook)
+	if decision.Mode != telegramTransportWebhook {
+		t.Fatalf("mode = %q, want %q", decision.Mode, telegramTransportWebhook)
 	}
-	if reason != "" {
-		t.Fatalf("reason = %q, want empty", reason)
+	if decision.ReasonCode != "" {
+		t.Fatalf("reasonCode = %q, want empty", decision.ReasonCode)
 	}
 	if fake.setWebhookCalls != 1 {
 		t.Fatalf("setWebhookCalls = %d, want 1", fake.setWebhookCalls)
@@ -107,21 +107,65 @@ func TestResolveTelegramTransportMode_AutoFallbackPolling(t *testing.T) {
 		TelegramWebhookURL:    "https://127.0.0.1/webhook/telegram",
 	}
 
-	mode, reason, err := resolveTelegramTransportMode(context.Background(), cfg, fake)
+	decision, err := resolveTelegramTransportMode(context.Background(), cfg, fake)
 	if err != nil {
 		t.Fatalf("resolveTelegramTransportMode error: %v", err)
 	}
-	if mode != telegramTransportPolling {
-		t.Fatalf("mode = %q, want %q", mode, telegramTransportPolling)
+	if decision.Mode != telegramTransportPolling {
+		t.Fatalf("mode = %q, want %q", decision.Mode, telegramTransportPolling)
 	}
-	if !strings.Contains(reason, "public") {
-		t.Fatalf("reason = %q, want contains %q", reason, "public")
+	if decision.ReasonCode != telegramFallbackWebhookURLInvalid {
+		t.Fatalf("reasonCode = %q, want %q", decision.ReasonCode, telegramFallbackWebhookURLInvalid)
+	}
+	if !strings.Contains(decision.Reason, "public") {
+		t.Fatalf("reason = %q, want contains %q", decision.Reason, "public")
 	}
 	if fake.setWebhookCalls != 0 {
 		t.Fatalf("setWebhookCalls = %d, want 0", fake.setWebhookCalls)
 	}
 	if fake.deleteCalls != 1 {
 		t.Fatalf("deleteCalls = %d, want 1", fake.deleteCalls)
+	}
+}
+
+func TestResolveTelegramTransportMode_AutoFallbackWebhookSetupFailure(t *testing.T) {
+	fake := &fakeTelegramAPI{setWebhookErr: context.DeadlineExceeded}
+	cfg := &GatewayConfig{
+		TelegramTransportMode: telegramTransportAuto,
+		TelegramWebhookURL:    "https://public.example.com/webhook/telegram",
+	}
+
+	decision, err := resolveTelegramTransportMode(context.Background(), cfg, fake)
+	if err != nil {
+		t.Fatalf("resolveTelegramTransportMode error: %v", err)
+	}
+	if decision.Mode != telegramTransportPolling {
+		t.Fatalf("mode = %q, want %q", decision.Mode, telegramTransportPolling)
+	}
+	if decision.ReasonCode != telegramFallbackWebhookSetupFailed {
+		t.Fatalf("reasonCode = %q, want %q", decision.ReasonCode, telegramFallbackWebhookSetupFailed)
+	}
+	if !strings.Contains(decision.Reason, "setWebhook failed") {
+		t.Fatalf("reason = %q, want setup failure detail", decision.Reason)
+	}
+}
+
+func TestResolveTelegramTransportMode_AutoFallbackMissingWebhookURL(t *testing.T) {
+	fake := &fakeTelegramAPI{}
+	cfg := &GatewayConfig{TelegramTransportMode: telegramTransportAuto}
+
+	decision, err := resolveTelegramTransportMode(context.Background(), cfg, fake)
+	if err != nil {
+		t.Fatalf("resolveTelegramTransportMode error: %v", err)
+	}
+	if decision.Mode != telegramTransportPolling {
+		t.Fatalf("mode = %q, want %q", decision.Mode, telegramTransportPolling)
+	}
+	if decision.ReasonCode != telegramFallbackWebhookURLInvalid {
+		t.Fatalf("reasonCode = %q, want %q", decision.ReasonCode, telegramFallbackWebhookURLInvalid)
+	}
+	if !strings.Contains(decision.Reason, "missing CARRIER_TELEGRAM_WEBHOOK_URL") {
+		t.Fatalf("reason = %q, want missing webhook URL detail", decision.Reason)
 	}
 }
 
@@ -132,7 +176,7 @@ func TestResolveTelegramTransportMode_WebhookInvalidURL(t *testing.T) {
 		TelegramWebhookURL:    "http://example.com/webhook/telegram",
 	}
 
-	_, _, err := resolveTelegramTransportMode(context.Background(), cfg, fake)
+	_, err := resolveTelegramTransportMode(context.Background(), cfg, fake)
 	if err == nil {
 		t.Fatal("expected error for invalid webhook URL in strict webhook mode")
 	}
