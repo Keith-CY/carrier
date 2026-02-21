@@ -33,3 +33,4 @@ Do not treat them as the implementation source of truth.
 
 - Keep unresolved work as tracked issues, not inline placeholders.
 - Keep this index updated when canonical architecture docs move.
+- Relative links in this file assume it lives in `docs/`. Update links if this file moves.
