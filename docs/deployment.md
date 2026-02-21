@@ -20,7 +20,6 @@ For lifecycle state transitions, crash-loop behavior, and operator troubleshooti
 ## Build
 
 ```bash
-cd daemon
 go build -o carrier ./cmd/carrier
 
 ## Gateway
