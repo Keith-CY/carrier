@@ -157,15 +157,16 @@ main() {
     for artifact in "${artifacts[@]}"; do
         if [[ "$method" == "cosign" ]]; then
             if sign_with_cosign "$artifact"; then
-                ((signed++))
+                # Use pre-increment so set -e does not treat a 0-valued expression as failure.
+                ((++signed))
             else
-                ((failed++))
+                ((++failed))
             fi
         elif [[ "$method" == "gpg" ]]; then
             if sign_with_gpg "$artifact"; then
-                ((signed++))
+                ((++signed))
             else
-                ((failed++))
+                ((++failed))
             fi
         else
             log_error "Unknown signing method: $method"

@@ -85,7 +85,67 @@ test_invalid_directory() {
     fi
 }
 
-# Test 4: Create test artifacts and attempt signing
+# Test 4: Regression test for set -e counter behavior
+test_counter_regression() {
+    log_test "Regression: successful first sign should not exit early under set -e"
+
+    local fixture_dir="$TEST_DIR/counter-fixture"
+    local mock_bin="$TEST_DIR/mock-bin"
+    mkdir -p "$fixture_dir" "$mock_bin"
+
+    echo "artifact one" > "$fixture_dir/one.zip"
+    echo "artifact two" > "$fixture_dir/two.zip"
+
+    cat > "$mock_bin/cosign" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+
+sig_path=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output-signature)
+      sig_path="${2:-}"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "$sig_path" ]]; then
+  echo "missing --output-signature" >&2
+  exit 2
+fi
+
+echo "mock-signature" > "$sig_path"
+MOCK
+    chmod +x "$mock_bin/cosign"
+
+    local output
+    if ! output=$(PATH="$mock_bin:$PATH" SIGNING_METHOD=cosign "$SIGN_SCRIPT" "$fixture_dir" 2>&1); then
+        log_fail "Counter regression run failed unexpectedly"
+        echo "$output"
+        return 1
+    fi
+
+    local sig_count
+    sig_count=$(find "$fixture_dir" -name "*.sig" -type f | wc -l | tr -d '[:space:]')
+    if [[ "$sig_count" != "2" ]]; then
+        log_fail "Expected 2 signatures from regression test, found $sig_count"
+        return 1
+    fi
+
+    if ! echo "$output" | grep -q "Signing complete: 2 signed, 0 failed"; then
+        log_fail "Did not find expected completion summary in output"
+        echo "$output"
+        return 1
+    fi
+
+    log_pass "Counter regression test passed"
+}
+
+# Test 5: Create test artifacts and attempt signing
 test_signing() {
     log_test "Creating test artifacts"
     
@@ -147,7 +207,7 @@ test_signing() {
     fi
 }
 
-# Test 5: Verify signatures are not re-signed
+# Test 6: Verify signatures are not re-signed
 test_skip_signatures() {
     log_test "Verifying that .sig files are skipped"
     
@@ -190,6 +250,9 @@ main() {
     if test_invalid_directory; then passed=$((passed + 1)); else failed=$((failed + 1)); fi
     echo ""
     
+    if test_counter_regression; then passed=$((passed + 1)); else failed=$((failed + 1)); fi
+    echo ""
+
     if test_signing; then passed=$((passed + 1)); else failed=$((failed + 1)); fi
     echo ""
     
