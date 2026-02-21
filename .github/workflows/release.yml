@@ -287,13 +287,18 @@ jobs:
           fi
           echo "Spot-checking signature for: $first_zip"
           ./scripts/verify-signature.sh "$first_zip"
+        env:
+          COSIGN_CERT_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/heads/main
+          COSIGN_OIDC_ISSUER: https://token.actions.githubusercontent.com
 
       - name: Upload signatures
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: carrier-signatures
           retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
-          path: dist/**/*.sig
+          path: |
+            dist/**/*.sig
+            dist/**/*.sigstore.json
           if-no-files-found: error
 
   publish-release:
@@ -332,6 +337,7 @@ jobs:
             dist/**/*.zip
             dist/**/*.sha256
             dist/**/*.sig
+            dist/**/*.sigstore.json
 
   comment-pr-packages:
     name: Comment PR Test Packages

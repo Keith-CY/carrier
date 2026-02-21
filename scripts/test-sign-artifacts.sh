@@ -96,15 +96,20 @@ test_counter_regression() {
     echo "artifact one" > "$fixture_dir/one.zip"
     echo "artifact two" > "$fixture_dir/two.zip"
 
-    cat > "$mock_bin/cosign" <<'MOCK'
+cat > "$mock_bin/cosign" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 
 sig_path=""
+bundle_path=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --output-signature)
       sig_path="${2:-}"
+      shift 2
+      ;;
+    --bundle)
+      bundle_path="${2:-}"
       shift 2
       ;;
     *)
@@ -119,6 +124,9 @@ if [[ -z "$sig_path" ]]; then
 fi
 
 echo "mock-signature" > "$sig_path"
+if [[ -n "$bundle_path" ]]; then
+  echo "mock-bundle" > "$bundle_path"
+fi
 MOCK
     chmod +x "$mock_bin/cosign"
 
@@ -133,6 +141,13 @@ MOCK
     sig_count=$(find "$fixture_dir" -name "*.sig" -type f | wc -l | tr -d '[:space:]')
     if [[ "$sig_count" != "2" ]]; then
         log_fail "Expected 2 signatures from regression test, found $sig_count"
+        return 1
+    fi
+
+    local bundle_count
+    bundle_count=$(find "$fixture_dir" -name "*.sigstore.json" -type f | wc -l | tr -d '[:space:]')
+    if [[ "$bundle_count" != "2" ]]; then
+        log_fail "Expected 2 bundles from regression test, found $bundle_count"
         return 1
     fi
 

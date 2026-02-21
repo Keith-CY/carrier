@@ -83,21 +83,16 @@ detect_signing_method() {
 sign_with_cosign() {
     local file="$1"
     local sig_file="${file}.sig"
+    local bundle_file="${file}.sigstore.json"
     
     log_info "Signing with cosign: $(basename "$file")"
-    
-    # Check if running in CI with OIDC token
-    if [[ -n "${GITHUB_ACTIONS:-}" ]] || [[ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
-        # GitHub Actions with keyless signing
-        cosign sign-blob --yes "$file" --output-signature "$sig_file"
+
+    if cosign sign-blob --yes "$file" --output-signature "$sig_file" --bundle "$bundle_file"; then
+        log_info "Created signature: $(basename "$sig_file")"
+        log_info "Created bundle: $(basename "$bundle_file")"
     else
-        # Local signing (will prompt for ephemeral key or use existing key)
-        if cosign sign-blob --yes "$file" --output-signature "$sig_file"; then
-            log_info "Created signature: $(basename "$sig_file")"
-        else
-            log_error "cosign signing failed for: $(basename "$file")"
-            return 1
-        fi
+        log_error "cosign signing failed for: $(basename "$file")"
+        return 1
     fi
 }
 
@@ -137,8 +132,8 @@ main() {
     
     local artifacts=()
     while IFS= read -r -d '' file; do
-        # Skip existing signature files
-        if [[ "$file" == *.sig ]] || [[ "$file" == *.asc ]]; then
+        # Skip generated signature/bundle files.
+        if [[ "$file" == *.sig ]] || [[ "$file" == *.asc ]] || [[ "$file" == *.sigstore ]] || [[ "$file" == *.sigstore.json ]]; then
             continue
         fi
         artifacts+=("$file")
