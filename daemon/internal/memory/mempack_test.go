@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -212,10 +213,11 @@ func TestAttachAndPrepareAgentMemoryComposesDeterministicView(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare agent memory: %v", err)
 	}
-	if contract.Env["AGENTD_MEMORY_PATH"] != "/app/memory" {
+	defaultReadPath, defaultWritePath := defaultRuntimeMountTargets()
+	if contract.Env["AGENTD_MEMORY_PATH"] != defaultReadPath {
 		t.Fatalf("unexpected AGENTD_MEMORY_PATH: %q", contract.Env["AGENTD_MEMORY_PATH"])
 	}
-	if contract.Env["AGENTD_MEMORY_WRITE_PATH"] != "/app/memory_private" {
+	if contract.Env["AGENTD_MEMORY_WRITE_PATH"] != defaultWritePath {
 		t.Fatalf("unexpected AGENTD_MEMORY_WRITE_PATH: %q", contract.Env["AGENTD_MEMORY_WRITE_PATH"])
 	}
 	if contract.ViewDigest == "" {
@@ -254,6 +256,93 @@ func TestAttachAndPrepareAgentMemoryComposesDeterministicView(t *testing.T) {
 	}
 }
 
+func TestPrepareAgentMemoryReusesExistingViewWhenInputUnchanged(t *testing.T) {
+	store, _ := newMemoryStoreWithRoot(t)
+	pack := filepath.Join(t.TempDir(), "reuse-view.mempack.zip")
+	writeMempack(t, pack, baseManifest("shared"), map[string]string{
+		"content/prompts/system.md": "hello",
+	})
+	entry, err := store.ImportMemory(pack, ImportOptions{TargetRegion: TypeShared})
+	if err != nil {
+		t.Fatalf("import memory: %v", err)
+	}
+	if _, err := store.AttachMemory("agent-1", entry.ID, AttachOptions{}); err != nil {
+		t.Fatalf("attach memory: %v", err)
+	}
+
+	first, err := store.PrepareAgentMemory("agent-1")
+	if err != nil {
+		t.Fatalf("first prepare: %v", err)
+	}
+	second, err := store.PrepareAgentMemory("agent-1")
+	if err != nil {
+		t.Fatalf("second prepare: %v", err)
+	}
+	if first.ViewDigest != second.ViewDigest {
+		t.Fatalf("expected stable digest, got %s and %s", first.ViewDigest, second.ViewDigest)
+	}
+
+	audits := store.AuditLogs()
+	reused := false
+	for _, a := range audits {
+		if a.Action == "prepare" && strings.Contains(a.Message, "reused=true") {
+			reused = true
+			break
+		}
+	}
+	if !reused {
+		t.Fatal("expected second prepare to reuse existing composed view")
+	}
+}
+
+func TestStorePersistsStateAcrossRestart(t *testing.T) {
+	root := t.TempDir()
+	statePath := filepath.Join(root, "state", "memory-store.json")
+	fixed := time.Date(2026, 2, 18, 12, 0, 0, 0, time.UTC)
+	store := NewStore(
+		WithRootDir(root),
+		WithPersistencePath(statePath),
+		WithNow(func() time.Time { return fixed }),
+	)
+
+	pack := filepath.Join(t.TempDir(), "persisted.mempack.zip")
+	writeMempack(t, pack, baseManifest("shared"), map[string]string{
+		"content/prompts/system.md": "persist me",
+	})
+	entry, err := store.ImportMemory(pack, ImportOptions{TargetRegion: TypeShared})
+	if err != nil {
+		t.Fatalf("import memory: %v", err)
+	}
+	if err := store.SetAttachmentsFromLinks("agent-1", []string{entry.ID}); err != nil {
+		t.Fatalf("set attachments: %v", err)
+	}
+	if err := store.LastStateError(); err != nil {
+		t.Fatalf("unexpected persistence error: %v", err)
+	}
+
+	reloaded := NewStore(
+		WithRootDir(root),
+		WithPersistencePath(statePath),
+		WithNow(func() time.Time { return fixed }),
+	)
+	if err := reloaded.LastStateError(); err != nil {
+		t.Fatalf("unexpected reload error: %v", err)
+	}
+	if _, err := reloaded.Get(entry.ID); err != nil {
+		t.Fatalf("expected memory entry to reload: %v", err)
+	}
+	attachments := reloaded.ListAttachments("agent-1")
+	if len(attachments) != 1 || attachments[0].MemoryID != entry.ID {
+		t.Fatalf("expected persisted attachment for agent-1, got %+v", attachments)
+	}
+	if _, ok := reloaded.manifests[entry.ID]; !ok {
+		t.Fatalf("expected persisted manifest for %s", entry.ID)
+	}
+	if reloaded.installPath[entry.ID] == "" {
+		t.Fatalf("expected persisted install path for %s", entry.ID)
+	}
+}
+
 func TestExportMemoryRespectsCollectionFilter(t *testing.T) {
 	store, _ := newMemoryStoreWithRoot(t)
 	pack := filepath.Join(t.TempDir(), "export-source.mempack.zip")
@@ -281,6 +370,55 @@ func TestExportMemoryRespectsCollectionFilter(t *testing.T) {
 	}
 	if _, ok := readZipFile(t, exportPath, "content/kb/internal.txt"); ok {
 		t.Fatal("did not expect filtered-out kb content in exported mempack")
+	}
+}
+
+func TestExportMemoryRespectsMaxSizeLimit(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(
+		WithRootDir(root),
+		WithNow(func() time.Time { return time.Date(2026, 2, 18, 12, 0, 0, 0, time.UTC) }),
+		WithExportGuard(8, 3),
+	)
+	pack := filepath.Join(t.TempDir(), "export-limit.mempack.zip")
+	writeMempack(t, pack, baseManifest("shared"), map[string]string{
+		"content/prompts/system.md": "this payload is larger than eight bytes",
+	})
+
+	entry, err := store.ImportMemory(pack, ImportOptions{TargetRegion: TypeShared})
+	if err != nil {
+		t.Fatalf("import memory: %v", err)
+	}
+
+	_, err = store.ExportMemory(entry.ID, ExportOptions{})
+	if !errors.Is(err, ErrExportTooLarge) {
+		t.Fatalf("expected ErrExportTooLarge, got %v", err)
+	}
+}
+
+func TestExportMemoryRespectsConcurrencyLimit(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(
+		WithRootDir(root),
+		WithNow(func() time.Time { return time.Date(2026, 2, 18, 12, 0, 0, 0, time.UTC) }),
+		WithExportGuard(1024*1024, 1),
+	)
+	pack := filepath.Join(t.TempDir(), "export-concurrency.mempack.zip")
+	writeMempack(t, pack, baseManifest("shared"), map[string]string{
+		"content/prompts/system.md": "small",
+	})
+	entry, err := store.ImportMemory(pack, ImportOptions{TargetRegion: TypeShared})
+	if err != nil {
+		t.Fatalf("import memory: %v", err)
+	}
+
+	// Simulate another export occupying the only slot.
+	store.exportSlots <- struct{}{}
+	defer func() { <-store.exportSlots }()
+
+	_, err = store.ExportMemory(entry.ID, ExportOptions{})
+	if !errors.Is(err, ErrExportBusy) {
+		t.Fatalf("expected ErrExportBusy, got %v", err)
 	}
 }
 
@@ -480,8 +618,8 @@ func TestPrepareAgentMemoryRollbackKeepsExistingMountsOnFailure(t *testing.T) {
 	if _, err := store.Mount(m1.ID, "agent-1", AccessReadOnly); err != nil {
 		t.Fatalf("mount existing memory: %v", err)
 	}
-	if err := store.Archive(m2.ID); err != nil {
-		t.Fatalf("archive m2: %v", err)
+	if _, err := store.Mount(m2.ID, "agent-2", AccessReadOnly); err != nil {
+		t.Fatalf("mount m2 for other agent: %v", err)
 	}
 	if err := store.SetAttachmentsFromLinks("agent-1", []string{m2.ID}); err != nil {
 		t.Fatalf("set attachments: %v", err)

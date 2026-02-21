@@ -256,6 +256,21 @@ func TestSetAttachmentsFromLinksPerAgentLimit(t *testing.T) {
 	}
 }
 
+func TestSetAttachmentsFromLinksArchivedRejected(t *testing.T) {
+	s := newTestStore()
+	_, _ = s.Create("m1", "A", "1.0.0", TypeShared, "")
+	if err := s.Archive("m1"); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	err := s.SetAttachmentsFromLinks("agent-1", []string{"m1"})
+	if err == nil {
+		t.Fatal("expected archived rejection error")
+	}
+	if !strings.Contains(err.Error(), "archived") {
+		t.Fatalf("expected archived in error, got %v", err)
+	}
+}
+
 // ── matchesCollectionSelection (33.3%) ──
 
 func TestMatchesCollectionSelection(t *testing.T) {
@@ -696,9 +711,9 @@ func TestCopyFileBadTargetDir(t *testing.T) {
 
 func TestShouldExportPath(t *testing.T) {
 	tests := []struct {
-		rel        string
-		selected   []string
-		want       bool
+		rel      string
+		selected []string
+		want     bool
 	}{
 		{"memory.yaml", nil, true},
 		{"README.md", []string{"prompts"}, true},
@@ -997,8 +1012,9 @@ func TestPrepareAgentMemoryDefaultRuntimeTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if contract.Env["AGENTD_MEMORY_PATH"] != "/app/memory" {
-		t.Fatalf("expected default /app/memory, got %s", contract.Env["AGENTD_MEMORY_PATH"])
+	defaultReadPath, _ := defaultRuntimeMountTargets()
+	if contract.Env["AGENTD_MEMORY_PATH"] != defaultReadPath {
+		t.Fatalf("expected default %s, got %s", defaultReadPath, contract.Env["AGENTD_MEMORY_PATH"])
 	}
 }
 

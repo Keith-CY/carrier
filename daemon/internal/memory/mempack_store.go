@@ -127,6 +127,14 @@ func (s *Store) ImportMemory(mempackPath string, opts ImportOptions) (Entry, err
 	s.entries[memoryID] = entry
 	s.manifests[memoryID] = manifest
 	s.installPath[memoryID] = installPath
+	if err := s.persistStateLocked(); err != nil {
+		delete(s.entries, memoryID)
+		delete(s.manifests, memoryID)
+		delete(s.installPath, memoryID)
+		s.mu.Unlock()
+		s.recordAudit(opts.RequestID, opts.Actor, "import", memoryID, auditResultFailure, err.Error())
+		return Entry{}, err
+	}
 	s.mu.Unlock()
 
 	s.recordAudit(opts.RequestID, opts.Actor, "import", memoryID, auditResultSuccess, "memory imported")
@@ -139,10 +147,17 @@ func (s *Store) ExportMemory(memoryID string, opts ExportOptions) (string, error
 	if err != nil {
 		return "", err
 	}
+	releaseExport, err := s.acquireExportSlot()
+	if err != nil {
+		s.recordAudit(opts.RequestID, opts.Actor, "export", memoryID, auditResultFailure, err.Error())
+		return "", err
+	}
+	defer releaseExport()
 
 	s.mu.RLock()
 	manifest, ok := s.manifests[memoryID]
 	installPath := s.installPath[memoryID]
+	exportMaxBytes := s.exportMaxBytes
 	s.mu.RUnlock()
 	if !ok {
 		s.recordAudit(opts.RequestID, opts.Actor, "export", memoryID, auditResultFailure, ErrMemoryNotFound.Error())
@@ -184,6 +199,13 @@ func (s *Store) ExportMemory(memoryID string, opts ExportOptions) (string, error
 		return "", err
 	}
 
+	type exportCandidate struct {
+		abs string
+		rel string
+	}
+	candidates := make([]exportCandidate, 0, len(files))
+	var totalBytes int64
+
 	for _, abs := range files {
 		rel, err := filepath.Rel(installPath, abs)
 		if err != nil {
@@ -193,7 +215,26 @@ func (s *Store) ExportMemory(memoryID string, opts ExportOptions) (string, error
 		if !shouldExportPath(rel, selectedCollections) {
 			continue
 		}
+		info, statErr := os.Stat(abs)
+		if statErr != nil {
+			return "", fmt.Errorf("stat export file %s: %w", rel, statErr)
+		}
+		totalBytes += info.Size()
+		if exportMaxBytes > 0 && totalBytes > exportMaxBytes {
+			err := fmt.Errorf("%w: total=%d limit=%d", ErrExportTooLarge, totalBytes, exportMaxBytes)
+			s.recordAudit(opts.RequestID, opts.Actor, "export", memoryID, auditResultFailure, err.Error())
+			return "", err
+		}
+		candidates = append(candidates, exportCandidate{abs: abs, rel: rel})
+	}
+	if err := ensureDiskSpaceForExport(exportsDir, totalBytes); err != nil {
+		s.recordAudit(opts.RequestID, opts.Actor, "export", memoryID, auditResultFailure, err.Error())
+		return "", err
+	}
 
+	for _, file := range candidates {
+		rel := file.rel
+		abs := file.abs
 		raw, err := os.ReadFile(abs)
 		if err != nil {
 			return "", fmt.Errorf("read export file %s: %w", rel, err)
@@ -234,6 +275,38 @@ func (s *Store) requireRootDir() (string, error) {
 		return "", ErrRootDirRequired
 	}
 	return root, nil
+}
+
+func (s *Store) acquireExportSlot() (func(), error) {
+	s.mu.RLock()
+	slots := s.exportSlots
+	s.mu.RUnlock()
+	if slots == nil {
+		return func() {}, nil
+	}
+	select {
+	case slots <- struct{}{}:
+		return func() { <-slots }, nil
+	default:
+		return nil, ErrExportBusy
+	}
+}
+
+func ensureDiskSpaceForExport(path string, requiredBytes int64) error {
+	if requiredBytes <= 0 {
+		return nil
+	}
+	available, err := availableDiskBytes(path)
+	if err != nil {
+		// Best effort: when disk availability cannot be determined on this platform,
+		// continue and rely on filesystem write errors.
+		return nil
+	}
+	needed := uint64(requiredBytes)
+	if available < needed {
+		return fmt.Errorf("%w: required=%d available=%d", ErrDiskSpaceLow, needed, available)
+	}
+	return nil
 }
 
 func (s *Store) recordAudit(requestID, actor, action, target, result, message string) {
