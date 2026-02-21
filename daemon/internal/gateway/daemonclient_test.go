@@ -122,6 +122,22 @@ func TestDaemonClient_StopAgent(t *testing.T) {
 	}
 }
 
+func TestDaemonClient_UninstallAgent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents/a1/uninstall" || r.Method != http.MethodPost {
+			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	err := dc.UninstallAgent(context.Background(), "a1", "actor", "req")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestDaemonClient_GetStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewEncoder(w).Encode(map[string]interface{}{

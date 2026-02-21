@@ -10,6 +10,17 @@
   let selectedAgent = '';
   let selectedProvider = null; // { id, name, auth_mode, env_var, example_model }
   let providerApiKey = '';
+  let addTargetAgent = '';
+  let addChannel = '';
+  let addChannelToken = '';
+  let addChannelChatId = '';
+  let addCarrierPairedUser = null;
+  let addCarrierPairedUserCount = 0;
+  let addWebhookSecret = '';
+  let addPairSessionId = '';
+  let addPairCode = '';
+  let addPairPollRunID = 0;
+  let lastAddResult = null;
   let logSource = null; // EventSource for SSE logs
 
   // --- Helpers ---
@@ -31,8 +42,25 @@
         clearToken();
         throw new Error('Unauthorized');
       }
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error || 'Request failed (' + r.status + ')');
+      const raw = await r.text();
+      let data = {};
+      if (raw) {
+        try {
+          data = JSON.parse(raw);
+        } catch (e) {
+          if (!r.ok) throw new Error(raw || 'Request failed (' + r.status + ')');
+          return raw;
+        }
+      }
+      if (!r.ok) {
+        const errMsg =
+          (data && data.message) ||
+          (data && data.errorCode) ||
+          (data && data.error && (data.error.message || data.error.code)) ||
+          data.error ||
+          ('Request failed (' + r.status + ')');
+        throw new Error(errMsg);
+      }
       return data;
     });
   }
@@ -52,6 +80,69 @@
     p.className = 'msg-' + (type || 'info');
     p.textContent = text;
     el.appendChild(p);
+  }
+
+  function isAddMode() {
+    return !!addTargetAgent;
+  }
+
+  function resetAddMode() {
+    addTargetAgent = '';
+    addChannel = '';
+    addChannelToken = '';
+    addChannelChatId = '';
+    addCarrierPairedUser = null;
+    addCarrierPairedUserCount = 0;
+    addWebhookSecret = '';
+    addPairSessionId = '';
+    addPairCode = '';
+    addPairPollRunID += 1;
+    lastAddResult = null;
+  }
+
+  function currentWizardTotalSteps() {
+    return isAddMode() ? 3 : 5;
+  }
+
+  function collectEnvVars() {
+    const vars = {};
+    $$('#env-fields .env-row').forEach(row => {
+      const inputs = row.querySelectorAll('input');
+      if (inputs.length < 2) return;
+      const key = (inputs[0].value || '').trim();
+      const value = (inputs[1].value || '').trim();
+      if (!key) return;
+      vars[key] = value;
+    });
+    return vars;
+  }
+
+  function normalizeAgentCatalog(data) {
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.agents)) return data.agents;
+    return [];
+  }
+
+  function normalizeInstances(data) {
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.instances)) return data.instances;
+    return [];
+  }
+
+  function canContinueWithProvider() {
+    if (!selectedProvider) return false;
+    const mode = selectedProvider.auth_mode;
+    if (mode === 'none') return true;
+    if (providerApiKey) return true;
+    if (isAddMode()) return true;
+    if (mode !== 'api_key') return true;
+    return false;
+  }
+
+  function refreshProviderNextButton() {
+    const nextBtn = $('#provider-next');
+    if (!nextBtn) return;
+    nextBtn.disabled = !canContinueWithProvider();
   }
 
   // --- Health ---
@@ -111,6 +202,29 @@
   function navigate(hash) {
     if (!hash || hash === '#' || hash === '#/') hash = '#/welcome';
     const route = hash.replace('#/', '');
+
+    if (route.startsWith('add/')) {
+      const agent = decodeURIComponent(route.slice(4)).trim().toLowerCase();
+      if (!agent) {
+        location.hash = '#/welcome';
+        return;
+      }
+      addTargetAgent = agent;
+      selectedAgent = agent;
+      lastAddResult = null;
+      initSetup();
+      return;
+    }
+
+    if (isAddMode()) {
+      const keepAddRoutes = new Set(['setup', 'provider', 'install', 'complete']);
+      if (!keepAddRoutes.has(route)) {
+        resetAddMode();
+      }
+    }
+    if (route !== 'dashboard') {
+      closeAddAgentModal();
+    }
 
     // Management views require auth
     const mgmtRoutes = ['dashboard', 'logs', 'chat', 'settings'];
@@ -184,6 +298,7 @@
 
   // --- Welcome ---
   function initWelcome() {
+    resetAddMode();
     showView('welcome');
     const status = $('#welcome-status');
     const btn = $('#welcome-continue');
@@ -211,25 +326,313 @@
   // --- Setup ---
   function initSetup() {
     showView('setup');
-    renderSteps('#steps-indicator', 0, 5);
+    const stepTotal = currentWizardTotalSteps();
+    renderSteps('#steps-indicator', 0, stepTotal);
+
+    const title = $('#setup-title');
+    const providerLabel = $('#setup-provider-label');
+    const tokenLabel = $('#setup-token-label');
+    const providerSelect = $('#provider');
+    const tokenInput = $('#provider-token');
+    const webhookInput = $('#webhook-secret');
+    const webhookLabel = $('label[for="webhook-secret"]');
+    const setupBtn = $('#setup-btn');
+    const pairSection = $('#setup-telegram-pair');
+    const pairInstruction = $('#setup-pair-instruction');
+    const pairUseCarrierBtn = $('#setup-pair-use-carrier');
+    const pairStartBtn = $('#setup-pair-start');
+    tokenInput.value = isAddMode() ? addChannelToken : '';
+    webhookInput.value = isAddMode() ? addWebhookSecret : '';
+    setMsg('#setup-msg', '', 'info');
+    setMsg('#setup-pair-msg', '', 'info');
+
+    function updatePairInstruction() {
+      if (!pairInstruction) return;
+      if (!isAddMode() || providerSelect.value.trim().toLowerCase() !== 'telegram') {
+        pairInstruction.textContent = '';
+        return;
+      }
+      if (addChannelChatId) {
+        pairInstruction.textContent = 'Paired chat id: ' + addChannelChatId;
+        return;
+      }
+      if (addPairCode) {
+        pairInstruction.textContent = 'Send `/pair ' + addPairCode + '` in your Telegram bot chat. Pairing will be detected automatically.';
+        return;
+      }
+      pairInstruction.textContent = 'Click Start Pairing to get a code, then send it in your Telegram bot chat.';
+    }
+
+    function renderCarrierPairShortcut(channel) {
+      if (!pairUseCarrierBtn) return;
+      const isTelegramAdd = isAddMode() && String(channel || '').toLowerCase() === 'telegram';
+      if (!isTelegramAdd || !addCarrierPairedUser || !addCarrierPairedUser.chatId) {
+        pairUseCarrierBtn.classList.add('hidden');
+        pairUseCarrierBtn.textContent = 'Use Carrier paired user (Recommended)';
+        return;
+      }
+      pairUseCarrierBtn.classList.remove('hidden');
+      const chatID = String(addCarrierPairedUser.chatId).trim();
+      if (addCarrierPairedUserCount === 1) {
+        pairUseCarrierBtn.textContent = 'Use Carrier paired user (Recommended): ' + chatID;
+        return;
+      }
+      pairUseCarrierBtn.textContent = 'Use last Carrier paired user (Recommended): ' + chatID;
+    }
+
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+    async function autoWaitTelegramPairing(sessionID) {
+      const sid = (sessionID || '').trim();
+      if (!sid) return;
+      const pollRunID = ++addPairPollRunID;
+      setMsg('#setup-pair-msg', 'Pair code ready. Waiting for Telegram `/pair` command…', 'info');
+      for (;;) {
+        if (pollRunID !== addPairPollRunID) return;
+        try {
+          const resp = await api('POST', '/api/v1/telegram/pair/wait', { sessionId: sid });
+          if (pollRunID !== addPairPollRunID) return;
+          if (resp && resp.paired && resp.chatId) {
+            addChannelChatId = String(resp.chatId).trim();
+            addPairSessionId = '';
+            addPairCode = '';
+            updatePairInstruction();
+            refreshSetupContinueState();
+            setMsg('#setup-pair-msg', 'Pairing complete. Chat id: ' + addChannelChatId, 'info');
+            return;
+          }
+          setMsg('#setup-pair-msg', 'Still waiting for Telegram `/pair` command…', 'info');
+          continue;
+        } catch (e) {
+          if (pollRunID !== addPairPollRunID) return;
+          const msg = (e && e.message ? String(e.message) : '').toLowerCase();
+          if (msg.includes('expired') || msg.includes('session') || msg.includes('not found') || msg.includes('invalid')) {
+            setMsg('#setup-pair-msg', 'Pair session expired. Click Start Pairing to generate a new code.', 'error');
+            refreshSetupContinueState();
+            return;
+          }
+          setMsg('#setup-pair-msg', 'Pair check failed, retrying…', 'error');
+          await delay(1500);
+        }
+      }
+    }
+
+    async function loadCarrierPairedUser(channel) {
+      if (!isAddMode() || channel !== 'telegram') {
+        addCarrierPairedUser = null;
+        addCarrierPairedUserCount = 0;
+        renderCarrierPairShortcut(channel);
+        return;
+      }
+      try {
+        const resp = await api('GET', '/api/v1/pairing/sessions?provider=telegram');
+        const sessions = (resp && Array.isArray(resp.sessions)) ? resp.sessions : [];
+        const validSessions = sessions.filter(s => s && s.chatId && /^[0-9]+$/.test(String(s.chatId).trim()));
+        addCarrierPairedUserCount = validSessions.length;
+        if (validSessions.length > 0) {
+          const latest = validSessions[0];
+          addCarrierPairedUser = { chatId: String(latest.chatId).trim() };
+        } else {
+          addCarrierPairedUser = null;
+        }
+        if (validSessions.length === 1 && addCarrierPairedUser && !addChannelChatId) {
+          addChannelChatId = addCarrierPairedUser.chatId;
+          setMsg('#setup-pair-msg', 'Auto-selected Carrier paired Telegram user: ' + addChannelChatId, 'info');
+        }
+      } catch (_e) {
+        addCarrierPairedUser = null;
+        addCarrierPairedUserCount = 0;
+      }
+      renderCarrierPairShortcut(channel);
+      updatePairInstruction();
+      refreshSetupContinueState();
+    }
+
+    function refreshSetupContinueState() {
+      if (!isAddMode()) {
+        setupBtn.disabled = false;
+        return;
+      }
+      const channel = providerSelect.value.trim().toLowerCase();
+      const channelToken = tokenInput.value.trim();
+      if (channel === 'telegram') {
+        setupBtn.disabled = !channelToken || !addChannelChatId;
+        return;
+      }
+      setupBtn.disabled = !channelToken;
+    }
+
+    if (addTargetAgent === 'picoclaw') {
+      title.textContent = 'Step 1 — Choose Chat Channel for PicoClaw';
+      providerLabel.textContent = 'Channel';
+      tokenLabel.textContent = 'Channel Bot Token';
+      providerSelect.value = addChannel || 'telegram';
+      [...providerSelect.options].forEach(opt => {
+        opt.disabled = opt.value !== '' && opt.value !== 'telegram';
+      });
+      webhookInput.disabled = true;
+      webhookInput.placeholder = 'Not required for PicoClaw add flow';
+      webhookInput.classList.add('hidden');
+      if (webhookLabel) webhookLabel.classList.add('hidden');
+      pairSection.classList.remove('hidden');
+      pairStartBtn.disabled = false;
+      renderCarrierPairShortcut('telegram');
+      updatePairInstruction();
+      refreshSetupContinueState();
+      loadCarrierPairedUser((providerSelect.value || '').trim().toLowerCase());
+      if (addPairSessionId && !addChannelChatId) {
+        autoWaitTelegramPairing(addPairSessionId);
+      }
+    } else {
+      title.textContent = 'Step 1 — Configure Chat Channel';
+      providerLabel.textContent = 'Chat Channel';
+      tokenLabel.textContent = 'Channel Bot Token';
+      providerSelect.value = '';
+      [...providerSelect.options].forEach(opt => { opt.disabled = false; });
+      webhookInput.disabled = false;
+      webhookInput.placeholder = 'Webhook verification secret';
+      webhookInput.classList.remove('hidden');
+      if (webhookLabel) webhookLabel.classList.remove('hidden');
+      pairSection.classList.add('hidden');
+      renderCarrierPairShortcut('');
+      setupBtn.disabled = false;
+    }
+
+    providerSelect.onchange = () => {
+      if (!isAddMode()) return;
+      const channel = providerSelect.value.trim().toLowerCase();
+      if (channel !== 'telegram') {
+        addChannelChatId = '';
+        addPairSessionId = '';
+        addPairCode = '';
+        addPairPollRunID += 1;
+      }
+      renderCarrierPairShortcut(channel);
+      loadCarrierPairedUser(channel);
+      updatePairInstruction();
+      refreshSetupContinueState();
+    };
+
+    tokenInput.oninput = () => {
+      if (!isAddMode()) return;
+      const inputToken = tokenInput.value.trim();
+      if (inputToken !== addChannelToken) {
+        addChannelChatId = '';
+        addPairSessionId = '';
+        addPairCode = '';
+        addPairPollRunID += 1;
+        setMsg('#setup-pair-msg', '', 'info');
+      }
+      if (providerSelect.value.trim().toLowerCase() === 'telegram') {
+        renderCarrierPairShortcut('telegram');
+        loadCarrierPairedUser('telegram');
+      }
+      updatePairInstruction();
+      refreshSetupContinueState();
+    };
+
+    if (pairUseCarrierBtn) {
+      pairUseCarrierBtn.onclick = () => {
+        if (!addCarrierPairedUser || !addCarrierPairedUser.chatId) {
+          setMsg('#setup-pair-msg', 'No reusable Carrier paired Telegram user found.', 'error');
+          return;
+        }
+        addPairPollRunID += 1;
+        addChannelChatId = String(addCarrierPairedUser.chatId).trim();
+        addPairSessionId = '';
+        addPairCode = '';
+        updatePairInstruction();
+        refreshSetupContinueState();
+        setMsg('#setup-pair-msg', 'Using Carrier paired Telegram user: ' + addChannelChatId, 'info');
+      };
+    }
+
+    pairStartBtn.onclick = async () => {
+      const channel = providerSelect.value.trim().toLowerCase();
+      const channelToken = tokenInput.value.trim();
+      if (channel !== 'telegram') {
+        setMsg('#setup-pair-msg', 'Pairing is only required for Telegram channel.', 'error');
+        return;
+      }
+      if (!channelToken) {
+        setMsg('#setup-pair-msg', 'Please enter channel bot token first.', 'error');
+        return;
+      }
+      pairStartBtn.disabled = true;
+      addPairPollRunID += 1;
+      setMsg('#setup-pair-msg', 'Creating pair code…', 'info');
+      try {
+        const resp = await api('POST', '/api/v1/telegram/pair/init', { token: channelToken });
+        addChannel = channel;
+        addChannelToken = channelToken;
+        addPairSessionId = (resp && resp.sessionId) || '';
+        addPairCode = (resp && resp.pairCode) || '';
+        addChannelChatId = '';
+        renderCarrierPairShortcut(channel);
+        updatePairInstruction();
+        refreshSetupContinueState();
+        autoWaitTelegramPairing(addPairSessionId);
+      } catch (e) {
+        setMsg('#setup-pair-msg', 'Pair init failed: ' + e.message, 'error');
+      } finally {
+        pairStartBtn.disabled = false;
+        refreshSetupContinueState();
+      }
+    };
 
     $('#setup-btn').onclick = async () => {
-      // Daemon mode: skip provider setup (gateway concept), go to agents.
+      const channel = providerSelect.value.trim().toLowerCase();
+      const channelToken = tokenInput.value.trim();
+      const webhookSecret = webhookInput.value.trim();
+      if (addTargetAgent) {
+        if (!channel) {
+          setMsg('#setup-msg', 'Please choose a channel.', 'error');
+          return;
+        }
+        if (!channelToken) {
+          setMsg('#setup-msg', 'Please enter channel bot token.', 'error');
+          return;
+        }
+        if (channel === 'telegram' && !addChannelChatId) {
+          setMsg('#setup-msg', 'Please complete Telegram pairing first to capture your chat id.', 'error');
+          return;
+        }
+        addChannel = channel;
+        addChannelToken = channelToken;
+        addWebhookSecret = webhookSecret;
+        location.hash = '#/provider';
+        return;
+      }
+
+      if (!channel) {
+        setMsg('#setup-msg', 'Please choose a chat channel.', 'error');
+        return;
+      }
+      if (!channelToken) {
+        setMsg('#setup-msg', 'Please enter channel bot token.', 'error');
+        return;
+      }
+
+      // Reuse channel fields for non-add wizard install path as well.
+      addChannel = channel;
+      addChannelToken = channelToken;
+      addWebhookSecret = webhookSecret;
       location.hash = '#/agents';
     };
   }
 
   // --- Agents selection ---
   async function initAgents() {
+    resetAddMode();
     showView('agents');
-    renderSteps('#steps-indicator-2', 1, 5);
+    renderSteps('#steps-indicator-2', 1, currentWizardTotalSteps());
 
     const list = $('#agent-pick');
     list.textContent = '';
     setMsg('#agents-msg', 'Loading agents…', 'info');
 
     try {
-      const agents = await api('GET', '/api/v1/agents');
+      const agents = normalizeAgentCatalog(await api('GET', '/api/v1/agents'));
       setMsg('#agents-msg', '', 'info');
 
       (agents || []).forEach(a => {
@@ -245,7 +648,7 @@
         list.appendChild(li);
       });
 
-      if (!agents || agents.length === 0) {
+      if (agents.length === 0) {
         setMsg('#agents-msg', 'No agents found.', 'error');
       }
     } catch (e) {
@@ -278,25 +681,88 @@
   // --- Provider selection ---
   async function initProvider() {
     showView('provider');
-    renderSteps('#steps-indicator-p', 2, 6);
+    renderSteps('#steps-indicator-p', isAddMode() ? 1 : 2, currentWizardTotalSteps());
 
-    $('#provider-agent-name').textContent = 'Configuring: ' + selectedAgent;
+    const heading = $('#view-provider h3');
+    if (heading) heading.textContent = isAddMode() ? 'Step 2 — Select LLM Provider' : 'Step 3 — Select LLM Provider';
+    $('#provider-agent-name').textContent = isAddMode() ? ('Adding: ' + selectedAgent) : ('Configuring: ' + selectedAgent);
     selectedProvider = null;
     providerApiKey = '';
-    $('#provider-next').disabled = true;
+    refreshProviderNextButton();
     $('#provider-auth-section').classList.add('hidden');
+
+    const skipBtn = $('#provider-skip');
+    skipBtn.classList.add('hidden');
+
+    const addChoice = $('#provider-add-choice');
+    const defaultSummary = $('#provider-default-summary');
+    const useDefaultContinueBtn = $('#provider-use-default-continue');
+    const otherWrap = $('#provider-other-wrap');
 
     const loading = $('#provider-loading');
     const catEl = $('#provider-categories');
     loading.classList.remove('hidden');
+    addChoice.classList.add('hidden');
+    otherWrap.classList.add('hidden');
     catEl.classList.add('hidden');
     catEl.textContent = '';
     setMsg('#provider-msg', '', 'info');
 
+    const providerById = new Map();
+    const providerItemById = new Map();
+    let carrierDefaultProvider = null;
+
+    function selectProvider(p, opts) {
+      if (!p || !p.id) return;
+      $$('.provider-item').forEach(x => x.classList.remove('selected'));
+      const item = providerItemById.get(p.id);
+      if (item) item.classList.add('selected');
+
+      selectedProvider = p;
+      showProviderAuth(p);
+      refreshProviderNextButton();
+    }
+
+    function renderCarrierDefaultChoice() {
+      if (!isAddMode()) return;
+      addChoice.classList.remove('hidden');
+      useDefaultContinueBtn.classList.add('hidden');
+      useDefaultContinueBtn.disabled = true;
+
+      if (!carrierDefaultProvider || !carrierDefaultProvider.configured) {
+        defaultSummary.textContent = 'Carrier default provider is not configured.';
+        return;
+      }
+      const pid = carrierDefaultProvider.id || '';
+      const providerInfo = carrierDefaultProvider.provider || {};
+      const pname = providerInfo.name || pid || 'unknown';
+
+      if (!carrierDefaultProvider.available) {
+        defaultSummary.textContent = 'Carrier default provider `' + pid + '` is not available in current gateway catalog.';
+        return;
+      }
+      if (carrierDefaultProvider.reusable) {
+        const backend = carrierDefaultProvider.credential_backend || 'saved store';
+        defaultSummary.textContent = 'Using Carrier default: ' + pname + ' (`' + pid + '`) · credential: ' + backend + '.';
+        const mapped = providerById.get(String(pid).trim().toLowerCase());
+        if (mapped) {
+          useDefaultContinueBtn.classList.remove('hidden');
+          useDefaultContinueBtn.disabled = false;
+          useDefaultContinueBtn.textContent = 'Use Carrier Provider (Recommended) →';
+        }
+        return;
+      }
+      if (carrierDefaultProvider.reason) {
+        defaultSummary.textContent = 'Carrier default: ' + pname + ' (`' + pid + '`), but cannot reuse now: ' + carrierDefaultProvider.reason + '.';
+      } else {
+        defaultSummary.textContent = 'Carrier default provider is available but no reusable credential was found.';
+      }
+    }
+
     try {
       const data = await api('GET', '/api/v1/providers');
       loading.classList.add('hidden');
-      catEl.classList.remove('hidden');
+      carrierDefaultProvider = data && data.carrier_default_provider ? data.carrier_default_provider : null;
 
       const categoryOrder = [
         { key: 'builtin', label: '☁️ Built-in (API key)' },
@@ -317,6 +783,7 @@
         const ul = document.createElement('ul');
         ul.className = 'provider-list';
         providers.forEach(p => {
+          providerById.set(p.id, p);
           const li = document.createElement('li');
           li.className = 'provider-item';
 
@@ -329,22 +796,59 @@
           }
 
           li.onclick = () => {
-            $$('.provider-item').forEach(x => x.classList.remove('selected'));
-            li.classList.add('selected');
-            selectedProvider = p;
-            showProviderAuth(p);
+            selectProvider(p, {});
           };
+          providerItemById.set(p.id, li);
           ul.appendChild(li);
         });
         section.appendChild(ul);
         catEl.appendChild(section);
       });
+
+      if (isAddMode()) {
+        renderCarrierDefaultChoice();
+        const defaultProviderID = ((carrierDefaultProvider && carrierDefaultProvider.id) || '').trim().toLowerCase();
+        const canAutoUseDefault = !!(carrierDefaultProvider && carrierDefaultProvider.reusable && defaultProviderID && providerById.has(defaultProviderID));
+        if (canAutoUseDefault) {
+          const p = providerById.get(defaultProviderID);
+          selectProvider(p, {});
+          otherWrap.classList.add('hidden');
+          catEl.classList.add('hidden');
+        } else {
+          otherWrap.classList.remove('hidden');
+          catEl.classList.remove('hidden');
+        }
+      } else {
+        addChoice.classList.add('hidden');
+        otherWrap.classList.remove('hidden');
+        catEl.classList.remove('hidden');
+      }
     } catch (e) {
       loading.classList.add('hidden');
+      addChoice.classList.add('hidden');
+      otherWrap.classList.add('hidden');
       setMsg('#provider-msg', 'Error loading providers: ' + e.message, 'error');
     }
 
-    $('#provider-back').onclick = () => { location.hash = '#/agents'; };
+    if (useDefaultContinueBtn) {
+      useDefaultContinueBtn.onclick = () => {
+        if (!isAddMode()) return;
+        if (!carrierDefaultProvider || !carrierDefaultProvider.reusable) {
+          setMsg('#provider-msg', 'Carrier default provider is not reusable right now.', 'error');
+          return;
+        }
+        const providerID = String(carrierDefaultProvider.id || '').trim().toLowerCase();
+        const p = providerById.get(providerID);
+        if (!p) {
+          setMsg('#provider-msg', 'Carrier default provider is not available in current provider list.', 'error');
+          return;
+        }
+        selectProvider(p, {});
+        location.hash = '#/install';
+      };
+    }
+
+    $('#provider-back').onclick = () => { location.hash = isAddMode() ? '#/setup' : '#/agents'; };
     $('#provider-skip').onclick = () => {
       selectedProvider = null;
       providerApiKey = '';
@@ -352,6 +856,10 @@
     };
     $('#provider-next').onclick = () => {
       if (!selectedProvider) return;
+      if (isAddMode()) {
+        location.hash = '#/install';
+        return;
+      }
       location.hash = '#/config';
     };
   }
@@ -380,32 +888,54 @@
     providerApiKey = '';
 
     if (p.auth_mode === 'api_key') {
-      label.textContent = 'Paste your API key for ' + p.name + ' (' + p.env_var + '):';
+      if (isAddMode()) {
+        label.textContent = 'Paste API key for ' + p.name + ' (' + p.env_var + ') if you are not reusing Carrier credential:';
+      } else {
+        label.textContent = 'Paste your API key for ' + p.name + ' (' + p.env_var + '):';
+      }
       keyInput.classList.remove('hidden');
+      keyInput.placeholder = 'API key';
       keyInput.oninput = () => {
         providerApiKey = keyInput.value.trim();
-        $('#provider-next').disabled = !providerApiKey;
+        refreshProviderNextButton();
       };
-      $('#provider-next').disabled = true;
     } else if (p.auth_mode === 'none') {
       label.textContent = p.name + ' requires no authentication.';
-      $('#provider-next').disabled = false;
+      providerApiKey = '';
     } else {
-      // OAuth or gcloud ADC — show instructions
-      const cmd = 'openclaw models auth login --provider ' + p.id;
-      label.textContent = p.name + ' requires external authentication:';
+      // OAuth / plugin / ADC
+      label.textContent = p.name + ' requires external authentication.';
       instructions.classList.remove('hidden');
-      instructions.innerHTML = 'Run: <code>' + escapeHtml(cmd) + '</code><br>Then click Continue.';
-      $('#provider-next').disabled = false;
+      if (isAddMode()) {
+        instructions.innerHTML =
+          'Paste access token below if you are not reusing Carrier credential.';
+        keyInput.classList.remove('hidden');
+        keyInput.placeholder = 'Access token (optional)';
+        keyInput.oninput = () => {
+          providerApiKey = keyInput.value.trim();
+          refreshProviderNextButton();
+        };
+      } else {
+        const cmd = 'openclaw models auth login --provider ' + p.id;
+        instructions.innerHTML = 'Run: <code>' + escapeHtml(cmd) + '</code><br>Then click Continue.';
+      }
     }
+    refreshProviderNextButton();
   }
 
   // --- Config ---
   function initConfig() {
+    if (isAddMode()) {
+      location.hash = '#/install';
+      return;
+    }
     showView('config');
-    renderSteps('#steps-indicator-3', 3, 6);
+    renderSteps('#steps-indicator-3', isAddMode() ? 2 : 3, currentWizardTotalSteps());
 
-    let agentLabel = 'Configuring: ' + selectedAgent;
+    const heading = $('#view-config h3');
+    if (heading) heading.textContent = isAddMode() ? 'Step 3 — Environment Variables' : 'Step 4 — Environment Variables';
+
+    let agentLabel = (isAddMode() ? 'Adding: ' : 'Configuring: ') + selectedAgent;
     if (selectedProvider) {
       agentLabel += ' · Provider: ' + selectedProvider.name;
     }
@@ -451,17 +981,59 @@
   // --- Install ---
   function initInstall() {
     showView('install');
-    renderSteps('#steps-indicator-4', 4, 6);
+    renderSteps('#steps-indicator-4', isAddMode() ? 2 : 4, currentWizardTotalSteps());
+
+    const heading = $('#view-install h3');
+    if (heading) heading.textContent = isAddMode() ? 'Step 3 — Confirm Installation' : 'Step 5 — Confirm Installation';
 
     let summary = 'Agent: ' + selectedAgent;
+    if (isAddMode()) summary += '\nChannel: ' + addChannel;
     if (selectedProvider) summary += '\nProvider: ' + selectedProvider.name;
     $('#install-summary').textContent = summary;
 
-    $('#install-back').onclick = () => { location.hash = '#/config'; };
+    $('#install-back').onclick = () => { location.hash = isAddMode() ? '#/provider' : '#/config'; };
     $('#install-confirm').onclick = async () => {
       setMsg('#install-msg', 'Installing…', 'info');
       try {
-        await api('POST', '/api/v1/agents/' + encodeURIComponent(selectedAgent) + '/install', {});
+        if (isAddMode()) {
+          if (!selectedProvider) {
+            throw new Error('Please select a provider.');
+          }
+          const envVars = collectEnvVars();
+          if (addWebhookSecret) {
+            envVars.CARRIER_TELEGRAM_WEBHOOK_SECRET = addWebhookSecret;
+          }
+          const resp = await api('POST', '/api/v1/add', {
+            agentId: selectedAgent,
+            channel: addChannel,
+            channelToken: addChannelToken,
+            channelChatId: addChannelChatId,
+            providerId: selectedProvider.id,
+            providerToken: providerApiKey,
+            reuseCredential: providerApiKey ? false : true,
+            envVars,
+          });
+          lastAddResult = resp || null;
+        } else {
+          if (!selectedProvider && selectedAgent === 'picoclaw') {
+            throw new Error('Please select an LLM provider for picoclaw.');
+          }
+          const envVars = collectEnvVars();
+          if (addWebhookSecret) {
+            envVars.CARRIER_TELEGRAM_WEBHOOK_SECRET = addWebhookSecret;
+          }
+          const resp = await api('POST', '/api/v1/add', {
+            agentId: selectedAgent,
+            channel: addChannel,
+            channelToken: addChannelToken,
+            channelChatId: addChannelChatId,
+            providerId: selectedProvider ? selectedProvider.id : '',
+            providerToken: providerApiKey,
+            reuseCredential: true,
+            envVars,
+          });
+          lastAddResult = resp || null;
+        }
         location.hash = '#/complete';
       } catch (e) {
         setMsg('#install-msg', 'Error: ' + e.message, 'error');
@@ -472,65 +1044,170 @@
   // --- Complete ---
   function initComplete() {
     showView('complete');
-    $('#complete-dashboard').onclick = () => { location.hash = '#/dashboard'; };
+    const title = $('#complete-title');
+    const detail = $('#complete-detail');
+    if (title) title.textContent = '✅ Setup Complete!';
+    if (isAddMode() && lastAddResult) {
+      const lines = [];
+      const pairRequired = !!lastAddResult.pairRequired;
+      if (pairRequired) {
+        if (title) title.textContent = '⚠️ One step left: Pair your PicoClaw bot';
+        lines.push('Action required: complete Telegram pairing before first use.');
+      }
+      if (lastAddResult.instanceId) lines.push('Instance: ' + lastAddResult.instanceId);
+      if (lastAddResult.pairCode) lines.push('Pair code: ' + lastAddResult.pairCode);
+      if (pairRequired && lastAddResult.pairCode) {
+        lines.push('Send in your PicoClaw bot chat: /pair ' + lastAddResult.pairCode);
+      }
+      if (lastAddResult.pairedChatId) lines.push('Paired chat: ' + lastAddResult.pairedChatId);
+      if (lastAddResult.workspacePath) lines.push('Workspace: ' + lastAddResult.workspacePath);
+      if (lastAddResult.configPath) lines.push('Config: ' + lastAddResult.configPath);
+      detail.textContent = lines.join('\n');
+    } else {
+      detail.textContent = '';
+    }
+    $('#complete-dashboard').onclick = () => {
+      resetAddMode();
+      location.hash = '#/dashboard';
+    };
   }
 
   // --- Dashboard ---
   async function initDashboard() {
+    resetAddMode();
     showView('dashboard');
     $('#nav').classList.remove('hidden');
-    await refreshAgents();
-    $('#refresh-agents').onclick = refreshAgents;
+    await refreshInstances();
+    $('#refresh-instances').onclick = refreshInstances;
+    $('#dashboard-add-agent').onclick = openAddAgentModal;
+    $('#add-agent-cancel').onclick = closeAddAgentModal;
   }
 
-  async function refreshAgents() {
-    const el = $('#agent-list');
+  async function refreshInstances() {
+    const el = $('#instance-list');
+    const summary = $('#instance-summary');
     el.textContent = 'Loading…';
+    summary.textContent = '';
     try {
-      const agents = await api('GET', '/api/v1/agents');
+      const instances = normalizeInstances(await api('GET', '/api/v1/instances'));
 
       el.textContent = '';
-      if (!agents || agents.length === 0) {
-        el.textContent = 'No agents found.';
+      if (instances.length === 0) {
+        el.textContent = 'No installed agent instances.';
+        summary.textContent = 'Use Add Agent to install and configure a new instance.';
         return;
       }
+      const running = instances.filter(i => {
+        const runtime = (i.runtime_state || i.runtimeState || i.runtime || '').toLowerCase();
+        return runtime === 'running' || runtime === 'healthy';
+      }).length;
+      summary.textContent = 'Total: ' + instances.length + ' · Running: ' + running;
 
-      agents.forEach(a => {
+      instances.forEach(a => {
         const card = document.createElement('div');
         card.className = 'agent-card';
-        card.onclick = () => { location.hash = '#/agents/' + encodeURIComponent(a.id || a.ID); };
+        const instanceID = a.id || a.ID;
+        const agentID = a.agent_id || a.agentID || a.agent || a.type || 'unknown';
+        const runtime = a.runtime_state || a.runtimeState || a.runtime || 'unknown';
+        const provider = a.provider || 'n/a';
+        const channel = a.channel || 'n/a';
+        const pairRequired = !!(a.pair_required || a.pairRequired);
+        const pairedChatId = a.paired_chat_id || a.pairedChatId || '';
 
         const h = document.createElement('h4');
-        h.textContent = a.id || a.ID || a.name;
+        h.textContent = instanceID;
 
-        const runtime = a.runtime || a.Runtime || 'unknown';
         const status = document.createElement('div');
         status.className = 'agent-status';
         status.textContent = statusIcon(runtime) + ' ' + runtime;
+
+        const meta = document.createElement('div');
+        meta.className = 'instance-meta';
+        let metaText = 'Type: ' + agentID + ' · Channel: ' + channel + ' · Provider: ' + provider;
+        if (pairRequired) metaText += ' · Pair: required';
+        else if (pairedChatId) metaText += ' · Paired chat: ' + pairedChatId;
+        meta.textContent = metaText;
 
         const btnRow = document.createElement('div');
         btnRow.className = 'btn-row';
 
         const startBtn = document.createElement('button');
         startBtn.className = 'btn-sm';
-        startBtn.textContent = '▶ Start';
-        startBtn.onclick = (e) => { e.stopPropagation(); agentAction(a.id || a.ID, 'start'); };
+        startBtn.textContent = 'Start';
+        startBtn.onclick = () => { instanceAction(instanceID, 'start'); };
 
         const stopBtn = document.createElement('button');
         stopBtn.className = 'btn-sm btn-secondary';
-        stopBtn.textContent = '⏹ Stop';
-        stopBtn.onclick = (e) => { e.stopPropagation(); agentAction(a.id || a.ID, 'stop'); };
+        stopBtn.textContent = 'Stop';
+        stopBtn.onclick = () => { instanceAction(instanceID, 'stop'); };
+
+        const uninstallBtn = document.createElement('button');
+        uninstallBtn.className = 'btn-sm btn-danger';
+        uninstallBtn.textContent = 'Uninstall';
+        uninstallBtn.onclick = () => { instanceAction(instanceID, 'uninstall'); };
 
         btnRow.appendChild(startBtn);
         btnRow.appendChild(stopBtn);
+        btnRow.appendChild(uninstallBtn);
         card.appendChild(h);
         card.appendChild(status);
+        card.appendChild(meta);
         card.appendChild(btnRow);
         el.appendChild(card);
       });
     } catch (e) {
       el.textContent = 'Error: ' + e.message;
     }
+  }
+
+  async function instanceAction(instanceID, action) {
+    if (action === 'uninstall') {
+      const confirmed = window.confirm('Uninstall instance ' + instanceID + '?');
+      if (!confirmed) return;
+    }
+    try {
+      await api('POST', '/api/v1/instances/' + encodeURIComponent(instanceID) + '/' + action, {});
+      await refreshInstances();
+    } catch (e) {
+      // Keep dashboard responsive and show a simple inline summary on top.
+      const summary = $('#instance-summary');
+      summary.textContent = 'Action failed: ' + e.message;
+    }
+  }
+
+  async function openAddAgentModal() {
+    const overlay = $('#add-agent-overlay');
+    const list = $('#add-agent-options');
+    overlay.classList.remove('hidden');
+    list.textContent = '';
+    setMsg('#add-agent-msg', 'Loading agents…', 'info');
+
+    try {
+      const agents = normalizeAgentCatalog(await api('GET', '/api/v1/agents'));
+      setMsg('#add-agent-msg', '', 'info');
+      if (agents.length === 0) {
+        setMsg('#add-agent-msg', 'No agents available.', 'error');
+        return;
+      }
+      agents.forEach(a => {
+        const id = (a.id || a.ID || a.name || '').toLowerCase();
+        if (!id) return;
+        const li = document.createElement('li');
+        li.innerHTML = '<strong>' + escapeHtml(id) + '</strong>';
+        li.onclick = () => {
+          closeAddAgentModal();
+          location.hash = '#/add/' + encodeURIComponent(id);
+        };
+        list.appendChild(li);
+      });
+    } catch (e) {
+      setMsg('#add-agent-msg', 'Error loading agents: ' + e.message, 'error');
+    }
+  }
+
+  function closeAddAgentModal() {
+    $('#add-agent-overlay').classList.add('hidden');
+    setMsg('#add-agent-msg', '', 'info');
   }
 
   function parseAgentStatus(text) {
@@ -554,7 +1231,7 @@
   async function agentAction(name, action) {
     try {
       await api('POST', '/api/v1/agents/' + encodeURIComponent(name) + '/' + action, {});
-      await refreshAgents();
+      await refreshInstances();
     } catch (e) {
       // silent
     }
@@ -616,13 +1293,16 @@
     const agentSelect = $('#log-agent');
     agentSelect.textContent = '';
 
-    // Populate agent list
-    api('GET', '/api/v1/agents').then(agents => {
-      (agents || []).forEach(a => {
-        const name = a.id || a.ID || a.name;
+    // Populate instance list (mapped to runtime agent id for logs)
+    api('GET', '/api/v1/instances').then(payload => {
+      const instances = normalizeInstances(payload);
+      instances.forEach(a => {
+        const instanceID = a.id || a.ID || '';
+        const name = a.agent_id || a.agentID || a.type || a.id || a.ID || a.name;
+        if (!name) return;
         const opt = document.createElement('option');
         opt.value = name;
-        opt.textContent = name;
+        opt.textContent = instanceID ? (instanceID + ' (' + name + ')') : name;
         agentSelect.appendChild(opt);
       });
     }).catch(() => {});

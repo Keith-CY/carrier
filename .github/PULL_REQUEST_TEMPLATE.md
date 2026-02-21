@@ -23,13 +23,13 @@
 Local verification (run the checks relevant to your change type):
 
 - [ ] **Daemon changes:** `cd daemon && go test ./...`
-- [ ] **Gateway changes:** `cd gateway && bun install && bun run check && bun test`
+- [ ] **Gateway changes:** `cd daemon && go test ./internal/gateway/...`
 - [ ] **Docs-only:** Verified markdown links render correctly
 - [ ] **Full suite:** `./scripts/run-all-tests.sh` (recommended before final push)
 
 CI checks (must be green before merge):
 
 - [ ] Daemon Tests (`daemon-tests`)
-- [ ] Gateway Type Check (`gateway-check`)
+- [ ] Gateway Check (`gateway-check`)
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for detailed guidance.

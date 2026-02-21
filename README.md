@@ -61,7 +61,7 @@ Key topics covered:
 | Path | Purpose |
 |------|---------|
 | [`daemon/`](./daemon/) | Go daemon — lifecycle management, catalog loading, Base Agent triage interfaces |
-| [`gateway/`](./gateway/) | TypeScript gateway — provider routing, session management, download tokens |
+| [`gateway/`](./gateway/) | Gateway docs entrypoint (runtime implementation is Go under `daemon/internal/gateway/`) |
 | [`catalog/`](./catalog/) | OpenClaw manifest and candidate agent list |
 | [`docs/`](./docs/) | Product requirements, implementation plan, and architecture docs |
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | System design overview and component interaction diagrams |
@@ -111,7 +111,7 @@ See `CONTRIBUTING.md` for command examples and required process. For security vu
 
 ### Prerequisites
 - Go toolchain (see `daemon/go.mod` for the required version)
-- Bun (for gateway TypeScript tasks)
+- Bun (optional; only needed for some utility scripts under `scripts/`)
 
 #### Toolchain quick check
 
@@ -120,43 +120,32 @@ Run the following to verify required tools are installed and print their version
 ```bash
 echo "gh:  $(gh --version | head -1)"
 echo "go:  $(go version)"
-echo "bun: $(bun --version)"
+bun --version >/dev/null 2>&1 && echo "bun: $(bun --version)" || echo "bun: (optional, not installed)"
 ```
 
 If any command fails, install the missing tool before running automation scripts. See [CONTRIBUTING.md](./CONTRIBUTING.md) for detailed CI troubleshooting.
 
 ### Install
-- Daemon (Go): Go modules are loaded automatically when building or testing; no additional install command needed.
-- Gateway (TypeScript):
-  - `cd gateway`
-  - `bun install --frozen-lockfile`
+- Carrier/Daemon/Gateway (Go): Go modules are loaded automatically when building or testing; no additional install command needed.
 
 ### Run tests / checks
 - Daemon tests:
   - `cd daemon`
   - `go test ./...`
   - `go test ./internal/manifest -run TestLoadFileAcceptsCatalogManifest -count=1`
-- Gateway checks:
-  - `cd gateway`
-  - `bun run check`
-  - `bun test`
+- Gateway tests:
+  - `cd daemon`
+  - `go test ./internal/gateway/...`
 - Full local flow from repo root (mandatory before pushing):
   - `./scripts/run-all-tests.sh`
 
 Optional local flow from repo root:
-  - `cd gateway && bun install --frozen-lockfile && bun run check && cd ../daemon && go test ./...`
+  - `cd daemon && go test ./...`
 
-### Frozen lockfile policy (CI and automation)
-- CI/release automation must use lockfile-enforced installs for gateway dependencies:
-  - `bun install --frozen-lockfile --no-progress`
-- This guarantees deterministic dependency resolution from committed `gateway/bun.lock`.
-- If `gateway/package.json` and `gateway/bun.lock` drift, install must fail until lockfile is updated and committed.
-
-### Gateway runtime server (Bun)
+### Gateway runtime server (Go)
 
 - Start gateway runtime HTTP server:
-  - `cd gateway`
-  - `bun run dev`
+  - `go run ./cmd/carrier gateway`
 - Health route:
   - `GET /healthz`
 - Command ingress route:

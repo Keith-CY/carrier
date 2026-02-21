@@ -27,6 +27,16 @@ type NormalizedCommand struct {
 	RawText   string
 }
 
+// NormalizedMessage is a platform-agnostic parsed inbound message.
+// Command is nil when the message is plain chat text (non-slash command).
+type NormalizedMessage struct {
+	Provider  string
+	ChatID    string
+	RequestID string
+	RawText   string
+	Command   *NormalizedCommand
+}
+
 // ToGatewayInput converts a normalized command to the gateway input string.
 func ToGatewayInput(nc *NormalizedCommand) string {
 	parts := []string{nc.Provider, nc.ChatID, nc.RequestID, nc.Command}
@@ -36,8 +46,8 @@ func ToGatewayInput(nc *NormalizedCommand) string {
 
 // --- Telegram ---
 
-// ParseTelegramUpdate parses a Telegram update payload into a normalized command.
-func ParseTelegramUpdate(payload map[string]interface{}) *NormalizedCommand {
+// ParseTelegramMessage parses a Telegram update payload into a normalized message.
+func ParseTelegramMessage(payload map[string]interface{}) *NormalizedMessage {
 	var message map[string]interface{}
 	for _, field := range []string{"message", "edited_message", "channel_post", "edited_channel_post"} {
 		if m, ok := asMap(payload[field]); ok {
@@ -56,20 +66,33 @@ func ParseTelegramUpdate(payload map[string]interface{}) *NormalizedCommand {
 		return nil
 	}
 
-	parsed := parseCommandText(rawText)
-	if parsed == nil {
-		return nil
-	}
-
 	requestID := buildRequestID("tg", toID(payload["update_id"]), toID(message["message_id"]))
-	return &NormalizedCommand{
+	out := &NormalizedMessage{
 		Provider:  "telegram",
 		ChatID:    chatID,
 		RequestID: requestID,
-		Command:   parsed.command,
-		Args:      parsed.args,
 		RawText:   rawText,
 	}
+	if parsed := parseCommandText(rawText); parsed != nil {
+		out.Command = &NormalizedCommand{
+			Provider:  out.Provider,
+			ChatID:    out.ChatID,
+			RequestID: out.RequestID,
+			Command:   parsed.command,
+			Args:      parsed.args,
+			RawText:   rawText,
+		}
+	}
+	return out
+}
+
+// ParseTelegramUpdate parses a Telegram update payload into a normalized command.
+func ParseTelegramUpdate(payload map[string]interface{}) *NormalizedCommand {
+	msg := ParseTelegramMessage(payload)
+	if msg == nil {
+		return nil
+	}
+	return msg.Command
 }
 
 // VerifyTelegramSecret does a constant-time comparison of the provided secret.
@@ -120,6 +143,22 @@ func RenderTelegramResponse(resp GatewayResponse) map[string]interface{} {
 	return result
 }
 
+// RenderTelegramWebhookResponse wraps a gateway response as a Telegram Bot API
+// webhook response payload (sendMessage method call).
+func RenderTelegramWebhookResponse(resp GatewayResponse, chatID string) map[string]interface{} {
+	base := RenderTelegramResponse(resp)
+	text, _ := base["text"].(string)
+	out := map[string]interface{}{
+		"method":  "sendMessage",
+		"chat_id": chatID,
+		"text":    text,
+	}
+	if v, ok := base["disable_web_page_preview"]; ok {
+		out["disable_web_page_preview"] = v
+	}
+	return out
+}
+
 // --- Discord ---
 
 // VerifyDiscordSignature verifies the Ed25519 signature on a Discord webhook request.
@@ -159,8 +198,8 @@ func VerifyDiscordSignature(r *http.Request, body []byte, publicKeyHex string, m
 	return ed25519.Verify(ed25519.PublicKey(pubKeyBytes), message, sig)
 }
 
-// ParseDiscordPayload parses a Discord webhook payload into a normalized command.
-func ParseDiscordPayload(payload map[string]interface{}) *NormalizedCommand {
+// ParseDiscordMessage parses a Discord payload into a normalized message.
+func ParseDiscordMessage(payload map[string]interface{}) *NormalizedMessage {
 	// Slash-command interaction (type=2)
 	if t := toFloat(payload["type"]); t == 2 {
 		data, _ := asMap(payload["data"])
@@ -174,13 +213,20 @@ func ParseDiscordPayload(payload map[string]interface{}) *NormalizedCommand {
 			return nil
 		}
 		requestID := buildRequestID("dc", toID(payload["id"]))
-		return &NormalizedCommand{
+		cmd := &NormalizedCommand{
 			Provider:  "discord",
 			ChatID:    chatID,
 			RequestID: requestID,
 			Command:   normalizeCommandName("/" + cmdName),
 			Args:      options,
 			RawText:   "/" + cmdName + " " + strings.Join(options, " "),
+		}
+		return &NormalizedMessage{
+			Provider:  cmd.Provider,
+			ChatID:    cmd.ChatID,
+			RequestID: cmd.RequestID,
+			RawText:   cmd.RawText,
+			Command:   cmd,
 		}
 	}
 
@@ -190,23 +236,37 @@ func ParseDiscordPayload(payload map[string]interface{}) *NormalizedCommand {
 	if content == "" || chatID == "" {
 		return nil
 	}
-	parsed := parseCommandText(content)
-	if parsed == nil {
-		return nil
-	}
 	var interactionID string
 	if interaction, ok := asMap(payload["interaction"]); ok {
 		interactionID = toID(interaction["id"])
 	}
 	requestID := buildRequestID("dc", toID(payload["id"]), interactionID)
-	return &NormalizedCommand{
+	out := &NormalizedMessage{
 		Provider:  "discord",
 		ChatID:    chatID,
 		RequestID: requestID,
-		Command:   parsed.command,
-		Args:      parsed.args,
 		RawText:   content,
 	}
+	if parsed := parseCommandText(content); parsed != nil {
+		out.Command = &NormalizedCommand{
+			Provider:  out.Provider,
+			ChatID:    out.ChatID,
+			RequestID: out.RequestID,
+			Command:   parsed.command,
+			Args:      parsed.args,
+			RawText:   content,
+		}
+	}
+	return out
+}
+
+// ParseDiscordPayload parses a Discord webhook payload into a normalized command.
+func ParseDiscordPayload(payload map[string]interface{}) *NormalizedCommand {
+	msg := ParseDiscordMessage(payload)
+	if msg == nil {
+		return nil
+	}
+	return msg.Command
 }
 
 // RenderDiscordResponse renders a GatewayResponse for Discord.
@@ -262,8 +322,8 @@ func ExtractFeishuChallenge(payload map[string]interface{}) (string, bool) {
 	return challenge, true
 }
 
-// ParseFeishuEvent parses a Feishu event payload into a normalized command.
-func ParseFeishuEvent(payload map[string]interface{}) *NormalizedCommand {
+// ParseFeishuMessage parses a Feishu event payload into a normalized message.
+func ParseFeishuMessage(payload map[string]interface{}) *NormalizedMessage {
 	t, _ := payload["type"].(string)
 	if t == "url_verification" {
 		return nil
@@ -286,24 +346,37 @@ func ParseFeishuEvent(payload map[string]interface{}) *NormalizedCommand {
 		return nil
 	}
 
-	parsed := parseCommandText(rawText)
-	if parsed == nil {
-		return nil
-	}
-
 	requestID := buildRequestID("fs",
 		toID(header["event_id"]),
 		toID(message["message_id"]),
 		toID(payload["uuid"]),
 	)
-	return &NormalizedCommand{
+	out := &NormalizedMessage{
 		Provider:  "feishu",
 		ChatID:    chatID,
 		RequestID: requestID,
-		Command:   parsed.command,
-		Args:      parsed.args,
 		RawText:   rawText,
 	}
+	if parsed := parseCommandText(rawText); parsed != nil {
+		out.Command = &NormalizedCommand{
+			Provider:  out.Provider,
+			ChatID:    out.ChatID,
+			RequestID: out.RequestID,
+			Command:   parsed.command,
+			Args:      parsed.args,
+			RawText:   rawText,
+		}
+	}
+	return out
+}
+
+// ParseFeishuEvent parses a Feishu event payload into a normalized command.
+func ParseFeishuEvent(payload map[string]interface{}) *NormalizedCommand {
+	msg := ParseFeishuMessage(payload)
+	if msg == nil {
+		return nil
+	}
+	return msg.Command
 }
 
 // RenderFeishuResponse renders a GatewayResponse for Feishu.

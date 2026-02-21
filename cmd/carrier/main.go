@@ -2,33 +2,298 @@
 //
 // Usage:
 //
-//	carrier           Start the daemon HTTP API server (with WebUI)
-//	carrier daemon    Same as above
-//	carrier --help    Show usage
+//	carrier                 Bootstrap Carrier (onboard if needed, keep daemon+gateway running, then exit)
+//	carrier daemon          Start daemon HTTP API server (foreground)
+//	carrier gateway         Start gateway HTTP server
+//	carrier stop            Stop background daemon and gateway started by Carrier
+//	carrier stop <id>       Stop a managed agent instance
+//	carrier uninstall <id>  Uninstall and remove a managed agent instance
+//	carrier list            List managed agent instances
+//	carrier onboard         Interactive TUI onboarding (channel/provider -> keep gateway running in background)
+//	carrier onboard --webui Launch WebUI onboarding (start/reuse daemon+gateway)
+//	carrier add <agent_id>  Add/install an agent via TUI flow
+//	carrier add <agent_id> --webui
+//	                       Add/install an agent via WebUI flow
+//	carrier --help          Show usage
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
+	neturl "net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
 
+	"carrier/configv2"
+	gatewayruntime "carrier/daemon/gateway"
 	"carrier/daemon/server"
 )
+
+type choiceOption struct {
+	ID    string
+	Name  string
+	Setup string
+
+	AuthMode     providerAuthMode
+	ProviderEnv  string
+	ExampleModel string
+
+	TokenEnv     string
+	RequireToken bool
+	SecretEnv    string
+}
+
+type providerAuthMode string
+
+const (
+	authModeAPIKey          providerAuthMode = "api_key"
+	authModeOAuthDeviceCode providerAuthMode = "oauth_device_code"
+	authModeNone            providerAuthMode = "none"
+)
+
+type addCommandOptions struct {
+	AgentID string
+	WebUI   bool
+}
+
+type picoclawChannel struct {
+	ID         string
+	Name       string
+	TokenLabel string
+}
+
+type picoclawAddResult struct {
+	InstanceID    string
+	WorkspacePath string
+	ConfigPath    string
+	RecordPath    string
+	ChannelID     string
+	ProviderID    string
+}
+
+type managedAgentInstance struct {
+	ID           string `json:"id"`
+	Type         string `json:"type"`
+	AgentID      string `json:"agent_id"`
+	GatewayURL   string `json:"gateway_url"`
+	Workspace    string `json:"workspace_path,omitempty"`
+	ConfigPath   string `json:"config_path,omitempty"`
+	RecordPath   string `json:"record_path,omitempty"`
+	Channel      string `json:"channel,omitempty"`
+	Provider     string `json:"provider,omitempty"`
+	PairRequired bool   `json:"pair_required,omitempty"`
+	PairCode     string `json:"pair_code,omitempty"`
+	PairedChatID string `json:"paired_chat_id,omitempty"`
+	RuntimeState string `json:"runtime_state,omitempty"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+type managedAgentInstanceFile struct {
+	Instances []managedAgentInstance `json:"instances"`
+}
+
+var (
+	errCredentialNotFound           = errors.New("credential not found")
+	errCredentialBackendUnavailable = errors.New("credential backend unavailable")
+)
+
+var picoclawPairCodePattern = regexp.MustCompile(`\bpair-[a-f0-9]{32}\b`)
+
+var picoclawChannels = []picoclawChannel{
+	{
+		ID:         "telegram",
+		Name:       "Telegram",
+		TokenLabel: "Telegram bot token for PicoClaw",
+	},
+}
+
+var channelOptions = []choiceOption{
+	{
+		ID: "telegram", Name: "Telegram", Setup: "Easy (bot token)",
+		TokenEnv: "CARRIER_TELEGRAM_BOT_TOKEN", RequireToken: true,
+		SecretEnv: "CARRIER_TELEGRAM_WEBHOOK_SECRET",
+	},
+	{
+		ID: "discord", Name: "Discord", Setup: "Easy (bot token + intents)",
+		TokenEnv:  "CARRIER_DISCORD_BOT_TOKEN",
+		SecretEnv: "CARRIER_DISCORD_PUBLIC_KEY",
+	},
+	{
+		ID: "feishu", Name: "Feishu", Setup: "Medium (app credentials + webhook)",
+		TokenEnv:  "CARRIER_FEISHU_APP_TOKEN",
+		SecretEnv: "CARRIER_FEISHU_VERIFICATION_TOKEN",
+	},
+	{ID: "qq", Name: "QQ", Setup: "Easy (AppID + AppSecret)", TokenEnv: "CARRIER_QQ_BOT_TOKEN"},
+	{ID: "dingtalk", Name: "DingTalk", Setup: "Medium (app credentials)", TokenEnv: "CARRIER_DINGTALK_BOT_TOKEN"},
+	{ID: "line", Name: "LINE", Setup: "Medium (credentials + webhook URL)", TokenEnv: "CARRIER_LINE_BOT_TOKEN"},
+	{ID: "wecom", Name: "WeCom", Setup: "Medium (CorpID + webhook setup)", TokenEnv: "CARRIER_WECOM_BOT_TOKEN"},
+}
+
+var providerOptions = []choiceOption{
+	{ID: "gemini", Name: "Google Gemini", Setup: "Gemini direct API key", AuthMode: authModeAPIKey, ProviderEnv: "GEMINI_API_KEY", ExampleModel: "gemini/gemini-2.0-flash-exp"},
+	{ID: "zhipu", Name: "Zhipu", Setup: "GLM direct API key", AuthMode: authModeAPIKey, ProviderEnv: "ZHIPU_API_KEY", ExampleModel: "zhipu/glm-4.7"},
+	{ID: "openrouter", Name: "OpenRouter", Setup: "Unified gateway API key", AuthMode: authModeAPIKey, ProviderEnv: "OPENROUTER_API_KEY", ExampleModel: "openrouter/auto"},
+	{ID: "anthropic", Name: "Anthropic", Setup: "Claude direct API key", AuthMode: authModeAPIKey, ProviderEnv: "ANTHROPIC_API_KEY", ExampleModel: "anthropic/claude-sonnet-4.6"},
+	{ID: "openai", Name: "OpenAI", Setup: "GPT direct API key", AuthMode: authModeAPIKey, ProviderEnv: "OPENAI_API_KEY", ExampleModel: "openai/gpt-5.2"},
+	{ID: "openai-codex", Name: "OpenAI Codex", Setup: "OAuth device-code login", AuthMode: authModeOAuthDeviceCode, ProviderEnv: "OPENAI_CODEX_TOKEN", ExampleModel: "openai-codex/gpt-5.3-codex"},
+	{ID: "deepseek", Name: "DeepSeek", Setup: "DeepSeek direct API key", AuthMode: authModeAPIKey, ProviderEnv: "DEEPSEEK_API_KEY", ExampleModel: "deepseek/deepseek-chat"},
+	{ID: "qwen", Name: "Qwen", Setup: "DashScope API key", AuthMode: authModeAPIKey, ProviderEnv: "QWEN_API_KEY", ExampleModel: "qwen/qwen-plus"},
+	{ID: "groq", Name: "Groq", Setup: "Groq API key", AuthMode: authModeAPIKey, ProviderEnv: "GROQ_API_KEY", ExampleModel: "groq/llama-3.3-70b-versatile"},
+	{ID: "cerebras", Name: "Cerebras", Setup: "Cerebras API key", AuthMode: authModeAPIKey, ProviderEnv: "CEREBRAS_API_KEY", ExampleModel: "cerebras/llama-3.3-70b"},
+	{ID: "ollama", Name: "Ollama", Setup: "Local runtime, no API key", AuthMode: authModeNone, ExampleModel: "ollama/llama3"},
+	{ID: "vllm", Name: "vLLM", Setup: "Local/OpenAI-compatible endpoint", AuthMode: authModeNone, ExampleModel: "vllm/auto"},
+}
+
+const (
+	openAICodexAuthBaseURL        = "https://auth.openai.com"
+	openAICodexClientID           = "app_EMoamEEZ73f0CkXaXp7hrann"
+	openAICodexVerificationURL    = openAICodexAuthBaseURL + "/codex/device"
+	openAICodexDeviceAuthTimeout  = 15 * time.Minute
+	openAICodexDefaultPollSeconds = 5
+	daemonBootTimeout             = 10 * time.Second
+	gatewayBootTimeout            = 10 * time.Second
+	daemonBootPollInterval        = 250 * time.Millisecond
+	defaultPairCodeTTLSeconds     = 300
+)
+
+var runOpenAICodexDeviceCodeFlow = performOpenAICodexDeviceCodeFlow
+var gatewayHealthProbe = checkGatewayHealth
+var daemonHealthProbe = checkDaemonHealth
+var daemonBackgroundStarter = startDaemonInBackground
+var gatewayBackgroundStarter = startGatewayInBackground
+var daemonPairCodeFetcher = fetchDaemonPairCode
+var openBrowserFunc = openBrowserURL
+var runOnboardFlow = runOnboard
+var ensureWebUIServicesFlow = ensureWebUIServices
 
 const usage = `Carrier — unified agent platform binary
 
 Usage:
-  carrier              Start the daemon HTTP API server (with WebUI)
-  carrier daemon       Same as above
-  carrier --help       Show this help message
+  carrier                Bootstrap Carrier (onboard if needed, keep daemon+gateway running, then exit)
+  carrier daemon         Start daemon HTTP API server (foreground)
+  carrier gateway        Start gateway HTTP server
+  carrier stop           Stop background daemon and gateway
+  carrier stop <id>      Stop a managed agent instance
+  carrier uninstall <id> Uninstall and remove a managed agent instance
+  carrier list           List managed agent instances
+  carrier onboard        Interactive onboarding (channel/provider -> keep gateway running in background)
+  carrier onboard --webui
+                        Launch WebUI onboarding (start/reuse daemon+gateway)
+  carrier add <agent_id>
+                        Add/install an agent via TUI flow
+  carrier add <agent_id> --webui
+                        Add/install an agent via WebUI flow
+  carrier --help         Show this help message
 
-The WebUI is served at http://localhost:<port>/ alongside the API.
+Notes:
+  - daemon API defaults to http://127.0.0.1:9090
+  - gateway API defaults to http://127.0.0.1:8787
+  - onboarding asks channel credentials and provider auth setup
+  - onboarding config path:
+      $CARRIER_CONFIG or ~/.carrier/config.v2.json
 `
 
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "daemon", "--daemon":
+			applyConfigV2Env(os.Stderr)
 			server.Run()
+			return
+		case "gateway", "--gateway":
+			applyConfigV2Env(os.Stderr)
+			if err := gatewayruntime.Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "gateway error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "stop":
+			if len(os.Args) >= 3 {
+				if err := runStopInstance(os.Stdout, os.Args[2]); err != nil {
+					fmt.Fprintf(os.Stderr, "stop failed: %v\n", err)
+					os.Exit(1)
+				}
+				return
+			}
+			if err := runStop(os.Stdout); err != nil {
+				fmt.Fprintf(os.Stderr, "stop failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "uninstall":
+			if len(os.Args) < 3 {
+				fmt.Fprintln(os.Stderr, "uninstall failed: instance id is required")
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runUninstallInstance(os.Stdout, os.Args[2]); err != nil {
+				fmt.Fprintf(os.Stderr, "uninstall failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "list":
+			if err := runListInstances(os.Stdout); err != nil {
+				fmt.Fprintf(os.Stderr, "list failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "onboard":
+			if len(os.Args) >= 3 {
+				mode := strings.ToLower(strings.TrimSpace(os.Args[2]))
+				switch mode {
+				case "--webui", "--web", "webui":
+					if err := runOnboardWebUI(os.Stdout); err != nil {
+						fmt.Fprintf(os.Stderr, "onboard failed: %v\n", err)
+						os.Exit(1)
+					}
+					return
+				default:
+					fmt.Fprintf(os.Stderr, "unknown onboard option: %s\n\n", os.Args[2])
+					fmt.Fprint(os.Stderr, usage)
+					os.Exit(1)
+				}
+			}
+			if err := runOnboardFlow(os.Stdin, os.Stdout, startGatewayInBackgroundAndWait); err != nil {
+				fmt.Fprintf(os.Stderr, "onboard failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "add":
+			opts, err := parseAddCommandArgs(os.Args[2:])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "add failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if opts.WebUI {
+				if err := runAddWebUI(os.Stdout, opts.AgentID); err != nil {
+					fmt.Fprintf(os.Stderr, "add failed: %v\n", err)
+					os.Exit(1)
+				}
+				return
+			}
+			if err := runAddTUI(os.Stdin, os.Stdout, opts.AgentID); err != nil {
+				fmt.Fprintf(os.Stderr, "add failed: %v\n", err)
+				os.Exit(1)
+			}
 			return
 		case "--help", "-h", "help":
 			fmt.Print(usage)
@@ -40,6 +305,2525 @@ func main() {
 		}
 	}
 
-	// Default: start daemon (which includes WebUI)
-	server.Run()
+	if err := runBootstrap(os.Stdin, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "carrier bootstrap failed: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func parseAddCommandArgs(args []string) (addCommandOptions, error) {
+	if len(args) == 0 {
+		return addCommandOptions{}, errors.New("usage: carrier add <agent_id> [--webui]")
+	}
+	opts := addCommandOptions{
+		AgentID: strings.ToLower(strings.TrimSpace(args[0])),
+	}
+	if opts.AgentID == "" || strings.HasPrefix(opts.AgentID, "-") {
+		return addCommandOptions{}, errors.New("agent_id is required")
+	}
+	for _, raw := range args[1:] {
+		arg := strings.ToLower(strings.TrimSpace(raw))
+		switch arg {
+		case "--webui", "--web", "webui":
+			opts.WebUI = true
+		case "":
+			continue
+		default:
+			return addCommandOptions{}, fmt.Errorf("unknown add option: %s", raw)
+		}
+	}
+	return opts, nil
+}
+
+func needsInitialOnboard(loadFn func() (*configv2.Config, string, error)) bool {
+	cfg, _, err := loadFn()
+	if err != nil || cfg == nil {
+		return true
+	}
+	enabledChannels := 0
+	for _, ch := range cfg.Channels {
+		if ch.Enabled {
+			enabledChannels++
+		}
+	}
+	if enabledChannels == 0 {
+		return true
+	}
+	if len(cfg.ModelList) == 0 {
+		return true
+	}
+	return false
+}
+
+func runBootstrap(in io.Reader, out io.Writer) error {
+	_, _ = fmt.Fprintln(out, "Carrier Bootstrap")
+	_, _ = fmt.Fprintln(out, "-----------------")
+
+	if needsInitialOnboard(configv2.Load) {
+		_, _ = fmt.Fprintln(out, "Carrier is not onboarded. Starting onboarding...")
+		if err := runOnboardFlow(in, out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+	} else {
+		_, _ = fmt.Fprintln(out, "Carrier is already onboarded. Ensuring runtime services...")
+		applyConfigV2Env(out)
+		if _, err := ensureWebUIServicesFlow(out); err != nil {
+			return err
+		}
+	}
+
+	printRuntimeSummary(out)
+
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Terminal is ready for the next command.")
+	_, _ = fmt.Fprintln(out, "Examples:")
+	_, _ = fmt.Fprintln(out, "  - carrier add picoclaw")
+	_, _ = fmt.Fprintln(out, "  - carrier add picoclaw --webui")
+	_, _ = fmt.Fprintln(out, "  - carrier list")
+	return nil
+}
+
+func runStop(out io.Writer) error {
+	_, _ = fmt.Fprintln(out, "Carrier Stop")
+	_, _ = fmt.Fprintln(out, "------------")
+
+	daemonStopped, daemonMsg := stopBackgroundService(
+		"daemon",
+		daemonProbeBaseURL(),
+		daemonHealthProbe,
+	)
+	gatewayStopped, gatewayMsg := stopBackgroundService(
+		"gateway",
+		gatewayProbeBaseURL(),
+		gatewayHealthProbe,
+	)
+
+	_, _ = fmt.Fprintf(out, "- daemon: %s\n", daemonMsg)
+	_, _ = fmt.Fprintf(out, "- gateway: %s\n", gatewayMsg)
+
+	if daemonStopped || gatewayStopped {
+		_, _ = fmt.Fprintln(out, "✅ stop complete")
+		return nil
+	}
+	_, _ = fmt.Fprintln(out, "No background daemon/gateway process was stopped.")
+	return nil
+}
+
+func runStopInstance(out io.Writer, instanceID string) error {
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return errors.New("instance id is required")
+	}
+	instances, path, err := loadManagedInstances()
+	if err != nil {
+		return err
+	}
+	idx := findManagedInstanceIndex(instances, instanceID)
+	if idx < 0 {
+		return fmt.Errorf("instance %s not found", instanceID)
+	}
+	inst := instances[idx]
+	if _, err := ensureDaemonRunning(out); err != nil {
+		return err
+	}
+	if err := daemonAgentAction(inst.AgentID, "stop"); err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	instances[idx].RuntimeState = "stopped"
+	instances[idx].UpdatedAt = now
+	if err := saveManagedInstances(path, instances); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "✅ stopped instance %s (%s)\n", inst.ID, inst.Type)
+	return nil
+}
+
+func runUninstallInstance(out io.Writer, instanceID string) error {
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return errors.New("instance id is required")
+	}
+	instances, path, err := loadManagedInstances()
+	if err != nil {
+		return err
+	}
+	idx := findManagedInstanceIndex(instances, instanceID)
+	if idx < 0 {
+		return fmt.Errorf("instance %s not found", instanceID)
+	}
+	inst := instances[idx]
+	if _, err := ensureDaemonRunning(out); err != nil {
+		return err
+	}
+	_ = daemonAgentAction(inst.AgentID, "stop")
+	if err := daemonAgentAction(inst.AgentID, "uninstall"); err != nil {
+		return err
+	}
+	if err := cleanupManagedInstanceFiles(inst); err != nil {
+		_, _ = fmt.Fprintf(out, "Warning: instance file cleanup failed: %v\n", err)
+	}
+	instances = append(instances[:idx], instances[idx+1:]...)
+	if err := saveManagedInstances(path, instances); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "✅ uninstalled instance %s (%s)\n", inst.ID, inst.Type)
+	return nil
+}
+
+func runListInstances(out io.Writer) error {
+	instances, _, err := loadManagedInstances()
+	if err != nil {
+		return err
+	}
+	running := make([]managedAgentInstance, 0, len(instances))
+	for _, inst := range instances {
+		if strings.EqualFold(strings.TrimSpace(inst.RuntimeState), "running") {
+			running = append(running, inst)
+		}
+	}
+	if len(running) == 0 {
+		_, _ = fmt.Fprintln(out, "No agent instances are running.")
+		return nil
+	}
+	_, _ = fmt.Fprintln(out, "Agent instances:")
+	for _, inst := range running {
+		runtimeState := strings.TrimSpace(inst.RuntimeState)
+		if runtimeState == "" {
+			runtimeState = "unknown"
+		}
+		_, _ = fmt.Fprintf(out, "- id=%s type=%s state=%s gateway=%s\n",
+			strings.TrimSpace(inst.ID),
+			strings.TrimSpace(inst.Type),
+			runtimeState,
+			strings.TrimSpace(inst.GatewayURL),
+		)
+	}
+	return nil
+}
+
+func stopBackgroundService(
+	name string,
+	baseURL string,
+	healthProbe func(string) bool,
+) (bool, string) {
+	stoppedByPID, pidErr := stopServiceByPIDFile(name)
+	if pidErr == nil && stoppedByPID {
+		return true, "stopped (pid file)"
+	}
+
+	if !healthProbe(baseURL) {
+		return false, "not running"
+	}
+
+	port := portFromBaseURL(baseURL)
+	if port <= 0 {
+		if pidErr != nil {
+			return false, fmt.Sprintf("running but unable to stop via pid file: %v", pidErr)
+		}
+		return false, "running but no pid file available"
+	}
+	stoppedByPort, portErr := stopServiceByPort(name, port)
+	if portErr == nil && stoppedByPort > 0 {
+		return true, fmt.Sprintf("stopped (%d process via port %d)", stoppedByPort, port)
+	}
+
+	if pidErr != nil {
+		return false, fmt.Sprintf("running but stop failed (pid file err=%v, port err=%v)", pidErr, portErr)
+	}
+	if portErr != nil {
+		return false, fmt.Sprintf("running but stop by port failed: %v", portErr)
+	}
+	return false, "running but no stoppable process found"
+}
+
+func stopServiceByPIDFile(name string) (bool, error) {
+	path, err := bootstrapPIDPath(name)
+	if err != nil {
+		return false, err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read pid file %s: %w", path, err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 0 {
+		_ = os.Remove(path)
+		return false, fmt.Errorf("invalid pid in %s", path)
+	}
+	stopped, stopErr := stopPID(pid)
+	_ = os.Remove(path)
+	return stopped, stopErr
+}
+
+func stopPID(pid int) (bool, error) {
+	if pid <= 0 {
+		return false, fmt.Errorf("invalid pid %d", pid)
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false, err
+	}
+
+	_ = proc.Signal(os.Interrupt)
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if !processLikelyAlive(proc) {
+			return true, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err := proc.Kill(); err != nil && !isProcessAlreadyGone(err) {
+		return false, err
+	}
+	return true, nil
+}
+
+func processLikelyAlive(proc *os.Process) bool {
+	if proc == nil {
+		return false
+	}
+	err := proc.Signal(syscall.Signal(0))
+	return err == nil
+}
+
+func isProcessAlreadyGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrProcessDone) {
+		return true
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, "finished") || strings.Contains(msg, "no such process") || strings.Contains(msg, "process already done")
+}
+
+func stopServiceByPort(name string, port int) (int, error) {
+	if port <= 0 {
+		return 0, errors.New("invalid port")
+	}
+	if runtime.GOOS == "windows" {
+		return 0, errors.New("port-based stop is not supported on windows")
+	}
+	lsofPath, err := exec.LookPath("lsof")
+	if err != nil {
+		return 0, errors.New("lsof is not available")
+	}
+	cmd := exec.Command(lsofPath, "-nP", "-ti", fmt.Sprintf("tcp:%d", port))
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) == 0 {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("query pid by port %d: %w", port, err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	stopped := 0
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		pid, convErr := strconv.Atoi(strings.TrimSpace(line))
+		if convErr != nil || pid <= 0 {
+			continue
+		}
+		ok, stopErr := stopPID(pid)
+		if stopErr == nil && ok {
+			stopped++
+		}
+	}
+	if stopped == 0 {
+		return 0, nil
+	}
+	if pidPath := mustBootstrapPIDPath(name); strings.TrimSpace(pidPath) != "" {
+		_ = os.Remove(pidPath)
+	}
+	return stopped, nil
+}
+
+func portFromBaseURL(baseURL string) int {
+	parsed, err := neturl.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return 0
+	}
+	if parsed.Port() == "" {
+		return 0
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port <= 0 {
+		return 0
+	}
+	return port
+}
+
+func managedInstancesPath() (string, error) {
+	if custom := strings.TrimSpace(os.Getenv("CARRIER_INSTANCE_STORE")); custom != "" {
+		return custom, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir for instance store: %w", err)
+	}
+	return filepath.Join(home, ".carrier", "instances.json"), nil
+}
+
+func generateManagedInstanceID(prefix string) (string, error) {
+	p := strings.ToLower(strings.TrimSpace(prefix))
+	if p == "" {
+		p = "agent"
+	}
+	buf := make([]byte, 4)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate random id: %w", err)
+	}
+	return fmt.Sprintf("%s-%s", p, hex.EncodeToString(buf)), nil
+}
+
+func loadManagedInstances() ([]managedAgentInstance, string, error) {
+	path, err := managedInstancesPath()
+	if err != nil {
+		return nil, "", err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []managedAgentInstance{}, path, nil
+		}
+		return nil, "", fmt.Errorf("read instance store: %w", err)
+	}
+	var file managedAgentInstanceFile
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return nil, "", fmt.Errorf("parse instance store: %w", err)
+	}
+	if file.Instances == nil {
+		file.Instances = []managedAgentInstance{}
+	}
+	return file.Instances, path, nil
+}
+
+func saveManagedInstances(path string, instances []managedAgentInstance) error {
+	if strings.TrimSpace(path) == "" {
+		return errors.New("instance store path is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create instance store dir: %w", err)
+	}
+	payload := managedAgentInstanceFile{Instances: instances}
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal instance store: %w", err)
+	}
+	if err := os.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
+		return fmt.Errorf("write instance store: %w", err)
+	}
+	return nil
+}
+
+func findManagedInstanceIndex(instances []managedAgentInstance, instanceID string) int {
+	id := strings.TrimSpace(instanceID)
+	for i, inst := range instances {
+		if strings.EqualFold(strings.TrimSpace(inst.ID), id) {
+			return i
+		}
+	}
+	return -1
+}
+
+func upsertManagedInstance(inst managedAgentInstance) error {
+	instances, path, err := loadManagedInstances()
+	if err != nil {
+		return err
+	}
+	idx := findManagedInstanceIndex(instances, inst.ID)
+	if idx >= 0 {
+		instances[idx] = inst
+	} else {
+		instances = append(instances, inst)
+	}
+	return saveManagedInstances(path, instances)
+}
+
+func cleanupManagedInstanceFiles(inst managedAgentInstance) error {
+	var firstErr error
+	removeFile := func(path string) {
+		if strings.TrimSpace(path) == "" {
+			return
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	removeDir := func(path string) {
+		p := strings.TrimSpace(path)
+		if p == "" {
+			return
+		}
+		if err := os.RemoveAll(p); err != nil && !errors.Is(err, os.ErrNotExist) && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	removeFile(strings.TrimSpace(inst.RecordPath))
+	removeFile(strings.TrimSpace(inst.ConfigPath))
+	removeDir(strings.TrimSpace(inst.Workspace))
+	return firstErr
+}
+
+func startGatewayInBackgroundAndWait() error {
+	if err := gatewayBackgroundStarter(); err != nil {
+		return err
+	}
+	gatewayURL := gatewayProbeBaseURL()
+	if err := waitForGatewayHealthy(gatewayURL, gatewayBootTimeout); err != nil {
+		return fmt.Errorf("gateway failed to become healthy at %s within %s: %w", gatewayURL, gatewayBootTimeout, err)
+	}
+	return nil
+}
+
+func printRuntimeSummary(out io.Writer) {
+	daemonURL := daemonProbeBaseURL()
+	gatewayURL := gatewayProbeBaseURL()
+	daemonReady := daemonHealthProbe(daemonURL)
+	gatewayReady := gatewayHealthProbe(gatewayURL)
+	webUIReady := checkWebUIReady(gatewayURL)
+
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Runtime summary:")
+	_, _ = fmt.Fprintf(out, "- daemon: %s (%s)\n", statusText(daemonReady), daemonURL)
+	_, _ = fmt.Fprintf(out, "- gateway: %s (%s)\n", statusText(gatewayReady), gatewayURL)
+	if webUIReady {
+		_, _ = fmt.Fprintf(out, "- webui: ready (%s/)\n", strings.TrimRight(gatewayURL, "/"))
+	} else {
+		_, _ = fmt.Fprintf(out, "- webui: unavailable (%s/)\n", strings.TrimRight(gatewayURL, "/"))
+	}
+	if !bootstrapVerboseEnabled() {
+		if daemonLogPath, err := bootstrapLogPath("daemon"); err == nil {
+			if _, statErr := os.Stat(daemonLogPath); statErr == nil {
+				_, _ = fmt.Fprintf(out, "- daemon log: %s\n", daemonLogPath)
+			}
+		}
+		if gatewayLogPath, err := bootstrapLogPath("gateway"); err == nil {
+			if _, statErr := os.Stat(gatewayLogPath); statErr == nil {
+				_, _ = fmt.Fprintf(out, "- gateway log: %s\n", gatewayLogPath)
+			}
+		}
+	}
+
+	if cfg, cfgPath, err := configv2.Load(); err == nil && cfg != nil {
+		_, _ = fmt.Fprintf(out, "- config: %s\n", cfgPath)
+		if chatInfo := summarizeConfiguredChannels(cfg); chatInfo != "" {
+			_, _ = fmt.Fprintf(out, "- chat apps: %s\n", chatInfo)
+		}
+		if modelInfo := summarizeDefaultModel(cfg); modelInfo != "" {
+			_, _ = fmt.Fprintf(out, "- default model: %s\n", modelInfo)
+		}
+	}
+
+	if daemonReady {
+		pairCode, pairCodeExpiresAt, err := daemonPairCodeFetcher(daemonURL)
+		if err == nil && strings.TrimSpace(pairCode) != "" {
+			_, _ = fmt.Fprintf(out, "- pair code: %s\n", pairCode)
+			if expiry, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(pairCodeExpiresAt)); parseErr == nil {
+				remaining := time.Until(expiry)
+				if remaining < 0 {
+					remaining = 0
+				}
+				_, _ = fmt.Fprintf(out, "  expires in %s\n", remaining.Round(time.Second))
+			}
+		}
+	}
+}
+
+func statusText(ready bool) string {
+	if ready {
+		return "running"
+	}
+	return "not running"
+}
+
+func summarizeConfiguredChannels(cfg *configv2.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	items := make([]string, 0, len(cfg.Channels))
+	for _, ch := range cfg.Channels {
+		if !ch.Enabled {
+			continue
+		}
+		id := strings.ToLower(strings.TrimSpace(ch.ID))
+		if id == "" {
+			continue
+		}
+		details := []string{id}
+		if id == "telegram" {
+			mode := strings.ToLower(strings.TrimSpace(ch.TransportMode))
+			if mode == "" {
+				mode = "auto"
+			}
+			details = append(details, "mode="+mode)
+		}
+		if strings.TrimSpace(ch.BotToken) != "" {
+			details = append(details, "token=set")
+		}
+		if strings.TrimSpace(ch.WebhookURL) != "" {
+			details = append(details, "webhook=url-set")
+		}
+		items = append(items, strings.Join(details, ","))
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	sort.Strings(items)
+	return strings.Join(items, " | ")
+}
+
+func summarizeDefaultModel(cfg *configv2.Config) string {
+	if cfg == nil || len(cfg.ModelList) == 0 {
+		return ""
+	}
+	pick := cfg.ModelList[0]
+	defaultName := strings.TrimSpace(cfg.DefaultModel)
+	if defaultName != "" {
+		for _, m := range cfg.ModelList {
+			if strings.EqualFold(strings.TrimSpace(m.ModelName), defaultName) {
+				pick = m
+				break
+			}
+		}
+	}
+	modelID := strings.TrimSpace(pick.Model)
+	if modelID == "" {
+		modelID = strings.TrimSpace(pick.ModelName)
+	}
+	if modelID == "" {
+		return ""
+	}
+	if providerID := strings.TrimSpace(pick.ProviderID); providerID != "" {
+		return fmt.Sprintf("%s (provider=%s)", modelID, providerID)
+	}
+	return modelID
+}
+
+func applyConfigV2Env(out io.Writer) {
+	cfg, _, err := configv2.Load()
+	if err != nil {
+		_, _ = fmt.Fprintf(out, "warning: failed to load config.v2: %v\n", err)
+		return
+	}
+	if err := configv2.ApplyGatewayEnvironment(cfg); err != nil {
+		_, _ = fmt.Fprintf(out, "warning: failed to apply config.v2 environment: %v\n", err)
+	}
+}
+
+func runOnboard(in io.Reader, out io.Writer, startGateway func() error) error {
+	reader := bufio.NewReader(in)
+
+	_, _ = fmt.Fprintln(out, "Carrier TUI Onboard")
+	_, _ = fmt.Fprintln(out, "-------------------")
+	_, _ = fmt.Fprintln(out, "Tip: for browser onboarding, run `carrier onboard --webui` and open http://127.0.0.1:8787/")
+	_, _ = fmt.Fprintln(out, "Step 1/4: Configure chat channel")
+	channel, ok := resolveChoice("telegram", channelOptions)
+	if !ok {
+		return errors.New("telegram channel is unavailable")
+	}
+	_, _ = fmt.Fprintf(out, "Using channel: %s\n", channel.Name)
+	channelEnv, channelCfg, err := promptChannelCredentialsMinimal(reader, out, channel)
+	if err != nil {
+		return err
+	}
+	channelConfigs := []configv2.Channel{channelCfg}
+
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Step 2/4: Configure LLM provider")
+	provider, err := pickMinimalProvider()
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "Using provider: %s (%s)\n", provider.Name, provider.ID)
+	providerEnv, providerCredentialProvided, err := promptProviderAuthMinimal(reader, out, provider)
+	if err != nil {
+		return err
+	}
+	modelName := provider.ID + "-default"
+	modelID := strings.TrimSpace(provider.ExampleModel)
+	if modelID == "" {
+		modelID = provider.ID + "/default"
+	}
+	model := configv2.Model{
+		ModelName:  modelName,
+		Model:      modelID,
+		ProviderID: provider.ID,
+		AuthMode:   string(provider.AuthMode),
+		EnvVar:     provider.ProviderEnv,
+	}
+	if providerCredentialProvided {
+		model.CredentialRef = provider.ID
+	}
+	modelList := []configv2.Model{model}
+	defaultModel := modelName
+
+	cfg := &configv2.Config{
+		ConfigVersion: configv2.CurrentVersion,
+		Channels:      channelConfigs,
+		ModelList:     modelList,
+		DefaultModel:  defaultModel,
+		BaseAgent: configv2.BaseAgentSpec{
+			Enabled:           true,
+			PublicMemoryID:    "carrier.base.public.v1",
+			ActiveMemoryID:    "carrier.base.active.v1",
+			SelfHealBackupDir: "base-agent-memory-backups",
+		},
+		ConfiguredAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	cfgPath, err := configv2.Save(cfg)
+	if err != nil {
+		return err
+	}
+
+	if err := configv2.ApplyGatewayEnvironment(cfg); err != nil {
+		return err
+	}
+
+	combinedEnv := mergeEnvVars(channelEnv, providerEnv)
+	if err := applyEnvVars(combinedEnv); err != nil {
+		return err
+	}
+
+	_, _ = fmt.Fprintf(out, "\nSaved onboarding config to %s\n", cfgPath)
+	if len(combinedEnv) > 0 {
+		envKeys := make([]string, 0, len(combinedEnv))
+		for k := range combinedEnv {
+			envKeys = append(envKeys, k)
+		}
+		sort.Strings(envKeys)
+		_, _ = fmt.Fprintf(out, "Configured env vars for this process: %s\n", strings.Join(envKeys, ", "))
+	}
+	_, _ = fmt.Fprintln(out, "Step 3/4: Credential setup complete")
+	_, _ = fmt.Fprintln(out, "Step 4/4: Launch gateway")
+	_, _ = fmt.Fprintf(out, "Selected channel: %s\n", channel.Name)
+	_, _ = fmt.Fprintf(out, "Selected provider: %s\n", provider.Name)
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Ensuring daemon is running...")
+
+	daemonURL := daemonProbeBaseURL()
+	if daemonHealthProbe(daemonURL) {
+		_, _ = fmt.Fprintf(out, "Daemon already running at %s, reusing existing process.\n", daemonURL)
+	} else {
+		_, _ = fmt.Fprintf(out, "Daemon not detected at %s, starting in background...\n", daemonURL)
+		if err := daemonBackgroundStarter(); err != nil {
+			return fmt.Errorf("start daemon in background: %w", err)
+		}
+		if err := waitForDaemonHealthy(daemonURL, daemonBootTimeout); err != nil {
+			return fmt.Errorf("daemon failed to become healthy at %s within %s: %w", daemonURL, daemonBootTimeout, err)
+		}
+		_, _ = fmt.Fprintf(out, "Daemon started and healthy at %s.\n", daemonURL)
+	}
+
+	pairCode, pairCodeExpiresAt, err := daemonPairCodeFetcher(daemonURL)
+	if err != nil {
+		_, _ = fmt.Fprintf(out, "Warning: failed to fetch pair code from daemon: %v\n", err)
+	} else if strings.TrimSpace(pairCode) != "" {
+		_, _ = fmt.Fprintln(out, "")
+		_, _ = fmt.Fprintf(out, "PAIR_CODE: %s\n", pairCode)
+		if strings.TrimSpace(pairCodeExpiresAt) != "" {
+			if expiry, parseErr := time.Parse(time.RFC3339Nano, pairCodeExpiresAt); parseErr == nil {
+				remaining := time.Until(expiry)
+				if remaining < 0 {
+					remaining = 0
+				}
+				_, _ = fmt.Fprintf(out, "(expires in %s)\n", remaining.Round(time.Second))
+			} else {
+				_, _ = fmt.Fprintf(out, "(expiresAt: %s)\n", pairCodeExpiresAt)
+			}
+		}
+	}
+
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Starting gateway...")
+	_, _ = fmt.Fprintln(out, buildSlashCommandGuide(channel))
+
+	gatewayURL := gatewayProbeBaseURL()
+	if gatewayHealthProbe(gatewayURL) {
+		_, _ = fmt.Fprintf(out, "Gateway already running at %s, reusing existing process.\n", gatewayURL)
+		return nil
+	}
+
+	if err := startGateway(); err != nil {
+		if isAddressInUseError(err) && gatewayHealthProbe(gatewayURL) {
+			_, _ = fmt.Fprintf(out, "Gateway already running at %s, reusing existing process.\n", gatewayURL)
+			return nil
+		}
+		if isAddressInUseError(err) {
+			return fmt.Errorf("gateway port is already in use; stop the conflicting process or set CARRIER_GATEWAY_PORT (probe: %s): %w", gatewayURL, err)
+		}
+		return err
+	}
+	return nil
+}
+
+func runOnboardWebUI(out io.Writer) error {
+	_, _ = fmt.Fprintln(out, "Carrier WebUI Onboard")
+	_, _ = fmt.Fprintln(out, "--------------------")
+
+	gatewayURL, err := ensureWebUIServices(out)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "\nOpen WebUI: %s/\n", gatewayURL)
+	_, _ = fmt.Fprintln(out, "Use the browser flow to onboard Carrier and add agents.")
+	return nil
+}
+
+func runAddWebUI(out io.Writer, agentID string) error {
+	agentID = strings.ToLower(strings.TrimSpace(agentID))
+	if agentID == "" {
+		return errors.New("agent_id is required")
+	}
+	_, _ = fmt.Fprintln(out, "Carrier Add (WebUI)")
+	_, _ = fmt.Fprintln(out, "-------------------")
+	_, _ = fmt.Fprintf(out, "Target agent: %s\n", agentID)
+
+	gatewayURL, err := ensureWebUIServices(out)
+	if err != nil {
+		return err
+	}
+	target := fmt.Sprintf("%s/#/add/%s", strings.TrimRight(gatewayURL, "/"), neturl.PathEscape(agentID))
+	_, _ = fmt.Fprintf(out, "\nOpening browser: %s\n", target)
+	if err := openBrowserFunc(target); err != nil {
+		_, _ = fmt.Fprintf(out, "Warning: failed to open browser automatically: %v\n", err)
+		_, _ = fmt.Fprintln(out, "Please open the URL manually.")
+	}
+	return nil
+}
+
+func ensureWebUIServices(out io.Writer) (string, error) {
+
+	daemonURL := daemonProbeBaseURL()
+	if daemonHealthProbe(daemonURL) {
+		_, _ = fmt.Fprintf(out, "Daemon already running at %s, reusing existing process.\n", daemonURL)
+	} else {
+		_, _ = fmt.Fprintf(out, "Daemon not detected at %s, starting in background...\n", daemonURL)
+		if err := daemonBackgroundStarter(); err != nil {
+			return "", fmt.Errorf("start daemon in background: %w", err)
+		}
+		if err := waitForDaemonHealthy(daemonURL, daemonBootTimeout); err != nil {
+			return "", fmt.Errorf("daemon failed to become healthy at %s within %s: %w", daemonURL, daemonBootTimeout, err)
+		}
+		_, _ = fmt.Fprintf(out, "Daemon started and healthy at %s.\n", daemonURL)
+	}
+
+	pairCode, pairCodeExpiresAt, err := daemonPairCodeFetcher(daemonURL)
+	if err != nil {
+		_, _ = fmt.Fprintf(out, "Warning: failed to fetch pair code from daemon: %v\n", err)
+	} else if strings.TrimSpace(pairCode) != "" {
+		_, _ = fmt.Fprintln(out, "")
+		_, _ = fmt.Fprintf(out, "PAIR_CODE: %s\n", pairCode)
+		if strings.TrimSpace(pairCodeExpiresAt) != "" {
+			if expiry, parseErr := time.Parse(time.RFC3339Nano, pairCodeExpiresAt); parseErr == nil {
+				remaining := time.Until(expiry)
+				if remaining < 0 {
+					remaining = 0
+				}
+				_, _ = fmt.Fprintf(out, "(expires in %s)\n", remaining.Round(time.Second))
+			} else {
+				_, _ = fmt.Fprintf(out, "(expiresAt: %s)\n", pairCodeExpiresAt)
+			}
+		}
+	}
+
+	gatewayURL := gatewayProbeBaseURL()
+	if gatewayHealthProbe(gatewayURL) {
+		_, _ = fmt.Fprintf(out, "\nGateway already running at %s.\n", gatewayURL)
+	} else {
+		_, _ = fmt.Fprintf(out, "\nGateway not detected at %s, starting in background...\n", gatewayURL)
+		if err := gatewayBackgroundStarter(); err != nil {
+			return "", fmt.Errorf("start gateway in background: %w", err)
+		}
+		if err := waitForGatewayHealthy(gatewayURL, gatewayBootTimeout); err != nil {
+			return "", fmt.Errorf("gateway failed to become healthy at %s within %s: %w", gatewayURL, gatewayBootTimeout, err)
+		}
+	}
+
+	if !checkWebUIReady(gatewayURL) {
+		return "", fmt.Errorf("gateway is running at %s but WebUI is not embedded (root route returned 404); rebuild with `go build -tags webui`", gatewayURL)
+	}
+	return gatewayURL, nil
+}
+
+func runAddTUI(in io.Reader, out io.Writer, agentID string) error {
+	agentID = strings.ToLower(strings.TrimSpace(agentID))
+	if agentID == "" {
+		return errors.New("agent_id is required")
+	}
+	if !strings.EqualFold(agentID, "picoclaw") {
+		_, _ = fmt.Fprintf(out, "Adding %s via direct install/start...\n", agentID)
+		if _, err := ensureDaemonRunning(out); err != nil {
+			return err
+		}
+		if err := daemonAgentAction(agentID, "install"); err != nil {
+			return err
+		}
+		if err := daemonAgentAction(agentID, "start"); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(out, "✅ %s installed and started.\n", agentID)
+		return nil
+	}
+
+	reader := bufio.NewReader(in)
+	_, _ = fmt.Fprintln(out, "Carrier Add (TUI)")
+	_, _ = fmt.Fprintln(out, "-----------------")
+	_, _ = fmt.Fprintln(out, "Agent: PicoClaw")
+	_, _ = fmt.Fprintln(out, "Tip: for browser flow, run `carrier add picoclaw --webui`.")
+	instanceID, err := generateManagedInstanceID("picoclaw")
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "Instance: %s\n", instanceID)
+	_, _ = fmt.Fprintln(out, "Step 1/4: Configure chat channel")
+	channel, ok := parsePicoclawChannel("telegram")
+	if !ok {
+		return errors.New("picoclaw telegram channel is unavailable")
+	}
+	_, _ = fmt.Fprintf(out, "Using channel: %s (fixed)\n", channel.Name)
+	token, err := promptInput(reader, out, "Telegram bot token for PicoClaw", true)
+	if err != nil {
+		return err
+	}
+
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Step 2/4: Configure LLM provider")
+	provider, err := pickMinimalProvider()
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "Using provider: %s (%s)\n", provider.Name, provider.ID)
+	_, _ = fmt.Fprintln(out, "Saved provider credential will be reused automatically when available.")
+	providerEnv, _, err := promptProviderAuthMinimal(reader, out, provider)
+	if err != nil {
+		return err
+	}
+	envVars := mergeEnvVars(providerEnv, nil)
+	if err := applyEnvVars(envVars); err != nil {
+		return err
+	}
+
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Step 3/4: Prepare PicoClaw configuration")
+	result, err := preparePicoclawAddArtifacts(instanceID, channel.ID, token, provider, envVars)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "PicoClaw workspace: %s\n", result.WorkspacePath)
+	_, _ = fmt.Fprintf(out, "PicoClaw config: %s\n", result.ConfigPath)
+	_, _ = fmt.Fprintf(out, "Carrier record: %s\n", result.RecordPath)
+
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Step 4/4: Install and start PicoClaw")
+	if _, err := ensureDaemonRunning(out); err != nil {
+		return err
+	}
+	if err := daemonAgentAction("picoclaw", "install"); err != nil {
+		return err
+	}
+	if err := daemonAgentAction("picoclaw", "start"); err != nil {
+		return err
+	}
+	if pairCode, _ := daemonExtractPairCodeFromLogs("picoclaw"); strings.TrimSpace(pairCode) != "" {
+		_, _ = fmt.Fprintf(out, "PicoClaw pair code: %s\n", pairCode)
+		_, _ = fmt.Fprintf(out, "Next: send `/pair %s` in your PicoClaw Telegram bot chat.\n", pairCode)
+	} else {
+		_, _ = fmt.Fprintln(out, "Pair code not detected yet. Open PicoClaw Telegram bot chat and follow `/start` -> `/pair` prompts.")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	inst := managedAgentInstance{
+		ID:           instanceID,
+		Type:         "picoclaw",
+		AgentID:      "picoclaw",
+		GatewayURL:   gatewayProbeBaseURL(),
+		Workspace:    result.WorkspacePath,
+		ConfigPath:   result.ConfigPath,
+		RecordPath:   result.RecordPath,
+		Channel:      result.ChannelID,
+		Provider:     result.ProviderID,
+		RuntimeState: "running",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := upsertManagedInstance(inst); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(out, "✅ PicoClaw installed and started.")
+	return nil
+}
+
+func parsePicoclawChannel(input string) (picoclawChannel, bool) {
+	id := strings.ToLower(strings.TrimSpace(input))
+	for _, ch := range picoclawChannels {
+		if id == ch.ID {
+			return ch, true
+		}
+	}
+	return picoclawChannel{}, false
+}
+
+func promptAdditionalEnvVars(reader *bufio.Reader, out io.Writer) (map[string]string, error) {
+	vars := map[string]string{}
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Step 2.5/4: Additional environment variables (optional)")
+	_, _ = fmt.Fprintln(out, "Enter KEY=VALUE pairs; type `done` to continue.")
+	for {
+		line, err := promptInput(reader, out, "env", false)
+		if err != nil {
+			return nil, err
+		}
+		text := strings.TrimSpace(line)
+		if text == "" || strings.EqualFold(text, "done") || strings.EqualFold(text, "skip") {
+			return vars, nil
+		}
+		eq := strings.IndexByte(text, '=')
+		if eq <= 0 {
+			_, _ = fmt.Fprintln(out, "Invalid format. Please use KEY=VALUE or `done`.")
+			continue
+		}
+		key := strings.TrimSpace(text[:eq])
+		value := strings.TrimSpace(text[eq+1:])
+		if key == "" || value == "" {
+			_, _ = fmt.Fprintln(out, "Invalid format. Please use KEY=VALUE with non-empty key/value.")
+			continue
+		}
+		vars[key] = value
+	}
+}
+
+func ensureDaemonRunning(out io.Writer) (string, error) {
+	daemonURL := daemonProbeBaseURL()
+	if daemonHealthProbe(daemonURL) {
+		_, _ = fmt.Fprintf(out, "Daemon already running at %s, reusing existing process.\n", daemonURL)
+		return daemonURL, nil
+	}
+	_, _ = fmt.Fprintf(out, "Daemon not detected at %s, starting in background...\n", daemonURL)
+	if err := daemonBackgroundStarter(); err != nil {
+		return "", fmt.Errorf("start daemon in background: %w", err)
+	}
+	if err := waitForDaemonHealthy(daemonURL, daemonBootTimeout); err != nil {
+		return "", fmt.Errorf("daemon failed to become healthy at %s within %s: %w", daemonURL, daemonBootTimeout, err)
+	}
+	_, _ = fmt.Fprintf(out, "Daemon started and healthy at %s.\n", daemonURL)
+	return daemonURL, nil
+}
+
+func daemonAgentAction(agentID, action string) error {
+	agentID = strings.TrimSpace(agentID)
+	action = strings.TrimSpace(action)
+	if agentID == "" || action == "" {
+		return errors.New("agentID and action are required")
+	}
+	path := fmt.Sprintf("/api/v1/agents/%s/%s", neturl.PathEscape(agentID), neturl.PathEscape(action))
+	_, status, err := daemonRequest(http.MethodPost, path, map[string]string{})
+	if err != nil {
+		return err
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("daemon %s %s failed with status %d", action, agentID, status)
+	}
+	return nil
+}
+
+func daemonExtractPairCodeFromLogs(agentID string) (string, error) {
+	raw, status, err := daemonRequest(http.MethodGet, fmt.Sprintf("/api/v1/agents/%s/logs?tail=120", neturl.PathEscape(strings.TrimSpace(agentID))), nil)
+	if err != nil {
+		return "", err
+	}
+	if status < 200 || status >= 300 {
+		return "", fmt.Errorf("daemon logs request failed with status %d", status)
+	}
+	var payload struct {
+		Lines []string `json:"lines"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", fmt.Errorf("decode logs response: %w", err)
+	}
+	for _, line := range payload.Lines {
+		if code := strings.TrimSpace(picoclawPairCodePattern.FindString(line)); code != "" {
+			return code, nil
+		}
+	}
+	return "", nil
+}
+
+func daemonRequest(method, path string, body any) ([]byte, int, error) {
+	base := strings.TrimRight(strings.TrimSpace(daemonProbeBaseURL()), "/")
+	if base == "" {
+		return nil, 0, errors.New("daemon base url is empty")
+	}
+	target := base + "/" + strings.TrimLeft(strings.TrimSpace(path), "/")
+
+	var reader io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return nil, 0, fmt.Errorf("marshal request body: %w", err)
+		}
+		reader = bytes.NewReader(raw)
+	}
+	req, err := http.NewRequest(method, target, reader)
+	if err != nil {
+		return nil, 0, fmt.Errorf("build request: %w", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	addDaemonAuthHeader(req)
+
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return raw, resp.StatusCode, nil
+	}
+
+	var errBody struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &errBody) == nil && strings.TrimSpace(errBody.Error.Message) != "" {
+		return raw, resp.StatusCode, fmt.Errorf("daemon request failed with status %d: %s", resp.StatusCode, strings.TrimSpace(errBody.Error.Message))
+	}
+	if msg := strings.TrimSpace(string(raw)); msg != "" {
+		return raw, resp.StatusCode, fmt.Errorf("daemon request failed with status %d: %s", resp.StatusCode, msg)
+	}
+	return raw, resp.StatusCode, fmt.Errorf("daemon request failed with status %d", resp.StatusCode)
+}
+
+func preparePicoclawAddArtifacts(instanceID, channelID, channelToken string, provider choiceOption, envVars map[string]string) (*picoclawAddResult, error) {
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return nil, errors.New("picoclaw instance id is required")
+	}
+	channelID = strings.TrimSpace(channelID)
+	channelToken = strings.TrimSpace(channelToken)
+	if channelID == "" {
+		return nil, errors.New("picoclaw channel is required")
+	}
+	if channelToken == "" {
+		return nil, errors.New("picoclaw channel token is required")
+	}
+	if strings.TrimSpace(provider.ID) == "" {
+		return nil, errors.New("picoclaw provider is required")
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home dir: %w", err)
+	}
+	workspacePath := filepath.Join(home, ".picoclaw", "instances", instanceID, "workspace")
+	configPath := filepath.Join(home, ".picoclaw", "config.json")
+	recordPath := filepath.Join(home, ".carrier", "agents", instanceID+".json")
+
+	if err := os.MkdirAll(workspacePath, 0o700); err != nil {
+		return nil, fmt.Errorf("create workspace: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		return nil, fmt.Errorf("create config dir: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(recordPath), 0o700); err != nil {
+		return nil, fmt.Errorf("create record dir: %w", err)
+	}
+	if err := backupIfExists(configPath); err != nil {
+		return nil, fmt.Errorf("backup existing picoclaw config: %w", err)
+	}
+
+	modelID := strings.TrimSpace(provider.ExampleModel)
+	if modelID == "" {
+		modelID = provider.ID + "/default"
+	}
+	if strings.EqualFold(provider.ID, "openai-codex") {
+		if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
+			modelID = "openai/" + strings.TrimSpace(name)
+		} else {
+			modelID = "openai/gpt-5.3-codex"
+		}
+	}
+	modelName := modelID
+	if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
+		modelName = strings.TrimSpace(name)
+	}
+
+	providerKey := provider.ID
+	if vendor, _, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(vendor) != "" {
+		providerKey = strings.TrimSpace(vendor)
+	}
+	providerKey = mapCarrierProviderToPicoclawProvider(providerKey)
+
+	modelItem := map[string]interface{}{
+		"model_name": modelName,
+		"model":      modelID,
+	}
+	providerItem := map[string]interface{}{}
+	token := pickProviderTokenForPicoclaw(provider, envVars)
+	if strings.EqualFold(provider.ID, "openai-codex") {
+		modelItem["auth_method"] = "oauth"
+		providerItem["auth_method"] = "oauth"
+		if token != "" {
+			modelItem["api_key"] = token
+			providerItem["api_key"] = token
+		}
+		accountID := extractOpenAIAccountIDFromToken(token)
+		if err := savePicoclawAuthCredential(home, "openai", token, accountID); err != nil {
+			return nil, fmt.Errorf("write picoclaw auth store: %w", err)
+		}
+	} else if token != "" {
+		modelItem["api_key"] = token
+		providerItem["api_key"] = token
+	}
+
+	payload := map[string]interface{}{
+		"agents": map[string]interface{}{
+			"defaults": map[string]interface{}{
+				"workspace":             workspacePath,
+				"provider":              providerKey,
+				"model":                 modelName,
+				"max_tokens":            8192,
+				"temperature":           0.7,
+				"max_tool_iterations":   20,
+				"restrict_to_workspace": true,
+			},
+		},
+		"model_list": []interface{}{modelItem},
+		"providers": map[string]interface{}{
+			providerKey: providerItem,
+		},
+		"channels": map[string]interface{}{
+			channelID: map[string]interface{}{
+				"enabled":    true,
+				"token":      channelToken,
+				"allow_from": []string{},
+			},
+		},
+	}
+
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal picoclaw config: %w", err)
+	}
+	if err := os.WriteFile(configPath, append(raw, '\n'), 0o600); err != nil {
+		return nil, fmt.Errorf("write picoclaw config: %w", err)
+	}
+
+	record := map[string]interface{}{
+		"instance_id":    instanceID,
+		"agent_id":       "picoclaw",
+		"workspace_path": workspacePath,
+		"config_path":    configPath,
+		"channel":        channelID,
+		"provider":       provider.ID,
+		"updated_at":     time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	recordRaw, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal carrier record: %w", err)
+	}
+	if err := os.WriteFile(recordPath, append(recordRaw, '\n'), 0o600); err != nil {
+		return nil, fmt.Errorf("write carrier record: %w", err)
+	}
+
+	return &picoclawAddResult{
+		InstanceID:    instanceID,
+		WorkspacePath: workspacePath,
+		ConfigPath:    configPath,
+		RecordPath:    recordPath,
+		ChannelID:     channelID,
+		ProviderID:    provider.ID,
+	}, nil
+}
+
+func backupIfExists(path string) error {
+	_, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	backupPath := fmt.Sprintf("%s.bak.%s", path, time.Now().UTC().Format("20060102T150405Z"))
+	return os.Rename(path, backupPath)
+}
+
+func mapCarrierProviderToPicoclawProvider(providerID string) string {
+	switch strings.ToLower(strings.TrimSpace(providerID)) {
+	case "openai-codex":
+		return "openai"
+	default:
+		return strings.TrimSpace(providerID)
+	}
+}
+
+func pickProviderTokenForPicoclaw(provider choiceOption, envVars map[string]string) string {
+	if envVars == nil {
+		return ""
+	}
+	if strings.EqualFold(provider.ID, "openai-codex") {
+		for _, key := range []string{"OPENAI_CODEX_TOKEN", "OPENAI_API_KEY", provider.ProviderEnv} {
+			if token := strings.TrimSpace(envVars[key]); token != "" {
+				return token
+			}
+		}
+		return ""
+	}
+	if provider.ProviderEnv == "" {
+		return ""
+	}
+	return strings.TrimSpace(envVars[provider.ProviderEnv])
+}
+
+type picoclawAuthCredential struct {
+	AccessToken string `json:"access_token"`
+	AccountID   string `json:"account_id,omitempty"`
+	Provider    string `json:"provider"`
+	AuthMethod  string `json:"auth_method"`
+}
+
+type picoclawAuthStore struct {
+	Credentials map[string]*picoclawAuthCredential `json:"credentials"`
+}
+
+func savePicoclawAuthCredential(home, providerID, accessToken, accountID string) error {
+	if strings.TrimSpace(accessToken) == "" {
+		return fmt.Errorf("empty access token")
+	}
+	path := filepath.Join(home, ".picoclaw", "auth.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create auth dir: %w", err)
+	}
+
+	store := picoclawAuthStore{Credentials: map[string]*picoclawAuthCredential{}}
+	if existing, err := os.ReadFile(path); err == nil && len(existing) > 0 {
+		if err := json.Unmarshal(existing, &store); err != nil {
+			return fmt.Errorf("parse existing auth store: %w", err)
+		}
+	}
+	if store.Credentials == nil {
+		store.Credentials = map[string]*picoclawAuthCredential{}
+	}
+	store.Credentials[strings.TrimSpace(providerID)] = &picoclawAuthCredential{
+		AccessToken: strings.TrimSpace(accessToken),
+		AccountID:   strings.TrimSpace(accountID),
+		Provider:    strings.TrimSpace(providerID),
+		AuthMethod:  "oauth",
+	}
+
+	raw, err := json.MarshalIndent(store, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal auth store: %w", err)
+	}
+	if err := os.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
+		return fmt.Errorf("write auth store: %w", err)
+	}
+	return nil
+}
+
+func extractOpenAIAccountIDFromToken(token string) string {
+	claims, err := parseJWTClaims(token)
+	if err != nil {
+		return ""
+	}
+	if accountID, ok := claims["chatgpt_account_id"].(string); ok && strings.TrimSpace(accountID) != "" {
+		return strings.TrimSpace(accountID)
+	}
+	if accountID, ok := claims["https://api.openai.com/auth.chatgpt_account_id"].(string); ok && strings.TrimSpace(accountID) != "" {
+		return strings.TrimSpace(accountID)
+	}
+	if authClaim, ok := claims["https://api.openai.com/auth"].(map[string]interface{}); ok {
+		if accountID, ok := authClaim["chatgpt_account_id"].(string); ok && strings.TrimSpace(accountID) != "" {
+			return strings.TrimSpace(accountID)
+		}
+	}
+	return ""
+}
+
+func parseJWTClaims(token string) (map[string]interface{}, error) {
+	parts := strings.Split(strings.TrimSpace(token), ".")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("token is not a JWT")
+	}
+	payload := parts[1]
+	decoded, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		decoded, err = base64.URLEncoding.DecodeString(payload)
+		if err != nil {
+			return nil, fmt.Errorf("decode jwt payload: %w", err)
+		}
+	}
+	var claims map[string]interface{}
+	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return nil, fmt.Errorf("decode jwt claims: %w", err)
+	}
+	return claims, nil
+}
+
+func openBrowserURL(targetURL string) error {
+	targetURL = strings.TrimSpace(targetURL)
+	if targetURL == "" {
+		return errors.New("url is empty")
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", targetURL).Start()
+	case "windows":
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", targetURL).Start()
+	default:
+		return exec.Command("xdg-open", targetURL).Start()
+	}
+}
+
+func pickMinimalProvider() (choiceOption, error) {
+	defaultID := strings.ToLower(strings.TrimSpace(os.Getenv("CARRIER_DEFAULT_PROVIDER_ID")))
+	if defaultID != "" {
+		if p, ok := resolveChoice(defaultID, providerOptions); ok {
+			return p, nil
+		}
+	}
+	if p, ok := resolveChoice("openai-codex", providerOptions); ok {
+		return p, nil
+	}
+	if len(providerOptions) == 0 {
+		return choiceOption{}, errors.New("no provider available")
+	}
+	return providerOptions[0], nil
+}
+
+func promptChannelCredentialsMinimal(reader *bufio.Reader, out io.Writer, channel choiceOption) (map[string]string, configv2.Channel, error) {
+	env := make(map[string]string)
+	cfg := configv2.Channel{
+		ID:      channel.ID,
+		Enabled: true,
+	}
+	token, err := promptInput(reader, out, "Telegram bot token (required, from @BotFather)", true)
+	if err != nil {
+		return nil, configv2.Channel{}, err
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, configv2.Channel{}, errors.New("telegram bot token is required")
+	}
+	cfg.BotToken = token
+	cfg.TransportMode = "auto"
+	env["CARRIER_TELEGRAM_BOT_TOKEN"] = token
+	env["CARRIER_TELEGRAM_TRANSPORT_MODE"] = "auto"
+	return env, cfg, nil
+}
+
+func promptProviderAuthMinimal(reader *bufio.Reader, out io.Writer, provider choiceOption) (map[string]string, bool, error) {
+	switch provider.AuthMode {
+	case authModeAPIKey:
+		value, backend, ok, err := loadProviderCredential(provider.ID)
+		if err == nil && ok && strings.TrimSpace(value) != "" && strings.TrimSpace(provider.ProviderEnv) != "" {
+			_, _ = fmt.Fprintf(out, "Reusing saved %s credential (%s).\n", provider.Name, backend)
+			return map[string]string{provider.ProviderEnv: strings.TrimSpace(value)}, true, nil
+		}
+		label := fmt.Sprintf("%s API key", provider.Name)
+		apiKey, err := promptInput(reader, out, label, true)
+		if err != nil {
+			return nil, false, err
+		}
+		apiKey = strings.TrimSpace(apiKey)
+		if apiKey == "" {
+			return nil, false, fmt.Errorf("%s API key is required", provider.Name)
+		}
+		if err := saveProviderCredentialAuto(out, provider, apiKey); err != nil {
+			return nil, false, err
+		}
+		return map[string]string{provider.ProviderEnv: apiKey}, true, nil
+	case authModeOAuthDeviceCode:
+		value, backend, ok, err := loadProviderCredential(provider.ID)
+		if err == nil && ok && strings.TrimSpace(value) != "" && strings.TrimSpace(provider.ProviderEnv) != "" {
+			_, _ = fmt.Fprintf(out, "Reusing saved %s credential (%s).\n", provider.Name, backend)
+			return map[string]string{provider.ProviderEnv: strings.TrimSpace(value)}, true, nil
+		}
+		if provider.ID == "openai-codex" {
+			token, err := runOpenAICodexDeviceCodeFlow(out)
+			if err != nil {
+				return nil, false, fmt.Errorf("openai-codex device-code login: %w", err)
+			}
+			token = strings.TrimSpace(token)
+			if token == "" {
+				return nil, false, errors.New("openai-codex token is empty")
+			}
+			if err := saveProviderCredentialAuto(out, provider, token); err != nil {
+				return nil, false, err
+			}
+			return map[string]string{provider.ProviderEnv: token}, true, nil
+		}
+		_, _ = fmt.Fprintln(out, "")
+		_, _ = fmt.Fprintf(out, "%s uses OAuth device-code authorization.\n", provider.Name)
+		_, _ = fmt.Fprintf(out, "Please complete the device-code flow in your auth tool, then paste %s.\n", provider.ProviderEnv)
+		token, err := promptInput(reader, out, fmt.Sprintf("%s token (%s)", provider.Name, provider.ProviderEnv), true)
+		if err != nil {
+			return nil, false, err
+		}
+		token = strings.TrimSpace(token)
+		if token == "" {
+			return nil, false, fmt.Errorf("%s token is required", provider.Name)
+		}
+		if err := saveProviderCredentialAuto(out, provider, token); err != nil {
+			return nil, false, err
+		}
+		return map[string]string{provider.ProviderEnv: token}, true, nil
+	case authModeNone:
+		_, _ = fmt.Fprintf(out, "%s does not require provider auth.\n", provider.Name)
+		return nil, true, nil
+	default:
+		return nil, false, fmt.Errorf("unsupported provider auth mode: %s", provider.AuthMode)
+	}
+}
+
+func promptChannelCredentials(reader *bufio.Reader, out io.Writer, channel choiceOption) (map[string]string, configv2.Channel, error) {
+	env := make(map[string]string)
+	cfg := configv2.Channel{
+		ID:      channel.ID,
+		Enabled: true,
+	}
+
+	if channel.TokenEnv != "" {
+		required := channel.RequireToken
+		tokenLabel := fmt.Sprintf("%s access token", channel.Name)
+		if channel.ID == "telegram" {
+			tokenLabel = "Telegram bot token (required, from @BotFather)"
+		}
+		token, err := promptInput(reader, out, tokenLabel, required)
+		if err != nil {
+			return nil, configv2.Channel{}, err
+		}
+		if strings.TrimSpace(token) != "" {
+			env[channel.TokenEnv] = strings.TrimSpace(token)
+			cfg.BotToken = strings.TrimSpace(token)
+		}
+	}
+
+	if channel.SecretEnv != "" {
+		secretLabel := fmt.Sprintf("%s webhook secret (optional, press Enter to skip)", channel.Name)
+		if channel.ID == "discord" {
+			secretLabel = "Discord public key (optional, press Enter to skip)"
+		}
+		secret, err := promptInput(reader, out, secretLabel, false)
+		if err != nil {
+			return nil, configv2.Channel{}, err
+		}
+		if strings.TrimSpace(secret) != "" {
+			env[channel.SecretEnv] = strings.TrimSpace(secret)
+			cfg.WebhookSecret = strings.TrimSpace(secret)
+		}
+	}
+
+	if channel.ID == "telegram" {
+		mode, webhookURL, err := promptTelegramTransport(reader, out)
+		if err != nil {
+			return nil, configv2.Channel{}, err
+		}
+		cfg.TransportMode = mode
+		cfg.WebhookURL = webhookURL
+		if strings.TrimSpace(mode) != "" {
+			env["CARRIER_TELEGRAM_TRANSPORT_MODE"] = mode
+		}
+		if strings.TrimSpace(webhookURL) != "" {
+			env["CARRIER_TELEGRAM_WEBHOOK_URL"] = webhookURL
+		}
+	}
+	return env, cfg, nil
+}
+
+func promptProviderAuth(reader *bufio.Reader, out io.Writer, provider choiceOption) (map[string]string, bool, error) {
+	switch provider.AuthMode {
+	case authModeAPIKey:
+		reused, ok, err := maybeReuseSavedProviderCredential(reader, out, provider)
+		if err != nil {
+			return nil, false, err
+		}
+		if ok {
+			return reused, true, nil
+		}
+
+		label := fmt.Sprintf("%s API key", provider.Name)
+		apiKey, err := promptInput(reader, out, label, true)
+		if err != nil {
+			return nil, false, err
+		}
+		cred := map[string]string{provider.ProviderEnv: apiKey}
+		if err := saveProviderCredentialFlow(reader, out, provider, apiKey); err != nil {
+			return nil, false, err
+		}
+		return cred, true, nil
+	case authModeOAuthDeviceCode:
+		reused, ok, err := maybeReuseSavedProviderCredential(reader, out, provider)
+		if err != nil {
+			return nil, false, err
+		}
+		if ok {
+			return reused, true, nil
+		}
+
+		if provider.ID == "openai-codex" {
+			token, err := runOpenAICodexDeviceCodeFlow(out)
+			if err != nil {
+				return nil, false, fmt.Errorf("openai-codex device-code login: %w", err)
+			}
+			cred := map[string]string{provider.ProviderEnv: token}
+			if err := saveProviderCredentialAuto(out, provider, token); err != nil {
+				return nil, false, err
+			}
+			return cred, true, nil
+		}
+
+		_, _ = fmt.Fprintln(out, "")
+		_, _ = fmt.Fprintf(out, "%s uses OAuth device-code authorization.\n", provider.Name)
+		_, _ = fmt.Fprintf(out, "Please complete the device-code flow in your auth tool, then paste %s.\n", provider.ProviderEnv)
+		token, err := promptInput(reader, out, fmt.Sprintf("%s token (%s)", provider.Name, provider.ProviderEnv), true)
+		if err != nil {
+			return nil, false, err
+		}
+		cred := map[string]string{provider.ProviderEnv: token}
+		if err := saveProviderCredentialAuto(out, provider, token); err != nil {
+			return nil, false, err
+		}
+		return cred, true, nil
+	case authModeNone:
+		_, _ = fmt.Fprintf(out, "%s does not require provider auth.\n", provider.Name)
+		return nil, true, nil
+	default:
+		return nil, false, fmt.Errorf("unsupported provider auth mode: %s", provider.AuthMode)
+	}
+}
+
+func maybeReuseSavedProviderCredential(reader *bufio.Reader, out io.Writer, provider choiceOption) (map[string]string, bool, error) {
+	if strings.TrimSpace(provider.ProviderEnv) == "" {
+		return nil, false, nil
+	}
+	value, backend, ok, err := loadProviderCredential(provider.ID)
+	if err != nil {
+		_, _ = fmt.Fprintf(out, "Warning: failed to read saved credential for %s: %v\n", provider.Name, err)
+		return nil, false, nil
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	reuse, err := promptYesNo(reader, out, fmt.Sprintf("Reuse saved %s credential from %s", provider.Name, backend), true)
+	if err != nil {
+		return nil, false, err
+	}
+	if !reuse {
+		return nil, false, nil
+	}
+	return map[string]string{provider.ProviderEnv: value}, true, nil
+}
+
+func saveProviderCredentialFlow(reader *bufio.Reader, out io.Writer, provider choiceOption, value string) error {
+	save, err := promptYesNo(reader, out, fmt.Sprintf("Save %s credential for future reuse", provider.Name), true)
+	if err != nil {
+		return err
+	}
+	if !save {
+		return nil
+	}
+	backend, err := saveProviderCredential(provider.ID, value)
+	if err != nil {
+		return fmt.Errorf("save credential: %w", err)
+	}
+	_, _ = fmt.Fprintf(out, "Credential saved (%s).\n", backend)
+	return nil
+}
+
+func saveProviderCredentialAuto(out io.Writer, provider choiceOption, value string) error {
+	backend, err := saveProviderCredential(provider.ID, value)
+	if err != nil {
+		return fmt.Errorf("save credential: %w", err)
+	}
+	_, _ = fmt.Fprintf(out, "Credential saved (%s).\n", backend)
+	return nil
+}
+
+func promptYesNo(reader *bufio.Reader, out io.Writer, label string, defaultYes bool) (bool, error) {
+	suffix := "[y/N]"
+	if defaultYes {
+		suffix = "[Y/n]"
+	}
+	for {
+		_, _ = fmt.Fprintf(out, "%s %s: ", label, suffix)
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				text := strings.ToLower(strings.TrimSpace(line))
+				if text == "" {
+					return defaultYes, nil
+				}
+				switch text {
+				case "y", "yes":
+					return true, nil
+				case "n", "no":
+					return false, nil
+				default:
+					return false, errors.New("input interrupted")
+				}
+			}
+			return false, err
+		}
+		text := strings.ToLower(strings.TrimSpace(line))
+		if text == "" {
+			return defaultYes, nil
+		}
+		switch text {
+		case "y", "yes":
+			return true, nil
+		case "n", "no":
+			return false, nil
+		default:
+			_, _ = fmt.Fprintln(out, "Please answer yes or no.")
+		}
+	}
+}
+
+func promptInput(reader *bufio.Reader, out io.Writer, label string, required bool) (string, error) {
+	for {
+		_, _ = fmt.Fprintf(out, "%s: ", label)
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				value := strings.TrimSpace(line)
+				if value != "" || !required {
+					return value, nil
+				}
+				return "", errors.New("input interrupted")
+			}
+			return "", err
+		}
+		value := strings.TrimSpace(line)
+		if value == "" && required {
+			_, _ = fmt.Fprintln(out, "This field is required, please retry.")
+			continue
+		}
+		return value, nil
+	}
+}
+
+func performOpenAICodexDeviceCodeFlow(out io.Writer) (string, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	deviceAuthID, userCode, pollInterval, err := requestOpenAICodexUserCode(client)
+	if err != nil {
+		return "", err
+	}
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "OpenAI Codex device-code login")
+	_, _ = fmt.Fprintln(out, "1. Open this URL in your browser:")
+	_, _ = fmt.Fprintf(out, "   %s\n", openAICodexVerificationURL)
+	_, _ = fmt.Fprintln(out, "2. Enter this one-time code:")
+	_, _ = fmt.Fprintf(out, "   %s\n", userCode)
+	_, _ = fmt.Fprintln(out, "Waiting for authorization (up to 15 minutes)...")
+
+	authorizationCode, codeVerifier, err := pollOpenAICodexAuthorization(client, deviceAuthID, userCode, pollInterval, openAICodexDeviceAuthTimeout)
+	if err != nil {
+		return "", err
+	}
+	token, err := exchangeOpenAICodexToken(client, authorizationCode, codeVerifier)
+	if err != nil {
+		return "", err
+	}
+	_, _ = fmt.Fprintln(out, "OpenAI Codex authorization completed.")
+	return token, nil
+}
+
+func requestOpenAICodexUserCode(client *http.Client) (string, string, int, error) {
+	status, body, err := postJSON(
+		client,
+		openAICodexAuthBaseURL+"/api/accounts/deviceauth/usercode",
+		map[string]string{
+			"client_id": openAICodexClientID,
+		},
+	)
+	if err != nil {
+		return "", "", 0, err
+	}
+	if status < 200 || status >= 300 {
+		return "", "", 0, fmt.Errorf("request user code failed: status=%d body=%s", status, strings.TrimSpace(string(body)))
+	}
+	var resp struct {
+		DeviceAuthID string `json:"device_auth_id"`
+		UserCode     string `json:"user_code"`
+		Interval     string `json:"interval"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", "", 0, fmt.Errorf("decode user code response: %w", err)
+	}
+	deviceAuthID := strings.TrimSpace(resp.DeviceAuthID)
+	userCode := strings.TrimSpace(resp.UserCode)
+	if deviceAuthID == "" || userCode == "" {
+		return "", "", 0, errors.New("device-code response missing device_auth_id or user_code")
+	}
+	pollInterval := openAICodexDefaultPollSeconds
+	if n, err := strconv.Atoi(strings.TrimSpace(resp.Interval)); err == nil && n > 0 {
+		pollInterval = n
+	}
+	return deviceAuthID, userCode, pollInterval, nil
+}
+
+func pollOpenAICodexAuthorization(client *http.Client, deviceAuthID, userCode string, pollIntervalSeconds int, timeout time.Duration) (string, string, error) {
+	deadline := time.Now().Add(timeout)
+	first := true
+
+	for time.Now().Before(deadline) {
+		if !first {
+			time.Sleep(time.Duration(pollIntervalSeconds) * time.Second)
+		}
+		first = false
+
+		status, body, err := postJSON(
+			client,
+			openAICodexAuthBaseURL+"/api/accounts/deviceauth/token",
+			map[string]string{
+				"device_auth_id": deviceAuthID,
+				"user_code":      userCode,
+			},
+		)
+		if err != nil {
+			return "", "", err
+		}
+		if status >= 200 && status < 300 {
+			var resp struct {
+				AuthorizationCode string `json:"authorization_code"`
+				CodeVerifier      string `json:"code_verifier"`
+			}
+			if err := json.Unmarshal(body, &resp); err != nil {
+				return "", "", fmt.Errorf("decode deviceauth token response: %w", err)
+			}
+			authCode := strings.TrimSpace(resp.AuthorizationCode)
+			verifier := strings.TrimSpace(resp.CodeVerifier)
+			if authCode == "" || verifier == "" {
+				return "", "", errors.New("deviceauth token response missing authorization_code or code_verifier")
+			}
+			return authCode, verifier, nil
+		}
+		if status == http.StatusForbidden || status == http.StatusNotFound {
+			continue
+		}
+		return "", "", fmt.Errorf("deviceauth polling failed: status=%d body=%s", status, strings.TrimSpace(string(body)))
+	}
+	return "", "", errors.New("openai-codex device-code authorization timed out")
+}
+
+func exchangeOpenAICodexToken(client *http.Client, authorizationCode, codeVerifier string) (string, error) {
+	status, body, err := postJSON(
+		client,
+		openAICodexAuthBaseURL+"/oauth/token",
+		map[string]string{
+			"grant_type":    "authorization_code",
+			"client_id":     openAICodexClientID,
+			"code":          authorizationCode,
+			"code_verifier": codeVerifier,
+			"redirect_uri":  openAICodexAuthBaseURL + "/deviceauth/callback",
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+	if status < 200 || status >= 300 {
+		return "", fmt.Errorf("token exchange failed: status=%d body=%s", status, strings.TrimSpace(string(body)))
+	}
+	var resp struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("decode oauth token response: %w", err)
+	}
+	token := strings.TrimSpace(resp.AccessToken)
+	if token == "" {
+		return "", errors.New("oauth token response missing access_token")
+	}
+	return token, nil
+}
+
+func postJSON(client *http.Client, url string, payload any) (int, []byte, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return 0, nil, fmt.Errorf("marshal request payload: %w", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(raw))
+	if err != nil {
+		return 0, nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("request %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, nil, fmt.Errorf("read response body: %w", err)
+	}
+	return resp.StatusCode, body, nil
+}
+
+func gatewayProbeBaseURL() string {
+	host := strings.TrimSpace(os.Getenv("CARRIER_GATEWAY_HOST"))
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	port := strings.TrimSpace(os.Getenv("CARRIER_GATEWAY_PORT"))
+	if port == "" {
+		port = "8787"
+	}
+	return fmt.Sprintf("http://%s:%s", host, port)
+}
+
+func checkGatewayHealth(baseURL string) bool {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if base == "" {
+		return false
+	}
+	client := &http.Client{Timeout: 1200 * time.Millisecond}
+	resp, err := client.Get(base + "/healthz")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+func daemonProbeBaseURL() string {
+	host := strings.TrimSpace(os.Getenv("CARRIER_SERVER_HOST"))
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	port := strings.TrimSpace(os.Getenv("CARRIER_SERVER_PORT"))
+	if port == "" {
+		port = "9090"
+	}
+	return fmt.Sprintf("http://%s:%s", host, port)
+}
+
+func checkDaemonHealth(baseURL string) bool {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if base == "" {
+		return false
+	}
+	client := &http.Client{Timeout: 1200 * time.Millisecond}
+	req, err := http.NewRequest(http.MethodGet, base+"/healthz", nil)
+	if err != nil {
+		return false
+	}
+	addDaemonAuthHeader(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+func waitForDaemonHealthy(baseURL string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if daemonHealthProbe(baseURL) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("daemon health probe timed out")
+		}
+		time.Sleep(daemonBootPollInterval)
+	}
+}
+
+func waitForGatewayHealthy(baseURL string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if gatewayHealthProbe(baseURL) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("gateway health probe timed out")
+		}
+		time.Sleep(daemonBootPollInterval)
+	}
+}
+
+func startDaemonInBackground() error {
+	return startBackgroundSubprocess("daemon", "daemon")
+}
+
+func startGatewayInBackground() error {
+	return startBackgroundSubprocess("gateway", "gateway")
+}
+
+func startBackgroundSubprocess(subcommand, logName string) error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve current executable: %w", err)
+	}
+	cmd := exec.Command(exePath, subcommand)
+	cmd.Env = os.Environ()
+	if bootstrapVerboseEnabled() {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	} else {
+		logFile, _, err := openBootstrapLogFile(logName)
+		if err != nil {
+			return err
+		}
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+		if err := cmd.Start(); err != nil {
+			_ = logFile.Close()
+			return err
+		}
+		_ = logFile.Close()
+		if err := writeBootstrapPIDFile(logName, cmd.Process.Pid); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if err := writeBootstrapPIDFile(logName, cmd.Process.Pid); err != nil {
+		return err
+	}
+	return nil
+}
+
+func bootstrapVerboseEnabled() bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("CARRIER_BOOTSTRAP_VERBOSE")))
+	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
+}
+
+func bootstrapLogDir() (string, error) {
+	if customDir := strings.TrimSpace(os.Getenv("CARRIER_BOOTSTRAP_LOG_DIR")); customDir != "" {
+		if err := os.MkdirAll(customDir, 0o700); err != nil {
+			return "", fmt.Errorf("create bootstrap log dir %s: %w", customDir, err)
+		}
+		return customDir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir for logs: %w", err)
+	}
+	dir := filepath.Join(home, ".carrier", "logs")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create bootstrap log dir %s: %w", dir, err)
+	}
+	return dir, nil
+}
+
+func bootstrapRunDir() (string, error) {
+	if customDir := strings.TrimSpace(os.Getenv("CARRIER_BOOTSTRAP_RUN_DIR")); customDir != "" {
+		if err := os.MkdirAll(customDir, 0o700); err != nil {
+			return "", fmt.Errorf("create bootstrap run dir %s: %w", customDir, err)
+		}
+		return customDir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir for run dir: %w", err)
+	}
+	dir := filepath.Join(home, ".carrier", "run")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create bootstrap run dir %s: %w", dir, err)
+	}
+	return dir, nil
+}
+
+func bootstrapPIDPath(name string) (string, error) {
+	dir, err := bootstrapRunDir()
+	if err != nil {
+		return "", err
+	}
+	base := strings.TrimSpace(name)
+	if base == "" {
+		base = "carrier"
+	}
+	return filepath.Join(dir, base+".pid"), nil
+}
+
+func mustBootstrapPIDPath(name string) string {
+	path, err := bootstrapPIDPath(name)
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
+func writeBootstrapPIDFile(name string, pid int) error {
+	path, err := bootstrapPIDPath(name)
+	if err != nil {
+		return err
+	}
+	raw := []byte(fmt.Sprintf("%d\n", pid))
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		return fmt.Errorf("write pid file %s: %w", path, err)
+	}
+	return nil
+}
+
+func bootstrapLogPath(logName string) (string, error) {
+	dir, err := bootstrapLogDir()
+	if err != nil {
+		return "", err
+	}
+	base := strings.TrimSpace(logName)
+	if base == "" {
+		base = "carrier"
+	}
+	return filepath.Join(dir, base+".log"), nil
+}
+
+func openBootstrapLogFile(logName string) (*os.File, string, error) {
+	path, err := bootstrapLogPath(logName)
+	if err != nil {
+		return nil, "", err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, "", fmt.Errorf("open log file %s: %w", path, err)
+	}
+	return file, path, nil
+}
+
+type daemonPairCodeRecord struct {
+	Code      string `json:"code"`
+	ExpiresAt string `json:"expiresAt"`
+}
+
+func fetchDaemonPairCode(baseURL string) (string, string, error) {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if base == "" {
+		return "", "", errors.New("daemon probe url is empty")
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	req, err := http.NewRequest(http.MethodGet, base+"/api/v1/pairing/codes", nil)
+	if err != nil {
+		return "", "", err
+	}
+	addDaemonAuthHeader(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return "", "", readErr
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", "", fmt.Errorf("list pairing codes failed with status %d", resp.StatusCode)
+	}
+
+	var listed struct {
+		Codes []daemonPairCodeRecord `json:"codes"`
+	}
+	if err := json.Unmarshal(body, &listed); err != nil {
+		return "", "", fmt.Errorf("decode pairing code list: %w", err)
+	}
+	for _, rec := range listed.Codes {
+		if strings.TrimSpace(rec.Code) != "" {
+			return strings.TrimSpace(rec.Code), strings.TrimSpace(rec.ExpiresAt), nil
+		}
+	}
+
+	issueReq, err := http.NewRequest(http.MethodPost, base+"/api/v1/pairing/codes", strings.NewReader(fmt.Sprintf(`{"ttlSeconds":%d}`, defaultPairCodeTTLSeconds)))
+	if err != nil {
+		return "", "", err
+	}
+	issueReq.Header.Set("Content-Type", "application/json")
+	addDaemonAuthHeader(issueReq)
+	issueResp, err := client.Do(issueReq)
+	if err != nil {
+		return "", "", err
+	}
+	issueBody, readIssueErr := io.ReadAll(issueResp.Body)
+	_ = issueResp.Body.Close()
+	if readIssueErr != nil {
+		return "", "", readIssueErr
+	}
+	if issueResp.StatusCode < 200 || issueResp.StatusCode >= 300 {
+		return "", "", fmt.Errorf("issue pairing code failed with status %d", issueResp.StatusCode)
+	}
+	var issued daemonPairCodeRecord
+	if err := json.Unmarshal(issueBody, &issued); err != nil {
+		return "", "", fmt.Errorf("decode issued pairing code: %w", err)
+	}
+	code := strings.TrimSpace(issued.Code)
+	if code == "" {
+		return "", "", errors.New("daemon returned empty pairing code")
+	}
+	return code, strings.TrimSpace(issued.ExpiresAt), nil
+}
+
+func addDaemonAuthHeader(req *http.Request) {
+	if req == nil {
+		return
+	}
+	if token := strings.TrimSpace(os.Getenv("CARRIER_SERVER_API_TOKEN")); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+}
+
+func checkWebUIReady(gatewayBaseURL string) bool {
+	base := strings.TrimRight(strings.TrimSpace(gatewayBaseURL), "/")
+	if base == "" {
+		return false
+	}
+	client := &http.Client{Timeout: 1500 * time.Millisecond}
+	resp, err := client.Get(base + "/")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+func isAddressInUseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		if strings.Contains(strings.ToLower(opErr.Error()), "address already in use") {
+			return true
+		}
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "address already in use")
+}
+
+func loadProviderCredential(providerID string) (string, string, bool, error) {
+	service := providerCredentialService(providerID)
+	if value, err := loadCredentialFromKeychain(service); err == nil {
+		return value, "macOS-keychain", true, nil
+	} else if !errors.Is(err, errCredentialNotFound) && !errors.Is(err, errCredentialBackendUnavailable) {
+		return "", "", false, err
+	}
+
+	value, err := loadCredentialFromFile(providerID)
+	if err == nil {
+		return value, "local-file", true, nil
+	}
+	if errors.Is(err, errCredentialNotFound) {
+		return "", "", false, nil
+	}
+	return "", "", false, err
+}
+
+func saveProviderCredential(providerID, value string) (string, error) {
+	service := providerCredentialService(providerID)
+	if err := saveCredentialToKeychain(service, value); err == nil {
+		return "macOS-keychain", nil
+	} else if !errors.Is(err, errCredentialBackendUnavailable) {
+		return "", err
+	}
+	if err := saveCredentialToFile(providerID, value); err != nil {
+		return "", err
+	}
+	return "local-file", nil
+}
+
+func providerCredentialService(providerID string) string {
+	return "carrier.provider." + strings.TrimSpace(providerID)
+}
+
+func keychainAvailable() bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CARRIER_DISABLE_KEYCHAIN")), "1") {
+		return false
+	}
+	_, err := exec.LookPath("security")
+	return err == nil
+}
+
+func loadCredentialFromKeychain(service string) (string, error) {
+	if !keychainAvailable() {
+		return "", errCredentialBackendUnavailable
+	}
+	cmd := exec.Command("security", "find-generic-password", "-a", "carrier", "-s", service, "-w")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		msg := strings.ToLower(strings.TrimSpace(stderr.String()))
+		if strings.Contains(msg, "could not be found") || strings.Contains(msg, "item not found") {
+			return "", errCredentialNotFound
+		}
+		return "", fmt.Errorf("read keychain credential for %s", service)
+	}
+	value := strings.TrimSpace(string(out))
+	if value == "" {
+		return "", errCredentialNotFound
+	}
+	return value, nil
+}
+
+func saveCredentialToKeychain(service, value string) error {
+	if !keychainAvailable() {
+		return errCredentialBackendUnavailable
+	}
+	cmd := exec.Command("security", "add-generic-password", "-U", "-a", "carrier", "-s", service, "-w", value)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("write keychain credential for %s", service)
+	}
+	return nil
+}
+
+func loadCredentialFromFile(providerID string) (string, error) {
+	path, err := credentialStorePath()
+	if err != nil {
+		return "", err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", errCredentialNotFound
+		}
+		return "", fmt.Errorf("read credential file: %w", err)
+	}
+	var payload struct {
+		Providers map[string]string `json:"providers"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", fmt.Errorf("parse credential file: %w", err)
+	}
+	if payload.Providers == nil {
+		return "", errCredentialNotFound
+	}
+	value := strings.TrimSpace(payload.Providers[providerID])
+	if value == "" {
+		return "", errCredentialNotFound
+	}
+	return value, nil
+}
+
+func saveCredentialToFile(providerID, value string) error {
+	path, err := credentialStorePath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create credential directory: %w", err)
+	}
+
+	payload := struct {
+		Providers map[string]string `json:"providers"`
+	}{
+		Providers: make(map[string]string),
+	}
+	if raw, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(raw, &payload)
+		if payload.Providers == nil {
+			payload.Providers = make(map[string]string)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read credential file: %w", err)
+	}
+
+	payload.Providers[providerID] = value
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal credential file: %w", err)
+	}
+	if err := os.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
+		return fmt.Errorf("write credential file: %w", err)
+	}
+	return nil
+}
+
+func credentialStorePath() (string, error) {
+	if path := strings.TrimSpace(os.Getenv("CARRIER_CREDENTIAL_STORE")); path != "" {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir: %w", err)
+	}
+	return filepath.Join(home, ".carrier", "credentials.json"), nil
+}
+
+func mergeEnvVars(sets ...map[string]string) map[string]string {
+	merged := make(map[string]string)
+	for _, set := range sets {
+		for k, v := range set {
+			merged[k] = v
+		}
+	}
+	return merged
+}
+
+func applyEnvVars(vars map[string]string) error {
+	for k, v := range vars {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		if err := os.Setenv(k, v); err != nil {
+			return fmt.Errorf("set env %s: %w", k, err)
+		}
+	}
+	return nil
+}
+
+func promptChoice(reader *bufio.Reader, out io.Writer, options []choiceOption) (choiceOption, error) {
+	if len(options) == 0 {
+		return choiceOption{}, errors.New("no options available")
+	}
+
+	for {
+		for i, opt := range options {
+			_, _ = fmt.Fprintf(out, "  %d) %s (%s)\n", i+1, opt.Name, opt.Setup)
+		}
+		_, _ = fmt.Fprint(out, "Select by number or id: ")
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return choiceOption{}, errors.New("input interrupted")
+			}
+			return choiceOption{}, err
+		}
+
+		selection, ok := resolveChoice(strings.TrimSpace(line), options)
+		if ok {
+			return selection, nil
+		}
+		_, _ = fmt.Fprintln(out, "Invalid selection, please retry.")
+	}
+}
+
+func promptMultiChoice(reader *bufio.Reader, out io.Writer, options []choiceOption, label string) ([]choiceOption, error) {
+	selected := make([]choiceOption, 0, len(options))
+	selectedSet := make(map[string]struct{})
+	for {
+		for i, opt := range options {
+			_, _ = fmt.Fprintf(out, "  %d) %s (%s)\n", i+1, opt.Name, opt.Setup)
+		}
+		if len(selected) > 0 {
+			names := make([]string, 0, len(selected))
+			for _, s := range selected {
+				names = append(names, s.Name)
+			}
+			_, _ = fmt.Fprintf(out, "Selected %s(s): %s\n", label, strings.Join(names, ", "))
+		}
+		_, _ = fmt.Fprintf(out, "Select %s by number or id (`done` to finish): ", label)
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if len(selected) == 0 {
+					return nil, fmt.Errorf("at least one %s is required", label)
+				}
+				return selected, nil
+			}
+			return nil, err
+		}
+		input := strings.ToLower(strings.TrimSpace(line))
+		if input == "done" {
+			if len(selected) == 0 {
+				_, _ = fmt.Fprintf(out, "Please select at least one %s.\n", label)
+				continue
+			}
+			return selected, nil
+		}
+		choice, ok := resolveChoice(input, options)
+		if !ok {
+			_, _ = fmt.Fprintln(out, "Invalid selection, please retry.")
+			continue
+		}
+		if _, exists := selectedSet[choice.ID]; exists {
+			_, _ = fmt.Fprintln(out, "Already selected, choose another or type `done`.")
+			continue
+		}
+		selected = append(selected, choice)
+		selectedSet[choice.ID] = struct{}{}
+	}
+}
+
+func promptTelegramTransport(reader *bufio.Reader, out io.Writer) (mode string, webhookURL string, err error) {
+	_, _ = fmt.Fprintln(out, "Telegram transport mode: auto (recommended), webhook, polling")
+	rawMode, err := promptInput(reader, out, "Transport mode [auto/webhook/polling] (default auto)", false)
+	if err != nil {
+		return "", "", err
+	}
+	mode = strings.ToLower(strings.TrimSpace(rawMode))
+	if mode == "" {
+		mode = "auto"
+	}
+	switch mode {
+	case "auto", "webhook", "polling":
+	default:
+		return "", "", fmt.Errorf("invalid transport mode %q", mode)
+	}
+
+	if mode == "auto" || mode == "webhook" {
+		urlLabel := "Public webhook URL (optional for auto; required for webhook)"
+		webhookURL, err = promptInput(reader, out, urlLabel, mode == "webhook")
+		if err != nil {
+			return "", "", err
+		}
+		webhookURL = strings.TrimSpace(webhookURL)
+	}
+	return mode, webhookURL, nil
+}
+
+func resolveChoice(input string, options []choiceOption) (choiceOption, bool) {
+	if input == "" {
+		return choiceOption{}, false
+	}
+
+	if n, err := strconv.Atoi(input); err == nil {
+		if n >= 1 && n <= len(options) {
+			return options[n-1], true
+		}
+		return choiceOption{}, false
+	}
+
+	for _, opt := range options {
+		if strings.EqualFold(opt.ID, input) {
+			return opt, true
+		}
+	}
+	return choiceOption{}, false
+}
+
+func onboardConfigPath(
+	getenv func(string) string,
+	userHomeDir func() (string, error),
+) (string, error) {
+	if path := strings.TrimSpace(getenv("CARRIER_CONFIG")); path != "" {
+		return path, nil
+	}
+	if path := strings.TrimSpace(getenv("CARRIER_ONBOARD_CONFIG")); path != "" {
+		return path, nil
+	}
+	home, err := userHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir: %w", err)
+	}
+	return filepath.Join(home, ".carrier", "config.v2.json"), nil
+}
+
+func buildSlashCommandGuide(channel choiceOption) string {
+	return fmt.Sprintf(
+		"Next step in %s:\n1. Open your bot chat and send `/pair <PAIR_CODE>`\n2. Then send `/agents`\n3. Open Carrier GUI to install/onboard additional agents\n4. Use `/start <agent_id>` to start installed agents",
+		channel.Name,
+	)
 }

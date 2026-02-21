@@ -2,12 +2,12 @@
 
 ## Overview
 
-Carrier is an agent lifecycle management system composed of two main components: a **daemon** (Go) that manages agents on the host, and a **gateway** (TypeScript/Bun) that provides a WebSocket API for remote control.
+Carrier is an agent lifecycle management system composed of two main components: a **daemon** (Go) that manages agents on the host, and a **gateway** (Go) that provides HTTP command/webhook ingress for remote control.
 
 ```
-┌─────────────┐       WebSocket        ┌─────────────┐      HTTP/exec      ┌──────────┐
-│   Client /   │ ◄──────────────────► │   Gateway    │ ◄────────────────► │  Daemon   │
-│   Browser    │   (commands/events)   │  (Bun/TS)   │   (JSON over WS)   │ (agentd)  │
+┌─────────────┐         HTTP           ┌─────────────┐        HTTP         ┌──────────┐
+│ Chat/Webhook │ ───────────────────► │   Gateway    │ ─────────────────► │  Daemon   │
+│   Clients    │   (commands/events)   │    (Go)      │   (JSON over API)  │ (agentd)  │
 └─────────────┘                        └─────────────┘                     └──────────┘
                                                                                 │
                                                                           ┌─────┴─────┐
@@ -35,19 +35,19 @@ The daemon (`agentd`) is the host-side process responsible for:
 - **Runtime Checks** (`internal/runtimecheck/`) — Pre-flight validation (env vars, ports, dependencies)
 - **Base Agent** (`internal/baseagent/`) — Repair action policies and risk classification
 
-### Gateway (`gateway/`)
+### Gateway (`daemon/internal/gateway/`)
 
-The gateway is a Bun/TypeScript WebSocket server that:
+The gateway is a Go HTTP server that:
 
-- Accepts client connections and routes commands to the daemon
-- Manages **sessions** (`session/`) with authentication
-- Issues **download tokens** (`downloads/`) for artifact retrieval
-- Enforces **rate limiting** (`ratelimit/`)
+- Accepts command requests (`/command`) and provider webhooks (`/webhook/{telegram|discord|feishu}`)
+- Manages **sessions** (`session.go`) with authentication
+- Issues **download tokens** (`downloads.go`) for artifact retrieval
+- Enforces **rate limiting** (`ratelimit.go`)
 - Translates between the client protocol and daemon API
 
-### Command Contract (`gateway/src/contracts/`)
+### Command Contract (`docs/command-contract.md`)
 
-Typed command definitions shared between gateway and clients, defining the request/response schema for each operation (`/pair`, `/agents`, `/install`, `/start`, `/stop`, `/status`, `/logs`, `/upgrade`, `/diagnose`).
+Command definitions used by gateway command parsing and response rendering, covering operations such as `/pair`, `/agents`, `/install`, `/start`, `/stop`, `/status`, `/logs`, `/upgrade`, `/diagnose`.
 
 ### Daemon API Contract (`docs/daemon-api-contract.md`)
 
@@ -55,7 +55,7 @@ Canonical endpoint/method matrix and error-envelope mapping for daemon HTTP APIs
 
 ## Data Flow
 
-1. Client connects to gateway via WebSocket
+1. Client sends command/webhook payload to gateway over HTTP
 2. Client sends a command (e.g., `/install agent-name`)
 3. Gateway validates session, applies rate limits, and forwards to daemon
 4. Daemon executes the operation (install agent, run pre-flight checks, etc.)
@@ -63,7 +63,7 @@ Canonical endpoint/method matrix and error-envelope mapping for daemon HTTP APIs
 
 ## Key Design Decisions
 
-- **Separation of concerns**: Gateway handles networking/auth; daemon handles host operations
+- **Separation of concerns**: Gateway handles transport/session/auth; daemon handles host operations
 - **Crash-loop protection**: Daemon tracks restart frequency and applies exponential cooldown
 - **Audit trail**: All lifecycle operations are logged with bounded audit buffers
 - **Redaction by default**: Sensitive environment variables and patterns are automatically redacted in diagnostics

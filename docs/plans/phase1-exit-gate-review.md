@@ -39,12 +39,12 @@ Primary blockers:
 | Evidence ID | Description | Pointer |
 |---|---|---|
 | E01 | Daemon lifecycle endpoint/API coverage | `daemon/internal/api/server_test.go` |
-| E02 | Gateway lifecycle E2E flows | `gateway/src/e2e.test.ts` |
+| E02 | Gateway lifecycle E2E flows | `scripts/e2e-integration.sh`, `daemon/internal/gateway/server_webhook_test.go` |
 | E03 | Crash-loop and exponential backoff tests | `daemon/internal/lifecycle/crash_loop_test.go`, `daemon/internal/lifecycle/backoff_test.go` |
 | E04 | Memory lifecycle and policy tests | `daemon/internal/memory/store_test.go`, `daemon/internal/memory/policy_test.go` |
 | E05 | Failure evidence and triage state persistence | `daemon/internal/lifecycle/evidence.go`, `daemon/internal/lifecycle/service.go`, `daemon/internal/lifecycle/service_test.go` |
-| E06 | Diagnose artifact + remote diagnosis consent APIs | `daemon/internal/api/server.go`, `daemon/internal/lifecycle/service.go`, `gateway/src/index.ts` |
-| E07 | Cross-provider parity tests | `gateway/src/cross-provider.test.ts`, `gateway/src/parity/failure_parity.test.ts` |
+| E06 | Diagnose artifact + remote diagnosis consent APIs | `daemon/internal/api/server.go`, `daemon/internal/lifecycle/service.go`, `daemon/internal/gateway/server.go` |
+| E07 | Cross-provider parity tests | `daemon/internal/gateway/providers_test.go`, `daemon/internal/gateway/server_test.go` |
 | E08 | WSL2 support matrix | `docs/WSL2_SUPPORT_MATRIX.md` |
 | E09 | Daemon coverage snapshot (`75.7%`) | `docs/coverage-report.md` |
 | E10 | Open P0 issues snapshot (`5`) | `#294`, `#295`, `#296`, `#297`, `#298` |
@@ -53,8 +53,8 @@ Primary blockers:
 | E13 | Latest CI run on `main` successful | [CI run](https://github.com/Keith-CY/carrier/actions/runs/22097465211) |
 | E14 | Upgrade rollback metadata contract | `daemon/internal/lifecycle/upgrade.go`, `daemon/internal/api/server_test.go` |
 | E15 | Audit schema + query/filter API | `daemon/internal/lifecycle/types.go`, `daemon/internal/api/server.go`, `docs/audit-event-dictionary.md` |
-| E16 | Diagnose-consent command + handoff flow | `gateway/src/e2e.test.ts`, `daemon/internal/api/server.go` |
-| E17 | Redaction baseline + tests | `docs/security/redaction-baseline.md`, `daemon/internal/redact/redact_test.go`, `gateway/src/redact.test.ts` |
+| E16 | Diagnose-consent command + handoff flow | `scripts/e2e-integration.sh`, `daemon/internal/api/server.go` |
+| E17 | Redaction baseline + tests | `docs/security/redaction-baseline.md`, `daemon/internal/redact/redact_test.go`, `daemon/internal/gateway/redact_test.go` |
 
 ## Blockers To Clear For Go
 

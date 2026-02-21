@@ -171,7 +171,7 @@ func TestTelegramWebhook_NonCommand(t *testing.T) {
 	}
 	mux := buildGatewayMux(cfg, dc, sessions, downloads, rl, onboard, setup)
 
-	// Non-command message should be ignored
+	// Non-command message should route to base-agent chat and require pairing first
 	body := `{"update_id":1,"message":{"chat":{"id":123},"text":"hello"}}`
 	req := httptest.NewRequest("POST", "/webhook/telegram", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -185,8 +185,9 @@ func TestTelegramWebhook_NonCommand(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if msg, ok := resp["message"].(string); ok && !strings.Contains(msg, "ignored") {
-		t.Errorf("expected ignored message, got %q", msg)
+	text, _ := resp["text"].(string)
+	if !strings.Contains(text, "E_SESSION_REQUIRED") {
+		t.Errorf("expected E_SESSION_REQUIRED in text, got %q", text)
 	}
 }
 

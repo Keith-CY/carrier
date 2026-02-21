@@ -157,6 +157,65 @@ func TestHandleCommand_InvalidSessionToken(t *testing.T) {
 	}
 }
 
+func TestHandleCommand_Chat_Success(t *testing.T) {
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
+		"POST /api/v1/base-agent/chat": func(w http.ResponseWriter, r *http.Request) {
+			var req map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if req["provider"] != "telegram" {
+				t.Fatalf("provider = %v, want telegram", req["provider"])
+			}
+			if req["chatId"] != "123" {
+				t.Fatalf("chatId = %v, want 123", req["chatId"])
+			}
+			if req["message"] != "hello from terminal" {
+				t.Fatalf("message = %v, want %q", req["message"], "hello from terminal")
+			}
+			if err := json.NewEncoder(w).Encode(map[string]interface{}{
+				"message": "hello back",
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		},
+	})
+	defer srv.Close()
+
+	tok := pairAndGetSession(sessions, "telegram", "123")
+	cmd := &GatewayCommand{
+		Provider: "telegram", ChatID: "123", RequestID: "r-chat",
+		Name: CmdChat, Args: []string{"hello", "from", "terminal"}, SessionToken: tok,
+	}
+	resp := HandleCommand(context.Background(), cmd, dc, sessions, downloads, nil, onboard)
+	if resp.Result != "ok" {
+		t.Fatalf("expected ok, got %s: %s", resp.Result, resp.Message)
+	}
+	if resp.Message != "hello back" {
+		t.Fatalf("message = %q, want %q", resp.Message, "hello back")
+	}
+}
+
+func TestHandleCommand_Chat_NoArgs(t *testing.T) {
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
+	defer srv.Close()
+
+	tok := pairAndGetSession(sessions, "telegram", "123")
+	cmd := &GatewayCommand{
+		Provider: "telegram", ChatID: "123", RequestID: "r-chat",
+		Name: CmdChat, Args: []string{}, SessionToken: tok,
+	}
+	resp := HandleCommand(context.Background(), cmd, dc, sessions, downloads, nil, onboard)
+	if resp.Result != "error" {
+		t.Fatalf("expected error, got %s", resp.Result)
+	}
+	if resp.ErrorCode != "E_USAGE" {
+		t.Fatalf("errorCode = %q, want %q", resp.ErrorCode, "E_USAGE")
+	}
+}
+
 func TestHandleCommand_Agents_Success(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"GET /api/v1/agents": func(w http.ResponseWriter, r *http.Request) {
@@ -188,15 +247,13 @@ func TestHandleCommand_Agents_Success(t *testing.T) {
 	if !strings.Contains(resp.Message, "1 installed") {
 		t.Errorf("expected '1 installed' in message, got %q", resp.Message)
 	}
+	if !strings.Contains(resp.Message, "a1") || !strings.Contains(resp.Message, "a2") {
+		t.Errorf("expected detailed agent list in message, got %q", resp.Message)
+	}
 }
 
-func TestHandleCommand_Install_Success(t *testing.T) {
-	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
-		"POST /api/v1/agents/myagent/install": func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"status":"installed"}`)
-		},
-	})
+func TestHandleCommand_Install_GuiOnly(t *testing.T) {
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
 	defer srv.Close()
 
 	tok := pairAndGetSession(sessions, "telegram", "123")
@@ -205,8 +262,14 @@ func TestHandleCommand_Install_Success(t *testing.T) {
 		Name: CmdInstall, Args: []string{"myagent"}, SessionToken: tok,
 	}
 	resp := HandleCommand(context.Background(), cmd, dc, sessions, downloads, nil, onboard)
-	if resp.Result != "ok" {
-		t.Fatalf("expected ok, got %s: %s", resp.Result, resp.Message)
+	if resp.Result != "error" {
+		t.Fatalf("expected error, got %s: %s", resp.Result, resp.Message)
+	}
+	if resp.ErrorCode != "E_INSTALL_GUI_ONLY" {
+		t.Fatalf("expected E_INSTALL_GUI_ONLY, got %s", resp.ErrorCode)
+	}
+	if !strings.Contains(resp.Message, "Carrier GUI") {
+		t.Fatalf("expected GUI guidance, got: %q", resp.Message)
 	}
 }
 
@@ -218,6 +281,65 @@ func TestHandleCommand_Install_NoArgs(t *testing.T) {
 	cmd := &GatewayCommand{
 		Provider: "telegram", ChatID: "123", RequestID: "r1",
 		Name: CmdInstall, Args: []string{}, SessionToken: tok,
+	}
+	resp := HandleCommand(context.Background(), cmd, dc, sessions, downloads, nil, onboard)
+	if resp.ErrorCode != "E_INSTALL_GUI_ONLY" {
+		t.Errorf("expected E_INSTALL_GUI_ONLY, got %s", resp.ErrorCode)
+	}
+	if !strings.Contains(resp.Message, "Carrier GUI") {
+		t.Fatalf("expected GUI guidance, got: %q", resp.Message)
+	}
+}
+
+func TestHandleCommand_Onboard_GuiOnly(t *testing.T) {
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
+	defer srv.Close()
+
+	tok := pairAndGetSession(sessions, "telegram", "123")
+	cmd := &GatewayCommand{
+		Provider: "telegram", ChatID: "123", RequestID: "r1",
+		Name: CmdOnboard, Args: []string{}, SessionToken: tok,
+	}
+	resp := HandleCommand(context.Background(), cmd, dc, sessions, downloads, nil, onboard)
+	if resp.Result != "error" {
+		t.Fatalf("expected error, got %s: %s", resp.Result, resp.Message)
+	}
+	if resp.ErrorCode != "E_ONBOARD_GUI_ONLY" {
+		t.Fatalf("expected E_ONBOARD_GUI_ONLY, got %s", resp.ErrorCode)
+	}
+	if !strings.Contains(resp.Message, "Carrier GUI") {
+		t.Fatalf("expected GUI guidance, got: %q", resp.Message)
+	}
+}
+
+func TestHandleCommand_Uninstall_Success(t *testing.T) {
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/myagent/uninstall": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"uninstalled"}`)
+		},
+	})
+	defer srv.Close()
+
+	tok := pairAndGetSession(sessions, "telegram", "123")
+	cmd := &GatewayCommand{
+		Provider: "telegram", ChatID: "123", RequestID: "r1",
+		Name: CmdUninstall, Args: []string{"myagent"}, SessionToken: tok,
+	}
+	resp := HandleCommand(context.Background(), cmd, dc, sessions, downloads, nil, onboard)
+	if resp.Result != "ok" {
+		t.Fatalf("expected ok, got %s: %s", resp.Result, resp.Message)
+	}
+}
+
+func TestHandleCommand_Uninstall_NoArgs(t *testing.T) {
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
+	defer srv.Close()
+
+	tok := pairAndGetSession(sessions, "telegram", "123")
+	cmd := &GatewayCommand{
+		Provider: "telegram", ChatID: "123", RequestID: "r1",
+		Name: CmdUninstall, Args: []string{}, SessionToken: tok,
 	}
 	resp := HandleCommand(context.Background(), cmd, dc, sessions, downloads, nil, onboard)
 	if resp.ErrorCode != "E_USAGE" {

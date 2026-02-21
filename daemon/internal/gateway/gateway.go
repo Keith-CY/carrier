@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -29,6 +30,11 @@ type GatewayConfig struct {
 	DiscordPublicKey        string // CARRIER_DISCORD_PUBLIC_KEY
 	FeishuVerificationToken string // CARRIER_FEISHU_VERIFICATION_TOKEN
 	TelegramWebhookSecret   string // CARRIER_TELEGRAM_WEBHOOK_SECRET
+	TelegramBotToken        string // CARRIER_TELEGRAM_BOT_TOKEN
+	TelegramTransportMode   string // CARRIER_TELEGRAM_TRANSPORT_MODE: auto|webhook|polling
+	TelegramWebhookURL      string // CARRIER_TELEGRAM_WEBHOOK_URL
+	TelegramPollingTimeout  int    // CARRIER_TELEGRAM_POLLING_TIMEOUT_SEC
+	TelegramAPIBaseURL      string // CARRIER_TELEGRAM_API_BASE_URL
 
 	// Limits
 	MaxCommandBodyBytes int // CARRIER_MAX_COMMAND_BODY_BYTES (default 64KB)
@@ -46,19 +52,24 @@ type GatewayConfig struct {
 // LoadGatewayConfigFromEnv loads GatewayConfig from environment variables.
 func LoadGatewayConfigFromEnv() *GatewayConfig {
 	cfg := &GatewayConfig{
-		Port:                parseEnvInt("CARRIER_GATEWAY_PORT", 8787),
-		Hostname:            envOrDefault("CARRIER_GATEWAY_HOST", "127.0.0.1"),
-		APIToken:            strings.TrimSpace(os.Getenv("CARRIER_GATEWAY_API_TOKEN")),
-		DaemonBaseURL:       strings.TrimRight(strings.TrimSpace(envOrDefault("CARRIER_DAEMON_BASE_URL", "http://127.0.0.1:9090")), "/"),
-		DaemonToken:         strings.TrimSpace(os.Getenv("CARRIER_SERVER_API_TOKEN")),
-		DaemonTimeout:       time.Duration(parseEnvInt("CARRIER_DAEMON_TIMEOUT_MS", 30000)) * time.Millisecond,
-		DiscordPublicKey:    strings.TrimSpace(os.Getenv("CARRIER_DISCORD_PUBLIC_KEY")),
+		Port:                    parseEnvInt("CARRIER_GATEWAY_PORT", 8787),
+		Hostname:                envOrDefault("CARRIER_GATEWAY_HOST", "127.0.0.1"),
+		APIToken:                strings.TrimSpace(os.Getenv("CARRIER_GATEWAY_API_TOKEN")),
+		DaemonBaseURL:           strings.TrimRight(strings.TrimSpace(envOrDefault("CARRIER_DAEMON_BASE_URL", "http://127.0.0.1:9090")), "/"),
+		DaemonToken:             strings.TrimSpace(os.Getenv("CARRIER_SERVER_API_TOKEN")),
+		DaemonTimeout:           time.Duration(parseEnvInt("CARRIER_DAEMON_TIMEOUT_MS", 30000)) * time.Millisecond,
+		DiscordPublicKey:        strings.TrimSpace(os.Getenv("CARRIER_DISCORD_PUBLIC_KEY")),
 		FeishuVerificationToken: strings.TrimSpace(os.Getenv("CARRIER_FEISHU_VERIFICATION_TOKEN")),
 		TelegramWebhookSecret:   strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_WEBHOOK_SECRET")),
-		MaxCommandBodyBytes: parseEnvInt("CARRIER_MAX_COMMAND_BODY_BYTES", defaultMaxCommandBodyBytes),
-		RateLimitPerSession: parseEnvInt("CARRIER_RATE_LIMIT_PER_SESSION", 30),
-		RateLimitGlobal:     parseEnvInt("CARRIER_RATE_LIMIT_GLOBAL", 200),
-		RateLimitWindow:     time.Duration(parseEnvInt("CARRIER_RATE_LIMIT_WINDOW_MS", 60000)) * time.Millisecond,
+		TelegramBotToken:        strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_BOT_TOKEN")),
+		TelegramTransportMode:   strings.ToLower(strings.TrimSpace(envOrDefault("CARRIER_TELEGRAM_TRANSPORT_MODE", "auto"))),
+		TelegramWebhookURL:      strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_WEBHOOK_URL")),
+		TelegramPollingTimeout:  parseEnvInt("CARRIER_TELEGRAM_POLLING_TIMEOUT_SEC", 30),
+		TelegramAPIBaseURL:      strings.TrimSpace(envOrDefault("CARRIER_TELEGRAM_API_BASE_URL", "https://api.telegram.org")),
+		MaxCommandBodyBytes:     parseEnvInt("CARRIER_MAX_COMMAND_BODY_BYTES", defaultMaxCommandBodyBytes),
+		RateLimitPerSession:     parseEnvInt("CARRIER_RATE_LIMIT_PER_SESSION", 30),
+		RateLimitGlobal:         parseEnvInt("CARRIER_RATE_LIMIT_GLOBAL", 200),
+		RateLimitWindow:         time.Duration(parseEnvInt("CARRIER_RATE_LIMIT_WINDOW_MS", 60000)) * time.Millisecond,
 	}
 
 	// Determine data dir
@@ -132,10 +143,18 @@ func StartGateway(cfg *GatewayConfig) error {
 	addr := fmt.Sprintf("%s:%d", cfg.Hostname, cfg.Port)
 	server := newGatewayHTTPServer(addr, mux)
 
+	transportCtx, cancelTransport := context.WithCancel(context.Background())
+	defer cancelTransport()
+
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("gateway listen %s: %w", addr, err)
 	}
+
+	if err := startTelegramTransport(transportCtx, cfg, daemon, sessions, downloads, rl, onboard); err != nil {
+		return err
+	}
+
 	log.Printf("[gateway] listening on http://%s", addr)
 	return server.Serve(ln)
 }

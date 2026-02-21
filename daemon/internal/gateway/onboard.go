@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 )
@@ -12,6 +13,8 @@ type OnboardStep string
 
 const (
 	OnboardIdle             OnboardStep = "idle"
+	OnboardChannelSelect    OnboardStep = "channel_select"
+	OnboardChannelToken     OnboardStep = "channel_token"
 	OnboardAgentSelected    OnboardStep = "agent_selected"
 	OnboardProviderSelected OnboardStep = "provider_selected"
 	OnboardAuthConfigured   OnboardStep = "auth_configured"
@@ -22,10 +25,15 @@ const (
 
 // OnboardSession is the state for a single chat's onboard flow.
 type OnboardSession struct {
-	Step             OnboardStep
-	SelectedAgent    string
-	SelectedProvider string // LLMProvider.ID
-	EnvVars          map[string]string
+	Step              OnboardStep
+	InstanceID        string
+	SelectedAgent     string
+	SelectedAgentName string
+	SelectedChannel   string
+	ChannelToken      string
+	SelectedProvider  string // LLMProvider.ID
+	WorkspacePath     string
+	EnvVars           map[string]string
 }
 
 // OnboardStore tracks per-session onboard state.
@@ -147,6 +155,10 @@ func onboardReply(ctx context.Context, requestID, sessionKey string, args []stri
 	switch sess.Step {
 	case OnboardIdle:
 		return onboardSelectAgent(ctx, requestID, sessionKey, input, daemon, store, actor)
+	case OnboardChannelSelect:
+		return onboardSelectChannel(requestID, sessionKey, input, store)
+	case OnboardChannelToken:
+		return onboardCaptureChannelToken(requestID, sessionKey, input, store)
 	case OnboardAgentSelected:
 		return onboardSelectProvider(requestID, sessionKey, input, store)
 	case OnboardProviderSelected:
@@ -183,12 +195,74 @@ func onboardSelectAgent(ctx context.Context, requestID, sessionKey, agentID stri
 		return errResp(requestID, "E_AGENT_NOT_FOUND", fmt.Sprintf("Agent %q not found. Run `/onboard` to see available agents.", agentID))
 	}
 	store.update(sessionKey, func(s *OnboardSession) {
-		s.Step = OnboardAgentSelected
 		s.SelectedAgent = agentID
+		s.SelectedAgentName = found.Name
+	})
+	if isPicoclawAgent(agentID) {
+		store.update(sessionKey, func(s *OnboardSession) {
+			s.Step = OnboardChannelSelect
+		})
+		return GatewayResponse{RequestID: requestID, Result: "ok", Message: renderPicoclawChannelPrompt()}
+	}
+	store.update(sessionKey, func(s *OnboardSession) {
+		s.Step = OnboardAgentSelected
 	})
 
 	// Build provider list
 	return buildProviderListResponse(requestID, found)
+}
+
+func onboardSelectChannel(requestID, sessionKey, input string, store *OnboardStore) GatewayResponse {
+	sess := store.get(sessionKey)
+	if sess == nil {
+		return errResp(requestID, "E_USAGE", "No active session. Run `/onboard` to start.")
+	}
+	if !isPicoclawAgent(sess.SelectedAgent) {
+		store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardAgentSelected })
+		return errResp(requestID, "E_USAGE", "Channel selection is only required for PicoClaw in this flow.")
+	}
+	channel, ok := parsePicoclawChannel(strings.TrimSpace(input))
+	if !ok {
+		return errResp(requestID, "E_USAGE", "Unsupported channel. Reply `/onboard telegram` to continue.")
+	}
+	store.update(sessionKey, func(s *OnboardSession) {
+		s.SelectedChannel = channel.ID
+		s.Step = OnboardChannelToken
+	})
+	return GatewayResponse{
+		RequestID: requestID,
+		Result:    "ok",
+		Message:   renderPicoclawChannelTokenPrompt(channel),
+	}
+}
+
+func onboardCaptureChannelToken(requestID, sessionKey, input string, store *OnboardStore) GatewayResponse {
+	sess := store.get(sessionKey)
+	if sess == nil {
+		return errResp(requestID, "E_USAGE", "No active session. Run `/onboard` to start.")
+	}
+	token := strings.TrimSpace(input)
+	if token == "" {
+		return errResp(requestID, "E_USAGE", "Bot token cannot be empty. Please paste the token to continue.")
+	}
+	store.update(sessionKey, func(s *OnboardSession) {
+		s.ChannelToken = token
+		s.Step = OnboardAgentSelected
+	})
+	name := strings.TrimSpace(sess.SelectedAgentName)
+	if name == "" {
+		name = sess.SelectedAgent
+	}
+	agent := &AgentState{ID: sess.SelectedAgent, Name: name}
+	resp := buildProviderListResponse(requestID, agent)
+	resp.Message = strings.TrimSpace(
+		fmt.Sprintf(
+			"✅ Channel configured for PicoClaw: `%s`.\n%s",
+			sess.SelectedChannel,
+			resp.Message,
+		),
+	)
+	return resp
 }
 
 // buildProviderListResponse constructs the provider selection prompt.
@@ -223,6 +297,7 @@ func buildProviderListResponse(requestID string, agent *AgentState) GatewayRespo
 
 	lines = append(lines, "Reply with a provider ID (e.g. `/onboard anthropic`) to continue,")
 	lines = append(lines, "or reply `/onboard skip` to skip provider selection.")
+	lines = append(lines, "or reply `/onboard reuse` to reuse Carrier default provider and saved credential.")
 	return GatewayResponse{RequestID: requestID, Result: "ok", Message: strings.Join(lines, "\n")}
 }
 
@@ -245,6 +320,51 @@ func authModeBadge(m AuthMode) string {
 
 func onboardSelectProvider(requestID, sessionKey, input string, store *OnboardStore) GatewayResponse {
 	lower := strings.ToLower(strings.TrimSpace(input))
+
+	if lower == "reuse" {
+		defaultProviderID := detectCarrierDefaultProviderID()
+		if defaultProviderID == "" {
+			return errResp(requestID, "E_PROVIDER_NOT_FOUND", "No Carrier default provider found. Select a provider ID explicitly.")
+		}
+		p := GetLLMProvider(defaultProviderID)
+		if p == nil {
+			return errResp(requestID, "E_PROVIDER_NOT_FOUND", fmt.Sprintf("Carrier default provider %q is not available.", defaultProviderID))
+		}
+		store.update(sessionKey, func(s *OnboardSession) {
+			s.Step = OnboardProviderSelected
+			s.SelectedProvider = p.ID
+		})
+		value, backend, ok, err := loadProviderCredential(p.ID)
+		if err != nil {
+			return errResp(requestID, "E_AUTH_INPUT", fmt.Sprintf("failed to load saved credential for %s: %v", p.Name, err))
+		}
+		if ok && p.EnvVar != "" && strings.TrimSpace(value) != "" {
+			store.update(sessionKey, func(s *OnboardSession) {
+				for k, v := range ProviderEnvVarsToSet(p, value) {
+					s.EnvVars[k] = v
+				}
+				s.Step = OnboardAuthConfigured
+			})
+			lines := []string{
+				fmt.Sprintf("✅ Reused Carrier default provider **%s** (`%s`).", p.Name, p.ID),
+				fmt.Sprintf("Credential loaded from %s.", backend),
+				"",
+			}
+			lines = append(lines, onboardEnvVarsPromptLines(store.get(sessionKey))...)
+			return GatewayResponse{RequestID: requestID, Result: "ok", Message: strings.Join(lines, "\n")}
+		}
+		if p.AuthMode == AuthModeNone {
+			store.update(sessionKey, func(s *OnboardSession) {
+				s.Step = OnboardAuthConfigured
+			})
+			return onboardPromptEnvVars(requestID, store.get(sessionKey))
+		}
+		lines := []string{
+			fmt.Sprintf("Carrier default provider is **%s** (`%s`), but no saved credential was found.", p.Name, p.ID),
+			BuildProviderAuthPrompt(p),
+		}
+		return GatewayResponse{RequestID: requestID, Result: "ok", Message: strings.Join(lines, "\n\n")}
+	}
 
 	// User can skip provider selection
 	if lower == "skip" || lower == "done" {
@@ -291,11 +411,26 @@ func onboardSelectProvider(requestID, sessionKey, input string, store *OnboardSt
 		"",
 		prompt,
 	}
+	if hint := credentialReuseHint(p); hint != "" {
+		lines = append(lines, "")
+		lines = append(lines, hint)
+	}
 	if p.ExampleModel != "" {
 		lines = append(lines, "")
 		lines = append(lines, fmt.Sprintf("Suggested model: `%s`", p.ExampleModel))
 	}
 	return GatewayResponse{RequestID: requestID, Result: "ok", Message: strings.Join(lines, "\n")}
+}
+
+func credentialReuseHint(p *LLMProvider) string {
+	if p == nil {
+		return ""
+	}
+	_, backend, ok, err := loadProviderCredential(p.ID)
+	if err != nil || !ok {
+		return ""
+	}
+	return fmt.Sprintf("Saved credential detected for **%s** (%s). Reply `/onboard reuse` to use it.", p.Name, backend)
 }
 
 func onboardHandleAuth(requestID, sessionKey, input string, store *OnboardStore) GatewayResponse {
@@ -329,13 +464,19 @@ func onboardHandleAuth(requestID, sessionKey, input string, store *OnboardStore)
 		// Merge any env vars from auth result into session
 		if result.EnvVar != "" && result.Value != "" {
 			store.update(sessionKey, func(s *OnboardSession) {
-				s.EnvVars[result.EnvVar] = result.Value
+				for k, v := range ProviderEnvVarsToSet(p, result.Value) {
+					s.EnvVars[k] = v
+				}
 			})
 		}
 		store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardAuthConfigured })
 		sess = store.get(sessionKey)
 
 		lines := []string{"✅ Authentication configured.", ""}
+		if strings.TrimSpace(result.Instructions) != "" {
+			lines = append(lines, result.Instructions)
+			lines = append(lines, "")
+		}
 		lines = append(lines, onboardEnvVarsPromptLines(sess)...)
 		return GatewayResponse{RequestID: requestID, Result: "ok", Message: strings.Join(lines, "\n")}
 	}
@@ -384,13 +525,17 @@ func onboardEnvInput(requestID, sessionKey, input string, store *OnboardStore) G
 			envSummary = "\nEnvironment variables: " + strings.Join(keys, ", ")
 		}
 
+		channelLine := ""
+		if sess.SelectedChannel != "" {
+			channelLine = fmt.Sprintf("\nChannel: %s", sess.SelectedChannel)
+		}
 		providerLine := ""
 		if sess.SelectedProvider != "" {
 			providerLine = fmt.Sprintf("\nLLM Provider: %s", sess.SelectedProvider)
 		}
 
 		lines := []string{
-			fmt.Sprintf("Ready to install **%s**?%s%s", sess.SelectedAgent, providerLine, envSummary),
+			fmt.Sprintf("Ready to install **%s**?%s%s%s", sess.SelectedAgent, channelLine, providerLine, envSummary),
 			"",
 			"Reply `/onboard yes` to proceed or `/onboard no` to go back.",
 		}
@@ -426,6 +571,21 @@ func onboardConfirm(ctx context.Context, requestID, sessionKey, input string, da
 	}
 	agentID := sess.SelectedAgent
 	store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardInstalling })
+	setupNotes := []string{}
+	if isPicoclawAgent(agentID) {
+		result, err := preparePicoclawManagedOnboard(sess, actor)
+		if err != nil {
+			store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardEnvConfigured })
+			return errResp(requestID, "E_ENV", fmt.Sprintf("failed to prepare picoclaw onboarding artifacts: %v", err))
+		}
+		setupNotes = append(setupNotes, fmt.Sprintf("PicoClaw workspace: %s", result.WorkspacePath))
+		setupNotes = append(setupNotes, fmt.Sprintf("PicoClaw config: %s", result.ConfigPath))
+		setupNotes = append(setupNotes, fmt.Sprintf("Carrier record: %s", result.RecordPath))
+	}
+	if err := applyOnboardEnvVars(sess.EnvVars); err != nil {
+		store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardEnvConfigured })
+		return errResp(requestID, "E_ENV", fmt.Sprintf("failed to apply environment variables: %v", err))
+	}
 
 	if err := daemon.InstallAgent(ctx, agentID, actor, requestID); err != nil {
 		store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardDone })
@@ -444,11 +604,60 @@ func onboardConfirm(ctx context.Context, requestID, sessionKey, input string, da
 		health = statuses[0].Health
 	}
 	store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardDone })
+	pairHint := ""
+	if isPicoclawAgent(agentID) {
+		if logs, logErr := daemon.GetLogs(ctx, agentID, 120, actor, requestID); logErr == nil && logs != nil {
+			if pairCode := extractPairCode(logs.Lines); pairCode != "" {
+				pairHint = fmt.Sprintf("PicoClaw pair code: `%s`. Send `/pair %s` in your PicoClaw Telegram bot.", pairCode, pairCode)
+			}
+		}
+		if pairHint == "" {
+			pairHint = "Open your PicoClaw Telegram bot and finish any in-bot pairing/authorization prompts to complete onboarding."
+		}
+	}
+	lines := []string{fmt.Sprintf("🎉 %s installed and running (%s). Onboarding complete!", agentID, health)}
+	if len(setupNotes) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, setupNotes...)
+	}
+	if pairHint != "" {
+		lines = append(lines, "")
+		lines = append(lines, pairHint)
+	}
 	return GatewayResponse{
 		RequestID: requestID,
 		Result:    "ok",
-		Message:   fmt.Sprintf("🎉 %s installed and running (%s). Onboarding complete!", agentID, health),
+		Message:   strings.Join(lines, "\n"),
 	}
+}
+
+func detectCarrierDefaultProviderID() string {
+	providerID := strings.TrimSpace(os.Getenv("CARRIER_DEFAULT_PROVIDER_ID"))
+	if providerID != "" {
+		return providerID
+	}
+	modelID := strings.TrimSpace(os.Getenv("CARRIER_DEFAULT_MODEL_ID"))
+	if modelID == "" {
+		return ""
+	}
+	parts := strings.SplitN(modelID, "/", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(parts[0])
+}
+
+func applyOnboardEnvVars(envVars map[string]string) error {
+	for k, v := range envVars {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		if err := os.Setenv(key, v); err != nil {
+			return fmt.Errorf("set %s: %w", key, err)
+		}
+	}
+	return nil
 }
 
 func onboardCancel(requestID, sessionKey string, store *OnboardStore) GatewayResponse {

@@ -24,6 +24,12 @@ func TestParseInput_ValidCommands(t *testing.T) {
 			wantCmd: CmdPair, wantArgs: []string{"abc123"},
 		},
 		{
+			name:         "chat command with session token",
+			input:        "telegram 123 req-chat session-abc /chat hello from terminal",
+			wantProvider: "telegram", wantChatID: "123", wantReqID: "req-chat",
+			wantCmd: CmdChat, wantArgs: []string{"hello", "from", "terminal"}, wantSession: "session-abc",
+		},
+		{
 			name:         "agents command",
 			input:        "discord ch-1 req-2 /agents",
 			wantProvider: "discord", wantChatID: "ch-1", wantReqID: "req-2",
@@ -34,6 +40,12 @@ func TestParseInput_ValidCommands(t *testing.T) {
 			input:        "feishu chat-abc req-3 session-xyz123 /install myagent",
 			wantProvider: "feishu", wantChatID: "chat-abc", wantReqID: "req-3",
 			wantCmd: CmdInstall, wantArgs: []string{"myagent"}, wantSession: "session-xyz123",
+		},
+		{
+			name:         "uninstall with session token",
+			input:        "feishu chat-abc req-3b session-xyz123 /uninstall myagent",
+			wantProvider: "feishu", wantChatID: "chat-abc", wantReqID: "req-3b",
+			wantCmd: CmdUninstall, wantArgs: []string{"myagent"}, wantSession: "session-xyz123",
 		},
 		{
 			name:         "logs with agent and tail",
@@ -173,9 +185,9 @@ func TestFormatUptime(t *testing.T) {
 
 func TestParseConsent(t *testing.T) {
 	tests := []struct {
-		input   string
-		want    bool
-		wantOK  bool
+		input  string
+		want   bool
+		wantOK bool
 	}{
 		{"yes", true, true},
 		{"YES", true, true},

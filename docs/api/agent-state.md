@@ -70,4 +70,4 @@ Migration mapping:
 ## Source Definitions
 
 - **Go (daemon):** `daemon/internal/lifecycle/types.go` — `AgentState` struct
-- **TypeScript (gateway):** `gateway/src/daemon/client.ts` — `DaemonAgentState` type
+- **Go (gateway):** `daemon/internal/gateway/daemonclient.go` — `AgentState` struct

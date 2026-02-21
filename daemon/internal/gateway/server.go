@@ -32,6 +32,7 @@ type requestIDKey struct{}
 // buildGatewayMux constructs the gateway HTTP mux.
 func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *SessionStore, downloads *DownloadStore, rl *GatewayRateLimiter, onboard *OnboardStore, setup *SetupStore) http.Handler {
 	mux := http.NewServeMux()
+	telegramPairs := newTelegramPairStore()
 
 	// Health
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -88,6 +89,86 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		default:
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 		}
+	})
+	mux.HandleFunc("/api/v1/add", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleWebUIAdd(w, r, requestID, daemon)
+	})
+	mux.HandleFunc("/api/v1/telegram/pair/init", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleTelegramPairInit(w, r, requestID, cfg, telegramPairs)
+	})
+	mux.HandleFunc("/api/v1/telegram/pair/wait", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleTelegramPairWait(w, r, requestID, cfg, telegramPairs)
+	})
+	mux.HandleFunc("/api/v1/pairing/sessions", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handlePairingSessions(w, r, requestID, sessions)
+	})
+	mux.HandleFunc("/api/v1/agents", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleWebUIAgents(w, r, requestID, daemon)
+	})
+	mux.HandleFunc("/api/v1/agents/", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleWebUIAgent(w, r, requestID, daemon)
+	})
+	mux.HandleFunc("/api/v1/instances", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleWebUIInstances(w, r, requestID, daemon)
+	})
+	mux.HandleFunc("/api/v1/instances/", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleWebUIInstance(w, r, requestID, daemon)
 	})
 	// Legacy alias
 	mux.HandleFunc("/setup", func(w http.ResponseWriter, r *http.Request) {
@@ -195,6 +276,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		}
 		requestID := requestIDFromCtx(r.Context())
 		byCategory := LLMProvidersByCategory()
+		carrierDefaultProvider := buildCarrierDefaultProviderInfo()
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"requestId": requestID,
 			"result":    "ok",
@@ -204,6 +286,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 				"custom":  byCategory["custom"],
 				"local":   byCategory["local"],
 			},
+			"carrier_default_provider": carrierDefaultProvider,
 		})
 	})
 
@@ -265,20 +348,19 @@ func handleTelegramWebhook(w http.ResponseWriter, r *http.Request, cfg *GatewayC
 		return
 	}
 
-	nc := ParseTelegramUpdate(payload)
-	if nc == nil {
+	msg := ParseTelegramMessage(payload)
+	if msg == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "message": "ignored non-command telegram update"})
 		return
 	}
 
-	session := sessions.GetSession("telegram", nc.ChatID)
-	var sessionToken string
-	if session != nil {
-		sessionToken = session.SessionToken
+	var resp GatewayResponse
+	if msg.Command != nil {
+		resp = processTelegramCommand(r.Context(), msg.Command, daemon, sessions, downloads, rl, onboard)
+	} else {
+		resp = processBaseAgentChat(r.Context(), msg.Provider, msg.ChatID, msg.RequestID, msg.RawText, daemon, sessions, rl)
 	}
-	input := InjectSessionToken(ToGatewayInput(nc), sessionToken)
-	resp := SafeHandleCommand(r.Context(), input, daemon, sessions, downloads, rl, onboard)
-	writeJSON(w, http.StatusOK, RenderTelegramResponse(resp))
+	writeJSON(w, http.StatusOK, RenderTelegramWebhookResponse(resp, msg.ChatID))
 }
 
 func handleDiscordWebhook(w http.ResponseWriter, r *http.Request, cfg *GatewayConfig, daemon *DaemonClient, sessions *SessionStore, downloads *DownloadStore, rl *GatewayRateLimiter, onboard *OnboardStore) {
@@ -306,19 +388,24 @@ func handleDiscordWebhook(w http.ResponseWriter, r *http.Request, cfg *GatewayCo
 		return
 	}
 
-	nc := ParseDiscordPayload(payload)
-	if nc == nil {
+	msg := ParseDiscordMessage(payload)
+	if msg == nil {
 		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "unsupported discord payload"))
 		return
 	}
 
-	session := sessions.GetSession("discord", nc.ChatID)
-	var sessionToken string
-	if session != nil {
-		sessionToken = session.SessionToken
+	var resp GatewayResponse
+	if msg.Command != nil {
+		session := sessions.GetSession("discord", msg.ChatID)
+		var sessionToken string
+		if session != nil {
+			sessionToken = session.SessionToken
+		}
+		input := InjectSessionToken(ToGatewayInput(msg.Command), sessionToken)
+		resp = SafeHandleCommand(r.Context(), input, daemon, sessions, downloads, rl, onboard)
+	} else {
+		resp = processBaseAgentChat(r.Context(), msg.Provider, msg.ChatID, msg.RequestID, msg.RawText, daemon, sessions, rl)
 	}
-	input := InjectSessionToken(ToGatewayInput(nc), sessionToken)
-	resp := SafeHandleCommand(r.Context(), input, daemon, sessions, downloads, rl, onboard)
 	rendered := RenderDiscordResponse(resp)
 
 	_ = requestID
@@ -358,20 +445,68 @@ func handleFeishuWebhook(w http.ResponseWriter, r *http.Request, cfg *GatewayCon
 		return
 	}
 
-	nc := ParseFeishuEvent(payload)
-	if nc == nil {
+	msg := ParseFeishuMessage(payload)
+	if msg == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "message": "ignored non-command feishu event"})
 		return
 	}
 
-	session := sessions.GetSession("feishu", nc.ChatID)
-	var sessionToken string
-	if session != nil {
-		sessionToken = session.SessionToken
+	var resp GatewayResponse
+	if msg.Command != nil {
+		session := sessions.GetSession("feishu", msg.ChatID)
+		var sessionToken string
+		if session != nil {
+			sessionToken = session.SessionToken
+		}
+		input := InjectSessionToken(ToGatewayInput(msg.Command), sessionToken)
+		resp = SafeHandleCommand(r.Context(), input, daemon, sessions, downloads, rl, onboard)
+	} else {
+		resp = processBaseAgentChat(r.Context(), msg.Provider, msg.ChatID, msg.RequestID, msg.RawText, daemon, sessions, rl)
 	}
-	input := InjectSessionToken(ToGatewayInput(nc), sessionToken)
-	resp := SafeHandleCommand(r.Context(), input, daemon, sessions, downloads, rl, onboard)
 	writeJSON(w, http.StatusOK, RenderFeishuResponse(resp))
+}
+
+func processBaseAgentChat(
+	ctx context.Context,
+	provider string,
+	chatID string,
+	requestID string,
+	message string,
+	daemon *DaemonClient,
+	sessions *SessionStore,
+	rl *GatewayRateLimiter,
+) GatewayResponse {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return GatewayResponse{RequestID: requestID, Result: "ok", Message: "empty message ignored"}
+	}
+	session := sessions.GetSession(provider, chatID)
+	if session == nil {
+		return errResp(requestID, "E_SESSION_REQUIRED", "chat is not paired; run /pair <code> first")
+	}
+	if rl != nil {
+		key := fmt.Sprintf("%s:%s", provider, chatID)
+		result := rl.Check(key)
+		if !result.Allowed {
+			return errResp(requestID, result.ErrorCode, result.Message)
+		}
+	}
+	sessions.Touch(provider, chatID)
+
+	actor := fmt.Sprintf("%s:%s", provider, chatID)
+	chatResult, err := daemon.ChatBaseAgent(ctx, provider, chatID, requestID, trimmed, actor)
+	if err != nil {
+		return daemonErrResp(requestID, err)
+	}
+	respMessage := strings.TrimSpace(chatResult.Message)
+	if respMessage == "" {
+		respMessage = "base agent completed with no output"
+	}
+	return GatewayResponse{
+		RequestID: requestID,
+		Result:    "ok",
+		Message:   respMessage,
+	}
 }
 
 func handleDownload(w http.ResponseWriter, r *http.Request, cfg *GatewayConfig, downloads *DownloadStore) {
