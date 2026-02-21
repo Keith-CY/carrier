@@ -66,6 +66,11 @@ func (s *Store) AttachMemory(agentID, memoryID string, opts AttachOptions) (Atta
 		AttachedAt:  s.now(),
 	}
 	s.attachments[agentID] = append(existing, att)
+	if err := s.persistStateLocked(); err != nil {
+		s.mu.Unlock()
+		s.recordAudit(opts.RequestID, opts.Actor, "attach", memoryID, auditResultFailure, err.Error())
+		return Attachment{}, err
+	}
 	s.mu.Unlock()
 	s.recordAudit(opts.RequestID, opts.Actor, "attach", memoryID, auditResultSuccess, "memory attached")
 	return att, nil
@@ -74,7 +79,6 @@ func (s *Store) AttachMemory(agentID, memoryID string, opts AttachOptions) (Atta
 // DetachMemory removes an attachment between an agent and memory package.
 func (s *Store) DetachMemory(agentID, memoryID string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	attachments := s.attachments[agentID]
 	idx := -1
@@ -85,6 +89,7 @@ func (s *Store) DetachMemory(agentID, memoryID string) error {
 		}
 	}
 	if idx < 0 {
+		s.mu.Unlock()
 		return ErrAttachmentMissing
 	}
 
@@ -95,6 +100,11 @@ func (s *Store) DetachMemory(agentID, memoryID string) error {
 			break
 		}
 	}
+	if err := s.persistStateLocked(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.mu.Unlock()
 	return nil
 }
 
@@ -112,20 +122,26 @@ func (s *Store) ListAttachments(agentID string) []Attachment {
 // The incoming order is preserved as ascending priority.
 func (s *Store) SetAttachmentsFromLinks(agentID string, memoryIDs []string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	attachments := make([]Attachment, 0, len(memoryIDs))
 	hasPerAgent := false
 	for i, memoryID := range memoryIDs {
 		entry, ok := s.entries[memoryID]
 		if !ok {
+			s.mu.Unlock()
 			return fmt.Errorf("%w: %s", ErrMemoryNotFound, memoryID)
+		}
+		if entry.State == StateArchived {
+			s.mu.Unlock()
+			return fmt.Errorf("%w: %s is archived", ErrInvalidState, memoryID)
 		}
 		if entry.Type == TypePerAgent {
 			if entry.Owner != "" && entry.Owner != agentID {
+				s.mu.Unlock()
 				return fmt.Errorf("%w: memory owner is %q, requester is %q", ErrOwnerMismatch, entry.Owner, agentID)
 			}
 			if hasPerAgent {
+				s.mu.Unlock()
 				return ErrPerAgentLimit
 			}
 			hasPerAgent = true
@@ -141,6 +157,11 @@ func (s *Store) SetAttachmentsFromLinks(agentID string, memoryIDs []string) erro
 		})
 	}
 	s.attachments[agentID] = attachments
+	if err := s.persistStateLocked(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.mu.Unlock()
 	return nil
 }
 
@@ -164,11 +185,14 @@ func (s *Store) PrepareAgentMemory(agentID string) (RuntimeMemoryContract, error
 		installPaths[a.MemoryID] = s.installPath[a.MemoryID]
 	}
 	s.mu.RUnlock()
-	if runtimeReadTargetPath == "" {
-		runtimeReadTargetPath = "/app/memory"
-	}
-	if runtimeWriteTargetPath == "" {
-		runtimeWriteTargetPath = "/app/memory_private"
+	if runtimeReadTargetPath == "" || runtimeWriteTargetPath == "" {
+		defaultReadPath, defaultWritePath := defaultRuntimeMountTargets()
+		if runtimeReadTargetPath == "" {
+			runtimeReadTargetPath = defaultReadPath
+		}
+		if runtimeWriteTargetPath == "" {
+			runtimeWriteTargetPath = defaultWritePath
+		}
 	}
 	previousMounts := s.MountsForAgent(agentID)
 
@@ -186,6 +210,28 @@ func (s *Store) PrepareAgentMemory(agentID string) (RuntimeMemoryContract, error
 		}
 		return sorted[i].MemoryID < sorted[j].MemoryID
 	})
+
+	inputDigest, err := computePrepareInputDigest(sorted, entries, manifests, installPaths)
+	if err != nil {
+		return RuntimeMemoryContract{}, err
+	}
+
+	s.mu.RLock()
+	cachedDigest := s.viewInputDigest[agentID]
+	cachedExplain, hasCachedExplain := s.views[agentID]
+	s.mu.RUnlock()
+	if hasCachedExplain && cachedDigest == inputDigest {
+		if _, err := os.Stat(cachedExplain.ViewPath); err == nil {
+			if _, err := os.Stat(cachedExplain.MountMapPath); err == nil {
+				if err := s.applyMountStateWithRollback(agentID, sorted, previousMounts); err != nil {
+					return RuntimeMemoryContract{}, err
+				}
+				contract := buildRuntimeContractFromExplain(agentID, runtimeReadTargetPath, runtimeWriteTargetPath, cachedExplain)
+				s.recordAudit("", "", "prepare", agentID, auditResultSuccess, fmt.Sprintf("digest=%s reused=true", cachedExplain.Digest))
+				return contract, nil
+			}
+		}
+	}
 
 	viewRoot := filepath.Join(root, "views", agentID)
 	effectiveDir := filepath.Join(viewRoot, "effective")
@@ -281,28 +327,15 @@ func (s *Store) PrepareAgentMemory(agentID string) (RuntimeMemoryContract, error
 
 	s.mu.Lock()
 	s.views[agentID] = explain
+	s.viewInputDigest[agentID] = inputDigest
+	if err := s.persistStateLocked(); err != nil {
+		s.mu.Unlock()
+		return RuntimeMemoryContract{}, err
+	}
 	s.mu.Unlock()
 
-	env := map[string]string{
-		"AGENTD_MEMORY_PATH":        runtimeReadTargetPath,
-		"AGENTD_MEMORY_WRITE_PATH":  runtimeWriteTargetPath,
-		"AGENTD_MEMORY_VIEW_DIGEST": digest,
-	}
-	contract := RuntimeMemoryContract{
-		AgentID:          agentID,
-		ViewPath:         effectiveDir,
-		PrivateWritePath: privateWriteDir,
-		MountMapPath:     mountMapPath,
-		ViewDigest:       digest,
-		Mounts: []RuntimeMount{
-			{Source: effectiveDir, Target: env["AGENTD_MEMORY_PATH"], Mode: AccessReadOnly},
-			{Source: privateWriteDir, Target: env["AGENTD_MEMORY_WRITE_PATH"], Mode: AccessReadWrite},
-		},
-		Env:         env,
-		Explanation: explain,
-	}
-
-	s.recordAudit("", "", "prepare", agentID, auditResultSuccess, fmt.Sprintf("digest=%s", digest))
+	contract := buildRuntimeContractFromExplain(agentID, runtimeReadTargetPath, runtimeWriteTargetPath, explain)
+	s.recordAudit("", "", "prepare", agentID, auditResultSuccess, fmt.Sprintf("digest=%s reused=false", digest))
 	return contract, nil
 }
 
@@ -448,4 +481,57 @@ func writeMountMap(explain ViewExplanation) error {
 		return fmt.Errorf("write mountmap: %w", err)
 	}
 	return nil
+}
+
+func buildRuntimeContractFromExplain(agentID, runtimeReadTargetPath, runtimeWriteTargetPath string, explain ViewExplanation) RuntimeMemoryContract {
+	env := map[string]string{
+		"AGENTD_MEMORY_PATH":        runtimeReadTargetPath,
+		"AGENTD_MEMORY_WRITE_PATH":  runtimeWriteTargetPath,
+		"AGENTD_MEMORY_VIEW_DIGEST": explain.Digest,
+	}
+	privateWritePath := filepath.Join(filepath.Dir(explain.ViewPath), "private")
+	return RuntimeMemoryContract{
+		AgentID:          agentID,
+		ViewPath:         explain.ViewPath,
+		PrivateWritePath: privateWritePath,
+		MountMapPath:     explain.MountMapPath,
+		ViewDigest:       explain.Digest,
+		Mounts: []RuntimeMount{
+			{Source: explain.ViewPath, Target: env["AGENTD_MEMORY_PATH"], Mode: AccessReadOnly},
+			{Source: privateWritePath, Target: env["AGENTD_MEMORY_WRITE_PATH"], Mode: AccessReadWrite},
+		},
+		Env:         env,
+		Explanation: explain,
+	}
+}
+
+func computePrepareInputDigest(sorted []Attachment, entries map[string]Entry, manifests map[string]PackageManifest, installPaths map[string]string) (string, error) {
+	type prepareInput struct {
+		MemoryID    string     `json:"memory_id"`
+		Mode        AccessMode `json:"mode"`
+		Priority    int        `json:"priority"`
+		Collections []string   `json:"collections"`
+		Digest      string     `json:"digest"`
+		InstallPath string     `json:"install_path"`
+	}
+
+	inputs := make([]prepareInput, 0, len(sorted))
+	for _, att := range sorted {
+		manifest := manifests[att.MemoryID]
+		inputs = append(inputs, prepareInput{
+			MemoryID:    att.MemoryID,
+			Mode:        att.Mode,
+			Priority:    att.Priority,
+			Collections: append([]string(nil), att.Collections...),
+			Digest:      manifest.Provenance.Digest,
+			InstallPath: installPaths[att.MemoryID],
+		})
+	}
+
+	raw, err := json.Marshal(inputs)
+	if err != nil {
+		return "", fmt.Errorf("marshal prepare input digest: %w", err)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
