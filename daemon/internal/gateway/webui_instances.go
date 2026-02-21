@@ -19,25 +19,25 @@ func handleWebUIInstances(w http.ResponseWriter, r *http.Request, requestID stri
 		writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load managed instances", "load managed instances", err)
 		return
 	}
+	persistDirty := false
 	if len(instances) > 0 {
 		updated := mergeManagedRuntimeState(r, daemon, instances, requestID)
 		if updated {
-			if saveErr := saveManagedInstances(path, instances); saveErr != nil {
-				log.Printf("[gateway] refresh managed runtime state persist skipped: %s", RedactErrorMessage(saveErr.Error()))
-			}
+			persistDirty = true
 		}
 	}
 	instances, updated, backfillErr := backfillManagedInstancesFromDaemon(r, daemon, instances, requestID)
 	if backfillErr != nil {
 		log.Printf("[gateway] managed instance backfill skipped: %s", RedactErrorMessage(backfillErr.Error()))
 	} else if updated {
-		if saveErr := saveManagedInstances(path, instances); saveErr != nil {
-			log.Printf("[gateway] managed instance backfill persist skipped: %s", RedactErrorMessage(saveErr.Error()))
-		}
+		persistDirty = true
 	}
 	if updatePairingStateFromLogs(r, daemon, instances, requestID) {
+		persistDirty = true
+	}
+	if persistDirty {
 		if saveErr := saveManagedInstances(path, instances); saveErr != nil {
-			log.Printf("[gateway] managed pairing-state refresh persist skipped: %s", RedactErrorMessage(saveErr.Error()))
+			log.Printf("[gateway] managed instances sync persist skipped: %s", RedactErrorMessage(saveErr.Error()))
 		}
 	}
 
