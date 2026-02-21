@@ -6,7 +6,8 @@ It is the fastest path from clean machine to a working first session.
 ## Task 1: 5-Minute First Setup
 
 Prerequisites:
-- Go and Bun installed
+- Go 1.23+ (matches `daemon/go.mod` / `toolchain go1.23.0`)
+- Bun 1.0+ (required by gateway validation scripts)
 - Repository cloned
 
 Commands:

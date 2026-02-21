@@ -24,7 +24,7 @@ Use this before reading historical planning notes.
 The documents below are retained for design history.
 Do not treat them as the implementation source of truth.
 
-- [`docs/plans/adr-runtime-model.md`](./plans/adr-runtime-model.md) -> use `docs/phase1-runtime-adr.md`
+- [`docs/plans/adr-runtime-model.md`](./plans/adr-runtime-model.md) -> use `docs/phase1-runtime-adr.md` (relative path assumes this index stays under `docs/`)
 - [`docs/plans/memory-package-specification.md`](./plans/memory-package-specification.md) -> use `daemon/internal/memory/`
 - [`docs/plans/memory-import-export-pipeline.md`](./plans/memory-import-export-pipeline.md) -> use `docs/command-contract.md` and `daemon/internal/memory/store.go`
 - [`docs/plans/memory-attach-detach-policy.md`](./plans/memory-attach-detach-policy.md) -> use `daemon/internal/memory/policy.go` and `daemon/internal/lifecycle/memory.go`
