@@ -2,7 +2,8 @@
 
 > **Issue:** #78 · **Status:** ⚠️ Superseded (diverged from implementation) · **Track:** B2 · **Depends on:** #77 (B1)
 >
-> **Note:** This plan describes HTTP endpoints (`POST /api/v1/memory/import` with multipart/form-data). The current implementation uses local file path–based `ImportMemory` / `ExportMemory` Go methods (see `daemon/internal/memory/store.go`). Refer to the code as the source of truth.
+> **Note:** This is a historical planning document.
+> For current behavior, use [`docs/current-architecture.md`](../current-architecture.md), [`docs/command-contract.md`](../command-contract.md), and [`daemon/internal/memory/store.go`](../../daemon/internal/memory/store.go).
 
 ## Goals
 

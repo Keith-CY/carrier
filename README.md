@@ -4,8 +4,8 @@ Scaffold for the Agent Installation Platform.
 
 ## Source of truth
 
+- Current architecture index: `docs/current-architecture.md`
 - Runtime model ADR: `docs/phase1-runtime-adr.md`
-- Conflict inventory: `docs/phase1-runtime-conflict-inventory.md`
 - Canonical product scope: `docs/Agent_Installation_Platform_PRD.md`
 
 ## Current scope
@@ -18,10 +18,17 @@ Scaffold for the Agent Installation Platform.
 
 ## Read order (single source of truth)
 For product scope/priority decisions, use this order:
-1. `docs/Agent_Installation_Platform_PRD.md` (source of truth for scope and requirements)
-2. `docs/phase1-runtime-adr.md` (canonical runtime-model ADR for Phase 1)
-3. `docs/Agent_Installation_Platform_Implementation_Plan.md` (execution sequence and delivery plan)
-4. `README.md` (quick orientation and current implementation status)
+1. `docs/current-architecture.md` (canonical index and task entry points)
+2. `docs/Agent_Installation_Platform_PRD.md` (source of truth for scope and requirements)
+3. `docs/phase1-runtime-adr.md` (canonical runtime-model ADR for Phase 1)
+4. `docs/Agent_Installation_Platform_Implementation_Plan.md` (historical execution plan context)
+5. `README.md` (quick orientation and current implementation status)
+
+## Task-first docs quick links
+- `docs/task-first-quickstart.md`
+- `docs/runbooks/pairing-lifecycle.md`
+- `docs/ci/first-response-playbook.md`
+- `docs/runbooks/go-live-rollback.md`
 
 ## Contributor docs quick links
 - `CONTRIBUTING.md`
