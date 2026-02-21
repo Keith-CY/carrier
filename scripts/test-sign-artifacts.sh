@@ -85,7 +85,7 @@ test_invalid_directory() {
     fi
 }
 
-# Test 4: Create test artifacts and attempt signing
+# Test 4: Regression test for set -e counter behavior
 test_counter_regression() {
     log_test "Regression: successful first sign should not exit early under set -e"
 
