@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"carrier/configv2"
+	"carrier/daemon/credentialstore"
 	gatewayruntime "carrier/daemon/gateway"
 	"carrier/daemon/server"
 )
@@ -110,11 +111,6 @@ type managedAgentInstanceFile struct {
 	Instances []managedAgentInstance `json:"instances"`
 }
 
-var (
-	errCredentialNotFound           = errors.New("credential not found")
-	errCredentialBackendUnavailable = errors.New("credential backend unavailable")
-)
-
 var picoclawPairCodePattern = regexp.MustCompile(`\bpair-[a-f0-9]{32}\b`)
 
 var picoclawChannels = []picoclawChannel{
@@ -179,6 +175,8 @@ var gatewayHealthProbe = checkGatewayHealth
 var daemonHealthProbe = checkDaemonHealth
 var daemonBackgroundStarter = startDaemonInBackground
 var gatewayBackgroundStarter = startGatewayInBackground
+var writeBootstrapPIDFileFunc = writeBootstrapPIDFile
+var terminateBackgroundProcessFunc = terminateBackgroundProcess
 var daemonPairCodeFetcher = fetchDaemonPairCode
 var openBrowserFunc = openBrowserURL
 var runOnboardFlow = runOnboard
@@ -746,6 +744,8 @@ func lookupListeningSocketInodeInFile(path string, port int) (string, error) {
 	return "", errors.New("socket inode not found")
 }
 
+// lookupPIDsBySocketInode scans /proc/*/fd and is intentionally scoped to
+// stop-path diagnostics/recovery, not hot-path request handling.
 func lookupPIDsBySocketInode(inode string) ([]int, error) {
 	if strings.TrimSpace(inode) == "" {
 		return nil, errors.New("socket inode is empty")
@@ -2524,16 +2524,41 @@ func startBackgroundSubprocess(subcommand, logName string) error {
 			return err
 		}
 		_ = logFile.Close()
-		if err := writeBootstrapPIDFile(logName, cmd.Process.Pid); err != nil {
-			return err
-		}
-		return nil
+		return persistBackgroundProcess(logName, cmd.Process)
 	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	if err := writeBootstrapPIDFile(logName, cmd.Process.Pid); err != nil {
+	if err := persistBackgroundProcess(logName, cmd.Process); err != nil {
 		return err
+	}
+	return nil
+}
+
+func persistBackgroundProcess(logName string, proc *os.Process) error {
+	if proc == nil || proc.Pid <= 0 {
+		return errors.New("background process is not available")
+	}
+	writeErr := writeBootstrapPIDFileFunc(logName, proc.Pid)
+	if writeErr == nil {
+		return nil
+	}
+	cleanupErr := terminateBackgroundProcessFunc(proc)
+	if cleanupErr != nil {
+		return fmt.Errorf("write bootstrap pid file: %w (cleanup failed: %v)", writeErr, cleanupErr)
+	}
+	return fmt.Errorf("write bootstrap pid file: %w", writeErr)
+}
+
+func terminateBackgroundProcess(proc *os.Process) error {
+	if proc == nil || proc.Pid <= 0 {
+		return nil
+	}
+	if stopped, stopErr := stopPID(proc.Pid); stopErr == nil && stopped {
+		return nil
+	}
+	if killErr := proc.Kill(); killErr != nil && !isProcessAlreadyGone(killErr) {
+		return killErr
 	}
 	return nil
 }
@@ -2743,157 +2768,11 @@ func isAddressInUseError(err error) bool {
 }
 
 func loadProviderCredential(providerID string) (string, string, bool, error) {
-	service := providerCredentialService(providerID)
-	if value, err := loadCredentialFromKeychain(service); err == nil {
-		return value, "macOS-keychain", true, nil
-	} else if !errors.Is(err, errCredentialNotFound) && !errors.Is(err, errCredentialBackendUnavailable) {
-		return "", "", false, err
-	}
-
-	value, err := loadCredentialFromFile(providerID)
-	if err == nil {
-		return value, "local-file", true, nil
-	}
-	if errors.Is(err, errCredentialNotFound) {
-		return "", "", false, nil
-	}
-	return "", "", false, err
+	return credentialstore.LoadProviderCredential(providerID)
 }
 
 func saveProviderCredential(providerID, value string) (string, error) {
-	service := providerCredentialService(providerID)
-	if err := saveCredentialToKeychain(service, value); err == nil {
-		return "macOS-keychain", nil
-	} else if !errors.Is(err, errCredentialBackendUnavailable) {
-		return "", err
-	}
-	if err := saveCredentialToFile(providerID, value); err != nil {
-		return "", err
-	}
-	return "local-file", nil
-}
-
-func providerCredentialService(providerID string) string {
-	return "carrier.provider." + strings.TrimSpace(providerID)
-}
-
-func keychainAvailable() bool {
-	if runtime.GOOS != "darwin" {
-		return false
-	}
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("CARRIER_DISABLE_KEYCHAIN")), "1") {
-		return false
-	}
-	_, err := exec.LookPath("security")
-	return err == nil
-}
-
-func loadCredentialFromKeychain(service string) (string, error) {
-	if !keychainAvailable() {
-		return "", errCredentialBackendUnavailable
-	}
-	cmd := exec.Command("security", "find-generic-password", "-a", "carrier", "-s", service, "-w")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		msg := strings.ToLower(strings.TrimSpace(stderr.String()))
-		if strings.Contains(msg, "could not be found") || strings.Contains(msg, "item not found") {
-			return "", errCredentialNotFound
-		}
-		return "", fmt.Errorf("read keychain credential for %s", service)
-	}
-	value := strings.TrimSpace(string(out))
-	if value == "" {
-		return "", errCredentialNotFound
-	}
-	return value, nil
-}
-
-func saveCredentialToKeychain(service, value string) error {
-	if !keychainAvailable() {
-		return errCredentialBackendUnavailable
-	}
-	cmd := exec.Command("security", "add-generic-password", "-U", "-a", "carrier", "-s", service, "-w", value)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("write keychain credential for %s", service)
-	}
-	return nil
-}
-
-func loadCredentialFromFile(providerID string) (string, error) {
-	path, err := credentialStorePath()
-	if err != nil {
-		return "", err
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", errCredentialNotFound
-		}
-		return "", fmt.Errorf("read credential file: %w", err)
-	}
-	var payload struct {
-		Providers map[string]string `json:"providers"`
-	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return "", fmt.Errorf("parse credential file: %w", err)
-	}
-	if payload.Providers == nil {
-		return "", errCredentialNotFound
-	}
-	value := strings.TrimSpace(payload.Providers[providerID])
-	if value == "" {
-		return "", errCredentialNotFound
-	}
-	return value, nil
-}
-
-func saveCredentialToFile(providerID, value string) error {
-	path, err := credentialStorePath()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("create credential directory: %w", err)
-	}
-
-	payload := struct {
-		Providers map[string]string `json:"providers"`
-	}{
-		Providers: make(map[string]string),
-	}
-	if raw, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(raw, &payload)
-		if payload.Providers == nil {
-			payload.Providers = make(map[string]string)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read credential file: %w", err)
-	}
-
-	payload.Providers[providerID] = value
-	raw, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal credential file: %w", err)
-	}
-	if err := os.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
-		return fmt.Errorf("write credential file: %w", err)
-	}
-	return nil
-}
-
-func credentialStorePath() (string, error) {
-	if path := strings.TrimSpace(os.Getenv("CARRIER_CREDENTIAL_STORE")); path != "" {
-		return path, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home dir: %w", err)
-	}
-	return filepath.Join(home, ".carrier", "credentials.json"), nil
+	return credentialstore.SaveProviderCredential(providerID, value)
 }
 
 func mergeEnvVars(sets ...map[string]string) map[string]string {

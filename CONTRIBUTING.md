@@ -40,6 +40,14 @@ Phase milestones define delivery scope and must be respected in planning/review.
 - Every PR must include milestone label: `Phase 1` or `Phase 2`.
 - Candidate agents remain blocked until Phase 1 exit criteria pass.
 
+## PR Decomposition Guidance
+
+Prefer domain-focused PRs over large mixed changesets.
+
+- Keep transport, onboarding, managed-instance lifecycle, and CI automation changes in separate PRs whenever possible.
+- If a PR must span multiple domains, include an explicit smoke checklist and validation evidence in the PR body.
+- Use follow-up issues for non-blocking refactors (for example, file decomposition) instead of bundling broad rewrites into urgent fixes.
+
 ## Skills Directory
 
 Before proposing changes, read `skills/` and follow repository instructions (especially `skills/pr-review/SKILL.md` and `skills/review-followup/SKILL.md`).

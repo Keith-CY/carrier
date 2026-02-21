@@ -16,6 +16,7 @@ Use this before reading historical planning notes.
 
 - 5-minute first setup: [`docs/task-first-quickstart.md`](./task-first-quickstart.md)
 - Pairing and command readiness: [`docs/runbooks/pairing-lifecycle.md`](./runbooks/pairing-lifecycle.md)
+- Post-merge smoke checklist: [`docs/runbooks/post-merge-smoke-checklist.md`](./runbooks/post-merge-smoke-checklist.md)
 - CI troubleshooting: [`docs/ci/first-response-playbook.md`](./ci/first-response-playbook.md)
 - Rollback and go-live checks: [`docs/runbooks/go-live-rollback.md`](./runbooks/go-live-rollback.md)
 
