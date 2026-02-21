@@ -199,19 +199,17 @@ jobs:
         run: |
           set -euo pipefail
           archive_name="${{ needs.prepare.outputs.package_prefix }}-${{ matrix.label }}"
-          binary_name="agentd${{ matrix.ext }}"
-          release_dir="dist/${archive_name}"
+          binary_name="carrier${{ matrix.ext }}"
           package_file="${archive_name}.${{ matrix.archive_ext }}"
 
-          mkdir -p "${release_dir}"
+          mkdir -p dist
 
           (cd daemon && \
             CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
-              go build -tags webui -trimpath -ldflags="-s -w" -o "../${release_dir}/${binary_name}" ./cmd/agentd)
+              go build -tags webui -trimpath -ldflags="-s -w" -o "../dist/${binary_name}" ./cmd/agentd)
 
-          cp -R daemon catalog gateway docs README.md "${release_dir}/"
-
-          (cd dist && zip -r "${package_file}" "${archive_name}")
+          # Release package should contain only the executable binary.
+          (cd dist && zip -j "${package_file}" "${binary_name}")
           (cd dist && sha256sum "${package_file}" > "${package_file}.sha256")
 
           echo "archive_name=${archive_name}" >> "${GITHUB_OUTPUT}"
