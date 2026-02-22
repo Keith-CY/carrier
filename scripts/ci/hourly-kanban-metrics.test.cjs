@@ -128,6 +128,9 @@ test("formatSignedDelta exports stable signed formatting", () => {
   assert.equal(formatSignedDelta(3, true), "+3");
   assert.equal(formatSignedDelta(0, true), "+0");
   assert.equal(formatSignedDelta(-2, true), "-2");
+  assert.equal(formatSignedDelta(null, true), "+0");
+  assert.equal(formatSignedDelta(undefined, true), "+0");
+  assert.equal(formatSignedDelta(Number.NaN, true), "+0");
   assert.equal(formatSignedDelta(5, false), "n/a");
 });
 
