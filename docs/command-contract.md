@@ -67,6 +67,8 @@ type GatewayResponse = {
 | `E_AUTH_INVALID`                 | Provided session token is invalid                     |
 | `E_PAIR_CODE_INVALID`            | Pairing code is invalid or expired                    |
 | `E_SESSION_REQUIRED`             | Chat is not paired; must run `/pair` first            |
+| `E_INSTALL_GUI_ONLY`            | Chat install is disabled; use Carrier TUI/WebUI       |
+| `E_ONBOARD_GUI_ONLY`            | Chat onboarding is disabled; use Carrier TUI/WebUI    |
 | `E_NOT_INSTALLED`                | Agent is not installed                                |
 | `E_ALREADY_RUNNING`              | Agent is already running                              |
 | `E_ALREADY_STOPPED`              | Agent is already stopped                              |
@@ -107,8 +109,19 @@ Installs an agent.
 
 - **Args:** `agent_id` (required)
 - **Requires session:** yes
-- **Success:** `{ result: "ok", message: "install completed for <agent_id>" }`
-- **Errors:** `E_USAGE`, `E_COMMAND_FAILED`
+- **Current behavior:** chat path is intentionally blocked for credential safety.
+- **Result:** `{ result: "error", errorCode: "E_INSTALL_GUI_ONLY", message: "...Open Carrier GUI to install/onboard agents..." }`
+- **Alternative flows:** `carrier add <agent_id>` (TUI) or WebUI add flow.
+
+### `/onboard`
+
+Starts onboarding.
+
+- **Args:** none
+- **Requires session:** yes
+- **Current behavior:** chat path is intentionally blocked for credential safety.
+- **Result:** `{ result: "error", errorCode: "E_ONBOARD_GUI_ONLY", message: "...Open Carrier GUI..." }`
+- **Alternative flows:** `carrier onboard` (TUI) or `carrier onboard --webui`.
 
 ### `/start <agent_id>`
 
