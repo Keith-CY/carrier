@@ -185,9 +185,11 @@ func TestGetInstallCommand_Default(t *testing.T) {
 			"Move-Item",
 			"powershell -NoProfile -ExecutionPolicy Bypass -File",
 		} {
-			if !strings.Contains(cmd, want) {
-				t.Errorf("windows fallback command missing %q\ngot: %s", want, cmd)
-			}
+			t.Run(want, func(t *testing.T) {
+				if !strings.Contains(cmd, want) {
+					t.Errorf("windows fallback command missing %q\ngot: %s", want, cmd)
+				}
+			})
 		}
 	default:
 		for _, want := range []string{
