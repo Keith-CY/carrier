@@ -1711,7 +1711,11 @@ func isDaemonEOFError(err error) bool {
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "eof")
+	if strings.Contains(strings.ToLower(err.Error()), "eof") {
+		fmt.Fprintf(os.Stderr, "[debug] isDaemonEOFError: string-match fallback hit for error: %v\n", err)
+		return true
+	}
+	return false
 }
 
 func daemonExtractPairCodeFromLogs(agentID string) (string, error) {
