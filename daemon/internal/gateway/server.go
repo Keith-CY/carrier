@@ -22,8 +22,9 @@ const (
 	discordMaxAgeSec           = 300
 	gatewayReadHeaderTimeout   = 10 * time.Second
 	gatewayReadTimeout         = 60 * time.Second
-	gatewayWriteTimeout        = 90 * time.Second
-	gatewayIdleTimeout         = 120 * time.Second
+	// Gateway can proxy long-running install/start operations from WebUI/TUI flows.
+	gatewayWriteTimeout = 30 * time.Minute
+	gatewayIdleTimeout  = 120 * time.Second
 )
 
 // requestIDKey is the context key for the request ID.

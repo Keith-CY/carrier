@@ -576,6 +576,9 @@ func TestNewHTTPServer(t *testing.T) {
 	if srv.ReadHeaderTimeout != defaultReadHeaderTimeout {
 		t.Errorf("unexpected ReadHeaderTimeout: %v", srv.ReadHeaderTimeout)
 	}
+	if srv.WriteTimeout != defaultWriteTimeout {
+		t.Errorf("unexpected WriteTimeout: %v", srv.WriteTimeout)
+	}
 	if srv.IdleTimeout != defaultIdleTimeout {
 		t.Errorf("unexpected IdleTimeout: %v", srv.IdleTimeout)
 	}

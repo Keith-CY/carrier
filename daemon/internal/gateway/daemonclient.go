@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	defaultDaemonBaseURL  = "http://127.0.0.1:9090"
-	defaultDaemonTimeout  = 30 * time.Second
+	defaultDaemonBaseURL = "http://127.0.0.1:9090"
+	// Install/upgrade actions may run for many minutes on cold hosts.
+	defaultDaemonTimeout  = 30 * time.Minute
 	maxDaemonResponseSize = 32 * 1024 * 1024 // 32 MB
 )
 
