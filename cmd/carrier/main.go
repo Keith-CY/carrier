@@ -1587,7 +1587,7 @@ func daemonAgentAction(agentID, action string) error {
 			return nil
 		}
 		if reconcileErr != nil {
-			return fmt.Errorf("%w (status reconciliation failed: %v)", err, reconcileErr)
+			return fmt.Errorf("daemon %s %s failed: %v (request error: %w)", action, agentID, reconcileErr, err)
 		}
 		return err
 	}
@@ -1600,6 +1600,7 @@ func daemonAgentAction(agentID, action string) error {
 type daemonAgentStatusSnapshot struct {
 	InstallState string
 	RuntimeState string
+	LastError    string
 }
 
 func reconcileDaemonActionOnEOF(agentID, action string, reqErr error) (bool, error) {
@@ -1617,10 +1618,29 @@ func reconcileDaemonActionOnEOF(agentID, action string, reqErr error) (bool, err
 	}
 	switch action {
 	case "install":
-		return strings.EqualFold(status.InstallState, "installed"), nil
+		switch strings.ToLower(strings.TrimSpace(status.InstallState)) {
+		case "installed":
+			return true, nil
+		case "broken", "failed", "error":
+			if lastErr := strings.TrimSpace(status.LastError); lastErr != "" {
+				return false, fmt.Errorf("install state=%s: %s", strings.TrimSpace(status.InstallState), lastErr)
+			}
+			return false, fmt.Errorf("install state=%s", strings.TrimSpace(status.InstallState))
+		default:
+			return false, nil
+		}
 	case "start":
 		runtimeState := strings.ToLower(strings.TrimSpace(status.RuntimeState))
-		return runtimeState == "running" || runtimeState == "starting", nil
+		if runtimeState == "running" || runtimeState == "starting" {
+			return true, nil
+		}
+		if runtimeState == "stopped" || runtimeState == "error" || runtimeState == "crashed" || runtimeState == "broken" {
+			if lastErr := strings.TrimSpace(status.LastError); lastErr != "" {
+				return false, fmt.Errorf("runtime state=%s: %s", strings.TrimSpace(status.RuntimeState), lastErr)
+			}
+			return false, fmt.Errorf("runtime state=%s", strings.TrimSpace(status.RuntimeState))
+		}
+		return false, nil
 	default:
 		return false, nil
 	}
@@ -1639,6 +1659,7 @@ func daemonFetchAgentStatus(agentID string) (daemonAgentStatusSnapshot, error) {
 		RuntimeState string `json:"runtimeState"`
 		Install      string `json:"install"`
 		Runtime      string `json:"runtime"`
+		LastError    string `json:"lastError"`
 	}
 	if err := json.Unmarshal(raw, &direct); err == nil {
 		installState := firstNonEmpty(direct.InstallState, direct.Install)
@@ -1647,6 +1668,7 @@ func daemonFetchAgentStatus(agentID string) (daemonAgentStatusSnapshot, error) {
 			return daemonAgentStatusSnapshot{
 				InstallState: installState,
 				RuntimeState: runtimeState,
+				LastError:    strings.TrimSpace(direct.LastError),
 			}, nil
 		}
 	}
@@ -1656,6 +1678,7 @@ func daemonFetchAgentStatus(agentID string) (daemonAgentStatusSnapshot, error) {
 			RuntimeState string `json:"runtimeState"`
 			Install      string `json:"install"`
 			Runtime      string `json:"runtime"`
+			LastError    string `json:"lastError"`
 		} `json:"statuses"`
 	}
 	if err := json.Unmarshal(raw, &wrapped); err != nil {
@@ -1668,6 +1691,7 @@ func daemonFetchAgentStatus(agentID string) (daemonAgentStatusSnapshot, error) {
 	return daemonAgentStatusSnapshot{
 		InstallState: firstNonEmpty(first.InstallState, first.Install),
 		RuntimeState: firstNonEmpty(first.RuntimeState, first.Runtime),
+		LastError:    strings.TrimSpace(first.LastError),
 	}, nil
 }
 

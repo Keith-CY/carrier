@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -73,6 +74,82 @@ func TestDaemonAgentActionInstallKeepsEOFFailureWhenStatusMismatch(t *testing.T)
 	}
 	if !isDaemonEOFError(err) {
 		t.Fatalf("daemonAgentAction install error = %v, want EOF-like error", err)
+	}
+}
+
+func TestDaemonAgentActionInstallReportsDaemonLastErrorOnEOF(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/agents/openclaw/install":
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatalf("response writer does not support hijacking")
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Fatalf("hijack connection: %v", err)
+			}
+			_ = conn.Close()
+			return
+		case "/api/v1/agents/openclaw/status":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"openclaw","installState":"broken","runtimeState":"stopped","lastError":"signal: killed"}`))
+			return
+		default:
+			http.NotFound(w, r)
+			return
+		}
+	}))
+	defer server.Close()
+	configureDaemonProbeEnvForTest(t, server.URL)
+
+	err := daemonAgentAction("openclaw", "install")
+	if err == nil {
+		t.Fatal("daemonAgentAction install should fail when daemon status is broken")
+	}
+	if !strings.Contains(err.Error(), "install state=broken: signal: killed") {
+		t.Fatalf("daemonAgentAction install error = %q, want daemon lastError details", err.Error())
+	}
+	if !strings.Contains(err.Error(), "request error:") {
+		t.Fatalf("daemonAgentAction install error = %q, want request error context", err.Error())
+	}
+}
+
+func TestDaemonAgentActionStartReportsDaemonLastErrorOnEOF(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/agents/openclaw/start":
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatalf("response writer does not support hijacking")
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Fatalf("hijack connection: %v", err)
+			}
+			_ = conn.Close()
+			return
+		case "/api/v1/agents/openclaw/status":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"statuses":[{"id":"openclaw","installState":"installed","runtimeState":"error","lastError":"failed to bind port"}]}`))
+			return
+		default:
+			http.NotFound(w, r)
+			return
+		}
+	}))
+	defer server.Close()
+	configureDaemonProbeEnvForTest(t, server.URL)
+
+	err := daemonAgentAction("openclaw", "start")
+	if err == nil {
+		t.Fatal("daemonAgentAction start should fail when daemon runtime state is error")
+	}
+	if !strings.Contains(err.Error(), "runtime state=error: failed to bind port") {
+		t.Fatalf("daemonAgentAction start error = %q, want daemon lastError details", err.Error())
+	}
+	if !strings.Contains(err.Error(), "request error:") {
+		t.Fatalf("daemonAgentAction start error = %q, want request error context", err.Error())
 	}
 }
 
