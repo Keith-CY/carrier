@@ -1,6 +1,9 @@
 # Memory Import/Export Pipeline and Artifact Delivery
 
-> **Issue:** #78 · **Status:** Plan · **Track:** B2 · **Depends on:** #77 (B1)
+> **Issue:** #78 · **Status:** ⚠️ Superseded (diverged from implementation) · **Track:** B2 · **Depends on:** #77 (B1)
+>
+> **Note:** This is a historical planning document.
+> For current behavior, use [`docs/current-architecture.md`](../current-architecture.md), [`docs/command-contract.md`](../command-contract.md), and [`daemon/internal/memory/store.go`](../../daemon/internal/memory/store.go).
 
 ## Goals
 

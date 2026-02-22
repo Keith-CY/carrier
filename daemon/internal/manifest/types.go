@@ -29,18 +29,18 @@ const (
 // Manifest is the full agent manifest schema covering runtime, env, network,
 // health, upgrade, memory, and diagnostics as required by the PRD.
 type Manifest struct {
-	ID           string        `json:"id"`
-	Name         string        `json:"name"`
-	Version      string        `json:"version"`
-	Description  string        `json:"description,omitempty"`
-	Capabilities []string      `json:"capabilities,omitempty"`
-	Runtime      RuntimeSpec   `json:"runtime"`
-	Network      NetworkSpec   `json:"network"`
-	Env          EnvSpec       `json:"env"`
-	Memory       MemorySpec    `json:"memory"`
-	Upgrade      UpgradeSpec   `json:"upgrade"`
-	Health       HealthSpec    `json:"health"`
-	Diagnostics  Diagnostics   `json:"diagnostics"`
+	ID           string      `json:"id"`
+	Name         string      `json:"name"`
+	Version      string      `json:"version"`
+	Description  string      `json:"description,omitempty"`
+	Capabilities []string    `json:"capabilities,omitempty"`
+	Runtime      RuntimeSpec `json:"runtime"`
+	Network      NetworkSpec `json:"network"`
+	Env          EnvSpec     `json:"env"`
+	Memory       MemorySpec  `json:"memory"`
+	Upgrade      UpgradeSpec `json:"upgrade"`
+	Health       HealthSpec  `json:"health"`
+	Diagnostics  Diagnostics `json:"diagnostics"`
 }
 
 type RuntimeSpec struct {
@@ -56,8 +56,8 @@ type CommandSpec struct {
 }
 
 type NetworkSpec struct {
-	Ports       []PortSpec       `json:"ports"`
-	Healthcheck HealthcheckSpec  `json:"healthcheck"`
+	Ports       []PortSpec      `json:"ports"`
+	Healthcheck HealthcheckSpec `json:"healthcheck"`
 }
 
 type PortSpec struct {
@@ -74,11 +74,11 @@ type HealthcheckSpec struct {
 // HealthSpec defines the top-level health configuration for the agent,
 // covering probe intervals, timeouts, and restart-loop detection.
 type HealthSpec struct {
-	IntervalSeconds    int `json:"interval_seconds,omitempty"`
-	TimeoutSeconds     int `json:"timeout_seconds,omitempty"`
-	Retries            int `json:"retries,omitempty"`
-	RestartLoopWindow  int `json:"restart_loop_window,omitempty"`
-	RestartLoopMax     int `json:"restart_loop_max,omitempty"`
+	IntervalSeconds   int `json:"interval_seconds,omitempty"`
+	TimeoutSeconds    int `json:"timeout_seconds,omitempty"`
+	Retries           int `json:"retries,omitempty"`
+	RestartLoopWindow int `json:"restart_loop_window,omitempty"`
+	RestartLoopMax    int `json:"restart_loop_max,omitempty"`
 }
 
 type EnvSpec struct {

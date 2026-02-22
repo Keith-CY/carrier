@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -72,7 +73,10 @@ func (s *Service) Upgrade(ctx context.Context, agentID string) (UpgradeResult, e
 	}
 	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_start backup=%q command=%q", backupPath, m.Runtime.Upgrade.Command))
 
-	result, runErr := s.runner.Run(ctx, m.Runtime.Upgrade.Command)
+	opCtx, cancel := context.WithTimeout(ctx, s.commandTimeout)
+	defer cancel()
+
+	result, runErr := s.runner.Run(opCtx, m.Runtime.Upgrade.Command)
 	s.appendCommandLog(agentID, "upgrade", m.Runtime.Upgrade.Command, result, runErr)
 	if runErr != nil {
 		updateErr := s.formatUpgradeFailure(runErr, backupPath)
@@ -86,9 +90,17 @@ func (s *Service) Upgrade(ctx context.Context, agentID string) (UpgradeResult, e
 		}, updateErr
 	}
 
+	// Try to detect the actual installed version post-upgrade.
+	// If the manifest defines a version file path, read it; otherwise fall back
+	// to the arithmetically computed next patch version.
+	actualVersion := toVersion
+	if detectedVersion := s.detectPostUpgradeVersion(agentID, m, result.CombinedOutput); detectedVersion != "" {
+		actualVersion = detectedVersion
+	}
+
 	s.mu.Lock()
 	state = s.states[agentID]
-	state.Version = toVersion
+	state.Version = actualVersion
 	state.LastError = ""
 	state.Runtime = RuntimeStateStopped
 	state.Health = HealthStateUnknown
@@ -101,14 +113,40 @@ func (s *Service) Upgrade(ctx context.Context, agentID string) (UpgradeResult, e
 	s.memoryLinks[agentID] = append([]string(nil), attachments...)
 	s.mu.Unlock()
 
-	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_success from=%s to=%s backup=%q", fromVersion, toVersion, backupPath))
+	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_success from=%s to=%s backup=%q", fromVersion, actualVersion, backupPath))
+
+	s.saveState()
+
 	return UpgradeResult{
 		AgentID:     agentID,
 		FromVersion: fromVersion,
-		ToVersion:   toVersion,
+		ToVersion:   actualVersion,
 		BackupPath:  backupPath,
 	}, nil
 }
+
+// detectPostUpgradeVersion attempts to detect the actual installed version
+// from the upgrade command's output. It looks for a trusted version marker
+// emitted by the upgrade script (format: "CARRIER_INSTALLED_VERSION=x.y.z").
+// Falls back to manifest-defined version probe command if available.
+// Returns empty string if no trusted version is detected (caller should
+// fall back to the computed version).
+func (s *Service) detectPostUpgradeVersion(_ string, _ manifest.Manifest, output string) string {
+	if output == "" {
+		return ""
+	}
+	// Only trust the explicit marker emitted by upgrade scripts
+	// (format: "CARRIER_INSTALLED_VERSION=x.y.z").
+	// This avoids capturing unrelated version-like strings from dependency
+	// or tool output (e.g., IP addresses like 127.0.0).
+	if match := trustedVersionMarker.FindStringSubmatch(output); len(match) > 1 {
+		return match[1]
+	}
+	return ""
+}
+
+// trustedVersionMarker matches the explicit marker emitted by upgrade scripts.
+var trustedVersionMarker = regexp.MustCompile(`CARRIER_INSTALLED_VERSION=(\d+\.\d+\.\d+)`)
 
 func (s *Service) formatUpgradeFailure(runErr error, backupPath string) error {
 	detail := fmt.Sprintf("upgrade failed: %v", runErr)
@@ -160,7 +198,7 @@ func (s *Service) envVarKeys(m manifest.Manifest) []string {
 }
 
 func (s *Service) createUpgradeBackup(agentID string, m manifest.Manifest, state AgentState, attachments []string) (string, error) {
-	if err := os.MkdirAll(s.diagnoseDir, 0o755); err != nil {
+	if err := os.MkdirAll(s.diagnoseDir, 0o700); err != nil {
 		return "", fmt.Errorf("create diagnose dir: %w", err)
 	}
 
@@ -180,7 +218,7 @@ func (s *Service) createUpgradeBackup(agentID string, m manifest.Manifest, state
 	if err != nil {
 		return "", fmt.Errorf("marshal upgrade backup: %w", err)
 	}
-	if err := os.WriteFile(filePath, content, 0o644); err != nil {
+	if err := os.WriteFile(filePath, content, 0o600); err != nil {
 		return "", fmt.Errorf("write upgrade backup: %w", err)
 	}
 

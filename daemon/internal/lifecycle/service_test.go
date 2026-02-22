@@ -5,17 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"carrier/daemon/internal/baseagent"
 	"carrier/daemon/internal/commandexec"
 	"carrier/daemon/internal/manifest"
 	"carrier/daemon/internal/redact"
@@ -53,15 +55,95 @@ func (f *fakeChecker) Check(manifest.Manifest) error {
 }
 
 type fakeClock struct {
+	mu      sync.Mutex
 	current time.Time
 }
 
 func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.current
 }
 
 func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.current = c.current.Add(d)
+}
+
+type fakeProcessManager struct {
+	mu                 sync.Mutex
+	isRunning          map[string]bool
+	pids               map[string]int
+	waitChs            map[string]chan struct{}
+	nextPID            int
+	shouldStartSucceed bool
+}
+
+func (f *fakeProcessManager) Start(agentID string, command string, args []string) (int, error) {
+	if !f.shouldStartSucceed {
+		return 0, errors.New("start failed")
+	}
+	f.mu.Lock()
+	pid := f.nextPID
+	f.pids[agentID] = pid
+	f.isRunning[agentID] = true
+	if f.waitChs == nil {
+		f.waitChs = make(map[string]chan struct{})
+	}
+	f.waitChs[agentID] = make(chan struct{})
+	f.nextPID++
+	f.mu.Unlock()
+	return pid, nil
+}
+
+func (f *fakeProcessManager) Stop(agentID string) error {
+	f.mu.Lock()
+	delete(f.isRunning, agentID)
+	delete(f.pids, agentID)
+	ch := f.waitChs[agentID]
+	delete(f.waitChs, agentID)
+	f.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+	return nil
+}
+
+// SimulateCrash simulates an unexpected process exit (not via Stop).
+func (f *fakeProcessManager) SimulateCrash(agentID string) {
+	f.mu.Lock()
+	f.isRunning[agentID] = false
+	ch := f.waitChs[agentID]
+	delete(f.waitChs, agentID)
+	f.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+}
+
+func (f *fakeProcessManager) IsRunning(agentID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.isRunning[agentID]
+}
+
+func (f *fakeProcessManager) Wait(agentID string) error {
+	f.mu.Lock()
+	ch := f.waitChs[agentID]
+	f.mu.Unlock()
+	if ch != nil {
+		<-ch
+	}
+	return nil
+}
+
+func (f *fakeProcessManager) Cleanup() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.isRunning = make(map[string]bool)
+	f.pids = make(map[string]int)
+	f.waitChs = make(map[string]chan struct{})
 }
 
 func sampleManifest() manifest.Manifest {
@@ -73,7 +155,7 @@ func sampleManifest() manifest.Manifest {
 			Type:    manifest.RuntimeTypeLocalBinary,
 			Install: manifest.CommandSpec{Command: "install-openclaw"},
 			Upgrade: manifest.CommandSpec{Command: "upgrade-openclaw"},
-			Start:   manifest.CommandSpec{Command: "start-openclaw"},
+			Start:   manifest.CommandSpec{Command: "tail -f /dev/null"},
 			Stop:    manifest.CommandSpec{Command: "stop-openclaw"},
 		},
 		Network: manifest.NetworkSpec{
@@ -142,7 +224,7 @@ func TestLifecycleInstallStartStop(t *testing.T) {
 	if checker.calls != 2 {
 		t.Fatalf("expected checker called twice (install/start), got %d", checker.calls)
 	}
-	wantCalls := []string{"install-openclaw", "start-openclaw", "stop-openclaw"}
+	wantCalls := []string{"install-openclaw"}
 	if len(runner.calls) != len(wantCalls) {
 		t.Fatalf("expected %d runner calls, got %d", len(wantCalls), len(runner.calls))
 	}
@@ -363,11 +445,15 @@ func TestStartFailsWhenPortIsInUse(t *testing.T) {
 
 func TestStartDetectsCrashLoopAndAppliesCooldown(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
-	runner := &fakeRunner{results: map[string]runResult{
-		"start-openclaw": {err: errors.New("boom")},
-	}}
+	runner := &fakeRunner{results: map[string]runResult{}}
 	checker := &fakeChecker{}
 	svc, clock := newServiceForTestWithClock(t, runner, checker)
+
+	m := sampleManifest()
+	m.Runtime.Start.Command = "missing-start-command"
+	if regErr := svc.RegisterManifest(m); regErr != nil {
+		t.Fatalf("re-register manifest: %v", regErr)
+	}
 
 	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
@@ -384,8 +470,8 @@ func TestStartDetectsCrashLoopAndAppliesCooldown(t *testing.T) {
 	if statusErr != nil {
 		t.Fatalf("status: %v", statusErr)
 	}
-	if status.Runtime != RuntimeStateCrashing {
-		t.Fatalf("expected runtime state crashing, got %s", status.Runtime)
+	if status.Runtime != RuntimeStateCrashLoop {
+		t.Fatalf("expected runtime state crash_loop, got %s", status.Runtime)
 	}
 	if !strings.Contains(status.LastError, "crash-loop detected") {
 		t.Fatalf("expected crash-loop reason, got %q", status.LastError)
@@ -397,9 +483,16 @@ func TestStartDetectsCrashLoopAndAppliesCooldown(t *testing.T) {
 	}
 
 	clock.Advance(defaultCrashLoopCooldown + time.Second)
-	runner.results["start-openclaw"] = runResult{result: commandexec.Result{ExitCode: 0}}
+	svc.mu.Lock()
+	updated := svc.manifests["openclaw"]
+	updated.Runtime.Start.Command = "tail -f /dev/null"
+	svc.manifests["openclaw"] = updated
+	svc.mu.Unlock()
 	if err := svc.Start(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("expected start success after cooldown, got %v", err)
+	}
+	if err := svc.Stop(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("stop after recovery start: %v", err)
 	}
 }
 
@@ -442,7 +535,7 @@ func TestLogsAndDiagnoseArtifact(t *testing.T) {
 		names = append(names, f.Name)
 	}
 	sort.Strings(names)
-	want := []string{"env.json", "logs.txt", "manifest.json", "metadata.json", "state.json"}
+	want := []string{"agent_manifest.json", "env.json", "logs.txt", "manifest.json", "metadata.json", "state.json"}
 	if len(names) != len(want) {
 		t.Fatalf("unexpected zip entry count: want %d got %d", len(want), len(names))
 	}
@@ -469,7 +562,8 @@ func TestLogsAndDiagnoseArtifact(t *testing.T) {
 		t.Fatalf("expected logs to contain redacted API key assignment, got %q", logPayload)
 	}
 
-	manifestPayload := readZipEntry(t, zr.File, "manifest.json")
+	diagnoseManifestPayload := readZipEntry(t, zr.File, "manifest.json")
+	agentManifestPayload := readZipEntry(t, zr.File, "agent_manifest.json")
 	statePayload := readZipEntry(t, zr.File, "state.json")
 	metadataPayload := readZipEntry(t, zr.File, "metadata.json")
 
@@ -486,10 +580,11 @@ func TestLogsAndDiagnoseArtifact(t *testing.T) {
 	}
 
 	wantChecksum := redact.ArtifactChecksum(map[string][]byte{
-		"state.json":    statePayload,
-		"manifest.json": manifestPayload,
-		"logs.txt":      []byte(logPayload),
-		"env.json":      envPayload,
+		"manifest.json":       diagnoseManifestPayload,
+		"state.json":          statePayload,
+		"agent_manifest.json": agentManifestPayload,
+		"logs.txt":            []byte(logPayload),
+		"env.json":            envPayload,
 	})
 	if meta.SHA256 != wantChecksum {
 		t.Fatalf("metadata sha256 mismatch: got %q want %q", meta.SHA256, wantChecksum)
@@ -571,11 +666,15 @@ func TestUpgradeRejectsWhenAgentRunning(t *testing.T) {
 
 func TestUpgradeResetsCrashLoopState(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
-	runner := &fakeRunner{results: map[string]runResult{
-		"start-openclaw": {err: errors.New("boom")},
-	}}
+	runner := &fakeRunner{results: map[string]runResult{}}
 	checker := &fakeChecker{}
 	svc, clock := newServiceForTestWithClock(t, runner, checker)
+
+	m := sampleManifest()
+	m.Runtime.Start.Command = "missing-start-command"
+	if regErr := svc.RegisterManifest(m); regErr != nil {
+		t.Fatalf("re-register manifest: %v", regErr)
+	}
 
 	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("install: %v", err)
@@ -592,8 +691,8 @@ func TestUpgradeResetsCrashLoopState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if status.Runtime != RuntimeStateCrashing {
-		t.Fatalf("expected crashing, got %s", status.Runtime)
+	if status.Runtime != RuntimeStateCrashLoop {
+		t.Fatalf("expected crash_loop, got %s", status.Runtime)
 	}
 
 	// Verify blocked by cooldown
@@ -605,7 +704,7 @@ func TestUpgradeResetsCrashLoopState(t *testing.T) {
 	// Stop and upgrade should reset crash-loop state
 	clock.Advance(defaultCrashLoopCooldown + time.Second)
 	// Force state to stopped for upgrade
-	svc.Stop(context.Background(), "openclaw")
+	_ = svc.Stop(context.Background(), "openclaw")
 
 	runner.results["upgrade-openclaw"] = runResult{result: commandexec.Result{ExitCode: 0}}
 	if _, err := svc.Upgrade(context.Background(), "openclaw"); err != nil {
@@ -626,10 +725,18 @@ func TestUpgradeResetsCrashLoopState(t *testing.T) {
 		t.Fatalf("expected empty LastError after upgrade, got %q", status.LastError)
 	}
 
-	// Verify can start without crash-loop blocking
-	runner.results["start-openclaw"] = runResult{result: commandexec.Result{ExitCode: 0}}
+	// Verify can start without crash-loop blocking.
+	// Restore a valid start command so this assertion checks crash-loop reset behavior,
+	// not command validity.
+	m.Runtime.Start.Command = "tail -f /dev/null"
+	svc.mu.Lock()
+	svc.manifests["openclaw"] = m
+	svc.mu.Unlock()
 	if err := svc.Start(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("expected start success after upgrade reset, got %v", err)
+	}
+	if err := svc.Stop(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("stop after post-upgrade start: %v", err)
 	}
 }
 
@@ -939,13 +1046,6 @@ func TestAuditLogsBoundedByConfiguredLimit(t *testing.T) {
 	}
 }
 
-// Wrappers to keep tests explicit and avoid importing extra packages in each assertion block.
-var (
-	netListen     = net.Listen
-	splitHostPort = net.SplitHostPort
-	atoi          = strconv.Atoi
-)
-
 func TestAuditBufferStatus(t *testing.T) {
 	svc := NewService(nil, WithAuditLogLimit(50))
 
@@ -1075,5 +1175,628 @@ func TestMemoryAttachmentsPreservedAcrossUpgrade(t *testing.T) {
 	got := svc.getMemoryAttachments("openclaw")
 	if !reflect.DeepEqual(got, []string{"/mem/keep.md"}) {
 		t.Fatalf("attachments lost after upgrade: %v", got)
+	}
+}
+
+func TestLoadPersistedState_VerifiesProcessLiveness(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	// Create a service with state file enabled
+	runner := &fakeRunner{results: make(map[string]runResult)}
+	checker := &fakeChecker{}
+	clock := &fakeClock{current: time.Date(2026, 2, 15, 5, 0, 0, 0, time.UTC)}
+
+	svc := NewService(nil,
+		WithRunner(runner),
+		WithRuntimeChecker(checker),
+		WithNow(clock.Now),
+		WithStateFile(statePath),
+	)
+
+	// Register an agent
+	m := sampleManifest()
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+
+	// Create a persisted state file with RuntimeStateRunning
+	// but without actually starting the process
+	now := clock.Now()
+	persistedStates := map[string]PersistedAgentState{
+		"openclaw": {
+			ID:             "openclaw",
+			Installed:      true,
+			RuntimeState:   string(RuntimeStateRunning),
+			LastTransition: now,
+		},
+	}
+
+	data, err := json.MarshalIndent(persistedStates, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal persisted state: %v", err)
+	}
+
+	if err := os.WriteFile(statePath, data, 0o600); err != nil {
+		t.Fatalf("write state file: %v", err)
+	}
+
+	// Load the persisted state
+	if err := svc.loadPersistedState(); err != nil {
+		t.Fatalf("loadPersistedState failed: %v", err)
+	}
+
+	// Verify that the state was corrected from "running" to "stopped"
+	// because the process is not actually running
+	state, err := svc.Status("openclaw")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+
+	if state.Runtime != RuntimeStateStopped {
+		t.Errorf("expected runtime state to be corrected to %q, got %q", RuntimeStateStopped, state.Runtime)
+	}
+
+	if state.Install != InstallStateInstalled {
+		t.Errorf("expected install state %q, got %q", InstallStateInstalled, state.Install)
+	}
+}
+
+func TestLoadPersistedState_KeepsRunningIfProcessAlive(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	// Create a service with state file enabled
+	runner := &fakeRunner{results: make(map[string]runResult)}
+	checker := &fakeChecker{}
+	clock := &fakeClock{current: time.Date(2026, 2, 15, 5, 0, 0, 0, time.UTC)}
+
+	svc := NewService(nil,
+		WithRunner(runner),
+		WithRuntimeChecker(checker),
+		WithNow(clock.Now),
+		WithStateFile(statePath),
+	)
+
+	// Register and install the agent
+	m := sampleManifest()
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	// Start the agent so there's an actual process running
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	if err := svc.Start(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// Save the current state (which includes RuntimeStateRunning)
+	svc.saveState()
+
+	// Create a new service instance and load the persisted state
+	svc2 := NewService(nil,
+		WithRunner(runner),
+		WithRuntimeChecker(checker),
+		WithNow(clock.Now),
+		WithStateFile(statePath),
+		WithProcessLogDir(svc.processLogDir),
+	)
+	svc2.processManager = svc.processManager // Share the process manager so it sees the running process
+
+	if err := svc2.RegisterManifest(m); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+
+	if err := svc2.loadPersistedState(); err != nil {
+		t.Fatalf("loadPersistedState failed: %v", err)
+	}
+
+	// Verify that the state remains "running" because the process is actually alive
+	state, err := svc2.Status("openclaw")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+
+	if state.Runtime != RuntimeStateRunning {
+		t.Errorf("expected runtime state to remain %q, got %q", RuntimeStateRunning, state.Runtime)
+	}
+
+	// Clean up
+	if err := svc.Stop(context.Background(), "openclaw"); err != nil {
+		t.Logf("cleanup stop: %v", err)
+	}
+}
+
+func TestService_ExponentialBackoff_Integration(t *testing.T) {
+	// Set required env var for test
+	oldEnv := os.Getenv("OPENAI_API_KEY")
+	os.Setenv("OPENAI_API_KEY", "test-key")
+	defer func() {
+		if oldEnv == "" {
+			os.Unsetenv("OPENAI_API_KEY")
+		} else {
+			os.Setenv("OPENAI_API_KEY", oldEnv)
+		}
+	}()
+
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	clock := &fakeClock{current: time.Date(2026, 2, 14, 10, 0, 0, 0, time.UTC)}
+
+	// Use a custom backoff policy for faster testing
+	backoffPolicy := BackoffPolicy{
+		InitialDelay:     1 * time.Second,
+		MaxDelay:         10 * time.Second,
+		Multiplier:       2.0,
+		MaxAttempts:      3,
+		SuccessThreshold: 5 * time.Second,
+	}
+
+	tmpDir := t.TempDir()
+	pm := &fakeProcessManager{isRunning: make(map[string]bool), pids: make(map[string]int)}
+
+	svc := NewService(nil,
+		WithRunner(runner),
+		WithRuntimeChecker(checker),
+		WithNow(clock.Now),
+		WithProcessLogDir(tmpDir),
+		WithProcessManager(pm),
+		WithBackoffPolicy(backoffPolicy),
+	)
+
+	m := sampleManifest()
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("RegisterManifest: %v", err)
+	}
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	// First start - should succeed
+	pm.shouldStartSucceed = true
+	pm.nextPID = 1001
+	if err := svc.Start(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("First Start: %v", err)
+	}
+
+	// Verify backoff state recorded start time
+	svc.mu.Lock()
+	backoffState := svc.backoffStates["openclaw"]
+	svc.mu.Unlock()
+	if backoffState.LastStartTime != clock.current {
+		t.Errorf("Expected LastStartTime = %v, got %v", clock.current, backoffState.LastStartTime)
+	}
+
+	// Simulate crash after 2 seconds (< success threshold)
+	clock.Advance(2 * time.Second)
+	pm.SimulateCrash("openclaw")
+	time.Sleep(50 * time.Millisecond) // let background goroutine process crash
+
+	// Verify backoff state after crash
+	svc.mu.Lock()
+	backoffState = svc.backoffStates["openclaw"]
+	svc.mu.Unlock()
+	if backoffState.Attempt != 1 {
+		t.Errorf("After first crash: Attempt = %v, want 1", backoffState.Attempt)
+	}
+	expectedRetryTime := clock.current.Add(1 * time.Second)
+	if !backoffState.NextRetryTime.Equal(expectedRetryTime) {
+		t.Errorf("After first crash: NextRetryTime = %v, want %v", backoffState.NextRetryTime, expectedRetryTime)
+	}
+
+	// Try to start immediately - should fail due to backoff
+	err := svc.Start(context.Background(), "openclaw")
+	if err == nil {
+		t.Fatal("Start during backoff should fail")
+	}
+	if !errors.Is(err, ErrCrashLoop) {
+		t.Errorf("Expected ErrCrashLoop, got %v", err)
+	}
+
+	// Advance past the backoff delay
+	clock.Advance(1 * time.Second)
+
+	// Second start - should succeed
+	pm.nextPID = 1002
+	if err := svc.Start(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("Second Start after backoff: %v", err)
+	}
+
+	// Crash again after 3 seconds (still < success threshold)
+	clock.Advance(3 * time.Second)
+	pm.SimulateCrash("openclaw")
+	time.Sleep(50 * time.Millisecond) // let background goroutine process crash
+
+	// Verify exponential increase in delay
+	svc.mu.Lock()
+	backoffState = svc.backoffStates["openclaw"]
+	svc.mu.Unlock()
+	if backoffState.Attempt != 2 {
+		t.Errorf("After second crash: Attempt = %v, want 2", backoffState.Attempt)
+	}
+	expectedRetryTime = clock.current.Add(2 * time.Second) // 1s * 2^1
+	if !backoffState.NextRetryTime.Equal(expectedRetryTime) {
+		t.Errorf("After second crash: NextRetryTime = %v, want %v", backoffState.NextRetryTime, expectedRetryTime)
+	}
+
+	// Advance and start again
+	clock.Advance(2 * time.Second)
+	pm.nextPID = 1003
+	if err := svc.Start(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("Third Start after backoff: %v", err)
+	}
+
+	// Crash after 10 seconds (> success threshold) - should reset backoff
+	clock.Advance(10 * time.Second)
+	pm.SimulateCrash("openclaw")
+	time.Sleep(50 * time.Millisecond) // let background goroutine process crash
+
+	svc.mu.Lock()
+	backoffState = svc.backoffStates["openclaw"]
+	svc.mu.Unlock()
+	if backoffState.Attempt != 0 {
+		t.Errorf("After successful run then crash: Attempt = %v, want 0 (reset)", backoffState.Attempt)
+	}
+	if backoffState.CrashLooping {
+		t.Errorf("After successful run: should not be crash looping")
+	}
+}
+
+func TestService_ExponentialBackoff_MaxAttemptsExceeded(t *testing.T) {
+	// Set required env var for test
+	oldEnv := os.Getenv("OPENAI_API_KEY")
+	os.Setenv("OPENAI_API_KEY", "test-key")
+	defer func() {
+		if oldEnv == "" {
+			os.Unsetenv("OPENAI_API_KEY")
+		} else {
+			os.Setenv("OPENAI_API_KEY", oldEnv)
+		}
+	}()
+
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	clock := &fakeClock{current: time.Date(2026, 2, 14, 10, 0, 0, 0, time.UTC)}
+
+	backoffPolicy := BackoffPolicy{
+		InitialDelay:     100 * time.Millisecond,
+		MaxDelay:         1 * time.Second,
+		Multiplier:       2.0,
+		MaxAttempts:      2,
+		SuccessThreshold: 5 * time.Second,
+	}
+
+	tmpDir := t.TempDir()
+	pm := &fakeProcessManager{isRunning: make(map[string]bool), pids: make(map[string]int)}
+
+	svc := NewService(nil,
+		WithRunner(runner),
+		WithRuntimeChecker(checker),
+		WithNow(clock.Now),
+		WithProcessLogDir(tmpDir),
+		WithProcessManager(pm),
+		WithBackoffPolicy(backoffPolicy),
+	)
+
+	m := sampleManifest()
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("RegisterManifest: %v", err)
+	}
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	// Start and crash twice
+	for i := 0; i < 2; i++ {
+		pm.shouldStartSucceed = true
+		pm.nextPID = 2000 + i
+		if err := svc.Start(context.Background(), "openclaw"); err != nil {
+			t.Fatalf("Start %d: %v", i+1, err)
+		}
+
+		// Crash quickly (< success threshold)
+		clock.Advance(1 * time.Second)
+		pm.SimulateCrash("openclaw")
+		time.Sleep(50 * time.Millisecond) // let background goroutine process crash
+
+		// Wait for backoff delay
+		svc.mu.Lock()
+		nextRetry := svc.backoffStates["openclaw"].NextRetryTime
+		svc.mu.Unlock()
+		if !nextRetry.IsZero() {
+			waitDuration := nextRetry.Sub(clock.current)
+			if waitDuration > 0 {
+				clock.Advance(waitDuration)
+			}
+		}
+	}
+
+	// Verify crash looping state
+	svc.mu.Lock()
+	backoffState := svc.backoffStates["openclaw"]
+	svc.mu.Unlock()
+
+	if !backoffState.CrashLooping {
+		t.Errorf("Expected CrashLooping = true after exceeding max attempts")
+	}
+	if backoffState.Attempt != 2 {
+		t.Errorf("Expected Attempt = 2, got %v", backoffState.Attempt)
+	}
+
+	// Try to start - should fail permanently
+	err := svc.Start(context.Background(), "openclaw")
+	if err == nil {
+		t.Fatal("Start should fail when crash looping")
+	}
+	if !errors.Is(err, ErrCrashLoop) {
+		t.Errorf("Expected ErrCrashLoop, got %v", err)
+	}
+
+	// Verify error message mentions crash-loop
+	if !strings.Contains(err.Error(), "crash-loop") {
+		t.Errorf("Error message should mention crash-loop, got: %v", err)
+	}
+}
+func TestHandleFailure_CollectsEvidence(t *testing.T) {
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	// Install and prepare agent
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	// Simulate some logs
+	svc.appendLog("openclaw", "Starting agent...")
+	svc.appendLog("openclaw", "Initializing components...")
+	svc.appendLog("openclaw", "Error: connection failed")
+
+	// Simulate an exit code
+	exitCode := 137
+	svc.exitCodes["openclaw"] = &exitCode
+
+	// Custom triager to capture the evidence passed to it
+	var capturedEvidence *baseagent.Evidence
+	customTriager := &fakeTriager{
+		onAnalyze: func(_ context.Context, e baseagent.Evidence) (baseagent.TriageResult, error) {
+			capturedEvidence = &e
+			return baseagent.TriageResult{
+				Resolved:                false,
+				Summary:                 "Evidence collected successfully",
+				SuggestedActions:        []string{"Check logs"},
+				RequiresRemoteDiagnosis: true,
+			}, nil
+		},
+	}
+	svc.triager = customTriager
+
+	// Trigger failure handling
+	triage, err := svc.HandleFailure(context.Background(), "openclaw", "process crashed")
+	if err != nil {
+		t.Fatalf("HandleFailure failed: %v", err)
+	}
+
+	if triage.Summary != "Evidence collected successfully" {
+		t.Errorf("unexpected triage summary: %s", triage.Summary)
+	}
+
+	// Verify evidence was collected
+	if capturedEvidence == nil {
+		t.Fatal("expected evidence to be captured by triager")
+	}
+
+	if capturedEvidence.AgentID != "openclaw" {
+		t.Errorf("expected AgentID 'openclaw', got %s", capturedEvidence.AgentID)
+	}
+
+	if capturedEvidence.LastError != "process crashed" {
+		t.Errorf("expected LastError 'process crashed', got %s", capturedEvidence.LastError)
+	}
+
+	if capturedEvidence.ExitCode == nil {
+		t.Fatal("expected exit code to be set")
+	}
+
+	if *capturedEvidence.ExitCode != 137 {
+		t.Errorf("expected exit code 137, got %d", *capturedEvidence.ExitCode)
+	}
+
+	// Log tail should contain at least our 3 manually added logs (plus install log)
+	if len(capturedEvidence.LogTail) < 3 {
+		t.Errorf("expected at least 3 log lines, got %d", len(capturedEvidence.LogTail))
+	}
+
+	// Check that our custom logs are present (they may have timestamps prepended)
+	logs := strings.Join(capturedEvidence.LogTail, "\n")
+	expectedSubstrings := []string{"Starting agent...", "Initializing components...", "Error: connection failed"}
+	for _, expected := range expectedSubstrings {
+		if !strings.Contains(logs, expected) {
+			t.Errorf("expected log to contain %q, but it didn't. Logs:\n%s", expected, logs)
+		}
+	}
+
+	if capturedEvidence.HealthProbe == "" {
+		t.Error("expected HealthProbe to be set")
+	}
+}
+
+func TestHandleFailure_CollectsEvidenceWithoutExitCode(t *testing.T) {
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	// Simulate logs but no exit code
+	svc.appendLog("openclaw", "Log line 1")
+
+	var capturedEvidence *baseagent.Evidence
+	customTriager := &fakeTriager{
+		onAnalyze: func(_ context.Context, e baseagent.Evidence) (baseagent.TriageResult, error) {
+			capturedEvidence = &e
+			return baseagent.TriageResult{
+				Resolved: false,
+				Summary:  "No exit code available",
+			}, nil
+		},
+	}
+	svc.triager = customTriager
+
+	_, err := svc.HandleFailure(context.Background(), "openclaw", "unknown error")
+	if err != nil {
+		t.Fatalf("HandleFailure failed: %v", err)
+	}
+
+	if capturedEvidence == nil {
+		t.Fatal("expected evidence to be captured")
+	}
+
+	if capturedEvidence.ExitCode != nil {
+		t.Errorf("expected exit code to be nil, got %v", capturedEvidence.ExitCode)
+	}
+
+	// Should have at least our log line (plus install log)
+	if len(capturedEvidence.LogTail) < 1 {
+		t.Errorf("expected at least 1 log line, got %d", len(capturedEvidence.LogTail))
+	}
+
+	// Verify our custom log is present
+	logs := strings.Join(capturedEvidence.LogTail, "\n")
+	if !strings.Contains(logs, "Log line 1") {
+		t.Errorf("expected log to contain 'Log line 1', got: %s", logs)
+	}
+}
+
+// fakeTriager allows custom behavior for testing
+type fakeTriager struct {
+	onAnalyze func(context.Context, baseagent.Evidence) (baseagent.TriageResult, error)
+}
+
+func (f *fakeTriager) Analyze(ctx context.Context, e baseagent.Evidence) (baseagent.TriageResult, error) {
+	if f.onAnalyze != nil {
+		return f.onAnalyze(ctx, e)
+	}
+	return baseagent.TriageResult{}, nil
+}
+
+func TestHandoffIDUniquenessAcrossRestarts(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	// Simulate two independent service instances (as if daemon restarted)
+	// and verify their handoff IDs never collide.
+	ids := make(map[string]struct{})
+	const handoffsPerInstance = 50
+
+	for instance := 0; instance < 2; instance++ {
+		runner := &fakeRunner{}
+		checker := &fakeChecker{}
+		svc := newServiceForTest(t, runner, checker)
+		if err := svc.Install(context.Background(), "openclaw"); err != nil {
+			t.Fatalf("install: %v", err)
+		}
+		if _, err := svc.HandleFailure(context.Background(), "openclaw", "test failure"); err != nil {
+			t.Fatalf("handle failure: %v", err)
+		}
+		if _, err := svc.Diagnose("openclaw"); err != nil {
+			t.Fatalf("diagnose: %v", err)
+		}
+		for i := 0; i < handoffsPerInstance; i++ {
+			h, err := svc.CreateRemoteDiagnosisHandoff("openclaw", true, "actor", fmt.Sprintf("req-%d-%d", instance, i))
+			if err != nil {
+				t.Fatalf("instance %d, iter %d: %v", instance, i, err)
+			}
+			if _, dup := ids[h.ID]; dup {
+				t.Fatalf("duplicate handoff ID %q on instance %d, iter %d", h.ID, instance, i)
+			}
+			ids[h.ID] = struct{}{}
+		}
+	}
+	if len(ids) != 2*handoffsPerInstance {
+		t.Fatalf("expected %d unique IDs, got %d", 2*handoffsPerInstance, len(ids))
+	}
+}
+
+func TestRegisterManifest_RejectsRunningAgent(t *testing.T) {
+	svc := NewService(nil)
+	m := sampleManifest()
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("initial register: %v", err)
+	}
+
+	// Simulate running state
+	svc.mu.Lock()
+	st := svc.states[m.ID]
+	st.Runtime = RuntimeStateRunning
+	svc.states[m.ID] = st
+	svc.mu.Unlock()
+
+	m.Version = "2.0.0"
+	if err := svc.RegisterManifest(m); !errors.Is(err, ErrAgentAlreadyRunning) {
+		t.Fatalf("expected ErrAgentAlreadyRunning, got %v", err)
+	}
+
+	// Verify state was not overwritten
+	status, _ := svc.Status(m.ID)
+	if status.Version != "1.0.0" {
+		t.Fatalf("expected version 1.0.0 preserved, got %s", status.Version)
+	}
+	if status.Runtime != RuntimeStateRunning {
+		t.Fatalf("expected runtime still running, got %s", status.Runtime)
+	}
+}
+
+func TestRegisterManifest_UpdatesStoppedAgent(t *testing.T) {
+	svc := NewService(nil)
+	m := sampleManifest()
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("initial register: %v", err)
+	}
+
+	// Set to installed+stopped
+	svc.mu.Lock()
+	st := svc.states[m.ID]
+	st.Install = InstallStateInstalled
+	st.Runtime = RuntimeStateStopped
+	svc.states[m.ID] = st
+	svc.mu.Unlock()
+
+	m.Version = "2.0.0"
+	m.Name = "OpenClaw v2"
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("re-register stopped agent: %v", err)
+	}
+
+	status, _ := svc.Status(m.ID)
+	if status.Version != "2.0.0" {
+		t.Fatalf("expected version 2.0.0, got %s", status.Version)
+	}
+	if status.Install != InstallStateInstalled {
+		t.Fatalf("expected install state preserved, got %s", status.Install)
+	}
+}
+
+func TestRegisterManifest_FreshRegistration(t *testing.T) {
+	svc := NewService(nil)
+	m := sampleManifest()
+	m.ID = "brand-new-agent"
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("fresh register: %v", err)
+	}
+
+	status, err := svc.Status("brand-new-agent")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if status.Install != InstallStateNotInstalled {
+		t.Fatalf("expected not-installed, got %s", status.Install)
+	}
+	if status.Runtime != RuntimeStateStopped {
+		t.Fatalf("expected stopped, got %s", status.Runtime)
 	}
 }

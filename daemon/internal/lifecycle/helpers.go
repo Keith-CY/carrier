@@ -91,6 +91,7 @@ func (s *Service) updateStateOnStartError(agentID string, err error) {
 	if len(restarts) >= s.crashLoopThreshold {
 		cooldownUntil := now.Add(s.crashLoopCooldown)
 		s.cooldowns[agentID] = cooldownUntil
+		state.Runtime = RuntimeStateCrashLoop
 		state.LastError = fmt.Sprintf(
 			"crash-loop detected: %d restarts within %s; cooldown until %s; last error: %v",
 			len(restarts),
@@ -192,7 +193,7 @@ func (s *Service) blockIfCrashLoopCoolingDown(agentID string, state AgentState) 
 	}
 
 	restartCount := len(trimRestartHistory(s.restarts[agentID], now.Add(-s.crashLoopWindow)))
-	state.Runtime = RuntimeStateCrashing
+	state.Runtime = RuntimeStateCrashLoop
 	state.Health = HealthStateUnhealthy
 	state.LastError = fmt.Sprintf(
 		"crash-loop detected: %d restarts within %s; cooldown until %s",
@@ -330,7 +331,7 @@ func findProcessBySocketInode(inode string) (int, string, error) {
 }
 
 func (s *Service) writeDiagnoseZip(path string, m manifest.Manifest, state AgentState, logs []string, createdAt time.Time) error {
-	file, err := os.Create(path)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("create diagnose zip: %w", err)
 	}
@@ -338,13 +339,20 @@ func (s *Service) writeDiagnoseZip(path string, m manifest.Manifest, state Agent
 
 	zipWriter := zip.NewWriter(file)
 
+	// Build structured diagnose manifest
+	diagnoseManifest := buildDiagnoseManifest(state.ID)
+	diagnoseManifestJSON, err := json.MarshalIndent(diagnoseManifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal diagnose manifest: %w", err)
+	}
+
 	stateJSON, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal state: %w", err)
 	}
-	manifestJSON, err := json.MarshalIndent(m, "", "  ")
+	agentManifestJSON, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal manifest: %w", err)
+		return fmt.Errorf("marshal agent manifest: %w", err)
 	}
 
 	redactedEnvJSON, err := json.MarshalIndent(redact.RedactEnviron(os.Environ()), "", "  ")
@@ -353,10 +361,11 @@ func (s *Service) writeDiagnoseZip(path string, m manifest.Manifest, state Agent
 	}
 
 	artifacts := map[string][]byte{
-		"state.json":    []byte(redact.RedactText(string(stateJSON))),
-		"manifest.json": []byte(redact.RedactText(string(manifestJSON))),
-		"logs.txt":      []byte(redact.RedactText(strings.Join(logs, "\n"))),
-		"env.json":      redactedEnvJSON,
+		"manifest.json":       diagnoseManifestJSON,
+		"state.json":          []byte(redact.RedactText(string(stateJSON))),
+		"agent_manifest.json": []byte(redact.RedactText(string(agentManifestJSON))),
+		"logs.txt":            []byte(redact.RedactText(strings.Join(logs, "\n"))),
+		"env.json":            redactedEnvJSON,
 	}
 
 	metadataJSON, err := redact.MetadataJSON(createdAt, 24*time.Hour, artifacts)
@@ -393,4 +402,18 @@ func addZipFile(zw *zip.Writer, name string, content []byte) error {
 		return fmt.Errorf("write zip entry %s: %w", name, err)
 	}
 	return nil
+}
+
+// recordRestart records a process restart for crash-loop detection.
+// Must be called with lock held.
+func (s *Service) recordRestart(agentID string) {
+	now := s.now()
+	restarts := append(s.restarts[agentID], now)
+	restarts = trimRestartHistory(restarts, now.Add(-s.crashLoopWindow))
+	s.restarts[agentID] = restarts
+
+	if len(restarts) >= s.crashLoopThreshold {
+		cooldownUntil := now.Add(s.crashLoopCooldown)
+		s.cooldowns[agentID] = cooldownUntil
+	}
 }

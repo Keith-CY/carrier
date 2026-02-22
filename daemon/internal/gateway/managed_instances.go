@@ -1,0 +1,157 @@
+package gateway
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+type managedAgentInstance struct {
+	ID           string `json:"id"`
+	Type         string `json:"type"`
+	AgentID      string `json:"agent_id"`
+	GatewayURL   string `json:"gateway_url"`
+	Workspace    string `json:"workspace_path,omitempty"`
+	ConfigPath   string `json:"config_path,omitempty"`
+	RecordPath   string `json:"record_path,omitempty"`
+	Channel      string `json:"channel,omitempty"`
+	Provider     string `json:"provider,omitempty"`
+	PairRequired bool   `json:"pair_required,omitempty"`
+	PairCode     string `json:"pair_code,omitempty"`
+	PairedChatID string `json:"paired_chat_id,omitempty"`
+	RuntimeState string `json:"runtime_state,omitempty"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+type managedAgentInstanceFile struct {
+	Instances []managedAgentInstance `json:"instances"`
+}
+
+func managedInstancesPath() (string, error) {
+	if custom := strings.TrimSpace(os.Getenv("CARRIER_INSTANCE_STORE")); custom != "" {
+		return custom, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir for instance store: %w", err)
+	}
+	return filepath.Join(home, ".carrier", "instances.json"), nil
+}
+
+func generateManagedInstanceID(prefix string) (string, error) {
+	p := strings.ToLower(strings.TrimSpace(prefix))
+	if p == "" {
+		p = "agent"
+	}
+	buf := make([]byte, 4)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate random id: %w", err)
+	}
+	return fmt.Sprintf("%s-%s", p, hex.EncodeToString(buf)), nil
+}
+
+func loadManagedInstances() ([]managedAgentInstance, string, error) {
+	path, err := managedInstancesPath()
+	if err != nil {
+		return nil, "", err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []managedAgentInstance{}, path, nil
+		}
+		return nil, "", fmt.Errorf("read instance store: %w", err)
+	}
+	var file managedAgentInstanceFile
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return nil, "", fmt.Errorf("parse instance store: %w", err)
+	}
+	if file.Instances == nil {
+		file.Instances = []managedAgentInstance{}
+	}
+	return file.Instances, path, nil
+}
+
+func saveManagedInstances(path string, instances []managedAgentInstance) error {
+	if strings.TrimSpace(path) == "" {
+		return errors.New("instance store path is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create instance store dir: %w", err)
+	}
+	payload := managedAgentInstanceFile{Instances: instances}
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal instance store: %w", err)
+	}
+	if err := os.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
+		return fmt.Errorf("write instance store: %w", err)
+	}
+	return nil
+}
+
+func findManagedInstanceIndex(instances []managedAgentInstance, instanceID string) int {
+	id := strings.TrimSpace(instanceID)
+	for i, inst := range instances {
+		if strings.EqualFold(strings.TrimSpace(inst.ID), id) {
+			return i
+		}
+	}
+	return -1
+}
+
+func findManagedInstanceIndexByAgentID(instances []managedAgentInstance, agentID string) int {
+	id := strings.TrimSpace(agentID)
+	for i, inst := range instances {
+		if strings.EqualFold(strings.TrimSpace(inst.AgentID), id) {
+			return i
+		}
+	}
+	return -1
+}
+
+func upsertManagedInstance(inst managedAgentInstance) error {
+	instances, path, err := loadManagedInstances()
+	if err != nil {
+		return err
+	}
+	idx := findManagedInstanceIndex(instances, inst.ID)
+	if idx >= 0 {
+		instances[idx] = inst
+	} else {
+		instances = append(instances, inst)
+	}
+	return saveManagedInstances(path, instances)
+}
+
+func cleanupManagedInstanceFiles(inst managedAgentInstance) error {
+	var firstErr error
+	removeFile := func(path string) {
+		if strings.TrimSpace(path) == "" {
+			return
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	removeDir := func(path string) {
+		p := strings.TrimSpace(path)
+		if p == "" {
+			return
+		}
+		if err := os.RemoveAll(p); err != nil && !errors.Is(err, os.ErrNotExist) && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	removeFile(strings.TrimSpace(inst.RecordPath))
+	removeFile(strings.TrimSpace(inst.ConfigPath))
+	removeDir(strings.TrimSpace(inst.Workspace))
+	return firstErr
+}

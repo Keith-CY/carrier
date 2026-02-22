@@ -2,6 +2,8 @@
 
 该仓库已有看板自动同步：`.github/workflows/carrier-kanban-automation.yml`
 
+> 项目选择说明：当前流程按仓库/工作流上下文自动解析目标 Project，优先级为 `workflow input project_id` -> `CARRIER_PROJECT_ID` -> 仓库默认配置。文档示例不需要手工维护独立的项目 ID 字段。
+
 ## 一、已完成的自动化优化
 - Issue/PR 变化会同步到 GitHub Project。
 - 扩展了同步事件：

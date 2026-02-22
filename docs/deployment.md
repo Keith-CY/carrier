@@ -1,6 +1,14 @@
 # Production Deployment Guide
 
-This guide covers deploying the Carrier daemon (`agentd`) and gateway in a production environment.
+This guide covers deploying the Carrier daemon (`carrier`) and gateway in a production environment.
+
+Related runbooks:
+
+- Go-live + rollback: `docs/runbooks/go-live-rollback.md`
+- Pairing lifecycle troubleshooting: `docs/runbooks/pairing-lifecycle.md`
+- CI first response: `docs/ci/first-response-playbook.md`
+
+For lifecycle state transitions, crash-loop behavior, and operator troubleshooting, see `docs/daemon-lifecycle-runtime.md`.
 
 ## Prerequisites
 
@@ -12,26 +20,39 @@ This guide covers deploying the Carrier daemon (`agentd`) and gateway in a produ
 ## Build
 
 ```bash
-cd daemon
-go build -o agentd ./cmd/agentd
-
-cd ../gateway
-go build -o carrier-gateway .
+go build -o carrier ./cmd/carrier
 ```
+
+## Gateway
+
+The gateway has been rewritten in Go and is now part of the daemon binary.
+No separate build step is required — the daemon serves the gateway API directly.
 
 ## Configuration
 
-The daemon reads configuration from a JSON file. Create `/etc/carrier/agentd.json`:
+The daemon reads configuration from a JSON file. Create `/etc/carrier/carrier.json`:
 
 ```json
 {
-  "log_level": "info",
-  "log_format": "json",
-  "health_port": 8081,
-  "diagnose_dir": "/var/lib/carrier/diagnose",
-  "data_dir": "/var/lib/carrier/data"
+  "server": {
+    "host": "127.0.0.1",
+    "port": 9090,
+    "api_token": ""
+  },
+  "log": {
+    "level": "info",
+    "format": "json"
+  },
+  "lifecycle": {
+    "crash_threshold": 3,
+    "crash_window": "5m",
+    "crash_cooldown": "5m"
+  }
 }
 ```
+
+> **Note:** If `api_token` is set, the config file must have restrictive permissions (`chmod 0600`).
+> See `daemon/internal/config/config.go` for all fields and environment variable overrides (`CARRIER_` prefix).
 
 Ensure the data and diagnose directories exist:
 
@@ -45,7 +66,7 @@ sudo chown carrier:carrier /var/lib/carrier/{data,diagnose}
 Agent manifests may declare required environment variables. Set them in the systemd unit or a dedicated env file:
 
 ```bash
-# /etc/carrier/agentd.env
+# /etc/carrier/carrier.env
 # Example — adjust per your agent manifests
 MY_AGENT_API_KEY=changeme
 ```
@@ -53,15 +74,15 @@ MY_AGENT_API_KEY=changeme
 ## Installation
 
 ```bash
-sudo install -o root -g root -m 0755 agentd /usr/local/bin/agentd
+sudo install -o root -g root -m 0755 carrier /usr/local/bin/carrier
 sudo install -o root -g root -m 0755 carrier-gateway /usr/local/bin/carrier-gateway
 ```
 
 ## systemd Service
 
-### Daemon (`agentd`)
+### Daemon (`carrier`)
 
-Create `/etc/systemd/system/carrier-agentd.service`:
+Create `/etc/systemd/system/carrier-daemon.service`:
 
 ```ini
 [Unit]
@@ -73,8 +94,8 @@ Wants=network-online.target
 Type=simple
 User=carrier
 Group=carrier
-ExecStart=/usr/local/bin/agentd --config /etc/carrier/agentd.json
-EnvironmentFile=-/etc/carrier/agentd.env
+ExecStart=/usr/local/bin/carrier --config /etc/carrier/carrier.json
+EnvironmentFile=-/etc/carrier/carrier.env
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=65536
@@ -96,7 +117,7 @@ Create `/etc/systemd/system/carrier-gateway.service`:
 ```ini
 [Unit]
 Description=Carrier Gateway
-After=network-online.target carrier-agentd.service
+After=network-online.target carrier-daemon.service
 Wants=network-online.target
 
 [Service]
@@ -121,7 +142,7 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now carrier-agentd carrier-gateway
+sudo systemctl enable --now carrier-daemon carrier-gateway
 ```
 
 ## Health Monitoring
@@ -151,7 +172,7 @@ Integrate with your monitoring stack (Prometheus, Datadog, etc.):
 With structured logging enabled (`log_format: "json"`), logs are written to stdout and captured by journald:
 
 ```bash
-journalctl -u carrier-agentd -f --output=json
+journalctl -u carrier-daemon -f --output=json
 ```
 
 Ship logs to your aggregation platform (ELK, Loki, etc.) via journald or a sidecar.
@@ -175,17 +196,17 @@ tar czf /backup/carrier-$(date +%Y%m%d).tar.gz \
 
 ### Restore
 
-1. Stop services: `sudo systemctl stop carrier-agentd carrier-gateway`
+1. Stop services: `sudo systemctl stop carrier-daemon carrier-gateway`
 2. Restore files from backup
-3. Start services: `sudo systemctl start carrier-agentd carrier-gateway`
+3. Start services: `sudo systemctl start carrier-daemon carrier-gateway`
 4. Verify health: `curl http://localhost:8081/healthz`
 
 ## Upgrade Procedure
 
 1. Build or download the new binary
-2. Stop the service: `sudo systemctl stop carrier-agentd`
-3. Replace the binary: `sudo install -o root -g root -m 0755 agentd /usr/local/bin/agentd`
-4. Start the service: `sudo systemctl start carrier-agentd`
+2. Stop the service: `sudo systemctl stop carrier-daemon`
+3. Replace the binary: `sudo install -o root -g root -m 0755 carrier /usr/local/bin/carrier`
+4. Start the service: `sudo systemctl start carrier-daemon`
 5. Verify: `curl http://localhost:8081/healthz`
 
 For agent upgrades (managed via the lifecycle API), the daemon automatically creates pre-upgrade backups in the diagnose directory.
@@ -194,6 +215,6 @@ For agent upgrades (managed via the lifecycle API), the daemon automatically cre
 
 - Run as a non-root user with minimal privileges
 - Use `ProtectSystem=strict` and `NoNewPrivileges=true` in systemd
-- Rotate secrets in `/etc/carrier/agentd.env` regularly
+- Rotate secrets in `/etc/carrier/carrier.env` regularly
 - The gateway uses crypto-secure tokens — do not downgrade to sequential generation
 - Review the [security audit](../docs/security-audit-command-execution.md) for command execution hardening

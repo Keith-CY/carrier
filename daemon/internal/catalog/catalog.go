@@ -25,6 +25,11 @@ func List() []Entry {
 	return DefaultEntries()
 }
 
+// ActiveEntries returns only entries with StatusActive, suitable for runtime registration.
+func ActiveEntries() []Entry {
+	return ListByStatus(StatusActive)
+}
+
 // ListByStatus returns entries filtered by candidate status.
 func ListByStatus(status CandidateStatus) []Entry {
 	var result []Entry
@@ -64,12 +69,20 @@ func DefaultEntries() []Entry {
 			Description:  "Compact coding assistant",
 		},
 		{
-			ID:           "picoclaw",
-			Name:         "Pico Claw",
+			ID:           "zeroclaw",
+			Name:         "ZeroClaw",
 			Version:      "0.1.0",
-			Status:       StatusCandidate,
-			Capabilities: []string{"chat"},
-			Description:  "Minimal chat agent",
+			Status:       StatusActive,
+			Capabilities: []string{"chat", "code"},
+			Description:  "Rust-based AI assistant with chat and code capabilities",
+		},
+		{
+			ID:           "picoclaw",
+			Name:         "PicoClaw",
+			Version:      "0.1.0",
+			Status:       StatusActive,
+			Capabilities: []string{"chat", "code"},
+			Description:  "Go-based ultra-lightweight AI assistant",
 		},
 	}
 	sort.Slice(entries, func(i, j int) bool {

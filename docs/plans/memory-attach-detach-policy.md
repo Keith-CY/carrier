@@ -1,5 +1,10 @@
 # OpenClaw Memory Attach/Detach and Mount Policy Enforcement
 
+> **Status:** ⚠️ Superseded (diverged from implementation)
+>
+> **Note:** This is a historical planning document.
+> For current behavior, use [`docs/current-architecture.md`](../current-architecture.md), [`daemon/internal/lifecycle/memory.go`](../../daemon/internal/lifecycle/memory.go), [`daemon/internal/memory/store.go`](../../daemon/internal/memory/store.go), and [`daemon/internal/memory/policy.go`](../../daemon/internal/memory/policy.go).
+
 ## Overview
 
 This design covers instance-level memory attach/detach lifecycle APIs and strict mount-policy enforcement for the OpenClaw daemon. The goal is to ensure agents can only access memory stores they are explicitly granted, with clear failure modes for invalid requests.

@@ -15,10 +15,12 @@ const (
 )
 
 const (
-	RuntimeStateStopped  RuntimeState = "stopped"
-	RuntimeStateStarting RuntimeState = "starting"
-	RuntimeStateRunning  RuntimeState = "running"
-	RuntimeStateCrashing RuntimeState = "crashing"
+	RuntimeStateStopped   RuntimeState = "stopped"
+	RuntimeStateStarting  RuntimeState = "starting"
+	RuntimeStateRunning   RuntimeState = "running"
+	RuntimeStateStopping  RuntimeState = "stopping"
+	RuntimeStateCrashing  RuntimeState = "crashing"
+	RuntimeStateCrashLoop RuntimeState = "crash_loop"
 )
 
 const (
@@ -29,16 +31,20 @@ const (
 )
 
 type AgentState struct {
-	ID                   string
-	Version              string
-	Install              InstallState
-	Runtime              RuntimeState
-	Health               HealthState
-	LastError            string
-	LastTriageSummary    string
-	NeedsRemoteDiagnosis bool
-	LastDiagnoseFile     string
-	UpdatedAt            time.Time
+	ID                   string       `json:"id"`
+	Name                 string       `json:"name"`
+	Version              string       `json:"version"`
+	Install              InstallState `json:"installState"`
+	Runtime              RuntimeState `json:"runtimeState"`
+	Health               HealthState  `json:"health"`
+	Ports                []int        `json:"ports"`
+	StartedAt            *time.Time   `json:"startedAt,omitempty"`
+	RestartCount         int          `json:"restartCount"`
+	LastError            string       `json:"lastError,omitempty"`
+	LastTriageSummary    string       `json:"lastTriageSummary,omitempty"`
+	NeedsRemoteDiagnosis bool         `json:"needsRemoteDiagnosis"`
+	LastDiagnoseFile     string       `json:"lastDiagnoseFile,omitempty"`
+	UpdatedAt            time.Time    `json:"updatedAt"`
 }
 
 type UpgradeResult struct {

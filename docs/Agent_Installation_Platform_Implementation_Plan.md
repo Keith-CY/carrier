@@ -1,13 +1,14 @@
 # Agent Installation Platform — Implementation Plan (Phase 1)
 
 > Scope/priority source-of-truth: `docs/Agent_Installation_Platform_PRD.md`.
-> This document defines execution sequencing only; if conflicts exist, follow PRD.
+> Runtime baseline source-of-truth: `docs/phase1-runtime-adr.md`.
+> This document defines execution sequencing only; if conflicts exist, follow PRD + ADR.
 
 ## 1. Plan Goal
 Deliver an end-to-end, production-like OpenClaw workflow on local runtime (macOS/Linux) and WSL2 (Windows), with Telegram/Discord/Feishu control, Per-Agent/Shared/Public memory management, and Base Agent triage + diagnose escalation.
 
 ## 2. Scope Baseline
-- Runtime: no Docker path
+- Runtime: local host (macOS/Linux) + WSL2 (Windows), no Docker path
 - Phase 1 fully operational Agent: OpenClaw only
 - Candidate-only (post-stability onboarding): Pi Mono, NanoClaw, Pico Claw
 - Memory taxonomy: Per-Agent, Shared, Public

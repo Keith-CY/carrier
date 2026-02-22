@@ -17,21 +17,28 @@ permissions:
   contents: read
   issues: read
   pull-requests: read
-  projects: read
+  repository-projects: read
   discussions: write
 
 jobs:
   sync-config-and-report:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Publish Kanban field/view status to Discussion
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        env:
+          CARRIER_PROJECT_ID: ${{ vars.CARRIER_PROJECT_ID }}
+          CARRIER_CANONICAL_PROJECT_ID: ${{ vars.CARRIER_CANONICAL_PROJECT_ID }}
         with:
+          github-token: ${{ secrets.CARRIER_PROJECTS_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
+            const { resolveProjectIdFromCandidates } = require('./.github/scripts/kanban-project-id');
+            const { loadKanbanConfig } = require('./scripts/ci/kanban-config.cjs');
 
             const owner = context.repo.owner;
             const repo = context.repo.repo;
@@ -39,9 +46,9 @@ jobs:
             const token = process.env.CARRIER_PROJECTS_TOKEN || process.env.GITHUB_TOKEN;
             // Fallback `github` comes from @actions/github and is a pre-authenticated Octokit client
             // scoped to the current repo context (default GITHUB_TOKEN), so graphql/rest calls still work.
-            const octokit = token ? github.getOctokit(token) : github;
+            const ghClient = token ? github.getOctokit(token) : github;
 
-            const repoMeta = await octokit.graphql(`
+            const repoMeta = await ghClient.graphql(`
               query($owner: String!, $repo: String!) {
                 repository(owner: $owner, name: $repo) {
                   id
@@ -62,14 +69,23 @@ jobs:
               return;
             }
 
-            const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-            const projectId = process.env.CARRIER_PROJECT_ID || (context.payload.inputs && context.payload.inputs.project_id) || config.projectId;
+            const config = loadKanbanConfig(configPath);
+            const resolveProjectCandidates = [
+              process.env.CARRIER_PROJECT_ID,
+              process.env.CARRIER_CANONICAL_PROJECT_ID,
+              (context.payload.inputs && context.payload.inputs.project_id) || '',
+              config.projectId || '',
+            ];
+            const projectId = await resolveProjectIdFromCandidates(resolveProjectCandidates, {
+              graphql: ghClient.graphql,
+              log: (message) => core.info(message),
+            });
             if (!projectId) {
-              core.setFailed('Missing projectId. Set CARRIER_PROJECT_ID secret or pass workflow input project_id.');
+              core.setFailed('Missing projectId. Set CARRIER_PROJECT_ID/CARRIER_CANONICAL_PROJECT_ID, pass workflow input project_id, or configure .github/kanban-config.json');
               return;
             }
 
-            const preflight = await octokit.graphql(`
+            const preflight = await ghClient.graphql(`
               query($projectId: ID!) {
                 node(id: $projectId) {
                   ... on ProjectV2 {
@@ -83,11 +99,9 @@ jobs:
                           dataType
                         }
                         ... on ProjectV2SingleSelectField {
-                          options(first: 50) {
-                            nodes {
-                              id
-                              name
-                            }
+                          options {
+                            id
+                            name
                           }
                         }
                       }
@@ -137,7 +151,7 @@ jobs:
               }
 
               if (String(existing.dataType) === 'SINGLE_SELECT' && Array.isArray(field.options)) {
-                const exists = new Set((existing.options?.nodes || []).map((o) => normalize(o.name)));
+                const exists = new Set((existing.options || []).map((o) => normalize(o.name)));
                 const missingOptions = field.options.filter((option) => !exists.has(normalize(option)));
                 if (missingOptions.length > 0) {
                   return {
@@ -313,11 +327,13 @@ jobs:
               renderViewTable(viewRows),
               '',
               '## 周度工作量快照（按未关闭 Issue/PR）',
-              `- 统计范围：
-  - 总未关闭项: **${totalItems}**
-  - 进行中: **${totalInProgress}**
-  - 待办: **${totalTodo}**
-  - 阻塞: **${totalBlocked}**（阻塞率 **${blockedRate}%**）`,
+              [
+                '- 统计范围：',
+                `  - 总未关闭项: **${totalItems}**`,
+                `  - 进行中: **${totalInProgress}**`,
+                `  - 待办: **${totalTodo}**`,
+                `  - 阻塞: **${totalBlocked}**（阻塞率 **${blockedRate}%**）`,
+              ].join('\n'),
               '',
               renderWorkload(workload),
               '',
@@ -364,7 +380,7 @@ jobs:
 
             const title = `Carrier Kanban：字段/视图配置与工作量报告 (${isoDate})`;
 
-            const resp = await octokit.graphql(createDiscussionMutation, {
+            const resp = await ghClient.graphql(createDiscussionMutation, {
               repositoryId: repoMeta.repository.id,
               categoryId: category.id,
               title,

@@ -38,8 +38,8 @@ func TestCreateAndGet(t *testing.T) {
 
 func TestList(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypePerAgent, "a")
-	s.Create("m2", "B", "1.0.0", TypeShared, "")
+	_, _ = s.Create("m1", "A", "1.0.0", TypePerAgent, "a")
+	_, _ = s.Create("m2", "B", "1.0.0", TypeShared, "")
 	if len(s.List()) != 2 {
 		t.Fatal("expected 2 entries")
 	}
@@ -47,7 +47,7 @@ func TestList(t *testing.T) {
 
 func TestMountUnmount(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypePerAgent, "agent-a")
+	_, _ = s.Create("m1", "A", "1.0.0", TypePerAgent, "agent-a")
 
 	rec, err := s.Mount("m1", "agent-a", AccessReadWrite)
 	if err != nil {
@@ -100,7 +100,7 @@ func TestMountNotFound(t *testing.T) {
 
 func TestUnmountNotMounted(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_, _ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	if err := s.Unmount("m1", "agent-a"); err != ErrNotMounted {
 		t.Fatalf("expected ErrNotMounted, got %v", err)
 	}
@@ -108,7 +108,7 @@ func TestUnmountNotMounted(t *testing.T) {
 
 func TestArchive(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_, _ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	if err := s.Archive("m1"); err != nil {
 		t.Fatal(err)
 	}
@@ -129,10 +129,10 @@ func TestArchive(t *testing.T) {
 
 func TestUnmountAll(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
-	s.Create("m2", "B", "1.0.0", TypePublic, "")
-	s.Mount("m1", "agent-a", AccessReadOnly)
-	s.Mount("m2", "agent-a", AccessReadOnly)
+	_, _ = s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_, _ = s.Create("m2", "B", "1.0.0", TypePublic, "")
+	_, _ = s.Mount("m1", "agent-a", AccessReadOnly)
+	_, _ = s.Mount("m2", "agent-a", AccessReadOnly)
 
 	n := s.UnmountAll("agent-a")
 	if n != 2 {
@@ -145,8 +145,8 @@ func TestUnmountAll(t *testing.T) {
 
 func TestMountsForAgent(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
-	s.Mount("m1", "agent-a", AccessReadOnly)
+	_, _ = s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_, _ = s.Mount("m1", "agent-a", AccessReadOnly)
 
 	mounts := s.MountsForAgent("agent-a")
 	if len(mounts) != 1 {
@@ -159,8 +159,8 @@ func TestMountsForAgent(t *testing.T) {
 
 func TestPerAgentLimitOnePerAgent(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypePerAgent, "agent-a")
-	s.Create("m2", "B", "1.0.0", TypePerAgent, "agent-a")
+	_, _ = s.Create("m1", "A", "1.0.0", TypePerAgent, "agent-a")
+	_, _ = s.Create("m2", "B", "1.0.0", TypePerAgent, "agent-a")
 
 	_, err := s.Mount("m1", "agent-a", AccessReadWrite)
 	if err != nil {
@@ -175,7 +175,7 @@ func TestPerAgentLimitOnePerAgent(t *testing.T) {
 
 func TestSharedReadOnlyDefault(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypeShared, "")
+	_, _ = s.Create("m1", "A", "1.0.0", TypeShared, "")
 	rec, err := s.Mount("m1", "agent-a", AccessReadOnly)
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +187,7 @@ func TestSharedReadOnlyDefault(t *testing.T) {
 
 func TestPublicAlwaysReadOnly(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypePublic, "")
+	_, _ = s.Create("m1", "A", "1.0.0", TypePublic, "")
 	rec, err := s.Mount("m1", "agent-a", AccessReadWrite) // request rw
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +199,7 @@ func TestPublicAlwaysReadOnly(t *testing.T) {
 
 func TestPerAgentOwnerRestriction(t *testing.T) {
 	s := newTestStore()
-	s.Create("m1", "A", "1.0.0", TypePerAgent, "agent-a")
+	_, _ = s.Create("m1", "A", "1.0.0", TypePerAgent, "agent-a")
 	_, err := s.Mount("m1", "agent-b", AccessReadWrite)
 	if err == nil {
 		t.Fatal("expected owner mismatch error")

@@ -1,6 +1,9 @@
 # Memory Package Specification and Validator
 
-> **Issue:** #77 · **Status:** Plan · **Track:** B1
+> **Issue:** #77 · **Status:** ⚠️ Superseded (diverged from implementation) · **Track:** B1
+>
+> **Note:** This is a historical planning document.
+> For current behavior, use [`docs/current-architecture.md`](../current-architecture.md), [`daemon/internal/memory/types.go`](../../daemon/internal/memory/types.go), [`daemon/internal/memory/store.go`](../../daemon/internal/memory/store.go), and [`daemon/internal/memory/policy.go`](../../daemon/internal/memory/policy.go).
 
 ## Goals
 

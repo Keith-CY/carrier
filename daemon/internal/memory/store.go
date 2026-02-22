@@ -2,6 +2,8 @@ package memory
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -14,6 +16,28 @@ type Store struct {
 	mounts  []MountRecord    // active mounts
 	policy  Policy
 	now     func() time.Time
+
+	rootDir                string
+	runtimeReadTargetPath  string
+	runtimeWriteTargetPath string
+	manifests              map[string]PackageManifest // keyed by memory ID
+	installPath            map[string]string          // keyed by memory ID
+	attachments            map[string][]Attachment    // keyed by agent ID
+	views                  map[string]ViewExplanation // keyed by agent ID
+	viewInputDigest        map[string]string          // keyed by agent ID
+	audits                 []AuditEvent
+	auditLimit             int
+	exportMaxBytes         int64
+	exportSlots            chan struct{}
+	statePath              string
+	lastStateErr           error
+	prepareLocksMu         sync.Mutex
+	prepareLocks           map[string]*prepareLockEntry // keyed by agent ID
+}
+
+type prepareLockEntry struct {
+	mu   sync.Mutex
+	refs int
 }
 
 // StoreOption configures a Store.
@@ -24,14 +48,86 @@ func WithNow(fn func() time.Time) StoreOption {
 	return func(s *Store) { s.now = fn }
 }
 
+// WithRootDir configures filesystem storage root for mempack import/export and composed views.
+func WithRootDir(root string) StoreOption {
+	return func(s *Store) { s.rootDir = root }
+}
+
+// WithPersistencePath overrides the default on-disk state file path.
+func WithPersistencePath(path string) StoreOption {
+	return func(s *Store) { s.statePath = path }
+}
+
+// WithAuditLimit configures the maximum number of retained memory audit records.
+func WithAuditLimit(limit int) StoreOption {
+	return func(s *Store) {
+		if limit > 0 {
+			s.auditLimit = limit
+		}
+	}
+}
+
+// WithRuntimeMountTargets configures the in-container (or runtime) mount targets used in prepare contracts.
+func WithRuntimeMountTargets(readPath, writePath string) StoreOption {
+	return func(s *Store) {
+		if readPath != "" {
+			s.runtimeReadTargetPath = readPath
+		}
+		if writePath != "" {
+			s.runtimeWriteTargetPath = writePath
+		}
+	}
+}
+
+// WithExportGuard configures export safeguards.
+// maxBytes <= 0 keeps the existing limit. maxConcurrent <= 0 keeps the existing limit.
+func WithExportGuard(maxBytes int64, maxConcurrent int) StoreOption {
+	return func(s *Store) {
+		if maxBytes > 0 {
+			s.exportMaxBytes = maxBytes
+		}
+		if maxConcurrent > 0 {
+			s.exportSlots = make(chan struct{}, maxConcurrent)
+		}
+	}
+}
+
+func defaultRuntimeMountTargets() (string, string) {
+	userConfigDir, err := os.UserConfigDir()
+	if err != nil || userConfigDir == "" {
+		return "/app/memory", "/app/memory_private"
+	}
+	base := filepath.Join(userConfigDir, "carrier")
+	return filepath.Join(base, "memory"), filepath.Join(base, "memory_private")
+}
+
 // NewStore creates an empty memory store.
 func NewStore(opts ...StoreOption) *Store {
+	defaultReadPath, defaultWritePath := defaultRuntimeMountTargets()
 	s := &Store{
-		entries: make(map[string]Entry),
-		now:     time.Now,
+		entries:                make(map[string]Entry),
+		now:                    time.Now,
+		runtimeReadTargetPath:  defaultReadPath,
+		runtimeWriteTargetPath: defaultWritePath,
+		manifests:              make(map[string]PackageManifest),
+		installPath:            make(map[string]string),
+		attachments:            make(map[string][]Attachment),
+		views:                  make(map[string]ViewExplanation),
+		viewInputDigest:        make(map[string]string),
+		audits:                 make([]AuditEvent, 0, 128),
+		auditLimit:             1000,
+		exportMaxBytes:         512 * 1024 * 1024,
+		exportSlots:            make(chan struct{}, 3),
+		prepareLocks:           make(map[string]*prepareLockEntry),
 	}
 	for _, o := range opts {
 		o(s)
+	}
+	if s.statePath == "" && s.rootDir != "" {
+		s.statePath = filepath.Join(s.rootDir, "state", "memory-store.json")
+	}
+	if err := s.loadState(); err != nil {
+		s.lastStateErr = err
 	}
 	return s
 }
@@ -57,6 +153,9 @@ func (s *Store) Create(id, name, version string, memType Type, owner string) (En
 		UpdatedAt: now,
 	}
 	s.entries[id] = e
+	if err := s.persistStateLocked(); err != nil {
+		return Entry{}, err
+	}
 	return e, nil
 }
 
@@ -119,6 +218,9 @@ func (s *Store) Mount(memoryID, agentID string, requestedMode AccessMode) (Mount
 		MountedAt:  now,
 	}
 	s.mounts = append(s.mounts, rec)
+	if err := s.persistStateLocked(); err != nil {
+		return MountRecord{}, err
+	}
 	return rec, nil
 }
 
@@ -153,6 +255,9 @@ func (s *Store) Unmount(memoryID, agentID string) error {
 
 	// Remove mount record.
 	s.mounts = append(s.mounts[:idx], s.mounts[idx+1:]...)
+	if err := s.persistStateLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -171,6 +276,9 @@ func (s *Store) Archive(memoryID string) error {
 	entry.State = StateArchived
 	entry.UpdatedAt = s.now()
 	s.entries[memoryID] = entry
+	if err := s.persistStateLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -207,6 +315,9 @@ func (s *Store) UnmountAll(agentID string) int {
 		}
 	}
 	s.mounts = remaining
+	if err := s.persistStateLocked(); err != nil {
+		s.lastStateErr = err
+	}
 	return count
 }
 
@@ -226,4 +337,38 @@ func (s *Store) agentMounts(agentID string) []MountRecord {
 		out = append(out, m)
 	}
 	return out
+}
+
+// LastStateError returns the latest persistence load/save error observed by the store.
+func (s *Store) LastStateError() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastStateErr
+}
+
+func (s *Store) lockPrepareForAgent(agentID string) func() {
+	if agentID == "" {
+		agentID = "__default__"
+	}
+
+	s.prepareLocksMu.Lock()
+	entry := s.prepareLocks[agentID]
+	if entry == nil {
+		entry = &prepareLockEntry{}
+		s.prepareLocks[agentID] = entry
+	}
+	entry.refs++
+	s.prepareLocksMu.Unlock()
+
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+
+		s.prepareLocksMu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(s.prepareLocks, agentID)
+		}
+		s.prepareLocksMu.Unlock()
+	}
 }

@@ -23,18 +23,16 @@ func TestHealthzReturns200(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	var body healthzResponse
+	var body map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if body.Status != "ok" {
-		t.Errorf("expected status ok, got %s", body.Status)
+	if body["status"] != "ok" {
+		t.Errorf("expected status ok, got %v", body["status"])
 	}
-	if body.RunningAgents != 3 {
-		t.Errorf("expected 3 running agents, got %d", body.RunningAgents)
-	}
-	if body.Version != "dev" {
-		t.Errorf("expected version dev, got %s", body.Version)
+	// /healthz now returns only {"status":"ok"} — no agents, version, or uptime
+	if len(body) != 1 {
+		t.Errorf("expected 1 field in response, got %d: %v", len(body), body)
 	}
 }
 
@@ -74,11 +72,11 @@ func TestHealthzNilCounter(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var body healthzResponse
+	var body map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if body.RunningAgents != 0 {
-		t.Errorf("expected 0 agents, got %d", body.RunningAgents)
+	if body["status"] != "ok" {
+		t.Errorf("expected status ok, got %v", body["status"])
 	}
 }

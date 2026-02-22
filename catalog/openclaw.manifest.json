@@ -3,24 +3,60 @@
   "name": "OpenClaw",
   "version": "1.0.0",
   "description": "Full-featured AI assistant with memory support",
-  "capabilities": ["chat", "code", "memory"],
+  "capabilities": [
+    "chat",
+    "code",
+    "memory"
+  ],
   "runtime": {
     "type": "local_binary",
-    "install": { "command": "./install.sh" },
-    "upgrade": { "command": "./install.sh --upgrade" },
-    "start": { "command": "./openclaw --config ./config.yaml" },
-    "stop": { "command": "./openclaw --stop" }
+    "install": {
+      "command": "npm install -g openclaw@1.0.0"
+    },
+    "upgrade": {
+      "command": "npm install -g openclaw@1.0.0"
+    },
+    "start": {
+      "command": "openclaw gateway start"
+    },
+    "stop": {
+      "command": "openclaw gateway stop"
+    }
   },
   "network": {
-    "ports": [{ "name": "http", "port": 8080 }],
-    "healthcheck": { "type": "http", "url": "http://localhost:8080/health" }
+    "ports": [
+      {
+        "name": "http",
+        "port": 9090
+      }
+    ],
+    "healthcheck": {
+      "type": "http",
+      "url": "http://localhost:9090/healthz"
+    }
   },
   "env": {
-    "required": [{ "name": "OPENAI_API_KEY", "secret": true, "description": "OpenAI API key for LLM access" }],
-    "optional": [{ "name": "LOG_LEVEL", "default": "info", "description": "Logging verbosity level" }]
+    "required": [
+      {
+        "name": "OPENAI_API_KEY",
+        "secret": true,
+        "description": "OpenAI API key for LLM access"
+      }
+    ],
+    "optional": [
+      {
+        "name": "LOG_LEVEL",
+        "default": "info",
+        "description": "Logging verbosity level"
+      }
+    ]
   },
   "memory": {
-    "supports": ["per_agent", "shared", "public"],
+    "supports": [
+      "per_agent",
+      "shared",
+      "public"
+    ],
     "mount_path": "./memory"
   },
   "upgrade": {
@@ -35,6 +71,13 @@
     "restart_loop_max": 5
   },
   "diagnostics": {
-    "include": ["runtime_logs", "process_state", "env_sanitized"]
+    "include": [
+      "runtime_logs",
+      "process_state",
+      "env_sanitized"
+    ]
+  },
+  "checksums": {
+    "_note": "Populate with real SHA-256 hashes at release time. Install script fails-closed without valid checksums."
   }
 }

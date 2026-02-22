@@ -4,8 +4,8 @@ import "testing"
 
 func TestDefaultEntriesContainsOpenClawAsActive(t *testing.T) {
 	entries := DefaultEntries()
-	if len(entries) != 4 {
-		t.Fatalf("expected 4 entries, got %d", len(entries))
+	if len(entries) != 5 {
+		t.Fatalf("expected 5 entries, got %d", len(entries))
 	}
 
 	openclaw, ok := FindByID("openclaw")
@@ -18,7 +18,7 @@ func TestDefaultEntriesContainsOpenClawAsActive(t *testing.T) {
 }
 
 func TestCandidateAgentsPresent(t *testing.T) {
-	ids := []string{"pi-mono", "nanoclaw", "picoclaw"}
+	ids := []string{"pi-mono", "nanoclaw"}
 	for _, id := range ids {
 		entry, ok := FindByID(id)
 		if !ok {
@@ -30,27 +30,84 @@ func TestCandidateAgentsPresent(t *testing.T) {
 	}
 }
 
+func TestPicoClawIsActive(t *testing.T) {
+	entry, ok := FindByID("picoclaw")
+	if !ok {
+		t.Fatal("expected picoclaw in catalog")
+	}
+	if entry.Status != StatusActive {
+		t.Fatalf("expected picoclaw status active, got %s", entry.Status)
+	}
+	if !entry.HasCapability("chat") || !entry.HasCapability("code") {
+		t.Fatal("expected picoclaw to have chat and code capabilities")
+	}
+	if !entry.IsRunnable() {
+		t.Fatal("expected picoclaw to be runnable")
+	}
+}
+
+func TestZeroClawIsActive(t *testing.T) {
+	entry, ok := FindByID("zeroclaw")
+	if !ok {
+		t.Fatal("expected zeroclaw in catalog")
+	}
+	if entry.Status != StatusActive {
+		t.Fatalf("expected zeroclaw status active, got %s", entry.Status)
+	}
+	if !entry.HasCapability("chat") || !entry.HasCapability("code") {
+		t.Fatal("expected zeroclaw to have chat and code capabilities")
+	}
+	if !entry.IsRunnable() {
+		t.Fatal("expected zeroclaw to be runnable")
+	}
+}
+
 func TestListReturnsAllEntries(t *testing.T) {
 	all := List()
-	if len(all) != 4 {
-		t.Fatalf("expected 4 entries from List(), got %d", len(all))
+	if len(all) != 5 {
+		t.Fatalf("expected 5 entries from List(), got %d", len(all))
+	}
+}
+
+func TestActiveEntriesOnlyReturnsActive(t *testing.T) {
+	active := ActiveEntries()
+	if len(active) != 3 {
+		t.Fatalf("expected 3 active entries from ActiveEntries(), got %d", len(active))
+	}
+	for _, e := range active {
+		if e.Status != StatusActive {
+			t.Fatalf("ActiveEntries() returned non-active entry: %s (%s)", e.ID, e.Status)
+		}
+	}
+}
+
+func TestActiveEntriesExcludesCandidates(t *testing.T) {
+	active := ActiveEntries()
+	for _, e := range active {
+		if e.ID == "nanoclaw" || e.ID == "pi-mono" {
+			t.Fatalf("ActiveEntries() should not include candidate %s", e.ID)
+		}
+	}
+}
+
+func TestFindByIDNotFound(t *testing.T) {
+	_, ok := FindByID("nonexistent-agent")
+	if ok {
+		t.Fatal("expected FindByID to return false for nonexistent agent")
 	}
 }
 
 func TestListByStatusActive(t *testing.T) {
 	active := ListByStatus(StatusActive)
-	if len(active) != 1 {
-		t.Fatalf("expected 1 active entry, got %d", len(active))
-	}
-	if active[0].ID != "openclaw" {
-		t.Fatalf("expected openclaw, got %s", active[0].ID)
+	if len(active) != 3 {
+		t.Fatalf("expected 3 active entries, got %d", len(active))
 	}
 }
 
 func TestListByStatusCandidate(t *testing.T) {
 	candidates := ListByStatus(StatusCandidate)
-	if len(candidates) != 3 {
-		t.Fatalf("expected 3 candidate entries, got %d", len(candidates))
+	if len(candidates) != 2 {
+		t.Fatalf("expected 2 candidate entries, got %d", len(candidates))
 	}
 }
 

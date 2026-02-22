@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"carrier/daemon/internal/runtimecheck"
 )
@@ -18,7 +19,20 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 	if state.Runtime == RuntimeStateRunning {
 		return ErrAlreadyRunning
 	}
+
+	// Check exponential backoff policy
+	s.mu.Lock()
+	backoffState := s.backoffStates[agentID]
+	shouldRetry, backoffMsg := s.backoffPolicy.ShouldRetry(backoffState, s.now())
+	s.mu.Unlock()
+
+	if !shouldRetry {
+		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_BACKOFF_COOLDOWN", backoffMsg)
+		return fmt.Errorf("%w: %s", ErrCrashLoop, backoffMsg)
+	}
+
 	if err := s.blockIfCrashLoopCoolingDown(agentID, state); err != nil {
+		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_CRASH_LOOP", err.Error())
 		return err
 	}
 
@@ -50,8 +64,8 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 		}
 	}
 
-	result, runErr := s.runner.Run(ctx, m.Runtime.Start.Command)
-	s.appendCommandLog(agentID, "start", m.Runtime.Start.Command, result, runErr)
+	// Start the process using ProcessManager
+	pid, runErr := s.processManager.Start(agentID, "sh", []string{"-c", m.Runtime.Start.Command})
 	if runErr != nil {
 		triage, triageErr := s.HandleFailure(ctx, agentID, runErr.Error())
 		if triageErr == nil {
@@ -62,40 +76,87 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 		return runErr
 	}
 
+	s.appendLog(agentID, fmt.Sprintf("started process with PID %d", pid))
+
+	// Detect immediate process exit (e.g., command not found) by probing
+	// multiple times instead of relying on a fixed sleep duration.
+	if err := s.waitForStableStart(agentID); err != nil {
+		s.updateStateOnStartError(agentID, err)
+		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_START_FAILED", err.Error())
+		return err
+	}
+
 	// Auto-mount memories linked to this agent.
 	s.autoMountMemories(agentID)
 
 	s.mu.Lock()
 	state = s.states[agentID]
+	now := s.now()
 	state.Runtime = RuntimeStateRunning
 	state.Health = HealthStateHealthy
 	state.LastError = ""
 	state.LastTriageSummary = ""
 	state.NeedsRemoteDiagnosis = false
-	state.UpdatedAt = s.now()
+	if state.StartedAt != nil {
+		// Only count as a restart if the agent was previously started
+		state.RestartCount = state.RestartCount + 1
+	}
+	state.StartedAt = &now
+	// Populate ports from manifest
+	if m, ok := s.manifests[agentID]; ok {
+		ports := make([]int, 0, len(m.Network.Ports))
+		for _, p := range m.Network.Ports {
+			ports = append(ports, p.Port)
+		}
+		state.Ports = ports
+	}
+	state.UpdatedAt = now
 	s.states[agentID] = state
 	delete(s.restarts, agentID)
 	delete(s.cooldowns, agentID)
+
+	// Record successful start in backoff state
+	backoffState = s.backoffStates[agentID]
+	backoffState = s.backoffPolicy.RecordStart(backoffState, s.now())
+	s.backoffStates[agentID] = backoffState
 	s.mu.Unlock()
-	s.recordAudit("", "system", "start", agentID, AuditResultSuccess, "", "start completed")
+	s.recordAudit("", "system", "start", agentID, AuditResultSuccess, "", fmt.Sprintf("start completed (PID %d)", pid))
+
+	// Monitor the process in background
+	go s.monitorProcess(agentID)
+
+	s.saveState()
 
 	return nil
 }
 
 func (s *Service) Stop(ctx context.Context, agentID string) error {
-	m, state, err := s.getManifestAndState(agentID)
-	if err != nil {
-		return err
+	// Atomically check preconditions and transition to RuntimeStateStopping in
+	// a single lock acquisition.  This closes the race window where
+	// monitorProcess() could observe RuntimeStateRunning between the old
+	// getManifestAndState (RLock) and the subsequent write-Lock, recording a
+	// false crash-loop restart.
+	s.mu.Lock()
+	if _, ok := s.manifests[agentID]; !ok {
+		s.mu.Unlock()
+		return ErrAgentNotFound
 	}
-	if state.Runtime == RuntimeStateStopped {
+	state := s.states[agentID]
+	if state.Runtime == RuntimeStateStopped || state.Runtime == RuntimeStateStopping {
+		s.mu.Unlock()
 		return ErrAlreadyStopped
 	}
+	state.Runtime = RuntimeStateStopping
+	state.UpdatedAt = s.now()
+	s.states[agentID] = state
+	s.mu.Unlock()
 
-	result, runErr := s.runner.Run(ctx, m.Runtime.Stop.Command)
-	s.appendCommandLog(agentID, "stop", m.Runtime.Stop.Command, result, runErr)
+	// Stop the process using ProcessManager
+	runErr := s.processManager.Stop(agentID)
 	if runErr != nil {
 		s.mu.Lock()
 		state = s.states[agentID]
+		state.Runtime = RuntimeStateRunning // revert — process may still be alive
 		state.LastError = runErr.Error()
 		state.UpdatedAt = s.now()
 		s.states[agentID] = state
@@ -103,6 +164,8 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 		s.recordAudit("", "system", "stop", agentID, AuditResultFailure, "E_STOP_FAILED", runErr.Error())
 		return runErr
 	}
+
+	s.appendLog(agentID, "process stopped successfully")
 
 	// Auto-unmount all memories for this agent.
 	s.autoUnmountMemories(agentID)
@@ -112,10 +175,102 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 	state.Runtime = RuntimeStateStopped
 	state.Health = HealthStateUnknown
 	state.LastError = ""
+	state.Ports = []int{}
 	state.UpdatedAt = s.now()
 	s.states[agentID] = state
 	s.mu.Unlock()
 	s.recordAudit("", "system", "stop", agentID, AuditResultSuccess, "", "stop completed")
 
+	s.saveState()
+
 	return nil
+}
+
+// stableStartProbes is the number of consecutive alive-checks required to
+// consider a process stably started.
+const stableStartProbes = 3
+
+// stableStartInterval is the delay between successive alive-checks.
+const stableStartInterval = 10 * time.Millisecond
+
+// waitForStableStart probes the process multiple times to confirm it has not
+// exited immediately after being started. This replaces the previous fixed
+// sleep with a deterministic check: the process must be alive on every probe.
+func (s *Service) waitForStableStart(agentID string) error {
+	for i := 0; i < stableStartProbes; i++ {
+		time.Sleep(stableStartInterval)
+		if !s.processManager.IsRunning(agentID) {
+			waitErr := s.processManager.Wait(agentID)
+			if waitErr == nil {
+				waitErr = fmt.Errorf("process exited immediately")
+			}
+			return waitErr
+		}
+	}
+	return nil
+}
+
+// monitorProcess watches a running agent process and updates state when it exits.
+func (s *Service) monitorProcess(agentID string) {
+	err := s.processManager.Wait(agentID)
+
+	var logLine string
+	var shouldTriage bool
+	var errorMsg string
+
+	s.mu.Lock()
+	state, ok := s.states[agentID]
+	if !ok {
+		s.mu.Unlock()
+		return
+	}
+
+	// If the process exited unexpectedly (not stopped by user)
+	if state.Runtime == RuntimeStateRunning {
+		state.Runtime = RuntimeStateCrashing
+		state.Health = HealthStateUnhealthy
+		if err != nil {
+			state.LastError = fmt.Sprintf("process exited: %v", err)
+		} else {
+			state.LastError = "process exited unexpectedly"
+		}
+		logLine = state.LastError
+		errorMsg = state.LastError
+		state.UpdatedAt = s.now()
+		s.states[agentID] = state
+
+		// Record crash for crash-loop detection (legacy)
+		s.recordRestart(agentID)
+
+		// Record crash for exponential backoff
+		backoffState := s.backoffStates[agentID]
+		backoffState = s.backoffPolicy.RecordCrash(backoffState, s.now())
+		s.backoffStates[agentID] = backoffState
+
+		// Update error message if crash looping
+		if backoffState.CrashLooping {
+			state.LastError = fmt.Sprintf("crash-loop: exceeded max retry attempts (%d); %s",
+				s.backoffPolicy.MaxAttempts, state.LastError)
+			s.states[agentID] = state
+		}
+
+		shouldTriage = true
+	}
+	s.mu.Unlock()
+
+	// Persist crash state to disk
+	if shouldTriage {
+		s.saveState()
+	}
+
+	if logLine != "" {
+		s.appendLog(agentID, logLine)
+	}
+
+	// Trigger failure handling for unexpected exits
+	if shouldTriage {
+		if _, triageErr := s.HandleFailure(context.Background(), agentID, errorMsg); triageErr != nil {
+			s.appendLog(agentID, fmt.Sprintf("triage error: %v", triageErr))
+		}
+	}
 }

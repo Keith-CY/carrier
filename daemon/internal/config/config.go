@@ -30,8 +30,9 @@ type Config struct {
 
 // ServerConfig holds the network server settings.
 type ServerConfig struct {
-	Host string `json:"host"`
-	Port int    `json:"port"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	APIToken string `json:"api_token"`
 }
 
 // LogConfig holds the logging settings.
@@ -69,6 +70,10 @@ func Default() Config {
 // Load reads configuration from the given JSON file path. If the file does
 // not exist, defaults are returned. Environment variables with the CARRIER_
 // prefix override file values.
+//
+// Relative paths are resolved from the current working directory of the process.
+// Use an absolute path to ensure consistent configuration loading regardless of
+// where the daemon is invoked.
 func Load(path string) (Config, error) {
 	cfg := Default()
 
@@ -82,10 +87,41 @@ func Load(path string) (Config, error) {
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			return cfg, fmt.Errorf("config: parse %s: %w", path, err)
 		}
+
+		// Check file permissions if config was loaded from disk
+		if err := checkConfigPermissions(path, &cfg); err != nil {
+			return cfg, err
+		}
 	}
 
 	applyEnvOverrides(&cfg)
 	return cfg, nil
+}
+
+// checkConfigPermissions verifies that the config file has appropriate
+// permissions when it contains sensitive data like API tokens.
+// Returns an error if the file is world-readable (perms > 0600) and
+// contains an API token.
+func checkConfigPermissions(path string, cfg *Config) error {
+	// Only check permissions if an API token is present in the config file
+	if cfg.Server.APIToken == "" {
+		return nil
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("config: stat %s: %w", path, err)
+	}
+
+	perm := info.Mode().Perm()
+
+	// Check if permissions are too permissive (more than 0600)
+	// 0600 = owner read/write only, no group or world access
+	if perm > 0o600 {
+		return fmt.Errorf("config: %s contains api_token but has insecure permissions %04o (should be 0600 or stricter)", path, perm)
+	}
+
+	return nil
 }
 
 // CrashWindowDuration parses the CrashWindow string as a time.Duration.
@@ -106,6 +142,9 @@ func applyEnvOverrides(cfg *Config) {
 		if p, err := strconv.Atoi(v); err == nil && p > 0 {
 			cfg.Server.Port = p
 		}
+	}
+	if v := os.Getenv("CARRIER_SERVER_API_TOKEN"); v != "" {
+		cfg.Server.APIToken = v
 	}
 	if v := os.Getenv("CARRIER_LOG_LEVEL"); v != "" {
 		cfg.Log.Level = v

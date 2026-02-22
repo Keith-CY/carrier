@@ -1,12 +1,16 @@
 # Phase 1 E2E Test Matrix (Happy/Failure/Memory)
 
 > **Issue:** #85 · **Status:** Plan · **Track:** C4
+>
+> **Note:** This is a historical planning matrix and may diverge from the active test suite.
+> For current execution and canonical references, use [`docs/current-architecture.md`](../current-architecture.md), [`docs/ci/first-response-playbook.md`](../ci/first-response-playbook.md), and the `scripts/` + CI workflow definitions under `.github/workflows/ci.yml`.
 
 ## Goals
 
 - Define a comprehensive E2E test matrix covering happy paths, failure paths, and memory operations.
 - Ensure every Phase 1 feature has at least one E2E test.
 - Produce a machine-readable run report after each test suite execution.
+- Use the shared parity categories from `docs/e2e-parity-taxonomy.md` when writing cross-provider assertions.
 
 ## Non-Goals
 

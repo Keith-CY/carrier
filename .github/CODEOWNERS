@@ -1,0 +1,14 @@
+# Security-sensitive daemon paths
+/daemon/internal/api/** @Keith-CY @Akane-CN
+/daemon/internal/commandexec/** @Keith-CY @Akane-CN
+/daemon/internal/lifecycle/** @Keith-CY @Akane-CN
+/daemon/internal/redact/** @Keith-CY @Akane-CN
+
+# Security-sensitive gateway paths
+/daemon/internal/gateway/** @Keith-CY @Akane-CN
+/daemon/gateway/** @Keith-CY @Akane-CN
+/cmd/carrier/main.go @Keith-CY @Akane-CN
+
+# Release and CI workflow controls
+/.github/workflows/release.yml @Keith-CY @Akane-CN
+/.github/workflows/ci.yml @Keith-CY @Akane-CN

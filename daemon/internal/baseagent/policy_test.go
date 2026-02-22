@@ -87,17 +87,17 @@ func TestClassifyRepairActionRisk(t *testing.T) {
 		want   RiskLevel
 	}{
 		{
-			name: "low risk allowlisted command",
+			name:   "low risk allowlisted command",
 			action: RepairAction{Command: "npm install", TargetPath: "./"},
 			want:   RiskLow,
 		},
 		{
-			name: "sudo command is high risk",
+			name:   "sudo command is high risk",
 			action: RepairAction{Command: "sudo npm install", TargetPath: "./"},
 			want:   RiskHigh,
 		},
 		{
-			name: "system path is high risk",
+			name:   "system path is high risk",
 			action: RepairAction{Command: "npm install", TargetPath: "/etc/openclaw"},
 			want:   RiskHigh,
 		},

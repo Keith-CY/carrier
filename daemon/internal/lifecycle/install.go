@@ -16,7 +16,10 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 		return err
 	}
 
-	result, runErr := s.runner.Run(ctx, m.Runtime.Install.Command)
+	opCtx, cancel := context.WithTimeout(ctx, s.commandTimeout)
+	defer cancel()
+
+	result, runErr := s.runner.Run(opCtx, m.Runtime.Install.Command)
 	s.appendCommandLog(agentID, "install", m.Runtime.Install.Command, result, runErr)
 	if runErr != nil {
 		s.updateStateOnInstallError(agentID, runErr)
@@ -36,6 +39,8 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 	s.states[agentID] = state
 	s.mu.Unlock()
 	s.recordAudit("", "system", "install", agentID, AuditResultSuccess, "", "install completed")
+
+	s.saveState()
 
 	return nil
 }

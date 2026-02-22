@@ -1,6 +1,6 @@
 # Agent Installation and Distribution Platform (Daemon + Gateway + Memory Platform) — Product Design
 
-> One-line pitch: A desktop Daemon (Go) that installs, runs, repairs, and monitors local Agents, controlled through Telegram/Discord/Feishu via a Gateway (TypeScript), with a unified Memory Platform based on Per-Agent, Shared, and Public memory.
+> One-line pitch: A desktop Daemon (Go) that installs, runs, repairs, and monitors local Agents, controlled through Telegram/Discord/Feishu via a Gateway (Go), with a unified Memory Platform based on Per-Agent, Shared, and Public memory.
 
 ---
 
@@ -59,7 +59,7 @@ Running Agents on desktop environments is fragmented and failure-prone:
 | Agent | Installable and runnable agent application distributed through catalog + manifest |
 | Base Agent | Internal Daemon capability that uses LLM-assisted analysis for installation/runtime issues |
 | Daemon (Go) | Resident service handling policy, execution, state, storage, and runtime control |
-| Gateway (TS) | Telegram/Discord/Feishu adapter + session layer + read-only download endpoint |
+| Gateway (Go) | Telegram/Discord/Feishu adapter + session layer + read-only download endpoint |
 | Manifest | Single source of truth for install, run, health, and memory requirements |
 | Per-Agent Memory | Memory owned by one Agent instance |
 | Shared Memory | Memory explicitly shared by user across local Agents |
@@ -72,13 +72,13 @@ Running Agents on desktop environments is fragmented and failure-prone:
 ### 4.1 Component boundaries
 - Daemon (Go): policy + execution + health + repair + state
 - Base Agent (inside Daemon): LLM-assisted troubleshooting and fix recommendation/execution policy
-- Gateway (TypeScript): Telegram/Discord/Feishu command adapter and session layer
+- Gateway (Go): Telegram/Discord/Feishu command adapter and session layer
 - Memory Platform (local): package and lifecycle management for Per-Agent/Shared/Public memory
 
 ### 4.2 Diagram
 ```mermaid
 flowchart LR
-  TG[Telegram Bot] --> GW[Gateway (TypeScript)]
+  TG[Telegram Bot] --> GW[Gateway (Go)]
   DC[Discord Bot] --> GW
   FSK[Feishu Bot] --> GW
   GW -->|local RPC| D[Daemon (Go)]
@@ -203,7 +203,7 @@ diagnostics:
 
 ### 7.2 Suggested storage layout
 ```text
-~/.agentd/memories/
+~/.carrier/memories/
   public/
     persona-product-manager@1.2.0/
       memory.yaml

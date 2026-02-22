@@ -2,6 +2,8 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -9,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"carrier/daemon/internal/baseagent"
@@ -33,12 +34,14 @@ var (
 	ErrRemoteDiagnosisNotNeeded   = errors.New("remote diagnosis is not required for this agent")
 	ErrUpgradeFailed              = errors.New("agent upgrade failed")
 	ErrUpgradeStrategyUnsupported = errors.New("upgrade strategy is not supported")
+	ErrAgentAlreadyRunning        = errors.New("cannot re-register manifest while agent is running")
 )
 
 const (
 	defaultCrashLoopThreshold = 3
 	defaultCrashLoopWindow    = 5 * time.Minute
 	defaultCrashLoopCooldown  = 5 * time.Minute
+	defaultCommandTimeout     = 5 * time.Minute
 )
 
 var (
@@ -47,6 +50,14 @@ var (
 )
 
 type Option func(*Service)
+
+type ProcessController interface {
+	Start(agentID string, command string, args []string) (int, error)
+	Stop(agentID string) error
+	IsRunning(agentID string) bool
+	Wait(agentID string) error
+	Cleanup()
+}
 
 func WithRunner(r commandexec.Runner) Option {
 	return func(s *Service) { s.runner = r }
@@ -126,6 +137,50 @@ func WithMemoryStore(ms *memory.Store) Option {
 	}
 }
 
+func WithStateFile(path string) Option {
+	return func(s *Service) {
+		s.stateFile = NewStateFile(path)
+	}
+}
+
+func WithAuditLogDir(dir string) Option {
+	return func(s *Service) {
+		if dir != "" {
+			s.auditLogDir = dir
+		}
+	}
+}
+
+func WithProcessLogDir(dir string) Option {
+	return func(s *Service) {
+		if dir != "" {
+			s.processLogDir = dir
+		}
+	}
+}
+
+func WithProcessManager(pm ProcessController) Option {
+	return func(s *Service) {
+		if pm != nil {
+			s.processManager = pm
+		}
+	}
+}
+
+func WithBackoffPolicy(policy BackoffPolicy) Option {
+	return func(s *Service) {
+		s.backoffPolicy = policy
+	}
+}
+
+func WithCommandTimeout(timeout time.Duration) Option {
+	return func(s *Service) {
+		if timeout > 0 {
+			s.commandTimeout = timeout
+		}
+	}
+}
+
 type Service struct {
 	mu                 sync.RWMutex
 	states             map[string]AgentState
@@ -139,10 +194,10 @@ type Service struct {
 	checker            runtimecheck.Checker
 	runner             commandexec.Runner
 	diagnoseDir        string
+	auditLogDir        string
 	logLimit           int
 	handoffTTL         time.Duration
 	now                func() time.Time
-	idCounter          uint64
 	idGenerator        func(prefix string) string
 	restarts           map[string][]time.Time
 	cooldowns          map[string]time.Time
@@ -150,6 +205,15 @@ type Service struct {
 	crashLoopWindow    time.Duration
 	crashLoopCooldown  time.Duration
 	memoryStore        *memory.Store
+	stateFile          *StateFile
+	pendingPersisted   map[string]*PersistedAgentState // loaded on startup, applied during RegisterManifest
+	processManager     ProcessController
+	processLogDir      string
+	backoffPolicy      BackoffPolicy
+	backoffStates      map[string]BackoffState
+	exitCodes          map[string]*int
+	evidenceCollector  *EvidenceCollector
+	commandTimeout     time.Duration
 }
 
 func NewService(triager baseagent.Triager, opts ...Option) *Service {
@@ -157,11 +221,15 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		triager = baseagent.NoopTriager{}
 	}
 
+	processLogDir := filepath.Join(os.TempDir(), "agentd-process-logs")
+	exitCodes := make(map[string]*int)
+	logs := make(map[string][]string)
+
 	svc := &Service{
 		states:             make(map[string]AgentState),
 		manifests:          make(map[string]manifest.Manifest),
 		memoryLinks:        make(map[string][]string),
-		logs:               make(map[string][]string),
+		logs:               logs,
 		handoffs:           make(map[string]DiagnosisHandoff),
 		auditLogs:          make([]AuditLog, 0, 128),
 		auditLogLimit:      1000,
@@ -169,6 +237,7 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		checker:            runtimecheck.NewHostChecker(),
 		runner:             commandexec.NewShellRunner(),
 		diagnoseDir:        filepath.Join(os.TempDir(), "agentd-diagnose"),
+		auditLogDir:        filepath.Join(os.TempDir(), "agentd-audit"),
 		logLimit:           1000,
 		handoffTTL:         24 * time.Hour,
 		now:                time.Now,
@@ -177,16 +246,46 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		crashLoopThreshold: defaultCrashLoopThreshold,
 		crashLoopWindow:    defaultCrashLoopWindow,
 		crashLoopCooldown:  defaultCrashLoopCooldown,
+		processLogDir:      processLogDir,
+		backoffPolicy:      DefaultBackoffPolicy(),
+		backoffStates:      make(map[string]BackoffState),
+		exitCodes:          exitCodes,
+		commandTimeout:     loadCommandTimeoutFromEnv(os.Getenv("CARRIER_COMMAND_TIMEOUT")),
 	}
+	svc.processManager = NewProcessManager(processLogDir)
+	svc.evidenceCollector = NewEvidenceCollector(logs, exitCodes, 1000)
 	svc.idGenerator = func(prefix string) string {
-		next := atomic.AddUint64(&svc.idCounter, 1)
-		return fmt.Sprintf("%s-%d", prefix, next)
+		var buf [16]byte
+		if _, err := rand.Read(buf[:]); err != nil {
+			panic("crypto/rand failed: " + err.Error())
+		}
+		return fmt.Sprintf("%s-%s", prefix, hex.EncodeToString(buf[:]))
 	}
 	for _, opt := range opts {
 		opt(svc)
 	}
 
+	// Load persisted state if configured
+	if svc.stateFile != nil {
+		if err := svc.loadPersistedState(); err != nil {
+			// Log but don't fail - start with empty state if load fails
+			// In production, you might want to handle this differently
+			_ = err
+		}
+	}
+
 	return svc
+}
+
+func loadCommandTimeoutFromEnv(raw string) time.Duration {
+	if raw == "" {
+		return defaultCommandTimeout
+	}
+	timeout, err := time.ParseDuration(raw)
+	if err != nil || timeout <= 0 {
+		return defaultCommandTimeout
+	}
+	return timeout
 }
 
 func (s *Service) RegisterManifest(m manifest.Manifest) error {
@@ -197,21 +296,53 @@ func (s *Service) RegisterManifest(m manifest.Manifest) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Guard: reject re-registration when the agent is currently running.
+	if existing, ok := s.states[m.ID]; ok && existing.Runtime == RuntimeStateRunning {
+		return ErrAgentAlreadyRunning
+	}
+
+	// Preserve runtime state for non-running agents that already exist.
+	if existing, ok := s.states[m.ID]; ok {
+		existing.Name = m.Name
+		existing.Version = m.Version
+		existing.UpdatedAt = s.now()
+		s.states[m.ID] = existing
+		s.manifests[m.ID] = m
+		return nil
+	}
+
 	s.manifests[m.ID] = m
 	s.states[m.ID] = AgentState{
 		ID:        m.ID,
+		Name:      m.Name,
 		Version:   m.Version,
 		Install:   InstallStateNotInstalled,
 		Runtime:   RuntimeStateStopped,
 		Health:    HealthStateUnknown,
+		Ports:     []int{},
 		UpdatedAt: s.now(),
 	}
 	if _, ok := s.memoryLinks[m.ID]; !ok {
 		s.memoryLinks[m.ID] = nil
 	}
 	s.logs[m.ID] = nil
-	s.restarts[m.ID] = nil
-	s.cooldowns[m.ID] = time.Time{}
+	s.backoffStates[m.ID] = BackoffState{}
+
+	// Apply any pending persisted state (crash-loop cooldown, restart timestamps)
+	// from a prior daemon run. If none exists, initialise to zero values.
+	if pState, ok := s.pendingPersisted[m.ID]; ok {
+		state := s.states[m.ID]
+		s.applyPersistedState(m.ID, pState, &state)
+		s.states[m.ID] = state
+		delete(s.pendingPersisted, m.ID)
+	} else {
+		if _, ok := s.restarts[m.ID]; !ok {
+			s.restarts[m.ID] = nil
+		}
+		if _, ok := s.cooldowns[m.ID]; !ok {
+			s.cooldowns[m.ID] = time.Time{}
+		}
+	}
 
 	return nil
 }
@@ -234,6 +365,32 @@ func (s *Service) ListAgents() []AgentState {
 	return out
 }
 
+// RunningAgentsCount returns the number of agents currently in running state.
+func (s *Service) RunningAgentsCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	count := 0
+	for _, state := range s.states {
+		if state.Runtime == RuntimeStateRunning {
+			count++
+		}
+	}
+	return count
+}
+
+// AgentName returns the manifest name for an agent ID, or the ID when no name is available.
+func (s *Service) AgentName(agentID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	m, ok := s.manifests[agentID]
+	if !ok || m.Name == "" {
+		return agentID
+	}
+	return m.Name
+}
+
 func (s *Service) Status(agentID string) (AgentState, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -254,12 +411,49 @@ func (s *Service) Logs(agentID string, tail int) ([]string, error) {
 	if !ok {
 		return nil, ErrAgentNotFound
 	}
+	tail = boundTail(tail)
 	if tail <= 0 || tail >= len(logs) {
 		return append([]string(nil), logs...), nil
 	}
 
 	start := len(logs) - tail
 	return append([]string(nil), logs[start:]...), nil
+}
+
+// MergedLogs returns the last `tail` log lines merged from all agents, sorted
+// lexicographically (which equals chronological order for ISO-8601 prefixed
+// lines produced by the process logger).
+func (s *Service) MergedLogs(tail int) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	tail = boundTail(tail)
+
+	var merged []string
+	for _, lines := range s.logs {
+		merged = append(merged, lines...)
+	}
+	sort.Strings(merged)
+
+	if tail > 0 && tail < len(merged) {
+		merged = merged[len(merged)-tail:]
+	}
+	return merged
+}
+
+// MaxTailLines is the upper bound accepted for the tail parameter.
+// Set to 1000 as a memory/performance guard: higher values would require
+// buffering proportionally more log data in memory per request.
+const MaxTailLines = 1000
+
+func boundTail(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	if n > MaxTailLines {
+		return MaxTailLines
+	}
+	return n
 }
 
 func (s *Service) HandleFailure(ctx context.Context, agentID, lastError string) (baseagent.TriageResult, error) {
@@ -275,9 +469,20 @@ func (s *Service) HandleFailure(ctx context.Context, agentID, lastError string) 
 	state.LastError = lastError
 	state.UpdatedAt = s.now()
 	s.states[agentID] = state
+
+	// Collect exit code from process manager
+	if pm, ok := s.processManager.(*ProcessManager); ok {
+		if exitCode := pm.GetExitCode(agentID); exitCode != nil {
+			s.exitCodes[agentID] = exitCode
+		}
+	}
 	s.mu.Unlock()
 
-	triage, err := s.triager.Analyze(ctx, baseagent.Evidence{AgentID: agentID, LastError: lastError})
+	// Collect comprehensive evidence
+	evidence := s.evidenceCollector.Collect(agentID, lastError)
+	baseEvidence := evidence.ToBaseAgentEvidence(lastError)
+
+	triage, err := s.triager.Analyze(ctx, baseEvidence)
 	if err != nil {
 		return baseagent.TriageResult{}, err
 	}
@@ -290,6 +495,9 @@ func (s *Service) HandleFailure(ctx context.Context, agentID, lastError string) 
 	s.states[agentID] = state
 	s.mu.Unlock()
 	s.recordAudit("", "base-agent", "triage", agentID, AuditResultSuccess, "", triage.Summary)
+
+	// Persist triage information to disk
+	s.saveState()
 
 	return triage, nil
 }
@@ -307,7 +515,7 @@ func (s *Service) Diagnose(agentID string) (string, error) {
 	logs := append([]string(nil), s.logs[agentID]...)
 	s.mu.RUnlock()
 
-	if err := os.MkdirAll(s.diagnoseDir, 0o755); err != nil {
+	if err := os.MkdirAll(s.diagnoseDir, 0o700); err != nil {
 		s.recordAudit("", "system", "diagnose", agentID, AuditResultFailure, "E_DIAG_DIR", err.Error())
 		return "", fmt.Errorf("create diagnose dir: %w", err)
 	}
@@ -379,6 +587,13 @@ func (s *Service) DiagnosisHandoffs() []DiagnosisHandoff {
 	return out
 }
 
+// Cleanup stops all managed processes for graceful shutdown.
+func (s *Service) Cleanup() {
+	if s.processManager != nil {
+		s.processManager.Cleanup()
+	}
+}
+
 func (s *Service) CleanupExpiredDiagnosisHandoffs() int {
 	cutoff := s.now().Add(-s.handoffTTL)
 
@@ -396,4 +611,93 @@ func (s *Service) CleanupExpiredDiagnosisHandoffs() int {
 		s.recordAudit("", "system", "handoff_cleanup", "diagnosis_handoffs", AuditResultSuccess, "", fmt.Sprintf("removed=%d", removed))
 	}
 	return removed
+}
+
+// loadPersistedState restores agent state from the state file.
+// Only restores Install and Runtime state for registered agents.
+// Verifies that processes marked as "running" are actually alive.
+func (s *Service) loadPersistedState() error {
+	if s.stateFile == nil {
+		return nil
+	}
+
+	persisted, err := s.stateFile.Load()
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Stash persisted state so RegisterManifest can apply it when agents
+	// are registered (agents may not exist yet at this point).
+	s.pendingPersisted = persisted
+
+	for id, pState := range persisted {
+		// Only restore state for agents that have been registered
+		if state, ok := s.states[id]; ok {
+			s.applyPersistedState(id, pState, &state)
+			s.states[id] = state
+		}
+	}
+
+	return nil
+}
+
+// applyPersistedState applies a single persisted record to the given AgentState
+// and restores crash-loop cooldown/restart data on the service. Caller must hold s.mu.
+func (s *Service) applyPersistedState(id string, pState *PersistedAgentState, state *AgentState) {
+	if pState.Installed {
+		state.Install = InstallStateInstalled
+	} else {
+		state.Install = InstallStateNotInstalled
+	}
+
+	restoredState := RuntimeState(pState.RuntimeState)
+	if restoredState == RuntimeStateRunning {
+		if !s.processManager.IsRunning(id) {
+			restoredState = RuntimeStateStopped
+		}
+	}
+	state.Runtime = restoredState
+	state.UpdatedAt = pState.LastTransition
+
+	// Restore crash-loop cooldown state
+	if len(pState.Restarts) > 0 {
+		s.restarts[id] = make([]time.Time, len(pState.Restarts))
+		copy(s.restarts[id], pState.Restarts)
+	}
+	if !pState.CooldownUntil.IsZero() {
+		s.cooldowns[id] = pState.CooldownUntil
+	}
+}
+
+// saveState persists the current agent states to disk, including crash-loop
+// cooldown and restart timestamps so they survive daemon restarts.
+func (s *Service) saveState() {
+	if s.stateFile == nil {
+		return
+	}
+
+	s.mu.RLock()
+	persisted := make(map[string]PersistedAgentState, len(s.states))
+	for id, state := range s.states {
+		p := PersistedAgentState{
+			ID:             state.ID,
+			Installed:      state.Install == InstallStateInstalled,
+			RuntimeState:   string(state.Runtime),
+			LastTransition: state.UpdatedAt,
+		}
+		if restarts, ok := s.restarts[id]; ok && len(restarts) > 0 {
+			p.Restarts = make([]time.Time, len(restarts))
+			copy(p.Restarts, restarts)
+		}
+		if cooldownUntil, ok := s.cooldowns[id]; ok && !cooldownUntil.IsZero() {
+			p.CooldownUntil = cooldownUntil
+		}
+		persisted[id] = p
+	}
+	s.mu.RUnlock()
+
+	_ = s.stateFile.SavePersisted(persisted)
 }

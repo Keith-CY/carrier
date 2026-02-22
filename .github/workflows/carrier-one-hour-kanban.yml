@@ -1,0 +1,517 @@
+name: Carrier 1h Kanban Board Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report only, do not write content to discussion/issue'
+        required: false
+        default: 'false'
+  schedule:
+    - cron: '0 * * * *'
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  discussions: write
+
+jobs:
+  sync-1h-board:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Update 1h Kanban snapshot
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        env:
+          CARRIER_1H_MERGE_READY_RUNS: ${{ vars.CARRIER_1H_MERGE_READY_RUNS || '3' }}
+          CARRIER_1H_STALE_PR_RUNS: ${{ vars.CARRIER_1H_STALE_PR_RUNS || '6' }}
+          CARRIER_1H_TEST_FILES_ALERT: ${{ vars.CARRIER_1H_TEST_FILES_ALERT || '5' }}
+          CARRIER_1H_DOCS_SUPERSEDED_WINDOW: ${{ vars.CARRIER_1H_DOCS_SUPERSEDED_WINDOW || '24' }}
+        with:
+          github-token: ${{ secrets.CARRIER_PROJECTS_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const { classifyBucket } = require('./scripts/classify-bucket');
+            const {
+              DELTA_COMMENT_MARKER,
+              buildAuditDeltaComment,
+              computeCleanRunGate,
+              computeDocsSupersededTrend,
+              computeMetricDrift,
+              computePrWatchdog,
+              extractStateFromBody,
+              isAutomationAuditPr,
+              upsertStateMarker,
+            } = require('./scripts/ci/hourly-kanban-metrics.cjs');
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const dryRun = String(context.payload.inputs?.dry_run || process.env.DRY_RUN || 'false').toLowerCase() === 'true';
+            const token = process.env.CARRIER_PROJECTS_TOKEN || process.env.GITHUB_TOKEN;
+            // Fallback to the pre-authenticated github-script client when no explicit token is provided.
+            const gh = token ? github.getOctokit(token) : github;
+
+            const targetIssueNumber = Number.parseInt(process.env.CARRIER_1H_ISSUE_NUMBER || '119', 10);
+            const discussionTitle = process.env.CARRIER_1H_DISCUSSION_TITLE || '1h Kanban Board (Pinned)';
+            const discussionCategoryName = process.env.CARRIER_1H_DISCUSSION_CATEGORY || 'General';
+            const timezone = process.env.CARRIER_1H_TIMEZONE || 'Asia/Tokyo';
+            const mergeReadyRuns = Math.max(1, Number.parseInt(process.env.CARRIER_1H_MERGE_READY_RUNS || '3', 10));
+            const stalePrRuns = Math.max(1, Number.parseInt(process.env.CARRIER_1H_STALE_PR_RUNS || '6', 10));
+            const testFilesAlertThreshold = Math.max(1, Number.parseInt(process.env.CARRIER_1H_TEST_FILES_ALERT || '5', 10));
+            const docsSupersededWindow = Math.max(1, Number.parseInt(process.env.CARRIER_1H_DOCS_SUPERSEDED_WINDOW || '24', 10));
+
+            const SKIP_WALK_DIRS = new Set(['.git', 'node_modules', '.next', '.turbo', 'dist', 'bin']);
+            const TEST_FILE_PATTERN = /(_test\.go|\.test\.(c?js|mjs|ts)|\.spec\.(c?js|mjs|ts))$/i;
+
+            const formatDate = (isoValue) => {
+              const value = new Date(isoValue);
+              const f = new Intl.DateTimeFormat('en-GB', {
+                timeZone: timezone,
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hourCycle: 'h23',
+              });
+              const p = Object.fromEntries(f.formatToParts(value).map((item) => [item.type, item.value]));
+              return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
+            };
+
+            const safeTableCell = (value) =>
+              String(value || '-')
+                .replace(/\|/g, '\\|')
+                .replace(/\r\n|\n/g, '<br>');
+
+            const escapeCsv = (value) => {
+              const raw = String(value ?? '').replace(/"/g, '""');
+              return `"${raw}"`;
+            };
+
+            const formatDelta = (hasPrevious, delta) => {
+              if (!hasPrevious) {
+                return 'n/a';
+              }
+              return `${delta >= 0 ? '+' : ''}${delta}`;
+            };
+
+            const walkFiles = (rootDir, out = []) => {
+              if (!fs.existsSync(rootDir)) {
+                return out;
+              }
+              for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
+                if (SKIP_WALK_DIRS.has(entry.name)) {
+                  continue;
+                }
+                const fullPath = path.join(rootDir, entry.name);
+                if (entry.isDirectory()) {
+                  walkFiles(fullPath, out);
+                  continue;
+                }
+                if (entry.isFile()) {
+                  out.push(fullPath);
+                }
+              }
+              return out;
+            };
+
+            const countTodoMentions = (dirs) => {
+              let count = 0;
+              for (const dir of dirs) {
+                for (const filePath of walkFiles(dir)) {
+                  if (!filePath.endsWith('.md') && !filePath.endsWith('.go') && !filePath.endsWith('.ts') && !filePath.endsWith('.js') && !filePath.endsWith('.cjs')) {
+                    continue;
+                  }
+                  const content = fs.readFileSync(filePath, 'utf8');
+                  const matches = content.match(/\bTODO\b/g);
+                  if (matches) {
+                    count += matches.length;
+                  }
+                }
+              }
+              return count;
+            };
+
+            const countSupersededDocs = () => {
+              let count = 0;
+              for (const filePath of walkFiles('docs')) {
+                if (!filePath.endsWith('.md')) {
+                  continue;
+                }
+                const content = fs.readFileSync(filePath, 'utf8');
+                if (/superseded/i.test(content)) {
+                  count += 1;
+                }
+              }
+              return count;
+            };
+
+            const countTestFiles = () => {
+              let count = 0;
+              for (const filePath of walkFiles('.')) {
+                const normalized = filePath.replace(/^\.\//, '');
+                if (TEST_FILE_PATTERN.test(normalized)) {
+                  count += 1;
+                }
+              }
+              return count;
+            };
+
+            if (!Number.isInteger(targetIssueNumber) || targetIssueNumber <= 0) {
+              core.setFailed(`Invalid CARRIER_1H_ISSUE_NUMBER: ${process.env.CARRIER_1H_ISSUE_NUMBER || '(unset)'}`);
+              return;
+            }
+
+            const existingIssue = await gh.rest.issues.get({
+              owner,
+              repo,
+              issue_number: targetIssueNumber,
+            });
+
+            const previousState = extractStateFromBody(existingIssue.data.body || '');
+
+            const issuesResponse = await gh.paginate(
+              gh.rest.issues.listForRepo,
+              {
+                owner,
+                repo,
+                state: 'open',
+                per_page: 100,
+                sort: 'updated',
+                direction: 'asc',
+              },
+              (resp) => resp.data,
+            );
+
+            const openIssues = issuesResponse.filter((item) => !item.pull_request);
+            const boardRows = openIssues.map((issue) => {
+              const bucket = classifyBucket(issue);
+              const assignees = (issue.assignees || []).map((assignee) => assignee?.login || 'unassigned');
+
+              return {
+                number: issue.number,
+                title: issue.title || '-',
+                link: issue.html_url,
+                bucket,
+                assignee: assignees.length > 0 ? assignees.join(' ') : 'unassigned',
+                updatedAt: issue.updated_at,
+              };
+            });
+
+            const buckets = {
+              open: boardRows.length,
+              Hotfix: boardRows.filter((item) => item.bucket === 'Hotfix').length,
+              Decomposition: boardRows.filter((item) => item.bucket === 'Decomposition').length,
+              Unscheduled: boardRows.filter((item) => item.bucket === 'Unscheduled').length,
+            };
+
+            const order = ['Hotfix', 'Decomposition', 'Unscheduled'];
+            const orderedRows = boardRows
+              .slice()
+              .sort((a, b) => a.bucket.localeCompare(b.bucket) || new Date(a.updatedAt) - new Date(b.updatedAt));
+            const groupedRows = order.flatMap((bucket) => orderedRows.filter((row) => row.bucket === bucket));
+
+            const tableLines = groupedRows
+              .map((row) =>
+                `| [${row.number}](${row.link}) | ${safeTableCell(row.title)} | ${row.bucket} | ${safeTableCell(row.assignee)} | ${formatDate(row.updatedAt)} |`
+              )
+              .join('\n');
+
+            const csvLines = [
+              'id,title,bucket,assignees,updated_at',
+              ...orderedRows.map((row) => [
+                row.number,
+                row.title,
+                row.bucket,
+                row.assignee,
+                row.updatedAt,
+              ].map((value) => escapeCsv(value)).join(',')),
+            ];
+
+            const metrics = {
+              docs_todo: countTodoMentions(['docs']),
+              core_todo: countTodoMentions(['daemon', 'gateway', 'cmd', 'webui']),
+              docs_superseded: countSupersededDocs(),
+              test_files: countTestFiles(),
+            };
+
+            const drifts = {
+              docsTodo: computeMetricDrift(previousState.metrics.docs_todo, metrics.docs_todo, 1),
+              coreTodo: computeMetricDrift(previousState.metrics.core_todo, metrics.core_todo, 1),
+              testFiles: computeMetricDrift(previousState.metrics.test_files, metrics.test_files, testFilesAlertThreshold),
+            };
+
+            const docsSupersededTrend = computeDocsSupersededTrend(
+              previousState,
+              metrics.docs_superseded,
+              new Date().toISOString(),
+              docsSupersededWindow,
+            );
+
+            const mergeGate = computeCleanRunGate(previousState, metrics, mergeReadyRuns);
+
+            const pullRequests = await gh.paginate(
+              gh.rest.pulls.list,
+              {
+                owner,
+                repo,
+                state: 'open',
+                per_page: 100,
+                sort: 'updated',
+                direction: 'desc',
+              },
+              (resp) => resp.data,
+            );
+
+            const prDetails = await Promise.all(
+              pullRequests.map(async (pr) => {
+                const detail = await gh.rest.pulls.get({
+                  owner,
+                  repo,
+                  pull_number: pr.number,
+                });
+                return {
+                  number: detail.data.number,
+                  title: detail.data.title,
+                  url: detail.data.html_url,
+                  headRef: detail.data.head?.ref,
+                  headSha: detail.data.head?.sha,
+                  changedFiles: detail.data.changed_files,
+                  additions: detail.data.additions,
+                  deletions: detail.data.deletions,
+                  createdAt: detail.data.created_at,
+                  updatedAt: detail.data.updated_at,
+                };
+              }),
+            );
+
+            const prWatchdog = computePrWatchdog(prDetails, previousState, {
+              staleThresholdRuns: stalePrRuns,
+              now: new Date(),
+            });
+
+            const staleLines = prWatchdog.staleEntries.length
+              ? prWatchdog.staleEntries
+                .map((entry) =>
+                  `- [#${entry.number}](${entry.url}) · unchanged_runs=${entry.unchangedRuns}/${prWatchdog.thresholdRuns}, open_hours=${entry.openHours}, head=${entry.headSha.slice(0, 12)}`
+                )
+                .join('\n')
+              : '- None';
+
+            const nowLabel = formatDate(new Date());
+            const summaryBody = [
+              '# 1h Kanban Board (Pinned)',
+              '',
+              `Updated (timezone: ${timezone}): ${nowLabel}`,
+              '',
+              '## Summary',
+              `- open: \`${buckets.open}\``,
+              `- Hotfix: \`${buckets.Hotfix}\``,
+              `- Decomposition: \`${buckets.Decomposition}\``,
+              `- Unscheduled: \`${buckets.Unscheduled}\``,
+              '',
+              '| Issue | Title | Bucket | Assignee | Updated At |',
+              '|---|---|---|---|---|',
+              tableLines || '| - | - | - | - | - |',
+              '',
+              '## Hourly Audit Metrics',
+              `- docs_todo: \`${metrics.docs_todo}\` (delta: \`${formatDelta(drifts.docsTodo.hasPrevious, drifts.docsTodo.delta)}\`)`,
+              `- core_todo: \`${metrics.core_todo}\` (delta: \`${formatDelta(drifts.coreTodo.hasPrevious, drifts.coreTodo.delta)}\`)`,
+              `- docs_superseded: \`${metrics.docs_superseded}\` (delta: \`${formatDelta(docsSupersededTrend.previousValue != null, docsSupersededTrend.delta)}\`)`,
+              `- test_files: \`${metrics.test_files}\` (delta: \`${formatDelta(drifts.testFiles.hasPrevious, drifts.testFiles.delta)}\`)${drifts.testFiles.alert ? ' ⚠️ drift alert' : ''}`,
+              docsSupersededTrend.regression
+                ? '- docs_superseded regression detected: value increased from previous run.'
+                : '- docs_superseded trend: stable/non-regressing.',
+              '',
+              '## Merge Readiness Gate',
+              `- clean conditions: docs_todo=0 && core_todo=0 -> \`${mergeGate.cleanRun ? 'true' : 'false'}\``,
+              `- clean streak: \`${mergeGate.cleanRunStreak}/${mergeGate.requiredRuns}\``,
+              `- ready for final review: \`${mergeGate.readyForReview ? 'true' : 'false'}\``,
+              '',
+              '## Stale Open PR Watchdog',
+              `- threshold (unchanged runs): \`${prWatchdog.thresholdRuns}\``,
+              `- open PRs tracked: \`${prWatchdog.entries.length}\``,
+              `- stale PRs: \`${prWatchdog.staleEntries.length}\``,
+              staleLines,
+              '',
+              '## CSV Export',
+              '',
+              '```csv',
+              csvLines.join('\n'),
+              '```',
+              '',
+              `Trigger: ${context.eventName === 'schedule' ? 'Scheduled (hourly)' : 'Manual run'}`,
+            ].join('\n');
+
+            const nextState = {
+              metrics,
+              cleanRunStreak: mergeGate.cleanRunStreak,
+              docsSupersededHistory: docsSupersededTrend.history,
+              prWatchdog: prWatchdog.nextMap,
+            };
+            const issueBody = upsertStateMarker(summaryBody, nextState);
+
+            const automationAuditPrs = prWatchdog.entries.filter((entry) => isAutomationAuditPr(entry));
+
+            if (dryRun) {
+              core.info('Dry run mode enabled, skip remote write.');
+              core.info(issueBody);
+              core.info(`automation-audit-pr-targets: ${automationAuditPrs.map((entry) => entry.number).join(', ') || '(none)'}`);
+              return;
+            }
+
+            await gh.rest.issues.update({
+              owner,
+              repo,
+              issue_number: targetIssueNumber,
+              body: issueBody,
+            });
+            core.info(`Updated issue #${targetIssueNumber}: ${existingIssue.data.html_url}`);
+
+            for (const entry of automationAuditPrs) {
+              const commentBody = buildAuditDeltaComment({
+                generatedAt: new Date().toISOString(),
+                metrics,
+                drifts,
+                docsSupersededTrend,
+                mergeGate,
+                watchdogEntry: entry,
+              });
+
+              const existingComments = await gh.paginate(
+                gh.rest.issues.listComments,
+                {
+                  owner,
+                  repo,
+                  issue_number: entry.number,
+                  per_page: 100,
+                },
+                (resp) => resp.data,
+              );
+
+              const existingDeltaComment = existingComments.find((comment) =>
+                String(comment.body || '').includes(DELTA_COMMENT_MARKER),
+              );
+
+              if (existingDeltaComment) {
+                await gh.rest.issues.updateComment({
+                  owner,
+                  repo,
+                  comment_id: existingDeltaComment.id,
+                  body: commentBody,
+                });
+                core.info(`Updated hourly delta comment on PR #${entry.number}`);
+              } else {
+                await gh.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: entry.number,
+                  body: commentBody,
+                });
+                core.info(`Created hourly delta comment on PR #${entry.number}`);
+              }
+            }
+
+            const repoMeta = await gh.graphql(`
+              query($owner: String!, $repo: String!) {
+                repository(owner: $owner, name: $repo) {
+                  id
+                  hasDiscussionsEnabled
+                  discussionCategories(first: 20) {
+                    nodes {
+                      id
+                      name
+                      slug
+                    }
+                  }
+                }
+              }
+            `, { owner, repo });
+
+            const publishToDiscussion = repoMeta.repository?.hasDiscussionsEnabled === true;
+            const categories = repoMeta.repository?.discussionCategories?.nodes || [];
+
+            if (!publishToDiscussion) {
+              core.info('Discussions not enabled; issue update only.');
+              return;
+            }
+
+            try {
+              const category =
+                categories.find((item) => item.slug === discussionCategoryName.toLowerCase()) ||
+                categories.find((item) => item.name.toLowerCase() === discussionCategoryName.toLowerCase()) ||
+                categories[0];
+
+              if (!category) {
+                core.warning('Discussions enabled, but no discussion category matched. Skip discussion sync.');
+                return;
+              }
+
+              const discussionNodes = await gh.graphql(`
+                query($owner: String!, $repo: String!) {
+                  repository(owner: $owner, name: $repo) {
+                    discussions(first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) {
+                      nodes {
+                        id
+                        title
+                        url
+                      }
+                    }
+                  }
+                }
+              `, { owner, repo });
+
+              const discussions = discussionNodes.repository?.discussions?.nodes || [];
+              const targetDiscussion = discussions.find((item) => item.title === discussionTitle);
+
+              if (targetDiscussion) {
+                const updateMutation = `
+                  mutation($discussionId: ID!, $body: String!) {
+                    updateDiscussion(input: { discussionId: $discussionId, body: $body }) {
+                      discussion {
+                        url
+                      }
+                    }
+                  }
+                `;
+                await gh.graphql(updateMutation, {
+                  discussionId: targetDiscussion.id,
+                  body: summaryBody,
+                });
+                core.info(`Updated discussion: ${targetDiscussion.title}`);
+                return;
+              }
+
+              const createMutation = `
+                mutation($repositoryId: ID!, $categoryId: ID!, $title: String!, $body: String!) {
+                  createDiscussion(input: {
+                    repositoryId: $repositoryId,
+                    categoryId: $categoryId,
+                    title: $title,
+                    body: $body,
+                  }) {
+                    discussion {
+                      url
+                    }
+                  }
+                }
+              `;
+              const created = await gh.graphql(createMutation, {
+                repositoryId: repoMeta.repository.id,
+                categoryId: category.id,
+                title: discussionTitle,
+                body: summaryBody,
+              });
+              core.info(`Created discussion: ${created.createDiscussion.discussion.url}`);
+            } catch (error) {
+              core.warning(`Discussion sync failed: ${(error && error.message) ? error.message : error}`);
+            }

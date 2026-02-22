@@ -1,14 +1,23 @@
 # Agent Installation and Distribution Platform — PRD (Phase 1 / Demo)
 
-> Product form factor: desktop Daemon (Go), no mandatory GUI, controlled through Telegram/Discord/Feishu via Gateway (TypeScript). Runtime is local-first (macOS/Linux host processes, Windows via WSL2). Memory model is Per-Agent, Shared, and Public.
+> Product form factor: desktop Daemon (Go), no mandatory GUI, controlled through Telegram/Discord/Feishu via Gateway (Go). Runtime is local-first (macOS/Linux host processes, Windows via WSL2). Memory model is Per-Agent, Shared, and Public.
+> Runtime baseline authority: `docs/phase1-runtime-adr.md`.
 
 ---
 
 ## 0. Document Metadata
 - Product codename: Agent Runtime Manager (Local)
 - Version: PRD v0.2
-- Owner modules: Daemon (Go), Gateway (TS), Memory Platform, Catalog
+- Owner modules: Daemon (Go), Gateway (Go), Memory Platform, Catalog
 - This PRD is the **single source of truth** for product scope/priority. If another document conflicts, PRD wins.
+- Runtime model changes must update this PRD and `docs/phase1-runtime-adr.md` in the same PR.
+
+### 0.1 Terminology baseline
+
+- Runtime = host (macOS/Linux) or WSL2 (Windows), no Docker path in Phase 1.
+- Diagnose = sanitized artifact generation + optional remote diagnosis consent.
+- Memory classes = Per-Agent / Shared / Public.
+- Priority semantics = P0 (must-have), P1 (important next), P2 (later).
 
 ---
 
@@ -222,7 +231,7 @@ Mount policy:
 - Public read-only
 - Per-Agent read-write
 
-### 4.4 Gateway (TypeScript)
+### 4.4 Gateway (Go)
 
 #### FR-G-001 Pairing: `/pair <code>` (P0)
 Flow:
@@ -261,10 +270,10 @@ Token properties:
 Default bind:
 - `127.0.0.1`
 
-#### FR-G-004 bun detection (P1)
-- detect bun presence/version for gateway needs
-- if missing: ask user before installing in gateway private directory
-- if declined: keep core adapter path operational where possible
+#### FR-G-004 gateway runtime prerequisite checks (P1)
+- validate required gateway webhook/auth configuration before enabling provider-specific ingress
+- return actionable setup guidance when configuration is incomplete
+- keep `/command` test path operational for local validation
 
 ---
 

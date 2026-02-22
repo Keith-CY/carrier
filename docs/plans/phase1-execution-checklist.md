@@ -1,6 +1,9 @@
 # Phase 1 Execution Checklist and Exit Gate Criteria
 
 > **Issue:** #76 · **Status:** Plan · **Track:** A3
+>
+> **Note:** This is a historical planning checklist and is not the canonical implementation source.
+> For current architecture and operational source-of-truth, use [`docs/current-architecture.md`](../current-architecture.md), [`docs/Agent_Installation_Platform_PRD.md`](../Agent_Installation_Platform_PRD.md), and [`ARCHITECTURE.md`](../../ARCHITECTURE.md).
 
 ## Goals
 
@@ -81,9 +84,9 @@ Every milestone tracked in Phase 1 **must** have a checklist entry in the follow
 | Risk ID | Description | Level | Likelihood | Impact | Mitigation | Owner | Status |
 |---------|-------------|-------|------------|--------|------------|-------|--------|
 | R-01 | Memory schema changes late in Phase 1 break downstream importers | high | medium | high | Lock schema after B1 sign-off; version bump required for breaking changes | `@dev01lay2` | open |
-| R-02 | Disk protection logic not tested under real low-disk conditions | medium | medium | medium | Add CI job with constrained tmpfs; manual test on staging | TBD | open |
-| R-03 | E2E test matrix too large to run in CI time budget | medium | low | medium | Prioritize happy-path; run full matrix nightly | TBD | open |
-| R-04 | Dependency on external runtime availability for install tests | low | low | low | Mock runtime binaries for CI; real binaries for nightly | TBD | open |
+| R-02 | Disk protection logic not tested under real low-disk conditions | medium | medium | medium | Add CI job with constrained tmpfs; manual test on staging | `@carrier-maintainers` | open |
+| R-03 | E2E test matrix too large to run in CI time budget | medium | low | medium | Prioritize happy-path; run full matrix nightly | `@carrier-maintainers` | open |
+| R-04 | Dependency on external runtime availability for install tests | low | low | low | Mock runtime binaries for CI; real binaries for nightly | `@carrier-maintainers` | open |
 
 ### Risk Levels
 
@@ -107,7 +110,7 @@ The project Kanban board uses the following columns. Transitioning between colum
 
 - [ ] All code committed and pushed to a feature branch
 - [ ] PR opened with passing CI checks
-- [ ] Self-review completed (no TODOs, no debug code)
+- [ ] Self-review completed (no pending placeholders, no debug code)
 - [ ] Linked to parent issue via `Closes #N`
 
 ### Column: In Review → Done

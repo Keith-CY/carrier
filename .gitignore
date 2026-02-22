@@ -1,2 +1,13 @@
 docs/Agent_Installation_Platform_PRD_extra.md
 node_modules/
+daemon/coverage.html
+daemon/coverage.out
+.worktree
+.worktrees/
+agentd
+!daemon/cmd/agentd/
+carrier
+!cmd/
+!cmd/carrier/
+!cmd/carrier/main_test.go
+agentd
