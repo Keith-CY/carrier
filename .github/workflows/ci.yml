@@ -148,6 +148,9 @@ jobs:
       - name: Run CI helper tests
         run: node scripts/kanban-project-id.test.js
 
+      - name: Credential loader dedupe guard
+        run: node scripts/ci/credential-loader-dedupe.cjs --root .
+
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
@@ -215,8 +218,18 @@ jobs:
         run: |
           set -euo pipefail
           base_sha="${{ github.event.pull_request.base.sha }}"
-          head_sha="${{ github.event.pull_request.head.sha }}"
-          git fetch --no-tags --depth=1 origin "${base_sha}" "${head_sha}"
+          base_ref="${{ github.event.pull_request.base.ref }}"
+
+          # Fetching PR head by raw SHA can fail for fork/shallow topologies.
+          # Base coverage only needs the base commit, so fetch base first with ref fallback.
+          if ! git fetch --no-tags --depth=1 origin "${base_sha}"; then
+            echo "Direct base SHA fetch failed; fallback to base ref ${base_ref}"
+            git fetch --no-tags --depth=1 origin "${base_ref}"
+          fi
+
+          if ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
+            base_sha="$(git rev-parse FETCH_HEAD)"
+          fi
           git worktree add ../_base_cov "${base_sha}"
           trap 'git worktree remove -f ../_base_cov || true' EXIT
 

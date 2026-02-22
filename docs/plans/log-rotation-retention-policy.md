@@ -1,6 +1,9 @@
 # Log Rotation/Retention Policy and Disk Protection
 
 > **Issue:** #83 · **Status:** Plan · **Track:** C2
+>
+> **Note:** This is a historical planning document and may diverge from current implementation.
+> For current behavior and canonical references, use [`docs/current-architecture.md`](../current-architecture.md), [`docs/deployment.md`](../deployment.md), [`daemon/internal/lifecycle/`](../../daemon/internal/lifecycle/), and [`daemon/internal/logging/`](../../daemon/internal/logging/).
 
 ## Goals
 

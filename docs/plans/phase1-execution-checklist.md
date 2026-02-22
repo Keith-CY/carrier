@@ -1,6 +1,9 @@
 # Phase 1 Execution Checklist and Exit Gate Criteria
 
 > **Issue:** #76 · **Status:** Plan · **Track:** A3
+>
+> **Note:** This is a historical planning checklist and is not the canonical implementation source.
+> For current architecture and operational source-of-truth, use [`docs/current-architecture.md`](../current-architecture.md), [`docs/Agent_Installation_Platform_PRD.md`](../Agent_Installation_Platform_PRD.md), and [`ARCHITECTURE.md`](../../ARCHITECTURE.md).
 
 ## Goals
 
