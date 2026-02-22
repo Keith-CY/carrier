@@ -38,6 +38,9 @@ const (
 	defaultDaemonHealthzPath = "/healthz"
 	defaultDaemonHealthURL   = "http://localhost:9090/healthz"
 
+	openClawInstallMethodEnv          = "CARRIER_OPENCLAW_INSTALL_METHOD"
+	openClawDisableInstallFallbackEnv = "CARRIER_OPENCLAW_DISABLE_INSTALL_FALLBACK"
+
 	// Official OpenClaw installer URLs
 	installScriptURL = "https://openclaw.ai/install.sh"
 	installPS1URL    = "https://openclaw.ai/install.ps1"
@@ -48,8 +51,10 @@ const (
 )
 
 // getInstallCommand returns the platform-appropriate install command.
-// In managed daemon installs, force source install from git and skip onboarding
-// to avoid interactive prompts that can block the API request.
+// In managed daemon installs, skip onboarding prompts to avoid blocking the API request.
+// Default behavior prefers git source install for freshness; on Unix-like systems,
+// we automatically retry with upstream default install mode if the git path fails
+// (useful on low-memory hosts). Operators can override install method via env.
 // - Linux/macOS/WSL: curl | bash (official install.sh) with args
 // - Windows: PowerShell script invocation with args
 // - Dev mode: creates a long-running placeholder script
@@ -58,12 +63,60 @@ func getInstallCommand() string {
 		return getDevInstallCommand()
 	}
 
+	method, explicitMethod := resolveOpenClawInstallMethod()
+	allowFallback := !explicitMethod && method == "git" && !isTruthyEnv(openClawDisableInstallFallbackEnv)
+
 	switch runtime.GOOS {
 	case "windows":
-		return fmt.Sprintf(`powershell -NoProfile -Command "& ([scriptblock]::Create((irm '%s'))) -InstallMethod git -NoOnboard"`, installPS1URL)
+		if allowFallback {
+			// Keep git as first choice, then retry with installer default mode.
+			return fmt.Sprintf(`powershell -NoProfile -Command "$ErrorActionPreference='Stop';$installer=(irm '%s');$script=[scriptblock]::Create($installer);$env:CARGO_BUILD_JOBS='1';try { & $script -InstallMethod 'git' -NoOnboard; if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw 'git install failed' } } catch { & $script -NoOnboard }"`, installPS1URL)
+		}
+		return fmt.Sprintf(`powershell -NoProfile -Command "& ([scriptblock]::Create((irm '%s'))) -InstallMethod '%s' -NoOnboard"`, installPS1URL, method)
 	default:
-		// Linux, macOS, and anything else that has sh + curl
-		return fmt.Sprintf(`sh -c 'curl -fsSL --proto "=https" --tlsv1.2 "%s" | bash -s -- --install-method git --no-onboard'`, installScriptURL)
+		// Linux, macOS, and anything else that has sh + curl.
+		if allowFallback {
+			// On small instances, the git build path can be OOM-killed; fallback keeps installs unblocked.
+			return fmt.Sprintf(`sh -c 'curl -fsSL --proto "=https" --tlsv1.2 "%s" | CARGO_BUILD_JOBS=1 bash -s -- --install-method git --no-onboard || curl -fsSL --proto "=https" --tlsv1.2 "%s" | bash -s -- --no-onboard'`, installScriptURL, installScriptURL)
+		}
+		return fmt.Sprintf(`sh -c 'curl -fsSL --proto "=https" --tlsv1.2 "%s" | bash -s -- --install-method %s --no-onboard'`, installScriptURL, method)
+	}
+}
+
+func resolveOpenClawInstallMethod() (method string, explicit bool) {
+	raw := strings.TrimSpace(os.Getenv(openClawInstallMethodEnv))
+	if raw == "" {
+		return "git", false
+	}
+	if !isSafeInstallerToken(raw) {
+		return "git", false
+	}
+	return strings.ToLower(raw), true
+}
+
+func isSafeInstallerToken(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func isTruthyEnv(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
 	}
 }
 
