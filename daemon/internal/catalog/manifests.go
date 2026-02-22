@@ -48,8 +48,10 @@ const (
 )
 
 // getInstallCommand returns the platform-appropriate install command.
-// - Linux/macOS/WSL: curl | bash (official install.sh)
-// - Windows: PowerShell irm | iex (official install.ps1)
+// In managed daemon installs, force source install from git and skip onboarding
+// to avoid interactive prompts that can block the API request.
+// - Linux/macOS/WSL: curl | bash (official install.sh) with args
+// - Windows: PowerShell script invocation with args
 // - Dev mode: creates a long-running placeholder script
 func getInstallCommand() string {
 	if os.Getenv("CARRIER_DEV_MODE") == "1" {
@@ -58,10 +60,10 @@ func getInstallCommand() string {
 
 	switch runtime.GOOS {
 	case "windows":
-		return fmt.Sprintf(`powershell -NoProfile -Command "irm '%s' | iex"`, installPS1URL)
+		return fmt.Sprintf(`powershell -NoProfile -Command "& ([scriptblock]::Create((irm '%s'))) -InstallMethod git -NoOnboard"`, installPS1URL)
 	default:
 		// Linux, macOS, and anything else that has sh + curl
-		return fmt.Sprintf(`sh -c 'curl -fsSL --proto "=https" --tlsv1.2 "%s" | bash'`, installScriptURL)
+		return fmt.Sprintf(`sh -c 'curl -fsSL --proto "=https" --tlsv1.2 "%s" | bash -s -- --install-method git --no-onboard'`, installScriptURL)
 	}
 }
 
