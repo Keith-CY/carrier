@@ -218,7 +218,8 @@ function formatSignedDelta(delta, hasPrevious) {
   if (!hasPrevious) {
     return "n/a";
   }
-  return `${delta >= 0 ? "+" : ""}${delta}`;
+  const safeDelta = toFiniteNumber(delta, 0);
+  return `${safeDelta >= 0 ? "+" : ""}${safeDelta}`;
 }
 
 function buildAuditDeltaComment(params) {
@@ -268,6 +269,7 @@ module.exports = {
   computePrWatchdog,
   encodeStateMarker,
   extractStateFromBody,
+  formatSignedDelta,
   isAutomationAuditPr,
   normalizeState,
   stripStateMarker,

@@ -11,6 +11,7 @@ const {
   computeMetricDrift,
   computePrWatchdog,
   extractStateFromBody,
+  formatSignedDelta,
   isAutomationAuditPr,
   upsertStateMarker,
 } = require("./hourly-kanban-metrics.cjs");
@@ -121,6 +122,16 @@ test("isAutomationAuditPr matches auto branch and audit title", () => {
     isAutomationAuditPr({ headRef: "feature/x", title: "feat: add endpoint" }),
     false,
   );
+});
+
+test("formatSignedDelta exports stable signed formatting", () => {
+  assert.equal(formatSignedDelta(3, true), "+3");
+  assert.equal(formatSignedDelta(0, true), "+0");
+  assert.equal(formatSignedDelta(-2, true), "-2");
+  assert.equal(formatSignedDelta(null, true), "+0");
+  assert.equal(formatSignedDelta(undefined, true), "+0");
+  assert.equal(formatSignedDelta(Number.NaN, true), "+0");
+  assert.equal(formatSignedDelta(5, false), "n/a");
 });
 
 test("buildAuditDeltaComment includes marker and key metrics", () => {
