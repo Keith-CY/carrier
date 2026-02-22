@@ -268,6 +268,7 @@ module.exports = {
   computePrWatchdog,
   encodeStateMarker,
   extractStateFromBody,
+  formatSignedDelta,
   isAutomationAuditPr,
   normalizeState,
   stripStateMarker,
