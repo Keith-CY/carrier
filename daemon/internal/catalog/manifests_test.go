@@ -280,34 +280,50 @@ func TestGetInstallCommand_DevMode(t *testing.T) {
 func TestGetStartCommand_Unix(t *testing.T) {
 	cmd := getStartCommand()
 
-	for _, want := range []string{
-		`$HOME/.local/bin/openclaw`,
-		"command -v openclaw",
-		"gateway start",
-	} {
-		if !strings.Contains(cmd, want) {
-			t.Errorf("start command missing %q\ngot: %s", want, cmd)
+	t.Run("uses shell resolver wrapper", func(t *testing.T) {
+		if !strings.HasPrefix(cmd, "sh -c") {
+			t.Errorf("start command should use shell resolver wrapper\ngot: %s", cmd)
 		}
-	}
-	if !strings.HasPrefix(cmd, "sh -c") {
-		t.Errorf("start command should use shell resolver wrapper\ngot: %s", cmd)
+	})
+
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{"home bin path", `$HOME/.local/bin/openclaw`},
+		{"path lookup", "command -v openclaw"},
+		{"subcommand", "gateway start"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(cmd, tc.want) {
+				t.Errorf("start command missing %q\ngot: %s", tc.want, cmd)
+			}
+		})
 	}
 }
 
 func TestGetStopCommand_Unix(t *testing.T) {
 	cmd := getStopCommand()
 
-	for _, want := range []string{
-		`$HOME/.local/bin/openclaw`,
-		"command -v openclaw",
-		"gateway stop",
-	} {
-		if !strings.Contains(cmd, want) {
-			t.Errorf("stop command missing %q\ngot: %s", want, cmd)
+	t.Run("uses shell resolver wrapper", func(t *testing.T) {
+		if !strings.HasPrefix(cmd, "sh -c") {
+			t.Errorf("stop command should use shell resolver wrapper\ngot: %s", cmd)
 		}
-	}
-	if !strings.HasPrefix(cmd, "sh -c") {
-		t.Errorf("stop command should use shell resolver wrapper\ngot: %s", cmd)
+	})
+
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{"home bin path", `$HOME/.local/bin/openclaw`},
+		{"path lookup", "command -v openclaw"},
+		{"subcommand", "gateway stop"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(cmd, tc.want) {
+				t.Errorf("stop command missing %q\ngot: %s", tc.want, cmd)
+			}
+		})
 	}
 }
 

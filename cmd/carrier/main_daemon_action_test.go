@@ -198,19 +198,31 @@ func configureDaemonProbeEnvForTest(t *testing.T, serverURL string) {
 }
 
 func TestDaemonActionTimeoutUsesExtendedInstallWindow(t *testing.T) {
-	t.Setenv("CARRIER_COMMAND_TIMEOUT", "")
-	if got := daemonActionTimeout("install"); got != 30*time.Minute {
-		t.Fatalf("daemonActionTimeout(install) = %s, want %s", got, 30*time.Minute)
-	}
-	t.Setenv("CARRIER_COMMAND_TIMEOUT", "45m")
-	if got := daemonActionTimeout("install"); got != 47*time.Minute {
-		t.Fatalf("daemonActionTimeout(install, command_timeout=45m) = %s, want %s", got, 47*time.Minute)
-	}
-	if got := daemonActionTimeout("start"); got != 5*time.Minute {
-		t.Fatalf("daemonActionTimeout(start) = %s, want %s", got, 5*time.Minute)
-	}
-	t.Setenv("CARRIER_COMMAND_TIMEOUT", "10m")
-	if got := daemonActionTimeout(" INSTALL "); got != 30*time.Minute {
-		t.Fatalf("daemonActionTimeout( INSTALL , command_timeout=10m) = %s, want %s", got, 30*time.Minute)
-	}
+	t.Run("default timeout for install", func(t *testing.T) {
+		t.Setenv("CARRIER_COMMAND_TIMEOUT", "")
+		if got := daemonActionTimeout("install"); got != 30*time.Minute {
+			t.Fatalf("daemonActionTimeout(install) = %s, want %s", got, 30*time.Minute)
+		}
+	})
+
+	t.Run("large custom timeout for install", func(t *testing.T) {
+		t.Setenv("CARRIER_COMMAND_TIMEOUT", "45m")
+		if got := daemonActionTimeout("install"); got != 47*time.Minute {
+			t.Fatalf("daemonActionTimeout(install, command_timeout=45m) = %s, want %s", got, 47*time.Minute)
+		}
+	})
+
+	t.Run("non-install action keeps default timeout", func(t *testing.T) {
+		t.Setenv("CARRIER_COMMAND_TIMEOUT", "45m")
+		if got := daemonActionTimeout("start"); got != 5*time.Minute {
+			t.Fatalf("daemonActionTimeout(start) = %s, want %s", got, 5*time.Minute)
+		}
+	})
+
+	t.Run("small custom timeout for install floor", func(t *testing.T) {
+		t.Setenv("CARRIER_COMMAND_TIMEOUT", "10m")
+		if got := daemonActionTimeout(" INSTALL " ); got != 30*time.Minute {
+			t.Fatalf("daemonActionTimeout( INSTALL , command_timeout=10m) = %s, want %s", got, 30*time.Minute)
+		}
+	})
 }
