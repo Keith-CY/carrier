@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+type timeoutNetError struct{}
+
+func (timeoutNetError) Error() string   { return "request timeout" }
+func (timeoutNetError) Timeout() bool   { return true }
+func (timeoutNetError) Temporary() bool { return true }
+
 func TestDaemonAgentActionInstallRecoversEOFWhenStatusInstalled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -153,6 +159,30 @@ func TestDaemonAgentActionStartReportsDaemonLastErrorOnEOF(t *testing.T) {
 	}
 }
 
+func TestReconcileDaemonActionOnTransportErrorRecoversTimeoutWhenStatusInstalled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/agents/openclaw/status":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"openclaw","installState":"installed","runtimeState":"stopped"}`))
+			return
+		default:
+			http.NotFound(w, r)
+			return
+		}
+	}))
+	defer server.Close()
+	configureDaemonProbeEnvForTest(t, server.URL)
+
+	reconciled, err := reconcileDaemonActionOnTransportError("openclaw", "install", timeoutNetError{})
+	if err != nil {
+		t.Fatalf("reconcileDaemonActionOnTransportError returned error: %v", err)
+	}
+	if !reconciled {
+		t.Fatal("reconcileDaemonActionOnTransportError should recover timeout when daemon status is installed")
+	}
+}
+
 func configureDaemonProbeEnvForTest(t *testing.T, serverURL string) {
 	t.Helper()
 	parsed, err := url.Parse(serverURL)
@@ -168,13 +198,19 @@ func configureDaemonProbeEnvForTest(t *testing.T, serverURL string) {
 }
 
 func TestDaemonActionTimeoutUsesExtendedInstallWindow(t *testing.T) {
-	if got := daemonActionTimeout("install"); got != 20*time.Minute {
-		t.Fatalf("daemonActionTimeout(install) = %s, want %s", got, 20*time.Minute)
+	t.Setenv("CARRIER_COMMAND_TIMEOUT", "")
+	if got := daemonActionTimeout("install"); got != 30*time.Minute {
+		t.Fatalf("daemonActionTimeout(install) = %s, want %s", got, 30*time.Minute)
+	}
+	t.Setenv("CARRIER_COMMAND_TIMEOUT", "45m")
+	if got := daemonActionTimeout("install"); got != 47*time.Minute {
+		t.Fatalf("daemonActionTimeout(install, command_timeout=45m) = %s, want %s", got, 47*time.Minute)
 	}
 	if got := daemonActionTimeout("start"); got != 5*time.Minute {
 		t.Fatalf("daemonActionTimeout(start) = %s, want %s", got, 5*time.Minute)
 	}
-	if got := daemonActionTimeout(" INSTALL "); got != 20*time.Minute {
-		t.Fatalf("daemonActionTimeout( INSTALL ) = %s, want %s", got, 20*time.Minute)
+	t.Setenv("CARRIER_COMMAND_TIMEOUT", "10m")
+	if got := daemonActionTimeout(" INSTALL "); got != 30*time.Minute {
+		t.Fatalf("daemonActionTimeout( INSTALL , command_timeout=10m) = %s, want %s", got, 30*time.Minute)
 	}
 }

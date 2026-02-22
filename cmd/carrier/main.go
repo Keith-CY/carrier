@@ -1582,7 +1582,7 @@ func daemonAgentAction(agentID, action string) error {
 	path := fmt.Sprintf("/api/v1/agents/%s/%s", neturl.PathEscape(agentID), neturl.PathEscape(action))
 	_, status, err := daemonRequestWithTimeout(http.MethodPost, path, map[string]string{}, daemonActionTimeout(action))
 	if err != nil {
-		reconciled, reconcileErr := reconcileDaemonActionOnEOF(agentID, action, err)
+		reconciled, reconcileErr := reconcileDaemonActionOnTransportError(agentID, action, err)
 		if reconciled {
 			return nil
 		}
@@ -1603,8 +1603,8 @@ type daemonAgentStatusSnapshot struct {
 	LastError    string
 }
 
-func reconcileDaemonActionOnEOF(agentID, action string, reqErr error) (bool, error) {
-	if !isDaemonEOFError(reqErr) {
+func reconcileDaemonActionOnTransportError(agentID, action string, reqErr error) (bool, error) {
+	if !isDaemonTransportErrorRecoverable(reqErr) {
 		return false, nil
 	}
 	switch action {
@@ -1714,6 +1714,24 @@ func isDaemonEOFError(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "eof")
 }
 
+func isDaemonTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "context deadline exceeded") ||
+		strings.Contains(lower, "client.timeout exceeded while awaiting headers") ||
+		strings.Contains(lower, "timeout exceeded")
+}
+
+func isDaemonTransportErrorRecoverable(err error) bool {
+	return isDaemonEOFError(err) || isDaemonTimeoutError(err)
+}
+
 func daemonExtractPairCodeFromLogs(agentID string) (string, error) {
 	raw, status, err := daemonRequest(http.MethodGet, fmt.Sprintf("/api/v1/agents/%s/logs?tail=120", neturl.PathEscape(strings.TrimSpace(agentID))), nil)
 	if err != nil {
@@ -1743,10 +1761,31 @@ func daemonRequest(method, path string, body any) ([]byte, int, error) {
 func daemonActionTimeout(action string) time.Duration {
 	switch strings.ToLower(strings.TrimSpace(action)) {
 	case "install":
-		return 20 * time.Minute
+		const (
+			installTimeoutBuffer = 2 * time.Minute
+			installTimeoutFloor  = 30 * time.Minute
+		)
+		timeout := daemonCommandTimeout() + installTimeoutBuffer
+		if timeout < installTimeoutFloor {
+			return installTimeoutFloor
+		}
+		return timeout
 	default:
 		return 5 * time.Minute
 	}
+}
+
+func daemonCommandTimeout() time.Duration {
+	const defaultDaemonCommandTimeout = 20 * time.Minute
+	raw := strings.TrimSpace(os.Getenv("CARRIER_COMMAND_TIMEOUT"))
+	if raw == "" {
+		return defaultDaemonCommandTimeout
+	}
+	timeout, err := time.ParseDuration(raw)
+	if err != nil || timeout <= 0 {
+		return defaultDaemonCommandTimeout
+	}
+	return timeout
 }
 
 func daemonRequestWithTimeout(method, path string, body any, timeout time.Duration) ([]byte, int, error) {
