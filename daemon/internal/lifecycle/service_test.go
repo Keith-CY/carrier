@@ -401,6 +401,9 @@ func TestInstallFailsWhenPrerequisiteCheckFails(t *testing.T) {
 	if !errors.Is(err, ErrRuntimePrerequisites) {
 		t.Fatalf("expected ErrRuntimePrerequisites, got %v", err)
 	}
+	if !strings.Contains(err.Error(), "diagnose artifact") {
+		t.Fatalf("expected diagnose artifact hint in error, got %v", err)
+	}
 
 	status, statusErr := svc.Status("openclaw")
 	if statusErr != nil {
@@ -408,6 +411,15 @@ func TestInstallFailsWhenPrerequisiteCheckFails(t *testing.T) {
 	}
 	if status.Install != InstallStateBroken {
 		t.Fatalf("expected install state broken, got %s", status.Install)
+	}
+	if status.LastDiagnoseFile == "" {
+		t.Fatal("expected diagnose artifact path to be recorded")
+	}
+	if _, statErr := os.Stat(status.LastDiagnoseFile); statErr != nil {
+		t.Fatalf("expected diagnose artifact to exist: %v", statErr)
+	}
+	if !status.NeedsRemoteDiagnosis {
+		t.Fatal("expected NeedsRemoteDiagnosis=true after unresolved install failure")
 	}
 }
 
@@ -511,6 +523,15 @@ func TestInstallSkipsNonAllowlistedRepairAction(t *testing.T) {
 	}
 	if status.LastTriageSummary == "" {
 		t.Fatal("expected LastTriageSummary to be retained")
+	}
+	if status.LastDiagnoseFile == "" {
+		t.Fatal("expected diagnose artifact path to be recorded")
+	}
+	if _, statErr := os.Stat(status.LastDiagnoseFile); statErr != nil {
+		t.Fatalf("expected diagnose artifact to exist: %v", statErr)
+	}
+	if !strings.Contains(err.Error(), "diagnose artifact") {
+		t.Fatalf("expected error to include diagnose artifact hint, got %v", err)
 	}
 	if len(runner.calls) != 1 || runner.calls[0] != "install-openclaw" {
 		t.Fatalf("unexpected runner calls when action is rejected: %#v", runner.calls)

@@ -15,32 +15,27 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 		return err
 	}
 
-	if err := s.checkRuntimePrerequisites(m); err != nil {
-		s.updateStateOnInstallError(agentID, err)
-		s.recordAudit("", "system", "install", agentID, AuditResultFailure, "E_RUNTIME_PREREQUISITES", err.Error())
-		return err
-	}
-
 	opCtx, cancel := context.WithTimeout(ctx, s.commandTimeout)
 	defer cancel()
+
+	if err := s.checkRuntimePrerequisites(m); err != nil {
+		repaired := s.triageInstallFailure(ctx, opCtx, agentID, err)
+		if repaired {
+			if retryPrereqErr := s.checkRuntimePrerequisites(m); retryPrereqErr != nil {
+				err = fmt.Errorf("runtime prerequisites still failing after auto-repair: %w", retryPrereqErr)
+			} else {
+				err = nil
+			}
+		}
+		if err != nil {
+			return s.finalizeInstallFailure(agentID, err, "E_RUNTIME_PREREQUISITES")
+		}
+	}
 
 	result, runErr := s.runner.Run(opCtx, m.Runtime.Install.Command)
 	s.appendCommandLog(agentID, "install", m.Runtime.Install.Command, result, runErr)
 	if runErr != nil {
-		triage, triageErr := s.HandleFailure(ctx, agentID, runErr.Error())
-		if triageErr != nil {
-			s.appendLog(agentID, fmt.Sprintf("triage error: %v", triageErr))
-		} else if triage.Summary != "" {
-			s.appendLog(agentID, fmt.Sprintf("triage summary: %s", triage.Summary))
-		}
-
-		repaired := false
-		if triageErr == nil {
-			repaired, err = s.tryAutoRepairInstallFailure(opCtx, agentID, triage)
-			if err != nil {
-				s.appendLog(agentID, fmt.Sprintf("auto-repair skipped: %v", err))
-			}
-		}
+		repaired := s.triageInstallFailure(ctx, opCtx, agentID, runErr)
 		if repaired {
 			retryResult, retryErr := s.runner.Run(opCtx, m.Runtime.Install.Command)
 			s.appendCommandLog(agentID, "install-retry", m.Runtime.Install.Command, retryResult, retryErr)
@@ -53,9 +48,7 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 			runErr = fmt.Errorf("install failed after auto-repair: %w", retryErr)
 		}
 
-		s.updateStateOnInstallError(agentID, runErr)
-		s.recordAudit("", "system", "install", agentID, AuditResultFailure, "E_INSTALL_FAILED", runErr.Error())
-		return runErr
+		return s.finalizeInstallFailure(agentID, runErr, "E_INSTALL_FAILED")
 	}
 
 	s.markInstallSuccess(agentID)
@@ -64,6 +57,40 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 	s.saveState()
 
 	return nil
+}
+
+func (s *Service) triageInstallFailure(ctx, opCtx context.Context, agentID string, runErr error) bool {
+	triage, triageErr := s.HandleFailure(ctx, agentID, runErr.Error())
+	if triageErr != nil {
+		s.appendLog(agentID, fmt.Sprintf("triage error: %v", triageErr))
+		return false
+	}
+	if triage.Summary != "" {
+		s.appendLog(agentID, fmt.Sprintf("triage summary: %s", triage.Summary))
+	}
+
+	repaired, repairErr := s.tryAutoRepairInstallFailure(opCtx, agentID, triage)
+	if repairErr != nil {
+		s.appendLog(agentID, fmt.Sprintf("auto-repair skipped: %v", repairErr))
+		return false
+	}
+	return repaired
+}
+
+func (s *Service) finalizeInstallFailure(agentID string, runErr error, code string) error {
+	s.updateStateOnInstallError(agentID, runErr)
+	s.recordAudit("", "system", "install", agentID, AuditResultFailure, code, runErr.Error())
+
+	diagnosePath, diagnoseErr := s.Diagnose(agentID)
+	if diagnoseErr != nil {
+		s.appendLog(agentID, fmt.Sprintf("diagnose generation failed: %v", diagnoseErr))
+		s.saveState()
+		return runErr
+	}
+
+	s.appendLog(agentID, fmt.Sprintf("diagnose artifact generated: %s", diagnosePath))
+	s.saveState()
+	return fmt.Errorf("%w (diagnose artifact: %s)", runErr, diagnosePath)
 }
 
 func (s *Service) markInstallSuccess(agentID string) {
