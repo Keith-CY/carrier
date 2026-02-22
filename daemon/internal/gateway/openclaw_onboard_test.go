@@ -9,10 +9,10 @@ import (
 )
 
 func TestParseOpenclawChannel(t *testing.T) {
-	if _, ok := parseOpenclawChannel("telegram"); !ok {
+	if _, ok := parseManagedChannel("openclaw", "telegram"); !ok {
 		t.Fatal("expected telegram channel to be supported")
 	}
-	if _, ok := parseOpenclawChannel("discord"); ok {
+	if _, ok := parseManagedChannel("openclaw", "discord"); ok {
 		t.Fatal("did not expect discord channel to be supported in managed openclaw flow")
 	}
 }
@@ -31,9 +31,9 @@ func TestPrepareOpenclawManagedOnboard_WritesConfigAndRecord(t *testing.T) {
 		},
 	}
 
-	result, err := prepareOpenclawManagedOnboard(sess, "telegram:418258935")
+	result, err := prepareManagedOnboard("openclaw", sess, "telegram:418258935")
 	if err != nil {
-		t.Fatalf("prepareOpenclawManagedOnboard: %v", err)
+		t.Fatalf("prepareManagedOnboard: %v", err)
 	}
 	if result.WorkspacePath == "" || result.ConfigPath == "" || result.RecordPath == "" {
 		t.Fatalf("expected non-empty output paths, got %+v", result)
@@ -93,7 +93,7 @@ func TestPrepareOpenclawManagedOnboard_RequiresOpenAIKey(t *testing.T) {
 		EnvVars:          map[string]string{},
 	}
 
-	if _, err := prepareOpenclawManagedOnboard(sess, "telegram:418258935"); err == nil {
+	if _, err := prepareManagedOnboard("openclaw", sess, "telegram:418258935"); err == nil {
 		t.Fatal("expected error when OPENAI_API_KEY cannot be resolved")
 	}
 }

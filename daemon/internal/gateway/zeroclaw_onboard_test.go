@@ -8,10 +8,10 @@ import (
 )
 
 func TestParseZeroclawChannel(t *testing.T) {
-	if _, ok := parseZeroclawChannel("telegram"); !ok {
+	if _, ok := parseManagedChannel("zeroclaw", "telegram"); !ok {
 		t.Fatal("expected telegram channel to be supported")
 	}
-	if _, ok := parseZeroclawChannel("discord"); ok {
+	if _, ok := parseManagedChannel("zeroclaw", "discord"); ok {
 		t.Fatal("did not expect discord channel to be supported in managed zeroclaw flow")
 	}
 }
@@ -30,9 +30,9 @@ func TestPrepareZeroclawManagedOnboard_WritesConfigAndRecord(t *testing.T) {
 		},
 	}
 
-	result, err := prepareZeroclawManagedOnboard(sess, "telegram:418258935")
+	result, err := prepareManagedOnboard("zeroclaw", sess, "telegram:418258935")
 	if err != nil {
-		t.Fatalf("prepareZeroclawManagedOnboard: %v", err)
+		t.Fatalf("prepareManagedOnboard: %v", err)
 	}
 	if result.WorkspacePath == "" || result.ConfigPath == "" || result.RecordPath == "" {
 		t.Fatalf("expected non-empty output paths, got %+v", result)

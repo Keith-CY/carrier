@@ -9,10 +9,10 @@ import (
 )
 
 func TestParsePicoclawChannel(t *testing.T) {
-	if _, ok := parsePicoclawChannel("telegram"); !ok {
+	if _, ok := parseManagedChannel("picoclaw", "telegram"); !ok {
 		t.Fatal("expected telegram channel to be supported")
 	}
-	if _, ok := parsePicoclawChannel("discord"); ok {
+	if _, ok := parseManagedChannel("picoclaw", "discord"); ok {
 		t.Fatal("did not expect discord channel to be supported in managed picoclaw flow")
 	}
 }
@@ -69,9 +69,9 @@ func TestPreparePicoclawManagedOnboard_WritesConfigAndRecord(t *testing.T) {
 		},
 	}
 
-	result, err := preparePicoclawManagedOnboard(sess, "telegram:418258935")
+	result, err := prepareManagedOnboard("picoclaw", sess, "telegram:418258935")
 	if err != nil {
-		t.Fatalf("preparePicoclawManagedOnboard: %v", err)
+		t.Fatalf("prepareManagedOnboard: %v", err)
 	}
 	if result.WorkspacePath == "" || result.ConfigPath == "" || result.RecordPath == "" {
 		t.Fatalf("expected non-empty output paths, got %+v", result)

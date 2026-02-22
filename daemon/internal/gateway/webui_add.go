@@ -36,7 +36,7 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 	}
 
 	actor := "webui:add"
-	if !isPicoclawAgent(agentID) && !isOpenclawAgent(agentID) && !isZeroclawAgent(agentID) {
+	if !isManagedAgent(agentID) {
 		instanceID := strings.TrimSpace(req.InstanceID)
 		if instanceID == "" {
 			generatedID, genErr := generateManagedInstanceID(agentID)
@@ -79,29 +79,11 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		return
 	}
 
-	var (
-		ch picoclawChannel
-		ok bool
-	)
-	switch {
-	case isPicoclawAgent(agentID):
-		ch, ok = parsePicoclawChannel(req.Channel)
-	case isOpenclawAgent(agentID):
-		ch, ok = parseOpenclawChannel(req.Channel)
-	case isZeroclawAgent(agentID):
-		ch, ok = parseZeroclawChannel(req.Channel)
-	}
+	ch, ok := parseManagedChannel(agentID, req.Channel)
 	if !ok && strings.TrimSpace(req.Channel) == "" {
 		if strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_BOT_TOKEN")) != "" {
 			req.Channel = "telegram"
-			switch {
-			case isPicoclawAgent(agentID):
-				ch, ok = parsePicoclawChannel(req.Channel)
-			case isOpenclawAgent(agentID):
-				ch, ok = parseOpenclawChannel(req.Channel)
-			case isZeroclawAgent(agentID):
-				ch, ok = parseZeroclawChannel(req.Channel)
-			}
+			ch, ok = parseManagedChannel(agentID, req.Channel)
 		}
 	}
 	if !ok {
@@ -145,26 +127,26 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 			envVars[k] = v
 		}
 	}
-	if isOpenclawAgent(agentID) {
-		if strings.TrimSpace(envVars["OPENAI_API_KEY"]) == "" {
-			openAIKey := token
-			if openAIKey == "" {
-				openAIKey = strings.TrimSpace(envVars[provider.EnvVar])
+	if cfg, managed := managedAgentByID(agentID); managed {
+		if cfg.RequiredEnvKey != "" && strings.TrimSpace(envVars[cfg.RequiredEnvKey]) == "" {
+			requiredValue := token
+			if requiredValue == "" {
+				requiredValue = strings.TrimSpace(envVars[provider.EnvVar])
 			}
-			if openAIKey == "" {
-				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_AUTH_INPUT", "openclaw requires OPENAI_API_KEY"))
+			if requiredValue == "" {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_AUTH_INPUT", fmt.Sprintf("%s requires %s", agentID, cfg.RequiredEnvKey)))
 				return
 			}
-			envVars["OPENAI_API_KEY"] = strings.TrimSpace(openAIKey)
+			envVars[cfg.RequiredEnvKey] = strings.TrimSpace(requiredValue)
 		}
-	}
-	if isZeroclawAgent(agentID) && strings.TrimSpace(envVars["ZEROCLAW_API_KEY"]) == "" {
-		zeroKey := token
-		if zeroKey == "" {
-			zeroKey = strings.TrimSpace(envVars[provider.EnvVar])
-		}
-		if zeroKey != "" {
-			envVars["ZEROCLAW_API_KEY"] = strings.TrimSpace(zeroKey)
+		if strings.EqualFold(agentID, "zeroclaw") && strings.TrimSpace(envVars["ZEROCLAW_API_KEY"]) == "" {
+			zeroKey := token
+			if zeroKey == "" {
+				zeroKey = strings.TrimSpace(envVars[provider.EnvVar])
+			}
+			if zeroKey != "" {
+				envVars["ZEROCLAW_API_KEY"] = strings.TrimSpace(zeroKey)
+			}
 		}
 	}
 
@@ -186,13 +168,8 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 	}
 	sess.InstanceID = instanceID
 	if home, homeErr := os.UserHomeDir(); homeErr == nil {
-		switch {
-		case isPicoclawAgent(agentID):
-			sess.WorkspacePath = filepath.Join(home, ".picoclaw", "instances", instanceID, "workspace")
-		case isOpenclawAgent(agentID):
-			sess.WorkspacePath = filepath.Join(home, ".openclaw", "instances", instanceID, "workspace")
-		case isZeroclawAgent(agentID):
-			sess.WorkspacePath = filepath.Join(home, ".zeroclaw", "instances", instanceID, "workspace")
+		if cfg, managed := managedAgentByID(agentID); managed {
+			sess.WorkspacePath = filepath.Join(home, cfg.ConfigDir, "instances", instanceID, "workspace")
 		}
 	}
 
@@ -205,38 +182,14 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		actor = "telegram:" + prefetchedChatID
 	}
 
-	workspacePath := ""
-	configPath := ""
-	recordPath := ""
-	switch {
-	case isPicoclawAgent(agentID):
-		result, prepErr := preparePicoclawManagedOnboard(sess, actor)
-		if prepErr != nil {
-			writeInternalGatewayError(w, http.StatusBadRequest, "E_ENV", "failed to prepare picoclaw configuration", "prepare picoclaw managed onboarding artifacts", prepErr)
-			return
-		}
-		workspacePath = result.WorkspacePath
-		configPath = result.ConfigPath
-		recordPath = result.RecordPath
-	case isOpenclawAgent(agentID):
-		result, prepErr := prepareOpenclawManagedOnboard(sess, actor)
-		if prepErr != nil {
-			writeInternalGatewayError(w, http.StatusBadRequest, "E_ENV", "failed to prepare openclaw configuration", "prepare openclaw managed onboarding artifacts", prepErr)
-			return
-		}
-		workspacePath = result.WorkspacePath
-		configPath = result.ConfigPath
-		recordPath = result.RecordPath
-	case isZeroclawAgent(agentID):
-		result, prepErr := prepareZeroclawManagedOnboard(sess, actor)
-		if prepErr != nil {
-			writeInternalGatewayError(w, http.StatusBadRequest, "E_ENV", "failed to prepare zeroclaw configuration", "prepare zeroclaw managed onboarding artifacts", prepErr)
-			return
-		}
-		workspacePath = result.WorkspacePath
-		configPath = result.ConfigPath
-		recordPath = result.RecordPath
+	result, prepErr := prepareManagedOnboard(agentID, sess, actor)
+	if prepErr != nil {
+		writeInternalGatewayError(w, http.StatusBadRequest, "E_ENV", fmt.Sprintf("failed to prepare %s configuration", agentID), fmt.Sprintf("prepare %s managed onboarding artifacts", agentID), prepErr)
+		return
 	}
+	workspacePath := result.WorkspacePath
+	configPath := result.ConfigPath
+	recordPath := result.RecordPath
 	if err := applyOnboardEnvVars(sess.EnvVars); err != nil {
 		writeInternalGatewayError(w, http.StatusBadRequest, "E_ENV", "failed to apply environment variables", "apply onboarding environment", err)
 		return
