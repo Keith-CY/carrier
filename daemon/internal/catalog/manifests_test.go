@@ -158,9 +158,11 @@ func TestCatalogJSONHealthcheckMatchesGeneratedManifest(t *testing.T) {
 // Install-command shell-contract tests
 // ---------------------------------------------------------------------------
 
-func TestGetInstallCommand_Unix(t *testing.T) {
+func TestGetInstallCommand_Default(t *testing.T) {
 	// Ensure dev mode is off so we get the production command.
 	t.Setenv("CARRIER_DEV_MODE", "")
+	t.Setenv(openClawInstallMethodEnv, "")
+	t.Setenv(openClawDisableInstallFallbackEnv, "")
 
 	cmd := getInstallCommand()
 
@@ -170,13 +172,73 @@ func TestGetInstallCommand_Unix(t *testing.T) {
 		`--proto "=https"`,
 		"--tlsv1.2",
 		installScriptURL,
-		"| bash -s --",
 		"--install-method git",
 		"--no-onboard",
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("install command missing %q\ngot: %s", want, cmd)
 		}
+	}
+
+	switch runtime.GOOS {
+	case "windows":
+		if !strings.Contains(cmd, "try {") {
+			t.Errorf("windows default command should include fallback try/catch\ngot: %s", cmd)
+		}
+	default:
+		for _, want := range []string{
+			"CARGO_BUILD_JOBS=1",
+			"||",
+			"| bash -s -- --no-onboard",
+		} {
+			if !strings.Contains(cmd, want) {
+				t.Errorf("unix default command should include fallback token %q\ngot: %s", want, cmd)
+			}
+		}
+	}
+}
+
+func TestGetInstallCommand_ExplicitMethodDisablesFallback(t *testing.T) {
+	t.Setenv("CARRIER_DEV_MODE", "")
+	t.Setenv(openClawInstallMethodEnv, "npm")
+
+	cmd := getInstallCommand()
+
+	if !strings.Contains(cmd, "--install-method") || !strings.Contains(cmd, "npm") {
+		t.Fatalf("expected explicit install method in command, got: %s", cmd)
+	}
+	if strings.Contains(cmd, "||") || strings.Contains(cmd, "try {") {
+		t.Fatalf("explicit install method should not auto-fallback, got: %s", cmd)
+	}
+}
+
+func TestGetInstallCommand_DisableFallback(t *testing.T) {
+	t.Setenv("CARRIER_DEV_MODE", "")
+	t.Setenv(openClawInstallMethodEnv, "")
+	t.Setenv(openClawDisableInstallFallbackEnv, "1")
+
+	cmd := getInstallCommand()
+
+	if !strings.Contains(cmd, "--install-method git") {
+		t.Fatalf("expected strict git install command, got: %s", cmd)
+	}
+	if strings.Contains(cmd, "||") || strings.Contains(cmd, "try {") {
+		t.Fatalf("fallback should be disabled, got: %s", cmd)
+	}
+}
+
+func TestGetInstallCommand_UnsafeMethodFallsBackToDefault(t *testing.T) {
+	t.Setenv("CARRIER_DEV_MODE", "")
+	t.Setenv(openClawInstallMethodEnv, "git;rm -rf /")
+	t.Setenv(openClawDisableInstallFallbackEnv, "")
+
+	cmd := getInstallCommand()
+
+	if strings.Contains(cmd, "rm -rf") {
+		t.Fatalf("unsafe install method must not be interpolated into command: %s", cmd)
+	}
+	if !strings.Contains(cmd, "--install-method git") {
+		t.Fatalf("unsafe value should fall back to git command, got: %s", cmd)
 	}
 }
 
