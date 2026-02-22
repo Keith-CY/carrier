@@ -22,6 +22,17 @@
   let addPairPollRunID = 0;
   let lastAddResult = null;
   let logSource = null; // EventSource for SSE logs
+  let logEntries = [];
+  let logBuffer = [];
+  let logPaused = false;
+  let logSearchQuery = '';
+  let logHandlersBound = false;
+  let logEntrySeq = 1;
+  let logLastPolledLines = [];
+  let logStatusBase = 'Select an agent and click Connect.';
+  const logLevelFilters = { DEBUG: true, INFO: true, WARN: true, ERROR: true };
+  const LOG_FILTER_LEVELS = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+  const LOG_ENTRY_LIMIT = 2000;
 
   // --- Helpers ---
   function escapeHtml(s) {
@@ -1290,6 +1301,10 @@
   function initLogs() {
     showView('logs');
     $('#nav').classList.remove('hidden');
+    bindLogsControls();
+    syncLogControls();
+    renderLogRows(false);
+
     const agentSelect = $('#log-agent');
     agentSelect.textContent = '';
 
@@ -1306,24 +1321,73 @@
         agentSelect.appendChild(opt);
       });
     }).catch(() => {});
+  }
 
-    $('#log-clear').onclick = () => {
-      $('#log-output').textContent = '';
-    };
+  function bindLogsControls() {
+    if (logHandlersBound) return;
+    logHandlersBound = true;
 
-    $('#log-connect').onclick = () => {
-      connectLogs(agentSelect.value);
-    };
+    $('#log-clear').addEventListener('click', () => {
+      clearLogs();
+      renderLogRows(true);
+    });
+
+    $('#log-connect').addEventListener('click', () => {
+      connectLogs($('#log-agent').value);
+    });
+
+    $('#log-pause').addEventListener('click', toggleLogPause);
+
+    $('#log-search').addEventListener('input', (e) => {
+      logSearchQuery = (e.target.value || '').trim().toLowerCase();
+      renderLogRows(false);
+    });
+
+    LOG_FILTER_LEVELS.forEach(level => {
+      const input = $('#log-filter-' + level.toLowerCase());
+      if (!input) return;
+      input.addEventListener('change', () => {
+        logLevelFilters[level] = !!input.checked;
+        renderLogRows(false);
+      });
+    });
+  }
+
+  function syncLogControls() {
+    LOG_FILTER_LEVELS.forEach(level => {
+      const input = $('#log-filter-' + level.toLowerCase());
+      if (!input) return;
+      input.checked = !!logLevelFilters[level];
+    });
+    const searchInput = $('#log-search');
+    if (searchInput) searchInput.value = logSearchQuery;
+    updateLogPauseButton();
+    refreshLogStatus(getVisibleLogEntries().length);
+  }
+
+  function clearLogs() {
+    logEntries = [];
+    logBuffer = [];
+    logEntrySeq = 1;
+    logLastPolledLines = [];
   }
 
   function connectLogs(agentId) {
+    if (!agentId) {
+      logStatusBase = 'Select an agent and click Connect.';
+      refreshLogStatus(getVisibleLogEntries().length);
+      return;
+    }
     if (logSource) {
       logSource.close();
       logSource = null;
     }
 
-    const output = $('#log-output');
-    output.textContent = 'Connecting to logs for ' + agentId + '…\n';
+    clearLogs();
+    logPaused = false;
+    updateLogPauseButton();
+    logStatusBase = 'Connecting to ' + agentId + '…';
+    renderLogRows(true);
 
     // Try SSE first
     let sseUrl = '/api/v1/logs/stream?agent=' + encodeURIComponent(agentId);
@@ -1332,45 +1396,259 @@
       const es = new EventSource(sseUrl);
       logSource = es;
 
+      es.onopen = () => {
+        logStatusBase = 'Connected to ' + agentId + ' via SSE.';
+        refreshLogStatus(getVisibleLogEntries().length);
+      };
+
       es.onmessage = (e) => {
-        output.textContent += e.data + '\n';
-        output.scrollTop = output.scrollHeight;
+        ingestLogLines([e.data], true);
       };
 
       es.onerror = () => {
+        if (logSource !== es) return;
         es.close();
         logSource = null;
-        output.textContent += '\n[SSE disconnected, falling back to polling]\n';
+        addSystemLog('SSE disconnected, falling back to polling.', 'WARN');
         pollLogs(agentId);
       };
-    } catch (e) {
+    } catch (_) {
+      addSystemLog('SSE unavailable, using polling.', 'WARN');
       pollLogs(agentId);
     }
   }
 
   function pollLogs(agentId) {
-    const output = $('#log-output');
     let running = true;
 
     // Store cancel function
     const cancel = () => { running = false; };
     logSource = { close: cancel };
+    logStatusBase = 'Connected to ' + agentId + ' via polling.';
+    refreshLogStatus(getVisibleLogEntries().length);
 
     const poll = async () => {
       if (!running) return;
       try {
         const res = await api('GET', '/api/v1/agents/' + encodeURIComponent(agentId) + '/logs');
-        const lines = res.lines || [];
-        if (lines.length) {
-          output.textContent += lines.join('\n') + '\n';
-          output.scrollTop = output.scrollHeight;
-        }
+        const lines = Array.isArray(res.lines) ? res.lines : [];
+        const normalized = normalizeLineList(lines);
+        const appended = diffAppendedLines(logLastPolledLines, normalized);
+        logLastPolledLines = normalized;
+        ingestLogLines(appended, true);
       } catch (e) {
-        output.textContent += '[poll error: ' + e.message + ']\n';
+        addSystemLog('poll error: ' + e.message, 'ERROR');
       }
       if (running) setTimeout(poll, 2000);
     };
     poll();
+  }
+
+  function normalizeLineList(lines) {
+    return lines.map(line => String(line == null ? '' : line)).filter(line => line.trim().length > 0);
+  }
+
+  function diffAppendedLines(previous, next) {
+    if (!next.length) return [];
+    if (!previous.length) return next;
+
+    const maxOverlap = Math.min(previous.length, next.length);
+    for (let overlap = maxOverlap; overlap >= 1; overlap--) {
+      let same = true;
+      for (let i = 0; i < overlap; i++) {
+        if (previous[previous.length - overlap + i] !== next[i]) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return next.slice(overlap);
+    }
+    return next;
+  }
+
+  function normalizeLogLevel(level) {
+    const raw = String(level || '').trim().toUpperCase();
+    if (!raw) return 'UNKNOWN';
+    if (raw === 'WARNING') return 'WARN';
+    if (raw === 'ERR') return 'ERROR';
+    if (raw === 'TRACE') return 'DEBUG';
+    return LOG_FILTER_LEVELS.includes(raw) ? raw : 'UNKNOWN';
+  }
+
+  function createLogEntry(level, message, timestamp) {
+    return {
+      id: logEntrySeq++,
+      timestamp: timestamp && String(timestamp).trim() ? String(timestamp).trim() : new Date().toISOString(),
+      level: normalizeLogLevel(level),
+      message: String(message == null ? '' : message),
+    };
+  }
+
+  function addSystemLog(message, level) {
+    appendLogEntries([createLogEntry(level || 'INFO', message)]);
+  }
+
+  function parseLogLine(line) {
+    const rawLine = String(line == null ? '' : line);
+    const trimmed = rawLine.trim();
+    if (!trimmed) return null;
+    if (/^returned \d+ log lines for /i.test(trimmed)) return null;
+
+    let timestamp = '';
+    let level = 'UNKNOWN';
+    let message = trimmed;
+
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          timestamp = String(parsed.time || parsed.timestamp || parsed.ts || '').trim();
+          level = normalizeLogLevel(parsed.level || parsed.severity || parsed.lvl);
+          const msg = parsed.message !== undefined ? parsed.message : (parsed.msg !== undefined ? parsed.msg : parsed.text);
+          if (msg !== undefined) {
+            message = typeof msg === 'string' ? msg : JSON.stringify(msg);
+          }
+        }
+      } catch (_) {
+        // keep parsing with non-JSON heuristics
+      }
+    }
+
+    if (level === 'UNKNOWN') {
+      const bracketMatch = trimmed.match(/^\[([A-Za-z]+)\]\s*(.*)$/);
+      if (bracketMatch) {
+        level = normalizeLogLevel(bracketMatch[1]);
+        message = (bracketMatch[2] || '').trim();
+      }
+    }
+
+    if (!timestamp) {
+      const timedMatch = trimmed.match(/^([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][^\s]+)\s+([A-Za-z]+)\s*(.*)$/);
+      if (timedMatch) {
+        timestamp = timedMatch[1].trim();
+        level = normalizeLogLevel(timedMatch[2]);
+        message = (timedMatch[3] || '').trim();
+      }
+    }
+
+    return createLogEntry(level, message || trimmed, timestamp);
+  }
+
+  function ingestLogLines(lines, stickToBottom) {
+    if (!lines || !lines.length) return;
+    if (logPaused) {
+      lines.forEach(line => {
+        if (line == null) return;
+        logBuffer.push(String(line));
+      });
+      refreshLogStatus(getVisibleLogEntries().length);
+      return;
+    }
+    const parsed = [];
+    lines.forEach(line => {
+      const entry = parseLogLine(line);
+      if (entry) parsed.push(entry);
+    });
+    appendLogEntries(parsed, stickToBottom);
+  }
+
+  function appendLogEntries(entries, stickToBottom) {
+    if (!entries || !entries.length) return;
+    const output = $('#log-output');
+    if (!output) return;
+    const shouldStick = stickToBottom || (output.scrollHeight - output.scrollTop - output.clientHeight < 24);
+    logEntries = logEntries.concat(entries);
+    if (logEntries.length > LOG_ENTRY_LIMIT) {
+      logEntries = logEntries.slice(logEntries.length - LOG_ENTRY_LIMIT);
+    }
+    renderLogRows(shouldStick);
+  }
+
+  function toggleLogPause() {
+    logPaused = !logPaused;
+    updateLogPauseButton();
+
+    if (!logPaused && logBuffer.length) {
+      const buffered = logBuffer.slice();
+      logBuffer = [];
+      ingestLogLines(buffered, true);
+      return;
+    }
+    refreshLogStatus(getVisibleLogEntries().length);
+  }
+
+  function updateLogPauseButton() {
+    const btn = $('#log-pause');
+    if (!btn) return;
+    btn.textContent = logPaused ? 'Resume' : 'Pause';
+  }
+
+  function getVisibleLogEntries() {
+    return logEntries.filter(entry => {
+      if (Object.prototype.hasOwnProperty.call(logLevelFilters, entry.level) && !logLevelFilters[entry.level]) {
+        return false;
+      }
+      if (!logSearchQuery) return true;
+      const haystack = (entry.timestamp + ' ' + entry.level + ' ' + entry.message).toLowerCase();
+      return haystack.includes(logSearchQuery);
+    });
+  }
+
+  function highlightLogText(text, query) {
+    const source = String(text == null ? '' : text);
+    if (!query) return escapeHtml(source);
+
+    const lower = source.toLowerCase();
+    let i = 0;
+    let html = '';
+    while (i < source.length) {
+      const idx = lower.indexOf(query, i);
+      if (idx === -1) {
+        html += escapeHtml(source.slice(i));
+        break;
+      }
+      html += escapeHtml(source.slice(i, idx));
+      html += '<mark class="log-highlight">' + escapeHtml(source.slice(idx, idx + query.length)) + '</mark>';
+      i = idx + query.length;
+    }
+    return html;
+  }
+
+  function renderLogRows(stickToBottom) {
+    const output = $('#log-output');
+    if (!output) return;
+
+    const visible = getVisibleLogEntries();
+    if (!visible.length) {
+      output.textContent = '';
+      refreshLogStatus(0);
+      return;
+    }
+
+    const query = logSearchQuery;
+    output.innerHTML = visible.map(entry =>
+      '<div class="log-row log-row-data" data-level="' + escapeHtml(entry.level) + '">' +
+        '<span class="log-cell-time">' + highlightLogText(entry.timestamp, query) + '</span>' +
+        '<span class="log-cell-level"><span class="log-level-pill">' + highlightLogText(entry.level, query) + '</span></span>' +
+        '<span class="log-cell-message">' + highlightLogText(entry.message, query) + '</span>' +
+      '</div>'
+    ).join('');
+
+    if (stickToBottom) output.scrollTop = output.scrollHeight;
+    refreshLogStatus(visible.length);
+  }
+
+  function refreshLogStatus(visibleCount) {
+    const status = $('#log-status');
+    if (!status) return;
+    const visible = typeof visibleCount === 'number' ? visibleCount : getVisibleLogEntries().length;
+    const parts = [logStatusBase];
+    if (logEntries.length > 0) {
+      parts.push('showing ' + visible + '/' + logEntries.length);
+    }
+    if (logPaused) parts.push('paused');
+    if (logBuffer.length) parts.push('buffered ' + logBuffer.length);
+    status.textContent = parts.filter(Boolean).join(' · ');
   }
 
   // --- Chat ---

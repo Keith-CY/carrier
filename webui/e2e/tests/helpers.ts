@@ -1,12 +1,26 @@
 import { Page } from '@playwright/test';
 
 export const TEST_TOKEN = 'test-token-valid';
+export const MOCK_LOG_STREAM_LINES = [
+  '{"time":"2026-02-22T10:00:00.000Z","level":"INFO","message":"agent started"}',
+  '[DEBUG] worker heartbeat',
+  '2026-02-22T10:00:01.000Z WARN queue depth high',
+  '2026-02-22T10:00:02.000Z ERROR request failed',
+];
 
 export const MOCK_AGENTS = [
   { id: 'agent-alpha', name: 'agent-alpha', runtime: 'running' },
   { id: 'agent-beta', name: 'agent-beta', runtime: 'error' },
   { id: 'agent-gamma', name: 'agent-gamma', runtime: 'stopped' },
 ];
+
+export const MOCK_INSTANCES = MOCK_AGENTS.map((agent, idx) => ({
+  id: `instance-${idx + 1}`,
+  agent_id: agent.id,
+  runtime_state: agent.runtime,
+  provider: 'openai',
+  channel: 'telegram',
+}));
 
 /** Set up standard API mocks so the app works without a real daemon. */
 export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
@@ -30,6 +44,21 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
     }
     return route.continue();
   });
+
+  await page.route('**/api/v1/instances', (route) => {
+    if (route.request().method() === 'GET') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(MOCK_INSTANCES),
+      });
+    }
+    return route.continue();
+  });
+
+  await page.route('**/api/v1/instances/*/*', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }),
+  );
 
   await page.route('**/api/v1/agents/*/install', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }),
@@ -78,7 +107,7 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
     route.fulfill({
       status: 200,
       contentType: 'text/event-stream',
-      body: 'data: [INFO] log line 1\n\ndata: [INFO] log line 2\n\n',
+      body: MOCK_LOG_STREAM_LINES.map((line) => `data: ${line}\n\n`).join(''),
     }),
   );
 }

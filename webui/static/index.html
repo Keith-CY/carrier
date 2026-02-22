@@ -181,9 +181,25 @@
         <label for="log-agent">Agent:</label>
         <select id="log-agent"></select>
         <button id="log-connect" class="btn-sm">Connect</button>
-        <button id="log-clear" class="btn-sm btn-secondary">Clear</button>
+        <button id="log-pause" class="btn-sm btn-secondary" type="button">Pause</button>
+        <button id="log-clear" class="btn-sm btn-secondary" type="button">Clear</button>
+        <input id="log-search" type="text" placeholder="Search logs…" autocomplete="off" aria-label="Search logs">
       </div>
-      <pre id="log-output" class="log-box"></pre>
+      <div class="log-filters" role="group" aria-label="Filter log levels">
+        <label class="log-filter-pill"><input id="log-filter-debug" type="checkbox" checked>DEBUG</label>
+        <label class="log-filter-pill"><input id="log-filter-info" type="checkbox" checked>INFO</label>
+        <label class="log-filter-pill"><input id="log-filter-warn" type="checkbox" checked>WARN</label>
+        <label class="log-filter-pill"><input id="log-filter-error" type="checkbox" checked>ERROR</label>
+      </div>
+      <p id="log-status" class="text-dim log-status"></p>
+      <div class="log-table">
+        <div class="log-row log-row-header" aria-hidden="true">
+          <span class="log-cell-time">Timestamp</span>
+          <span class="log-cell-level">Level</span>
+          <span class="log-cell-message">Message</span>
+        </div>
+        <div id="log-output" class="log-rows" role="log" aria-live="polite"></div>
+      </div>
     </section>
 
     <section id="view-chat" class="view hidden">
