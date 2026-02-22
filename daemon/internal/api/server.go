@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -275,7 +276,9 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 		if !allowMethod(w, r, http.MethodPost) {
 			return
 		}
-		if err := s.lifecycle.Install(r.Context(), agentID); err != nil {
+		// Detach long-running install execution from client disconnects/timeouts.
+		// The lifecycle layer enforces command timeout independently.
+		if err := s.lifecycle.Install(context.WithoutCancel(r.Context()), agentID); err != nil {
 			status, code, message := mapLifecycleError(err)
 			writeError(w, status, code, message)
 			return
@@ -353,7 +356,9 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 		if !allowMethod(w, r, http.MethodPost) {
 			return
 		}
-		result, err := s.lifecycle.Upgrade(r.Context(), agentID)
+		// Upgrade can take minutes and should continue even if the HTTP client
+		// connection is interrupted.
+		result, err := s.lifecycle.Upgrade(context.WithoutCancel(r.Context()), agentID)
 		if err != nil {
 			status, code, message := mapLifecycleError(err)
 			writeError(w, status, code, message)

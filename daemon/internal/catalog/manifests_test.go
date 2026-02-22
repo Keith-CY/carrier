@@ -302,7 +302,7 @@ func TestGetStartCommand_Unix(t *testing.T) {
 	}{
 		{"home bin path", `$HOME/.local/bin/openclaw`},
 		{"path lookup", "command -v openclaw"},
-		{"subcommand", "gateway start"},
+		{"subcommand", "gateway"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if !strings.Contains(cmd, tc.want) {

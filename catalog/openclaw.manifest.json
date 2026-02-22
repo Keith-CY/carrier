@@ -17,7 +17,7 @@
       "command": "npm install -g openclaw@1.0.0"
     },
     "start": {
-      "command": "openclaw gateway start"
+      "command": "openclaw gateway"
     },
     "stop": {
       "command": "openclaw gateway stop"

@@ -154,12 +154,12 @@ echo "Dev placeholder created at $HOME/.local/bin/openclaw" >&2
 func getStartCommand() string {
 	switch runtime.GOOS {
 	case "windows":
-		return "openclaw gateway start"
+		return "openclaw gateway"
 	default:
 		// Git installs create a ~/.local/bin wrapper, while npm installs may
 		// place openclaw in npm's global bin dir. Resolve both without forcing
 		// pre-flight to depend on a single hardcoded absolute path.
-		return `sh -c 'if [ -x "$HOME/.local/bin/openclaw" ]; then exec "$HOME/.local/bin/openclaw" gateway start; elif command -v openclaw >/dev/null 2>&1; then exec "$(command -v openclaw)" gateway start; else echo "openclaw executable not found (checked $HOME/.local/bin/openclaw and PATH)" >&2; exit 127; fi'`
+		return `sh -c 'if [ -x "$HOME/.local/bin/openclaw" ]; then exec "$HOME/.local/bin/openclaw" gateway; elif command -v openclaw >/dev/null 2>&1; then exec "$(command -v openclaw)" gateway; else echo "openclaw executable not found (checked $HOME/.local/bin/openclaw and PATH)" >&2; exit 127; fi'`
 	}
 }
 
