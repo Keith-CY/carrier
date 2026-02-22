@@ -69,15 +69,15 @@ func getInstallCommand() string {
 	switch runtime.GOOS {
 	case "windows":
 		if allowFallback {
-			// Keep git as first choice, then retry with installer default mode.
-			return fmt.Sprintf(`powershell -NoProfile -Command "$ErrorActionPreference='Stop';$installer=(irm '%s');$script=[scriptblock]::Create($installer);$env:CARGO_BUILD_JOBS='1';try { & $script -InstallMethod 'git' -NoOnboard; if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw 'git install failed' } } catch { & $script -NoOnboard }"`, installPS1URL)
+			// Keep git as first choice, then retry with non-interactive npm install.
+			return fmt.Sprintf(`powershell -NoProfile -Command "$ErrorActionPreference='Stop';$installer=(irm '%s');$script=[scriptblock]::Create($installer);$env:CARGO_BUILD_JOBS='1';try { & $script -InstallMethod 'git' -NoOnboard; if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw 'git install failed' } } catch { & $script -InstallMethod 'npm' -NoOnboard }"`, installPS1URL)
 		}
 		return fmt.Sprintf(`powershell -NoProfile -Command "& ([scriptblock]::Create((irm '%s'))) -InstallMethod '%s' -NoOnboard"`, installPS1URL, method)
 	default:
 		// Linux, macOS, and anything else that has sh + curl.
 		if allowFallback {
 			// On small instances, the git build path can be OOM-killed; fallback keeps installs unblocked.
-			return fmt.Sprintf(`sh -c 'curl -fsSL --proto "=https" --tlsv1.2 "%s" | CARGO_BUILD_JOBS=1 bash -s -- --install-method git --no-onboard || curl -fsSL --proto "=https" --tlsv1.2 "%s" | bash -s -- --no-onboard'`, installScriptURL, installScriptURL)
+			return fmt.Sprintf(`sh -c 'curl -fsSL --proto "=https" --tlsv1.2 "%s" | CARGO_BUILD_JOBS=1 bash -s -- --install-method git --no-onboard || curl -fsSL --proto "=https" --tlsv1.2 "%s" | bash -s -- --install-method npm --no-onboard'`, installScriptURL, installScriptURL)
 		}
 		return fmt.Sprintf(`sh -c 'curl -fsSL --proto "=https" --tlsv1.2 "%s" | bash -s -- --install-method %s --no-onboard'`, installScriptURL, method)
 	}

@@ -189,7 +189,7 @@ func TestGetInstallCommand_Default(t *testing.T) {
 		for _, want := range []string{
 			"CARGO_BUILD_JOBS=1",
 			"||",
-			"| bash -s -- --no-onboard",
+			"| bash -s -- --install-method npm --no-onboard",
 		} {
 			if !strings.Contains(cmd, want) {
 				t.Errorf("unix default command should include fallback token %q\ngot: %s", want, cmd)
