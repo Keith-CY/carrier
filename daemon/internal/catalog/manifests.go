@@ -70,16 +70,24 @@ func getInstallCommand() string {
 	case "windows":
 		if allowFallback {
 			// Keep git as first choice, then retry with installer default mode.
-			return fmt.Sprintf(`powershell -NoProfile -Command "$ErrorActionPreference='Stop';$installer=(irm '%s');$script=[scriptblock]::Create($installer);$env:CARGO_BUILD_JOBS='1';try { & $script -InstallMethod 'git' -NoOnboard; if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw 'git install failed' } } catch { & $script -NoOnboard }"`, installPS1URL)
+			// Run installer in child PowerShell processes so script-level `exit`
+			// does not terminate fallback orchestration.
+			return fmt.Sprintf(`powershell -NoProfile -Command "$ErrorActionPreference='Stop';$tmp=[System.IO.Path]::GetTempFileName();$ps1="$tmp.ps1";Move-Item -LiteralPath $tmp -Destination $ps1 -Force;irm '%s' | Out-File -LiteralPath $ps1 -Encoding utf8;try {$env:CARGO_BUILD_JOBS='1';powershell -NoProfile -ExecutionPolicy Bypass -File $ps1 -InstallMethod 'git' -NoOnboard; if ($LASTEXITCODE -ne 0) { powershell -NoProfile -ExecutionPolicy Bypass -File $ps1 -NoOnboard; exit $LASTEXITCODE }} finally { Remove-Item -LiteralPath $ps1 -ErrorAction SilentlyContinue }"`, installPS1URL)
+		}
+		if method == "git" {
+			return fmt.Sprintf(`powershell -NoProfile -Command "$env:CARGO_BUILD_JOBS='1';& ([scriptblock]::Create((irm '%s'))) -InstallMethod '%s' -NoOnboard"`, installPS1URL, method)
 		}
 		return fmt.Sprintf(`powershell -NoProfile -Command "& ([scriptblock]::Create((irm '%s'))) -InstallMethod '%s' -NoOnboard"`, installPS1URL, method)
 	default:
 		// Linux, macOS, and anything else that has sh + curl.
 		if allowFallback {
 			// On small instances, the git build path can be OOM-killed; fallback keeps installs unblocked.
-			return fmt.Sprintf(`sh -c 'curl -fsSL --proto "=https" --tlsv1.2 "%s" | CARGO_BUILD_JOBS=1 bash -s -- --install-method git --no-onboard || curl -fsSL --proto "=https" --tlsv1.2 "%s" | bash -s -- --no-onboard'`, installScriptURL, installScriptURL)
+			return fmt.Sprintf(`sh -c 'set -e; tmp=$(mktemp); trap "rm -f $tmp" EXIT; curl -fsSL --proto "=https" --tlsv1.2 "%s" -o "$tmp"; CARGO_BUILD_JOBS=1 bash "$tmp" --install-method git --no-onboard || bash "$tmp" --no-onboard'`, installScriptURL)
 		}
-		return fmt.Sprintf(`sh -c 'curl -fsSL --proto "=https" --tlsv1.2 "%s" | bash -s -- --install-method %s --no-onboard'`, installScriptURL, method)
+		if method == "git" {
+			return fmt.Sprintf(`sh -c 'set -e; tmp=$(mktemp); trap "rm -f $tmp" EXIT; curl -fsSL --proto "=https" --tlsv1.2 "%s" -o "$tmp"; CARGO_BUILD_JOBS=1 bash "$tmp" --install-method %s --no-onboard'`, installScriptURL, method)
+		}
+		return fmt.Sprintf(`sh -c 'set -e; tmp=$(mktemp); trap "rm -f $tmp" EXIT; curl -fsSL --proto "=https" --tlsv1.2 "%s" -o "$tmp"; bash "$tmp" --install-method %s --no-onboard'`, installScriptURL, method)
 	}
 }
 

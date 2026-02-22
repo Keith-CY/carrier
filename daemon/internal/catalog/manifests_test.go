@@ -188,8 +188,9 @@ func TestGetInstallCommand_Default(t *testing.T) {
 	default:
 		for _, want := range []string{
 			"CARGO_BUILD_JOBS=1",
-			"||",
-			"| bash -s -- --no-onboard",
+			"mktemp",
+			"curl -fsSL",
+			"|| bash \"$tmp\" --no-onboard",
 		} {
 			if !strings.Contains(cmd, want) {
 				t.Errorf("unix default command should include fallback token %q\ngot: %s", want, cmd)
@@ -239,6 +240,21 @@ func TestGetInstallCommand_UnsafeMethodFallsBackToDefault(t *testing.T) {
 	}
 	if !strings.Contains(cmd, "--install-method git") {
 		t.Fatalf("unsafe value should fall back to git command, got: %s", cmd)
+	}
+}
+
+
+func TestGetInstallCommand_ExplicitGitUsesCargoBuildJobs(t *testing.T) {
+	t.Setenv("CARRIER_DEV_MODE", "")
+	t.Setenv(openClawInstallMethodEnv, "git")
+	t.Setenv(openClawDisableInstallFallbackEnv, "1")
+
+	cmd := getInstallCommand()
+	if !strings.Contains(cmd, "--install-method git") {
+		t.Fatalf("expected git install method, got: %s", cmd)
+	}
+	if !strings.Contains(cmd, "CARGO_BUILD_JOBS=1") {
+		t.Fatalf("expected explicit git path to include CARGO_BUILD_JOBS=1, got: %s", cmd)
 	}
 }
 
