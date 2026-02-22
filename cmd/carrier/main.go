@@ -1582,12 +1582,112 @@ func daemonAgentAction(agentID, action string) error {
 	path := fmt.Sprintf("/api/v1/agents/%s/%s", neturl.PathEscape(agentID), neturl.PathEscape(action))
 	_, status, err := daemonRequest(http.MethodPost, path, map[string]string{})
 	if err != nil {
+		reconciled, reconcileErr := reconcileDaemonActionOnEOF(agentID, action, err)
+		if reconciled {
+			return nil
+		}
+		if reconcileErr != nil {
+			return fmt.Errorf("%w (status reconciliation failed: %v)", err, reconcileErr)
+		}
 		return err
 	}
 	if status < 200 || status >= 300 {
 		return fmt.Errorf("daemon %s %s failed with status %d", action, agentID, status)
 	}
 	return nil
+}
+
+type daemonAgentStatusSnapshot struct {
+	InstallState string
+	RuntimeState string
+}
+
+func reconcileDaemonActionOnEOF(agentID, action string, reqErr error) (bool, error) {
+	if !isDaemonEOFError(reqErr) {
+		return false, nil
+	}
+	switch action {
+	case "install", "start":
+	default:
+		return false, nil
+	}
+	status, err := daemonFetchAgentStatus(agentID)
+	if err != nil {
+		return false, err
+	}
+	switch action {
+	case "install":
+		return strings.EqualFold(status.InstallState, "installed"), nil
+	case "start":
+		runtimeState := strings.ToLower(strings.TrimSpace(status.RuntimeState))
+		return runtimeState == "running" || runtimeState == "starting", nil
+	default:
+		return false, nil
+	}
+}
+
+func daemonFetchAgentStatus(agentID string) (daemonAgentStatusSnapshot, error) {
+	raw, status, err := daemonRequest(http.MethodGet, fmt.Sprintf("/api/v1/agents/%s/status", neturl.PathEscape(strings.TrimSpace(agentID))), nil)
+	if err != nil {
+		return daemonAgentStatusSnapshot{}, err
+	}
+	if status < 200 || status >= 300 {
+		return daemonAgentStatusSnapshot{}, fmt.Errorf("daemon status request failed with status %d", status)
+	}
+	var direct struct {
+		InstallState string `json:"installState"`
+		RuntimeState string `json:"runtimeState"`
+		Install      string `json:"install"`
+		Runtime      string `json:"runtime"`
+	}
+	if err := json.Unmarshal(raw, &direct); err == nil {
+		installState := firstNonEmpty(direct.InstallState, direct.Install)
+		runtimeState := firstNonEmpty(direct.RuntimeState, direct.Runtime)
+		if installState != "" || runtimeState != "" {
+			return daemonAgentStatusSnapshot{
+				InstallState: installState,
+				RuntimeState: runtimeState,
+			}, nil
+		}
+	}
+	var wrapped struct {
+		Statuses []struct {
+			InstallState string `json:"installState"`
+			RuntimeState string `json:"runtimeState"`
+			Install      string `json:"install"`
+			Runtime      string `json:"runtime"`
+		} `json:"statuses"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return daemonAgentStatusSnapshot{}, fmt.Errorf("decode daemon status response: %w", err)
+	}
+	if len(wrapped.Statuses) == 0 {
+		return daemonAgentStatusSnapshot{}, errors.New("daemon status response did not include statuses")
+	}
+	first := wrapped.Statuses[0]
+	return daemonAgentStatusSnapshot{
+		InstallState: firstNonEmpty(first.InstallState, first.Install),
+		RuntimeState: firstNonEmpty(first.RuntimeState, first.Runtime),
+	}, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func isDaemonEOFError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "eof")
 }
 
 func daemonExtractPairCodeFromLogs(agentID string) (string, error) {
