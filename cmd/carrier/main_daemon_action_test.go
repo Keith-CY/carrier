@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 )
 
 func TestDaemonAgentActionInstallRecoversEOFWhenStatusInstalled(t *testing.T) {
@@ -87,4 +88,16 @@ func configureDaemonProbeEnvForTest(t *testing.T, serverURL string) {
 	}
 	t.Setenv("CARRIER_SERVER_HOST", host)
 	t.Setenv("CARRIER_SERVER_PORT", port)
+}
+
+func TestDaemonActionTimeoutUsesExtendedInstallWindow(t *testing.T) {
+	if got := daemonActionTimeout("install"); got != 20*time.Minute {
+		t.Fatalf("daemonActionTimeout(install) = %s, want %s", got, 20*time.Minute)
+	}
+	if got := daemonActionTimeout("start"); got != 5*time.Minute {
+		t.Fatalf("daemonActionTimeout(start) = %s, want %s", got, 5*time.Minute)
+	}
+	if got := daemonActionTimeout(" INSTALL "); got != 20*time.Minute {
+		t.Fatalf("daemonActionTimeout( INSTALL ) = %s, want %s", got, 20*time.Minute)
+	}
 }

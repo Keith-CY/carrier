@@ -1580,7 +1580,7 @@ func daemonAgentAction(agentID, action string) error {
 		return errors.New("agentID and action are required")
 	}
 	path := fmt.Sprintf("/api/v1/agents/%s/%s", neturl.PathEscape(agentID), neturl.PathEscape(action))
-	_, status, err := daemonRequest(http.MethodPost, path, map[string]string{})
+	_, status, err := daemonRequestWithTimeout(http.MethodPost, path, map[string]string{}, daemonActionTimeout(action))
 	if err != nil {
 		reconciled, reconcileErr := reconcileDaemonActionOnEOF(agentID, action, err)
 		if reconciled {
@@ -1713,6 +1713,22 @@ func daemonExtractPairCodeFromLogs(agentID string) (string, error) {
 }
 
 func daemonRequest(method, path string, body any) ([]byte, int, error) {
+	return daemonRequestWithTimeout(method, path, body, 5*time.Minute)
+}
+
+func daemonActionTimeout(action string) time.Duration {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "install":
+		return 20 * time.Minute
+	default:
+		return 5 * time.Minute
+	}
+}
+
+func daemonRequestWithTimeout(method, path string, body any, timeout time.Duration) ([]byte, int, error) {
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
 	base := strings.TrimRight(strings.TrimSpace(daemonProbeBaseURL()), "/")
 	if base == "" {
 		return nil, 0, errors.New("daemon base url is empty")
@@ -1736,7 +1752,7 @@ func daemonRequest(method, path string, body any) ([]byte, int, error) {
 	}
 	addDaemonAuthHeader(req)
 
-	client := &http.Client{Timeout: 5 * time.Minute}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, 0, err
