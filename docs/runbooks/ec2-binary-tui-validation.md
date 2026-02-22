@@ -24,6 +24,7 @@ https://github.com/Keith-CY/carrier/releases/download/main-<full_commit_sha>/car
 Notes:
 - The same workflow also uploads Actions artifacts (retention: 14 days).
 - For EC2 validation, prefer release assets (`releases/download/...`) so no local rebuild is needed.
+- Do not infer "latest" by picking the first item from `/releases`; resolve `main` HEAD SHA first, then use `main-<sha>`.
 
 ## 2) Linux EC2 Validation (No Rebuild)
 
@@ -31,8 +32,13 @@ Run on Linux EC2:
 
 ```bash
 chmod +x scripts/ec2-binary-tui-linux.sh
-scripts/ec2-binary-tui-linux.sh --sha <full_commit_sha>
+scripts/ec2-binary-tui-linux.sh
 ```
+
+Behavior:
+- With no `--sha/--tag`, script resolves `Keith-CY/carrier` `main` HEAD automatically.
+- It waits up to 600s for `main-<sha>` release asset to appear (use `--wait-seconds 0` to disable).
+- You can still pin an exact build with `--sha <full_commit_sha>` or `--tag main-<full_commit_sha>`.
 
 Optional non-interactive env:
 
@@ -54,8 +60,13 @@ Complete OAuth in browser while command is waiting.
 Run in PowerShell (Admin not required):
 
 ```powershell
-.\scripts\ec2-binary-tui-windows.ps1 -Sha <full_commit_sha>
+.\scripts\ec2-binary-tui-windows.ps1
 ```
+
+Behavior:
+- With no `-Sha/-Tag`, script resolves `Keith-CY/carrier` `main` HEAD automatically.
+- It waits up to 600s for `main-<sha>` release asset to appear (use `-WaitSeconds 0` to disable).
+- You can still pin an exact build with `-Sha <full_commit_sha>` or `-Tag main-<full_commit_sha>`.
 
 Optional non-interactive env:
 
