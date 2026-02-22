@@ -156,12 +156,10 @@ func getStartCommand() string {
 	case "windows":
 		return "openclaw gateway start"
 	default:
-		// Use absolute path to avoid PATH shadowing on Unix
-		home, err := os.UserHomeDir()
-		if err != nil {
-			home = os.Getenv("HOME")
-		}
-		return filepath.Join(home, ".local", "bin", "openclaw") + " gateway start"
+		// Git installs create a ~/.local/bin wrapper, while npm installs may
+		// place openclaw in npm's global bin dir. Resolve both without forcing
+		// pre-flight to depend on a single hardcoded absolute path.
+		return `sh -c 'if [ -x "$HOME/.local/bin/openclaw" ]; then exec "$HOME/.local/bin/openclaw" gateway start; elif command -v openclaw >/dev/null 2>&1; then exec "$(command -v openclaw)" gateway start; else echo "openclaw executable not found (checked $HOME/.local/bin/openclaw and PATH)" >&2; exit 127; fi'`
 	}
 }
 
@@ -171,26 +169,17 @@ func getStopCommand() string {
 	case "windows":
 		return "openclaw gateway stop"
 	default:
-		home, err := os.UserHomeDir()
-		if err != nil {
-			home = os.Getenv("HOME")
-		}
-		return filepath.Join(home, ".local", "bin", "openclaw") + " gateway stop"
+		return `sh -c 'if [ -x "$HOME/.local/bin/openclaw" ]; then exec "$HOME/.local/bin/openclaw" gateway stop; elif command -v openclaw >/dev/null 2>&1; then exec "$(command -v openclaw)" gateway stop; else echo "openclaw executable not found (checked $HOME/.local/bin/openclaw and PATH)" >&2; exit 127; fi'`
 	}
 }
 
 func getNetworkSpec() manifest.NetworkSpec {
-	spec := manifest.NetworkSpec{
+	return manifest.NetworkSpec{
 		Healthcheck: manifest.HealthcheckSpec{
 			Type: "http",
 			URL:  defaultDaemonHealthURL,
 		},
 	}
-	// Skip port declarations in dev mode to avoid port conflict with the daemon itself
-	if os.Getenv("CARRIER_DEV_MODE") != "1" {
-		spec.Ports = []manifest.PortSpec{{Name: "http", Port: defaultDaemonPort}}
-	}
-	return spec
 }
 
 // getZeroClawInstallCommand returns the install command for ZeroClaw.
@@ -543,7 +532,7 @@ func OpenClawManifest() manifest.Manifest {
 		},
 		Network: getNetworkSpec(),
 		Env: manifest.EnvSpec{
-			Required: []manifest.EnvVar{{Name: "OPENAI_API_KEY", Secret: true, Description: "OpenAI API key for LLM access"}},
+			Required: []manifest.EnvVar{},
 			Optional: []manifest.EnvVar{{Name: "LOG_LEVEL", Default: "info", Description: "Logging verbosity level"}},
 		},
 		Memory: manifest.MemorySpec{

@@ -12,11 +12,10 @@ import (
 func TestOpenClawManifestUsesDaemonHealthContract(t *testing.T) {
 	m := OpenClawManifest()
 
-	if len(m.Network.Ports) == 0 {
-		t.Fatal("expected at least one network port in manifest")
-	}
-	if got := m.Network.Ports[0].Port; got != defaultDaemonPort {
-		t.Fatalf("network port = %d, want %d", got, defaultDaemonPort)
+	// OpenClaw runs alongside carrier daemon; declaring daemon's own fixed port
+	// in agent pre-flight causes false-positive conflict failures.
+	if got := len(m.Network.Ports); got != 0 {
+		t.Fatalf("expected no declared network ports, got %d", got)
 	}
 	if got := m.Network.Healthcheck.URL; got != defaultDaemonHealthURL {
 		t.Fatalf("healthcheck url = %q, want %q", got, defaultDaemonHealthURL)
@@ -146,11 +145,8 @@ func TestCatalogJSONHealthcheckMatchesGeneratedManifest(t *testing.T) {
 	if fileManifest.Network.Healthcheck.URL != generated.Network.Healthcheck.URL {
 		t.Fatalf("catalog healthcheck url = %q, generated = %q", fileManifest.Network.Healthcheck.URL, generated.Network.Healthcheck.URL)
 	}
-	if len(fileManifest.Network.Ports) == 0 || len(generated.Network.Ports) == 0 {
-		t.Fatal("expected network ports in both manifests")
-	}
-	if fileManifest.Network.Ports[0].Port != generated.Network.Ports[0].Port {
-		t.Fatalf("catalog port = %d, generated = %d", fileManifest.Network.Ports[0].Port, generated.Network.Ports[0].Port)
+	if len(fileManifest.Network.Ports) != len(generated.Network.Ports) {
+		t.Fatalf("catalog port count = %d, generated = %d", len(fileManifest.Network.Ports), len(generated.Network.Ports))
 	}
 }
 
@@ -284,51 +280,54 @@ func TestGetInstallCommand_DevMode(t *testing.T) {
 func TestGetStartCommand_Unix(t *testing.T) {
 	cmd := getStartCommand()
 
-	home, _ := os.UserHomeDir()
-	wantPrefix := filepath.Join(home, ".local", "bin", "openclaw")
-
-	if !strings.HasPrefix(cmd, wantPrefix) {
-		t.Errorf("start command should use absolute path\ngot: %s\nwant prefix: %s", cmd, wantPrefix)
+	for _, want := range []string{
+		`$HOME/.local/bin/openclaw`,
+		"command -v openclaw",
+		"gateway start",
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("start command missing %q\ngot: %s", want, cmd)
+		}
 	}
-	if !strings.HasSuffix(cmd, "gateway start") {
-		t.Errorf("start command should end with 'gateway start'\ngot: %s", cmd)
+	if !strings.HasPrefix(cmd, "sh -c") {
+		t.Errorf("start command should use shell resolver wrapper\ngot: %s", cmd)
 	}
 }
 
 func TestGetStopCommand_Unix(t *testing.T) {
 	cmd := getStopCommand()
 
-	home, _ := os.UserHomeDir()
-	wantPrefix := filepath.Join(home, ".local", "bin", "openclaw")
-
-	if !strings.HasPrefix(cmd, wantPrefix) {
-		t.Errorf("stop command should use absolute path\ngot: %s\nwant prefix: %s", cmd, wantPrefix)
+	for _, want := range []string{
+		`$HOME/.local/bin/openclaw`,
+		"command -v openclaw",
+		"gateway stop",
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("stop command missing %q\ngot: %s", want, cmd)
+		}
 	}
-	if !strings.HasSuffix(cmd, "gateway stop") {
-		t.Errorf("stop command should end with 'gateway stop'\ngot: %s", cmd)
+	if !strings.HasPrefix(cmd, "sh -c") {
+		t.Errorf("stop command should use shell resolver wrapper\ngot: %s", cmd)
 	}
 }
 
-func TestGetNetworkSpec_ProductionIncludesPorts(t *testing.T) {
+func TestGetNetworkSpec_ProductionOmitsPorts(t *testing.T) {
 	t.Setenv("CARRIER_DEV_MODE", "")
 
 	spec := getNetworkSpec()
 
-	if len(spec.Ports) == 0 {
-		t.Fatal("production network spec must declare ports")
-	}
-	if spec.Ports[0].Port != defaultDaemonPort {
-		t.Fatalf("port = %d, want %d", spec.Ports[0].Port, defaultDaemonPort)
+	if len(spec.Ports) != 0 {
+		t.Fatalf("production network spec should not declare fixed ports, got %d", len(spec.Ports))
 	}
 }
 
-func TestGetNetworkSpec_DevModeSkipsPorts(t *testing.T) {
+func TestGetNetworkSpec_DevModeAlsoOmitsPorts(t *testing.T) {
 	t.Setenv("CARRIER_DEV_MODE", "1")
 
 	spec := getNetworkSpec()
 
 	if len(spec.Ports) != 0 {
-		t.Fatalf("dev mode should skip ports, got %d", len(spec.Ports))
+		t.Fatalf("dev mode should not declare ports, got %d", len(spec.Ports))
 	}
 }
 
