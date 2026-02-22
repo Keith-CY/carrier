@@ -76,7 +76,7 @@ Write-Host "[ec2] Binary ready: $binPath"
 
 function Invoke-TuiCommand {
   param(
-    [string[]]$Args
+    [string[]]$CarrierArgs
   )
 
   $token = [string]$env:CARRIER_TELEGRAM_BOT_TOKEN
@@ -97,7 +97,7 @@ function Invoke-TuiCommand {
     return
   }
 
-  Write-Host "[ec2] CARRIER_TELEGRAM_BOT_TOKEN not set, running interactively for: carrier $($Args -join ' ')"
+  Write-Host "[ec2] CARRIER_TELEGRAM_BOT_TOKEN not set, running interactively for: carrier $($CarrierArgs -join ' ')"
   & $binPath @Args
 }
 
