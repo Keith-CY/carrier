@@ -93,22 +93,22 @@ function Invoke-TuiCommand {
       $lines += $secret
     }
     $inputText = ($lines -join "`n") + "`n"
-    $inputText | & $binPath @Args
+    $inputText | & $binPath @CarrierArgs
     return
   }
 
   Write-Host "[ec2] CARRIER_TELEGRAM_BOT_TOKEN not set, running interactively for: carrier $($CarrierArgs -join ' ')"
-  & $binPath @Args
+  & $binPath @CarrierArgs
 }
 
 if (-not $SkipOnboard) {
   Write-Host "[ec2] Running: carrier onboard (TUI)"
-  Invoke-TuiCommand -Args @("onboard")
+  Invoke-TuiCommand -CarrierArgs @("onboard")
 }
 
 if (-not $SkipAdd) {
   Write-Host "[ec2] Running: carrier add openclaw (TUI)"
-  Invoke-TuiCommand -Args @("add", "openclaw")
+  Invoke-TuiCommand -CarrierArgs @("add", "openclaw")
 }
 
 Write-Host "[ec2] Current managed instances:"
