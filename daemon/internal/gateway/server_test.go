@@ -970,6 +970,160 @@ func TestAddEndpoint_MethodNotAllowed(t *testing.T) {
 	}
 }
 
+func TestAddEndpoint_ManagedAgentSuccess_OpenAndZeroClaw(t *testing.T) {
+	cases := []struct {
+		name         string
+		agentID      string
+		requestEnv   map[string]string
+		expectedEnvs map[string]string
+	}{
+		{
+			name:    "openclaw",
+			agentID: "openclaw",
+			requestEnv: map[string]string{
+				"OPENCLAW_MODE": "managed",
+			},
+			expectedEnvs: map[string]string{
+				"OPENCLAW_MODE":  "managed",
+				"OPENAI_API_KEY": "sk-provider-token",
+			},
+		},
+		{
+			name:    "zeroclaw",
+			agentID: "zeroclaw",
+			requestEnv: map[string]string{
+				"ZEROCLAW_REGION": "cn",
+			},
+			expectedEnvs: map[string]string{
+				"ZEROCLAW_REGION":  "cn",
+				"OPENAI_API_KEY":   "sk-provider-token",
+				"ZEROCLAW_API_KEY": "sk-provider-token",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			t.Setenv("HOME", tmp)
+			t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+			t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+			t.Setenv("CARRIER_TELEGRAM_BOT_TOKEN", "tg-token")
+
+			installRoute := fmt.Sprintf("POST /api/v1/agents/%s/install", tc.agentID)
+			startRoute := fmt.Sprintf("POST /api/v1/agents/%s/start", tc.agentID)
+			installCalls := 0
+			startCalls := 0
+
+			mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+				installRoute: func(w http.ResponseWriter, r *http.Request) {
+					installCalls++
+					w.WriteHeader(http.StatusOK)
+					fmt.Fprint(w, `{"status":"installed"}`)
+				},
+				startRoute: func(w http.ResponseWriter, r *http.Request) {
+					startCalls++
+					w.WriteHeader(http.StatusOK)
+					fmt.Fprint(w, `{"status":"running"}`)
+				},
+			})
+			defer srv.Close()
+
+			for key := range tc.expectedEnvs {
+				t.Setenv(key, "")
+			}
+
+			bodyMap := map[string]interface{}{
+				"agentId":       tc.agentID,
+				"channel":       "telegram",
+				"providerId":    "openai",
+				"providerToken": "sk-provider-token",
+				"envVars":       tc.requestEnv,
+			}
+			bodyBytes, err := json.Marshal(bodyMap)
+			if err != nil {
+				t.Fatalf("marshal request body: %v", err)
+			}
+
+			req := httptest.NewRequest("POST", "/api/v1/add", strings.NewReader(string(bodyBytes)))
+			req.Header.Set("Authorization", "Bearer test-gateway-token")
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+			}
+
+			var resp map[string]interface{}
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("parse response: %v", err)
+			}
+			if got := strings.TrimSpace(fmt.Sprintf("%v", resp["result"])); got != "ok" {
+				t.Fatalf("expected result=ok, got %q", got)
+			}
+			if got := strings.TrimSpace(fmt.Sprintf("%v", resp["agentId"])); got != tc.agentID {
+				t.Fatalf("expected agentId=%s, got %q", tc.agentID, got)
+			}
+			instanceID := strings.TrimSpace(fmt.Sprintf("%v", resp["instanceId"]))
+			if instanceID == "" {
+				t.Fatalf("expected non-empty instanceId, got %#v", resp["instanceId"])
+			}
+
+			envKeysRaw, ok := resp["envKeys"].([]interface{})
+			if !ok {
+				t.Fatalf("expected envKeys array, got %#v", resp["envKeys"])
+			}
+			envKeySet := map[string]bool{}
+			for _, item := range envKeysRaw {
+				envKeySet[strings.TrimSpace(fmt.Sprintf("%v", item))] = true
+			}
+			for key, value := range tc.expectedEnvs {
+				if !envKeySet[key] {
+					t.Fatalf("expected envKeys to include %s, got %#v", key, envKeysRaw)
+				}
+				if got := os.Getenv(key); got != value {
+					t.Fatalf("expected env var %s=%q, got %q", key, value, got)
+				}
+			}
+
+			instances, _, err := loadManagedInstances()
+			if err != nil {
+				t.Fatalf("loadManagedInstances: %v", err)
+			}
+			if len(instances) != 1 {
+				t.Fatalf("expected 1 managed instance, got %d", len(instances))
+			}
+			inst := instances[0]
+			if inst.ID != instanceID {
+				t.Fatalf("instance id mismatch: store=%s response=%s", inst.ID, instanceID)
+			}
+			if inst.Type != tc.agentID || inst.AgentID != tc.agentID {
+				t.Fatalf("expected managed instance type/agent=%s, got %+v", tc.agentID, inst)
+			}
+			if strings.TrimSpace(inst.Channel) != "telegram" {
+				t.Fatalf("expected channel=telegram, got %+v", inst)
+			}
+			if strings.TrimSpace(inst.Provider) != "openai" {
+				t.Fatalf("expected provider=openai, got %+v", inst)
+			}
+			if inst.RuntimeState != "running" {
+				t.Fatalf("expected runtime_state=running, got %+v", inst)
+			}
+			if strings.TrimSpace(inst.Workspace) == "" || strings.TrimSpace(inst.ConfigPath) == "" || strings.TrimSpace(inst.RecordPath) == "" {
+				t.Fatalf("expected persisted paths in managed instance, got %+v", inst)
+			}
+			if strings.TrimSpace(inst.CreatedAt) == "" || strings.TrimSpace(inst.UpdatedAt) == "" {
+				t.Fatalf("expected timestamps in managed instance, got %+v", inst)
+			}
+			if installCalls != 1 || startCalls != 1 {
+				t.Fatalf("expected install/start calls = 1/1, got %d/%d", installCalls, startCalls)
+			}
+		})
+	}
+}
+
 func TestAddEndpoint_DaemonErrorIsSanitized(t *testing.T) {
 	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
 		"POST /api/v1/agents/openclaw/install": func(w http.ResponseWriter, r *http.Request) {

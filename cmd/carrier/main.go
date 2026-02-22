@@ -129,6 +129,22 @@ var picoclawChannels = []picoclawChannel{
 	},
 }
 
+var openclawChannels = []picoclawChannel{
+	{
+		ID:         "telegram",
+		Name:       "Telegram",
+		TokenLabel: "Telegram bot token for OpenClaw",
+	},
+}
+
+var zeroclawChannels = []picoclawChannel{
+	{
+		ID:         "telegram",
+		Name:       "Telegram",
+		TokenLabel: "Telegram bot token for ZeroClaw",
+	},
+}
+
 var managedAgents = map[string]managedAgentConfig{
 	"picoclaw": {
 		ID:        "picoclaw",
@@ -1365,12 +1381,12 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string) error {
 	}
 	_, _ = fmt.Fprintf(out, "Instance: %s\n", instanceID)
 	_, _ = fmt.Fprintln(out, "Step 1/4: Configure chat channel")
-	channel, ok := parsePicoclawChannel("telegram")
+	channel, ok := resolveManagedAgentChannel(cfg.ID)
 	if !ok {
-		return fmt.Errorf("%s telegram channel is unavailable", cfg.ID)
+		return fmt.Errorf("%s channel is unavailable", cfg.ID)
 	}
-	_, _ = fmt.Fprintf(out, "Using channel: %s (fixed)\n", channel.Name)
-	token, err := promptInput(reader, out, fmt.Sprintf("Telegram bot token for %s", cfg.Name), true)
+	_, _ = fmt.Fprintf(out, "Using channel: %s (default)\n", channel.Name)
+	token, err := promptInput(reader, out, channel.TokenLabel, true)
 	if err != nil {
 		return err
 	}
@@ -1839,6 +1855,30 @@ func pickProviderTokenForManaged(provider choiceOption, envVars map[string]strin
 func managedAgentByID(agentID string) (managedAgentConfig, bool) {
 	cfg, ok := managedAgents[strings.ToLower(strings.TrimSpace(agentID))]
 	return cfg, ok
+}
+
+func managedAgentChannels(agentID string) ([]picoclawChannel, bool) {
+	switch strings.ToLower(strings.TrimSpace(agentID)) {
+	case "picoclaw":
+		return picoclawChannels, true
+	case "openclaw":
+		return openclawChannels, true
+	case "zeroclaw":
+		return zeroclawChannels, true
+	default:
+		return nil, false
+	}
+}
+
+func resolveManagedAgentChannel(agentID string) (picoclawChannel, bool) {
+	channels, ok := managedAgentChannels(agentID)
+	if !ok {
+		return picoclawChannel{}, false
+	}
+	if len(channels) == 0 {
+		return picoclawChannel{}, false
+	}
+	return channels[0], true
 }
 
 func isManagedAgent(agentID string) bool {
