@@ -42,6 +42,7 @@ For product scope/priority decisions, use this order:
 - [Architecture](#architecture)
 - [Repository Map](#repository-map)
 - [Installation and Testing](#installation-and-testing)
+- [EC2 Binary + TUI Validation](#ec2-binary--tui-validation)
 - [Install OpenClaw from Release](#install-openclaw-from-release-package-non-technical-quick-path)
 - [三平台 Bot 管理（中文）](#三平台-bot-管理超详细步骤可直接照做)
 - [Three-Platform Bot Management (English)](#three-platform-bot-management-detailed-step-by-step)
@@ -208,6 +209,23 @@ Target project resolution order:
 Implementation notes:
 - `carrier-kanban-operations.yml` can fall back to the pre-authenticated `github` client from `@actions/github` for repository-scoped calls when an explicit token is not provided.
 - Kanban workflows skip with a warning when `CARRIER_PROJECTS_TOKEN` is missing or project access is unavailable, so unrelated CI checks are not blocked by Kanban configuration gaps.
+
+## EC2 Binary + TUI Validation
+
+- For each push to `main`, release workflow publishes a **pre-release** with tag `main-<full_commit_sha>`.
+- Binary package naming on that tag:
+  - `carrier-main-<full_commit_sha>-linux-x64.zip`
+  - `carrier-main-<full_commit_sha>-windows-x64.zip`
+- Release assets can be downloaded directly from:
+  - `https://github.com/Keith-CY/carrier/releases/download/main-<full_commit_sha>/carrier-main-<full_commit_sha>-<label>.zip`
+- Use TUI flow for onboarding/install on EC2:
+  - `carrier onboard`
+  - `carrier add openclaw`
+- Chat `/install` and `/onboard` are intentionally blocked (`E_INSTALL_GUI_ONLY` / `E_ONBOARD_GUI_ONLY`).
+- End-to-end no-rebuild scripts:
+  - Linux: `scripts/ec2-binary-tui-linux.sh`
+  - Windows: `scripts/ec2-binary-tui-windows.ps1`
+- Detailed runbook: `docs/runbooks/ec2-binary-tui-validation.md`
 
 ## Install OpenClaw from release package (non-technical quick path)
 

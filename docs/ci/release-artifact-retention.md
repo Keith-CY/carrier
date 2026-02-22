@@ -11,10 +11,11 @@ Retention policy is enforced by release workflow and documented here for operato
 
 ## Release Trigger Policy
 
-- Release publication is tag-driven (`v*`) in `.github/workflows/release.yml`.
-- Main-branch pushes do not create GitHub Releases automatically.
+- Published release events (`release.published`) produce release-mode artifacts.
+- Pushes to `main` produce prerelease artifacts under tag `main-<full_commit_sha>`.
+- Pull requests build test packages as workflow artifacts only (no GitHub Release publication).
 
 ## Why this rule
 
 - Time-based retention limits storage for workflow artifacts.
-- Tag-driven releases prevent noisy non-release artifacts on routine main merges.
+- Main push prereleases provide ready-to-test binaries for environments such as EC2.
