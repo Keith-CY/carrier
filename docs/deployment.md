@@ -20,14 +20,13 @@ For lifecycle state transitions, crash-loop behavior, and operator troubleshooti
 ## Build
 
 ```bash
-cd daemon
 go build -o carrier ./cmd/carrier
+```
 
 ## Gateway
 
 The gateway has been rewritten in Go and is now part of the daemon binary.
 No separate build step is required — the daemon serves the gateway API directly.
-```
 
 ## Configuration
 
