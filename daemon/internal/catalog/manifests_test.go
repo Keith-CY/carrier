@@ -170,7 +170,9 @@ func TestGetInstallCommand_Unix(t *testing.T) {
 		`--proto "=https"`,
 		"--tlsv1.2",
 		installScriptURL,
-		"| bash",
+		"| bash -s --",
+		"--install-method git",
+		"--no-onboard",
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("install command missing %q\ngot: %s", want, cmd)
