@@ -146,3 +146,28 @@ func TestPersistBackgroundProcessIncludesCleanupFailure(t *testing.T) {
 		t.Fatalf("expected cleanup context, got %v", err)
 	}
 }
+
+func TestResolveManagedAgentChannelUsesManagedChannelRegistry(t *testing.T) {
+	for _, agentID := range []string{"picoclaw", "openclaw", "zeroclaw"} {
+		t.Run(agentID, func(t *testing.T) {
+			channels, ok := managedAgentChannels(agentID)
+			if !ok || len(channels) == 0 {
+				t.Fatalf("expected channel registry for %s", agentID)
+			}
+
+			channel, ok := resolveManagedAgentChannel(agentID)
+			if !ok {
+				t.Fatalf("expected managed channel resolution to succeed for %s", agentID)
+			}
+			if channel.ID != channels[0].ID {
+				t.Fatalf("channel.ID = %q, want %q", channel.ID, channels[0].ID)
+			}
+		})
+	}
+}
+
+func TestResolveManagedAgentChannelRejectsUnknownAgent(t *testing.T) {
+	if _, ok := resolveManagedAgentChannel("unknown-agent"); ok {
+		t.Fatal("expected unknown managed agent channel resolution to fail")
+	}
+}
