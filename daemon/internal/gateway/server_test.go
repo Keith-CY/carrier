@@ -979,7 +979,13 @@ func TestAddEndpoint_DaemonErrorIsSanitized(t *testing.T) {
 	})
 	defer srv.Close()
 
-	body := `{"agentId":"openclaw"}`
+	body := `{
+		"agentId":"openclaw",
+		"channel":"telegram",
+		"channelToken":"tg-token",
+		"providerId":"openai",
+		"providerToken":"sk-test-token"
+	}`
 	req := httptest.NewRequest("POST", "/api/v1/add", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer test-gateway-token")
 	req.Header.Set("Content-Type", "application/json")
@@ -1018,7 +1024,13 @@ func TestAddEndpoint_StatePersistenceFailureReturnsPartialSuccess(t *testing.T) 
 	defer srv.Close()
 	t.Setenv("CARRIER_INSTANCE_STORE", badStore)
 
-	body := `{"agentId":"openclaw"}`
+	body := `{
+		"agentId":"openclaw",
+		"channel":"telegram",
+		"channelToken":"tg-token",
+		"providerId":"openai",
+		"providerToken":"sk-test-token"
+	}`
 	req := httptest.NewRequest("POST", "/api/v1/add", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer test-gateway-token")
 	req.Header.Set("Content-Type", "application/json")

@@ -80,13 +80,21 @@ type picoclawChannel struct {
 	TokenLabel string
 }
 
-type picoclawAddResult struct {
+type managedAgentAddResult struct {
 	InstanceID    string
 	WorkspacePath string
 	ConfigPath    string
 	RecordPath    string
 	ChannelID     string
 	ProviderID    string
+}
+
+type managedAgentConfig struct {
+	ID                  string
+	Name                string
+	ConfigDir           string
+	RequiredEnvKey      string
+	OptionalPopulateKey string
 }
 
 type managedAgentInstance struct {
@@ -118,6 +126,26 @@ var picoclawChannels = []picoclawChannel{
 		ID:         "telegram",
 		Name:       "Telegram",
 		TokenLabel: "Telegram bot token for PicoClaw",
+	},
+}
+
+var managedAgents = map[string]managedAgentConfig{
+	"picoclaw": {
+		ID:        "picoclaw",
+		Name:      "PicoClaw",
+		ConfigDir: ".picoclaw",
+	},
+	"openclaw": {
+		ID:             "openclaw",
+		Name:           "OpenClaw",
+		ConfigDir:      ".openclaw",
+		RequiredEnvKey: "OPENAI_API_KEY",
+	},
+	"zeroclaw": {
+		ID:                  "zeroclaw",
+		Name:                "ZeroClaw",
+		ConfigDir:           ".zeroclaw",
+		OptionalPopulateKey: "ZEROCLAW_API_KEY",
 	},
 }
 
@@ -1304,7 +1332,7 @@ func runAddTUI(in io.Reader, out io.Writer, agentID string) error {
 	if agentID == "" {
 		return errors.New("agent_id is required")
 	}
-	if !strings.EqualFold(agentID, "picoclaw") {
+	if !isManagedAgent(agentID) {
 		_, _ = fmt.Fprintf(out, "Adding %s via direct install/start...\n", agentID)
 		if _, err := ensureDaemonRunning(out); err != nil {
 			return err
@@ -1318,13 +1346,20 @@ func runAddTUI(in io.Reader, out io.Writer, agentID string) error {
 		_, _ = fmt.Fprintf(out, "✅ %s installed and started.\n", agentID)
 		return nil
 	}
+	return runAddManagedAgentTUI(in, out, agentID)
+}
 
+func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string) error {
+	cfg, ok := managedAgentByID(agentID)
+	if !ok {
+		return fmt.Errorf("managed agent %q is not supported", agentID)
+	}
 	reader := bufio.NewReader(in)
 	_, _ = fmt.Fprintln(out, "Carrier Add (TUI)")
 	_, _ = fmt.Fprintln(out, "-----------------")
-	_, _ = fmt.Fprintln(out, "Agent: PicoClaw")
-	_, _ = fmt.Fprintln(out, "Tip: for browser flow, run `carrier add picoclaw --webui`.")
-	instanceID, err := generateManagedInstanceID("picoclaw")
+	_, _ = fmt.Fprintf(out, "Agent: %s\n", cfg.Name)
+	_, _ = fmt.Fprintf(out, "Tip: for browser flow, run `carrier add %s --webui`.\n", cfg.ID)
+	instanceID, err := generateManagedInstanceID(cfg.ID)
 	if err != nil {
 		return err
 	}
@@ -1332,10 +1367,10 @@ func runAddTUI(in io.Reader, out io.Writer, agentID string) error {
 	_, _ = fmt.Fprintln(out, "Step 1/4: Configure chat channel")
 	channel, ok := parsePicoclawChannel("telegram")
 	if !ok {
-		return errors.New("picoclaw telegram channel is unavailable")
+		return fmt.Errorf("%s telegram channel is unavailable", cfg.ID)
 	}
 	_, _ = fmt.Fprintf(out, "Using channel: %s (fixed)\n", channel.Name)
-	token, err := promptInput(reader, out, "Telegram bot token for PicoClaw", true)
+	token, err := promptInput(reader, out, fmt.Sprintf("Telegram bot token for %s", cfg.Name), true)
 	if err != nil {
 		return err
 	}
@@ -1363,42 +1398,47 @@ func runAddTUI(in io.Reader, out io.Writer, agentID string) error {
 		return err
 	}
 	envVars := mergeEnvVars(providerEnv, nil)
+	if err := ensureManagedAgentEnvRequirements(cfg.ID, envVars, provider); err != nil {
+		return err
+	}
 	if err := applyEnvVars(envVars); err != nil {
 		return err
 	}
 
 	_, _ = fmt.Fprintln(out, "")
-	_, _ = fmt.Fprintln(out, "Step 3/4: Prepare PicoClaw configuration")
-	result, err := preparePicoclawAddArtifacts(instanceID, channel.ID, token, provider, envVars)
+	_, _ = fmt.Fprintf(out, "Step 3/4: Prepare %s configuration\n", cfg.Name)
+	result, err := prepareManagedAgentAddArtifacts(cfg.ID, instanceID, channel.ID, token, provider, envVars)
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "PicoClaw workspace: %s\n", result.WorkspacePath)
-	_, _ = fmt.Fprintf(out, "PicoClaw config: %s\n", result.ConfigPath)
+	_, _ = fmt.Fprintf(out, "%s workspace: %s\n", cfg.Name, result.WorkspacePath)
+	_, _ = fmt.Fprintf(out, "%s config: %s\n", cfg.Name, result.ConfigPath)
 	_, _ = fmt.Fprintf(out, "Carrier record: %s\n", result.RecordPath)
 
 	_, _ = fmt.Fprintln(out, "")
-	_, _ = fmt.Fprintln(out, "Step 4/4: Install and start PicoClaw")
+	_, _ = fmt.Fprintf(out, "Step 4/4: Install and start %s\n", cfg.Name)
 	if _, err := ensureDaemonRunning(out); err != nil {
 		return err
 	}
-	if err := daemonAgentAction("picoclaw", "install"); err != nil {
+	if err := daemonAgentAction(cfg.ID, "install"); err != nil {
 		return err
 	}
-	if err := daemonAgentAction("picoclaw", "start"); err != nil {
+	if err := daemonAgentAction(cfg.ID, "start"); err != nil {
 		return err
 	}
-	if pairCode, _ := daemonExtractPairCodeFromLogs("picoclaw"); strings.TrimSpace(pairCode) != "" {
-		_, _ = fmt.Fprintf(out, "PicoClaw pair code: %s\n", pairCode)
-		_, _ = fmt.Fprintf(out, "Next: send `/pair %s` in your PicoClaw Telegram bot chat.\n", pairCode)
-	} else {
-		_, _ = fmt.Fprintln(out, "Pair code not detected yet. Open PicoClaw Telegram bot chat and follow `/start` -> `/pair` prompts.")
+	if strings.EqualFold(cfg.ID, "picoclaw") {
+		if pairCode, _ := daemonExtractPairCodeFromLogs(cfg.ID); strings.TrimSpace(pairCode) != "" {
+			_, _ = fmt.Fprintf(out, "PicoClaw pair code: %s\n", pairCode)
+			_, _ = fmt.Fprintf(out, "Next: send `/pair %s` in your PicoClaw Telegram bot chat.\n", pairCode)
+		} else {
+			_, _ = fmt.Fprintln(out, "Pair code not detected yet. Open PicoClaw Telegram bot chat and follow `/start` -> `/pair` prompts.")
+		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	inst := managedAgentInstance{
 		ID:           instanceID,
-		Type:         "picoclaw",
-		AgentID:      "picoclaw",
+		Type:         cfg.ID,
+		AgentID:      cfg.ID,
 		GatewayURL:   gatewayProbeBaseURL(),
 		Workspace:    result.WorkspacePath,
 		ConfigPath:   result.ConfigPath,
@@ -1412,7 +1452,7 @@ func runAddTUI(in io.Reader, out io.Writer, agentID string) error {
 	if err := upsertManagedInstance(inst); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintln(out, "✅ PicoClaw installed and started.")
+	_, _ = fmt.Fprintf(out, "✅ %s installed and started.\n", cfg.Name)
 	return nil
 }
 
@@ -1609,29 +1649,36 @@ func daemonRequest(method, path string, body any) ([]byte, int, error) {
 	return raw, resp.StatusCode, fmt.Errorf("daemon request failed with status %d", resp.StatusCode)
 }
 
-func preparePicoclawAddArtifacts(instanceID, channelID, channelToken string, provider choiceOption, envVars map[string]string) (*picoclawAddResult, error) {
+func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToken string, provider choiceOption, envVars map[string]string) (*managedAgentAddResult, error) {
+	cfg, ok := managedAgentByID(agentID)
+	if !ok {
+		return nil, fmt.Errorf("managed agent %q is not supported", agentID)
+	}
 	instanceID = strings.TrimSpace(instanceID)
 	if instanceID == "" {
-		return nil, errors.New("picoclaw instance id is required")
+		return nil, fmt.Errorf("%s instance id is required", cfg.ID)
 	}
 	channelID = strings.TrimSpace(channelID)
 	channelToken = strings.TrimSpace(channelToken)
 	if channelID == "" {
-		return nil, errors.New("picoclaw channel is required")
+		return nil, fmt.Errorf("%s channel is required", cfg.ID)
 	}
 	if channelToken == "" {
-		return nil, errors.New("picoclaw channel token is required")
+		return nil, fmt.Errorf("%s channel token is required", cfg.ID)
 	}
 	if strings.TrimSpace(provider.ID) == "" {
-		return nil, errors.New("picoclaw provider is required")
+		return nil, fmt.Errorf("%s provider is required", cfg.ID)
+	}
+	if err := ensureManagedAgentEnvRequirements(cfg.ID, envVars, provider); err != nil {
+		return nil, err
 	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve home dir: %w", err)
 	}
-	workspacePath := filepath.Join(home, ".picoclaw", "instances", instanceID, "workspace")
-	configPath := filepath.Join(home, ".picoclaw", "config.json")
+	workspacePath := filepath.Join(home, cfg.ConfigDir, "instances", instanceID, "workspace")
+	configPath := filepath.Join(home, cfg.ConfigDir, "config.json")
 	recordPath := filepath.Join(home, ".carrier", "agents", instanceID+".json")
 
 	if err := os.MkdirAll(workspacePath, 0o700); err != nil {
@@ -1644,7 +1691,7 @@ func preparePicoclawAddArtifacts(instanceID, channelID, channelToken string, pro
 		return nil, fmt.Errorf("create record dir: %w", err)
 	}
 	if err := backupIfExists(configPath); err != nil {
-		return nil, fmt.Errorf("backup existing picoclaw config: %w", err)
+		return nil, fmt.Errorf("backup existing %s config: %w", cfg.ID, err)
 	}
 
 	modelID := strings.TrimSpace(provider.ExampleModel)
@@ -1667,7 +1714,7 @@ func preparePicoclawAddArtifacts(instanceID, channelID, channelToken string, pro
 	if vendor, _, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(vendor) != "" {
 		providerKey = strings.TrimSpace(vendor)
 	}
-	providerKey = mapCarrierProviderToPicoclawProvider(providerKey)
+	providerKey = mapCarrierProviderToManagedProvider(providerKey)
 
 	modelItem := map[string]interface{}{
 		"model_name": modelName,
@@ -1676,13 +1723,15 @@ func preparePicoclawAddArtifacts(instanceID, channelID, channelToken string, pro
 	providerItem := map[string]interface{}{
 		"credential_ref": provider.ID,
 	}
-	token := pickProviderTokenForPicoclaw(provider, envVars)
+	token := pickProviderTokenForManaged(provider, envVars)
 	if strings.EqualFold(provider.ID, "openai-codex") {
 		modelItem["auth_method"] = "oauth"
 		providerItem["auth_method"] = "oauth"
-		accountID := extractOpenAIAccountIDFromToken(token)
-		if err := savePicoclawAuthCredential(home, "openai", token, accountID); err != nil {
-			return nil, fmt.Errorf("write picoclaw auth store: %w", err)
+		if strings.EqualFold(cfg.ID, "picoclaw") {
+			accountID := extractOpenAIAccountIDFromToken(token)
+			if err := savePicoclawAuthCredential(home, "openai", token, accountID); err != nil {
+				return nil, fmt.Errorf("write picoclaw auth store: %w", err)
+			}
 		}
 	} else if token != "" {
 		providerItem["api_key"] = token
@@ -1715,15 +1764,15 @@ func preparePicoclawAddArtifacts(instanceID, channelID, channelToken string, pro
 
 	raw, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		return nil, fmt.Errorf("marshal picoclaw config: %w", err)
+		return nil, fmt.Errorf("marshal %s config: %w", cfg.ID, err)
 	}
 	if err := os.WriteFile(configPath, append(raw, '\n'), 0o600); err != nil {
-		return nil, fmt.Errorf("write picoclaw config: %w", err)
+		return nil, fmt.Errorf("write %s config: %w", cfg.ID, err)
 	}
 
 	record := map[string]interface{}{
 		"instance_id":    instanceID,
-		"agent_id":       "picoclaw",
+		"agent_id":       cfg.ID,
 		"workspace_path": workspacePath,
 		"config_path":    configPath,
 		"channel":        channelID,
@@ -1738,7 +1787,7 @@ func preparePicoclawAddArtifacts(instanceID, channelID, channelToken string, pro
 		return nil, fmt.Errorf("write carrier record: %w", err)
 	}
 
-	return &picoclawAddResult{
+	return &managedAgentAddResult{
 		InstanceID:    instanceID,
 		WorkspacePath: workspacePath,
 		ConfigPath:    configPath,
@@ -1760,7 +1809,7 @@ func backupIfExists(path string) error {
 	return os.Rename(path, backupPath)
 }
 
-func mapCarrierProviderToPicoclawProvider(providerID string) string {
+func mapCarrierProviderToManagedProvider(providerID string) string {
 	switch strings.ToLower(strings.TrimSpace(providerID)) {
 	case "openai-codex":
 		return "openai"
@@ -1769,7 +1818,7 @@ func mapCarrierProviderToPicoclawProvider(providerID string) string {
 	}
 }
 
-func pickProviderTokenForPicoclaw(provider choiceOption, envVars map[string]string) string {
+func pickProviderTokenForManaged(provider choiceOption, envVars map[string]string) string {
 	if envVars == nil {
 		return ""
 	}
@@ -1785,6 +1834,46 @@ func pickProviderTokenForPicoclaw(provider choiceOption, envVars map[string]stri
 		return ""
 	}
 	return strings.TrimSpace(envVars[provider.ProviderEnv])
+}
+
+func managedAgentByID(agentID string) (managedAgentConfig, bool) {
+	cfg, ok := managedAgents[strings.ToLower(strings.TrimSpace(agentID))]
+	return cfg, ok
+}
+
+func isManagedAgent(agentID string) bool {
+	_, ok := managedAgentByID(agentID)
+	return ok
+}
+
+func ensureManagedAgentEnvRequirements(agentID string, envVars map[string]string, provider choiceOption) error {
+	cfg, ok := managedAgentByID(agentID)
+	if !ok {
+		return fmt.Errorf("managed agent %q is not supported", agentID)
+	}
+	if envVars == nil {
+		if cfg.RequiredEnvKey != "" {
+			return fmt.Errorf("%s requires %s", cfg.ID, cfg.RequiredEnvKey)
+		}
+		return nil
+	}
+	if cfg.RequiredEnvKey != "" && strings.TrimSpace(envVars[cfg.RequiredEnvKey]) == "" {
+		if token := pickProviderTokenForManaged(provider, envVars); token != "" {
+			envVars[cfg.RequiredEnvKey] = token
+		}
+	}
+	if cfg.RequiredEnvKey != "" && strings.TrimSpace(envVars[cfg.RequiredEnvKey]) == "" {
+		if strings.EqualFold(cfg.ID, "openclaw") {
+			return errors.New("openclaw requires OPENAI_API_KEY (select a provider with credentials)")
+		}
+		return fmt.Errorf("%s requires %s", cfg.ID, cfg.RequiredEnvKey)
+	}
+	if cfg.OptionalPopulateKey != "" && strings.TrimSpace(envVars[cfg.OptionalPopulateKey]) == "" {
+		if token := pickProviderTokenForManaged(provider, envVars); token != "" {
+			envVars[cfg.OptionalPopulateKey] = token
+		}
+	}
+	return nil
 }
 
 type picoclawAuthCredential struct {

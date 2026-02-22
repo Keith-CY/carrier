@@ -199,11 +199,11 @@ func onboardSelectAgent(ctx context.Context, requestID, sessionKey, agentID stri
 		s.SelectedAgent = agentID
 		s.SelectedAgentName = found.Name
 	})
-	if isPicoclawAgent(agentID) {
+	if isManagedAgent(agentID) {
 		store.update(sessionKey, func(s *OnboardSession) {
 			s.Step = OnboardChannelSelect
 		})
-		return GatewayResponse{RequestID: requestID, Result: "ok", Message: renderPicoclawChannelPrompt()}
+		return GatewayResponse{RequestID: requestID, Result: "ok", Message: renderManagedChannelPrompt(agentID)}
 	}
 	store.update(sessionKey, func(s *OnboardSession) {
 		s.Step = OnboardAgentSelected
@@ -218,11 +218,11 @@ func onboardSelectChannel(requestID, sessionKey, input string, store *OnboardSto
 	if sess == nil {
 		return errResp(requestID, "E_USAGE", "No active session. Run `/onboard` to start.")
 	}
-	if !isPicoclawAgent(sess.SelectedAgent) {
+	if !isManagedAgent(sess.SelectedAgent) {
 		store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardAgentSelected })
-		return errResp(requestID, "E_USAGE", "Channel selection is only required for PicoClaw in this flow.")
+		return errResp(requestID, "E_USAGE", "Channel selection is only required for PicoClaw/OpenClaw/ZeroClaw in this flow.")
 	}
-	channel, ok := parsePicoclawChannel(strings.TrimSpace(input))
+	channel, ok := parseManagedChannel(sess.SelectedAgent, strings.TrimSpace(input))
 	if !ok {
 		return errResp(requestID, "E_USAGE", "Unsupported channel. Reply `/onboard telegram` to continue.")
 	}
@@ -233,7 +233,7 @@ func onboardSelectChannel(requestID, sessionKey, input string, store *OnboardSto
 	return GatewayResponse{
 		RequestID: requestID,
 		Result:    "ok",
-		Message:   renderPicoclawChannelTokenPrompt(channel),
+		Message:   renderManagedChannelTokenPrompt(sess.SelectedAgent, channel),
 	}
 }
 
@@ -256,13 +256,11 @@ func onboardCaptureChannelToken(requestID, sessionKey, input string, store *Onbo
 	}
 	agent := &AgentState{ID: sess.SelectedAgent, Name: name}
 	resp := buildProviderListResponse(requestID, agent)
-	resp.Message = strings.TrimSpace(
-		fmt.Sprintf(
-			"✅ Channel configured for PicoClaw: `%s`.\n%s",
-			sess.SelectedChannel,
-			resp.Message,
-		),
-	)
+	agentLabel := "agent"
+	if isManagedAgent(sess.SelectedAgent) {
+		agentLabel = managedAgentDisplayName(sess.SelectedAgent)
+	}
+	resp.Message = strings.TrimSpace(fmt.Sprintf("✅ Channel configured for %s: `%s`.\n%s", agentLabel, sess.SelectedChannel, resp.Message))
 	return resp
 }
 
@@ -574,15 +572,15 @@ func onboardConfirm(ctx context.Context, requestID, sessionKey, input string, da
 	agentID := sess.SelectedAgent
 	store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardInstalling })
 	setupNotes := []string{}
-	if isPicoclawAgent(agentID) {
-		result, err := preparePicoclawManagedOnboard(sess, actor)
+	if isManagedAgent(agentID) {
+		result, err := prepareManagedOnboard(agentID, sess, actor)
 		if err != nil {
 			store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardEnvConfigured })
-			log.Printf("[gateway] onboarding: prepare picoclaw artifacts failed detail=%s", RedactErrorMessage(err.Error()))
-			return errResp(requestID, "E_ENV", "failed to prepare picoclaw onboarding artifacts")
+			log.Printf("[gateway] onboarding: prepare %s artifacts failed detail=%s", agentID, RedactErrorMessage(err.Error()))
+			return errResp(requestID, "E_ENV", fmt.Sprintf("failed to prepare %s onboarding artifacts", agentID))
 		}
-		setupNotes = append(setupNotes, fmt.Sprintf("PicoClaw workspace: %s", result.WorkspacePath))
-		setupNotes = append(setupNotes, fmt.Sprintf("PicoClaw config: %s", result.ConfigPath))
+		setupNotes = append(setupNotes, fmt.Sprintf("%s workspace: %s", managedAgentDisplayName(agentID), result.WorkspacePath))
+		setupNotes = append(setupNotes, fmt.Sprintf("%s config: %s", managedAgentDisplayName(agentID), result.ConfigPath))
 		setupNotes = append(setupNotes, fmt.Sprintf("Carrier record: %s", result.RecordPath))
 	}
 	if err := applyOnboardEnvVars(sess.EnvVars); err != nil {
