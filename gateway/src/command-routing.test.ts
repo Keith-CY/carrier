@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { handleCommand, parseInput, ParseError, type GatewayDependencies } from "./index";
-import { InMemoryDaemonClient } from "./daemon/client";
+import { type DaemonAgentState, InMemoryDaemonClient } from "./daemon/client";
 import { SessionStore } from "./session/store";
 import { DownloadTokenStore } from "./downloads/token_store";
 
@@ -17,6 +17,11 @@ function buildDeps(): GatewayDependencies {
 function pairChat(d: GatewayDependencies, provider: "telegram" | "discord" | "feishu" = "telegram", chatId = "100"): void {
   d.sessions.registerPairCode("pair-ok", 300);
   d.sessions.pair({ provider, chatId, code: "pair-ok" });
+}
+
+function stubAgentList(d: GatewayDependencies, agents: DaemonAgentState[]): void {
+  const daemon = d.daemon as InMemoryDaemonClient;
+  (daemon as { listAgents: (ctx: unknown) => Promise<DaemonAgentState[]> }).listAgents = async () => agents;
 }
 
 describe("command routing: /pair", () => {
@@ -72,6 +77,59 @@ describe("command routing: /agents", () => {
 
     expect(res.result).toBe("ok");
     expect(res.message).toContain("listed");
+  });
+
+  test("returns error-first operational summary with lastError and guidance", async () => {
+    const updatedAt = "2026-02-22T00:00:00.000Z";
+    stubAgentList(deps, [
+      {
+        id: "agent-healthy",
+        name: "Healthy Agent",
+        version: "1.0.0",
+        installed: true,
+        runtimeState: "running",
+        health: "healthy",
+        needsRemoteDiagnosis: false,
+        updatedAt,
+      },
+      {
+        id: "agent-unhealthy",
+        name: "Unhealthy Agent",
+        version: "1.0.0",
+        installed: true,
+        runtimeState: "running",
+        health: "unhealthy",
+        needsRemoteDiagnosis: false,
+        lastError: "panic: disk full",
+        updatedAt,
+      },
+      {
+        id: "agent-unknown",
+        name: "Unknown Agent",
+        version: "1.0.0",
+        installed: false,
+        runtimeState: "stopped",
+        health: "unknown",
+        needsRemoteDiagnosis: false,
+        updatedAt,
+      },
+    ]);
+
+    const res = await handleCommand(parseInput("telegram 100 req-1 /agents"), deps);
+
+    expect(res.result).toBe("ok");
+    expect(res.message).toContain("listed 3 agents (2 installed)");
+    expect(res.message).toContain('agent-unhealthy: runtime=running health=unhealthy lastError="panic: disk full"');
+    expect(res.message).toContain("drill-down: /status <agent_id> | /logs <agent_id> [tail] | /diagnose <agent_id>");
+
+    const unhealthyPos = res.message.indexOf("agent-unhealthy: runtime=running health=unhealthy");
+    const unknownPos = res.message.indexOf("agent-unknown: runtime=stopped health=unknown");
+    const healthyPos = res.message.indexOf("agent-healthy: runtime=running health=healthy");
+    expect(unhealthyPos).toBeGreaterThan(-1);
+    expect(unknownPos).toBeGreaterThan(-1);
+    expect(healthyPos).toBeGreaterThan(-1);
+    expect(unhealthyPos).toBeLessThan(unknownPos);
+    expect(unknownPos).toBeLessThan(healthyPos);
   });
 });
 

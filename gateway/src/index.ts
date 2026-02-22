@@ -6,6 +6,7 @@ import type {
 import {
   DaemonClientError,
   RemoteDiagnosisNotNeededError,
+  type DaemonAgentState,
   type DaemonClient,
   type RequestContext,
 } from "./daemon/client";
@@ -111,11 +112,11 @@ export async function handleCommand(
     switch (cmd.name) {
       case "/agents": {
         const agents = await deps.daemon.listAgents(ctx);
-        const installed = agents.filter((agent) => agent.installed).length;
+        const message = formatAgentsSummary(agents);
         return {
           requestId: cmd.requestId,
           result: "ok",
-          message: `listed ${agents.length} agents (${installed} installed)`,
+          message,
         };
       }
       case "/install": {
@@ -335,4 +336,31 @@ function errorResponse(requestId: string, errorCode: string, message: string): G
     errorCode,
     message,
   };
+}
+
+const HEALTH_PRIORITY: Readonly<Record<DaemonAgentState["health"], number>> = {
+  unhealthy: 0,
+  unknown: 1,
+  healthy: 2,
+};
+
+function formatAgentsSummary(agents: DaemonAgentState[]): string {
+  const installed = agents.filter((agent) => agent.installed).length;
+  const summary = `listed ${agents.length} agents (${installed} installed)`;
+  const sortedAgents = [...agents].sort((left, right) => {
+    const healthDelta = HEALTH_PRIORITY[left.health] - HEALTH_PRIORITY[right.health];
+    if (healthDelta !== 0) {
+      return healthDelta;
+    }
+    return left.id.localeCompare(right.id);
+  });
+  const detailLines = sortedAgents.map((agent) => {
+    const base = `${agent.id}: runtime=${agent.runtimeState} health=${agent.health}`;
+    if (!agent.lastError) {
+      return base;
+    }
+    return `${base} lastError="${agent.lastError}"`;
+  });
+  const guidance = "drill-down: /status <agent_id> | /logs <agent_id> [tail] | /diagnose <agent_id>";
+  return [summary, ...detailLines, guidance].join("\n");
 }

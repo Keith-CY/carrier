@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { safeHandleCommand, type GatewayDependencies } from "./index";
-import { InMemoryDaemonClient } from "./daemon/client";
+import { type DaemonAgentState, InMemoryDaemonClient } from "./daemon/client";
 import { SessionStore } from "./session/store";
 import { DownloadTokenStore } from "./downloads/token_store";
 
@@ -15,6 +15,11 @@ function buildDeps(): GatewayDependencies {
 function pair(deps: GatewayDependencies, provider = "telegram", chatId = "100"): void {
   deps.sessions.registerPairCode("test-code", 300);
   deps.sessions.pair({ provider: provider as "telegram", chatId, code: "test-code" });
+}
+
+function stubAgentList(deps: GatewayDependencies, agents: DaemonAgentState[]): void {
+  const daemon = deps.daemon as InMemoryDaemonClient;
+  (daemon as { listAgents: (ctx: unknown) => Promise<DaemonAgentState[]> }).listAgents = async () => agents;
 }
 
 describe("E2E: pair → install → start → status → stop flow", () => {
@@ -217,6 +222,60 @@ describe("E2E: logs and upgrade", () => {
     const res = await safeHandleCommand("telegram 100 r1 /agents", deps);
     expect(res.result).toBe("ok");
     expect(res.message).toContain("1 agents");
+  });
+
+  test("agents list is sorted by health with lastError and drill-down guidance", async () => {
+    const deps = buildDeps();
+    pair(deps);
+    const updatedAt = "2026-02-22T00:00:00.000Z";
+    stubAgentList(deps, [
+      {
+        id: "a-healthy",
+        name: "A Healthy",
+        version: "1.0.0",
+        installed: true,
+        runtimeState: "running",
+        health: "healthy",
+        needsRemoteDiagnosis: false,
+        updatedAt,
+      },
+      {
+        id: "b-unhealthy",
+        name: "B Unhealthy",
+        version: "1.0.0",
+        installed: true,
+        runtimeState: "running",
+        health: "unhealthy",
+        needsRemoteDiagnosis: false,
+        lastError: "connection timeout",
+        updatedAt,
+      },
+      {
+        id: "c-unknown",
+        name: "C Unknown",
+        version: "1.0.0",
+        installed: false,
+        runtimeState: "stopped",
+        health: "unknown",
+        needsRemoteDiagnosis: false,
+        updatedAt,
+      },
+    ]);
+
+    const res = await safeHandleCommand("telegram 100 r2 /agents", deps);
+    expect(res.result).toBe("ok");
+    expect(res.message).toContain("listed 3 agents (2 installed)");
+    expect(res.message).toContain('b-unhealthy: runtime=running health=unhealthy lastError="connection timeout"');
+    expect(res.message).toContain("drill-down: /status <agent_id> | /logs <agent_id> [tail] | /diagnose <agent_id>");
+
+    const unhealthyPos = res.message.indexOf("b-unhealthy: runtime=running health=unhealthy");
+    const unknownPos = res.message.indexOf("c-unknown: runtime=stopped health=unknown");
+    const healthyPos = res.message.indexOf("a-healthy: runtime=running health=healthy");
+    expect(unhealthyPos).toBeGreaterThan(-1);
+    expect(unknownPos).toBeGreaterThan(-1);
+    expect(healthyPos).toBeGreaterThan(-1);
+    expect(unhealthyPos).toBeLessThan(unknownPos);
+    expect(unknownPos).toBeLessThan(healthyPos);
   });
 });
 
