@@ -41,11 +41,13 @@ const (
 	shutdownTimeout          = 30 * time.Second
 	defaultReadHeaderTimeout = 10 * time.Second
 	defaultReadTimeout       = 30 * time.Second
-	defaultWriteTimeout      = 60 * time.Second
-	defaultIdleTimeout       = 120 * time.Second
-	defaultLogsTail          = 200
-	maxLogsTail              = 1000
-	maxBodySize              = 1 << 20
+	// Long-running install/start requests can take several minutes on cold machines.
+	// Keep write timeout above those command windows so clients do not get EOF mid-flight.
+	defaultWriteTimeout = 30 * time.Minute
+	defaultIdleTimeout  = 120 * time.Second
+	defaultLogsTail     = 200
+	maxLogsTail         = 1000
+	maxBodySize         = 1 << 20
 )
 
 var agentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)

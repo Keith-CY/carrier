@@ -57,7 +57,7 @@ func LoadGatewayConfigFromEnv() *GatewayConfig {
 		APIToken:                strings.TrimSpace(os.Getenv("CARRIER_GATEWAY_API_TOKEN")),
 		DaemonBaseURL:           strings.TrimRight(strings.TrimSpace(envOrDefault("CARRIER_DAEMON_BASE_URL", "http://127.0.0.1:9090")), "/"),
 		DaemonToken:             strings.TrimSpace(os.Getenv("CARRIER_SERVER_API_TOKEN")),
-		DaemonTimeout:           time.Duration(parseEnvInt("CARRIER_DAEMON_TIMEOUT_MS", 30000)) * time.Millisecond,
+		DaemonTimeout:           time.Duration(parseEnvInt("CARRIER_DAEMON_TIMEOUT_MS", int(defaultDaemonTimeout/time.Millisecond))) * time.Millisecond,
 		DiscordPublicKey:        strings.TrimSpace(os.Getenv("CARRIER_DISCORD_PUBLIC_KEY")),
 		FeishuVerificationToken: strings.TrimSpace(os.Getenv("CARRIER_FEISHU_VERIFICATION_TOKEN")),
 		TelegramWebhookSecret:   strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_WEBHOOK_SECRET")),

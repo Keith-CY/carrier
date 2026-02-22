@@ -574,6 +574,9 @@ func TestNewGatewayHTTPServer(t *testing.T) {
 	if srv.ReadHeaderTimeout != gatewayReadHeaderTimeout {
 		t.Errorf("unexpected ReadHeaderTimeout: %v", srv.ReadHeaderTimeout)
 	}
+	if srv.WriteTimeout != gatewayWriteTimeout {
+		t.Errorf("unexpected WriteTimeout: %v", srv.WriteTimeout)
+	}
 	if srv.IdleTimeout != gatewayIdleTimeout {
 		t.Errorf("unexpected IdleTimeout: %v", srv.IdleTimeout)
 	}
