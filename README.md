@@ -218,13 +218,14 @@ Implementation notes:
   - `carrier-main-<full_commit_sha>-windows-x64.zip`
 - Release assets can be downloaded directly from:
   - `https://github.com/Keith-CY/carrier/releases/download/main-<full_commit_sha>/carrier-main-<full_commit_sha>-<label>.zip`
+- Do not infer latest by taking the first `/releases` entry; resolve `main` HEAD SHA and use `main-<full_commit_sha>`.
 - Use TUI flow for onboarding/install on EC2:
   - `carrier onboard`
   - `carrier add openclaw`
 - Chat `/install` and `/onboard` are intentionally blocked (`E_INSTALL_GUI_ONLY` / `E_ONBOARD_GUI_ONLY`).
 - End-to-end no-rebuild scripts:
-  - Linux: `scripts/ec2-binary-tui-linux.sh`
-  - Windows: `scripts/ec2-binary-tui-windows.ps1`
+  - Linux: `scripts/ec2-binary-tui-linux.sh` (no args defaults to latest `main` push release)
+  - Windows: `scripts/ec2-binary-tui-windows.ps1` (no args defaults to latest `main` push release)
 - Detailed runbook: `docs/runbooks/ec2-binary-tui-validation.md`
 
 ## Install OpenClaw from release package (non-technical quick path)

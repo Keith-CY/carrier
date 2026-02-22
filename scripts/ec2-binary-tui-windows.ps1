@@ -1,6 +1,9 @@
 param(
   [string]$Sha = "",
   [string]$Tag = "",
+  [switch]$Main,
+  [string]$Repo = "Keith-CY/carrier",
+  [int]$WaitSeconds = -1,
   [string]$Label = "windows-x64",
   [string]$OutDir = "C:\Temp\carrier-ec2",
   [switch]$SkipOnboard,
@@ -14,10 +17,15 @@ function Show-Usage {
 Usage:
   .\ec2-binary-tui-windows.ps1 -Sha <full_commit_sha> [options]
   .\ec2-binary-tui-windows.ps1 -Tag <release_tag> [options]
+  .\ec2-binary-tui-windows.ps1 -Main [options]
+  .\ec2-binary-tui-windows.ps1 [options]
 
 Options:
   -Sha <sha>          Full commit SHA. Tag becomes main-<sha>.
   -Tag <tag>          Explicit release tag (for example main-<sha>).
+  -Main               Resolve SHA from repository main HEAD.
+  -Repo <owner/repo>  GitHub repository (default: Keith-CY/carrier).
+  -WaitSeconds <n>    Wait up to n seconds for release asset (default: 600 with -Main, else 0).
   -Label <label>      Asset label (default: windows-x64).
   -OutDir <dir>       Download/extract directory (default: C:\Temp\carrier-ec2).
   -SkipOnboard        Skip `carrier onboard`.
@@ -34,13 +42,87 @@ Notes:
 "@
 }
 
+function Wait-ReleaseAsset {
+  param(
+    [string]$Uri,
+    [int]$TimeoutSeconds
+  )
+
+  if ($TimeoutSeconds -le 0) {
+    return
+  }
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ($true) {
+    $ready = $false
+    $statusCode = 0
+    try {
+      $response = Invoke-WebRequest -Uri $Uri -Method Head -MaximumRedirection 5
+      $statusCode = [int]$response.StatusCode
+      if ($statusCode -ge 200 -and $statusCode -lt 400) {
+        $ready = $true
+      }
+    } catch {
+      if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+        $statusCode = [int]$_.Exception.Response.StatusCode.value__
+      }
+    }
+
+    if ($ready) {
+      Write-Host "[ec2] Release asset is ready: $Uri"
+      return
+    }
+
+    if ((Get-Date) -ge $deadline) {
+      throw "Release asset not ready after $TimeoutSeconds seconds: $Uri (last HTTP $statusCode)"
+    }
+
+    Write-Host "[ec2] Waiting for release asset (HTTP $statusCode), retrying in 10s..."
+    Start-Sleep -Seconds 10
+  }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($Tag) -and -not [string]::IsNullOrWhiteSpace($Sha)) {
+  Write-Error "-Tag and -Sha cannot be used together."
+  Show-Usage
+  exit 1
+}
+
+if ($WaitSeconds -lt -1) {
+  Write-Error "-WaitSeconds must be -1 or a non-negative integer."
+  Show-Usage
+  exit 1
+}
+
+if ([string]::IsNullOrWhiteSpace($Tag) -and [string]::IsNullOrWhiteSpace($Sha)) {
+  $Main = $true
+}
+
+if ($Main -and [string]::IsNullOrWhiteSpace($Tag) -and [string]::IsNullOrWhiteSpace($Sha)) {
+  Write-Host "[ec2] Resolving main HEAD SHA from $Repo"
+  $mainHead = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/commits/main"
+  $Sha = [string]$mainHead.sha
+  if ([string]::IsNullOrWhiteSpace($Sha) -or $Sha.Length -ne 40) {
+    throw "Failed to resolve main HEAD SHA from $Repo"
+  }
+  Write-Host "[ec2] Resolved main SHA: $Sha"
+}
+
 if ([string]::IsNullOrWhiteSpace($Tag)) {
   if ([string]::IsNullOrWhiteSpace($Sha)) {
-    Write-Error "Provide -Sha or -Tag."
+    Write-Error "Provide -Sha or -Tag (or use -Main)."
     Show-Usage
     exit 1
   }
   $Tag = "main-$Sha"
+}
+
+if ($WaitSeconds -eq -1) {
+  if ($Main) {
+    $WaitSeconds = 600
+  } else {
+    $WaitSeconds = 0
+  }
 }
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
@@ -48,7 +130,9 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $zipName = "carrier-$Tag-$Label.zip"
 $zipPath = Join-Path $OutDir $zipName
 $sumPath = Join-Path $OutDir "$zipName.sha256"
-$baseUrl = "https://github.com/Keith-CY/carrier/releases/download/$Tag"
+$baseUrl = "https://github.com/$Repo/releases/download/$Tag"
+
+Wait-ReleaseAsset -Uri "$baseUrl/$zipName" -TimeoutSeconds $WaitSeconds
 
 Write-Host "[ec2] Downloading release asset: $baseUrl/$zipName"
 Invoke-WebRequest -Uri "$baseUrl/$zipName" -OutFile $zipPath

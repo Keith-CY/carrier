@@ -5,6 +5,8 @@
 # Examples:
 #   scripts/ec2-binary-tui-linux.sh --sha <full_commit_sha>
 #   scripts/ec2-binary-tui-linux.sh --tag main-<full_commit_sha>
+#   scripts/ec2-binary-tui-linux.sh --main
+#   scripts/ec2-binary-tui-linux.sh
 #
 # Optional non-interactive inputs:
 #   CARRIER_TELEGRAM_BOT_TOKEN   Telegram bot token used by TUI prompts.
@@ -22,10 +24,15 @@ usage() {
 Usage:
   ec2-binary-tui-linux.sh --sha <full_commit_sha> [options]
   ec2-binary-tui-linux.sh --tag <release_tag> [options]
+  ec2-binary-tui-linux.sh --main [options]
+  ec2-binary-tui-linux.sh [options]
 
 Options:
   --sha <sha>          Full commit SHA. Tag becomes main-<sha>.
   --tag <tag>          Explicit release tag (for example main-<sha>).
+  --main               Resolve SHA from repository main HEAD.
+  --repo <owner/repo>  GitHub repository (default: Keith-CY/carrier).
+  --wait-seconds <n>   Wait up to n seconds for release asset (default: 600 with --main, else 0).
   --label <label>      Asset label (default: linux-x64).
   --out-dir <dir>      Download/extract directory (default: /tmp/carrier-ec2).
   --skip-onboard       Skip `carrier onboard`.
@@ -46,12 +53,54 @@ require_cmd() {
   fi
 }
 
+is_non_negative_integer() {
+  [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+resolve_main_sha() {
+  local repo="$1"
+  local api_url="https://api.github.com/repos/${repo}/commits/main"
+  local json sha
+
+  json="$(curl -fsSL --retry 3 --retry-delay 2 "$api_url")" || return 1
+  sha="$(printf '%s\n' "$json" | sed -nE 's/^[[:space:]]*"sha":[[:space:]]*"([0-9a-f]{40})".*/\1/p' | head -n 1)"
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+  printf '%s\n' "$sha"
+}
+
+wait_for_release_asset() {
+  local url="$1"
+  local timeout="$2"
+  local deadline code
+
+  (( timeout > 0 )) || return 0
+  deadline=$((SECONDS + timeout))
+
+  while :; do
+    code="$(curl -sS -o /dev/null -w '%{http_code}' -L "$url" || true)"
+    if [[ "$code" == "200" ]]; then
+      echo "[ec2] Release asset is ready: $url"
+      return 0
+    fi
+    if (( SECONDS >= deadline )); then
+      echo "ERROR: release asset not ready after ${timeout}s: $url (last HTTP $code)" >&2
+      echo "Hint: wait for Release workflow on main push to finish, then retry." >&2
+      return 1
+    fi
+    echo "[ec2] Waiting for release asset (HTTP $code), retrying in 10s..."
+    sleep 10
+  done
+}
+
 TAG=""
 SHA=""
 LABEL="linux-x64"
 OUT_DIR="/tmp/carrier-ec2"
 SKIP_ONBOARD=0
 SKIP_ADD=0
+REPO="Keith-CY/carrier"
+USE_MAIN=0
+WAIT_SECONDS=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -61,6 +110,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --tag)
       TAG="${2:-}"
+      shift 2
+      ;;
+    --main)
+      USE_MAIN=1
+      shift
+      ;;
+    --repo)
+      REPO="${2:-}"
+      shift 2
+      ;;
+    --wait-seconds)
+      WAIT_SECONDS="${2:-}"
       shift 2
       ;;
     --label)
@@ -91,13 +152,46 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -n "$TAG" && -n "$SHA" ]]; then
+  echo "ERROR: --tag and --sha cannot be used together" >&2
+  usage
+  exit 1
+fi
+
+if [[ -n "$WAIT_SECONDS" ]] && ! is_non_negative_integer "$WAIT_SECONDS"; then
+  echo "ERROR: --wait-seconds must be a non-negative integer" >&2
+  usage
+  exit 1
+fi
+
+if [[ -z "$TAG" && -z "$SHA" ]]; then
+  USE_MAIN=1
+fi
+
+if [[ "$USE_MAIN" -eq 1 && -z "$SHA" && -z "$TAG" ]]; then
+  echo "[ec2] Resolving main HEAD SHA from ${REPO}"
+  SHA="$(resolve_main_sha "$REPO")" || {
+    echo "ERROR: failed to resolve main HEAD SHA from ${REPO}" >&2
+    exit 1
+  }
+  echo "[ec2] Resolved main SHA: ${SHA}"
+fi
+
 if [[ -z "$TAG" ]]; then
   if [[ -z "$SHA" ]]; then
-    echo "ERROR: provide --sha or --tag" >&2
+    echo "ERROR: provide --sha or --tag (or use --main)" >&2
     usage
     exit 1
   fi
   TAG="main-$SHA"
+fi
+
+if [[ -z "$WAIT_SECONDS" ]]; then
+  if [[ "$USE_MAIN" -eq 1 ]]; then
+    WAIT_SECONDS=600
+  else
+    WAIT_SECONDS=0
+  fi
 fi
 
 require_cmd curl
@@ -108,17 +202,21 @@ if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1
 fi
 
 ZIP_NAME="carrier-${TAG}-${LABEL}.zip"
-BASE_URL="https://github.com/Keith-CY/carrier/releases/download/${TAG}"
+BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
 ZIP_PATH="${OUT_DIR}/${ZIP_NAME}"
 SUM_PATH="${OUT_DIR}/${ZIP_NAME}.sha256"
+ASSET_URL="${BASE_URL}/${ZIP_NAME}"
+SUM_URL="${BASE_URL}/${ZIP_NAME}.sha256"
 
 mkdir -p "$OUT_DIR"
 
-echo "[ec2] Downloading release asset: ${BASE_URL}/${ZIP_NAME}"
-curl -fL --retry 3 --retry-delay 2 -o "$ZIP_PATH" "${BASE_URL}/${ZIP_NAME}"
+wait_for_release_asset "$ASSET_URL" "$WAIT_SECONDS"
 
-echo "[ec2] Downloading checksum: ${BASE_URL}/${ZIP_NAME}.sha256"
-curl -fL --retry 3 --retry-delay 2 -o "$SUM_PATH" "${BASE_URL}/${ZIP_NAME}.sha256"
+echo "[ec2] Downloading release asset: ${ASSET_URL}"
+curl -fL --retry 3 --retry-delay 2 -o "$ZIP_PATH" "$ASSET_URL"
+
+echo "[ec2] Downloading checksum: ${SUM_URL}"
+curl -fL --retry 3 --retry-delay 2 -o "$SUM_PATH" "$SUM_URL"
 
 echo "[ec2] Verifying checksum"
 if command -v sha256sum >/dev/null 2>&1; then
