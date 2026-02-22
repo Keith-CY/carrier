@@ -41,7 +41,7 @@ const (
 	defaultCrashLoopThreshold = 3
 	defaultCrashLoopWindow    = 5 * time.Minute
 	defaultCrashLoopCooldown  = 5 * time.Minute
-	defaultCommandTimeout     = 5 * time.Minute
+	defaultCommandTimeout     = 20 * time.Minute
 )
 
 var (
