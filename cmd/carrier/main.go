@@ -89,6 +89,24 @@ type picoclawAddResult struct {
 	ProviderID    string
 }
 
+type openclawAddResult struct {
+	InstanceID    string
+	WorkspacePath string
+	ConfigPath    string
+	RecordPath    string
+	ChannelID     string
+	ProviderID    string
+}
+
+type zeroclawAddResult struct {
+	InstanceID    string
+	WorkspacePath string
+	ConfigPath    string
+	RecordPath    string
+	ChannelID     string
+	ProviderID    string
+}
+
 type managedAgentInstance struct {
 	ID           string `json:"id"`
 	Type         string `json:"type"`
@@ -1304,7 +1322,7 @@ func runAddTUI(in io.Reader, out io.Writer, agentID string) error {
 	if agentID == "" {
 		return errors.New("agent_id is required")
 	}
-	if !strings.EqualFold(agentID, "picoclaw") {
+	if !strings.EqualFold(agentID, "picoclaw") && !strings.EqualFold(agentID, "openclaw") && !strings.EqualFold(agentID, "zeroclaw") {
 		_, _ = fmt.Fprintf(out, "Adding %s via direct install/start...\n", agentID)
 		if _, err := ensureDaemonRunning(out); err != nil {
 			return err
@@ -1317,6 +1335,12 @@ func runAddTUI(in io.Reader, out io.Writer, agentID string) error {
 		}
 		_, _ = fmt.Fprintf(out, "✅ %s installed and started.\n", agentID)
 		return nil
+	}
+	if strings.EqualFold(agentID, "openclaw") {
+		return runAddOpenclawTUI(in, out)
+	}
+	if strings.EqualFold(agentID, "zeroclaw") {
+		return runAddZeroclawTUI(in, out)
 	}
 
 	reader := bufio.NewReader(in)
@@ -1413,6 +1437,194 @@ func runAddTUI(in io.Reader, out io.Writer, agentID string) error {
 		return err
 	}
 	_, _ = fmt.Fprintln(out, "✅ PicoClaw installed and started.")
+	return nil
+}
+
+func runAddOpenclawTUI(in io.Reader, out io.Writer) error {
+	reader := bufio.NewReader(in)
+	_, _ = fmt.Fprintln(out, "Carrier Add (TUI)")
+	_, _ = fmt.Fprintln(out, "-----------------")
+	_, _ = fmt.Fprintln(out, "Agent: OpenClaw")
+	_, _ = fmt.Fprintln(out, "Tip: for browser flow, run `carrier add openclaw --webui`.")
+	instanceID, err := generateManagedInstanceID("openclaw")
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "Instance: %s\n", instanceID)
+	_, _ = fmt.Fprintln(out, "Step 1/4: Configure LLM provider")
+	provider, providerReason, err := pickMinimalProviderWithReason()
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "Auto-selected provider: %s (%s)\n", provider.Name, provider.ID)
+	_, _ = fmt.Fprintf(out, "Selection reason: %s\n", providerReason)
+	provider, override, err := promptMinimalProviderOverride(reader, out, provider)
+	if err != nil {
+		return err
+	}
+	if override {
+		_, _ = fmt.Fprintf(out, "Provider override selected: %s (%s)\n", provider.Name, provider.ID)
+	} else {
+		_, _ = fmt.Fprintf(out, "Using provider: %s (%s)\n", provider.Name, provider.ID)
+	}
+	_, _ = fmt.Fprintln(out, "Saved provider credential will be reused automatically when available.")
+	providerEnv, _, err := promptProviderAuthMinimal(reader, out, provider)
+	if err != nil {
+		return err
+	}
+	envVars := mergeEnvVars(providerEnv, nil)
+	if err := ensureOpenclawAPIKey(envVars, provider); err != nil {
+		return err
+	}
+	if err := applyEnvVars(envVars); err != nil {
+		return err
+	}
+
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Step 2/4: Configure chat channel")
+	channel, ok := parsePicoclawChannel("telegram")
+	if !ok {
+		return errors.New("openclaw telegram channel is unavailable")
+	}
+	_, _ = fmt.Fprintf(out, "Using channel: %s (fixed)\n", channel.Name)
+	token, err := promptInput(reader, out, "Telegram bot token for OpenClaw", true)
+	if err != nil {
+		return err
+	}
+
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Step 3/4: Prepare OpenClaw configuration")
+	result, err := prepareOpenclawAddArtifacts(instanceID, channel.ID, token, provider, envVars)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "OpenClaw workspace: %s\n", result.WorkspacePath)
+	_, _ = fmt.Fprintf(out, "OpenClaw config: %s\n", result.ConfigPath)
+	_, _ = fmt.Fprintf(out, "Carrier record: %s\n", result.RecordPath)
+
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Step 4/4: Install and start OpenClaw")
+	if _, err := ensureDaemonRunning(out); err != nil {
+		return err
+	}
+	if err := daemonAgentAction("openclaw", "install"); err != nil {
+		return err
+	}
+	if err := daemonAgentAction("openclaw", "start"); err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	inst := managedAgentInstance{
+		ID:           instanceID,
+		Type:         "openclaw",
+		AgentID:      "openclaw",
+		GatewayURL:   gatewayProbeBaseURL(),
+		Workspace:    result.WorkspacePath,
+		ConfigPath:   result.ConfigPath,
+		RecordPath:   result.RecordPath,
+		Channel:      result.ChannelID,
+		Provider:     result.ProviderID,
+		RuntimeState: "running",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := upsertManagedInstance(inst); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(out, "✅ OpenClaw installed and started.")
+	return nil
+}
+
+func runAddZeroclawTUI(in io.Reader, out io.Writer) error {
+	reader := bufio.NewReader(in)
+	_, _ = fmt.Fprintln(out, "Carrier Add (TUI)")
+	_, _ = fmt.Fprintln(out, "-----------------")
+	_, _ = fmt.Fprintln(out, "Agent: ZeroClaw")
+	_, _ = fmt.Fprintln(out, "Tip: for browser flow, run `carrier add zeroclaw --webui`.")
+	instanceID, err := generateManagedInstanceID("zeroclaw")
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "Instance: %s\n", instanceID)
+	_, _ = fmt.Fprintln(out, "Step 1/4: Configure LLM provider")
+	provider, providerReason, err := pickMinimalProviderWithReason()
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "Auto-selected provider: %s (%s)\n", provider.Name, provider.ID)
+	_, _ = fmt.Fprintf(out, "Selection reason: %s\n", providerReason)
+	provider, override, err := promptMinimalProviderOverride(reader, out, provider)
+	if err != nil {
+		return err
+	}
+	if override {
+		_, _ = fmt.Fprintf(out, "Provider override selected: %s (%s)\n", provider.Name, provider.ID)
+	} else {
+		_, _ = fmt.Fprintf(out, "Using provider: %s (%s)\n", provider.Name, provider.ID)
+	}
+	_, _ = fmt.Fprintln(out, "Saved provider credential will be reused automatically when available.")
+	providerEnv, _, err := promptProviderAuthMinimal(reader, out, provider)
+	if err != nil {
+		return err
+	}
+	envVars := mergeEnvVars(providerEnv, nil)
+	ensureZeroclawAPIKey(envVars, provider)
+	if err := applyEnvVars(envVars); err != nil {
+		return err
+	}
+
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Step 2/4: Configure chat channel")
+	channel, ok := parsePicoclawChannel("telegram")
+	if !ok {
+		return errors.New("zeroclaw telegram channel is unavailable")
+	}
+	_, _ = fmt.Fprintf(out, "Using channel: %s (fixed)\n", channel.Name)
+	token, err := promptInput(reader, out, "Telegram bot token for ZeroClaw", true)
+	if err != nil {
+		return err
+	}
+
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Step 3/4: Prepare ZeroClaw configuration")
+	result, err := prepareZeroclawAddArtifacts(instanceID, channel.ID, token, provider, envVars)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "ZeroClaw workspace: %s\n", result.WorkspacePath)
+	_, _ = fmt.Fprintf(out, "ZeroClaw config: %s\n", result.ConfigPath)
+	_, _ = fmt.Fprintf(out, "Carrier record: %s\n", result.RecordPath)
+
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Step 4/4: Install and start ZeroClaw")
+	if _, err := ensureDaemonRunning(out); err != nil {
+		return err
+	}
+	if err := daemonAgentAction("zeroclaw", "install"); err != nil {
+		return err
+	}
+	if err := daemonAgentAction("zeroclaw", "start"); err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	inst := managedAgentInstance{
+		ID:           instanceID,
+		Type:         "zeroclaw",
+		AgentID:      "zeroclaw",
+		GatewayURL:   gatewayProbeBaseURL(),
+		Workspace:    result.WorkspacePath,
+		ConfigPath:   result.ConfigPath,
+		RecordPath:   result.RecordPath,
+		Channel:      result.ChannelID,
+		Provider:     result.ProviderID,
+		RuntimeState: "running",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := upsertManagedInstance(inst); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(out, "✅ ZeroClaw installed and started.")
 	return nil
 }
 
@@ -1667,7 +1879,7 @@ func preparePicoclawAddArtifacts(instanceID, channelID, channelToken string, pro
 	if vendor, _, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(vendor) != "" {
 		providerKey = strings.TrimSpace(vendor)
 	}
-	providerKey = mapCarrierProviderToPicoclawProvider(providerKey)
+	providerKey = mapCarrierProviderToManagedProvider(providerKey)
 
 	modelItem := map[string]interface{}{
 		"model_name": modelName,
@@ -1676,7 +1888,7 @@ func preparePicoclawAddArtifacts(instanceID, channelID, channelToken string, pro
 	providerItem := map[string]interface{}{
 		"credential_ref": provider.ID,
 	}
-	token := pickProviderTokenForPicoclaw(provider, envVars)
+	token := pickProviderTokenForManaged(provider, envVars)
 	if strings.EqualFold(provider.ID, "openai-codex") {
 		modelItem["auth_method"] = "oauth"
 		providerItem["auth_method"] = "oauth"
@@ -1748,6 +1960,280 @@ func preparePicoclawAddArtifacts(instanceID, channelID, channelToken string, pro
 	}, nil
 }
 
+func prepareOpenclawAddArtifacts(instanceID, channelID, channelToken string, provider choiceOption, envVars map[string]string) (*openclawAddResult, error) {
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return nil, errors.New("openclaw instance id is required")
+	}
+	channelID = strings.TrimSpace(channelID)
+	channelToken = strings.TrimSpace(channelToken)
+	if channelID == "" {
+		return nil, errors.New("openclaw channel is required")
+	}
+	if channelToken == "" {
+		return nil, errors.New("openclaw channel token is required")
+	}
+	if strings.TrimSpace(provider.ID) == "" {
+		return nil, errors.New("openclaw provider is required")
+	}
+	if err := ensureOpenclawAPIKey(envVars, provider); err != nil {
+		return nil, err
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home dir: %w", err)
+	}
+	workspacePath := filepath.Join(home, ".openclaw", "instances", instanceID, "workspace")
+	configPath := filepath.Join(home, ".openclaw", "config.json")
+	recordPath := filepath.Join(home, ".carrier", "agents", instanceID+".json")
+
+	if err := os.MkdirAll(workspacePath, 0o700); err != nil {
+		return nil, fmt.Errorf("create workspace: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		return nil, fmt.Errorf("create config dir: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(recordPath), 0o700); err != nil {
+		return nil, fmt.Errorf("create record dir: %w", err)
+	}
+	if err := backupIfExists(configPath); err != nil {
+		return nil, fmt.Errorf("backup existing openclaw config: %w", err)
+	}
+
+	modelID := strings.TrimSpace(provider.ExampleModel)
+	if modelID == "" {
+		modelID = provider.ID + "/default"
+	}
+	if strings.EqualFold(provider.ID, "openai-codex") {
+		if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
+			modelID = "openai/" + strings.TrimSpace(name)
+		} else {
+			modelID = "openai/gpt-5.3-codex"
+		}
+	}
+	modelName := modelID
+	if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
+		modelName = strings.TrimSpace(name)
+	}
+
+	providerKey := provider.ID
+	if vendor, _, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(vendor) != "" {
+		providerKey = strings.TrimSpace(vendor)
+	}
+	providerKey = mapCarrierProviderToManagedProvider(providerKey)
+
+	modelItem := map[string]interface{}{
+		"model_name": modelName,
+		"model":      modelID,
+	}
+	providerItem := map[string]interface{}{
+		"credential_ref": provider.ID,
+	}
+	token := pickProviderTokenForManaged(provider, envVars)
+	if strings.EqualFold(provider.ID, "openai-codex") {
+		modelItem["auth_method"] = "oauth"
+		providerItem["auth_method"] = "oauth"
+	} else if token != "" {
+		providerItem["api_key"] = token
+	}
+
+	payload := map[string]interface{}{
+		"agents": map[string]interface{}{
+			"defaults": map[string]interface{}{
+				"workspace":             workspacePath,
+				"provider":              providerKey,
+				"model":                 modelName,
+				"max_tokens":            8192,
+				"temperature":           0.7,
+				"max_tool_iterations":   20,
+				"restrict_to_workspace": true,
+			},
+		},
+		"model_list": []interface{}{modelItem},
+		"providers": map[string]interface{}{
+			providerKey: providerItem,
+		},
+		"channels": map[string]interface{}{
+			channelID: map[string]interface{}{
+				"enabled":    true,
+				"token":      channelToken,
+				"allow_from": []string{},
+			},
+		},
+	}
+
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal openclaw config: %w", err)
+	}
+	if err := os.WriteFile(configPath, append(raw, '\n'), 0o600); err != nil {
+		return nil, fmt.Errorf("write openclaw config: %w", err)
+	}
+
+	record := map[string]interface{}{
+		"instance_id":    instanceID,
+		"agent_id":       "openclaw",
+		"workspace_path": workspacePath,
+		"config_path":    configPath,
+		"channel":        channelID,
+		"provider":       provider.ID,
+		"updated_at":     time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	recordRaw, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal carrier record: %w", err)
+	}
+	if err := os.WriteFile(recordPath, append(recordRaw, '\n'), 0o600); err != nil {
+		return nil, fmt.Errorf("write carrier record: %w", err)
+	}
+
+	return &openclawAddResult{
+		InstanceID:    instanceID,
+		WorkspacePath: workspacePath,
+		ConfigPath:    configPath,
+		RecordPath:    recordPath,
+		ChannelID:     channelID,
+		ProviderID:    provider.ID,
+	}, nil
+}
+
+func prepareZeroclawAddArtifacts(instanceID, channelID, channelToken string, provider choiceOption, envVars map[string]string) (*zeroclawAddResult, error) {
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return nil, errors.New("zeroclaw instance id is required")
+	}
+	channelID = strings.TrimSpace(channelID)
+	channelToken = strings.TrimSpace(channelToken)
+	if channelID == "" {
+		return nil, errors.New("zeroclaw channel is required")
+	}
+	if channelToken == "" {
+		return nil, errors.New("zeroclaw channel token is required")
+	}
+	if strings.TrimSpace(provider.ID) == "" {
+		return nil, errors.New("zeroclaw provider is required")
+	}
+	ensureZeroclawAPIKey(envVars, provider)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home dir: %w", err)
+	}
+	workspacePath := filepath.Join(home, ".zeroclaw", "instances", instanceID, "workspace")
+	configPath := filepath.Join(home, ".zeroclaw", "config.json")
+	recordPath := filepath.Join(home, ".carrier", "agents", instanceID+".json")
+
+	if err := os.MkdirAll(workspacePath, 0o700); err != nil {
+		return nil, fmt.Errorf("create workspace: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		return nil, fmt.Errorf("create config dir: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(recordPath), 0o700); err != nil {
+		return nil, fmt.Errorf("create record dir: %w", err)
+	}
+	if err := backupIfExists(configPath); err != nil {
+		return nil, fmt.Errorf("backup existing zeroclaw config: %w", err)
+	}
+
+	modelID := strings.TrimSpace(provider.ExampleModel)
+	if modelID == "" {
+		modelID = provider.ID + "/default"
+	}
+	if strings.EqualFold(provider.ID, "openai-codex") {
+		if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
+			modelID = "openai/" + strings.TrimSpace(name)
+		} else {
+			modelID = "openai/gpt-5.3-codex"
+		}
+	}
+	modelName := modelID
+	if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
+		modelName = strings.TrimSpace(name)
+	}
+
+	providerKey := provider.ID
+	if vendor, _, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(vendor) != "" {
+		providerKey = strings.TrimSpace(vendor)
+	}
+	providerKey = mapCarrierProviderToManagedProvider(providerKey)
+
+	modelItem := map[string]interface{}{
+		"model_name": modelName,
+		"model":      modelID,
+	}
+	providerItem := map[string]interface{}{
+		"credential_ref": provider.ID,
+	}
+	token := pickProviderTokenForManaged(provider, envVars)
+	if strings.EqualFold(provider.ID, "openai-codex") {
+		modelItem["auth_method"] = "oauth"
+		providerItem["auth_method"] = "oauth"
+	} else if token != "" {
+		providerItem["api_key"] = token
+	}
+
+	payload := map[string]interface{}{
+		"agents": map[string]interface{}{
+			"defaults": map[string]interface{}{
+				"workspace":             workspacePath,
+				"provider":              providerKey,
+				"model":                 modelName,
+				"max_tokens":            8192,
+				"temperature":           0.7,
+				"max_tool_iterations":   20,
+				"restrict_to_workspace": true,
+			},
+		},
+		"model_list": []interface{}{modelItem},
+		"providers": map[string]interface{}{
+			providerKey: providerItem,
+		},
+		"channels": map[string]interface{}{
+			channelID: map[string]interface{}{
+				"enabled":    true,
+				"token":      channelToken,
+				"allow_from": []string{},
+			},
+		},
+	}
+
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal zeroclaw config: %w", err)
+	}
+	if err := os.WriteFile(configPath, append(raw, '\n'), 0o600); err != nil {
+		return nil, fmt.Errorf("write zeroclaw config: %w", err)
+	}
+
+	record := map[string]interface{}{
+		"instance_id":    instanceID,
+		"agent_id":       "zeroclaw",
+		"workspace_path": workspacePath,
+		"config_path":    configPath,
+		"channel":        channelID,
+		"provider":       provider.ID,
+		"updated_at":     time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	recordRaw, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal carrier record: %w", err)
+	}
+	if err := os.WriteFile(recordPath, append(recordRaw, '\n'), 0o600); err != nil {
+		return nil, fmt.Errorf("write carrier record: %w", err)
+	}
+
+	return &zeroclawAddResult{
+		InstanceID:    instanceID,
+		WorkspacePath: workspacePath,
+		ConfigPath:    configPath,
+		RecordPath:    recordPath,
+		ChannelID:     channelID,
+		ProviderID:    provider.ID,
+	}, nil
+}
+
 func backupIfExists(path string) error {
 	_, err := os.Stat(path)
 	if err != nil {
@@ -1761,6 +2247,10 @@ func backupIfExists(path string) error {
 }
 
 func mapCarrierProviderToPicoclawProvider(providerID string) string {
+	return mapCarrierProviderToManagedProvider(providerID)
+}
+
+func mapCarrierProviderToManagedProvider(providerID string) string {
 	switch strings.ToLower(strings.TrimSpace(providerID)) {
 	case "openai-codex":
 		return "openai"
@@ -1770,6 +2260,10 @@ func mapCarrierProviderToPicoclawProvider(providerID string) string {
 }
 
 func pickProviderTokenForPicoclaw(provider choiceOption, envVars map[string]string) string {
+	return pickProviderTokenForManaged(provider, envVars)
+}
+
+func pickProviderTokenForManaged(provider choiceOption, envVars map[string]string) string {
 	if envVars == nil {
 		return ""
 	}
@@ -1785,6 +2279,33 @@ func pickProviderTokenForPicoclaw(provider choiceOption, envVars map[string]stri
 		return ""
 	}
 	return strings.TrimSpace(envVars[provider.ProviderEnv])
+}
+
+func ensureOpenclawAPIKey(envVars map[string]string, provider choiceOption) error {
+	if envVars == nil {
+		return errors.New("openclaw requires OPENAI_API_KEY")
+	}
+	if key := strings.TrimSpace(envVars["OPENAI_API_KEY"]); key != "" {
+		return nil
+	}
+	token := pickProviderTokenForManaged(provider, envVars)
+	if token == "" {
+		return errors.New("openclaw requires OPENAI_API_KEY (select a provider with credentials)")
+	}
+	envVars["OPENAI_API_KEY"] = token
+	return nil
+}
+
+func ensureZeroclawAPIKey(envVars map[string]string, provider choiceOption) {
+	if envVars == nil {
+		return
+	}
+	if strings.TrimSpace(envVars["ZEROCLAW_API_KEY"]) != "" {
+		return
+	}
+	if token := pickProviderTokenForManaged(provider, envVars); token != "" {
+		envVars["ZEROCLAW_API_KEY"] = token
+	}
 }
 
 type picoclawAuthCredential struct {

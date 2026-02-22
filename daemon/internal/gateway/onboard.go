@@ -199,11 +199,18 @@ func onboardSelectAgent(ctx context.Context, requestID, sessionKey, agentID stri
 		s.SelectedAgent = agentID
 		s.SelectedAgentName = found.Name
 	})
-	if isPicoclawAgent(agentID) {
+	if isPicoclawAgent(agentID) || isOpenclawAgent(agentID) || isZeroclawAgent(agentID) {
 		store.update(sessionKey, func(s *OnboardSession) {
 			s.Step = OnboardChannelSelect
 		})
-		return GatewayResponse{RequestID: requestID, Result: "ok", Message: renderPicoclawChannelPrompt()}
+		switch {
+		case isPicoclawAgent(agentID):
+			return GatewayResponse{RequestID: requestID, Result: "ok", Message: renderPicoclawChannelPrompt()}
+		case isOpenclawAgent(agentID):
+			return GatewayResponse{RequestID: requestID, Result: "ok", Message: renderOpenclawChannelPrompt()}
+		default:
+			return GatewayResponse{RequestID: requestID, Result: "ok", Message: renderZeroclawChannelPrompt()}
+		}
 	}
 	store.update(sessionKey, func(s *OnboardSession) {
 		s.Step = OnboardAgentSelected
@@ -218,11 +225,22 @@ func onboardSelectChannel(requestID, sessionKey, input string, store *OnboardSto
 	if sess == nil {
 		return errResp(requestID, "E_USAGE", "No active session. Run `/onboard` to start.")
 	}
-	if !isPicoclawAgent(sess.SelectedAgent) {
+	if !isPicoclawAgent(sess.SelectedAgent) && !isOpenclawAgent(sess.SelectedAgent) && !isZeroclawAgent(sess.SelectedAgent) {
 		store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardAgentSelected })
-		return errResp(requestID, "E_USAGE", "Channel selection is only required for PicoClaw in this flow.")
+		return errResp(requestID, "E_USAGE", "Channel selection is only required for PicoClaw/OpenClaw/ZeroClaw in this flow.")
 	}
-	channel, ok := parsePicoclawChannel(strings.TrimSpace(input))
+	var (
+		channel picoclawChannel
+		ok      bool
+	)
+	switch {
+	case isPicoclawAgent(sess.SelectedAgent):
+		channel, ok = parsePicoclawChannel(strings.TrimSpace(input))
+	case isOpenclawAgent(sess.SelectedAgent):
+		channel, ok = parseOpenclawChannel(strings.TrimSpace(input))
+	case isZeroclawAgent(sess.SelectedAgent):
+		channel, ok = parseZeroclawChannel(strings.TrimSpace(input))
+	}
 	if !ok {
 		return errResp(requestID, "E_USAGE", "Unsupported channel. Reply `/onboard telegram` to continue.")
 	}
@@ -230,10 +248,25 @@ func onboardSelectChannel(requestID, sessionKey, input string, store *OnboardSto
 		s.SelectedChannel = channel.ID
 		s.Step = OnboardChannelToken
 	})
-	return GatewayResponse{
-		RequestID: requestID,
-		Result:    "ok",
-		Message:   renderPicoclawChannelTokenPrompt(channel),
+	switch {
+	case isPicoclawAgent(sess.SelectedAgent):
+		return GatewayResponse{
+			RequestID: requestID,
+			Result:    "ok",
+			Message:   renderPicoclawChannelTokenPrompt(channel),
+		}
+	case isOpenclawAgent(sess.SelectedAgent):
+		return GatewayResponse{
+			RequestID: requestID,
+			Result:    "ok",
+			Message:   renderOpenclawChannelTokenPrompt(channel),
+		}
+	default:
+		return GatewayResponse{
+			RequestID: requestID,
+			Result:    "ok",
+			Message:   renderZeroclawChannelTokenPrompt(channel),
+		}
 	}
 }
 
@@ -256,13 +289,16 @@ func onboardCaptureChannelToken(requestID, sessionKey, input string, store *Onbo
 	}
 	agent := &AgentState{ID: sess.SelectedAgent, Name: name}
 	resp := buildProviderListResponse(requestID, agent)
-	resp.Message = strings.TrimSpace(
-		fmt.Sprintf(
-			"✅ Channel configured for PicoClaw: `%s`.\n%s",
-			sess.SelectedChannel,
-			resp.Message,
-		),
-	)
+	agentLabel := "agent"
+	switch {
+	case isPicoclawAgent(sess.SelectedAgent):
+		agentLabel = "PicoClaw"
+	case isOpenclawAgent(sess.SelectedAgent):
+		agentLabel = "OpenClaw"
+	case isZeroclawAgent(sess.SelectedAgent):
+		agentLabel = "ZeroClaw"
+	}
+	resp.Message = strings.TrimSpace(fmt.Sprintf("✅ Channel configured for %s: `%s`.\n%s", agentLabel, sess.SelectedChannel, resp.Message))
 	return resp
 }
 
@@ -574,7 +610,8 @@ func onboardConfirm(ctx context.Context, requestID, sessionKey, input string, da
 	agentID := sess.SelectedAgent
 	store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardInstalling })
 	setupNotes := []string{}
-	if isPicoclawAgent(agentID) {
+	switch {
+	case isPicoclawAgent(agentID):
 		result, err := preparePicoclawManagedOnboard(sess, actor)
 		if err != nil {
 			store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardEnvConfigured })
@@ -583,6 +620,26 @@ func onboardConfirm(ctx context.Context, requestID, sessionKey, input string, da
 		}
 		setupNotes = append(setupNotes, fmt.Sprintf("PicoClaw workspace: %s", result.WorkspacePath))
 		setupNotes = append(setupNotes, fmt.Sprintf("PicoClaw config: %s", result.ConfigPath))
+		setupNotes = append(setupNotes, fmt.Sprintf("Carrier record: %s", result.RecordPath))
+	case isOpenclawAgent(agentID):
+		result, err := prepareOpenclawManagedOnboard(sess, actor)
+		if err != nil {
+			store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardEnvConfigured })
+			log.Printf("[gateway] onboarding: prepare openclaw artifacts failed detail=%s", RedactErrorMessage(err.Error()))
+			return errResp(requestID, "E_ENV", "failed to prepare openclaw onboarding artifacts")
+		}
+		setupNotes = append(setupNotes, fmt.Sprintf("OpenClaw workspace: %s", result.WorkspacePath))
+		setupNotes = append(setupNotes, fmt.Sprintf("OpenClaw config: %s", result.ConfigPath))
+		setupNotes = append(setupNotes, fmt.Sprintf("Carrier record: %s", result.RecordPath))
+	case isZeroclawAgent(agentID):
+		result, err := prepareZeroclawManagedOnboard(sess, actor)
+		if err != nil {
+			store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardEnvConfigured })
+			log.Printf("[gateway] onboarding: prepare zeroclaw artifacts failed detail=%s", RedactErrorMessage(err.Error()))
+			return errResp(requestID, "E_ENV", "failed to prepare zeroclaw onboarding artifacts")
+		}
+		setupNotes = append(setupNotes, fmt.Sprintf("ZeroClaw workspace: %s", result.WorkspacePath))
+		setupNotes = append(setupNotes, fmt.Sprintf("ZeroClaw config: %s", result.ConfigPath))
 		setupNotes = append(setupNotes, fmt.Sprintf("Carrier record: %s", result.RecordPath))
 	}
 	if err := applyOnboardEnvVars(sess.EnvVars); err != nil {

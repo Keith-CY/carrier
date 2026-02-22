@@ -481,3 +481,45 @@ func TestApplyOnboardEnvVars(t *testing.T) {
 		t.Fatalf("env %s = %q, want %q", key, got, "new")
 	}
 }
+
+func TestOnboardSelectChannel_Openclaw(t *testing.T) {
+	s := NewOnboardStore()
+	key := "telegram:openclaw"
+	s.start(key)
+	s.update(key, func(sess *OnboardSession) {
+		sess.Step = OnboardChannelSelect
+		sess.SelectedAgent = "openclaw"
+	})
+
+	resp := onboardSelectChannel("req-openclaw", key, "telegram", s)
+	if resp.Result != "ok" {
+		t.Fatalf("expected ok, got %+v", resp)
+	}
+	if !strings.Contains(resp.Message, "OpenClaw channel selected") {
+		t.Fatalf("expected openclaw channel prompt, got %q", resp.Message)
+	}
+	if got := s.get(key).Step; got != OnboardChannelToken {
+		t.Fatalf("expected channel token step, got %q", got)
+	}
+}
+
+func TestOnboardSelectChannel_Zeroclaw(t *testing.T) {
+	s := NewOnboardStore()
+	key := "telegram:zeroclaw"
+	s.start(key)
+	s.update(key, func(sess *OnboardSession) {
+		sess.Step = OnboardChannelSelect
+		sess.SelectedAgent = "zeroclaw"
+	})
+
+	resp := onboardSelectChannel("req-zeroclaw", key, "telegram", s)
+	if resp.Result != "ok" {
+		t.Fatalf("expected ok, got %+v", resp)
+	}
+	if !strings.Contains(resp.Message, "ZeroClaw channel selected") {
+		t.Fatalf("expected zeroclaw channel prompt, got %q", resp.Message)
+	}
+	if got := s.get(key).Step; got != OnboardChannelToken {
+		t.Fatalf("expected channel token step, got %q", got)
+	}
+}

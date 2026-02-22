@@ -36,7 +36,7 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 	}
 
 	actor := "webui:add"
-	if agentID != "picoclaw" {
+	if !isPicoclawAgent(agentID) && !isOpenclawAgent(agentID) && !isZeroclawAgent(agentID) {
 		instanceID := strings.TrimSpace(req.InstanceID)
 		if instanceID == "" {
 			generatedID, genErr := generateManagedInstanceID(agentID)
@@ -79,15 +79,33 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		return
 	}
 
-	ch, ok := parsePicoclawChannel(req.Channel)
+	var (
+		ch picoclawChannel
+		ok bool
+	)
+	switch {
+	case isPicoclawAgent(agentID):
+		ch, ok = parsePicoclawChannel(req.Channel)
+	case isOpenclawAgent(agentID):
+		ch, ok = parseOpenclawChannel(req.Channel)
+	case isZeroclawAgent(agentID):
+		ch, ok = parseZeroclawChannel(req.Channel)
+	}
 	if !ok && strings.TrimSpace(req.Channel) == "" {
 		if strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_BOT_TOKEN")) != "" {
 			req.Channel = "telegram"
-			ch, ok = parsePicoclawChannel(req.Channel)
+			switch {
+			case isPicoclawAgent(agentID):
+				ch, ok = parsePicoclawChannel(req.Channel)
+			case isOpenclawAgent(agentID):
+				ch, ok = parseOpenclawChannel(req.Channel)
+			case isZeroclawAgent(agentID):
+				ch, ok = parseZeroclawChannel(req.Channel)
+			}
 		}
 	}
 	if !ok {
-		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "unsupported channel for picoclaw"))
+		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", fmt.Sprintf("unsupported channel for %s", agentID)))
 		return
 	}
 	channelToken := strings.TrimSpace(req.ChannelToken)
@@ -127,9 +145,31 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 			envVars[k] = v
 		}
 	}
+	if isOpenclawAgent(agentID) {
+		if strings.TrimSpace(envVars["OPENAI_API_KEY"]) == "" {
+			openAIKey := token
+			if openAIKey == "" {
+				openAIKey = strings.TrimSpace(envVars[provider.EnvVar])
+			}
+			if openAIKey == "" {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_AUTH_INPUT", "openclaw requires OPENAI_API_KEY"))
+				return
+			}
+			envVars["OPENAI_API_KEY"] = strings.TrimSpace(openAIKey)
+		}
+	}
+	if isZeroclawAgent(agentID) && strings.TrimSpace(envVars["ZEROCLAW_API_KEY"]) == "" {
+		zeroKey := token
+		if zeroKey == "" {
+			zeroKey = strings.TrimSpace(envVars[provider.EnvVar])
+		}
+		if zeroKey != "" {
+			envVars["ZEROCLAW_API_KEY"] = strings.TrimSpace(zeroKey)
+		}
+	}
 
 	sess := &OnboardSession{
-		SelectedAgent:    "picoclaw",
+		SelectedAgent:    agentID,
 		SelectedChannel:  ch.ID,
 		ChannelToken:     channelToken,
 		SelectedProvider: provider.ID,
@@ -137,16 +177,23 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 	}
 	instanceID := strings.TrimSpace(req.InstanceID)
 	if instanceID == "" {
-		generatedID, genErr := generateManagedInstanceID("picoclaw")
+		generatedID, genErr := generateManagedInstanceID(agentID)
 		if genErr != nil {
-			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to allocate instance id", "generate picoclaw instance id", genErr)
+			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to allocate instance id", "generate managed instance id", genErr)
 			return
 		}
 		instanceID = generatedID
 	}
 	sess.InstanceID = instanceID
 	if home, homeErr := os.UserHomeDir(); homeErr == nil {
-		sess.WorkspacePath = filepath.Join(home, ".picoclaw", "instances", instanceID, "workspace")
+		switch {
+		case isPicoclawAgent(agentID):
+			sess.WorkspacePath = filepath.Join(home, ".picoclaw", "instances", instanceID, "workspace")
+		case isOpenclawAgent(agentID):
+			sess.WorkspacePath = filepath.Join(home, ".openclaw", "instances", instanceID, "workspace")
+		case isZeroclawAgent(agentID):
+			sess.WorkspacePath = filepath.Join(home, ".zeroclaw", "instances", instanceID, "workspace")
+		}
 	}
 
 	prefetchedChatID := strings.TrimSpace(req.ChannelChatID)
@@ -158,33 +205,65 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		actor = "telegram:" + prefetchedChatID
 	}
 
-	result, err := preparePicoclawManagedOnboard(sess, actor)
-	if err != nil {
-		writeInternalGatewayError(w, http.StatusBadRequest, "E_ENV", "failed to prepare picoclaw configuration", "prepare picoclaw managed onboarding artifacts", err)
-		return
+	workspacePath := ""
+	configPath := ""
+	recordPath := ""
+	switch {
+	case isPicoclawAgent(agentID):
+		result, prepErr := preparePicoclawManagedOnboard(sess, actor)
+		if prepErr != nil {
+			writeInternalGatewayError(w, http.StatusBadRequest, "E_ENV", "failed to prepare picoclaw configuration", "prepare picoclaw managed onboarding artifacts", prepErr)
+			return
+		}
+		workspacePath = result.WorkspacePath
+		configPath = result.ConfigPath
+		recordPath = result.RecordPath
+	case isOpenclawAgent(agentID):
+		result, prepErr := prepareOpenclawManagedOnboard(sess, actor)
+		if prepErr != nil {
+			writeInternalGatewayError(w, http.StatusBadRequest, "E_ENV", "failed to prepare openclaw configuration", "prepare openclaw managed onboarding artifacts", prepErr)
+			return
+		}
+		workspacePath = result.WorkspacePath
+		configPath = result.ConfigPath
+		recordPath = result.RecordPath
+	case isZeroclawAgent(agentID):
+		result, prepErr := prepareZeroclawManagedOnboard(sess, actor)
+		if prepErr != nil {
+			writeInternalGatewayError(w, http.StatusBadRequest, "E_ENV", "failed to prepare zeroclaw configuration", "prepare zeroclaw managed onboarding artifacts", prepErr)
+			return
+		}
+		workspacePath = result.WorkspacePath
+		configPath = result.ConfigPath
+		recordPath = result.RecordPath
 	}
 	if err := applyOnboardEnvVars(sess.EnvVars); err != nil {
 		writeInternalGatewayError(w, http.StatusBadRequest, "E_ENV", "failed to apply environment variables", "apply onboarding environment", err)
 		return
 	}
-	if err := daemon.InstallAgent(r.Context(), "picoclaw", actor, requestID); err != nil {
+	if err := daemon.InstallAgent(r.Context(), agentID, actor, requestID); err != nil {
 		writeDaemonAPIError(w, err)
 		return
 	}
-	if err := daemon.StartAgent(r.Context(), "picoclaw", actor, requestID); err != nil {
+	if err := daemon.StartAgent(r.Context(), agentID, actor, requestID); err != nil {
 		writeDaemonAPIError(w, err)
 		return
 	}
 
 	pairCode := ""
 	pairedChatID := prefetchedChatID
-	if logs, err := daemon.GetLogs(r.Context(), "picoclaw", 120, actor, requestID); err == nil && logs != nil {
-		pairCode = extractPairCode(logs.Lines)
-		if strings.TrimSpace(pairedChatID) == "" {
-			pairedChatID = extractPairedTelegramChatID(logs.Lines)
+	if isPicoclawAgent(agentID) {
+		if logs, err := daemon.GetLogs(r.Context(), agentID, 120, actor, requestID); err == nil && logs != nil {
+			pairCode = extractPairCode(logs.Lines)
+			if strings.TrimSpace(pairedChatID) == "" {
+				pairedChatID = extractPairedTelegramChatID(logs.Lines)
+			}
 		}
 	}
 	pairRequired := strings.EqualFold(ch.ID, "telegram") && strings.TrimSpace(pairedChatID) == ""
+	if !isPicoclawAgent(agentID) {
+		pairRequired = false
+	}
 	runtimeState := "running"
 	if pairRequired {
 		runtimeState = "pending_pair"
@@ -199,12 +278,12 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	inst := managedAgentInstance{
 		ID:           instanceID,
-		Type:         "picoclaw",
-		AgentID:      "picoclaw",
+		Type:         agentID,
+		AgentID:      agentID,
 		GatewayURL:   gatewayURLFromRequest(r),
-		Workspace:    result.WorkspacePath,
-		ConfigPath:   result.ConfigPath,
-		RecordPath:   result.RecordPath,
+		Workspace:    workspacePath,
+		ConfigPath:   configPath,
+		RecordPath:   recordPath,
 		Channel:      ch.ID,
 		Provider:     provider.ID,
 		PairRequired: pairRequired,
@@ -215,21 +294,21 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		UpdatedAt:    now,
 	}
 	if err := upsertManagedInstance(inst); err != nil {
-		writeStatePersistenceError(w, requestID, "add", "picoclaw", instanceID, err)
+		writeStatePersistenceError(w, requestID, "add", agentID, instanceID, err)
 		return
 	}
 	payload := map[string]interface{}{
 		"requestId":     requestID,
 		"result":        "ok",
-		"message":       "picoclaw configured, installed, and started",
-		"agentId":       "picoclaw",
+		"message":       fmt.Sprintf("%s configured, installed, and started", agentID),
+		"agentId":       agentID,
 		"instanceId":    instanceID,
 		"pairCode":      pairCode,
 		"pairRequired":  pairRequired,
 		"pairedChatId":  pairedChatID,
-		"workspacePath": result.WorkspacePath,
-		"configPath":    result.ConfigPath,
-		"recordPath":    result.RecordPath,
+		"workspacePath": workspacePath,
+		"configPath":    configPath,
+		"recordPath":    recordPath,
 		"envKeys":       envKeys,
 	}
 	writeJSON(w, http.StatusOK, payload)
