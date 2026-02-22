@@ -178,8 +178,16 @@ func TestGetInstallCommand_Default(t *testing.T) {
 
 	switch runtime.GOOS {
 	case "windows":
-		if !strings.Contains(cmd, "try {") {
-			t.Errorf("windows default command should include fallback try/catch\ngot: %s", cmd)
+		for _, want := range []string{
+			"try {",
+			"GetTempFileName",
+			".ps1",
+			"Move-Item",
+			"powershell -NoProfile -ExecutionPolicy Bypass -File",
+		} {
+			if !strings.Contains(cmd, want) {
+				t.Errorf("windows fallback command missing %q\ngot: %s", want, cmd)
+			}
 		}
 	default:
 		for _, want := range []string{
