@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"carrier/daemon/internal/manifest"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -134,6 +135,16 @@ func searchSubstring(s, substr string) bool {
 	return false
 }
 
+func writeMemInfoFixture(t *testing.T, memKB int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "meminfo")
+	content := fmt.Sprintf("MemTotal:       %d kB\n", memKB)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write meminfo fixture: %v", err)
+	}
+	return path
+}
+
 func TestCatalogJSONHealthcheckMatchesGeneratedManifest(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "catalog", "openclaw.manifest.json")
 	fileManifest, err := manifest.LoadFile(path)
@@ -159,6 +170,7 @@ func TestGetInstallCommand_Default(t *testing.T) {
 	t.Setenv("CARRIER_DEV_MODE", "")
 	t.Setenv(openClawInstallMethodEnv, "")
 	t.Setenv(openClawDisableInstallFallbackEnv, "")
+	t.Setenv(openClawInstallMemInfoPathEnv, writeMemInfoFixture(t, 8*1024*1024))
 
 	cmd := getInstallCommand()
 
@@ -184,6 +196,8 @@ func TestGetInstallCommand_Default(t *testing.T) {
 			".ps1",
 			"Move-Item",
 			"powershell -NoProfile -ExecutionPolicy Bypass -File",
+			"InstallMethod 'npm'",
+			"$env:NODE_OPTIONS='--max-old-space-size=384'",
 		} {
 			t.Run(want, func(t *testing.T) {
 				if !strings.Contains(cmd, want) {
@@ -194,9 +208,12 @@ func TestGetInstallCommand_Default(t *testing.T) {
 	default:
 		for _, want := range []string{
 			"CARGO_BUILD_JOBS=1",
+			`NODE_OPTIONS="--max-old-space-size=384"`,
+			"OPENCLAW_NPM_LOGLEVEL=warn",
+			"SHARP_IGNORE_GLOBAL_LIBVIPS=1",
 			"mktemp",
 			"curl -fsSL",
-			"|| bash \"$tmp\" --no-onboard",
+			"--install-method npm --no-onboard",
 		} {
 			if !strings.Contains(cmd, want) {
 				t.Errorf("unix default command should include fallback token %q\ngot: %s", want, cmd)
@@ -223,6 +240,7 @@ func TestGetInstallCommand_DisableFallback(t *testing.T) {
 	t.Setenv("CARRIER_DEV_MODE", "")
 	t.Setenv(openClawInstallMethodEnv, "")
 	t.Setenv(openClawDisableInstallFallbackEnv, "1")
+	t.Setenv(openClawInstallMemInfoPathEnv, writeMemInfoFixture(t, 8*1024*1024))
 
 	cmd := getInstallCommand()
 
@@ -238,6 +256,7 @@ func TestGetInstallCommand_UnsafeMethodFallsBackToDefault(t *testing.T) {
 	t.Setenv("CARRIER_DEV_MODE", "")
 	t.Setenv(openClawInstallMethodEnv, "git;rm -rf /")
 	t.Setenv(openClawDisableInstallFallbackEnv, "")
+	t.Setenv(openClawInstallMemInfoPathEnv, writeMemInfoFixture(t, 8*1024*1024))
 
 	cmd := getInstallCommand()
 
@@ -261,6 +280,27 @@ func TestGetInstallCommand_ExplicitGitUsesCargoBuildJobs(t *testing.T) {
 	}
 	if !strings.Contains(cmd, "CARGO_BUILD_JOBS=1") {
 		t.Fatalf("expected explicit git path to include CARGO_BUILD_JOBS=1, got: %s", cmd)
+	}
+	if !strings.Contains(cmd, "--max-old-space-size=384") {
+		t.Fatalf("expected explicit git path to include NODE_OPTIONS max-old-space-size, got: %s", cmd)
+	}
+}
+
+func TestGetInstallCommand_LowMemoryDefaultsToNPM(t *testing.T) {
+	t.Setenv("CARRIER_DEV_MODE", "")
+	t.Setenv(openClawInstallMethodEnv, "")
+	t.Setenv(openClawDisableInstallFallbackEnv, "")
+	t.Setenv(openClawInstallMemInfoPathEnv, writeMemInfoFixture(t, 938840))
+
+	cmd := getInstallCommand()
+	if !strings.Contains(cmd, "--install-method npm") {
+		t.Fatalf("expected low-memory default to npm install method, got: %s", cmd)
+	}
+	if strings.Contains(cmd, "--install-method git") {
+		t.Fatalf("low-memory default should not keep git as primary method, got: %s", cmd)
+	}
+	if strings.Contains(cmd, "||") || strings.Contains(cmd, "try {") {
+		t.Fatalf("low-memory npm path should not include git fallback orchestration, got: %s", cmd)
 	}
 }
 

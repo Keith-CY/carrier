@@ -41,6 +41,10 @@ type llmRuntimeConfig struct {
 }
 
 func (r *Runtime) replyWithLLM(ctx context.Context, userMessage string) (string, error) {
+	return requestLLMCompletion(ctx, baseAgentSystemPrompt, userMessage)
+}
+
+func requestLLMCompletion(ctx context.Context, systemPrompt, userMessage string) (string, error) {
 	cfg, err := resolveLLMRuntimeConfig()
 	if err != nil {
 		return "", err
@@ -51,11 +55,11 @@ func (r *Runtime) replyWithLLM(ctx context.Context, userMessage string) (string,
 	}
 
 	path := "/chat/completions"
-	reqBody := buildOpenAICompatibleChatRequest(modelID, userMessage)
+	reqBody := buildOpenAICompatibleChatRequest(modelID, systemPrompt, userMessage)
 	parseResponse := parseOpenAICompatibleChatResponse
 	if isOpenAICodexProvider(cfg.ProviderID) {
 		path = "/codex/responses"
-		reqBody = buildOpenAICodexResponsesRequest(modelID, userMessage)
+		reqBody = buildOpenAICodexResponsesRequest(modelID, systemPrompt, userMessage)
 		parseResponse = parseOpenAICodexResponses
 	}
 
@@ -119,23 +123,23 @@ func (r *Runtime) replyWithLLM(ctx context.Context, userMessage string) (string,
 	return text, nil
 }
 
-func buildOpenAICompatibleChatRequest(modelID, userMessage string) map[string]interface{} {
+func buildOpenAICompatibleChatRequest(modelID, systemPrompt, userMessage string) map[string]interface{} {
 	return map[string]interface{}{
 		"model": modelID,
 		"messages": []map[string]string{
-			{"role": "system", "content": baseAgentSystemPrompt},
+			{"role": "system", "content": systemPrompt},
 			{"role": "user", "content": userMessage},
 		},
 		"temperature": 0.2,
 	}
 }
 
-func buildOpenAICodexResponsesRequest(modelID, userMessage string) map[string]interface{} {
+func buildOpenAICodexResponsesRequest(modelID, systemPrompt, userMessage string) map[string]interface{} {
 	return map[string]interface{}{
 		"model":        modelID,
 		"store":        false,
 		"stream":       true,
-		"instructions": baseAgentSystemPrompt,
+		"instructions": systemPrompt,
 		"input": []map[string]interface{}{
 			{
 				"role": "user",

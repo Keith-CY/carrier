@@ -82,7 +82,7 @@ func Run() {
 	memStore := memory.NewStore(memory.WithRootDir(memRoot))
 	opts = append(opts, lifecycle.WithMemoryStore(memStore))
 
-	svc := lifecycle.NewService(baseagent.NoopTriager{}, opts...)
+	svc := lifecycle.NewService(baseagent.NewLLMTriager(baseagent.NoopTriager{}), opts...)
 	baseRuntime := baseagent.NewRuntime(newLifecycleAgentServiceAdapter(svc), memStore)
 
 	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {

@@ -15,6 +15,7 @@ type TriageResult struct {
 	Summary                 string
 	SuggestedActions        []string
 	RequiresRemoteDiagnosis bool
+	RepairAction            *RepairAction
 }
 
 type Triager interface {

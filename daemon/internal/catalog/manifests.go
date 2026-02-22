@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -40,6 +41,10 @@ const (
 
 	openClawInstallMethodEnv          = "CARRIER_OPENCLAW_INSTALL_METHOD"
 	openClawDisableInstallFallbackEnv = "CARRIER_OPENCLAW_DISABLE_INSTALL_FALLBACK"
+	openClawInstallMemInfoPathEnv     = "CARRIER_OPENCLAW_MEMINFO_PATH"
+
+	openClawNodeMaxOldSpaceMB   = 384
+	openClawLowMemoryThresholdK = 1536 * 1024 // 1.5 GiB in KiB
 
 	// Official OpenClaw installer URLs
 	installScriptURL = "https://openclaw.ai/install.sh"
@@ -72,34 +77,66 @@ func getInstallCommand() string {
 			// Keep git as first choice, then retry with installer default mode.
 			// Run installer in child PowerShell processes so script-level `exit`
 			// does not terminate fallback orchestration.
-			return fmt.Sprintf(`powershell -NoProfile -Command "$ErrorActionPreference='Stop';$tmp=[System.IO.Path]::GetTempFileName();$ps1="$tmp.ps1";Move-Item -LiteralPath $tmp -Destination $ps1 -Force;irm '%s' | Out-File -LiteralPath $ps1 -Encoding utf8;try {$env:CARGO_BUILD_JOBS='1';powershell -NoProfile -ExecutionPolicy Bypass -File $ps1 -InstallMethod 'git' -NoOnboard; if ($LASTEXITCODE -ne 0) { powershell -NoProfile -ExecutionPolicy Bypass -File $ps1 -NoOnboard; exit $LASTEXITCODE }} finally { Remove-Item -LiteralPath $ps1 -ErrorAction SilentlyContinue }"`, installPS1URL)
+			return fmt.Sprintf(`powershell -NoProfile -Command "$ErrorActionPreference='Stop';$tmp=[System.IO.Path]::GetTempFileName();$ps1="$tmp.ps1";Move-Item -LiteralPath $tmp -Destination $ps1 -Force;irm '%s' | Out-File -LiteralPath $ps1 -Encoding utf8;try {$env:CARGO_BUILD_JOBS='1';$env:NODE_OPTIONS='--max-old-space-size=%d';$env:OPENCLAW_NPM_LOGLEVEL='warn';$env:SHARP_IGNORE_GLOBAL_LIBVIPS='1';powershell -NoProfile -ExecutionPolicy Bypass -File $ps1 -InstallMethod 'git' -NoOnboard; if ($LASTEXITCODE -ne 0) { $env:NODE_OPTIONS='--max-old-space-size=%d';$env:OPENCLAW_NPM_LOGLEVEL='warn';$env:SHARP_IGNORE_GLOBAL_LIBVIPS='1';powershell -NoProfile -ExecutionPolicy Bypass -File $ps1 -InstallMethod 'npm' -NoOnboard; exit $LASTEXITCODE }} finally { Remove-Item -LiteralPath $ps1 -ErrorAction SilentlyContinue }"`, installPS1URL, openClawNodeMaxOldSpaceMB, openClawNodeMaxOldSpaceMB)
 		}
 		if method == "git" {
-			return fmt.Sprintf(`powershell -NoProfile -Command "$env:CARGO_BUILD_JOBS='1';& ([scriptblock]::Create((irm '%s'))) -InstallMethod '%s' -NoOnboard"`, installPS1URL, method)
+			return fmt.Sprintf(`powershell -NoProfile -Command "$env:CARGO_BUILD_JOBS='1';$env:NODE_OPTIONS='--max-old-space-size=%d';$env:OPENCLAW_NPM_LOGLEVEL='warn';$env:SHARP_IGNORE_GLOBAL_LIBVIPS='1';& ([scriptblock]::Create((irm '%s'))) -InstallMethod '%s' -NoOnboard"`, openClawNodeMaxOldSpaceMB, installPS1URL, method)
 		}
-		return fmt.Sprintf(`powershell -NoProfile -Command "& ([scriptblock]::Create((irm '%s'))) -InstallMethod '%s' -NoOnboard"`, installPS1URL, method)
+		return fmt.Sprintf(`powershell -NoProfile -Command "$env:NODE_OPTIONS='--max-old-space-size=%d';$env:OPENCLAW_NPM_LOGLEVEL='warn';$env:SHARP_IGNORE_GLOBAL_LIBVIPS='1';& ([scriptblock]::Create((irm '%s'))) -InstallMethod '%s' -NoOnboard"`, openClawNodeMaxOldSpaceMB, installPS1URL, method)
 	default:
 		// Linux, macOS, and anything else that has sh + curl.
 		if allowFallback {
 			// On small instances, the git build path can be OOM-killed; fallback keeps installs unblocked.
-			return fmt.Sprintf(`sh -c 'set -e; tmp=$(mktemp); trap "rm -f $tmp" EXIT; curl -fsSL --proto "=https" --tlsv1.2 "%s" -o "$tmp"; CARGO_BUILD_JOBS=1 bash "$tmp" --install-method git --no-onboard || bash "$tmp" --no-onboard'`, installScriptURL)
+			return fmt.Sprintf(`sh -c 'set -e; tmp=$(mktemp); trap "rm -f $tmp" EXIT; curl -fsSL --proto "=https" --tlsv1.2 "%s" -o "$tmp"; CARGO_BUILD_JOBS=1 NODE_OPTIONS="--max-old-space-size=%d" OPENCLAW_NPM_LOGLEVEL=warn SHARP_IGNORE_GLOBAL_LIBVIPS=1 bash "$tmp" --install-method git --no-onboard || NODE_OPTIONS="--max-old-space-size=%d" OPENCLAW_NPM_LOGLEVEL=warn SHARP_IGNORE_GLOBAL_LIBVIPS=1 bash "$tmp" --install-method npm --no-onboard'`, installScriptURL, openClawNodeMaxOldSpaceMB, openClawNodeMaxOldSpaceMB)
 		}
 		if method == "git" {
-			return fmt.Sprintf(`sh -c 'set -e; tmp=$(mktemp); trap "rm -f $tmp" EXIT; curl -fsSL --proto "=https" --tlsv1.2 "%s" -o "$tmp"; CARGO_BUILD_JOBS=1 bash "$tmp" --install-method %s --no-onboard'`, installScriptURL, method)
+			return fmt.Sprintf(`sh -c 'set -e; tmp=$(mktemp); trap "rm -f $tmp" EXIT; curl -fsSL --proto "=https" --tlsv1.2 "%s" -o "$tmp"; CARGO_BUILD_JOBS=1 NODE_OPTIONS="--max-old-space-size=%d" OPENCLAW_NPM_LOGLEVEL=warn SHARP_IGNORE_GLOBAL_LIBVIPS=1 bash "$tmp" --install-method %s --no-onboard'`, installScriptURL, openClawNodeMaxOldSpaceMB, method)
 		}
-		return fmt.Sprintf(`sh -c 'set -e; tmp=$(mktemp); trap "rm -f $tmp" EXIT; curl -fsSL --proto "=https" --tlsv1.2 "%s" -o "$tmp"; bash "$tmp" --install-method %s --no-onboard'`, installScriptURL, method)
+		return fmt.Sprintf(`sh -c 'set -e; tmp=$(mktemp); trap "rm -f $tmp" EXIT; curl -fsSL --proto "=https" --tlsv1.2 "%s" -o "$tmp"; NODE_OPTIONS="--max-old-space-size=%d" OPENCLAW_NPM_LOGLEVEL=warn SHARP_IGNORE_GLOBAL_LIBVIPS=1 bash "$tmp" --install-method %s --no-onboard'`, installScriptURL, openClawNodeMaxOldSpaceMB, method)
 	}
 }
 
 func resolveOpenClawInstallMethod() (method string, explicit bool) {
 	raw := strings.TrimSpace(os.Getenv(openClawInstallMethodEnv))
 	if raw == "" {
+		if shouldPreferNPMInstallOnLowMemoryHost() {
+			return "npm", false
+		}
 		return "git", false
 	}
 	if !isSafeInstallerToken(raw) {
+		if shouldPreferNPMInstallOnLowMemoryHost() {
+			return "npm", false
+		}
 		return "git", false
 	}
 	return strings.ToLower(raw), true
+}
+
+func shouldPreferNPMInstallOnLowMemoryHost() bool {
+	memInfoPath := strings.TrimSpace(os.Getenv(openClawInstallMemInfoPathEnv))
+	if memInfoPath == "" {
+		memInfoPath = "/proc/meminfo"
+	}
+	raw, err := os.ReadFile(memInfoPath)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "MemTotal:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return false
+		}
+		memKB, err := strconv.Atoi(fields[1])
+		if err != nil {
+			return false
+		}
+		return memKB > 0 && memKB <= openClawLowMemoryThresholdK
+	}
+	return false
 }
 
 func isSafeInstallerToken(value string) bool {
