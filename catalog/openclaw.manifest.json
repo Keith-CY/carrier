@@ -24,25 +24,14 @@
     }
   },
   "network": {
-    "ports": [
-      {
-        "name": "http",
-        "port": 9090
-      }
-    ],
+    "ports": [],
     "healthcheck": {
       "type": "http",
       "url": "http://localhost:9090/healthz"
     }
   },
   "env": {
-    "required": [
-      {
-        "name": "OPENAI_API_KEY",
-        "secret": true,
-        "description": "OpenAI API key for LLM access"
-      }
-    ],
+    "required": [],
     "optional": [
       {
         "name": "LOG_LEVEL",
