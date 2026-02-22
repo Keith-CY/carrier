@@ -37,9 +37,24 @@ func (f *fakeChecker) Check(manifest.Manifest) error {
 	return f.err
 }
 
+type contextCancelAwareRunner struct{}
+
+func (contextCancelAwareRunner) Run(ctx context.Context, _ string) (commandexec.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return commandexec.Result{ExitCode: -1}, err
+	}
+	return commandexec.Result{ExitCode: 0}, nil
+}
+
 func newServiceForAPITest(t *testing.T) *lifecycle.Service {
+	return newServiceForAPITestWithRunner(t, nil)
+}
+
+func newServiceForAPITestWithRunner(t *testing.T, runner commandexec.Runner) *lifecycle.Service {
 	t.Helper()
-	runner := &fakeRunner{}
+	if runner == nil {
+		runner = &fakeRunner{}
+	}
 	checker := &fakeChecker{}
 	now := func() time.Time {
 		return time.Date(2026, 2, 14, 16, 30, 0, 0, time.UTC)
@@ -54,6 +69,22 @@ func newServiceForAPITest(t *testing.T) *lifecycle.Service {
 		t.Fatalf("RegisterManifest() error: %v", err)
 	}
 	return svc
+}
+
+func TestInstallEndpointIgnoresCanceledRequestContext(t *testing.T) {
+	svc := newServiceForAPITestWithRunner(t, contextCancelAwareRunner{})
+	handler := NewServer(svc).Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/openclaw/install", nil)
+	canceledCtx, cancel := context.WithCancel(req.Context())
+	cancel()
+	req = req.WithContext(canceledCtx)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("install status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
 }
 
 func sampleManifest() manifest.Manifest {
