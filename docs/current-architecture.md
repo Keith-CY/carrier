@@ -29,6 +29,9 @@ Do not treat them as the implementation source of truth.
 - [`docs/plans/memory-package-specification.md`](./plans/memory-package-specification.md) -> use `daemon/internal/memory/`
 - [`docs/plans/memory-import-export-pipeline.md`](./plans/memory-import-export-pipeline.md) -> use `docs/command-contract.md` and `daemon/internal/memory/store.go`
 - [`docs/plans/memory-attach-detach-policy.md`](./plans/memory-attach-detach-policy.md) -> use `daemon/internal/memory/policy.go` and `daemon/internal/lifecycle/memory.go`
+- [`docs/plans/phase1-execution-checklist.md`](./plans/phase1-execution-checklist.md) -> use `docs/Agent_Installation_Platform_PRD.md` + `ARCHITECTURE.md`
+- [`docs/plans/log-rotation-retention-policy.md`](./plans/log-rotation-retention-policy.md) -> use `docs/deployment.md` + `daemon/internal/logging/`
+- [`docs/plans/phase1-e2e-test-matrix.md`](./plans/phase1-e2e-test-matrix.md) -> use `.github/workflows/ci.yml` + `scripts/run-e2e-tests.sh`
 
 ## Documentation Hygiene
 

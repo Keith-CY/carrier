@@ -1,14 +1,12 @@
 package configv2
 
 import (
-	"bytes"
+	"carrier/daemon/credentialstore"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -164,10 +162,12 @@ func ApplyGatewayEnvironment(cfg *Config) error {
 		if strings.TrimSpace(m.EnvVar) == "" || strings.TrimSpace(m.CredentialRef) == "" {
 			continue
 		}
-		if value, ok := loadCredential(m.CredentialRef); ok {
-			if err := setEnvIfUnset(m.EnvVar, value); err != nil {
-				return err
-			}
+		value, _, ok, err := credentialstore.LoadProviderCredential(m.CredentialRef)
+		if err != nil || !ok || strings.TrimSpace(value) == "" {
+			continue
+		}
+		if err := setEnvIfUnset(m.EnvVar, value); err != nil {
+			return err
 		}
 	}
 
@@ -203,65 +203,4 @@ func pickDefaultModel(cfg *Config) *Model {
 		}
 	}
 	return &cfg.ModelList[0]
-}
-
-func loadCredential(providerID string) (string, bool) {
-	service := "carrier.provider." + strings.TrimSpace(providerID)
-	if v, ok := loadCredentialFromKeychain(service); ok {
-		return v, true
-	}
-	if v, ok := loadCredentialFromFile(providerID); ok {
-		return v, true
-	}
-	return "", false
-}
-
-func loadCredentialFromKeychain(service string) (string, bool) {
-	if runtime.GOOS != "darwin" {
-		return "", false
-	}
-	if strings.TrimSpace(os.Getenv("CARRIER_DISABLE_KEYCHAIN")) == "1" {
-		return "", false
-	}
-	if _, err := exec.LookPath("security"); err != nil {
-		return "", false
-	}
-	cmd := exec.Command("security", "find-generic-password", "-a", "carrier", "-s", service, "-w")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return "", false
-	}
-	value := strings.TrimSpace(string(out))
-	if value == "" {
-		return "", false
-	}
-	return value, true
-}
-
-func loadCredentialFromFile(providerID string) (string, bool) {
-	path := strings.TrimSpace(os.Getenv("CARRIER_CREDENTIAL_STORE"))
-	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", false
-		}
-		path = filepath.Join(home, ".carrier", "credentials.json")
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return "", false
-	}
-	var payload struct {
-		Providers map[string]string `json:"providers"`
-	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return "", false
-	}
-	value := strings.TrimSpace(payload.Providers[providerID])
-	if value == "" {
-		return "", false
-	}
-	return value, true
 }
