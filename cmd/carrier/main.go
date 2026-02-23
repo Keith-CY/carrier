@@ -689,6 +689,9 @@ func runUpdate(in io.Reader, out io.Writer, opts updateCommandOptions) error {
 			return err
 		}
 	}
+	if opts.JSON {
+		return nil
+	}
 	if opts.NoRestart {
 		_, _ = fmt.Fprintln(out, "no-restart: enabled, service restart skipped")
 	}
