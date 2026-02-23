@@ -484,7 +484,7 @@ func parseAddCommandArgs(args []string) (addCommandOptions, error) {
 		switch arg {
 		case "--webui", "--web", "webui":
 			opts.WebUI = true
-		case "-q", "--quiet", "--quite":
+		case "-q", "--quiet", "--quite": // "--quite" is an intentional alias for the common typo
 			opts.Quiet = true
 		case "":
 			continue
