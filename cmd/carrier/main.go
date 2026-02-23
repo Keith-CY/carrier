@@ -20,6 +20,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -73,6 +74,28 @@ const (
 type addCommandOptions struct {
 	AgentID string
 	WebUI   bool
+}
+
+type updateCommandOptions struct {
+	Check     bool
+	Yes       bool
+	DryRun    bool
+	Force     bool
+	Channel   string
+	Tag       string
+	Timeout   time.Duration
+	JSON      bool
+	NoRestart bool
+}
+
+type versionCommandOptions struct {
+	JSON bool
+}
+
+type versionInfo struct {
+	Version   string `json:"version"`
+	Commit    string `json:"commit"`
+	BuildDate string `json:"buildDate"`
 }
 
 type picoclawChannel struct {
@@ -139,6 +162,10 @@ var openclawChannels = []picoclawChannel{
 }
 
 var (
+	carrierVersion   = "dev"
+	carrierCommit    = "unknown"
+	carrierBuildDate = ""
+
 	carrierUserHomeDirFunc = os.UserHomeDir
 	carrierCurrentUserFunc = user.Current
 )
@@ -218,6 +245,7 @@ const (
 	gatewayBootTimeout            = 10 * time.Second
 	daemonBootPollInterval        = 250 * time.Millisecond
 	defaultPairCodeTTLSeconds     = 300
+	defaultUpdateTimeout          = 120 * time.Second
 )
 
 var runOpenAICodexDeviceCodeFlow = performOpenAICodexDeviceCodeFlow
@@ -231,13 +259,33 @@ var daemonPairCodeFetcher = fetchDaemonPairCode
 var openBrowserFunc = openBrowserURL
 var runOnboardFlow = runOnboard
 var ensureWebUIServicesFlow = ensureWebUIServices
+var execGitCommand = func(ctx context.Context, workingDir string, args ...string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = workingDir
+	raw, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(raw)))
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
 var procFSRoot = "/proc"
 
 const usage = `Carrier — unified agent platform binary
 
 Usage:
   carrier                Bootstrap Carrier (onboard if needed, keep daemon+gateway running, then exit)
+  carrier version        Print version metadata
+  carrier --version      Print version metadata
+  carrier -v             Print version metadata
+  carrier -V             Print version metadata
   carrier daemon         Start daemon HTTP API server (foreground)
+  carrier update         Update to a newer git ref
+  carrier update --check  Show current and target without applying changes
+  Common update options:
+    --check, --yes, --dry-run, --force, --channel <stable|beta|dev>, --tag <dist-tag|version>, --timeout <seconds>, --json, --no-restart
   carrier gateway        Start gateway HTTP server
   carrier stop           Stop background daemon and gateway
   carrier stop <id>      Stop a managed agent instance
@@ -262,7 +310,13 @@ Notes:
 
 func main() {
 	if len(os.Args) > 1 {
-		switch os.Args[1] {
+		command, commandArgs, parseErr := parseCarrierCommand(os.Args)
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "%v\n\n", parseErr)
+			fmt.Fprint(os.Stderr, usage)
+			os.Exit(1)
+		}
+		switch command {
 		case "daemon", "--daemon":
 			applyConfigV2Env(os.Stderr)
 			server.Run()
@@ -275,8 +329,8 @@ func main() {
 			}
 			return
 		case "stop":
-			if len(os.Args) >= 3 {
-				if err := runStopInstance(os.Stdout, os.Args[2]); err != nil {
+			if len(commandArgs) >= 1 {
+				if err := runStopInstance(os.Stdout, commandArgs[0]); err != nil {
 					fmt.Fprintf(os.Stderr, "stop failed: %v\n", err)
 					os.Exit(1)
 				}
@@ -288,12 +342,12 @@ func main() {
 			}
 			return
 		case "uninstall":
-			if len(os.Args) < 3 {
+			if len(commandArgs) < 1 {
 				fmt.Fprintln(os.Stderr, "uninstall failed: instance id is required")
 				fmt.Fprint(os.Stderr, usage)
 				os.Exit(1)
 			}
-			if err := runUninstallInstance(os.Stdout, os.Args[2]); err != nil {
+			if err := runUninstallInstance(os.Stdout, commandArgs[0]); err != nil {
 				fmt.Fprintf(os.Stderr, "uninstall failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -305,8 +359,8 @@ func main() {
 			}
 			return
 		case "onboard":
-			if len(os.Args) >= 3 {
-				mode := strings.ToLower(strings.TrimSpace(os.Args[2]))
+			if len(commandArgs) >= 1 {
+				mode := strings.ToLower(strings.TrimSpace(commandArgs[0]))
 				switch mode {
 				case "--webui", "--web", "webui":
 					if err := runOnboardWebUI(os.Stdout); err != nil {
@@ -315,7 +369,7 @@ func main() {
 					}
 					return
 				default:
-					fmt.Fprintf(os.Stderr, "unknown onboard option: %s\n\n", os.Args[2])
+					fmt.Fprintf(os.Stderr, "unknown onboard option: %s\n\n", commandArgs[0])
 					fmt.Fprint(os.Stderr, usage)
 					os.Exit(1)
 				}
@@ -326,7 +380,7 @@ func main() {
 			}
 			return
 		case "add":
-			opts, err := parseAddCommandArgs(os.Args[2:])
+			opts, err := parseAddCommandArgs(commandArgs)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "add failed: %v\n\n", err)
 				fmt.Fprint(os.Stderr, usage)
@@ -344,11 +398,35 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "version":
+			opts, err := parseVersionCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "version failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runVersionCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "version failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "update":
+			opts, err := parseUpdateCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "update failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runUpdate(os.Stdin, os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "update failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "--help", "-h", "help":
 			fmt.Print(usage)
 			return
 		default:
-			fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", os.Args[1])
+			fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", command)
 			fmt.Fprint(os.Stderr, usage)
 			os.Exit(1)
 		}
@@ -357,6 +435,40 @@ func main() {
 	if err := runBootstrap(os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "carrier bootstrap failed: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+func parseCarrierCommand(args []string) (string, []string, error) {
+	if len(args) <= 1 {
+		return "bootstrap", nil, nil
+	}
+	command := strings.ToLower(strings.TrimSpace(args[1]))
+	if command == "" {
+		return "", nil, errors.New("empty command")
+	}
+	switch command {
+	case "daemon", "--daemon":
+		return "daemon", args[2:], nil
+	case "gateway", "--gateway":
+		return "gateway", args[2:], nil
+	case "stop":
+		return "stop", args[2:], nil
+	case "uninstall":
+		return "uninstall", args[2:], nil
+	case "list":
+		return "list", nil, nil
+	case "onboard":
+		return "onboard", args[2:], nil
+	case "add":
+		return "add", args[2:], nil
+	case "--help", "-h", "help":
+		return "help", nil, nil
+	case "version", "--version", "-v", "-V":
+		return "version", args[2:], nil
+	case "update":
+		return "update", args[2:], nil
+	default:
+		return "", nil, fmt.Errorf("unknown command: %s", command)
 	}
 }
 
@@ -382,6 +494,326 @@ func parseAddCommandArgs(args []string) (addCommandOptions, error) {
 		}
 	}
 	return opts, nil
+}
+
+func parseVersionCommandArgs(args []string) (versionCommandOptions, error) {
+	opts := versionCommandOptions{}
+	for _, raw := range args {
+		arg := strings.TrimSpace(raw)
+		switch arg {
+		case "":
+		case "--json":
+			opts.JSON = true
+		default:
+			return versionCommandOptions{}, fmt.Errorf("unknown version option: %s", raw)
+		}
+	}
+	return opts, nil
+}
+
+func parseUpdateCommandArgs(args []string) (updateCommandOptions, error) {
+	opts := updateCommandOptions{
+		Channel: "stable",
+		Timeout: defaultUpdateTimeout,
+	}
+	for i := 0; i < len(args); i++ {
+		arg := strings.ToLower(strings.TrimSpace(args[i]))
+		switch arg {
+		case "":
+		case "--check":
+			opts.Check = true
+		case "--yes":
+			opts.Yes = true
+		case "--dry-run":
+			opts.DryRun = true
+		case "--force":
+			opts.Force = true
+		case "--no-restart":
+			opts.NoRestart = true
+		case "--json":
+			opts.JSON = true
+		case "--channel":
+			if i+1 >= len(args) {
+				return updateCommandOptions{}, errors.New("missing value for --channel")
+			}
+			opts.Channel = strings.ToLower(strings.TrimSpace(args[i+1]))
+			i++
+			switch opts.Channel {
+			case "stable", "beta", "dev":
+			default:
+				return updateCommandOptions{}, fmt.Errorf("invalid --channel value: %s", args[i])
+			}
+		case "--tag":
+			if i+1 >= len(args) {
+				return updateCommandOptions{}, errors.New("missing value for --tag")
+			}
+			opts.Tag = strings.TrimSpace(args[i+1])
+			i++
+			if opts.Tag == "" {
+				return updateCommandOptions{}, errors.New("missing value for --tag")
+			}
+		case "--timeout":
+			if i+1 >= len(args) {
+				return updateCommandOptions{}, errors.New("missing value for --timeout")
+			}
+			arg = strings.TrimSpace(args[i+1])
+			i++
+			seconds, err := strconv.Atoi(arg)
+			if err != nil || seconds <= 0 {
+				return updateCommandOptions{}, fmt.Errorf("invalid --timeout value: %s", arg)
+			}
+			opts.Timeout = time.Duration(seconds) * time.Second
+		default:
+			return updateCommandOptions{}, fmt.Errorf("unknown update option: %s", arg)
+		}
+	}
+	opts.Channel = strings.ToLower(strings.TrimSpace(opts.Channel))
+	if opts.Channel == "" {
+		opts.Channel = "stable"
+	}
+	return opts, nil
+}
+
+func runVersionCommand(out io.Writer, opts versionCommandOptions) error {
+	info := versionInfo{
+		Version:   carrierVersion,
+		Commit:    carrierCommit,
+		BuildDate: carrierBuildDate,
+	}
+	if opts.JSON {
+		raw, err := json.MarshalIndent(info, "", "  ")
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintln(out, string(raw))
+		return nil
+	}
+	_, _ = fmt.Fprintf(out, "carrier %s\n", info.Version)
+	_, _ = fmt.Fprintf(out, "commit: %s\n", info.Commit)
+	_, _ = fmt.Fprintf(out, "build date: %s\n", info.BuildDate)
+	return nil
+}
+
+func runUpdate(in io.Reader, out io.Writer, opts updateCommandOptions) error {
+	if opts.DryRun {
+		opts.Check = true
+	}
+
+	repoRoot, err := resolveRepoRootForUpdate(opts.Timeout)
+	if err != nil {
+		return err
+	}
+
+	if err := fetchGitRefs(opts.Timeout, repoRoot); err != nil {
+		return err
+	}
+
+	target, targetSource, err := resolveUpdateTarget(opts.Timeout, repoRoot, opts)
+	if err != nil {
+		return err
+	}
+	current, err := resolveCurrentRef(opts.Timeout, repoRoot)
+	if err != nil {
+		return err
+	}
+	if opts.JSON {
+		type payload struct {
+			Current    string `json:"current"`
+			Target     string `json:"target"`
+			Source     string `json:"source"`
+			Timeout    int    `json:"timeoutSeconds"`
+			Channel    string `json:"channel"`
+			Tag        string `json:"tag"`
+			Check      bool   `json:"check"`
+			DryRun     bool   `json:"dryRun"`
+			Force      bool   `json:"force"`
+			JSON       bool   `json:"json"`
+			NoRestart  bool   `json:"noRestart"`
+			WouldApply bool   `json:"wouldApply"`
+		}
+		raw, err := json.MarshalIndent(payload{
+			Current:    current,
+			Target:     target,
+			Source:     targetSource,
+			Timeout:    int(opts.Timeout.Seconds()),
+			Channel:    opts.Channel,
+			Tag:        opts.Tag,
+			Check:      opts.Check,
+			DryRun:     opts.DryRun,
+			Force:      opts.Force,
+			JSON:       opts.JSON,
+			NoRestart:  opts.NoRestart,
+			WouldApply: !opts.Check,
+		}, "", "  ")
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintln(out, string(raw))
+	}
+
+	if opts.Check {
+		if !opts.JSON {
+			_, _ = fmt.Fprintf(out, "Current: %s\n", current)
+			_, _ = fmt.Fprintf(out, "Target: %s (%s)\n", target, targetSource)
+			if opts.NoRestart {
+				_, _ = fmt.Fprintln(out, "no-restart: enabled (no service restart action)")
+			}
+			_, _ = fmt.Fprintln(out, "check mode: no changes applied")
+		}
+		return nil
+	}
+
+	if !opts.Force {
+		clean, err := isWorkingTreeClean(opts.Timeout, repoRoot)
+		if err != nil {
+			return err
+		}
+		if !clean {
+			return errors.New("working tree is not clean; pass --force to continue")
+		}
+	}
+
+	if !opts.Yes {
+		ok, err := promptYesNo(bufio.NewReader(in), out, fmt.Sprintf("Apply update from %s to %s?", current, target), false)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			_, _ = fmt.Fprintln(out, "Update canceled.")
+			return nil
+		}
+	}
+
+	if !opts.DryRun {
+		if err := applyGitUpdate(opts.Timeout, repoRoot, target); err != nil {
+			return err
+		}
+	}
+	if opts.NoRestart {
+		_, _ = fmt.Fprintln(out, "no-restart: enabled, service restart skipped")
+	}
+	_, _ = fmt.Fprintf(out, "Updated to %s.\n", target)
+	return nil
+}
+
+func resolveRepoRootForUpdate(timeout time.Duration) (string, error) {
+	return runGitCommand(timeout, "", "rev-parse", "--show-toplevel")
+}
+
+func resolveCurrentRef(timeout time.Duration, repoRoot string) (string, error) {
+	ref, err := runGitCommand(timeout, repoRoot, "rev-parse", "--abbrev-ref", "HEAD")
+	if err == nil {
+		ref = strings.TrimSpace(ref)
+		if ref != "" && ref != "HEAD" {
+			return ref, nil
+		}
+	}
+	ref, err = runGitCommand(timeout, repoRoot, "rev-parse", "--short", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(ref), nil
+}
+
+func isWorkingTreeClean(timeout time.Duration, repoRoot string) (bool, error) {
+	out, err := runGitCommand(timeout, repoRoot, "status", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) == "", nil
+}
+
+func resolveUpdateTarget(timeout time.Duration, repoRoot string, opts updateCommandOptions) (string, string, error) {
+	if opts.Tag != "" {
+		exact := strings.TrimSpace(opts.Tag)
+		refs, err := runGitCommand(timeout, repoRoot, "tag", "--list", exact)
+		if err != nil {
+			return "", "", err
+		}
+		if strings.TrimSpace(refs) == "" {
+			return "", "", fmt.Errorf("tag %q not found", exact)
+		}
+		return exact, "tag", nil
+	}
+
+	channel := strings.ToLower(strings.TrimSpace(opts.Channel))
+	if channel == "" {
+		channel = "stable"
+	}
+	switch channel {
+	case "dev":
+		return "origin/main", "channel dev", nil
+	case "beta":
+		tag, err := latestTagMatching(timeout, repoRoot, true)
+		if err != nil {
+			return "", "", err
+		}
+		return tag, "channel beta", nil
+	case "stable":
+		tag, err := latestTagMatching(timeout, repoRoot, false)
+		if err != nil {
+			return "", "", err
+		}
+		return tag, "channel stable", nil
+	default:
+		return "", "", fmt.Errorf("invalid channel %q", channel)
+	}
+}
+
+func fetchGitRefs(timeout time.Duration, repoRoot string) error {
+	_, err := runGitCommand(timeout, repoRoot, "fetch", "--all", "--tags", "--prune", "--force")
+	return err
+}
+
+func latestTagMatching(timeout time.Duration, repoRoot string, requireBeta bool) (string, error) {
+	raw, err := runGitCommand(timeout, repoRoot, "tag", "--list", "--sort=-creatordate")
+	if err != nil {
+		return "", fmt.Errorf("list tags: %w", err)
+	}
+	for _, line := range strings.Split(raw, "\n") {
+		tag := strings.TrimSpace(line)
+		if tag == "" {
+			continue
+		}
+		isBeta := strings.Contains(strings.ToLower(tag), "beta")
+		if isBeta == requireBeta {
+			return tag, nil
+		}
+	}
+	if requireBeta {
+		return "", errors.New("no matching beta tags found")
+	}
+	return "", errors.New("no matching stable tags found")
+}
+
+func applyGitUpdate(timeout time.Duration, repoRoot, target string) error {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return errors.New("empty update target")
+	}
+	if strings.HasPrefix(target, "origin/") {
+		branch := strings.TrimPrefix(target, "origin/")
+		_, err := runGitCommand(timeout, repoRoot, "checkout", "-B", branch, target)
+		if err != nil {
+			return fmt.Errorf("checkout %s: %w", target, err)
+		}
+		_, err = runGitCommand(timeout, repoRoot, "pull", "--rebase", "--ff-only", "origin", branch)
+		if err != nil {
+			return fmt.Errorf("pull remote %s: %w", target, err)
+		}
+		return nil
+	}
+	_, err := runGitCommand(timeout, repoRoot, "checkout", target)
+	if err != nil {
+		return fmt.Errorf("checkout %s: %w", target, err)
+	}
+	return nil
+}
+
+func runGitCommand(timeout time.Duration, repoRoot string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return execGitCommand(ctx, repoRoot, args...)
 }
 
 func needsInitialOnboard(loadFn func() (*configv2.Config, string, error)) bool {
