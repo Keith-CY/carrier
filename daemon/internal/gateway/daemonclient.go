@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -374,19 +375,30 @@ func (c *DaemonClient) parseErrorResponse(status int, body []byte) *DaemonClient
 	code := fallbackCode
 
 	var envelope struct {
-		Error *struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err == nil && len(bytes.TrimSpace(envelope.Error)) > 0 {
+		var detailed struct {
 			Code    string `json:"code"`
 			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Error != nil {
-		if envelope.Error.Code != "" {
-			code = envelope.Error.Code
 		}
-		if envelope.Error.Message != "" {
-			msg = envelope.Error.Message
+		if err := json.Unmarshal(envelope.Error, &detailed); err == nil {
+			if strings.TrimSpace(detailed.Code) != "" {
+				code = strings.TrimSpace(detailed.Code)
+			}
+			if strings.TrimSpace(detailed.Message) != "" {
+				msg = strings.TrimSpace(detailed.Message)
+			}
+		} else {
+			// Legacy daemon responses can return {"error":"..."}.
+			var legacy string
+			if err := json.Unmarshal(envelope.Error, &legacy); err == nil && strings.TrimSpace(legacy) != "" {
+				msg = strings.TrimSpace(legacy)
+			}
 		}
 	}
+
+	code = normalizeDaemonErrorCode(code, msg)
 	return &DaemonClientError{Code: code, Message: msg}
 }
 
@@ -401,4 +413,19 @@ func (c *DaemonClient) statusToCode(status int) string {
 	default:
 		return "E_COMMAND_FAILED"
 	}
+}
+
+func normalizeDaemonErrorCode(code, message string) string {
+	normalized := strings.TrimSpace(code)
+	if normalized == "" {
+		normalized = "E_COMMAND_FAILED"
+	}
+
+	lowerMsg := strings.ToLower(strings.TrimSpace(message))
+	if (normalized == "E_USAGE" || normalized == "E_COMMAND_FAILED") &&
+		strings.Contains(lowerMsg, "pairing code is invalid or expired") {
+		return "E_PAIR_CODE_INVALID"
+	}
+
+	return normalized
 }

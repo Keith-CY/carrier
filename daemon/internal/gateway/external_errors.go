@@ -19,6 +19,8 @@ func mapDaemonErrorToExternal(code string) (status int, normalizedCode, message 
 		return http.StatusNotFound, normalizedCode, "agent not found"
 	case "E_USAGE":
 		return http.StatusBadRequest, normalizedCode, "invalid daemon request"
+	case "E_PAIR_CODE_INVALID":
+		return http.StatusBadRequest, normalizedCode, "pair code is invalid or expired; request a new PAIR_CODE and retry /pair"
 	case "E_SESSION_REQUIRED":
 		return http.StatusUnauthorized, normalizedCode, "daemon request unauthorized"
 	case "E_NOT_INSTALLED":

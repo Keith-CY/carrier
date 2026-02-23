@@ -113,6 +113,31 @@ func TestHandleCommand_Pair_DaemonError(t *testing.T) {
 	}
 }
 
+func TestHandleCommand_Pair_LegacyPairCodeInvalid(t *testing.T) {
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
+		"POST /api/v1/pairing/verify-consume": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":"pairing code is invalid or expired"}`)
+		},
+	})
+	defer srv.Close()
+
+	cmd := &GatewayCommand{
+		Provider: "telegram", ChatID: "123", RequestID: "r1",
+		Name: CmdPair, Args: []string{"expired"},
+	}
+	resp := HandleCommand(context.Background(), cmd, dc, sessions, downloads, nil, onboard)
+	if resp.Result != "error" {
+		t.Fatalf("expected error, got %s", resp.Result)
+	}
+	if resp.ErrorCode != "E_PAIR_CODE_INVALID" {
+		t.Fatalf("errorCode = %q, want %q", resp.ErrorCode, "E_PAIR_CODE_INVALID")
+	}
+	if !strings.Contains(resp.Message, "pair code is invalid or expired") {
+		t.Fatalf("message = %q, want pair code guidance", resp.Message)
+	}
+}
+
 func TestHandleCommand_RequiresSession(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
 	defer srv.Close()

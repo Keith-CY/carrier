@@ -355,6 +355,75 @@ func TestDaemonClient_ErrorResponse(t *testing.T) {
 	}
 }
 
+func TestDaemonClient_ErrorResponse_LegacyStringPairCodeInvalid(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "pairing code is invalid or expired",
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	err := dc.VerifyPairCode(context.Background(), "bad", "actor", "req")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	de, ok := err.(*DaemonClientError)
+	if !ok {
+		t.Fatalf("expected DaemonClientError, got %T", err)
+	}
+	if de.Code != "E_PAIR_CODE_INVALID" {
+		t.Fatalf("expected E_PAIR_CODE_INVALID, got %q (message=%q)", de.Code, de.Message)
+	}
+}
+
+func TestNormalizeDaemonErrorCode(t *testing.T) {
+	tests := []struct {
+		name    string
+		code    string
+		message string
+		want    string
+	}{
+		{
+			name:    "pair invalid from usage",
+			code:    "E_USAGE",
+			message: "pairing code is invalid or expired",
+			want:    "E_PAIR_CODE_INVALID",
+		},
+		{
+			name:    "pair invalid from fallback",
+			code:    "E_COMMAND_FAILED",
+			message: "pairing code is invalid or expired",
+			want:    "E_PAIR_CODE_INVALID",
+		},
+		{
+			name:    "keeps specific code",
+			code:    "E_AGENT_NOT_FOUND",
+			message: "agent not found",
+			want:    "E_AGENT_NOT_FOUND",
+		},
+		{
+			name:    "empty code fallback",
+			code:    "",
+			message: "unknown",
+			want:    "E_COMMAND_FAILED",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := normalizeDaemonErrorCode(tc.code, tc.message)
+			if got != tc.want {
+				t.Fatalf("normalizeDaemonErrorCode(%q,%q)=%q want %q", tc.code, tc.message, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDaemonClient_AuthHeader(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
