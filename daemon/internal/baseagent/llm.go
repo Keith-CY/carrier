@@ -2,6 +2,7 @@ package baseagent
 
 import (
 	"bytes"
+	"carrier/daemon/internal/config"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -10,7 +11,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -336,7 +336,7 @@ func parseModelError(statusCode int, body []byte) error {
 }
 
 func resolveLLMRuntimeConfig() (*llmRuntimeConfig, error) {
-	cfg, err := readDefaultModelFromConfigFile()
+	cfg, err := config.LoadCarrierDefaultModel()
 	if err != nil || cfg == nil {
 		return nil, errors.New("default model is not configured")
 	}
@@ -387,67 +387,6 @@ func resolveLLMRuntimeConfig() (*llmRuntimeConfig, error) {
 		Token:      token,
 		BaseURL:    baseURL,
 	}, nil
-}
-
-type defaultModelConfig struct {
-	ProviderID string
-	ModelID    string
-	EnvVar     string
-}
-
-func readDefaultModelFromConfigFile() (*defaultModelConfig, error) {
-	path, err := resolveConfigV2Path()
-	if err != nil {
-		return nil, err
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var cfg struct {
-		DefaultModel string `json:"default_model"`
-		ModelList    []struct {
-			ModelName  string `json:"model_name"`
-			Model      string `json:"model"`
-			ProviderID string `json:"provider_id"`
-			EnvVar     string `json:"env_var"`
-		} `json:"model_list"`
-	}
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return nil, err
-	}
-	if len(cfg.ModelList) == 0 {
-		return nil, errors.New("empty model_list")
-	}
-	defaultName := strings.TrimSpace(cfg.DefaultModel)
-	if defaultName != "" {
-		for _, m := range cfg.ModelList {
-			if strings.EqualFold(strings.TrimSpace(m.ModelName), defaultName) {
-				return &defaultModelConfig{
-					ProviderID: strings.TrimSpace(m.ProviderID),
-					ModelID:    strings.TrimSpace(m.Model),
-					EnvVar:     strings.TrimSpace(m.EnvVar),
-				}, nil
-			}
-		}
-	}
-	m := cfg.ModelList[0]
-	return &defaultModelConfig{
-		ProviderID: strings.TrimSpace(m.ProviderID),
-		ModelID:    strings.TrimSpace(m.Model),
-		EnvVar:     strings.TrimSpace(m.EnvVar),
-	}, nil
-}
-
-func resolveConfigV2Path() (string, error) {
-	if path := strings.TrimSpace(os.Getenv("CARRIER_CONFIG")); path != "" {
-		return path, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".carrier", "config.v2.json"), nil
 }
 
 func inferProviderEnvVar(providerID string) string {

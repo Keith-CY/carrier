@@ -209,6 +209,73 @@ func TestApplyGatewayEnvironmentPreservesExistingEnv(t *testing.T) {
 	assertEnv(t, "OPENAI_API_KEY", "existing-openai-token")
 }
 
+func TestResolveDefaultModelPrefersNamedDefault(t *testing.T) {
+	cfg := &Config{
+		DefaultModel: "openai-default",
+		ModelList: []Model{
+			{
+				ModelName:  "openai-codex-default",
+				Model:      "openai-codex/gpt-5.3-codex",
+				ProviderID: "openai-codex",
+			},
+			{
+				ModelName:  "openai-default",
+				Model:      "openai/gpt-5.2",
+				ProviderID: "openai",
+			},
+		},
+	}
+
+	got, err := ResolveDefaultModel(cfg)
+	if err != nil {
+		t.Fatalf("ResolveDefaultModel returned error: %v", err)
+	}
+	if got.ProviderID != "openai" {
+		t.Fatalf("ProviderID = %q, want %q", got.ProviderID, "openai")
+	}
+	if got.Model != "openai/gpt-5.2" {
+		t.Fatalf("Model = %q, want %q", got.Model, "openai/gpt-5.2")
+	}
+}
+
+func TestResolveDefaultModelFallsBackToFirstEntry(t *testing.T) {
+	cfg := &Config{
+		DefaultModel: "missing-default",
+		ModelList: []Model{
+			{
+				ModelName:  "openrouter-default",
+				Model:      "openrouter/auto",
+				ProviderID: "openrouter",
+			},
+			{
+				ModelName:  "openai-default",
+				Model:      "openai/gpt-5.2",
+				ProviderID: "openai",
+			},
+		},
+	}
+
+	got, err := ResolveDefaultModel(cfg)
+	if err != nil {
+		t.Fatalf("ResolveDefaultModel returned error: %v", err)
+	}
+	if got.ProviderID != "openrouter" {
+		t.Fatalf("ProviderID = %q, want %q", got.ProviderID, "openrouter")
+	}
+	if got.Model != "openrouter/auto" {
+		t.Fatalf("Model = %q, want %q", got.Model, "openrouter/auto")
+	}
+}
+
+func TestResolveDefaultModelRejectsInvalidInput(t *testing.T) {
+	if _, err := ResolveDefaultModel(nil); err == nil {
+		t.Fatal("expected error for nil config")
+	}
+	if _, err := ResolveDefaultModel(&Config{}); err == nil {
+		t.Fatal("expected error for empty model_list")
+	}
+}
+
 func assertEnv(t *testing.T, key, want string) {
 	t.Helper()
 	got := os.Getenv(key)

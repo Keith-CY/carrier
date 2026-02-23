@@ -1761,18 +1761,9 @@ func summarizeConfiguredChannels(cfg *configv2.Config) string {
 }
 
 func summarizeDefaultModel(cfg *configv2.Config) string {
-	if cfg == nil || len(cfg.ModelList) == 0 {
+	pick, err := configv2.ResolveDefaultModel(cfg)
+	if err != nil || pick == nil {
 		return ""
-	}
-	pick := cfg.ModelList[0]
-	defaultName := strings.TrimSpace(cfg.DefaultModel)
-	if defaultName != "" {
-		for _, m := range cfg.ModelList {
-			if strings.EqualFold(strings.TrimSpace(m.ModelName), defaultName) {
-				pick = m
-				break
-			}
-		}
 	}
 	modelID := strings.TrimSpace(pick.Model)
 	if modelID == "" {
@@ -1789,18 +1780,12 @@ func summarizeDefaultModel(cfg *configv2.Config) string {
 
 func configuredDefaultProviderID() string {
 	cfg, _, err := configv2.Load()
-	if err != nil || cfg == nil || len(cfg.ModelList) == 0 {
+	if err != nil {
 		return ""
 	}
-	pick := cfg.ModelList[0]
-	defaultName := strings.TrimSpace(cfg.DefaultModel)
-	if defaultName != "" {
-		for _, m := range cfg.ModelList {
-			if strings.EqualFold(strings.TrimSpace(m.ModelName), defaultName) {
-				pick = m
-				break
-			}
-		}
+	pick, err := configv2.ResolveDefaultModel(cfg)
+	if err != nil || pick == nil {
+		return ""
 	}
 	return strings.ToLower(strings.TrimSpace(pick.ProviderID))
 }
