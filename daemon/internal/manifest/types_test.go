@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -213,6 +214,81 @@ func TestValidateDescriptionOptional(t *testing.T) {
 	m.Description = "A test agent"
 	if err := m.Validate(); err != nil {
 		t.Fatalf("expected valid with description, got: %v", err)
+	}
+}
+
+func TestValidateAcceptsCommandByOSWhenCommandEmpty(t *testing.T) {
+	m := validManifestForTest()
+	m.Runtime.Install = CommandSpec{
+		CommandByOS: map[string]string{
+			"darwin":  "curl -fsSL https://openclaw.ai/install.sh | bash",
+			"linux":   "curl -fsSL https://openclaw.ai/install.sh | bash",
+			"windows": "powershell -NoProfile -Command \"iwr -useb https://openclaw.ai/install.ps1 | iex\"",
+		},
+	}
+	m.Runtime.Start = CommandSpec{
+		CommandByOS: map[string]string{
+			"default": "openclaw gateway",
+		},
+	}
+	m.Runtime.Stop = CommandSpec{
+		CommandByOS: map[string]string{
+			"default": "openclaw gateway stop",
+		},
+	}
+
+	if err := m.Validate(); err != nil {
+		t.Fatalf("expected command_by_os manifest to validate, got: %v", err)
+	}
+}
+
+func TestValidateRejectsUppercaseCommandByOSKey(t *testing.T) {
+	m := validManifestForTest()
+	m.Runtime.Install = CommandSpec{
+		CommandByOS: map[string]string{
+			"Linux": "curl -fsSL https://openclaw.ai/install.sh | bash",
+		},
+	}
+	err := m.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for uppercase command_by_os key")
+	}
+	if !strings.Contains(err.Error(), "must be lowercase and trimmed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCommandSpecResolveForGOOS(t *testing.T) {
+	spec := CommandSpec{
+		Command: "openclaw gateway",
+		CommandByOS: map[string]string{
+			"windows": "powershell -NoProfile -Command \"openclaw gateway\"",
+			"default": "sh -lc 'openclaw gateway'",
+		},
+	}
+
+	got, err := spec.ResolveForGOOS("windows")
+	if err != nil {
+		t.Fatalf("ResolveForGOOS(windows) error: %v", err)
+	}
+	if got != `powershell -NoProfile -Command "openclaw gateway"` {
+		t.Fatalf("windows command = %q", got)
+	}
+
+	got, err = spec.ResolveForGOOS("linux")
+	if err != nil {
+		t.Fatalf("ResolveForGOOS(linux) error: %v", err)
+	}
+	if got != `sh -lc 'openclaw gateway'` {
+		t.Fatalf("linux command = %q", got)
+	}
+
+	got, err = spec.ResolveForCurrentOS()
+	if err != nil {
+		t.Fatalf("ResolveForCurrentOS(%s) error: %v", runtime.GOOS, err)
+	}
+	if strings.TrimSpace(got) == "" {
+		t.Fatal("ResolveForCurrentOS returned empty command")
 	}
 }
 

@@ -177,20 +177,29 @@ func (r *preFlightRunner) checkPorts(m manifest.Manifest) []CheckResult {
 }
 
 func (r *preFlightRunner) checkCommandExists(m manifest.Manifest) CheckResult {
-	cmd := strings.TrimSpace(m.Runtime.Start.Command)
-	if cmd == "" {
+	cmd, err := m.Runtime.Start.ResolveForCurrentOS()
+	if err != nil {
 		return CheckResult{
 			Name:    CheckNameCommandExists,
 			Passed:  false,
 			Code:    IssueCodeCommandNotFound,
-			Message: "runtime.start.command is empty",
+			Message: fmt.Sprintf("runtime.start command is unavailable: %v", err),
 		}
 	}
 
 	// Extract the first token (executable name)
-	executable := strings.Fields(cmd)[0]
+	fields := strings.Fields(strings.TrimSpace(cmd))
+	if len(fields) == 0 {
+		return CheckResult{
+			Name:    CheckNameCommandExists,
+			Passed:  false,
+			Code:    IssueCodeCommandNotFound,
+			Message: "runtime.start command is empty",
+		}
+	}
+	executable := fields[0]
 
-	_, err := r.lookPath(executable)
+	_, err = r.lookPath(executable)
 	if err != nil {
 		return CheckResult{
 			Name:    CheckNameCommandExists,

@@ -37,8 +37,12 @@ func (s *Service) Upgrade(ctx context.Context, agentID string) (UpgradeResult, e
 	if state.Runtime == RuntimeStateRunning {
 		return UpgradeResult{}, ErrAgentRunning
 	}
-	if strings.TrimSpace(m.Runtime.Upgrade.Command) == "" {
+	if m.Runtime.Upgrade.IsEmpty() {
 		return UpgradeResult{}, ErrUpgradeNotSupported
+	}
+	upgradeCommand, err := m.Runtime.Upgrade.ResolveForCurrentOS()
+	if err != nil {
+		return UpgradeResult{}, fmt.Errorf("%w: %v", ErrUpgradeNotSupported, err)
 	}
 
 	strategy := strings.TrimSpace(m.Upgrade.Strategy)
@@ -71,13 +75,13 @@ func (s *Service) Upgrade(ctx context.Context, agentID string) (UpgradeResult, e
 		s.recordAudit("", "system", "upgrade", agentID, AuditResultFailure, "E_UPGRADE_BACKUP", backupErr.Error())
 		return UpgradeResult{AgentID: agentID, FromVersion: fromVersion}, updateErr
 	}
-	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_start backup=%q command=%q", backupPath, m.Runtime.Upgrade.Command))
+	s.recordAudit("", "system", "upgrade", agentID, AuditResultSuccess, "", fmt.Sprintf("upgrade_start backup=%q command=%q", backupPath, upgradeCommand))
 
 	opCtx, cancel := context.WithTimeout(ctx, s.commandTimeout)
 	defer cancel()
 
-	result, runErr := s.runner.Run(opCtx, m.Runtime.Upgrade.Command)
-	s.appendCommandLog(agentID, "upgrade", m.Runtime.Upgrade.Command, result, runErr)
+	result, runErr := s.runner.Run(opCtx, upgradeCommand)
+	s.appendCommandLog(agentID, "upgrade", upgradeCommand, result, runErr)
 	if runErr != nil {
 		updateErr := s.formatUpgradeFailure(runErr, backupPath)
 		s.updateStateOnUpgradeError(agentID, updateErr)

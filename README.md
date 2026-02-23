@@ -277,9 +277,10 @@ Implementation notes:
    - `/pair <code>`
    - `/agents`
    - If `/agents` returns an empty list, verify the daemon is running and successfully paired, then retry after a few seconds. If still empty, re-run `/pair <code>` with a fresh code.
-   - `/install openclaw`
-8. Configure required OpenClaw environment (for example `OPENAI_API_KEY`) before start.
-9. Start and verify:
+8. Install OpenClaw through Carrier CLI/WebUI (chat `/install` is intentionally blocked):
+   - `carrier add openclaw`
+9. Configure required OpenClaw environment (for example `OPENAI_API_KEY`) before start.
+10. Start and verify:
    - `/start openclaw`
    - `/status openclaw`
 
@@ -303,15 +304,16 @@ If install/start fails, run `/diagnose openclaw` and use the generated artifact 
    - `/pair <code>`
    - `/agents`
    - 若 `/agents` 返回空列表，请先确认 daemon 正在运行且已成功配对，等待数秒后重试；若仍为空，请用新的配对码重新执行 `/pair <code>`。
-   - `/install openclaw`
-8. 启动前先配置 OpenClaw 必需环境变量（如 `OPENAI_API_KEY`）。
-9. 启动并检查：
+8. 通过 Carrier CLI/WebUI 安装 OpenClaw（chat `/install` 已被有意禁用）：
+   - `carrier add openclaw`
+9. 启动前先配置 OpenClaw 必需环境变量（如 `OPENAI_API_KEY`）。
+10. 启动并检查：
    - `/start openclaw`
    - `/status openclaw`
 
 如果安装或启动失败，请执行 `/diagnose openclaw` 并提交诊断产物。
 
-### Flow verification checklist (download → pair → install/start)
+### Flow verification checklist (download → pair → add/start)
 
 Use this as a quick pass/fail checklist when validating the README flow:
 
@@ -324,14 +326,14 @@ Use this as a quick pass/fail checklist when validating the README flow:
    - `agentd` starts and prints a usable `PAIR_CODE`.
 4. **Pair**
    - `/pair <code>` returns success before TTL expires.
-5. **Install path**
-   - `/agents` includes `openclaw`, then `/install openclaw` starts normally.
+5. **Add path**
+   - `carrier add openclaw` completes successfully.
 6. **Start/Status**
    - `/start openclaw` succeeds; `/status openclaw` returns healthy/running.
 7. **Fallback path**
    - On failure, `/diagnose openclaw` generates a support artifact.
 
-### 流程验收清单（下载 → 配对 → 安装/启动）
+### 流程验收清单（下载 → 配对 → add/启动）
 
 可用下面清单快速确认 README 流程是否可执行：
 
@@ -340,14 +342,14 @@ Use this as a quick pass/fail checklist when validating the README flow:
 2. **校验**：对应系统校验命令可用且结果成功。
 3. **启动 daemon**：`agentd` 启动后可看到可用 `PAIR_CODE`。
 4. **配对**：`/pair <code>` 在有效期内返回成功。
-5. **安装链路**：`/agents` 包含 `openclaw`，`/install openclaw` 能正常开始。
+5. **安装链路**：`carrier add openclaw` 能成功完成。
 6. **启动与状态**：`/start openclaw` 成功，`/status openclaw` 显示 healthy/running。
 7. **兜底诊断**：失败场景可通过 `/diagnose openclaw` 产出诊断文件。
 
 ## 三平台 Bot 管理（超详细步骤，可直接照做）
 
-本节用于“只使用聊天软件操作”的场景。  
-你不需要理解系统内部原理，只要按步骤发送命令。
+本节用于“聊天侧运维命令（start/stop/status 等）”的场景。  
+安装必须通过 Carrier TUI/WebUI 完成，聊天里的 `/install` 已禁用。
 
 ### 先准备（缺一不可）
 
@@ -364,7 +366,7 @@ Use this as a quick pass/fail checklist when validating the README flow:
 
 1. 命令必须发给机器人账号（Bot），不能发给真人账号
 2. 每个平台第一次都要先执行：`/pair <PAIR_CODE>`
-3. 配对成功后，才能执行 `/agents`、`/install openclaw` 等命令
+3. 配对成功后，才能执行 `/agents`、`/start openclaw` 等管理命令
 4. 如果提示配对码无效或过期，向管理员申请新的 `PAIR_CODE`
 
 ### Telegram（逐步执行）
@@ -377,7 +379,6 @@ Use this as a quick pass/fail checklist when validating the README flow:
 6. 发送：`/agents`
 7. 确认回复中包含 `openclaw`
 8. 依次发送：
-   - `/install openclaw`
    - `/start openclaw`
    - `/status openclaw`
 9. 确认状态回复包含 `healthy`（或“健康”）
@@ -392,7 +393,6 @@ Use this as a quick pass/fail checklist when validating the README flow:
 6. 发送：`/agents`
 7. 确认回复中包含 `openclaw`
 8. 依次发送：
-   - `/install openclaw`
    - `/start openclaw`
    - `/status openclaw`
 9. 确认状态回复包含 `healthy`（或“健康”）
@@ -407,7 +407,6 @@ Use this as a quick pass/fail checklist when validating the README flow:
 6. 发送：`/agents`
 7. 确认回复中包含 `openclaw`
 8. 依次发送：
-   - `/install openclaw`
    - `/start openclaw`
    - `/status openclaw`
 9. 确认状态回复包含 `healthy`（或“健康”）
@@ -417,7 +416,7 @@ Use this as a quick pass/fail checklist when validating the README flow:
 ```text
 /pair <PAIR_CODE>
 /agents
-/install openclaw
+# 安装请在终端执行：carrier add openclaw
 /start openclaw
 /status openclaw
 /logs openclaw 200
@@ -432,7 +431,7 @@ Use this as a quick pass/fail checklist when validating the README flow:
 
 **配对成功 (`/pair`)：**
 ```
-✅ 配对成功。你现在可以使用 /agents、/install 等命令。
+✅ 配对成功。你现在可以使用 /agents、/start、/status 等管理命令。
 ```
 
 **代理列表 (`/agents`)：**
@@ -464,7 +463,7 @@ Use this as a quick pass/fail checklist when validating the README flow:
 2. `chat is not paired; run /pair <code> first`
    - 处理：当前聊天窗口还未配对，先执行 `/pair <PAIR_CODE>`
 3. `E_NOT_INSTALLED`
-   - 处理：先执行 `/install openclaw`，再执行 `/start openclaw`
+   - 处理：先在终端执行 `carrier add openclaw`，再执行 `/start openclaw`
 4. `E_ALREADY_RUNNING`
    - 处理：说明已经在运行，直接执行 `/status openclaw` 即可
 5. 没有任何回复
@@ -482,8 +481,8 @@ PAIR_CODE 获取方式: <填写由谁提供、有效期多久>
 
 ## Three-Platform Bot Management (Detailed Step-by-Step)
 
-This section is for users who operate only through chat apps.  
-Follow the steps exactly. No internal system knowledge is required.
+This section covers chat-side management commands (`/start`, `/stop`, `/status`, etc.).  
+Installation must be done in Carrier TUI/WebUI because chat `/install` is intentionally blocked.
 
 ### Prerequisites (all required)
 
@@ -500,7 +499,7 @@ If any of the items above is missing, this flow cannot be completed.
 
 1. Send commands to a bot account, not to a human account
 2. On each platform, run pairing first: `/pair <PAIR_CODE>`
-3. Only after pairing succeeds, run `/agents`, `/install openclaw`, and other commands
+3. Only after pairing succeeds, run `/agents`, `/start openclaw`, and other management commands
 4. If pairing code is invalid or expired, request a new `PAIR_CODE` from admin
 
 ### Telegram (step by step)
@@ -513,7 +512,6 @@ If any of the items above is missing, this flow cannot be completed.
 6. Send: `/agents`
 7. Confirm response includes `openclaw`
 8. Send in order:
-   - `/install openclaw`
    - `/start openclaw`
    - `/status openclaw`
 9. Confirm status response includes `healthy`
@@ -528,7 +526,6 @@ If any of the items above is missing, this flow cannot be completed.
 6. Send: `/agents`
 7. Confirm response includes `openclaw`
 8. Send in order:
-   - `/install openclaw`
    - `/start openclaw`
    - `/status openclaw`
 9. Confirm status response includes `healthy`
@@ -543,7 +540,6 @@ If any of the items above is missing, this flow cannot be completed.
 6. Send: `/agents`
 7. Confirm response includes `openclaw`
 8. Send in order:
-   - `/install openclaw`
    - `/start openclaw`
    - `/status openclaw`
 9. Confirm status response includes `healthy`
@@ -553,7 +549,7 @@ If any of the items above is missing, this flow cannot be completed.
 ```text
 /pair <PAIR_CODE>
 /agents
-/install openclaw
+# Install via terminal: carrier add openclaw
 /start openclaw
 /status openclaw
 /logs openclaw 200
@@ -568,7 +564,7 @@ Below are generic response examples (no real IDs or tokens):
 
 **Pairing success (`/pair`):**
 ```
-✅ Paired successfully. You can now use /agents, /install, and other commands.
+✅ Paired successfully. You can now use /agents, /start, /status, and other management commands.
 ```
 
 **Agent listing (`/agents`):**
@@ -600,7 +596,7 @@ Configuration is successful only when all conditions are met:
 2. `chat is not paired; run /pair <code> first`
    - Action: current chat is not paired; run `/pair <PAIR_CODE>` first
 3. `E_NOT_INSTALLED`
-   - Action: run `/install openclaw` first, then run `/start openclaw`
+   - Action: run `carrier add openclaw` in terminal first, then run `/start openclaw`
 4. `E_ALREADY_RUNNING`
    - Action: bot is already running; run `/status openclaw` directly
 5. No reply at all

@@ -13,6 +13,10 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 	if err != nil {
 		return err
 	}
+	startCommand, err := m.Runtime.Start.ResolveForCurrentOS()
+	if err != nil {
+		return fmt.Errorf("resolve start command for %s: %w", agentID, err)
+	}
 	if state.Install != InstallStateInstalled {
 		return ErrNotInstalled
 	}
@@ -65,7 +69,7 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 	}
 
 	// Start the process using ProcessManager
-	pid, runErr := s.processManager.Start(agentID, "sh", []string{"-c", m.Runtime.Start.Command})
+	pid, runErr := s.processManager.Start(agentID, "sh", []string{"-c", startCommand})
 	if runErr != nil {
 		triage, triageErr := s.HandleFailure(ctx, agentID, runErr.Error())
 		if triageErr == nil {

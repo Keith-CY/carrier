@@ -14,6 +14,11 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 	if err != nil {
 		return err
 	}
+	installCommand, err := m.Runtime.Install.ResolveForCurrentOS()
+	if err != nil {
+		manifestErr := fmt.Errorf("resolve install command for %s: %w", agentID, err)
+		return s.finalizeInstallFailure(agentID, manifestErr, "E_MANIFEST_INVALID")
+	}
 
 	opCtx, cancel := context.WithTimeout(ctx, s.commandTimeout)
 	defer cancel()
@@ -32,20 +37,20 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 		}
 	}
 
-	result, streamed, runErr := s.runCommandWithAgentLogs(opCtx, agentID, "install", m.Runtime.Install.Command)
+	result, streamed, runErr := s.runCommandWithAgentLogs(opCtx, agentID, "install", installCommand)
 	if streamed {
-		s.appendCommandLogSummary(agentID, "install", m.Runtime.Install.Command, result, runErr)
+		s.appendCommandLogSummary(agentID, "install", installCommand, result, runErr)
 	} else {
-		s.appendCommandLog(agentID, "install", m.Runtime.Install.Command, result, runErr)
+		s.appendCommandLog(agentID, "install", installCommand, result, runErr)
 	}
 	if runErr != nil {
 		repaired := s.triageInstallFailure(ctx, opCtx, agentID, runErr)
 		if repaired {
-			retryResult, retryStreamed, retryErr := s.runCommandWithAgentLogs(opCtx, agentID, "install-retry", m.Runtime.Install.Command)
+			retryResult, retryStreamed, retryErr := s.runCommandWithAgentLogs(opCtx, agentID, "install-retry", installCommand)
 			if retryStreamed {
-				s.appendCommandLogSummary(agentID, "install-retry", m.Runtime.Install.Command, retryResult, retryErr)
+				s.appendCommandLogSummary(agentID, "install-retry", installCommand, retryResult, retryErr)
 			} else {
-				s.appendCommandLog(agentID, "install-retry", m.Runtime.Install.Command, retryResult, retryErr)
+				s.appendCommandLog(agentID, "install-retry", installCommand, retryResult, retryErr)
 			}
 			if retryErr == nil {
 				s.markInstallSuccess(agentID)

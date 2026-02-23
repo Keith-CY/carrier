@@ -19,12 +19,18 @@ This page summarizes the implemented CLI command surface and the recommended usa
 - `carrier add <agent_id> --webui`
   - Browser/WebUI add flow.
 - `carrier list`
-  - Lists running managed agent instances.
+  - Lists managed agent instances with state.
 - `carrier stop`
   - Stops background services started by Carrier: daemon and gateway.
-- `carrier stop <instance_id>`
+- `carrier start <id|name>`
+  - Starts one managed agent instance.
+- `carrier stop <id|name>`
   - Stops one managed agent instance.
-- `carrier uninstall <instance_id>`
+- `carrier status <id|name>`
+  - Shows install/runtime status for one managed agent instance.
+- `carrier upgrade <id|name>`
+  - Upgrades one managed agent instance.
+- `carrier uninstall <id|name>`
   - Uninstalls and removes a managed agent instance.
 - `carrier daemon`
   - Starts Carrier daemon in the foreground.
@@ -61,6 +67,7 @@ Use `--webui` when interactive terminal access is unavailable or when onboarding
 carrier
 carrier onboard
 carrier add openclaw
+carrier status openclaw
 carrier list
 ```
 
@@ -78,12 +85,15 @@ carrier list
 carrier add <agent_id>
 carrier stop
 # For managed-instance flows:
-carrier stop <instance_id>
-carrier uninstall <instance_id>
+carrier start <id|name>
+carrier stop <id|name>
+carrier status <id|name>
+carrier upgrade <id|name>
+carrier uninstall <id|name>
 ```
 
 ## Daemon and gateway helpers
 
 - `carrier stop` only manages background carrier services and does not remove instance metadata.
-- `carrier stop <instance_id>` and `carrier uninstall <instance_id>` require a managed instance ID from `carrier list`.
+- `carrier start|stop|status|upgrade|uninstall <id|name>` accept either the instance ID or the instance name (for example, `openclaw`).
 - `carrier daemon` and `carrier gateway` are foreground commands and keep process running until interrupted.

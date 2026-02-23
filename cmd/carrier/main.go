@@ -6,8 +6,11 @@
 //	carrier daemon          Start daemon HTTP API server (foreground)
 //	carrier gateway         Start gateway HTTP server
 //	carrier stop            Stop background daemon and gateway started by Carrier
-//	carrier stop <id>       Stop a managed agent instance
-//	carrier uninstall <id>  Uninstall and remove a managed agent instance
+//	carrier stop <id|name>  Stop a managed agent instance
+//	carrier start <id|name> Start a managed agent instance
+//	carrier status <id|name> Show status for a managed agent instance
+//	carrier upgrade <id|name> Upgrade a managed agent instance
+//	carrier uninstall <id|name> Uninstall and remove a managed agent instance
 //	carrier list            List managed agent instances
 //	carrier onboard         Interactive TUI onboarding (channel/provider -> keep gateway running in background)
 //	carrier onboard --webui Launch WebUI onboarding (start/reuse daemon+gateway)
@@ -124,6 +127,7 @@ type managedAgentConfig struct {
 
 type managedAgentInstance struct {
 	ID           string `json:"id"`
+	Name         string `json:"name,omitempty"`
 	Type         string `json:"type"`
 	AgentID      string `json:"agent_id"`
 	GatewayURL   string `json:"gateway_url"`
@@ -291,8 +295,11 @@ Usage:
     --check, --yes, --dry-run, --force, --channel <stable|beta|dev>, --tag <dist-tag|version>, --timeout <seconds>, --json, --no-restart
   carrier gateway        Start gateway HTTP server
   carrier stop           Stop background daemon and gateway
-  carrier stop <id>      Stop a managed agent instance
-  carrier uninstall <id> Uninstall and remove a managed agent instance
+  carrier stop <id|name> Stop a managed agent instance
+  carrier start <id|name> Start a managed agent instance
+  carrier status <id|name> Show status for a managed agent instance
+  carrier upgrade <id|name> Upgrade a managed agent instance
+  carrier uninstall <id|name> Uninstall and remove a managed agent instance
   carrier list           List managed agent instances
   carrier onboard        Interactive onboarding (channel/provider -> keep gateway running in background)
   carrier onboard --webui
@@ -342,9 +349,42 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "start":
+			if len(commandArgs) < 1 {
+				fmt.Fprintln(os.Stderr, "start failed: instance id or name is required")
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runStartInstance(os.Stdout, commandArgs[0]); err != nil {
+				fmt.Fprintf(os.Stderr, "start failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "status":
+			if len(commandArgs) < 1 {
+				fmt.Fprintln(os.Stderr, "status failed: instance id or name is required")
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runStatusInstance(os.Stdout, commandArgs[0]); err != nil {
+				fmt.Fprintf(os.Stderr, "status failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "upgrade":
+			if len(commandArgs) < 1 {
+				fmt.Fprintln(os.Stderr, "upgrade failed: instance id or name is required")
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runUpgradeInstance(os.Stdout, commandArgs[0]); err != nil {
+				fmt.Fprintf(os.Stderr, "upgrade failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "uninstall":
 			if len(commandArgs) < 1 {
-				fmt.Fprintln(os.Stderr, "uninstall failed: instance id is required")
+				fmt.Fprintln(os.Stderr, "uninstall failed: instance id or name is required")
 				fmt.Fprint(os.Stderr, usage)
 				os.Exit(1)
 			}
@@ -454,6 +494,12 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "gateway", args[2:], nil
 	case "stop":
 		return "stop", args[2:], nil
+	case "start":
+		return "start", args[2:], nil
+	case "status":
+		return "status", args[2:], nil
+	case "upgrade":
+		return "upgrade", args[2:], nil
 	case "uninstall":
 		return "uninstall", args[2:], nil
 	case "list":
@@ -898,24 +944,44 @@ func runStop(out io.Writer) error {
 	return nil
 }
 
-func runStopInstance(out io.Writer, instanceID string) error {
-	instanceID = strings.TrimSpace(instanceID)
-	if instanceID == "" {
-		return errors.New("instance id is required")
-	}
+func runStartInstance(out io.Writer, target string) error {
 	instances, path, err := loadManagedInstances()
 	if err != nil {
 		return err
 	}
-	idx := findManagedInstanceIndex(instances, instanceID)
-	if idx < 0 {
-		return fmt.Errorf("instance %s not found", instanceID)
+	inst, idx, err := resolveManagedInstanceTarget(instances, target)
+	if err != nil {
+		return err
 	}
-	inst := instances[idx]
 	if _, err := ensureDaemonRunning(out); err != nil {
 		return err
 	}
-	if err := daemonAgentAction(inst.AgentID, "stop"); err != nil {
+	if err := daemonAgentActionWithProgress(out, inst.AgentID, "start", false); err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	instances[idx].RuntimeState = "running"
+	instances[idx].UpdatedAt = now
+	if err := saveManagedInstances(path, instances); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "✅ started instance %s (%s)\n", inst.ID, managedInstanceDisplayName(inst))
+	return nil
+}
+
+func runStopInstance(out io.Writer, target string) error {
+	instances, path, err := loadManagedInstances()
+	if err != nil {
+		return err
+	}
+	inst, idx, err := resolveManagedInstanceTarget(instances, target)
+	if err != nil {
+		return err
+	}
+	if _, err := ensureDaemonRunning(out); err != nil {
+		return err
+	}
+	if err := daemonAgentActionWithProgress(out, inst.AgentID, "stop", false); err != nil {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -924,24 +990,81 @@ func runStopInstance(out io.Writer, instanceID string) error {
 	if err := saveManagedInstances(path, instances); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "✅ stopped instance %s (%s)\n", inst.ID, inst.Type)
+	_, _ = fmt.Fprintf(out, "✅ stopped instance %s (%s)\n", inst.ID, managedInstanceDisplayName(inst))
 	return nil
 }
 
-func runUninstallInstance(out io.Writer, instanceID string) error {
-	instanceID = strings.TrimSpace(instanceID)
-	if instanceID == "" {
-		return errors.New("instance id is required")
-	}
+func runUpgradeInstance(out io.Writer, target string) error {
 	instances, path, err := loadManagedInstances()
 	if err != nil {
 		return err
 	}
-	idx := findManagedInstanceIndex(instances, instanceID)
-	if idx < 0 {
-		return fmt.Errorf("instance %s not found", instanceID)
+	inst, idx, err := resolveManagedInstanceTarget(instances, target)
+	if err != nil {
+		return err
 	}
-	inst := instances[idx]
+	if _, err := ensureDaemonRunning(out); err != nil {
+		return err
+	}
+	if err := daemonAgentActionWithProgress(out, inst.AgentID, "upgrade", false); err != nil {
+		return err
+	}
+	instances[idx].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := saveManagedInstances(path, instances); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "✅ upgraded instance %s (%s)\n", inst.ID, managedInstanceDisplayName(inst))
+	return nil
+}
+
+func runStatusInstance(out io.Writer, target string) error {
+	instances, path, err := loadManagedInstances()
+	if err != nil {
+		return err
+	}
+	inst, idx, err := resolveManagedInstanceTarget(instances, target)
+	if err != nil {
+		return err
+	}
+	if _, err := ensureDaemonRunning(out); err != nil {
+		return err
+	}
+	status, err := daemonFetchAgentStatus(inst.AgentID)
+	if err != nil {
+		return err
+	}
+	if runtimeState := strings.TrimSpace(status.RuntimeState); runtimeState != "" {
+		instances[idx].RuntimeState = runtimeState
+	}
+	instances[idx].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := saveManagedInstances(path, instances); err != nil {
+		return err
+	}
+	installState := strings.TrimSpace(status.InstallState)
+	if installState == "" {
+		installState = "unknown"
+	}
+	runtimeState := strings.TrimSpace(status.RuntimeState)
+	if runtimeState == "" {
+		runtimeState = "unknown"
+	}
+	_, _ = fmt.Fprintf(out, "Instance %s (%s)\n", inst.ID, managedInstanceDisplayName(inst))
+	_, _ = fmt.Fprintf(out, "  install=%s runtime=%s\n", installState, runtimeState)
+	if lastErr := strings.TrimSpace(status.LastError); lastErr != "" {
+		_, _ = fmt.Fprintf(out, "  lastError=%s\n", lastErr)
+	}
+	return nil
+}
+
+func runUninstallInstance(out io.Writer, instanceID string) error {
+	instances, path, err := loadManagedInstances()
+	if err != nil {
+		return err
+	}
+	inst, idx, err := resolveManagedInstanceTarget(instances, instanceID)
+	if err != nil {
+		return err
+	}
 	if _, err := ensureDaemonRunning(out); err != nil {
 		return err
 	}
@@ -956,7 +1079,7 @@ func runUninstallInstance(out io.Writer, instanceID string) error {
 	if err := saveManagedInstances(path, instances); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "✅ uninstalled instance %s (%s)\n", inst.ID, inst.Type)
+	_, _ = fmt.Fprintf(out, "✅ uninstalled instance %s (%s)\n", inst.ID, managedInstanceDisplayName(inst))
 	return nil
 }
 
@@ -965,30 +1088,77 @@ func runListInstances(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	running := make([]managedAgentInstance, 0, len(instances))
-	for _, inst := range instances {
-		if strings.EqualFold(strings.TrimSpace(inst.RuntimeState), "running") {
-			running = append(running, inst)
-		}
-	}
-	if len(running) == 0 {
-		_, _ = fmt.Fprintln(out, "No agent instances are running.")
+	if len(instances) == 0 {
+		_, _ = fmt.Fprintln(out, "No managed agent instances found.")
 		return nil
 	}
-	_, _ = fmt.Fprintln(out, "Agent instances:")
-	for _, inst := range running {
+	_, _ = fmt.Fprintln(out, "Managed agent instances:")
+	for _, inst := range instances {
 		runtimeState := strings.TrimSpace(inst.RuntimeState)
 		if runtimeState == "" {
 			runtimeState = "unknown"
 		}
-		_, _ = fmt.Fprintf(out, "- id=%s type=%s state=%s gateway=%s\n",
+		_, _ = fmt.Fprintf(out, "- id=%s name=%s type=%s state=%s gateway=%s\n",
 			strings.TrimSpace(inst.ID),
+			managedInstanceDisplayName(inst),
 			strings.TrimSpace(inst.Type),
 			runtimeState,
 			strings.TrimSpace(inst.GatewayURL),
 		)
 	}
 	return nil
+}
+
+func resolveManagedInstanceTarget(instances []managedAgentInstance, target string) (managedAgentInstance, int, error) {
+	trimmed := strings.TrimSpace(target)
+	if trimmed == "" {
+		return managedAgentInstance{}, -1, errors.New("instance id or name is required")
+	}
+	matches := make([]int, 0, 1)
+	for i, inst := range instances {
+		if managedInstanceMatchesTarget(inst, trimmed) {
+			matches = append(matches, i)
+		}
+	}
+	if len(matches) == 0 {
+		return managedAgentInstance{}, -1, fmt.Errorf("instance %s not found", trimmed)
+	}
+	if len(matches) > 1 {
+		names := make([]string, 0, len(matches))
+		for _, idx := range matches {
+			inst := instances[idx]
+			names = append(names, fmt.Sprintf("%s(%s)", strings.TrimSpace(inst.ID), managedInstanceDisplayName(inst)))
+		}
+		sort.Strings(names)
+		return managedAgentInstance{}, -1, fmt.Errorf("target %s is ambiguous; matches: %s", trimmed, strings.Join(names, ", "))
+	}
+	idx := matches[0]
+	return instances[idx], idx, nil
+}
+
+func managedInstanceMatchesTarget(inst managedAgentInstance, target string) bool {
+	candidates := []string{
+		inst.ID,
+		inst.Name,
+		inst.Type,
+		inst.AgentID,
+	}
+	for _, candidate := range candidates {
+		if strings.EqualFold(strings.TrimSpace(candidate), strings.TrimSpace(target)) && strings.TrimSpace(candidate) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func managedInstanceDisplayName(inst managedAgentInstance) string {
+	if name := strings.TrimSpace(inst.Name); name != "" {
+		return name
+	}
+	if agent := strings.TrimSpace(inst.AgentID); agent != "" {
+		return agent
+	}
+	return strings.TrimSpace(inst.Type)
 }
 
 func stopBackgroundService(
@@ -1365,6 +1535,16 @@ func findManagedInstanceIndex(instances []managedAgentInstance, instanceID strin
 	id := strings.TrimSpace(instanceID)
 	for i, inst := range instances {
 		if strings.EqualFold(strings.TrimSpace(inst.ID), id) {
+			return i
+		}
+	}
+	return -1
+}
+
+func findManagedInstanceIndexByAgentID(instances []managedAgentInstance, agentID string) int {
+	id := strings.TrimSpace(agentID)
+	for i, inst := range instances {
+		if strings.EqualFold(strings.TrimSpace(inst.AgentID), id) || strings.EqualFold(strings.TrimSpace(inst.Type), id) {
 			return i
 		}
 	}
@@ -1821,11 +2001,26 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 	_, _ = fmt.Fprintln(out, "-----------------")
 	_, _ = fmt.Fprintf(out, "Agent: %s\n", cfg.Name)
 	_, _ = fmt.Fprintf(out, "Tip: for browser flow, run `carrier add %s --webui`.\n", cfg.ID)
-	instanceID, err := generateManagedInstanceID(cfg.ID)
+	instanceName := cfg.ID
+	instanceID := ""
+	createdAt := ""
+	existingInstances, _, err := loadManagedInstances()
 	if err != nil {
 		return err
 	}
+	if existingIdx := findManagedInstanceIndexByAgentID(existingInstances, cfg.ID); existingIdx >= 0 {
+		instanceID = strings.TrimSpace(existingInstances[existingIdx].ID)
+		createdAt = strings.TrimSpace(existingInstances[existingIdx].CreatedAt)
+		_, _ = fmt.Fprintf(out, "Reusing existing instance for %s.\n", cfg.ID)
+	}
+	if instanceID == "" {
+		instanceID, err = generateManagedInstanceID(cfg.ID)
+		if err != nil {
+			return err
+		}
+	}
 	_, _ = fmt.Fprintf(out, "Instance: %s\n", instanceID)
+	_, _ = fmt.Fprintf(out, "Name: %s\n", instanceName)
 	_, _ = fmt.Fprintln(out, "Step 1/4: Configure chat channel")
 	channel, ok := resolveManagedAgentChannel(cfg.ID)
 	if !ok {
@@ -1894,8 +2089,12 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if createdAt == "" {
+		createdAt = now
+	}
 	inst := managedAgentInstance{
 		ID:           instanceID,
+		Name:         instanceName,
 		Type:         cfg.ID,
 		AgentID:      cfg.ID,
 		GatewayURL:   gatewayProbeBaseURL(),
@@ -1905,7 +2104,7 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 		Channel:      result.ChannelID,
 		Provider:     result.ProviderID,
 		RuntimeState: "running",
-		CreatedAt:    now,
+		CreatedAt:    createdAt,
 		UpdatedAt:    now,
 	}
 	if err := upsertManagedInstance(inst); err != nil {

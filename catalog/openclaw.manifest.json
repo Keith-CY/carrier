@@ -11,10 +11,18 @@
   "runtime": {
     "type": "local_binary",
     "install": {
-      "command": "npm install -g openclaw@1.0.0"
+      "command_by_os": {
+        "darwin": "curl -fsSL https://openclaw.ai/install.sh | bash",
+        "linux": "curl -fsSL https://openclaw.ai/install.sh | bash",
+        "windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"iwr -useb https://openclaw.ai/install.ps1 | iex\" || (curl -fsSL https://openclaw.ai/install.cmd -o install.cmd && cmd.exe /c \"install.cmd && del install.cmd\")"
+      }
     },
     "upgrade": {
-      "command": "npm install -g openclaw@1.0.0"
+      "command_by_os": {
+        "darwin": "curl -fsSL https://openclaw.ai/install.sh | bash",
+        "linux": "curl -fsSL https://openclaw.ai/install.sh | bash",
+        "windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"iwr -useb https://openclaw.ai/install.ps1 | iex\" || (curl -fsSL https://openclaw.ai/install.cmd -o install.cmd && cmd.exe /c \"install.cmd && del install.cmd\")"
+      }
     },
     "start": {
       "command": "openclaw gateway"

@@ -3,6 +3,7 @@ package manifest
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 )
 
@@ -52,7 +53,50 @@ type RuntimeSpec struct {
 }
 
 type CommandSpec struct {
-	Command string `json:"command"`
+	Command     string            `json:"command,omitempty"`
+	CommandByOS map[string]string `json:"command_by_os,omitempty"`
+}
+
+// IsEmpty reports whether neither command nor command_by_os is defined.
+func (c CommandSpec) IsEmpty() bool {
+	if strings.TrimSpace(c.Command) != "" {
+		return false
+	}
+	for _, value := range c.CommandByOS {
+		if strings.TrimSpace(value) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// ResolveForCurrentOS resolves the runtime command for the active GOOS.
+func (c CommandSpec) ResolveForCurrentOS() (string, error) {
+	return c.ResolveForGOOS(runtime.GOOS)
+}
+
+// ResolveForGOOS resolves the runtime command for a specific GOOS value.
+// Resolution order:
+// 1. command_by_os[goos]
+// 2. command_by_os["default"]
+// 3. command
+func (c CommandSpec) ResolveForGOOS(goos string) (string, error) {
+	goos = strings.ToLower(strings.TrimSpace(goos))
+	if goos != "" {
+		if cmd := strings.TrimSpace(c.CommandByOS[goos]); cmd != "" {
+			return cmd, nil
+		}
+	}
+	if cmd := strings.TrimSpace(c.CommandByOS["default"]); cmd != "" {
+		return cmd, nil
+	}
+	if cmd := strings.TrimSpace(c.Command); cmd != "" {
+		return cmd, nil
+	}
+	if goos == "" {
+		return "", errors.New("command is required")
+	}
+	return "", fmt.Errorf("command is not defined for os %q", goos)
 }
 
 type NetworkSpec struct {
@@ -160,17 +204,59 @@ func validateRuntime(r RuntimeSpec) error {
 		)
 	}
 
-	if err := validateRequired("runtime.install.command", r.Install.Command); err != nil {
+	if err := validateCommandSpec("runtime.install", r.Install, true); err != nil {
 		return err
 	}
 	// runtime.upgrade.command is optional - not all agents need upgrade support
-	if err := validateRequired("runtime.start.command", r.Start.Command); err != nil {
+	if err := validateCommandSpec("runtime.upgrade", r.Upgrade, false); err != nil {
 		return err
 	}
-	if err := validateRequired("runtime.stop.command", r.Stop.Command); err != nil {
+	if err := validateCommandSpec("runtime.start", r.Start, true); err != nil {
+		return err
+	}
+	if err := validateCommandSpec("runtime.stop", r.Stop, true); err != nil {
 		return err
 	}
 
+	return nil
+}
+
+func validateCommandSpec(field string, command CommandSpec, required bool) error {
+	trimmedDefault := strings.TrimSpace(command.Command)
+	if trimmedDefault != "" {
+		if err := validateCommandByOS(field, command.CommandByOS); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if len(command.CommandByOS) > 0 {
+		if err := validateCommandByOS(field, command.CommandByOS); err != nil {
+			return err
+		}
+		// command_by_os is present and valid, so this command spec is satisfied.
+		return nil
+	}
+
+	if required {
+		return fmt.Errorf("%s.command is required", field)
+	}
+	return nil
+}
+
+func validateCommandByOS(field string, byOS map[string]string) error {
+	for osName, raw := range byOS {
+		normalized := strings.ToLower(strings.TrimSpace(osName))
+		if normalized == "" {
+			return fmt.Errorf("%s.command_by_os key must not be empty", field)
+		}
+		if normalized != osName {
+			return fmt.Errorf("%s.command_by_os key %q must be lowercase and trimmed", field, osName)
+		}
+		if strings.TrimSpace(raw) == "" {
+			return fmt.Errorf("%s.command_by_os.%s is required", field, osName)
+		}
+	}
 	return nil
 }
 
