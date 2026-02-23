@@ -63,7 +63,7 @@ func getInstallCommand() string {
 	case "windows":
 		return resolveWindowsOpenClawInstallCommand(exec.LookPath)
 	default:
-		return fmt.Sprintf(`sh -c 'set -e; tmp="$(mktemp)"; trap "rm -f \"$tmp\"" EXIT; curl -fsSL %s -o "$tmp"; bash "$tmp" --no-onboard --no-prompt'`, installScriptURL)
+		return fmt.Sprintf(`sh -c 'set -e; tmp="$(mktemp)"; trap "rm -f \"$tmp\"" EXIT; curl -fsSL --proto "=https" --tlsv1.2 %s -o "$tmp"; bash "$tmp" --no-onboard --no-prompt'`, installScriptURL)
 	}
 }
 
@@ -71,7 +71,7 @@ func resolveWindowsOpenClawInstallCommand(lookPath func(string) (string, error))
 	if commandExistsOnHost(lookPath, "powershell") || commandExistsOnHost(lookPath, "powershell.exe") {
 		return fmt.Sprintf(`powershell -NoProfile -Command "$ErrorActionPreference='Stop';$env:OPENCLAW_INSTALL_METHOD='npm';$env:OPENCLAW_NO_ONBOARD='1';$env:OPENCLAW_NO_PROMPT='1';$tmp=Join-Path $env:TEMP ('openclaw-install-' + [guid]::NewGuid().ToString() + '.ps1');try { iwr -useb %s -OutFile $tmp; & $tmp } finally { Remove-Item $tmp -ErrorAction SilentlyContinue }"`, installPS1URL)
 	}
-	return fmt.Sprintf(`set "OPENCLAW_NO_ONBOARD=1" && set "OPENCLAW_NO_PROMPT=1" && set "TMPF=%%TEMP%%\openclaw-install-%%RANDOM%%%%RANDOM%%.cmd" && curl -fsSL %s -o "%%TMPF%%" && call "%%TMPF%%" --no-onboard && del "%%TMPF%%"`, installCMDURL)
+	return fmt.Sprintf(`set "OPENCLAW_NO_ONBOARD=1" && set "OPENCLAW_NO_PROMPT=1" && set "TMPF=%%TEMP%%\openclaw-install-%%RANDOM%%%%RANDOM%%.cmd" && curl -fsSL --proto "=https" --tlsv1.2 %s -o "%%TMPF%%" && call "%%TMPF%%" --no-onboard && del "%%TMPF%%"`, installCMDURL)
 }
 
 func commandExistsOnHost(lookPath func(string) (string, error), name string) bool {

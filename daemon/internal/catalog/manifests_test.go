@@ -170,6 +170,8 @@ func TestGetInstallCommand_Default(t *testing.T) {
 			"sh -c",
 			"mktemp",
 			"curl -fsSL",
+			`--proto "=https"`,
+			"--tlsv1.2",
 			installScriptURL,
 			"-o \"$tmp\"",
 			"bash \"$tmp\"",
@@ -233,6 +235,8 @@ func TestResolveWindowsOpenClawInstallCommand_CmdFallback(t *testing.T) {
 	}
 	for _, want := range []string{
 		"curl -fsSL",
+		`--proto "=https"`,
+		"--tlsv1.2",
 		installCMDURL,
 		"set \"TMPF=%TEMP%\\openclaw-install-%RANDOM%%RANDOM%.cmd\"",
 		"call \"%TMPF%\"",
