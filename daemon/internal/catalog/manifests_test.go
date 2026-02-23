@@ -268,7 +268,6 @@ func TestGetInstallCommand_UnsafeMethodFallsBackToDefault(t *testing.T) {
 	}
 }
 
-
 func TestGetInstallCommand_ExplicitGitUsesCargoBuildJobs(t *testing.T) {
 	t.Setenv("CARRIER_DEV_MODE", "")
 	t.Setenv(openClawInstallMethodEnv, "git")
@@ -341,6 +340,7 @@ func TestGetStartCommand_Unix(t *testing.T) {
 		want string
 	}{
 		{"home bin path", `$HOME/.local/bin/openclaw`},
+		{"npm-global path", `$HOME/.npm-global/bin/openclaw`},
 		{"path lookup", "command -v openclaw"},
 		{"subcommand", "gateway"},
 	} {
@@ -366,6 +366,7 @@ func TestGetStopCommand_Unix(t *testing.T) {
 		want string
 	}{
 		{"home bin path", `$HOME/.local/bin/openclaw`},
+		{"npm-global path", `$HOME/.npm-global/bin/openclaw`},
 		{"path lookup", "command -v openclaw"},
 		{"subcommand", "gateway stop"},
 	} {

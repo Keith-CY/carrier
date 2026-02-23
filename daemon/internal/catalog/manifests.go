@@ -196,7 +196,7 @@ func getStartCommand() string {
 		// Git installs create a ~/.local/bin wrapper, while npm installs may
 		// place openclaw in npm's global bin dir. Resolve both without forcing
 		// pre-flight to depend on a single hardcoded absolute path.
-		return `sh -c 'if [ -x "$HOME/.local/bin/openclaw" ]; then exec "$HOME/.local/bin/openclaw" gateway; elif command -v openclaw >/dev/null 2>&1; then exec "$(command -v openclaw)" gateway; else echo "openclaw executable not found (checked $HOME/.local/bin/openclaw and PATH)" >&2; exit 127; fi'`
+		return `sh -c 'if [ -x "$HOME/.local/bin/openclaw" ]; then exec "$HOME/.local/bin/openclaw" gateway; elif [ -x "$HOME/.npm-global/bin/openclaw" ]; then exec "$HOME/.npm-global/bin/openclaw" gateway; elif command -v openclaw >/dev/null 2>&1; then exec "$(command -v openclaw)" gateway; else echo "openclaw executable not found (checked $HOME/.local/bin/openclaw, $HOME/.npm-global/bin/openclaw, and PATH)" >&2; exit 127; fi'`
 	}
 }
 
@@ -206,7 +206,7 @@ func getStopCommand() string {
 	case "windows":
 		return "openclaw gateway stop"
 	default:
-		return `sh -c 'if [ -x "$HOME/.local/bin/openclaw" ]; then exec "$HOME/.local/bin/openclaw" gateway stop; elif command -v openclaw >/dev/null 2>&1; then exec "$(command -v openclaw)" gateway stop; else echo "openclaw executable not found (checked $HOME/.local/bin/openclaw and PATH)" >&2; exit 127; fi'`
+		return `sh -c 'if [ -x "$HOME/.local/bin/openclaw" ]; then exec "$HOME/.local/bin/openclaw" gateway stop; elif [ -x "$HOME/.npm-global/bin/openclaw" ]; then exec "$HOME/.npm-global/bin/openclaw" gateway stop; elif command -v openclaw >/dev/null 2>&1; then exec "$(command -v openclaw)" gateway stop; else echo "openclaw executable not found (checked $HOME/.local/bin/openclaw, $HOME/.npm-global/bin/openclaw, and PATH)" >&2; exit 127; fi'`
 	}
 }
 
