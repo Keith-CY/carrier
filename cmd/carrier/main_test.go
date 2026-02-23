@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -257,5 +259,173 @@ func TestPickManagedAddProviderWithReasonUsesLatestManagedInstanceProvider(t *te
 	}
 	if !strings.Contains(strings.ToLower(reason), "latest openclaw instance") {
 		t.Fatalf("reason should mention latest managed instance reuse, got %q", reason)
+	}
+}
+
+func TestParseCarrierCommandRoutesVersionAliases(t *testing.T) {
+	for _, command := range []string{"version", "--version", "-v", "-V"} {
+		t.Run(command, func(t *testing.T) {
+			cmd, args, err := parseCarrierCommand([]string{"carrier", command})
+			if err != nil {
+				t.Fatalf("parseCarrierCommand(%q) error: %v", command, err)
+			}
+			if cmd != "version" {
+				t.Fatalf("parseCarrierCommand(%q) = %q, want version", command, cmd)
+			}
+			if len(args) != 0 {
+				t.Fatalf("args = %v, want empty", args)
+			}
+		})
+	}
+}
+
+func TestParseCarrierCommandRoutesUpdateCommand(t *testing.T) {
+	cmd, args, err := parseCarrierCommand([]string{"carrier", "update", "--check"})
+	if err != nil {
+		t.Fatalf("parseCarrierCommand(update) error: %v", err)
+	}
+	if cmd != "update" {
+		t.Fatalf("cmd = %q, want update", cmd)
+	}
+	if len(args) != 1 || args[0] != "--check" {
+		t.Fatalf("args = %v, want [--check]", args)
+	}
+}
+
+func TestParseUpdateCommandArgsDefaultsAndPriority(t *testing.T) {
+	opts, err := parseUpdateCommandArgs(nil)
+	if err != nil {
+		t.Fatalf("parseUpdateCommandArgs(nil) error: %v", err)
+	}
+	if opts.Channel != "stable" {
+		t.Fatalf("channel = %q, want stable", opts.Channel)
+	}
+	if opts.Timeout != defaultUpdateTimeout {
+		t.Fatalf("timeout = %s, want %s", opts.Timeout, defaultUpdateTimeout)
+	}
+
+	opts, err = parseUpdateCommandArgs([]string{
+		"--tag", "v9.9.9",
+		"--channel", "beta",
+	})
+	if err != nil {
+		t.Fatalf("parseUpdateCommandArgs with tag+channel error: %v", err)
+	}
+	if opts.Tag != "v9.9.9" {
+		t.Fatalf("tag = %q, want %q", opts.Tag, "v9.9.9")
+	}
+	if opts.Channel != "beta" {
+		t.Fatalf("channel = %q, want beta", opts.Channel)
+	}
+}
+
+func TestParseUpdateCommandArgsRejectsInvalidInput(t *testing.T) {
+	if _, err := parseUpdateCommandArgs([]string{"--timeout", "0"}); err == nil {
+		t.Fatal("expected timeout validation failure")
+	}
+	if _, err := parseUpdateCommandArgs([]string{"--channel", "nightly"}); err == nil {
+		t.Fatal("expected invalid channel validation failure")
+	}
+}
+
+func TestResolveUpdateTargetPrefersTag(t *testing.T) {
+	origGit := execGitCommand
+	t.Cleanup(func() { execGitCommand = origGit })
+	execGitCommand = func(_ context.Context, _ string, args ...string) (string, error) {
+		switch strings.Join(args, " ") {
+		case "tag --list v1.2.3":
+			return "v1.2.3", nil
+		default:
+			t.Fatalf("unexpected git command: %v", args)
+			return "", nil
+		}
+	}
+
+	target, source, err := resolveUpdateTarget(10*time.Second, "/tmp", updateCommandOptions{
+		Tag:     "v1.2.3",
+		Channel: "beta",
+	})
+	if err != nil {
+		t.Fatalf("resolveUpdateTarget error: %v", err)
+	}
+	if target != "v1.2.3" {
+		t.Fatalf("target = %q, want v1.2.3", target)
+	}
+	if source != "tag" {
+		t.Fatalf("source = %q, want tag", source)
+	}
+}
+
+func TestResolveUpdateTargetResolvesStableAndBetaTags(t *testing.T) {
+	origGit := execGitCommand
+	t.Cleanup(func() { execGitCommand = origGit })
+	execGitCommand = func(_ context.Context, _ string, args ...string) (string, error) {
+		switch strings.Join(args, " ") {
+		case "tag --list --sort=-creatordate":
+			return "v2.0.0\nv2.0.0-beta.2\nv1.9.0", nil
+		default:
+			t.Fatalf("unexpected git command: %v", args)
+			return "", nil
+		}
+	}
+
+	target, source, err := resolveUpdateTarget(10*time.Second, "/tmp", updateCommandOptions{Channel: "beta"})
+	if err != nil {
+		t.Fatalf("resolveUpdateTarget(beta) error: %v", err)
+	}
+	if target != "v2.0.0-beta.2" {
+		t.Fatalf("target(beta) = %q, want v2.0.0-beta.2", target)
+	}
+	if source != "channel beta" {
+		t.Fatalf("source(beta) = %q, want channel beta", source)
+	}
+
+	target, source, err = resolveUpdateTarget(10*time.Second, "/tmp", updateCommandOptions{Channel: "stable"})
+	if err != nil {
+		t.Fatalf("resolveUpdateTarget(stable) error: %v", err)
+	}
+	if target != "v2.0.0" {
+		t.Fatalf("target(stable) = %q, want v2.0.0", target)
+	}
+	if source != "channel stable" {
+		t.Fatalf("source(stable) = %q, want channel stable", source)
+	}
+}
+
+func TestRunVersionCommandJSON(t *testing.T) {
+	var out bytes.Buffer
+	if err := runVersionCommand(&out, versionCommandOptions{JSON: true}); err != nil {
+		t.Fatalf("runVersionCommand error: %v", err)
+	}
+	var payload versionInfo
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal version output: %v", err)
+	}
+	if payload.Version == "" {
+		t.Fatalf("payload.version is empty")
+	}
+}
+
+func TestRunVersionCommandText(t *testing.T) {
+	var out bytes.Buffer
+	if err := runVersionCommand(&out, versionCommandOptions{}); err != nil {
+		t.Fatalf("runVersionCommand error: %v", err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "carrier") {
+		t.Fatalf("version text should contain command name, got: %q", text)
+	}
+}
+
+func TestParseVersionCommandArgs(t *testing.T) {
+	opts, err := parseVersionCommandArgs([]string{"--json"})
+	if err != nil {
+		t.Fatalf("parseVersionCommandArgs error: %v", err)
+	}
+	if !opts.JSON {
+		t.Fatal("opts.JSON = false, want true")
+	}
+	if _, err := parseVersionCommandArgs([]string{"--bad"}); err == nil {
+		t.Fatal("expected parse error for unknown version option")
 	}
 }
