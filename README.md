@@ -218,6 +218,9 @@ Implementation notes:
   - `carrier-main-<full_commit_sha>-windows-x64.zip`
 - Release assets can be downloaded directly from:
   - `https://github.com/Keith-CY/carrier/releases/download/main-<full_commit_sha>/carrier-main-<full_commit_sha>-<label>.zip`
+- Quick install (`curl ... | bash`) is available via:
+  - `curl -fsSL https://raw.githubusercontent.com/Keith-CY/carrier/main/scripts/install.sh | bash`
+  - Installer behavior: resolves `main` HEAD SHA, downloads `carrier-main-<full_commit_sha>-<label>.zip`, verifies `.sha256`, installs `carrier`.
 - Do not infer latest by taking the first `/releases` entry; resolve `main` HEAD SHA and use `main-<full_commit_sha>`.
 - Use TUI flow for onboarding/install on EC2:
   - `carrier onboard`

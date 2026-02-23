@@ -1,120 +1,207 @@
 #!/bin/sh
-# Carrier install script with checksum verification
-# Downloads, verifies, and installs openclaw binary from GitHub releases
+# Carrier installer script with checksum verification.
 #
 # Usage:
-#   OPENCLAW_VERSION=1.0.0 OPENCLAW_CHECKSUM=abc123... ./install.sh
-#   Or pipe from curl (checksum still required via env):
-#   curl -fsSL https://raw.githubusercontent.com/Keith-CY/carrier/main/scripts/install.sh | \
-#     OPENCLAW_VERSION=1.0.0 OPENCLAW_CHECKSUM=abc123... sh
+#   curl -fsSL https://raw.githubusercontent.com/Keith-CY/carrier/main/scripts/install.sh | bash
 #
-# Environment Variables:
-#   OPENCLAW_VERSION    - Version to install (default: 1.0.0)
-#   OPENCLAW_CHECKSUM   - Expected SHA-256 checksum (REQUIRED)
-#   INSTALL_DIR         - Installation directory (default: /usr/local/bin)
-#   DRY_RUN             - If set, print actions without executing (for testing)
+# Optional environment variables:
+#   CARRIER_REPO       - GitHub repo (default: Keith-CY/carrier)
+#   CARRIER_TAG        - Release tag (example: main-<full_commit_sha>)
+#   CARRIER_SHA        - Full commit SHA (used as main-<sha> when CARRIER_TAG is unset)
+#   CARRIER_LABEL      - Asset label (default: auto-detected, e.g. linux-x64)
+#   INSTALL_DIR        - Install directory (default: /usr/local/bin)
+#   BINARY_NAME        - Installed binary name (default: carrier)
+#   VERIFY_CHECKSUM    - 1 to verify .sha256 sidecar, 0 to skip (default: 1)
+#   DRY_RUN            - If set, print actions without executing
 
-set -e
+set -eu
 
-VERSION="${OPENCLAW_VERSION:-1.0.0}"
+REPO="${CARRIER_REPO:-Keith-CY/carrier}"
+TAG="${CARRIER_TAG:-}"
+SHA="${CARRIER_SHA:-}"
+LABEL="${CARRIER_LABEL:-}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
-BASE_URL="https://github.com/Keith-CY/carrier/releases/download/v${VERSION}"
+BINARY_NAME="${BINARY_NAME:-carrier}"
+VERIFY_CHECKSUM="${VERIFY_CHECKSUM:-1}"
 
-# Platform detection
-OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
-ARCH="$(uname -m)"
+log() {
+    printf '%s\n' "$*"
+}
 
-# Normalize architecture names
-case "$ARCH" in
-    x86_64) ARCH="amd64" ;;
-    aarch64) ARCH="arm64" ;;
-    armv7l) ARCH="armv7" ;;
-    # riscv64, i386, etc. - keep as-is
-esac
-
-BINARY="openclaw-v${VERSION}-${OS}-${ARCH}"
-BINARY_NAME="openclaw"
-
-# Determine checksum command
-if command -v sha256sum >/dev/null 2>&1; then
-    CHECKSUM_CMD="sha256sum"
-elif command -v shasum >/dev/null 2>&1; then
-    CHECKSUM_CMD="shasum -a 256"
-else
-    echo "ERROR: No SHA-256 checksum utility found (sha256sum or shasum)" >&2
+fail() {
+    printf 'ERROR: %s\n' "$*" >&2
     exit 1
+}
+
+require_cmd() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        fail "required command not found: $1"
+    fi
+}
+
+is_full_sha() {
+    printf '%s' "$1" | grep -Eq '^[0-9a-f]{40}$'
+}
+
+detect_label() {
+    os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+    arch="$(uname -m)"
+
+    case "$arch" in
+        x86_64|amd64) arch="x64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *) fail "unsupported architecture: $arch (set CARRIER_LABEL to override)" ;;
+    esac
+
+    case "$os" in
+        linux) printf 'linux-%s\n' "$arch" ;;
+        darwin) printf 'darwin-%s\n' "$arch" ;;
+        msys*|mingw*|cygwin*) printf 'windows-%s\n' "$arch" ;;
+        *) fail "unsupported OS: $os (set CARRIER_LABEL to override)" ;;
+    esac
+}
+
+resolve_main_sha() {
+    repo="$1"
+    api_url="https://api.github.com/repos/${repo}/commits/main"
+    json="$(curl -fsSL --retry 3 --retry-delay 2 "$api_url")" || return 1
+    sha="$(printf '%s\n' "$json" | awk -F'"' '/"sha":/ {print $4; exit}')"
+    is_full_sha "$sha" || return 1
+    printf '%s\n' "$sha"
+}
+
+http_code() {
+    curl -sS -o /dev/null -w '%{http_code}' -L "$1" || true
+}
+
+if [ -n "$TAG" ] && [ -n "$SHA" ]; then
+    fail "CARRIER_TAG and CARRIER_SHA cannot both be set"
 fi
 
-# Check for required checksum
-EXPECTED="${OPENCLAW_CHECKSUM:-}"
-if [ -z "$EXPECTED" ]; then
-    echo "ERROR: OPENCLAW_CHECKSUM not set. Cannot verify artifact integrity." >&2
-    echo "" >&2
-    echo "Set OPENCLAW_CHECKSUM to the expected SHA-256 hash of ${BINARY}." >&2
-    echo "Find checksums at: ${BASE_URL}/" >&2
-    exit 1
+if [ -z "$LABEL" ]; then
+    LABEL="$(detect_label)"
 fi
 
-# Create temporary directory
+if [ -z "$TAG" ]; then
+    if [ -z "$SHA" ]; then
+        log "Resolving main SHA from ${REPO}..."
+        SHA="$(resolve_main_sha "$REPO")" || fail "failed to resolve main SHA from ${REPO}"
+    fi
+    is_full_sha "$SHA" || fail "CARRIER_SHA must be a full 40-character commit SHA"
+    TAG="main-${SHA}"
+fi
+
+if [ -z "$SHA" ]; then
+    case "$TAG" in
+        main-*)
+            maybe_sha="${TAG#main-}"
+            if is_full_sha "$maybe_sha"; then
+                SHA="$maybe_sha"
+            fi
+            ;;
+    esac
+fi
+
+ZIP_TAG="$TAG"
+ZIP_NAME="carrier-${ZIP_TAG}-${LABEL}.zip"
+BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
+ASSET_URL="${BASE_URL}/${ZIP_NAME}"
+SUM_URL="${BASE_URL}/${ZIP_NAME}.sha256"
+
+if [ "${DRY_RUN:-}" ]; then
+    log "[DRY_RUN] release tag: ${TAG}"
+    log "[DRY_RUN] asset URL: ${ASSET_URL}"
+    log "[DRY_RUN] checksum URL: ${SUM_URL}"
+    log "[DRY_RUN] unzip -o ${ZIP_NAME}"
+    log "[DRY_RUN] install -m 755 ${BINARY_NAME} ${INSTALL_DIR}/${BINARY_NAME}"
+    exit 0
+fi
+
+require_cmd curl
+require_cmd unzip
+require_cmd install
+
+status="$(http_code "$ASSET_URL")"
+if [ "$status" != "200" ] && [ -n "$SHA" ] && [ "$TAG" = "main-${SHA}" ]; then
+    legacy_name="carrier-${SHA}-${LABEL}.zip"
+    legacy_asset_url="${BASE_URL}/${legacy_name}"
+    legacy_sum_url="${BASE_URL}/${legacy_name}.sha256"
+    legacy_status="$(http_code "$legacy_asset_url")"
+    if [ "$legacy_status" = "200" ]; then
+        log "Primary asset name not found, falling back to legacy naming: ${legacy_name}"
+        ZIP_NAME="$legacy_name"
+        ASSET_URL="$legacy_asset_url"
+        SUM_URL="$legacy_sum_url"
+        status="$legacy_status"
+    fi
+fi
+
+if [ "$status" != "200" ]; then
+    fail "release asset not found (HTTP ${status}): ${ASSET_URL}"
+fi
+
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT INT TERM
 
-cd "$TMPDIR"
+ZIP_PATH="${TMPDIR}/${ZIP_NAME}"
+SUM_PATH="${TMPDIR}/${ZIP_NAME}.sha256"
+EXTRACT_DIR="${TMPDIR}/extract"
 
-# Download binary
-echo "Downloading ${BINARY}..."
-if [ "${DRY_RUN:-}" ]; then
-    echo "[DRY_RUN] curl -fsSL -O ${BASE_URL}/${BINARY}"
-else
-    if ! curl -fsSL -O "${BASE_URL}/${BINARY}"; then
-        echo "ERROR: Failed to download ${BINARY}" >&2
-        echo "Check that version ${VERSION} exists and includes ${OS}-${ARCH} build" >&2
-        exit 1
-    fi
-fi
+log "Downloading ${ASSET_URL}"
+curl -fL --retry 3 --retry-delay 2 -o "$ZIP_PATH" "$ASSET_URL"
 
-# Verify checksum
-echo "Verifying integrity against pinned checksum..."
-if [ "${DRY_RUN:-}" ]; then
-    echo "[DRY_RUN] Checksum verification: ${EXPECTED}"
-else
-    ACTUAL=$(${CHECKSUM_CMD} "$BINARY" | awk '{print $1}')
-    if [ "$ACTUAL" != "$EXPECTED" ]; then
-        echo "ERROR: Checksum mismatch!" >&2
-        echo "  Expected: $EXPECTED" >&2
-        echo "  Actual:   $ACTUAL" >&2
-        echo "" >&2
-        echo "This may indicate:" >&2
-        echo "  - Corrupted download" >&2
-        echo "  - Incorrect OPENCLAW_CHECKSUM value" >&2
-        echo "  - Man-in-the-middle attack" >&2
-        exit 1
-    fi
-    echo "Checksum OK"
-fi
+if [ "$VERIFY_CHECKSUM" = "1" ]; then
+    log "Downloading checksum ${SUM_URL}"
+    curl -fL --retry 3 --retry-delay 2 -o "$SUM_PATH" "$SUM_URL"
 
-# Install binary
-if [ -w "$INSTALL_DIR" ]; then
-    # Can write directly
-    echo "Installing to ${INSTALL_DIR}/${BINARY_NAME}..."
-    if [ "${DRY_RUN:-}" ]; then
-        echo "[DRY_RUN] install -m 755 $BINARY ${INSTALL_DIR}/${BINARY_NAME}"
+    if command -v sha256sum >/dev/null 2>&1; then
+        log "Verifying checksum with sha256sum"
+        (
+            cd "$TMPDIR"
+            sha256sum -c "${ZIP_NAME}.sha256"
+        )
+    elif command -v shasum >/dev/null 2>&1; then
+        log "Verifying checksum with shasum"
+        expected="$(awk '{print $1}' "$SUM_PATH" | tr '[:upper:]' '[:lower:]')"
+        actual="$(shasum -a 256 "$ZIP_PATH" | awk '{print $1}' | tr '[:upper:]' '[:lower:]')"
+        if [ "$expected" != "$actual" ]; then
+            fail "checksum mismatch for ${ZIP_NAME} (expected=${expected} actual=${actual})"
+        fi
     else
-        install -m 755 "$BINARY" "${INSTALL_DIR}/${BINARY_NAME}"
-    fi
-else
-    # Need sudo
-    echo "Installing to ${INSTALL_DIR}/${BINARY_NAME} (requires sudo)..."
-    if [ "${DRY_RUN:-}" ]; then
-        echo "[DRY_RUN] sudo install -m 755 $BINARY ${INSTALL_DIR}/${BINARY_NAME}"
-    else
-        sudo install -m 755 "$BINARY" "${INSTALL_DIR}/${BINARY_NAME}"
+        fail "no SHA-256 checksum utility found (sha256sum or shasum)"
     fi
 fi
 
-if [ "${DRY_RUN:-}" ]; then
-    echo "[DRY_RUN] Installation complete"
+log "Extracting ${ZIP_NAME}"
+mkdir -p "$EXTRACT_DIR"
+unzip -o "$ZIP_PATH" -d "$EXTRACT_DIR" >/dev/null
+
+BIN_PATH="${EXTRACT_DIR}/${BINARY_NAME}"
+if [ ! -f "$BIN_PATH" ]; then
+    BIN_PATH="$(find "$EXTRACT_DIR" -type f -name "$BINARY_NAME" 2>/dev/null | head -n 1 || true)"
+fi
+
+if [ -z "$BIN_PATH" ] || [ ! -f "$BIN_PATH" ]; then
+    fail "binary ${BINARY_NAME} not found in extracted archive"
+fi
+
+chmod +x "$BIN_PATH"
+TARGET_PATH="${INSTALL_DIR}/${BINARY_NAME}"
+
+if [ -d "$INSTALL_DIR" ] && [ -w "$INSTALL_DIR" ]; then
+    install -m 755 "$BIN_PATH" "$TARGET_PATH"
+elif command -v sudo >/dev/null 2>&1; then
+    sudo mkdir -p "$INSTALL_DIR"
+    sudo install -m 755 "$BIN_PATH" "$TARGET_PATH"
 else
-    echo "OpenClaw ${VERSION} installed successfully"
-    echo "Run: openclaw --version"
+    FALLBACK_DIR="${HOME}/.local/bin"
+    mkdir -p "$FALLBACK_DIR"
+    TARGET_PATH="${FALLBACK_DIR}/${BINARY_NAME}"
+    install -m 755 "$BIN_PATH" "$TARGET_PATH"
+    log "sudo unavailable; installed to ${TARGET_PATH}"
+fi
+
+log "Installed ${BINARY_NAME} to ${TARGET_PATH}"
+if "$TARGET_PATH" --version >/dev/null 2>&1; then
+    "$TARGET_PATH" --version
 fi

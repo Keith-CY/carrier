@@ -1,11 +1,12 @@
 #!/bin/sh
 # Test suite for install.sh
-# Runs the install script in DRY_RUN mode with various configurations
+# Runs the install script in DRY_RUN mode with various configurations.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_SCRIPT="${SCRIPT_DIR}/install.sh"
+FAKE_SHA="1111111111111111111111111111111111111111"
 
 # Colors for output
 RED='\033[0;31m'
@@ -47,88 +48,100 @@ else
     chmod +x "$INSTALL_SCRIPT" 2>/dev/null || true
 fi
 
-# Test 2: Missing checksum fails
-print_test "Missing OPENCLAW_CHECKSUM causes failure"
-if run_dry_run "$INSTALL_SCRIPT" 2>&1 | grep -q "OPENCLAW_CHECKSUM not set"; then
-    print_pass "Correctly rejects missing checksum"
+# Test 2: Dry-run with explicit SHA succeeds
+print_test "Dry-run with explicit CARRIER_SHA succeeds"
+if OUTPUT=$(CARRIER_SHA="$FAKE_SHA" run_dry_run "$INSTALL_SCRIPT"); then
+    if echo "$OUTPUT" | grep -q "\[DRY_RUN\]"; then
+        print_pass "Dry-run mode works"
+    else
+        print_fail "Dry-run output missing"
+    fi
 else
-    print_fail "Should reject missing checksum"
+    print_fail "Dry-run should succeed with explicit CARRIER_SHA"
 fi
 
-# Test 3: Valid dry-run execution
-print_test "Dry-run with valid checksum succeeds"
-OUTPUT=$(OPENCLAW_VERSION=1.0.0 \
-         OPENCLAW_CHECKSUM=0000000000000000000000000000000000000000000000000000000000000000 \
-         run_dry_run "$INSTALL_SCRIPT")
-
-if echo "$OUTPUT" | grep -q "\[DRY_RUN\]"; then
-    print_pass "Dry-run mode works"
+# Test 3: SHA resolves to main tag + expected asset naming
+print_test "Constructs main-<sha> release asset URL"
+EXPECTED_URL="https://github.com/Keith-CY/carrier/releases/download/main-${FAKE_SHA}/carrier-main-${FAKE_SHA}-linux-x64.zip"
+if OUTPUT=$(CARRIER_SHA="$FAKE_SHA" CARRIER_LABEL=linux-x64 run_dry_run "$INSTALL_SCRIPT"); then
+    if echo "$OUTPUT" | grep -q "$EXPECTED_URL"; then
+        print_pass "Main tag URL format is correct"
+    else
+        print_fail "Main tag URL format is incorrect"
+    fi
 else
-    print_fail "Dry-run output missing"
+    print_fail "Dry-run should succeed for URL check"
 fi
 
-# Test 4: Platform detection
-print_test "Platform detection works"
-OUTPUT=$(OPENCLAW_VERSION=1.0.0 \
-         OPENCLAW_CHECKSUM=0000000000000000000000000000000000000000000000000000000000000000 \
-         run_dry_run "$INSTALL_SCRIPT")
-
-if echo "$OUTPUT" | grep -qE "openclaw-v1.0.0-(linux|darwin|windows)-(amd64|arm64)"; then
-    print_pass "Platform detected correctly"
-else
-    print_fail "Platform detection issue"
-fi
-
-# Test 5: Custom install directory
+# Test 4: Custom INSTALL_DIR is respected
 print_test "Custom INSTALL_DIR is respected"
-OUTPUT=$(OPENCLAW_VERSION=1.0.0 \
-         OPENCLAW_CHECKSUM=0000000000000000000000000000000000000000000000000000000000000000 \
-         INSTALL_DIR=/opt/custom \
-         run_dry_run "$INSTALL_SCRIPT")
-
-if echo "$OUTPUT" | grep -q "/opt/custom/openclaw"; then
-    print_pass "Custom install directory works"
+if OUTPUT=$(CARRIER_SHA="$FAKE_SHA" \
+            INSTALL_DIR=/opt/custom \
+            run_dry_run "$INSTALL_SCRIPT"); then
+    if echo "$OUTPUT" | grep -q "/opt/custom/carrier"; then
+        print_pass "Custom install directory works"
+    else
+        print_fail "Custom install directory not respected"
+    fi
 else
-    print_fail "Custom install directory not respected"
+    print_fail "Dry-run should succeed with custom INSTALL_DIR"
 fi
 
-# Test 6: Version override
-print_test "OPENCLAW_VERSION override works"
-OUTPUT=$(OPENCLAW_VERSION=2.0.0-beta \
-         OPENCLAW_CHECKSUM=0000000000000000000000000000000000000000000000000000000000000000 \
-         run_dry_run "$INSTALL_SCRIPT")
-
-if echo "$OUTPUT" | grep -q "openclaw-v2.0.0-beta-"; then
-    print_pass "Version override works"
+# Test 5: Custom CARRIER_LABEL is respected
+print_test "Custom CARRIER_LABEL is respected"
+if OUTPUT=$(CARRIER_SHA="$FAKE_SHA" \
+            CARRIER_LABEL=linux-arm64 \
+            run_dry_run "$INSTALL_SCRIPT"); then
+    if echo "$OUTPUT" | grep -q "carrier-main-${FAKE_SHA}-linux-arm64.zip"; then
+        print_pass "Custom label works"
+    else
+        print_fail "Custom label not respected"
+    fi
 else
-    print_fail "Version override not working"
+    print_fail "Dry-run should succeed with custom CARRIER_LABEL"
 fi
 
-# Test 7: Architecture normalization
-print_test "Architecture names are normalized"
-# We can't easily override uname output, but we can check the script logic
-if grep -q 'x86_64) ARCH="amd64"' "$INSTALL_SCRIPT" && \
-   grep -q 'aarch64) ARCH="arm64"' "$INSTALL_SCRIPT"; then
-    print_pass "Architecture normalization present"
+# Test 6: Explicit CARRIER_TAG override works
+print_test "Explicit CARRIER_TAG override works"
+if OUTPUT=$(CARRIER_TAG="main-${FAKE_SHA}" CARRIER_LABEL=linux-x64 run_dry_run "$INSTALL_SCRIPT"); then
+    if echo "$OUTPUT" | grep -q "releases/download/main-${FAKE_SHA}/carrier-main-${FAKE_SHA}-linux-x64.zip"; then
+        print_pass "Tag override works"
+    else
+        print_fail "Tag override not working"
+    fi
 else
-    print_fail "Architecture normalization missing"
+    print_fail "Dry-run should succeed with explicit CARRIER_TAG"
 fi
 
-# Test 8: Checksum verification logic
-print_test "Checksum verification is implemented"
-if grep -q "Checksum mismatch" "$INSTALL_SCRIPT" && \
-   grep -q "ACTUAL.*EXPECTED" "$INSTALL_SCRIPT"; then
+# Test 7: CARRIER_TAG and CARRIER_SHA conflict fails
+print_test "CARRIER_TAG + CARRIER_SHA conflict is rejected"
+if CARRIER_TAG="main-${FAKE_SHA}" CARRIER_SHA="$FAKE_SHA" run_dry_run "$INSTALL_SCRIPT" | grep -q "cannot both be set"; then
+    print_pass "Conflicting inputs rejected"
+else
+    print_fail "Conflicting inputs should be rejected"
+fi
+
+# Test 8: Custom CARRIER_REPO is respected
+print_test "Custom CARRIER_REPO is respected"
+if OUTPUT=$(CARRIER_SHA="$FAKE_SHA" \
+            CARRIER_REPO="octo/example" \
+            run_dry_run "$INSTALL_SCRIPT"); then
+    if echo "$OUTPUT" | grep -q "https://github.com/octo/example/releases/download/main-${FAKE_SHA}"; then
+        print_pass "Custom repo works"
+    else
+        print_fail "Custom repo not respected"
+    fi
+else
+    print_fail "Dry-run should succeed with custom CARRIER_REPO"
+fi
+
+# Test 9: Checksum verification logic exists
+print_test "Checksum verification logic is implemented"
+if grep -q "checksum mismatch" "$INSTALL_SCRIPT" && \
+   grep -q "sha256sum -c" "$INSTALL_SCRIPT"; then
     print_pass "Checksum verification implemented"
 else
     print_fail "Checksum verification incomplete"
-fi
-
-# Test 9: Error handling for missing utilities
-print_test "Handles missing checksum utilities gracefully"
-if grep -q "No SHA-256 checksum utility found" "$INSTALL_SCRIPT"; then
-    print_pass "Checksum utility check present"
-else
-    print_fail "Missing checksum utility check"
 fi
 
 # Test 10: Shell compatibility (no bashisms)
@@ -142,9 +155,6 @@ if command -v shellcheck >/dev/null 2>&1; then
         print_pass "ShellCheck passed"
     fi
 else
-    # Run basic bashism check manually
-    # Note: $(…) is POSIX-compliant, not a bashism
-    # Real bashisms: [[, function keyword, == in tests, $'...'
     if grep -qE '(\[\[|function [a-z]|== )' "$INSTALL_SCRIPT"; then
         print_fail "Potential bashisms detected"
     else

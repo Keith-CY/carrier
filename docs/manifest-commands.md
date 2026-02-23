@@ -32,7 +32,7 @@ The install command uses npm as the primary installation method with a binary fa
 npm install -g openclaw
 
 # Fallback (Linux/macOS only):
-curl -fsSL https://github.com/Keith-CY/carrier/releases/latest/download/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Keith-CY/carrier/main/scripts/install.sh | bash
 ```
 
 ### Start
