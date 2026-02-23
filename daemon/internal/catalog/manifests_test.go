@@ -167,15 +167,21 @@ func TestGetInstallCommand_Default(t *testing.T) {
 		}
 	default:
 		for _, want := range []string{
+			"sh -c",
+			"mktemp",
 			"curl -fsSL",
 			installScriptURL,
-			"| bash -s --",
+			"-o \"$tmp\"",
+			"bash \"$tmp\"",
 			"--no-onboard",
 			"--no-prompt",
 		} {
 			if !strings.Contains(cmd, want) {
 				t.Errorf("unix default install command missing %q\ngot: %s", want, cmd)
 			}
+		}
+		if strings.Contains(cmd, "| bash") {
+			t.Fatalf("unix command should not pipe directly into shell, got: %s", cmd)
 		}
 		if strings.Contains(cmd, "--install-method") || strings.Contains(cmd, " npm ") || strings.Contains(cmd, "||") {
 			t.Fatalf("unix command should not include installer fallback/method switching, got: %s", cmd)
@@ -197,14 +203,23 @@ func TestResolveWindowsOpenClawInstallCommand_PowerShellPreferred(t *testing.T) 
 	if !strings.Contains(cmd, installPS1URL) {
 		t.Fatalf("expected powershell install URL, got: %s", cmd)
 	}
-	if !strings.Contains(cmd, "iwr -useb") || !strings.Contains(cmd, "| iex") {
-		t.Fatalf("expected powershell command to use iwr|iex flow, got: %s", cmd)
+	if !strings.Contains(cmd, "iwr -useb") || !strings.Contains(cmd, "-OutFile $tmp") {
+		t.Fatalf("expected powershell command to download script to tmp file, got: %s", cmd)
+	}
+	if !strings.Contains(cmd, "& $tmp") {
+		t.Fatalf("expected powershell command to execute tmp script file, got: %s", cmd)
+	}
+	if strings.Contains(cmd, "| iex") {
+		t.Fatalf("did not expect powershell pipe-to-iex flow, got: %s", cmd)
 	}
 	if !strings.Contains(cmd, "$env:OPENCLAW_NO_ONBOARD='1'") {
 		t.Fatalf("expected powershell command to disable onboarding, got: %s", cmd)
 	}
 	if !strings.Contains(cmd, "$env:OPENCLAW_INSTALL_METHOD='npm'") {
 		t.Fatalf("expected powershell command to pin install method, got: %s", cmd)
+	}
+	if !strings.Contains(cmd, "$env:OPENCLAW_NO_PROMPT='1'") {
+		t.Fatalf("expected powershell command to disable prompts, got: %s", cmd)
 	}
 }
 
@@ -219,13 +234,17 @@ func TestResolveWindowsOpenClawInstallCommand_CmdFallback(t *testing.T) {
 	for _, want := range []string{
 		"curl -fsSL",
 		installCMDURL,
-		"install.cmd",
+		"set \"TMPF=%TEMP%\\openclaw-install-%RANDOM%%RANDOM%.cmd\"",
+		"call \"%TMPF%\"",
 		"--no-onboard",
-		"del install.cmd",
+		"del \"%TMPF%\"",
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("cmd fallback command missing %q: %s", want, cmd)
 		}
+	}
+	if strings.Contains(cmd, "| iex") {
+		t.Fatalf("cmd fallback should not use powershell iex pipe flow: %s", cmd)
 	}
 }
 

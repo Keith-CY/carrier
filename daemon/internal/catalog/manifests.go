@@ -50,9 +50,9 @@ const (
 )
 
 // getInstallCommand returns the platform-appropriate install command.
-// - Linux/macOS: curl | bash (skip onboarding, non-interactive)
-// - Windows with PowerShell: iwr | iex with OPENCLAW_NO_ONBOARD=1
-// - Windows cmd-only hosts: download and run install.cmd --no-onboard
+// - Linux/macOS: download to a tmpfile, then execute with bash
+// - Windows with PowerShell: download to a tmpfile, then execute script file
+// - Windows cmd-only hosts: download to a tmpfile, then execute install.cmd
 // - Dev mode: creates a long-running placeholder script
 func getInstallCommand() string {
 	if os.Getenv("CARRIER_DEV_MODE") == "1" {
@@ -63,15 +63,15 @@ func getInstallCommand() string {
 	case "windows":
 		return resolveWindowsOpenClawInstallCommand(exec.LookPath)
 	default:
-		return fmt.Sprintf(`curl -fsSL %s | bash -s -- --no-onboard --no-prompt`, installScriptURL)
+		return fmt.Sprintf(`sh -c 'set -e; tmp="$(mktemp)"; trap "rm -f \"$tmp\"" EXIT; curl -fsSL %s -o "$tmp"; bash "$tmp" --no-onboard --no-prompt'`, installScriptURL)
 	}
 }
 
 func resolveWindowsOpenClawInstallCommand(lookPath func(string) (string, error)) string {
 	if commandExistsOnHost(lookPath, "powershell") || commandExistsOnHost(lookPath, "powershell.exe") {
-		return fmt.Sprintf(`powershell -NoProfile -Command "$env:OPENCLAW_INSTALL_METHOD='npm';$env:OPENCLAW_NO_ONBOARD='1';iwr -useb %s | iex"`, installPS1URL)
+		return fmt.Sprintf(`powershell -NoProfile -Command "$ErrorActionPreference='Stop';$env:OPENCLAW_INSTALL_METHOD='npm';$env:OPENCLAW_NO_ONBOARD='1';$env:OPENCLAW_NO_PROMPT='1';$tmp=Join-Path $env:TEMP ('openclaw-install-' + [guid]::NewGuid().ToString() + '.ps1');try { iwr -useb %s -OutFile $tmp; & $tmp } finally { Remove-Item $tmp -ErrorAction SilentlyContinue }"`, installPS1URL)
 	}
-	return fmt.Sprintf(`curl -fsSL %s -o install.cmd && install.cmd --no-onboard && del install.cmd`, installCMDURL)
+	return fmt.Sprintf(`set "OPENCLAW_NO_ONBOARD=1" && set "OPENCLAW_NO_PROMPT=1" && set "TMPF=%%TEMP%%\openclaw-install-%%RANDOM%%%%RANDOM%%.cmd" && curl -fsSL %s -o "%%TMPF%%" && call "%%TMPF%%" --no-onboard && del "%%TMPF%%"`, installCMDURL)
 }
 
 func commandExistsOnHost(lookPath func(string) (string, error), name string) bool {
