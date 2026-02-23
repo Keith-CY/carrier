@@ -204,8 +204,22 @@ jobs:
 
           mkdir -p dist
 
+          carrier_version="${{ needs.prepare.outputs.release_tag }}"
+          if [[ -z "${carrier_version}" ]]; then
+            carrier_version="dev"
+          fi
+          carrier_commit="${GITHUB_SHA}"
+          carrier_build_date="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          ldflags=(
+            "-s"
+            "-w"
+            "-X=main.carrierVersion=${carrier_version}"
+            "-X=main.carrierCommit=${carrier_commit}"
+            "-X=main.carrierBuildDate=${carrier_build_date}"
+          )
+
           CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
-            go build -tags webui -trimpath -ldflags="-s -w" -o "dist/${binary_name}" ./cmd/carrier
+            go build -tags webui -trimpath -ldflags="${ldflags[*]}" -o "dist/${binary_name}" ./cmd/carrier
 
           # Release package should contain only the executable binary.
           (cd dist && zip -j "${package_file}" "${binary_name}")
