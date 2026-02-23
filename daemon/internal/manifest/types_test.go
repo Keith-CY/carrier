@@ -258,6 +258,25 @@ func TestValidateRejectsUppercaseCommandByOSKey(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsUnsupportedCommandByOSKey(t *testing.T) {
+	m := validManifestForTest()
+	m.Runtime.Install = CommandSpec{
+		CommandByOS: map[string]string{
+			"plan9": "curl -fsSL https://openclaw.ai/install.sh | bash",
+		},
+	}
+	err := m.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for unsupported command_by_os key")
+	}
+	if !strings.Contains(err.Error(), `unsupported key "plan9"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), `"darwin"`) || !strings.Contains(err.Error(), `"linux"`) || !strings.Contains(err.Error(), `"windows"`) || !strings.Contains(err.Error(), `"default"`) {
+		t.Fatalf("error should include supported keys, got: %v", err)
+	}
+}
+
 func TestCommandSpecResolveForGOOS(t *testing.T) {
 	spec := CommandSpec{
 		Command: "openclaw gateway",
