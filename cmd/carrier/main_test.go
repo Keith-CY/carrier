@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPickMinimalProviderWithReasonUsesEnvDefault(t *testing.T) {
@@ -169,5 +171,91 @@ func TestResolveManagedAgentChannelUsesManagedChannelRegistry(t *testing.T) {
 func TestResolveManagedAgentChannelRejectsUnknownAgent(t *testing.T) {
 	if _, ok := resolveManagedAgentChannel("unknown-agent"); ok {
 		t.Fatal("expected unknown managed agent channel resolution to fail")
+	}
+}
+
+func TestResolveManagedChannelTokenPrefersEnvironment(t *testing.T) {
+	t.Setenv("CARRIER_TELEGRAM_BOT_TOKEN", "tg-env-token")
+
+	token, source := resolveManagedChannelToken("telegram")
+	if token != "tg-env-token" {
+		t.Fatalf("token = %q, want %q", token, "tg-env-token")
+	}
+	if !strings.Contains(source, "CARRIER_TELEGRAM_BOT_TOKEN") {
+		t.Fatalf("source should mention token env var, got %q", source)
+	}
+}
+
+func TestResolveManagedChannelTokenFallsBackToConfig(t *testing.T) {
+	t.Setenv("CARRIER_TELEGRAM_BOT_TOKEN", "")
+	cfgPath := filepath.Join(t.TempDir(), "config.v2.json")
+	t.Setenv("CARRIER_CONFIG", cfgPath)
+
+	raw, err := json.Marshal(map[string]interface{}{
+		"config_version": 2,
+		"channels": []map[string]interface{}{
+			{
+				"id":        "telegram",
+				"bot_token": "tg-config-token",
+				"enabled":   true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(cfgPath, raw, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	token, source := resolveManagedChannelToken("telegram")
+	if token != "tg-config-token" {
+		t.Fatalf("token = %q, want %q", token, "tg-config-token")
+	}
+	if !strings.Contains(source, "config") {
+		t.Fatalf("source should mention config fallback, got %q", source)
+	}
+}
+
+func TestPickManagedAddProviderWithReasonUsesLatestManagedInstanceProvider(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "")
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+
+	instancesPath, err := managedInstancesPath()
+	if err != nil {
+		t.Fatalf("managedInstancesPath: %v", err)
+	}
+	instances := []managedAgentInstance{
+		{
+			ID:        "openclaw-a",
+			Type:      "openclaw",
+			AgentID:   "openclaw",
+			Provider:  "openai",
+			UpdatedAt: time.Date(2026, 2, 1, 8, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		},
+		{
+			ID:        "openclaw-b",
+			Type:      "openclaw",
+			AgentID:   "openclaw",
+			Provider:  "deepseek",
+			UpdatedAt: time.Date(2026, 2, 2, 8, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		},
+	}
+	if err := saveManagedInstances(instancesPath, instances); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	provider, reason, err := pickManagedAddProviderWithReason("openclaw")
+	if err != nil {
+		t.Fatalf("pickManagedAddProviderWithReason error: %v", err)
+	}
+	if provider.ID != "deepseek" {
+		t.Fatalf("provider.ID = %q, want %q", provider.ID, "deepseek")
+	}
+	if !strings.Contains(strings.ToLower(reason), "latest openclaw instance") {
+		t.Fatalf("reason should mention latest managed instance reuse, got %q", reason)
 	}
 }

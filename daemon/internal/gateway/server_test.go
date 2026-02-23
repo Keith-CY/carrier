@@ -1127,6 +1127,79 @@ func TestAddEndpoint_ManagedAgentSuccess_OpenAndZeroClaw(t *testing.T) {
 	}
 }
 
+func TestAddEndpoint_OpenClawSuccess_AutoSelectsProviderAndChannel(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "openai-codex")
+	t.Setenv("CARRIER_TELEGRAM_BOT_TOKEN", "tg-auto-token")
+
+	if _, err := saveProviderCredential("openai-codex", "codex-auto-token"); err != nil {
+		t.Fatalf("saveProviderCredential: %v", err)
+	}
+
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/openclaw/install": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"installed"}`)
+		},
+		"POST /api/v1/agents/openclaw/start": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"status":"running"}`)
+		},
+	})
+	defer srv.Close()
+
+	req := httptest.NewRequest("POST", "/api/v1/add", strings.NewReader(`{"agentId":"openclaw","envVars":{"OPENCLAW_MODE":"managed"}}`))
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse add response: %v", err)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", resp["result"])); got != "ok" {
+		t.Fatalf("expected result=ok, got %q", got)
+	}
+
+	envKeysRaw, ok := resp["envKeys"].([]interface{})
+	if !ok {
+		t.Fatalf("expected envKeys array, got %#v", resp["envKeys"])
+	}
+	envKeySet := map[string]bool{}
+	for _, item := range envKeysRaw {
+		envKeySet[strings.TrimSpace(fmt.Sprintf("%v", item))] = true
+	}
+	for _, key := range []string{"OPENCLAW_MODE", "OPENAI_CODEX_TOKEN", "OPENAI_API_KEY"} {
+		if !envKeySet[key] {
+			t.Fatalf("expected envKeys to include %s, got %#v", key, envKeysRaw)
+		}
+	}
+
+	instances, _, err := loadManagedInstances()
+	if err != nil {
+		t.Fatalf("loadManagedInstances: %v", err)
+	}
+	if len(instances) != 1 {
+		t.Fatalf("expected 1 managed instance, got %d", len(instances))
+	}
+	inst := instances[0]
+	if inst.Provider != "openai-codex" {
+		t.Fatalf("expected provider=openai-codex, got %+v", inst)
+	}
+	if inst.Channel != "telegram" {
+		t.Fatalf("expected channel=telegram, got %+v", inst)
+	}
+}
+
 func TestAddEndpoint_DaemonErrorIsSanitized(t *testing.T) {
 	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
 		"POST /api/v1/agents/openclaw/install": func(w http.ResponseWriter, r *http.Request) {

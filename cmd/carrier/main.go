@@ -1392,28 +1392,25 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string) error {
 		return fmt.Errorf("%s channel is unavailable", cfg.ID)
 	}
 	_, _ = fmt.Fprintf(out, "Using channel: %s (default)\n", channel.Name)
-	token, err := promptInput(reader, out, channel.TokenLabel, true)
-	if err != nil {
-		return err
+	token, tokenSource := resolveManagedChannelToken(channel.ID)
+	if tokenSource != "" {
+		_, _ = fmt.Fprintf(out, "Reused %s token from %s.\n", channel.Name, tokenSource)
+	} else {
+		token, err = promptInput(reader, out, channel.TokenLabel, true)
+		if err != nil {
+			return err
+		}
 	}
 
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "Step 2/4: Configure LLM provider")
-	provider, providerReason, err := pickMinimalProviderWithReason()
+	provider, providerReason, err := pickManagedAddProviderWithReason(cfg.ID)
 	if err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(out, "Auto-selected provider: %s (%s)\n", provider.Name, provider.ID)
 	_, _ = fmt.Fprintf(out, "Selection reason: %s\n", providerReason)
-	provider, override, err := promptMinimalProviderOverride(reader, out, provider)
-	if err != nil {
-		return err
-	}
-	if override {
-		_, _ = fmt.Fprintf(out, "Provider override selected: %s (%s)\n", provider.Name, provider.ID)
-	} else {
-		_, _ = fmt.Fprintf(out, "Using provider: %s (%s)\n", provider.Name, provider.ID)
-	}
+	_, _ = fmt.Fprintf(out, "Using provider: %s (%s)\n", provider.Name, provider.ID)
 	_, _ = fmt.Fprintln(out, "Saved provider credential will be reused automatically when available.")
 	providerEnv, _, err := promptProviderAuthMinimal(reader, out, provider)
 	if err != nil {
@@ -1476,6 +1473,176 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string) error {
 	}
 	_, _ = fmt.Fprintf(out, "✅ %s installed and started.\n", cfg.Name)
 	return nil
+}
+
+func resolveManagedChannelToken(channelID string) (string, string) {
+	channelID = strings.ToLower(strings.TrimSpace(channelID))
+	if channelID == "" {
+		return "", ""
+	}
+
+	for _, ch := range channelOptions {
+		if !strings.EqualFold(ch.ID, channelID) {
+			continue
+		}
+		if envKey := strings.TrimSpace(ch.TokenEnv); envKey != "" {
+			if token := strings.TrimSpace(os.Getenv(envKey)); token != "" {
+				return token, fmt.Sprintf("environment variable %s", envKey)
+			}
+		}
+		break
+	}
+
+	cfg, _, err := configv2.Load()
+	if err != nil || cfg == nil {
+		return "", ""
+	}
+	for _, ch := range cfg.Channels {
+		if !strings.EqualFold(ch.ID, channelID) {
+			continue
+		}
+		if token := strings.TrimSpace(ch.BotToken); token != "" {
+			return token, "Carrier config channels"
+		}
+	}
+	return "", ""
+}
+
+func pickManagedAddProviderWithReason(agentID string) (choiceOption, string, error) {
+	defaultID := strings.ToLower(strings.TrimSpace(os.Getenv("CARRIER_DEFAULT_PROVIDER_ID")))
+	if defaultID != "" {
+		if p, ok := resolveChoice(defaultID, providerOptions); ok && providerCompatibleForManagedAgent(agentID, p) {
+			return p, fmt.Sprintf("environment default from CARRIER_DEFAULT_PROVIDER_ID=%s", defaultID), nil
+		}
+	}
+
+	if p, reason, ok := pickProviderFromLatestManagedInstance(agentID); ok {
+		return p, reason, nil
+	}
+
+	if p, reason, ok := pickProviderWithSavedCredential(agentID); ok {
+		return p, reason, nil
+	}
+
+	p, reason, err := pickMinimalProviderWithReason()
+	if err != nil {
+		return choiceOption{}, "", err
+	}
+	if providerCompatibleForManagedAgent(agentID, p) {
+		return p, reason, nil
+	}
+
+	for _, candidate := range providerOptions {
+		if providerCompatibleForManagedAgent(agentID, candidate) {
+			return candidate, "fallback to first compatible provider", nil
+		}
+	}
+	return choiceOption{}, "", fmt.Errorf("no compatible provider available for %s", agentID)
+}
+
+func pickProviderFromLatestManagedInstance(agentID string) (choiceOption, string, bool) {
+	providerID := latestManagedInstanceProvider(agentID)
+	if providerID == "" {
+		return choiceOption{}, "", false
+	}
+	provider, ok := resolveChoice(providerID, providerOptions)
+	if !ok || !providerCompatibleForManagedAgent(agentID, provider) {
+		return choiceOption{}, "", false
+	}
+	return provider, fmt.Sprintf("reused provider from latest %s instance (%s)", strings.ToLower(strings.TrimSpace(agentID)), provider.ID), true
+}
+
+func pickProviderWithSavedCredential(agentID string) (choiceOption, string, bool) {
+	for _, candidate := range providerOptions {
+		if !providerCompatibleForManagedAgent(agentID, candidate) {
+			continue
+		}
+		if candidate.AuthMode == authModeNone {
+			continue
+		}
+		_, backend, ok, err := loadProviderCredential(candidate.ID)
+		if err != nil || !ok {
+			continue
+		}
+		return candidate, fmt.Sprintf("reused saved credential for %s (%s)", candidate.ID, backend), true
+	}
+	return choiceOption{}, "", false
+}
+
+func latestManagedInstanceProvider(agentID string) string {
+	instances, _, err := loadManagedInstances()
+	if err != nil || len(instances) == 0 {
+		return ""
+	}
+
+	target := strings.ToLower(strings.TrimSpace(agentID))
+	bestIdx := -1
+	var bestTime time.Time
+	bestHasTime := false
+
+	for i, inst := range instances {
+		if target != "" &&
+			!strings.EqualFold(strings.TrimSpace(inst.AgentID), target) &&
+			!strings.EqualFold(strings.TrimSpace(inst.Type), target) {
+			continue
+		}
+		providerID := strings.TrimSpace(inst.Provider)
+		if providerID == "" {
+			continue
+		}
+		updated, hasTime := parseManagedTimestamp(inst.UpdatedAt)
+
+		if bestIdx == -1 {
+			bestIdx = i
+			bestTime = updated
+			bestHasTime = hasTime
+			continue
+		}
+		if hasTime && !bestHasTime {
+			bestIdx = i
+			bestTime = updated
+			bestHasTime = true
+			continue
+		}
+		if hasTime && bestHasTime {
+			if updated.After(bestTime) || updated.Equal(bestTime) {
+				bestIdx = i
+				bestTime = updated
+			}
+			continue
+		}
+		if !hasTime && !bestHasTime {
+			bestIdx = i
+		}
+	}
+
+	if bestIdx < 0 {
+		return ""
+	}
+	return strings.TrimSpace(instances[bestIdx].Provider)
+}
+
+func parseManagedTimestamp(raw string) (time.Time, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, trimmed)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
+}
+
+func providerCompatibleForManagedAgent(agentID string, provider choiceOption) bool {
+	cfg, ok := managedAgentByID(agentID)
+	if !ok || strings.TrimSpace(cfg.RequiredEnvKey) == "" {
+		return true
+	}
+	if strings.TrimSpace(provider.ProviderEnv) != "" {
+		return true
+	}
+	return strings.TrimSpace(os.Getenv(cfg.RequiredEnvKey)) != ""
 }
 
 func parsePicoclawChannel(input string) (picoclawChannel, bool) {

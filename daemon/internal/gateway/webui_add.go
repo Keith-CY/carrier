@@ -79,17 +79,25 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		return
 	}
 
-	ch, ok := parseManagedChannel(agentID, req.Channel)
-	if !ok && strings.TrimSpace(req.Channel) == "" {
+	channelID := strings.TrimSpace(req.Channel)
+	ch, ok := parseManagedChannel(agentID, channelID)
+	if !ok && channelID == "" {
+		if inferred := inferManagedChannelID(agentID); inferred != "" {
+			channelID = inferred
+			ch, ok = parseManagedChannel(agentID, channelID)
+		}
+	}
+	if !ok && channelID == "" {
 		if strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_BOT_TOKEN")) != "" {
-			req.Channel = "telegram"
-			ch, ok = parseManagedChannel(agentID, req.Channel)
+			channelID = "telegram"
+			ch, ok = parseManagedChannel(agentID, channelID)
 		}
 	}
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", fmt.Sprintf("unsupported channel for %s", agentID)))
 		return
 	}
+	req.Channel = channelID
 	channelToken := strings.TrimSpace(req.ChannelToken)
 	if channelToken == "" && ch.ID == "telegram" {
 		channelToken = strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_BOT_TOKEN"))
@@ -98,26 +106,34 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "channelToken is required"))
 		return
 	}
-	provider := GetLLMProvider(req.ProviderID)
+	providerID := strings.TrimSpace(req.ProviderID)
+	if providerID == "" {
+		providerID = resolveWebUIAddProviderID(agentID)
+	}
+	provider := GetLLMProvider(providerID)
 	if provider == nil {
 		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_PROVIDER_NOT_FOUND", "providerId is invalid"))
 		return
 	}
+	req.ProviderID = provider.ID
 
 	envVars := sanitizeEnvVars(req.EnvVars)
 	token := strings.TrimSpace(req.ProviderToken)
 	if provider.AuthMode != AuthModeNone {
-		if token == "" || req.ReuseCredential {
+		if req.ReuseCredential || token == "" {
 			value, _, hasSaved, err := loadProviderCredential(provider.ID)
-			if err != nil {
+			if err == nil && hasSaved {
+				token = strings.TrimSpace(value)
+			} else if err != nil && req.ReuseCredential && token == "" {
 				writeInternalGatewayError(w, http.StatusBadRequest, "E_AUTH_INPUT", "failed to read saved credential for selected provider", "load saved provider credential", err)
 				return
 			}
-			if !hasSaved {
-				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_AUTH_INPUT", "saved credential is required for the selected provider"))
-				return
-			}
-			token = strings.TrimSpace(value)
+		}
+		if token == "" && strings.TrimSpace(provider.EnvVar) != "" {
+			token = strings.TrimSpace(envVars[provider.EnvVar])
+		}
+		if token == "" && strings.TrimSpace(provider.EnvVar) != "" {
+			token = strings.TrimSpace(os.Getenv(provider.EnvVar))
 		}
 		if token == "" {
 			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_AUTH_INPUT", fmt.Sprintf("provider %s requires credential", provider.ID)))
@@ -306,4 +322,129 @@ func gatewayURLFromRequest(r *http.Request) string {
 		host = host + ":" + port
 	}
 	return fmt.Sprintf("%s://%s", scheme, host)
+}
+
+func inferManagedChannelID(agentID string) string {
+	if inst, ok := latestManagedInstanceForAgent(agentID); ok {
+		if channelID := strings.TrimSpace(inst.Channel); channelID != "" {
+			return channelID
+		}
+	}
+	return ""
+}
+
+func resolveWebUIAddProviderID(agentID string) string {
+	if envDefault := strings.TrimSpace(os.Getenv("CARRIER_DEFAULT_PROVIDER_ID")); envDefault != "" {
+		if provider := GetLLMProvider(envDefault); provider != nil && providerCompatibleForManagedAgent(agentID, provider) {
+			return provider.ID
+		}
+	}
+
+	if inst, ok := latestManagedInstanceForAgent(agentID); ok {
+		if provider := GetLLMProvider(strings.TrimSpace(inst.Provider)); provider != nil && providerCompatibleForManagedAgent(agentID, provider) {
+			return provider.ID
+		}
+	}
+
+	for _, provider := range ListLLMProviders() {
+		if !providerCompatibleForManagedAgent(agentID, &provider) {
+			continue
+		}
+		if provider.AuthMode == AuthModeNone {
+			continue
+		}
+		if _, _, hasSaved, err := loadProviderCredential(provider.ID); err == nil && hasSaved {
+			return provider.ID
+		}
+	}
+
+	if provider := GetLLMProvider("openai-codex"); provider != nil && providerCompatibleForManagedAgent(agentID, provider) {
+		return provider.ID
+	}
+	if provider := GetLLMProvider("openai"); provider != nil && providerCompatibleForManagedAgent(agentID, provider) {
+		return provider.ID
+	}
+
+	for _, provider := range ListLLMProviders() {
+		if providerCompatibleForManagedAgent(agentID, &provider) {
+			return provider.ID
+		}
+	}
+	return ""
+}
+
+func providerCompatibleForManagedAgent(agentID string, provider *LLMProvider) bool {
+	cfg, ok := managedAgentByID(agentID)
+	if !ok || strings.TrimSpace(cfg.RequiredEnvKey) == "" {
+		return true
+	}
+	if provider == nil {
+		return false
+	}
+	if strings.TrimSpace(provider.EnvVar) != "" {
+		return true
+	}
+	return strings.TrimSpace(os.Getenv(cfg.RequiredEnvKey)) != ""
+}
+
+func latestManagedInstanceForAgent(agentID string) (managedAgentInstance, bool) {
+	instances, _, err := loadManagedInstances()
+	if err != nil || len(instances) == 0 {
+		return managedAgentInstance{}, false
+	}
+
+	target := strings.ToLower(strings.TrimSpace(agentID))
+	bestIdx := -1
+	var bestTime time.Time
+	bestHasTime := false
+
+	for i, inst := range instances {
+		if target != "" &&
+			!strings.EqualFold(strings.TrimSpace(inst.AgentID), target) &&
+			!strings.EqualFold(strings.TrimSpace(inst.Type), target) {
+			continue
+		}
+
+		updatedAt, hasTime := parseManagedInstanceTimestamp(inst.UpdatedAt)
+		if bestIdx == -1 {
+			bestIdx = i
+			bestTime = updatedAt
+			bestHasTime = hasTime
+			continue
+		}
+
+		if hasTime && !bestHasTime {
+			bestIdx = i
+			bestTime = updatedAt
+			bestHasTime = true
+			continue
+		}
+		if hasTime && bestHasTime {
+			if updatedAt.After(bestTime) || updatedAt.Equal(bestTime) {
+				bestIdx = i
+				bestTime = updatedAt
+			}
+			continue
+		}
+		if !hasTime && !bestHasTime {
+			bestIdx = i
+		}
+	}
+
+	if bestIdx < 0 {
+		return managedAgentInstance{}, false
+	}
+	return instances[bestIdx], true
+}
+
+func parseManagedInstanceTimestamp(raw string) (time.Time, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, trimmed)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
 }
