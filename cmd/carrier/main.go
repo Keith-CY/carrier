@@ -214,7 +214,7 @@ const (
 	openAICodexVerificationURL    = openAICodexAuthBaseURL + "/codex/device"
 	openAICodexDeviceAuthTimeout  = 15 * time.Minute
 	openAICodexDefaultPollSeconds = 5
-	daemonBootTimeout             = 10 * time.Second
+	daemonBootTimeout             = 45 * time.Second
 	gatewayBootTimeout            = 10 * time.Second
 	daemonBootPollInterval        = 250 * time.Millisecond
 	defaultPairCodeTTLSeconds     = 300
