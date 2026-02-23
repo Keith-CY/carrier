@@ -115,6 +115,20 @@
     return isAddMode() ? 3 : 5;
   }
 
+  function addAgentSetupProfile() {
+    const agentID = String(addTargetAgent || '').trim().toLowerCase();
+    switch (agentID) {
+      case 'picoclaw':
+        return { displayName: 'PicoClaw', requiresPairing: true, hideWebhook: true };
+      case 'openclaw':
+        return { displayName: 'OpenClaw', requiresPairing: false, hideWebhook: true };
+      case 'zeroclaw':
+        return { displayName: 'ZeroClaw', requiresPairing: false, hideWebhook: true };
+      default:
+        return null;
+    }
+  }
+
   function collectEnvVars() {
     const vars = {};
     $$('#env-fields .env-row').forEach(row => {
@@ -356,6 +370,8 @@
     webhookInput.value = isAddMode() ? addWebhookSecret : '';
     setMsg('#setup-msg', '', 'info');
     setMsg('#setup-pair-msg', '', 'info');
+    const addProfile = isAddMode() ? addAgentSetupProfile() : null;
+    const addRequiresPairing = !!(addProfile && addProfile.requiresPairing);
 
     function updatePairInstruction() {
       if (!pairInstruction) return;
@@ -466,33 +482,52 @@
       }
       const channel = providerSelect.value.trim().toLowerCase();
       const channelToken = tokenInput.value.trim();
-      if (channel === 'telegram') {
+      if (channel === 'telegram' && addRequiresPairing) {
         setupBtn.disabled = !channelToken || !addChannelChatId;
         return;
       }
       setupBtn.disabled = !channelToken;
     }
 
-    if (addTargetAgent === 'picoclaw') {
-      title.textContent = 'Step 1 — Choose Chat Channel for PicoClaw';
+    if (addProfile) {
+      title.textContent = 'Step 1 — Choose Chat Channel for ' + addProfile.displayName;
       providerLabel.textContent = 'Channel';
       tokenLabel.textContent = 'Channel Bot Token';
       providerSelect.value = addChannel || 'telegram';
       [...providerSelect.options].forEach(opt => {
         opt.disabled = opt.value !== '' && opt.value !== 'telegram';
       });
-      webhookInput.disabled = true;
-      webhookInput.placeholder = 'Not required for PicoClaw add flow';
-      webhookInput.classList.add('hidden');
-      if (webhookLabel) webhookLabel.classList.add('hidden');
-      pairSection.classList.remove('hidden');
-      pairStartBtn.disabled = false;
-      renderCarrierPairShortcut('telegram');
-      updatePairInstruction();
-      refreshSetupContinueState();
-      loadCarrierPairedUser((providerSelect.value || '').trim().toLowerCase());
-      if (addPairSessionId && !addChannelChatId) {
-        autoWaitTelegramPairing(addPairSessionId);
+      if (addProfile.hideWebhook) {
+        webhookInput.disabled = true;
+        webhookInput.placeholder = 'Not required for ' + addProfile.displayName + ' add flow';
+        webhookInput.classList.add('hidden');
+        if (webhookLabel) webhookLabel.classList.add('hidden');
+      } else {
+        webhookInput.disabled = false;
+        webhookInput.placeholder = 'Webhook verification secret';
+        webhookInput.classList.remove('hidden');
+        if (webhookLabel) webhookLabel.classList.remove('hidden');
+      }
+      if (addRequiresPairing) {
+        pairSection.classList.remove('hidden');
+        pairStartBtn.disabled = false;
+        renderCarrierPairShortcut('telegram');
+        updatePairInstruction();
+        refreshSetupContinueState();
+        loadCarrierPairedUser((providerSelect.value || '').trim().toLowerCase());
+        if (addPairSessionId && !addChannelChatId) {
+          autoWaitTelegramPairing(addPairSessionId);
+        }
+      } else {
+        addChannelChatId = '';
+        addPairSessionId = '';
+        addPairCode = '';
+        addPairPollRunID += 1;
+        pairSection.classList.add('hidden');
+        pairStartBtn.disabled = true;
+        renderCarrierPairShortcut('');
+        updatePairInstruction();
+        refreshSetupContinueState();
       }
     } else {
       title.textContent = 'Step 1 — Configure Chat Channel';
@@ -518,9 +553,13 @@
         addPairCode = '';
         addPairPollRunID += 1;
       }
-      renderCarrierPairShortcut(channel);
-      loadCarrierPairedUser(channel);
-      updatePairInstruction();
+      if (addRequiresPairing) {
+        renderCarrierPairShortcut(channel);
+        loadCarrierPairedUser(channel);
+        updatePairInstruction();
+      } else {
+        renderCarrierPairShortcut('');
+      }
       refreshSetupContinueState();
     };
 
@@ -534,11 +573,13 @@
         addPairPollRunID += 1;
         setMsg('#setup-pair-msg', '', 'info');
       }
-      if (providerSelect.value.trim().toLowerCase() === 'telegram') {
+      if (addRequiresPairing && providerSelect.value.trim().toLowerCase() === 'telegram') {
         renderCarrierPairShortcut('telegram');
         loadCarrierPairedUser('telegram');
       }
-      updatePairInstruction();
+      if (addRequiresPairing) {
+        updatePairInstruction();
+      }
       refreshSetupContinueState();
     };
 
@@ -561,6 +602,7 @@
     pairStartBtn.onclick = async () => {
       const channel = providerSelect.value.trim().toLowerCase();
       const channelToken = tokenInput.value.trim();
+      if (!addRequiresPairing) return;
       if (channel !== 'telegram') {
         setMsg('#setup-pair-msg', 'Pairing is only required for Telegram channel.', 'error');
         return;
@@ -604,7 +646,7 @@
           setMsg('#setup-msg', 'Please enter channel bot token.', 'error');
           return;
         }
-        if (channel === 'telegram' && !addChannelChatId) {
+        if (channel === 'telegram' && addRequiresPairing && !addChannelChatId) {
           setMsg('#setup-msg', 'Please complete Telegram pairing first to capture your chat id.', 'error');
           return;
         }
