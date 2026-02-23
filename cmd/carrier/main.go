@@ -2247,45 +2247,12 @@ func latestManagedInstanceProvider(agentID string) string {
 	}
 
 	target := strings.ToLower(strings.TrimSpace(agentID))
-	bestIdx := -1
-	var bestTime time.Time
-	bestHasTime := false
-
-	for i, inst := range instances {
-		if target != "" &&
-			!strings.EqualFold(strings.TrimSpace(inst.AgentID), target) &&
-			!strings.EqualFold(strings.TrimSpace(inst.Type), target) {
-			continue
+	bestIdx := latestManagedInstanceIndex(instances, func(inst managedAgentInstance) bool {
+		if !managedInstanceMatchesAgent(inst, target) {
+			return false
 		}
-		providerID := strings.TrimSpace(inst.Provider)
-		if providerID == "" {
-			continue
-		}
-		updated, hasTime := parseManagedTimestamp(inst.UpdatedAt)
-
-		if bestIdx == -1 {
-			bestIdx = i
-			bestTime = updated
-			bestHasTime = hasTime
-			continue
-		}
-		if hasTime && !bestHasTime {
-			bestIdx = i
-			bestTime = updated
-			bestHasTime = true
-			continue
-		}
-		if hasTime && bestHasTime {
-			if updated.After(bestTime) || updated.Equal(bestTime) {
-				bestIdx = i
-				bestTime = updated
-			}
-			continue
-		}
-		if !hasTime && !bestHasTime {
-			bestIdx = i
-		}
-	}
+		return strings.TrimSpace(inst.Provider) != ""
+	})
 
 	if bestIdx < 0 {
 		return ""
@@ -2301,21 +2268,34 @@ func latestManagedPairedChatID(agentID, channelID string) (string, string) {
 
 	targetAgent := strings.ToLower(strings.TrimSpace(agentID))
 	targetChannel := strings.ToLower(strings.TrimSpace(channelID))
+	bestIdx := latestManagedInstanceIndex(instances, func(inst managedAgentInstance) bool {
+		if !managedInstanceMatchesAgent(inst, targetAgent) {
+			return false
+		}
+		if targetChannel != "" && !strings.EqualFold(strings.TrimSpace(inst.Channel), targetChannel) {
+			return false
+		}
+		pairedChatID := strings.TrimSpace(inst.PairedChatID)
+		return pairedChatID != ""
+	})
+
+	if bestIdx < 0 {
+		return "", ""
+	}
+	return strings.TrimSpace(instances[bestIdx].PairedChatID), "latest managed instance"
+}
+
+func latestManagedInstanceIndex(instances []managedAgentInstance, match func(managedAgentInstance) bool) int {
+	if len(instances) == 0 || match == nil {
+		return -1
+	}
+
 	bestIdx := -1
 	var bestTime time.Time
 	bestHasTime := false
 
 	for i, inst := range instances {
-		if targetAgent != "" &&
-			!strings.EqualFold(strings.TrimSpace(inst.AgentID), targetAgent) &&
-			!strings.EqualFold(strings.TrimSpace(inst.Type), targetAgent) {
-			continue
-		}
-		if targetChannel != "" && !strings.EqualFold(strings.TrimSpace(inst.Channel), targetChannel) {
-			continue
-		}
-		pairedChatID := strings.TrimSpace(inst.PairedChatID)
-		if pairedChatID == "" {
+		if !match(inst) {
 			continue
 		}
 		updated, hasTime := parseManagedTimestamp(inst.UpdatedAt)
@@ -2344,10 +2324,15 @@ func latestManagedPairedChatID(agentID, channelID string) (string, string) {
 		}
 	}
 
-	if bestIdx < 0 {
-		return "", ""
+	return bestIdx
+}
+
+func managedInstanceMatchesAgent(inst managedAgentInstance, targetAgent string) bool {
+	if strings.TrimSpace(targetAgent) == "" {
+		return true
 	}
-	return strings.TrimSpace(instances[bestIdx].PairedChatID), "latest managed instance"
+	return strings.EqualFold(strings.TrimSpace(inst.AgentID), targetAgent) ||
+		strings.EqualFold(strings.TrimSpace(inst.Type), targetAgent)
 }
 
 func parseManagedTimestamp(raw string) (time.Time, bool) {

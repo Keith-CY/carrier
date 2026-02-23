@@ -53,6 +53,52 @@ func TestLatestManagedPairedChatIDUsesLatestInstance(t *testing.T) {
 	}
 }
 
+func TestLatestManagedInstanceProviderUsesLatestInstance(t *testing.T) {
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(t.TempDir(), "instances.json"))
+
+	path, err := managedInstancesPath()
+	if err != nil {
+		t.Fatalf("managedInstancesPath: %v", err)
+	}
+	if err := saveManagedInstances(path, []managedAgentInstance{
+		{
+			ID:        "openclaw-old",
+			Type:      "openclaw",
+			AgentID:   "openclaw",
+			Provider:  "openrouter",
+			UpdatedAt: time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		},
+		{
+			ID:        "openclaw-new",
+			Type:      "openclaw",
+			AgentID:   "openclaw",
+			Provider:  "openai",
+			UpdatedAt: time.Date(2026, 2, 22, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		},
+		{
+			ID:        "openclaw-empty-provider",
+			Type:      "openclaw",
+			AgentID:   "openclaw",
+			Provider:  "",
+			UpdatedAt: time.Date(2026, 2, 23, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		},
+		{
+			ID:        "picoclaw-newer",
+			Type:      "picoclaw",
+			AgentID:   "picoclaw",
+			Provider:  "openai-codex",
+			UpdatedAt: time.Date(2026, 2, 24, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		},
+	}); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	providerID := latestManagedInstanceProvider("openclaw")
+	if providerID != "openai" {
+		t.Fatalf("provider id = %q, want %q", providerID, "openai")
+	}
+}
+
 func TestPrepareManagedAgentAddArtifactsWritesPairedChatID(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	if err := os.MkdirAll(home, 0o700); err != nil {
