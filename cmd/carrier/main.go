@@ -32,6 +32,7 @@ import (
 	neturl "net/url"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -136,6 +137,11 @@ var openclawChannels = []picoclawChannel{
 		TokenLabel: "Telegram bot token for OpenClaw",
 	},
 }
+
+var (
+	carrierUserHomeDirFunc = os.UserHomeDir
+	carrierCurrentUserFunc = user.Current
+)
 
 var zeroclawChannels = []picoclawChannel{
 	{
@@ -856,7 +862,7 @@ func managedInstancesPath() (string, error) {
 	if custom := strings.TrimSpace(os.Getenv("CARRIER_INSTANCE_STORE")); custom != "" {
 		return custom, nil
 	}
-	home, err := os.UserHomeDir()
+	home, err := resolveCarrierHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home dir for instance store: %w", err)
 	}
@@ -1872,7 +1878,7 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 		return nil, err
 	}
 
-	home, err := os.UserHomeDir()
+	home, err := resolveCarrierHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve home dir: %w", err)
 	}
@@ -2888,7 +2894,7 @@ func bootstrapLogDir() (string, error) {
 		}
 		return customDir, nil
 	}
-	home, err := os.UserHomeDir()
+	home, err := resolveCarrierHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home dir for logs: %w", err)
 	}
@@ -2906,7 +2912,7 @@ func bootstrapRunDir() (string, error) {
 		}
 		return customDir, nil
 	}
-	home, err := os.UserHomeDir()
+	home, err := resolveCarrierHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home dir for run dir: %w", err)
 	}
@@ -3245,6 +3251,42 @@ func onboardConfigPath(
 		return "", fmt.Errorf("resolve home dir: %w", err)
 	}
 	return filepath.Join(home, ".carrier", "config.v2.json"), nil
+}
+
+func resolveCarrierHomeDir() (string, error) {
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return home, nil
+	}
+	if home, err := carrierUserHomeDirFunc(); err == nil {
+		if trimmed := strings.TrimSpace(home); trimmed != "" {
+			return trimmed, nil
+		}
+	}
+	if current, err := carrierCurrentUserFunc(); err == nil && current != nil {
+		if trimmed := strings.TrimSpace(current.HomeDir); trimmed != "" {
+			return trimmed, nil
+		}
+	}
+
+	if runtime.GOOS == "windows" {
+		if profile := strings.TrimSpace(os.Getenv("USERPROFILE")); profile != "" {
+			return profile, nil
+		}
+		if drive, homePath := strings.TrimSpace(os.Getenv("HOMEDRIVE")), strings.TrimSpace(os.Getenv("HOMEPATH")); drive != "" && homePath != "" {
+			return filepath.Clean(drive + homePath), nil
+		}
+	} else {
+		switch username := strings.TrimSpace(os.Getenv("USER")); username {
+		case "root":
+			return "/root", nil
+		case "":
+			return "/root", nil
+		default:
+			return filepath.Join("/home", username), nil
+		}
+	}
+
+	return "", errors.New("home directory unavailable")
 }
 
 func buildSlashCommandGuide(channel choiceOption) string {
