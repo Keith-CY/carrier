@@ -95,9 +95,13 @@ Notes:
 - OpenClaw can be `active`
 - Pi Mono/NanoClaw/Pico Claw appear as `candidate`
 
-#### FR-D-002 Install agent: `/install <agent>` (P0)
+#### FR-D-002 Install agent: `carrier add <agent>` (P0)
 Input:
 - `agent_id` in catalog allowlist
+
+Notes:
+- Chat `/install` is intentionally blocked (`E_INSTALL_GUI_ONLY`) for credential safety.
+- Installation entrypoint is Carrier TUI/WebUI (`carrier add <agent>`).
 
 Steps:
 1. validate runtime preconditions (OS-specific + toolchain)
@@ -337,7 +341,7 @@ Logical endpoints:
 
 ### 7.1 Phase 1 happy path (OpenClaw)
 1. `/pair`
-2. `/install openclaw`
+2. `carrier add openclaw`
 3. `/start openclaw`
 4. `/status openclaw` reports `healthy`
 5. `/logs openclaw --tail 200` returns expected tail
@@ -383,3 +387,6 @@ Memory criteria:
 1. Preferred runtime package format per OS for OpenClaw (`tar.gz`, installer script, package manager)
 2. WSL2 distro and shell assumptions for Windows support baseline
 3. Remote diagnosis handoff schema and privacy policy contract
+Notes:
+- Chat `/install` is intentionally blocked (`E_INSTALL_GUI_ONLY`) for credential safety.
+- Installation entrypoint is Carrier TUI/WebUI (`carrier add <agent>`).
