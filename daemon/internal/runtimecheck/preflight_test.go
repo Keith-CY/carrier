@@ -141,6 +141,32 @@ func TestRunPreFlight_CommandNotFound(t *testing.T) {
 	}
 }
 
+func TestRunPreFlight_CommandByOSResolution(t *testing.T) {
+	m := baseManifest()
+	m.Runtime.Start = manifest.CommandSpec{
+		CommandByOS: map[string]string{
+			"windows": "powershell -NoProfile -Command \"openclaw gateway\"",
+			"default": "sh -c 'openclaw gateway'",
+		},
+	}
+	checker := newPassingChecker()
+
+	result := RunPreFlight(m, checker,
+		WithGetenv(func(string) string { return "val" }),
+		WithListenTCP(func(_, _ string) (net.Listener, error) { return &fakeListener{}, nil }),
+		WithCommandLookPath(func(name string) (string, error) {
+			if name == "sh" {
+				return "/bin/sh", nil
+			}
+			return "", errors.New("not found")
+		}),
+	)
+
+	if !result.Passed {
+		t.Fatalf("expected preflight to pass with command_by_os fallback, got: %+v", result.Checks)
+	}
+}
+
 func TestRunPreFlight_NoRequiredEnvVars(t *testing.T) {
 	m := baseManifest()
 	m.Env.Required = nil
