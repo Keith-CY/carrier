@@ -177,6 +177,21 @@ jobs:
       - name: Build headless (default, no WebUI)
         run: go build -o carrier-headless ./cmd/carrier/
 
+      - name: Version command smoke check
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$(./carrier --version)"
+          echo "${out}"
+          grep -E '^carrier ' <<<"${out}"
+          grep -E '^commit: ' <<<"${out}"
+          grep -E '^build date: ' <<<"${out}"
+
+          sub_out="$(./carrier version)"
+          short_out="$(./carrier -v)"
+          [[ "${sub_out}" == "${out}" ]]
+          [[ "${short_out}" == "${out}" ]]
+
       - name: Cross-compile WebUI (Windows amd64)
         run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -tags webui -o carrier-windows.exe ./cmd/carrier/
 
