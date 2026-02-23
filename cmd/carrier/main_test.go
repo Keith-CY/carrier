@@ -333,7 +333,7 @@ func TestPickManagedAddProviderWithReasonUsesLatestManagedInstanceProvider(t *te
 			ID:        "openclaw-b",
 			Type:      "openclaw",
 			AgentID:   "openclaw",
-			Provider:  "deepseek",
+			Provider:  "anthropic",
 			UpdatedAt: time.Date(2026, 2, 2, 8, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
 		},
 	}
@@ -345,8 +345,8 @@ func TestPickManagedAddProviderWithReasonUsesLatestManagedInstanceProvider(t *te
 	if err != nil {
 		t.Fatalf("pickManagedAddProviderWithReason error: %v", err)
 	}
-	if provider.ID != "deepseek" {
-		t.Fatalf("provider.ID = %q, want %q", provider.ID, "deepseek")
+	if provider.ID != "anthropic" {
+		t.Fatalf("provider.ID = %q, want %q", provider.ID, "anthropic")
 	}
 	if !strings.Contains(strings.ToLower(reason), "latest openclaw instance") {
 		t.Fatalf("reason should mention latest managed instance reuse, got %q", reason)

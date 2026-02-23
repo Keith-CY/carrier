@@ -647,7 +647,7 @@ func TestProvidersEndpoint_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-func TestProvidersEndpoint_ContainsAnthropicAndOllama(t *testing.T) {
+func TestProvidersEndpoint_ContainsAnthropicAndVLLM(t *testing.T) {
 	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()
 
@@ -660,8 +660,8 @@ func TestProvidersEndpoint_ContainsAnthropicAndOllama(t *testing.T) {
 	if !strings.Contains(body, "anthropic") {
 		t.Errorf("expected 'anthropic' in response body")
 	}
-	if !strings.Contains(body, "ollama") {
-		t.Errorf("expected 'ollama' in response body")
+	if !strings.Contains(body, "vllm") {
+		t.Errorf("expected 'vllm' in response body")
 	}
 	if !strings.Contains(body, "api_key") {
 		t.Errorf("expected 'api_key' auth mode in response body")

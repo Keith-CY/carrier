@@ -227,18 +227,10 @@ var channelOptions = []choiceOption{
 }
 
 var providerOptions = []choiceOption{
-	{ID: "gemini", Name: "Google Gemini", Setup: "Gemini direct API key", AuthMode: authModeAPIKey, ProviderEnv: "GEMINI_API_KEY", ExampleModel: "gemini/gemini-2.0-flash-exp"},
-	{ID: "zhipu", Name: "Zhipu", Setup: "GLM direct API key", AuthMode: authModeAPIKey, ProviderEnv: "ZHIPU_API_KEY", ExampleModel: "zhipu/glm-4.7"},
-	{ID: "openrouter", Name: "OpenRouter", Setup: "Unified gateway API key", AuthMode: authModeAPIKey, ProviderEnv: "OPENROUTER_API_KEY", ExampleModel: "openrouter/auto"},
 	{ID: "anthropic", Name: "Anthropic", Setup: "Claude direct API key", AuthMode: authModeAPIKey, ProviderEnv: "ANTHROPIC_API_KEY", ExampleModel: "anthropic/claude-sonnet-4.6"},
 	{ID: "openai", Name: "OpenAI", Setup: "GPT direct API key", AuthMode: authModeAPIKey, ProviderEnv: "OPENAI_API_KEY", ExampleModel: "openai/gpt-5.2"},
 	{ID: "openai-codex", Name: "OpenAI Codex", Setup: "OAuth device-code login", AuthMode: authModeOAuthDeviceCode, ProviderEnv: "OPENAI_CODEX_TOKEN", ExampleModel: "openai-codex/gpt-5.3-codex"},
-	{ID: "deepseek", Name: "DeepSeek", Setup: "DeepSeek direct API key", AuthMode: authModeAPIKey, ProviderEnv: "DEEPSEEK_API_KEY", ExampleModel: "deepseek/deepseek-chat"},
-	{ID: "qwen", Name: "Qwen", Setup: "DashScope API key", AuthMode: authModeAPIKey, ProviderEnv: "QWEN_API_KEY", ExampleModel: "qwen/qwen-plus"},
-	{ID: "groq", Name: "Groq", Setup: "Groq API key", AuthMode: authModeAPIKey, ProviderEnv: "GROQ_API_KEY", ExampleModel: "groq/llama-3.3-70b-versatile"},
-	{ID: "cerebras", Name: "Cerebras", Setup: "Cerebras API key", AuthMode: authModeAPIKey, ProviderEnv: "CEREBRAS_API_KEY", ExampleModel: "cerebras/llama-3.3-70b"},
-	{ID: "ollama", Name: "Ollama", Setup: "Local runtime, no API key", AuthMode: authModeNone, ExampleModel: "ollama/llama3"},
-	{ID: "vllm", Name: "vLLM", Setup: "Local/OpenAI-compatible endpoint", AuthMode: authModeNone, ExampleModel: "vllm/auto"},
+	{ID: "vllm", Name: "OpenAI-Compatible (v1)", Setup: "OpenAI v1-compatible endpoint", AuthMode: authModeNone, ExampleModel: "vllm/auto"},
 }
 
 const (

@@ -186,13 +186,13 @@ func TestOnboardSelectProvider_LocalProvider_AutoAdvance(t *testing.T) {
 		sess.SelectedAgent = "openclaw"
 	})
 
-	resp := onboardSelectProvider("req-1", key, "ollama", s)
+	resp := onboardSelectProvider("req-1", key, "vllm", s)
 	if resp.Result != "ok" {
 		t.Errorf("expected ok, got: %+v", resp)
 	}
 	sess := s.get(key)
 	if sess.Step != OnboardAuthConfigured {
-		t.Errorf("ollama should auto-advance to auth_configured, got %q", sess.Step)
+		t.Errorf("vllm should auto-advance to auth_configured, got %q", sess.Step)
 	}
 	if !strings.Contains(strings.ToLower(resp.Message), "no auth") {
 		t.Errorf("expected 'no auth' message, got: %q", resp.Message)
@@ -417,7 +417,7 @@ func TestOnboardHandleAuth_OAuth_BadInput(t *testing.T) {
 	s.update(key, func(sess *OnboardSession) {
 		sess.Step = OnboardProviderSelected
 		sess.SelectedAgent = "openclaw"
-		sess.SelectedProvider = "qwen-portal"
+		sess.SelectedProvider = "openai-codex"
 	})
 
 	resp := onboardHandleAuth("req-1", key, "", s)
