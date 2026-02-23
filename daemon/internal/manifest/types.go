@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sort"
 	"strings"
 )
 
@@ -26,6 +27,20 @@ const (
 const (
 	UpgradeStrategyInPlaceOrReinstall = "in_place_or_reinstall"
 )
+
+const (
+	CommandOSDarwin  = "darwin"
+	CommandOSLinux   = "linux"
+	CommandOSWindows = "windows"
+	CommandOSDefault = "default"
+)
+
+var supportedCommandOS = map[string]struct{}{
+	CommandOSDarwin:  {},
+	CommandOSLinux:   {},
+	CommandOSWindows: {},
+	CommandOSDefault: {},
+}
 
 // Manifest is the full agent manifest schema covering runtime, env, network,
 // health, upgrade, memory, and diagnostics as required by the PRD.
@@ -252,6 +267,14 @@ func validateCommandByOS(field string, byOS map[string]string) error {
 		}
 		if normalized != osName {
 			return fmt.Errorf("%s.command_by_os key %q must be lowercase and trimmed", field, osName)
+		}
+		if _, ok := supportedCommandOS[normalized]; !ok {
+			keys := make([]string, 0, len(supportedCommandOS))
+			for key := range supportedCommandOS {
+				keys = append(keys, fmt.Sprintf("%q", key))
+			}
+			sort.Strings(keys)
+			return fmt.Errorf("%s.command_by_os has unsupported key %q; supported: %s", field, osName, strings.Join(keys, ", "))
 		}
 		if strings.TrimSpace(raw) == "" {
 			return fmt.Errorf("%s.command_by_os.%s is required", field, osName)
