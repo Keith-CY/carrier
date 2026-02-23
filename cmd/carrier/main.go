@@ -1088,18 +1088,12 @@ func runListInstances(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	running := make([]managedAgentInstance, 0, len(instances))
-	for _, inst := range instances {
-		if strings.EqualFold(strings.TrimSpace(inst.RuntimeState), "running") {
-			running = append(running, inst)
-		}
-	}
-	if len(running) == 0 {
-		_, _ = fmt.Fprintln(out, "No agent instances are running.")
+	if len(instances) == 0 {
+		_, _ = fmt.Fprintln(out, "No managed agent instances found.")
 		return nil
 	}
-	_, _ = fmt.Fprintln(out, "Agent instances:")
-	for _, inst := range running {
+	_, _ = fmt.Fprintln(out, "Managed agent instances:")
+	for _, inst := range instances {
 		runtimeState := strings.TrimSpace(inst.RuntimeState)
 		if runtimeState == "" {
 			runtimeState = "unknown"

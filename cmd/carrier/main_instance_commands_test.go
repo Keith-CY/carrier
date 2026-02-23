@@ -153,3 +153,47 @@ func TestManagedInstanceLifecycleCommandsSupportIDOrName(t *testing.T) {
 		t.Fatalf("runtime state = %q, want stopped", got)
 	}
 }
+
+func TestRunListInstancesShowsAllManagedInstances(t *testing.T) {
+	tmp := t.TempDir()
+	storePath := filepath.Join(tmp, "instances.json")
+	t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+
+	instances := []managedAgentInstance{
+		{
+			ID:           "openclaw-abcd1234",
+			Name:         "openclaw",
+			Type:         "openclaw",
+			AgentID:      "openclaw",
+			GatewayURL:   "http://127.0.0.1:8787",
+			RuntimeState: "running",
+			CreatedAt:    "2026-02-23T00:00:00Z",
+			UpdatedAt:    "2026-02-23T00:00:00Z",
+		},
+		{
+			ID:           "picoclaw-ffff1111",
+			Name:         "picoclaw",
+			Type:         "picoclaw",
+			AgentID:      "picoclaw",
+			GatewayURL:   "http://127.0.0.1:8787",
+			RuntimeState: "stopped",
+			CreatedAt:    "2026-02-23T00:00:00Z",
+			UpdatedAt:    "2026-02-23T00:00:00Z",
+		},
+	}
+	if err := saveManagedInstances(storePath, instances); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := runListInstances(&out); err != nil {
+		t.Fatalf("runListInstances: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "Managed agent instances:") {
+		t.Fatalf("missing list header in output: %q", got)
+	}
+	if !strings.Contains(got, "id=openclaw-abcd1234") || !strings.Contains(got, "id=picoclaw-ffff1111") {
+		t.Fatalf("expected all instances in output: %q", got)
+	}
+}

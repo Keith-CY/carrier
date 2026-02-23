@@ -19,7 +19,7 @@ This page summarizes the implemented CLI command surface and the recommended usa
 - `carrier add <agent_id> --webui`
   - Browser/WebUI add flow.
 - `carrier list`
-  - Lists running managed agent instances.
+  - Lists managed agent instances with state.
 - `carrier stop`
   - Stops background services started by Carrier: daemon and gateway.
 - `carrier start <id|name>`

@@ -12,9 +12,9 @@ Source issue: #426
 
 1. Confirm CI is green for merge candidate.
 2. Validate daemon and gateway binaries for target platform.
-3. Run smoke path: pair -> install -> start -> status -> logs.
+3. Run smoke path: `carrier add openclaw` -> pair -> start -> status -> logs.
 4. Verify diagnose path and artifact download URL.
-5. Confirm audit logs are generated for install/start/stop/diagnose.
+5. Confirm audit logs are generated for add/install/start/stop/diagnose.
 6. Confirm required secrets/env are present (without printing values).
 7. Confirm monitoring and health endpoint checks are active.
 8. Publish release notes and known limitations.
@@ -38,5 +38,6 @@ Source issue: #426
 ## Post-Rollback Validation
 
 - `/health` returns healthy.
-- `/pair`, `/install`, `/start`, `/status`, `/stop` execute normally.
+- `carrier add openclaw` works in TUI/WebUI.
+- `/pair`, `/start`, `/status`, `/stop` execute normally in chat mode.
 - audit log and diagnose commands remain available.

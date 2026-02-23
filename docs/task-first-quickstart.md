@@ -31,19 +31,21 @@ Prerequisites:
 
 Commands:
 ```text
+carrier add openclaw
 /pair <code>
 /agents
-/install openclaw
 /start openclaw
 /status openclaw
 ```
 
 Expected output:
+- `carrier add openclaw` completes install/start for OpenClaw
 - `/pair` returns success
 - `/status openclaw` reports running/healthy
 
 Rollback notes:
 - If startup fails, run `/stop openclaw` and then `/diagnose openclaw`.
+- If chat reports `E_INSTALL_GUI_ONLY`, use `carrier add <agent_id>` in TUI/WebUI; chat install is intentionally blocked.
 - Keep diagnose artifacts with request IDs before retrying.
 
 ## Task 3: Fix Common Failures Quickly
