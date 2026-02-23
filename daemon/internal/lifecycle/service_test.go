@@ -36,6 +36,29 @@ type runResult struct {
 	err    error
 }
 
+type fakeStreamingRunner struct {
+	runCalls     []string
+	streamCalls  []string
+	streamLines  []string
+	streamResult commandexec.Result
+	streamErr    error
+}
+
+func (f *fakeStreamingRunner) Run(_ context.Context, command string) (commandexec.Result, error) {
+	f.runCalls = append(f.runCalls, command)
+	return commandexec.Result{}, nil
+}
+
+func (f *fakeStreamingRunner) RunStreaming(_ context.Context, command string, onLine func(string)) (commandexec.Result, error) {
+	f.streamCalls = append(f.streamCalls, command)
+	for _, line := range f.streamLines {
+		if onLine != nil {
+			onLine(line)
+		}
+	}
+	return f.streamResult, f.streamErr
+}
+
 func (f *fakeRunner) Run(_ context.Context, command string) (commandexec.Result, error) {
 	f.calls = append(f.calls, command)
 	if f.counts == nil {
@@ -251,6 +274,55 @@ func TestLifecycleInstallStartStop(t *testing.T) {
 		if runner.calls[i] != wantCalls[i] {
 			t.Fatalf("runner call %d mismatch: want %q got %q", i, wantCalls[i], runner.calls[i])
 		}
+	}
+}
+
+func TestInstallStreamsRunnerOutputIntoAgentLogs(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	runner := &fakeStreamingRunner{
+		streamLines: []string{
+			"npm installing package A",
+			"npm installing package B",
+		},
+		streamResult: commandexec.Result{
+			CombinedOutput: "npm installing package A\nnpm installing package B",
+			ExitCode:       0,
+		},
+	}
+	checker := &fakeChecker{}
+	clock := &fakeClock{current: time.Date(2026, 2, 14, 4, 20, 0, 0, time.UTC)}
+
+	svc := NewService(nil,
+		WithRunner(runner),
+		WithRuntimeChecker(checker),
+		WithDiagnoseDir(t.TempDir()),
+		WithNow(clock.Now),
+	)
+	if err := svc.RegisterManifest(sampleManifest()); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if len(runner.streamCalls) != 1 || runner.streamCalls[0] != "install-openclaw" {
+		t.Fatalf("expected streaming runner to execute install command once, got %+v", runner.streamCalls)
+	}
+	if len(runner.runCalls) != 0 {
+		t.Fatalf("expected non-streaming Run to be unused, got %+v", runner.runCalls)
+	}
+
+	logs, err := svc.Logs("openclaw", 20)
+	if err != nil {
+		t.Fatalf("logs: %v", err)
+	}
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "[install] npm installing package A") {
+		t.Fatalf("expected streamed install log line in logs, got %q", joined)
+	}
+	if !strings.Contains(joined, "[install] command=\"install-openclaw\" exit=0") {
+		t.Fatalf("expected install summary log line in logs, got %q", joined)
 	}
 }
 

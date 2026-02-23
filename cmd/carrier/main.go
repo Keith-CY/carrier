@@ -74,6 +74,7 @@ const (
 type addCommandOptions struct {
 	AgentID string
 	WebUI   bool
+	Quiet   bool
 }
 
 type updateCommandOptions struct {
@@ -272,6 +273,8 @@ var execGitCommand = func(ctx context.Context, workingDir string, args ...string
 	return strings.TrimSpace(string(raw)), nil
 }
 var procFSRoot = "/proc"
+var daemonActionLogPollInterval = 2 * time.Second
+var daemonActionHeartbeatInterval = 15 * time.Second
 
 const usage = `Carrier — unified agent platform binary
 
@@ -294,10 +297,8 @@ Usage:
   carrier onboard        Interactive onboarding (channel/provider -> keep gateway running in background)
   carrier onboard --webui
                         Launch WebUI onboarding (start/reuse daemon+gateway)
-  carrier add <agent_id>
-                        Add/install an agent via TUI flow
-  carrier add <agent_id> --webui
-                        Add/install an agent via WebUI flow
+  carrier add <agent_id> [--webui] [-q|--quiet]
+                        Add/install an agent (default: show install logs; use -q for quiet mode)
   carrier --help         Show this help message
 
 Notes:
@@ -393,7 +394,7 @@ func main() {
 				}
 				return
 			}
-			if err := runAddTUI(os.Stdin, os.Stdout, opts.AgentID); err != nil {
+			if err := runAddTUI(os.Stdin, os.Stdout, opts.AgentID, opts.Quiet); err != nil {
 				fmt.Fprintf(os.Stderr, "add failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -474,24 +475,31 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 
 func parseAddCommandArgs(args []string) (addCommandOptions, error) {
 	if len(args) == 0 {
-		return addCommandOptions{}, errors.New("usage: carrier add <agent_id> [--webui]")
+		return addCommandOptions{}, errors.New("usage: carrier add <agent_id> [--webui] [-q|--quiet]")
 	}
-	opts := addCommandOptions{
-		AgentID: strings.ToLower(strings.TrimSpace(args[0])),
-	}
-	if opts.AgentID == "" || strings.HasPrefix(opts.AgentID, "-") {
-		return addCommandOptions{}, errors.New("agent_id is required")
-	}
-	for _, raw := range args[1:] {
+
+	opts := addCommandOptions{}
+	for _, raw := range args {
 		arg := strings.ToLower(strings.TrimSpace(raw))
 		switch arg {
 		case "--webui", "--web", "webui":
 			opts.WebUI = true
+		case "-q", "--quiet", "--quite":
+			opts.Quiet = true
 		case "":
 			continue
 		default:
-			return addCommandOptions{}, fmt.Errorf("unknown add option: %s", raw)
+			if strings.HasPrefix(arg, "-") {
+				return addCommandOptions{}, fmt.Errorf("unknown add option: %s", raw)
+			}
+			if opts.AgentID != "" {
+				return addCommandOptions{}, fmt.Errorf("multiple agent ids provided: %s and %s", opts.AgentID, raw)
+			}
+			opts.AgentID = arg
 		}
+	}
+	if opts.AgentID == "" {
+		return addCommandOptions{}, errors.New("agent_id is required")
 	}
 	return opts, nil
 }
@@ -1781,7 +1789,7 @@ func ensureWebUIServices(out io.Writer) (string, error) {
 	return gatewayURL, nil
 }
 
-func runAddTUI(in io.Reader, out io.Writer, agentID string) error {
+func runAddTUI(in io.Reader, out io.Writer, agentID string, quiet bool) error {
 	agentID = strings.ToLower(strings.TrimSpace(agentID))
 	if agentID == "" {
 		return errors.New("agent_id is required")
@@ -1791,19 +1799,19 @@ func runAddTUI(in io.Reader, out io.Writer, agentID string) error {
 		if _, err := ensureDaemonRunning(out); err != nil {
 			return err
 		}
-		if err := daemonAgentAction(agentID, "install"); err != nil {
+		if err := daemonAgentActionWithProgress(out, agentID, "install", quiet); err != nil {
 			return err
 		}
-		if err := daemonAgentAction(agentID, "start"); err != nil {
+		if err := daemonAgentActionWithProgress(out, agentID, "start", quiet); err != nil {
 			return err
 		}
 		_, _ = fmt.Fprintf(out, "✅ %s installed and started.\n", agentID)
 		return nil
 	}
-	return runAddManagedAgentTUI(in, out, agentID)
+	return runAddManagedAgentTUI(in, out, agentID, quiet)
 }
 
-func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string) error {
+func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bool) error {
 	cfg, ok := managedAgentByID(agentID)
 	if !ok {
 		return fmt.Errorf("managed agent %q is not supported", agentID)
@@ -1871,10 +1879,10 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string) error {
 	if _, err := ensureDaemonRunning(out); err != nil {
 		return err
 	}
-	if err := daemonAgentAction(cfg.ID, "install"); err != nil {
+	if err := daemonAgentActionWithProgress(out, cfg.ID, "install", quiet); err != nil {
 		return err
 	}
-	if err := daemonAgentAction(cfg.ID, "start"); err != nil {
+	if err := daemonAgentActionWithProgress(out, cfg.ID, "start", quiet); err != nil {
 		return err
 	}
 	if strings.EqualFold(cfg.ID, "picoclaw") {
@@ -2178,6 +2186,90 @@ func ensureGatewayRunning(out io.Writer, startGateway func() error) (string, err
 	return gatewayURL, nil
 }
 
+func daemonAgentActionWithProgress(out io.Writer, agentID, action string, quiet bool) error {
+	if quiet {
+		return daemonAgentAction(agentID, action)
+	}
+
+	previousLogs, _ := daemonFetchAgentLogs(agentID, 1000)
+	startedAt := time.Now()
+	lastHeartbeat := startedAt
+
+	done := make(chan error, 1)
+	go func() {
+		done <- daemonAgentAction(agentID, action)
+	}()
+
+	ticker := time.NewTicker(daemonActionLogPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case err := <-done:
+			if currentLogs, logErr := daemonFetchAgentLogs(agentID, 1000); logErr == nil {
+				for _, line := range diffNewLogLines(previousLogs, currentLogs) {
+					_, _ = fmt.Fprintln(out, line)
+				}
+			}
+			return err
+		case <-ticker.C:
+			currentLogs, logErr := daemonFetchAgentLogs(agentID, 1000)
+			if logErr != nil {
+				if time.Since(lastHeartbeat) >= daemonActionHeartbeatInterval {
+					_, _ = fmt.Fprintf(out, "[%s] in progress (%s elapsed)\n", action, time.Since(startedAt).Round(time.Second))
+					lastHeartbeat = time.Now()
+				}
+				continue
+			}
+			newLines := diffNewLogLines(previousLogs, currentLogs)
+			for _, line := range newLines {
+				_, _ = fmt.Fprintln(out, line)
+			}
+			previousLogs = currentLogs
+			if len(newLines) == 0 && time.Since(lastHeartbeat) >= daemonActionHeartbeatInterval {
+				_, _ = fmt.Fprintf(out, "[%s] in progress (%s elapsed)\n", action, time.Since(startedAt).Round(time.Second))
+				lastHeartbeat = time.Now()
+			}
+			if len(newLines) > 0 {
+				lastHeartbeat = time.Now()
+			}
+		}
+	}
+}
+
+func diffNewLogLines(previous, current []string) []string {
+	if len(current) == 0 {
+		return nil
+	}
+	maxOverlap := 0
+	limit := len(previous)
+	if len(current) < limit {
+		limit = len(current)
+	}
+	for overlap := limit; overlap > 0; overlap-- {
+		if logSliceEqual(previous[len(previous)-overlap:], current[:overlap]) {
+			maxOverlap = overlap
+			break
+		}
+	}
+	if maxOverlap >= len(current) {
+		return nil
+	}
+	return append([]string(nil), current[maxOverlap:]...)
+}
+
+func logSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func daemonAgentAction(agentID, action string) error {
 	agentID = strings.TrimSpace(agentID)
 	action = strings.TrimSpace(action)
@@ -2341,21 +2433,40 @@ func isDaemonTransportErrorRecoverable(err error) bool {
 	return isDaemonEOFError(err) || isDaemonTimeoutError(err)
 }
 
-func daemonExtractPairCodeFromLogs(agentID string) (string, error) {
-	raw, status, err := daemonRequest(http.MethodGet, fmt.Sprintf("/api/v1/agents/%s/logs?tail=120", neturl.PathEscape(strings.TrimSpace(agentID))), nil)
+func daemonFetchAgentLogs(agentID string, tail int) ([]string, error) {
+	trimmedAgentID := strings.TrimSpace(agentID)
+	if trimmedAgentID == "" {
+		return nil, errors.New("agent id is required")
+	}
+	if tail <= 0 {
+		tail = 200
+	}
+	raw, status, err := daemonRequest(
+		http.MethodGet,
+		fmt.Sprintf("/api/v1/agents/%s/logs?tail=%d", neturl.PathEscape(trimmedAgentID), tail),
+		nil,
+	)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return "", fmt.Errorf("daemon logs request failed with status %d", status)
+		return nil, fmt.Errorf("daemon logs request failed with status %d", status)
 	}
 	var payload struct {
 		Lines []string `json:"lines"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return "", fmt.Errorf("decode logs response: %w", err)
+		return nil, fmt.Errorf("decode logs response: %w", err)
 	}
-	for _, line := range payload.Lines {
+	return payload.Lines, nil
+}
+
+func daemonExtractPairCodeFromLogs(agentID string) (string, error) {
+	lines, err := daemonFetchAgentLogs(agentID, 120)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range lines {
 		if code := strings.TrimSpace(picoclawPairCodePattern.FindString(line)); code != "" {
 			return code, nil
 		}

@@ -32,13 +32,21 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 		}
 	}
 
-	result, runErr := s.runner.Run(opCtx, m.Runtime.Install.Command)
-	s.appendCommandLog(agentID, "install", m.Runtime.Install.Command, result, runErr)
+	result, streamed, runErr := s.runCommandWithAgentLogs(opCtx, agentID, "install", m.Runtime.Install.Command)
+	if streamed {
+		s.appendCommandLogSummary(agentID, "install", m.Runtime.Install.Command, result, runErr)
+	} else {
+		s.appendCommandLog(agentID, "install", m.Runtime.Install.Command, result, runErr)
+	}
 	if runErr != nil {
 		repaired := s.triageInstallFailure(ctx, opCtx, agentID, runErr)
 		if repaired {
-			retryResult, retryErr := s.runner.Run(opCtx, m.Runtime.Install.Command)
-			s.appendCommandLog(agentID, "install-retry", m.Runtime.Install.Command, retryResult, retryErr)
+			retryResult, retryStreamed, retryErr := s.runCommandWithAgentLogs(opCtx, agentID, "install-retry", m.Runtime.Install.Command)
+			if retryStreamed {
+				s.appendCommandLogSummary(agentID, "install-retry", m.Runtime.Install.Command, retryResult, retryErr)
+			} else {
+				s.appendCommandLog(agentID, "install-retry", m.Runtime.Install.Command, retryResult, retryErr)
+			}
 			if retryErr == nil {
 				s.markInstallSuccess(agentID)
 				s.recordAudit("", "system", "install", agentID, AuditResultSuccess, "", "install completed after auto-repair")
@@ -136,8 +144,12 @@ func (s *Service) tryAutoRepairInstallFailure(ctx context.Context, agentID strin
 		repairCommand = fmt.Sprintf("cd %s && %s", shellSingleQuote(targetPath), repairCommand)
 	}
 
-	result, repairErr := s.runner.Run(ctx, repairCommand)
-	s.appendCommandLog(agentID, "repair", repairCommand, result, repairErr)
+	result, streamed, repairErr := s.runCommandWithAgentLogs(ctx, agentID, "repair", repairCommand)
+	if streamed {
+		s.appendCommandLogSummary(agentID, "repair", repairCommand, result, repairErr)
+	} else {
+		s.appendCommandLog(agentID, "repair", repairCommand, result, repairErr)
+	}
 	if repairErr != nil {
 		s.recordAudit("", "base-agent", "repair", agentID, AuditResultFailure, "E_REPAIR_FAILED", repairErr.Error())
 		return false, repairErr

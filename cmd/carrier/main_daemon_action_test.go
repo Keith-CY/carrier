@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"net"
-	"os"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -239,4 +241,80 @@ func TestDaemonActionTimeoutUsesExtendedInstallWindow(t *testing.T) {
 			t.Fatalf("daemonActionTimeout( INSTALL , command_timeout=10m) = %s, want %s", got, 30*time.Minute)
 		}
 	})
+}
+
+func TestDaemonAgentActionWithProgressPrintsNewLogLines(t *testing.T) {
+	var installDone atomic.Bool
+	var logsCalls atomic.Int64
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/agents/openclaw/install":
+			time.Sleep(25 * time.Millisecond)
+			installDone.Store(true)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "/api/v1/agents/openclaw/logs":
+			logsCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			if installDone.Load() {
+				_, _ = w.Write([]byte(`{"lines":["old-line","install-progress-line"]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"lines":["old-line"]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	configureDaemonProbeEnvForTest(t, server.URL)
+
+	prevPoll := daemonActionLogPollInterval
+	prevHeartbeat := daemonActionHeartbeatInterval
+	daemonActionLogPollInterval = 5 * time.Millisecond
+	daemonActionHeartbeatInterval = time.Hour
+	t.Cleanup(func() {
+		daemonActionLogPollInterval = prevPoll
+		daemonActionHeartbeatInterval = prevHeartbeat
+	})
+
+	var out bytes.Buffer
+	if err := daemonAgentActionWithProgress(&out, "openclaw", "install", false); err != nil {
+		t.Fatalf("daemonAgentActionWithProgress install error: %v", err)
+	}
+
+	output := out.String()
+	if strings.Contains(output, "old-line") {
+		t.Fatalf("output should not replay baseline log lines, got %q", output)
+	}
+	if !strings.Contains(output, "install-progress-line") {
+		t.Fatalf("output should include new log lines, got %q", output)
+	}
+	if logsCalls.Load() == 0 {
+		t.Fatal("expected logs endpoint to be queried for progress output")
+	}
+}
+
+func TestDaemonAgentActionWithProgressQuietModeSuppressesLogs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/agents/openclaw/install":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "/api/v1/agents/openclaw/logs":
+			t.Fatalf("logs endpoint should not be called in quiet mode")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	configureDaemonProbeEnvForTest(t, server.URL)
+
+	var out bytes.Buffer
+	if err := daemonAgentActionWithProgress(&out, "openclaw", "install", true); err != nil {
+		t.Fatalf("daemonAgentActionWithProgress install error: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("quiet mode should not print progress logs, got %q", out.String())
+	}
 }
