@@ -7,7 +7,9 @@ param(
   [string]$Label = "windows-x64",
   [string]$OutDir = "C:\Temp\carrier-ec2",
   [switch]$SkipOnboard,
-  [switch]$SkipAdd
+  [switch]$SkipAdd,
+  [switch]$SkipPicoclaw,
+  [switch]$SkipOpenclaw
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,6 +32,8 @@ Options:
   -OutDir <dir>       Download/extract directory (default: C:\Temp\carrier-ec2).
   -SkipOnboard        Skip `carrier onboard`.
   -SkipAdd            Skip `carrier add openclaw`.
+  -SkipPicoclaw       Skip `carrier add picoclaw`.
+  -SkipOpenclaw       Skip `carrier add openclaw`.
 
 Environment (optional):
   CARRIER_TELEGRAM_BOT_TOKEN
@@ -125,20 +129,51 @@ if ($WaitSeconds -eq -1) {
   }
 }
 
+if ($SkipAdd) {
+  $SkipOpenclaw = $true
+}
+
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-$zipName = "carrier-$Tag-$Label.zip"
+$artifactTag = $Tag
+if ([string]::IsNullOrWhiteSpace($artifactTag)) {
+  $artifactTag = $Sha
+}
+
+$zipName = "carrier-$artifactTag-$Label.zip"
 $zipPath = Join-Path $OutDir $zipName
 $sumPath = Join-Path $OutDir "$zipName.sha256"
 $baseUrl = "https://github.com/$Repo/releases/download/$Tag"
 
-Wait-ReleaseAsset -Uri "$baseUrl/$zipName" -TimeoutSeconds $WaitSeconds
+$downloadZip = { param([string]$uri, [string]$outPath)
+  Invoke-WebRequest -Uri $uri -OutFile $outPath
+}
 
-Write-Host "[ec2] Downloading release asset: $baseUrl/$zipName"
-Invoke-WebRequest -Uri "$baseUrl/$zipName" -OutFile $zipPath
-
-Write-Host "[ec2] Downloading checksum: $baseUrl/$zipName.sha256"
-Invoke-WebRequest -Uri "$baseUrl/$zipName.sha256" -OutFile $sumPath
+try {
+  Wait-ReleaseAsset -Uri "$baseUrl/$zipName" -TimeoutSeconds $WaitSeconds
+  Write-Host "[ec2] Downloading release asset: $baseUrl/$zipName"
+  &$downloadZip "$baseUrl/$zipName" $zipPath
+  Write-Host "[ec2] Downloading checksum: $baseUrl/$zipName.sha256"
+  &$downloadZip "$baseUrl/$zipName.sha256" $sumPath
+} catch {
+  $legacyTag = $Sha
+  if ($baseUrl -like "*main-*" -and -not [string]::IsNullOrWhiteSpace($legacyTag) -and $artifactTag -ne $legacyTag) {
+    $legacyZipName = "carrier-$legacyTag-$Label.zip"
+    $legacyZipPath = Join-Path $OutDir $legacyZipName
+    $legacySumPath = Join-Path $OutDir "$legacyZipName.sha256"
+    Write-Host "[ec2] Primary asset name not found; falling back to legacy carrier-$legacyTag-$Label.zip"
+    $zipName = $legacyZipName
+    $zipPath = $legacyZipPath
+    $sumPath = $legacySumPath
+    Wait-ReleaseAsset -Uri "$baseUrl/$zipName" -TimeoutSeconds $WaitSeconds
+    Write-Host "[ec2] Downloading fallback release asset: $baseUrl/$zipName"
+    &$downloadZip "$baseUrl/$zipName" $zipPath
+    Write-Host "[ec2] Downloading fallback checksum: $baseUrl/$zipName.sha256"
+    &$downloadZip "$baseUrl/$zipName.sha256" $sumPath
+  } else {
+    throw
+  }
+}
 
 Write-Host "[ec2] Verifying checksum"
 $expected = ((Get-Content -Path $sumPath -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
@@ -190,7 +225,19 @@ if (-not $SkipOnboard) {
   Invoke-TuiCommand -CarrierArgs @("onboard")
 }
 
-if (-not $SkipAdd) {
+if (-not $SkipPicoclaw) {
+  Write-Host "[ec2] Running: carrier add picoclaw (TUI)"
+  Invoke-TuiCommand -CarrierArgs @("add", "picoclaw")
+}
+
+Write-Host "[ec2] PicoClaw status from daemon API (best effort):"
+try {
+  Invoke-RestMethod -Uri "http://127.0.0.1:9090/api/v1/agents/picoclaw/status" | ConvertTo-Json -Depth 8
+} catch {
+  Write-Warning $_
+}
+
+if (-not $SkipOpenclaw) {
   Write-Host "[ec2] Running: carrier add openclaw (TUI)"
   Invoke-TuiCommand -CarrierArgs @("add", "openclaw")
 }

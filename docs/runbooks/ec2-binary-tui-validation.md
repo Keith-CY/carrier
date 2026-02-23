@@ -2,7 +2,7 @@
 
 Purpose: validate Carrier on EC2 (Linux/Windows) without rebuilding from source, using:
 - `carrier onboard` (TUI)
-- `carrier add openclaw` (TUI)
+- `carrier add picoclaw` + `carrier add openclaw` (TUI)
 
 ## 1) Main Push Binary Location
 
@@ -39,6 +39,7 @@ Behavior:
 - With no `--sha/--tag`, script resolves `Keith-CY/carrier` `main` HEAD automatically.
 - It waits up to 600s for `main-<sha>` release asset to appear (use `--wait-seconds 0` to disable).
 - You can still pin an exact build with `--sha <full_commit_sha>` or `--tag main-<full_commit_sha>`.
+- Script installs `picoclaw` then `openclaw`, printing `/api/v1/agents/<id>/status` for each.
 
 Optional non-interactive env:
 
@@ -67,6 +68,7 @@ Behavior:
 - With no `-Sha/-Tag`, script resolves `Keith-CY/carrier` `main` HEAD automatically.
 - It waits up to 600s for `main-<sha>` release asset to appear (use `-WaitSeconds 0` to disable).
 - You can still pin an exact build with `-Sha <full_commit_sha>` or `-Tag main-<full_commit_sha>`.
+- Script installs `picoclaw` then `openclaw`, printing `/api/v1/agents/<id>/status` for each.
 
 Optional non-interactive env:
 
@@ -83,14 +85,15 @@ If default `openai-codex` is used and no saved credential exists, TUI will print
 
 Successful flow should include:
 - `carrier onboard` completes and starts/reuses daemon+gateway.
+- `carrier add picoclaw` completes install/start for PicoClaw.
 - `carrier add openclaw` completes install/start for OpenClaw.
 - `carrier list` shows managed instance.
-- `GET /api/v1/agents/openclaw/status` returns OpenClaw status payload.
+- `GET /api/v1/agents/picoclaw/status` and `/api/v1/agents/openclaw/status` return status payloads.
 
 ## 5) Important Behavioral Note
 
 Chat commands `/install` and `/onboard` are intentionally blocked in gateway chat mode (`E_INSTALL_GUI_ONLY` / `E_ONBOARD_GUI_ONLY`).
 
 Use either:
-- TUI (`carrier onboard`, `carrier add openclaw`), or
-- WebUI (`carrier onboard --webui`, `carrier add openclaw --webui`).
+- TUI (`carrier onboard`, `carrier add picoclaw`, `carrier add openclaw`), or
+- WebUI (`carrier onboard --webui`, `carrier add picoclaw --webui`, `carrier add openclaw --webui`).
