@@ -334,8 +334,8 @@ func inferManagedChannelID(agentID string) string {
 }
 
 func resolveWebUIAddProviderID(agentID string) string {
-	if envDefault := strings.TrimSpace(os.Getenv("CARRIER_DEFAULT_PROVIDER_ID")); envDefault != "" {
-		if provider := GetLLMProvider(envDefault); provider != nil && providerCompatibleForManagedAgent(agentID, provider) {
+	if configuredDefault := strings.TrimSpace(readCarrierDefaultProviderID()); configuredDefault != "" {
+		if provider := GetLLMProvider(configuredDefault); provider != nil && providerCompatibleForManagedAgent(agentID, provider) {
 			return provider.ID
 		}
 	}

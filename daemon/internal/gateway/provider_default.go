@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"os"
 	"strings"
 )
 
@@ -12,7 +11,7 @@ func buildCarrierDefaultProviderInfo() map[string]interface{} {
 		"reusable":   false,
 	}
 
-	providerID := strings.TrimSpace(os.Getenv("CARRIER_DEFAULT_PROVIDER_ID"))
+	providerID := strings.TrimSpace(readCarrierDefaultProviderID())
 	if providerID == "" {
 		return info
 	}

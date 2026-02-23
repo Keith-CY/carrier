@@ -6,9 +6,38 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func writeDefaultModelConfig(t *testing.T, providerID, modelID, envVar string) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "config.v2.json")
+	t.Setenv("CARRIER_CONFIG", path)
+	modelName := providerID + "-default"
+	payload := map[string]interface{}{
+		"config_version": 2,
+		"default_model":  modelName,
+		"model_list": []map[string]string{
+			{
+				"model_name":  modelName,
+				"model":       modelID,
+				"provider_id": providerID,
+				"env_var":     envVar,
+			},
+		},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal config payload: %v", err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write config payload: %v", err)
+	}
+}
 
 func TestNormalizeModelForProvider(t *testing.T) {
 	tests := []struct {
@@ -79,9 +108,7 @@ func TestExtractModelContent(t *testing.T) {
 }
 
 func TestResolveLLMRuntimeConfig_OpenAICodexBaseURL(t *testing.T) {
-	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "openai-codex")
-	t.Setenv("CARRIER_DEFAULT_MODEL_ID", "openai-codex/gpt-5.3-codex")
-	t.Setenv("CARRIER_DEFAULT_PROVIDER_ENV", "OPENAI_CODEX_TOKEN")
+	writeDefaultModelConfig(t, "openai-codex", "openai-codex/gpt-5.3-codex", "OPENAI_CODEX_TOKEN")
 	t.Setenv("OPENAI_CODEX_TOKEN", "test-token")
 	t.Setenv("CARRIER_OPENAI_CODEX_BASE_URL", "")
 	t.Setenv("CARRIER_OPENAI_BASE_URL", "")
@@ -96,9 +123,7 @@ func TestResolveLLMRuntimeConfig_OpenAICodexBaseURL(t *testing.T) {
 }
 
 func TestResolveLLMRuntimeConfig_OpenAICodexBaseURLOverride(t *testing.T) {
-	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "openai-codex")
-	t.Setenv("CARRIER_DEFAULT_MODEL_ID", "openai-codex/gpt-5.3-codex")
-	t.Setenv("CARRIER_DEFAULT_PROVIDER_ENV", "OPENAI_CODEX_TOKEN")
+	writeDefaultModelConfig(t, "openai-codex", "openai-codex/gpt-5.3-codex", "OPENAI_CODEX_TOKEN")
 	t.Setenv("OPENAI_CODEX_TOKEN", "test-token")
 	t.Setenv("CARRIER_OPENAI_CODEX_BASE_URL", "http://127.0.0.1:3001/backend-api")
 
@@ -150,9 +175,7 @@ func TestReplyWithLLM_OpenAICodexUsesResponsesEndpoint(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "openai-codex")
-	t.Setenv("CARRIER_DEFAULT_MODEL_ID", "openai-codex/gpt-5.3-codex")
-	t.Setenv("CARRIER_DEFAULT_PROVIDER_ENV", "OPENAI_CODEX_TOKEN")
+	writeDefaultModelConfig(t, "openai-codex", "openai-codex/gpt-5.3-codex", "OPENAI_CODEX_TOKEN")
 	t.Setenv("CARRIER_OPENAI_CODEX_BASE_URL", server.URL)
 	t.Setenv("OPENAI_CODEX_TOKEN", makeOpenAICodexJWT("acct-test-123"))
 
@@ -223,9 +246,7 @@ func TestReplyWithLLM_OpenAIUsesChatCompletionsEndpoint(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "openai")
-	t.Setenv("CARRIER_DEFAULT_MODEL_ID", "openai/gpt-5.3")
-	t.Setenv("CARRIER_DEFAULT_PROVIDER_ENV", "OPENAI_API_KEY")
+	writeDefaultModelConfig(t, "openai", "openai/gpt-5.3", "OPENAI_API_KEY")
 	t.Setenv("CARRIER_OPENAI_BASE_URL", server.URL)
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 

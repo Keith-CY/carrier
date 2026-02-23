@@ -36,10 +36,10 @@ func TestParseInput_ValidCommands(t *testing.T) {
 			wantCmd: CmdAgents, wantArgs: []string{},
 		},
 		{
-			name:         "install with session token",
-			input:        "feishu chat-abc req-3 session-xyz123 /install myagent",
+			name:         "add with session token",
+			input:        "feishu chat-abc req-3 session-xyz123 /add myagent",
 			wantProvider: "feishu", wantChatID: "chat-abc", wantReqID: "req-3",
-			wantCmd: CmdInstall, wantArgs: []string{"myagent"}, wantSession: "session-xyz123",
+			wantCmd: CmdAdd, wantArgs: []string{"myagent"}, wantSession: "session-xyz123",
 		},
 		{
 			name:         "uninstall with session token",

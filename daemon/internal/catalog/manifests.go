@@ -4,9 +4,9 @@ import (
 	"carrier/daemon/internal/manifest"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 )
 
@@ -39,16 +39,10 @@ const (
 	defaultDaemonHealthzPath = "/healthz"
 	defaultDaemonHealthURL   = "http://localhost:9090/healthz"
 
-	openClawInstallMethodEnv          = "CARRIER_OPENCLAW_INSTALL_METHOD"
-	openClawDisableInstallFallbackEnv = "CARRIER_OPENCLAW_DISABLE_INSTALL_FALLBACK"
-	openClawInstallMemInfoPathEnv     = "CARRIER_OPENCLAW_MEMINFO_PATH"
-
-	openClawNodeMaxOldSpaceMB   = 384
-	openClawLowMemoryThresholdK = 1536 * 1024 // 1.5 GiB in KiB
-
 	// Official OpenClaw installer URLs
 	installScriptURL = "https://openclaw.ai/install.sh"
 	installPS1URL    = "https://openclaw.ai/install.ps1"
+	installCMDURL    = "https://openclaw.ai/install.cmd"
 
 	// PicoClaw release URL pattern
 	picoClawReleaseBaseURL = "https://github.com/sipeed/picoclaw/releases/latest/download"
@@ -56,113 +50,36 @@ const (
 )
 
 // getInstallCommand returns the platform-appropriate install command.
-// In managed daemon installs, skip onboarding prompts to avoid blocking the API request.
-// Default behavior prefers git source install for freshness; on Unix-like systems,
-// we automatically retry with upstream default install mode if the git path fails
-// (useful on low-memory hosts). Operators can override install method via env.
-// - Linux/macOS/WSL: curl | bash (official install.sh) with args
-// - Windows: PowerShell script invocation with args
+// - Linux/macOS: curl | bash (skip onboarding, non-interactive)
+// - Windows with PowerShell: iwr | iex with OPENCLAW_NO_ONBOARD=1
+// - Windows cmd-only hosts: download and run install.cmd --no-onboard
 // - Dev mode: creates a long-running placeholder script
 func getInstallCommand() string {
 	if os.Getenv("CARRIER_DEV_MODE") == "1" {
 		return getDevInstallCommand()
 	}
 
-	method, explicitMethod := resolveOpenClawInstallMethod()
-	allowFallback := !explicitMethod && method == "git" && !isTruthyEnv(openClawDisableInstallFallbackEnv)
-
 	switch runtime.GOOS {
 	case "windows":
-		if allowFallback {
-			// Keep git as first choice, then retry with installer default mode.
-			// Run installer in child PowerShell processes so script-level `exit`
-			// does not terminate fallback orchestration.
-			return fmt.Sprintf(`powershell -NoProfile -Command "$ErrorActionPreference='Stop';$tmp=[System.IO.Path]::GetTempFileName();$ps1="$tmp.ps1";Move-Item -LiteralPath $tmp -Destination $ps1 -Force;irm '%s' | Out-File -LiteralPath $ps1 -Encoding utf8;try {$env:CARGO_BUILD_JOBS='1';$env:NODE_OPTIONS='--max-old-space-size=%d';$env:OPENCLAW_NPM_LOGLEVEL='warn';$env:SHARP_IGNORE_GLOBAL_LIBVIPS='1';powershell -NoProfile -ExecutionPolicy Bypass -File $ps1 -InstallMethod 'git' -NoOnboard; if ($LASTEXITCODE -ne 0) { $env:NODE_OPTIONS='--max-old-space-size=%d';$env:OPENCLAW_NPM_LOGLEVEL='warn';$env:SHARP_IGNORE_GLOBAL_LIBVIPS='1';powershell -NoProfile -ExecutionPolicy Bypass -File $ps1 -InstallMethod 'npm' -NoOnboard; exit $LASTEXITCODE }} finally { Remove-Item -LiteralPath $ps1 -ErrorAction SilentlyContinue }"`, installPS1URL, openClawNodeMaxOldSpaceMB, openClawNodeMaxOldSpaceMB)
-		}
-		if method == "git" {
-			return fmt.Sprintf(`powershell -NoProfile -Command "$env:CARGO_BUILD_JOBS='1';$env:NODE_OPTIONS='--max-old-space-size=%d';$env:OPENCLAW_NPM_LOGLEVEL='warn';$env:SHARP_IGNORE_GLOBAL_LIBVIPS='1';& ([scriptblock]::Create((irm '%s'))) -InstallMethod '%s' -NoOnboard"`, openClawNodeMaxOldSpaceMB, installPS1URL, method)
-		}
-		return fmt.Sprintf(`powershell -NoProfile -Command "$env:NODE_OPTIONS='--max-old-space-size=%d';$env:OPENCLAW_NPM_LOGLEVEL='warn';$env:SHARP_IGNORE_GLOBAL_LIBVIPS='1';& ([scriptblock]::Create((irm '%s'))) -InstallMethod '%s' -NoOnboard"`, openClawNodeMaxOldSpaceMB, installPS1URL, method)
+		return resolveWindowsOpenClawInstallCommand(exec.LookPath)
 	default:
-		// Linux, macOS, and anything else that has sh + curl.
-		if allowFallback {
-			// On small instances, the git build path can be OOM-killed; fallback keeps installs unblocked.
-			return fmt.Sprintf(`sh -c 'set -e; tmp=$(mktemp); trap "rm -f $tmp" EXIT; curl -fsSL --proto "=https" --tlsv1.2 "%s" -o "$tmp"; CARGO_BUILD_JOBS=1 NODE_OPTIONS="--max-old-space-size=%d" OPENCLAW_NPM_LOGLEVEL=warn SHARP_IGNORE_GLOBAL_LIBVIPS=1 bash "$tmp" --install-method git --no-onboard || NODE_OPTIONS="--max-old-space-size=%d" OPENCLAW_NPM_LOGLEVEL=warn SHARP_IGNORE_GLOBAL_LIBVIPS=1 bash "$tmp" --install-method npm --no-onboard'`, installScriptURL, openClawNodeMaxOldSpaceMB, openClawNodeMaxOldSpaceMB)
-		}
-		if method == "git" {
-			return fmt.Sprintf(`sh -c 'set -e; tmp=$(mktemp); trap "rm -f $tmp" EXIT; curl -fsSL --proto "=https" --tlsv1.2 "%s" -o "$tmp"; CARGO_BUILD_JOBS=1 NODE_OPTIONS="--max-old-space-size=%d" OPENCLAW_NPM_LOGLEVEL=warn SHARP_IGNORE_GLOBAL_LIBVIPS=1 bash "$tmp" --install-method %s --no-onboard'`, installScriptURL, openClawNodeMaxOldSpaceMB, method)
-		}
-		return fmt.Sprintf(`sh -c 'set -e; tmp=$(mktemp); trap "rm -f $tmp" EXIT; curl -fsSL --proto "=https" --tlsv1.2 "%s" -o "$tmp"; NODE_OPTIONS="--max-old-space-size=%d" OPENCLAW_NPM_LOGLEVEL=warn SHARP_IGNORE_GLOBAL_LIBVIPS=1 bash "$tmp" --install-method %s --no-onboard'`, installScriptURL, openClawNodeMaxOldSpaceMB, method)
+		return fmt.Sprintf(`curl -fsSL %s | bash -s -- --no-onboard --no-prompt`, installScriptURL)
 	}
 }
 
-func resolveOpenClawInstallMethod() (method string, explicit bool) {
-	raw := strings.TrimSpace(os.Getenv(openClawInstallMethodEnv))
-	if raw == "" {
-		if shouldPreferNPMInstallOnLowMemoryHost() {
-			return "npm", false
-		}
-		return "git", false
+func resolveWindowsOpenClawInstallCommand(lookPath func(string) (string, error)) string {
+	if commandExistsOnHost(lookPath, "powershell") || commandExistsOnHost(lookPath, "powershell.exe") {
+		return fmt.Sprintf(`powershell -NoProfile -Command "$env:OPENCLAW_INSTALL_METHOD='npm';$env:OPENCLAW_NO_ONBOARD='1';iwr -useb %s | iex"`, installPS1URL)
 	}
-	if !isSafeInstallerToken(raw) {
-		if shouldPreferNPMInstallOnLowMemoryHost() {
-			return "npm", false
-		}
-		return "git", false
-	}
-	return strings.ToLower(raw), true
+	return fmt.Sprintf(`curl -fsSL %s -o install.cmd && install.cmd --no-onboard && del install.cmd`, installCMDURL)
 }
 
-func shouldPreferNPMInstallOnLowMemoryHost() bool {
-	memInfoPath := strings.TrimSpace(os.Getenv(openClawInstallMemInfoPathEnv))
-	if memInfoPath == "" {
-		memInfoPath = "/proc/meminfo"
-	}
-	raw, err := os.ReadFile(memInfoPath)
-	if err != nil {
+func commandExistsOnHost(lookPath func(string) (string, error), name string) bool {
+	if lookPath == nil {
 		return false
 	}
-	for _, line := range strings.Split(string(raw), "\n") {
-		if !strings.HasPrefix(strings.TrimSpace(line), "MemTotal:") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			return false
-		}
-		memKB, err := strconv.Atoi(fields[1])
-		if err != nil {
-			return false
-		}
-		return memKB > 0 && memKB <= openClawLowMemoryThresholdK
-	}
-	return false
-}
-
-func isSafeInstallerToken(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, r := range value {
-		switch {
-		case r >= 'a' && r <= 'z':
-		case r >= 'A' && r <= 'Z':
-		case r >= '0' && r <= '9':
-		case r == '-' || r == '_':
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-func isTruthyEnv(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
+	_, err := lookPath(name)
+	return err == nil
 }
 
 // getDevInstallCommand creates a placeholder binary for development testing.

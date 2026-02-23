@@ -12,8 +12,33 @@ import (
 	"time"
 )
 
-func TestPickMinimalProviderWithReasonUsesEnvDefault(t *testing.T) {
-	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "openai")
+func writeDefaultProviderConfigForTest(t *testing.T, providerID, modelID string) {
+	t.Helper()
+
+	cfgPath := filepath.Join(t.TempDir(), "config.v2.json")
+	t.Setenv("CARRIER_CONFIG", cfgPath)
+	payload := map[string]interface{}{
+		"config_version": 2,
+		"default_model":  providerID + "-default",
+		"model_list": []map[string]string{
+			{
+				"model_name":  providerID + "-default",
+				"model":       modelID,
+				"provider_id": providerID,
+			},
+		},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal test config: %v", err)
+	}
+	if err := os.WriteFile(cfgPath, raw, 0o600); err != nil {
+		t.Fatalf("write test config: %v", err)
+	}
+}
+
+func TestPickMinimalProviderWithReasonUsesConfigDefault(t *testing.T) {
+	writeDefaultProviderConfigForTest(t, "openai", "openai/gpt-5.2")
 
 	provider, reason, err := pickMinimalProviderWithReason()
 	if err != nil {
@@ -22,13 +47,13 @@ func TestPickMinimalProviderWithReasonUsesEnvDefault(t *testing.T) {
 	if provider.ID != "openai" {
 		t.Fatalf("provider.ID = %q, want %q", provider.ID, "openai")
 	}
-	if !strings.Contains(reason, "CARRIER_DEFAULT_PROVIDER_ID") {
-		t.Fatalf("reason should include env-default context, got %q", reason)
+	if !strings.Contains(reason, "config.v2") {
+		t.Fatalf("reason should include config-default context, got %q", reason)
 	}
 }
 
 func TestPickMinimalProviderWithReasonFallsBackToOpenAICodex(t *testing.T) {
-	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "")
+	t.Setenv("CARRIER_CONFIG", filepath.Join(t.TempDir(), "missing-config.v2.json"))
 
 	provider, reason, err := pickMinimalProviderWithReason()
 	if err != nil {
@@ -219,6 +244,30 @@ func TestResolveManagedChannelTokenFallsBackToConfig(t *testing.T) {
 	}
 }
 
+func TestManagedAddReusesChannelTokenPolicy(t *testing.T) {
+	cases := []struct {
+		name      string
+		agentID   string
+		channelID string
+		want      bool
+	}{
+		{name: "openclaw telegram", agentID: "openclaw", channelID: "telegram", want: false},
+		{name: "picoclaw telegram", agentID: "picoclaw", channelID: "telegram", want: true},
+		{name: "zeroclaw telegram", agentID: "zeroclaw", channelID: "telegram", want: true},
+		{name: "openclaw discord", agentID: "openclaw", channelID: "discord", want: true},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := managedAddReusesChannelToken(tc.agentID, tc.channelID)
+			if got != tc.want {
+				t.Fatalf("managedAddReusesChannelToken(%q, %q) = %v, want %v", tc.agentID, tc.channelID, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseAddCommandArgsSupportsQuietOptions(t *testing.T) {
 	cases := []struct {
 		name string
@@ -263,7 +312,7 @@ func TestParseAddCommandArgsSupportsQuietOptions(t *testing.T) {
 
 func TestPickManagedAddProviderWithReasonUsesLatestManagedInstanceProvider(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "")
+	t.Setenv("CARRIER_CONFIG", filepath.Join(t.TempDir(), "missing-config.v2.json"))
 	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
 	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
 	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))

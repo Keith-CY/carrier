@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"carrier/daemon/internal/baseagent"
+	"carrier/daemon/internal/manifest"
 )
+
+const maxInstallAutoRepairRounds = 3
 
 func (s *Service) Install(ctx context.Context, agentID string) error {
 	m, _, err := s.getManifestAndState(agentID)
@@ -24,16 +28,8 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 	defer cancel()
 
 	if err := s.checkRuntimePrerequisites(m); err != nil {
-		repaired := s.triageInstallFailure(ctx, opCtx, agentID, err)
-		if repaired {
-			if retryPrereqErr := s.checkRuntimePrerequisites(m); retryPrereqErr != nil {
-				err = fmt.Errorf("runtime prerequisites still failing after auto-repair: %w", retryPrereqErr)
-			} else {
-				err = nil
-			}
-		}
-		if err != nil {
-			return s.finalizeInstallFailure(agentID, err, "E_RUNTIME_PREREQUISITES")
+		if prereqErr := s.repairRuntimePrerequisitesLoop(ctx, opCtx, agentID, m, err); prereqErr != nil {
+			return s.finalizeInstallFailure(agentID, prereqErr, "E_RUNTIME_PREREQUISITES")
 		}
 	}
 
@@ -44,24 +40,10 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 		s.appendCommandLog(agentID, "install", installCommand, result, runErr)
 	}
 	if runErr != nil {
-		repaired := s.triageInstallFailure(ctx, opCtx, agentID, runErr)
-		if repaired {
-			retryResult, retryStreamed, retryErr := s.runCommandWithAgentLogs(opCtx, agentID, "install-retry", installCommand)
-			if retryStreamed {
-				s.appendCommandLogSummary(agentID, "install-retry", installCommand, retryResult, retryErr)
-			} else {
-				s.appendCommandLog(agentID, "install-retry", installCommand, retryResult, retryErr)
-			}
-			if retryErr == nil {
-				s.markInstallSuccess(agentID)
-				s.recordAudit("", "system", "install", agentID, AuditResultSuccess, "", "install completed after auto-repair")
-				s.saveState()
-				return nil
-			}
-			runErr = fmt.Errorf("install failed after auto-repair: %w", retryErr)
+		loopErr := s.repairAndRetryInstallLoop(ctx, opCtx, agentID, installCommand, runErr)
+		if loopErr != nil {
+			return s.finalizeInstallFailure(agentID, loopErr, "E_INSTALL_FAILED")
 		}
-
-		return s.finalizeInstallFailure(agentID, runErr, "E_INSTALL_FAILED")
 	}
 
 	s.markInstallSuccess(agentID)
@@ -70,6 +52,45 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 	s.saveState()
 
 	return nil
+}
+
+func (s *Service) repairRuntimePrerequisitesLoop(ctx, opCtx context.Context, agentID string, m manifest.Manifest, initialErr error) error {
+	currentErr := initialErr
+	for round := 1; round <= maxInstallAutoRepairRounds; round++ {
+		s.appendLog(agentID, fmt.Sprintf("auto-repair round %d/%d for runtime prerequisites", round, maxInstallAutoRepairRounds))
+		if repaired := s.triageInstallFailure(ctx, opCtx, agentID, currentErr); !repaired {
+			return currentErr
+		}
+		if retryErr := s.checkRuntimePrerequisites(m); retryErr == nil {
+			return nil
+		} else {
+			currentErr = fmt.Errorf("runtime prerequisites still failing after auto-repair round %d: %w", round, retryErr)
+		}
+	}
+	return fmt.Errorf("runtime prerequisites unresolved after %d auto-repair rounds: %w", maxInstallAutoRepairRounds, currentErr)
+}
+
+func (s *Service) repairAndRetryInstallLoop(ctx, opCtx context.Context, agentID, installCommand string, initialErr error) error {
+	currentErr := initialErr
+	for round := 1; round <= maxInstallAutoRepairRounds; round++ {
+		s.appendLog(agentID, fmt.Sprintf("auto-repair round %d/%d for install command", round, maxInstallAutoRepairRounds))
+		if repaired := s.triageInstallFailure(ctx, opCtx, agentID, currentErr); !repaired {
+			return currentErr
+		}
+
+		action := "install-retry-" + strconv.Itoa(round)
+		retryResult, retryStreamed, retryErr := s.runCommandWithAgentLogs(opCtx, agentID, action, installCommand)
+		if retryStreamed {
+			s.appendCommandLogSummary(agentID, action, installCommand, retryResult, retryErr)
+		} else {
+			s.appendCommandLog(agentID, action, installCommand, retryResult, retryErr)
+		}
+		if retryErr == nil {
+			return nil
+		}
+		currentErr = fmt.Errorf("install failed after auto-repair round %d: %w", round, retryErr)
+	}
+	return fmt.Errorf("install failed after %d auto-repair rounds: %w", maxInstallAutoRepairRounds, currentErr)
 }
 
 func (s *Service) triageInstallFailure(ctx, opCtx context.Context, agentID string, runErr error) bool {

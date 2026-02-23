@@ -123,6 +123,10 @@ func TestApplyGatewayEnvironmentCoversChannelsAndProviders(t *testing.T) {
 
 	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
 	t.Setenv("CARRIER_CREDENTIAL_STORE", storePath)
+	t.Setenv("CARRIER_DEFAULT_MODEL_NAME", "")
+	t.Setenv("CARRIER_DEFAULT_MODEL_ID", "")
+	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "")
+	t.Setenv("CARRIER_DEFAULT_PROVIDER_ENV", "")
 
 	cfg := &Config{
 		Channels: []Channel{
@@ -166,10 +170,10 @@ func TestApplyGatewayEnvironmentCoversChannelsAndProviders(t *testing.T) {
 	assertEnv(t, "CARRIER_TELEGRAM_TRANSPORT_MODE", "auto")
 	assertEnv(t, "OPENAI_API_KEY", "sk-openai")
 	assertEnv(t, "OPENAI_CODEX_TOKEN", "codex-token")
-	assertEnv(t, "CARRIER_DEFAULT_MODEL_NAME", "openai-codex-default")
-	assertEnv(t, "CARRIER_DEFAULT_MODEL_ID", "openai-codex/gpt-5.3-codex")
-	assertEnv(t, "CARRIER_DEFAULT_PROVIDER_ID", "openai-codex")
-	assertEnv(t, "CARRIER_DEFAULT_PROVIDER_ENV", "OPENAI_CODEX_TOKEN")
+	assertEnv(t, "CARRIER_DEFAULT_MODEL_NAME", "")
+	assertEnv(t, "CARRIER_DEFAULT_MODEL_ID", "")
+	assertEnv(t, "CARRIER_DEFAULT_PROVIDER_ID", "")
+	assertEnv(t, "CARRIER_DEFAULT_PROVIDER_ENV", "")
 }
 
 func TestApplyGatewayEnvironmentPreservesExistingEnv(t *testing.T) {

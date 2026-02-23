@@ -30,7 +30,6 @@ type PreFlighter interface {
 }
 
 const (
-	IssueCodeWSL2Missing    = "E_WSL2_MISSING"
 	IssueCodeNPMMissing     = "E_NPM_MISSING"
 	IssueCodeGoMissing      = "E_GO_MISSING"
 	IssueCodeUnknownRuntime = "E_RUNTIME_TYPE_UNKNOWN"
@@ -84,16 +83,6 @@ func (c HostChecker) Check(m manifest.Manifest) error {
 func (c HostChecker) collectIssues(runtimeType manifest.RuntimeType) []Issue {
 	issues := make([]Issue, 0, 2)
 	isWSL := c.detectWSL()
-
-	if c.GOOS == "windows" {
-		if !c.hasTool("wsl.exe") {
-			issues = append(issues, Issue{
-				Code:    IssueCodeWSL2Missing,
-				Message: "Windows runtime requires WSL2 (wsl.exe not found)",
-			})
-		}
-		return issues
-	}
 
 	switch runtimeType {
 	case manifest.RuntimeTypeNpmCLI:

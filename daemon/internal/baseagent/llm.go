@@ -336,23 +336,13 @@ func parseModelError(statusCode int, body []byte) error {
 }
 
 func resolveLLMRuntimeConfig() (*llmRuntimeConfig, error) {
-	providerID := strings.TrimSpace(os.Getenv("CARRIER_DEFAULT_PROVIDER_ID"))
-	modelID := strings.TrimSpace(os.Getenv("CARRIER_DEFAULT_MODEL_ID"))
-	envVar := strings.TrimSpace(os.Getenv("CARRIER_DEFAULT_PROVIDER_ENV"))
-
-	if providerID == "" || modelID == "" {
-		if cfg, err := readDefaultModelFromConfigFile(); err == nil && cfg != nil {
-			if providerID == "" {
-				providerID = cfg.ProviderID
-			}
-			if modelID == "" {
-				modelID = cfg.ModelID
-			}
-			if envVar == "" {
-				envVar = cfg.EnvVar
-			}
-		}
+	cfg, err := readDefaultModelFromConfigFile()
+	if err != nil || cfg == nil {
+		return nil, errors.New("default model is not configured")
 	}
+	providerID := strings.TrimSpace(cfg.ProviderID)
+	modelID := strings.TrimSpace(cfg.ModelID)
+	envVar := strings.TrimSpace(cfg.EnvVar)
 
 	if providerID == "" || modelID == "" {
 		return nil, errors.New("default model is not configured")

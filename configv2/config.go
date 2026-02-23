@@ -170,37 +170,5 @@ func ApplyGatewayEnvironment(cfg *Config) error {
 			return err
 		}
 	}
-
-	// Expose default model context for components that need runtime inference.
-	defaultModel := pickDefaultModel(cfg)
-	if defaultModel != nil {
-		if err := setEnvIfUnset("CARRIER_DEFAULT_MODEL_NAME", defaultModel.ModelName); err != nil {
-			return err
-		}
-		if err := setEnvIfUnset("CARRIER_DEFAULT_MODEL_ID", defaultModel.Model); err != nil {
-			return err
-		}
-		if err := setEnvIfUnset("CARRIER_DEFAULT_PROVIDER_ID", defaultModel.ProviderID); err != nil {
-			return err
-		}
-		if err := setEnvIfUnset("CARRIER_DEFAULT_PROVIDER_ENV", defaultModel.EnvVar); err != nil {
-			return err
-		}
-	}
 	return nil
-}
-
-func pickDefaultModel(cfg *Config) *Model {
-	if cfg == nil || len(cfg.ModelList) == 0 {
-		return nil
-	}
-	defaultName := strings.TrimSpace(cfg.DefaultModel)
-	if defaultName != "" {
-		for i := range cfg.ModelList {
-			if strings.EqualFold(strings.TrimSpace(cfg.ModelList[i].ModelName), defaultName) {
-				return &cfg.ModelList[i]
-			}
-		}
-	}
-	return &cfg.ModelList[0]
 }

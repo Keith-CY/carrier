@@ -635,19 +635,7 @@ func onboardConfirm(ctx context.Context, requestID, sessionKey, input string, da
 }
 
 func detectCarrierDefaultProviderID() string {
-	providerID := strings.TrimSpace(os.Getenv("CARRIER_DEFAULT_PROVIDER_ID"))
-	if providerID != "" {
-		return providerID
-	}
-	modelID := strings.TrimSpace(os.Getenv("CARRIER_DEFAULT_MODEL_ID"))
-	if modelID == "" {
-		return ""
-	}
-	parts := strings.SplitN(modelID, "/", 2)
-	if len(parts) != 2 {
-		return ""
-	}
-	return strings.TrimSpace(parts[0])
+	return strings.TrimSpace(readCarrierDefaultProviderID())
 }
 
 func applyOnboardEnvVars(envVars map[string]string) error {
