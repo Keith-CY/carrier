@@ -446,6 +446,9 @@ func TestRunVersionCommandJSON(t *testing.T) {
 	if payload.Version == "" {
 		t.Fatalf("payload.version is empty")
 	}
+	if payload.GoVersion == "" {
+		t.Fatalf("payload.goVersion is empty")
+	}
 }
 
 func TestRunVersionCommandText(t *testing.T) {
@@ -456,6 +459,9 @@ func TestRunVersionCommandText(t *testing.T) {
 	text := out.String()
 	if !strings.Contains(text, "carrier") {
 		t.Fatalf("version text should contain command name, got: %q", text)
+	}
+	if !strings.Contains(text, "go version:") {
+		t.Fatalf("version text should contain go version, got: %q", text)
 	}
 }
 
