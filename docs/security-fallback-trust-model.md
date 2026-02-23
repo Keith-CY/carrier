@@ -8,69 +8,56 @@ When the primary npm-based install path is unavailable, the manifest runtime com
 
 Current release packaging (see `.github/workflows/release.yml`) publishes per-platform ZIP archives and a paired SHA-256 sidecar file:
 
-- `carrier-${GITHUB_SHA}-<platform>.zip`
-- `carrier-${GITHUB_SHA}-<platform>.zip.sha256`
+- `carrier-main-${GITHUB_SHA}-<platform>.zip` (main pre-release flow)
+- `carrier-main-${GITHUB_SHA}-<platform>.zip.sha256`
 
 Example:
 
-- `carrier-3f2c...-linux-x64.zip`
-- `carrier-3f2c...-linux-x64.zip.sha256`
+- `carrier-main-3f2c...-linux-x64.zip`
+- `carrier-main-3f2c...-linux-x64.zip.sha256`
 
 The fallback trust model is:
 
 1. Download the ZIP artifact.
-2. Obtain the expected SHA-256 digest from trusted release metadata (or a pinned deployment source).
+2. Download the paired `.sha256` sidecar from the same release tag.
 3. Verify the local artifact hash before install/upgrade.
 4. Abort if hashes do not match.
 
 ## Installer Pinning Model
 
-`catalog/scripts/install-openclaw.sh` is fail-closed and does **not** consume `checksums.txt`.
+`scripts/install.sh` is fail-closed for checksum verification by default.
 
-Instead, it requires:
+Current behavior:
 
-- `OPENCLAW_CHECKSUM` to be provided explicitly (pinned expected digest), and
-- local SHA-256 verification to match that pinned value.
+- resolves `main` HEAD SHA from GitHub API (or accepts explicit `CARRIER_TAG` / `CARRIER_SHA`)
+- downloads `carrier-main-<sha>-<label>.zip` and `carrier-main-<sha>-<label>.zip.sha256`
+- validates SHA-256 locally (`sha256sum` or `shasum`) before install
 
-If `OPENCLAW_CHECKSUM` is missing or mismatched, installation fails.
+If hash validation fails, installation aborts.
 
 ## What Is Verified
 
 | Check | Status |
 |-------|--------|
-| Binary integrity (SHA-256 vs pinned expected digest) | ✅ Verified |
+| Binary integrity (SHA-256 vs release sidecar) | ✅ Verified |
 | Sidecar checksum file authenticity/provenance | ❌ Not cryptographically signed in-repo flow |
 | TLS transport integrity | ✅ Via HTTPS |
-| Release ref immutability | ⚠️ Mutable refs are risky; pin exact tag/SHA-derived assets |
-
-## The `releases/latest` Tradeoff
-
-By default, manifest commands may resolve install URLs via `https://github.com/<owner>/<repo>/releases/latest`, which always points to the most recent published release.
-
-**Advantages:**
-- Operators get the newest version without config changes.
-- Simplifies zero-touch upgrade flows.
-
-**Risks:**
-- A compromised release or mutable ref could be picked up automatically.
-- No explicit version control in deployment history.
+| Release ref immutability | ⚠️ `main` is mutable; pin exact `main-<sha>` tag for deterministic installs |
 
 ## Recommendation: Pinning for Stricter Supply-Chain Control
 
 Operators who require deterministic, auditable deployments should pin exact release assets and expected checksums.
 
 ```yaml
-# Avoid mutable latest pointers in production:
-install_url: https://github.com/Keith-CY/carrier/releases/latest/download/carrier-linux-x64.tar.gz
-
 # Prefer pinned release assets (example pattern):
-install_url: https://github.com/Keith-CY/carrier/releases/download/v<major.minor.patch>/carrier-<commit>-linux-x64.zip
-# and pin expected SHA-256 separately (e.g., OPENCLAW_CHECKSUM or deployment metadata)
+install_url: https://github.com/Keith-CY/carrier/releases/download/main-<full_commit_sha>/carrier-main-<full_commit_sha>-linux-x64.zip
+checksum_url: https://github.com/Keith-CY/carrier/releases/download/main-<full_commit_sha>/carrier-main-<full_commit_sha>-linux-x64.zip.sha256
 ```
 
-Note: `catalog/scripts/install-openclaw.sh` currently targets `v${VERSION}` tags and
-`openclaw-v${VERSION}-${OS}-${ARCH}` artifact naming. Keep the installer and release
-workflow conventions aligned (or explicitly document intentional divergence).
+For scripted installs, pass pinned refs via:
+- `CARRIER_TAG=main-<full_commit_sha>`
+- `CARRIER_SHA=<full_commit_sha>`
+- `CARRIER_LABEL=<platform-label>`
 
 This ensures:
 - Exact binary version is known and auditable.
@@ -86,7 +73,7 @@ Older docs and examples may reference `carrier-<platform>.tar.gz` and `checksums
 When changing release packaging or installer verification behavior, update this file in the same PR and validate alignment against:
 
 - `.github/workflows/release.yml`
-- `catalog/scripts/install-openclaw.sh`
+- `scripts/install.sh`
 
 A simple reviewer checklist item for release/install PRs:
 
