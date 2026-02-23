@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Download a main-push Carrier binary from GitHub Releases and validate
-# TUI onboarding + TUI add(openclaw) on Linux.
+# TUI onboarding + TUI add(picoclaw/openclaw) on Linux.
 #
 # Examples:
 #   scripts/ec2-binary-tui-linux.sh --sha <full_commit_sha>
@@ -16,6 +16,7 @@
 # Notes:
 # - Default provider selection is openai-codex; OAuth device-code flow is shown in terminal.
 # - If OAuth is needed, complete it in browser while command waits.
+# - By default this installs picoclaw first, then openclaw.
 
 set -euo pipefail
 
@@ -37,6 +38,8 @@ Options:
   --out-dir <dir>      Download/extract directory (default: /tmp/carrier-ec2).
   --skip-onboard       Skip `carrier onboard`.
   --skip-add           Skip `carrier add openclaw`.
+  --skip-picoclaw      Skip `carrier add picoclaw`.
+  --skip-openclaw      Skip `carrier add openclaw`.
   -h, --help           Show this help message.
 
 Environment (optional):
@@ -97,7 +100,8 @@ SHA=""
 LABEL="linux-x64"
 OUT_DIR="/tmp/carrier-ec2"
 SKIP_ONBOARD=0
-SKIP_ADD=0
+SKIP_PICOCLAW=0
+SKIP_OPENCLAW=0
 REPO="Keith-CY/carrier"
 USE_MAIN=0
 WAIT_SECONDS=""
@@ -137,7 +141,15 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --skip-add)
-      SKIP_ADD=1
+      SKIP_OPENCLAW=1
+      shift
+      ;;
+    --skip-picoclaw)
+      SKIP_PICOCLAW=1
+      shift
+      ;;
+    --skip-openclaw)
+      SKIP_OPENCLAW=1
       shift
       ;;
     -h|--help)
@@ -201,8 +213,18 @@ if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1
   exit 1
 fi
 
-ZIP_NAME="carrier-${TAG}-${LABEL}.zip"
+ZIP_ARTIFACT_TAG="${TAG:-$SHA}"
+ZIP_NAME="carrier-${ZIP_ARTIFACT_TAG}-${LABEL}.zip"
 BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
+
+if ! curl -sS -L -o /dev/null -w '%{http_code}' "${BASE_URL}/${ZIP_NAME}" | grep -q '^200$'; then
+  if [[ "$TAG" == main-* && -n "$SHA" && "${ZIP_ARTIFACT_TAG}" != "$SHA" ]]; then
+    echo "[ec2] Primary asset name not found; falling back to legacy carrier-${SHA}-${LABEL}.zip"
+    ZIP_ARTIFACT_TAG="${SHA}"
+    ZIP_NAME="carrier-${ZIP_ARTIFACT_TAG}-${LABEL}.zip"
+  fi
+fi
+
 ZIP_PATH="${OUT_DIR}/${ZIP_NAME}"
 SUM_PATH="${OUT_DIR}/${ZIP_NAME}.sha256"
 ASSET_URL="${BASE_URL}/${ZIP_NAME}"
@@ -274,16 +296,23 @@ if [[ "$SKIP_ONBOARD" -eq 0 ]]; then
   run_tui onboard
 fi
 
-if [[ "$SKIP_ADD" -eq 0 ]]; then
+if [[ "$SKIP_PICOCLAW" -eq 0 ]]; then
+  echo "[ec2] Running: carrier add picoclaw (TUI)"
+  run_tui add picoclaw
+  echo "[ec2] PicoClaw status from daemon API (best effort):"
+  curl -fsS http://127.0.0.1:9090/api/v1/agents/picoclaw/status || true
+  echo
+fi
+
+if [[ "$SKIP_OPENCLAW" -eq 0 ]]; then
   echo "[ec2] Running: carrier add openclaw (TUI)"
   run_tui add openclaw
+  echo "[ec2] OpenClaw status from daemon API (best effort):"
+  curl -fsS http://127.0.0.1:9090/api/v1/agents/openclaw/status || true
+  echo
 fi
 
 echo "[ec2] Current managed instances:"
 "$BIN_PATH" list || true
-
-echo "[ec2] OpenClaw status from daemon API (best effort):"
-curl -fsS http://127.0.0.1:9090/api/v1/agents/openclaw/status || true
-echo
 
 echo "[ec2] Done."
