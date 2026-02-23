@@ -26,6 +26,7 @@ For product scope/priority decisions, use this order:
 
 ## Task-first docs quick links
 - `docs/task-first-quickstart.md`
+- `docs/carrier-cli.md`
 - `docs/runbooks/pairing-lifecycle.md`
 - `docs/ci/first-response-playbook.md`
 - `docs/runbooks/go-live-rollback.md`
@@ -42,6 +43,7 @@ For product scope/priority decisions, use this order:
 - [Architecture](#architecture)
 - [Repository Map](#repository-map)
 - [Installation and Testing](#installation-and-testing)
+- [Carrier CLI Flow](#carrier-cli-flow-recommended-bootstrap--onboard--add)
 - [EC2 Binary + TUI Validation](#ec2-binary--tui-validation)
 - [Install OpenClaw from Release](#install-openclaw-from-release-package-non-technical-quick-path)
 - [三平台 Bot 管理（中文）](#三平台-bot-管理超详细步骤可直接照做)
@@ -109,6 +111,28 @@ See `CONTRIBUTING.md` for command examples and required process. For security vu
 | P1 | Important priority after P0 |
 
 ## Installation and testing
+
+### Carrier CLI flow (recommended: bootstrap → onboard → add)
+
+Carrier CLI is now the recommended first path:
+
+1. `carrier` (bootstrap)
+   - If no onboarding config exists, it starts onboarding automatically.
+   - If already onboarded, it starts/reuses daemon + gateway and exits.
+2. `carrier onboard` (interactive TUI)
+   - This flow is Telegram-first today.
+   - For Discord/Feishu onboarding, use `carrier onboard --webui` (or provider/manual setup) and run add flow through WebUI where needed.
+3. `carrier add <agent_id>` (managed or direct)
+   - `openclaw`, `picoclaw`, and `zeroclaw`: managed-agent flow with provider/channel setup, then install/start plus instance tracking.
+   - Other agent IDs: direct install + start for the daemon.
+4. `carrier add <agent_id> --webui` (browser-assisted for all managed flows)
+
+For full command coverage, see [`docs/carrier-cli.md`](./docs/carrier-cli.md).
+
+Notes:
+
+- Chat `/install` and `/onboard` command names still exist, but onboarding/install in chat mode are intentionally blocked (`E_INSTALL_GUI_ONLY` / `E_ONBOARD_GUI_ONLY`) to protect credentials; use Carrier CLI/WebUI instead.
+- Release/package flows below are still valid and useful for non-CLI deployment scenarios.
 
 ### Prerequisites
 - Go toolchain (see `daemon/go.mod` for the required version)
@@ -225,7 +249,7 @@ Implementation notes:
 - Use TUI flow for onboarding/install on EC2:
   - `carrier onboard`
   - `carrier add openclaw`
-- Chat `/install` and `/onboard` are intentionally blocked (`E_INSTALL_GUI_ONLY` / `E_ONBOARD_GUI_ONLY`).
+- Chat `/install` and `/onboard` are intentionally blocked in gateway chat mode (`E_INSTALL_GUI_ONLY` / `E_ONBOARD_GUI_ONLY`) for credential safety.
 - End-to-end no-rebuild scripts:
   - Linux: `scripts/ec2-binary-tui-linux.sh` (no args defaults to latest `main` push release)
   - Windows: `scripts/ec2-binary-tui-windows.ps1` (no args defaults to latest `main` push release)

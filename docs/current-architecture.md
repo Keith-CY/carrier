@@ -14,6 +14,7 @@ Use this before reading historical planning notes.
 
 ## Task-Oriented Entry Points
 
+- Carrier CLI command reference: [`docs/carrier-cli.md`](./carrier-cli.md)
 - 5-minute first setup: [`docs/task-first-quickstart.md`](./task-first-quickstart.md)
 - Pairing and command readiness: [`docs/runbooks/pairing-lifecycle.md`](./runbooks/pairing-lifecycle.md)
 - Post-merge smoke checklist: [`docs/runbooks/post-merge-smoke-checklist.md`](./runbooks/post-merge-smoke-checklist.md)
