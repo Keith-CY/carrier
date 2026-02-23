@@ -18,8 +18,10 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,6 +53,12 @@ const (
 )
 
 var agentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
+var (
+	userConfigDirFunc = os.UserConfigDir
+	userHomeDirFunc   = os.UserHomeDir
+	currentUserFunc   = user.Current
+)
 
 // Run starts the daemon HTTP API server. It blocks until a termination
 // signal is received or the server encounters a fatal error.
@@ -906,9 +914,51 @@ func defaultMemoryRoot() (string, error) {
 	if raw := strings.TrimSpace(os.Getenv("CARRIER_MEMORY_ROOT")); raw != "" {
 		return raw, nil
 	}
-	configDir, err := os.UserConfigDir()
+	if configDir, err := userConfigDirFunc(); err == nil {
+		if trimmed := strings.TrimSpace(configDir); trimmed != "" {
+			return filepath.Join(trimmed, "carrier", "memory"), nil
+		}
+	}
+
+	home, err := resolveDaemonHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(configDir, "carrier", "memory"), nil
+	return filepath.Join(home, ".config", "carrier", "memory"), nil
+}
+
+func resolveDaemonHomeDir() (string, error) {
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return home, nil
+	}
+	if home, err := userHomeDirFunc(); err == nil {
+		if trimmed := strings.TrimSpace(home); trimmed != "" {
+			return trimmed, nil
+		}
+	}
+	if current, err := currentUserFunc(); err == nil && current != nil {
+		if trimmed := strings.TrimSpace(current.HomeDir); trimmed != "" {
+			return trimmed, nil
+		}
+	}
+
+	if runtime.GOOS == "windows" {
+		if profile := strings.TrimSpace(os.Getenv("USERPROFILE")); profile != "" {
+			return profile, nil
+		}
+		if drive, homePath := strings.TrimSpace(os.Getenv("HOMEDRIVE")), strings.TrimSpace(os.Getenv("HOMEPATH")); drive != "" && homePath != "" {
+			return filepath.Clean(drive + homePath), nil
+		}
+	} else {
+		switch username := strings.TrimSpace(os.Getenv("USER")); username {
+		case "root":
+			return "/root", nil
+		case "":
+			return "/root", nil
+		default:
+			return filepath.Join("/home", username), nil
+		}
+	}
+
+	return "", errors.New("home directory unavailable")
 }
