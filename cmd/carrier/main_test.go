@@ -429,3 +429,94 @@ func TestParseVersionCommandArgs(t *testing.T) {
 		t.Fatal("expected parse error for unknown version option")
 	}
 }
+
+func TestRunUpdateJSONWithoutYesReturnsError(t *testing.T) {
+	origGit := execGitCommand
+	t.Cleanup(func() { execGitCommand = origGit })
+	execGitCommand = func(_ context.Context, _ string, args ...string) (string, error) {
+		switch {
+		case len(args) >= 2 && args[0] == "rev-parse" && args[1] == "--show-toplevel":
+			return "/tmp/repo", nil
+		case len(args) >= 1 && args[0] == "fetch":
+			return "", nil
+		case len(args) >= 2 && args[0] == "tag" && args[1] == "--list" && len(args) == 3:
+			return args[2], nil
+		case len(args) >= 2 && args[0] == "rev-parse" && args[1] == "--abbrev-ref":
+			return "main", nil
+		case len(args) >= 2 && args[0] == "status" && args[1] == "--porcelain":
+			return "", nil
+		default:
+			return "", nil
+		}
+	}
+
+	var out bytes.Buffer
+	err := runUpdate(
+		strings.NewReader(""),
+		&out,
+		updateCommandOptions{
+			Tag:     "v1.0.0",
+			Channel: "stable",
+			Timeout: 10 * time.Second,
+			JSON:    true,
+			// Yes is NOT set — should error
+		},
+	)
+	if err == nil {
+		t.Fatal("expected error when --json is used without --yes in apply mode")
+	}
+	if !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("error should mention --yes, got: %v", err)
+	}
+}
+
+func TestRunUpdateJSONWithYesProducesOnlyJSON(t *testing.T) {
+	origGit := execGitCommand
+	t.Cleanup(func() { execGitCommand = origGit })
+	execGitCommand = func(_ context.Context, _ string, args ...string) (string, error) {
+		switch {
+		case len(args) >= 2 && args[0] == "rev-parse" && args[1] == "--show-toplevel":
+			return "/tmp/repo", nil
+		case len(args) >= 1 && args[0] == "fetch":
+			return "", nil
+		case len(args) >= 2 && args[0] == "tag" && args[1] == "--list" && len(args) == 3:
+			return args[2], nil
+		case len(args) >= 2 && args[0] == "rev-parse" && args[1] == "--abbrev-ref":
+			return "main", nil
+		case len(args) >= 2 && args[0] == "status" && args[1] == "--porcelain":
+			return "", nil
+		case len(args) >= 1 && args[0] == "checkout":
+			return "", nil
+		default:
+			return "", nil
+		}
+	}
+
+	var out bytes.Buffer
+	err := runUpdate(
+		strings.NewReader(""),
+		&out,
+		updateCommandOptions{
+			Tag:     "v1.0.0",
+			Channel: "stable",
+			Timeout: 10 * time.Second,
+			JSON:    true,
+			Yes:     true,
+		},
+	)
+	if err != nil {
+		t.Fatalf("runUpdate error: %v", err)
+	}
+	output := strings.TrimSpace(out.String())
+	if output == "" {
+		t.Fatal("expected JSON output, got empty")
+	}
+	if output[0] != '{' {
+		t.Fatalf("expected JSON output starting with '{', got: %q", output)
+	}
+	// Ensure no non-JSON text after the payload
+	var raw json.RawMessage
+	if err := json.Unmarshal([]byte(output), &raw); err != nil {
+		t.Fatalf("output is not valid JSON: %v\noutput: %q", err, output)
+	}
+}

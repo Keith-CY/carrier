@@ -674,6 +674,9 @@ func runUpdate(in io.Reader, out io.Writer, opts updateCommandOptions) error {
 	}
 
 	if !opts.Yes {
+		if opts.JSON {
+			return errors.New("--json in apply mode requires --yes to avoid interactive prompts in machine output")
+		}
 		ok, err := promptYesNo(bufio.NewReader(in), out, fmt.Sprintf("Apply update from %s to %s?", current, target), false)
 		if err != nil {
 			return err
