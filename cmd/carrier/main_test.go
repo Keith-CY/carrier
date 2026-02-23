@@ -217,6 +217,48 @@ func TestResolveManagedChannelTokenFallsBackToConfig(t *testing.T) {
 	}
 }
 
+func TestParseAddCommandArgsSupportsQuietOptions(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want addCommandOptions
+	}{
+		{
+			name: "quiet short flag after agent",
+			args: []string{"openclaw", "-q"},
+			want: addCommandOptions{AgentID: "openclaw", Quiet: true},
+		},
+		{
+			name: "quiet long flag before agent",
+			args: []string{"--quiet", "picoclaw"},
+			want: addCommandOptions{AgentID: "picoclaw", Quiet: true},
+		},
+		{
+			name: "quiet typo alias supported",
+			args: []string{"zeroclaw", "--quite"},
+			want: addCommandOptions{AgentID: "zeroclaw", Quiet: true},
+		},
+		{
+			name: "combined webui and quiet flags",
+			args: []string{"-q", "openclaw", "--webui"},
+			want: addCommandOptions{AgentID: "openclaw", Quiet: true, WebUI: true},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseAddCommandArgs(tc.args)
+			if err != nil {
+				t.Fatalf("parseAddCommandArgs(%v) error: %v", tc.args, err)
+			}
+			if got != tc.want {
+				t.Fatalf("parseAddCommandArgs(%v) = %+v, want %+v", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPickManagedAddProviderWithReasonUsesLatestManagedInstanceProvider(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "")

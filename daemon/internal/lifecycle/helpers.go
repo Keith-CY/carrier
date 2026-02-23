@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"archive/zip"
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +42,30 @@ func (s *Service) appendCommandLog(agentID, action, command string, result comma
 	if runErr != nil {
 		s.appendLog(agentID, fmt.Sprintf("[%s] error=%v", action, runErr))
 	}
+}
+
+func (s *Service) appendCommandLogSummary(agentID, action, command string, result commandexec.Result, runErr error) {
+	line := fmt.Sprintf("[%s] command=%q exit=%d", action, command, result.ExitCode)
+	s.appendLog(agentID, line)
+	if runErr != nil {
+		s.appendLog(agentID, fmt.Sprintf("[%s] error=%v", action, runErr))
+	}
+}
+
+func (s *Service) runCommandWithAgentLogs(ctx context.Context, agentID, action, command string) (commandexec.Result, bool, error) {
+	streamingRunner, ok := s.runner.(commandexec.StreamingRunner)
+	if !ok {
+		result, err := s.runner.Run(ctx, command)
+		return result, false, err
+	}
+	result, err := streamingRunner.RunStreaming(ctx, command, func(line string) {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			return
+		}
+		s.appendLog(agentID, fmt.Sprintf("[%s] %s", action, trimmed))
+	})
+	return result, true, err
 }
 
 func (s *Service) appendLog(agentID, line string) {

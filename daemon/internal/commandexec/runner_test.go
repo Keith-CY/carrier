@@ -120,3 +120,27 @@ func TestShellRunnerExitCodeZeroOnSuccess(t *testing.T) {
 		t.Fatalf("expected exit code 0, got %d", result.ExitCode)
 	}
 }
+
+func TestShellRunnerRunStreamingEmitsOutputLines(t *testing.T) {
+	runner := ShellRunner{GOOS: "linux"}
+
+	var lines []string
+	result, err := runner.RunStreaming(context.Background(), "echo stdout-line; echo stderr-line >&2", func(line string) {
+		lines = append(lines, line)
+	})
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", result.ExitCode)
+	}
+	if len(lines) == 0 {
+		t.Fatal("expected streaming callback to receive at least one line")
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "stdout-line") {
+		t.Fatalf("expected stdout line in streamed output, got %v", lines)
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "stderr-line") {
+		t.Fatalf("expected stderr line in streamed output, got %v", lines)
+	}
+}
