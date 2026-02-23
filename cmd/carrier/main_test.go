@@ -1,6 +1,7 @@
 package main
 
 import (
+	"carrier/configv2"
 	"errors"
 	"os"
 	"path/filepath"
@@ -169,5 +170,138 @@ func TestResolveManagedAgentChannelUsesManagedChannelRegistry(t *testing.T) {
 func TestResolveManagedAgentChannelRejectsUnknownAgent(t *testing.T) {
 	if _, ok := resolveManagedAgentChannel("unknown-agent"); ok {
 		t.Fatal("expected unknown managed agent channel resolution to fail")
+	}
+}
+
+func TestParseOnboardCommandArgsWithFlags(t *testing.T) {
+	opts, err := parseOnboardCommandArgs([]string{"--telegram-bot-token", "tg-token", "--provider", "openai-oauth"})
+	if err != nil {
+		t.Fatalf("parseOnboardCommandArgs error: %v", err)
+	}
+	if opts.WebUI {
+		t.Fatal("expected WebUI=false")
+	}
+	if opts.TelegramBotToken != "tg-token" {
+		t.Fatalf("TelegramBotToken = %q, want tg-token", opts.TelegramBotToken)
+	}
+	if opts.ProviderID != "openai-codex" {
+		t.Fatalf("ProviderID = %q, want openai-codex", opts.ProviderID)
+	}
+}
+
+func TestParseOnboardCommandArgsRejectsWebUICombination(t *testing.T) {
+	_, err := parseOnboardCommandArgs([]string{"--webui", "--telegram-bot-token", "tg-token"})
+	if err == nil {
+		t.Fatal("expected parseOnboardCommandArgs to reject --webui combination")
+	}
+}
+
+func TestParseAddCommandArgsWithFlags(t *testing.T) {
+	opts, err := parseAddCommandArgs([]string{"openclaw", "--telegram-bot-token", "tg-token", "--provider", "openai-oauth"})
+	if err != nil {
+		t.Fatalf("parseAddCommandArgs error: %v", err)
+	}
+	if opts.AgentID != "openclaw" {
+		t.Fatalf("AgentID = %q, want openclaw", opts.AgentID)
+	}
+	if opts.TelegramBotToken != "tg-token" {
+		t.Fatalf("TelegramBotToken = %q, want tg-token", opts.TelegramBotToken)
+	}
+	if opts.ProviderID != "openai-codex" {
+		t.Fatalf("ProviderID = %q, want openai-codex", opts.ProviderID)
+	}
+}
+
+func TestPickProviderForManagedAddWithReasonUsesCarrierConfig(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.v2.json")
+	t.Setenv("CARRIER_CONFIG", cfgPath)
+	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "")
+
+	cfg := &configv2.Config{
+		ConfigVersion: configv2.CurrentVersion,
+		Channels: []configv2.Channel{
+			{ID: "telegram", Enabled: true, BotToken: "tg-token"},
+		},
+		ModelList: []configv2.Model{
+			{
+				ModelName:  "openai-default",
+				Model:      "openai/gpt-5.2",
+				ProviderID: "openai",
+			},
+		},
+		DefaultModel: "openai-default",
+	}
+	if _, err := configv2.Save(cfg); err != nil {
+		t.Fatalf("configv2.Save error: %v", err)
+	}
+
+	provider, reason, err := pickProviderForManagedAddWithReason("")
+	if err != nil {
+		t.Fatalf("pickProviderForManagedAddWithReason error: %v", err)
+	}
+	if provider.ID != "openai" {
+		t.Fatalf("provider.ID = %q, want openai", provider.ID)
+	}
+	if !strings.Contains(reason, "Carrier config") {
+		t.Fatalf("expected reason to mention Carrier config, got %q", reason)
+	}
+}
+
+func TestLoadConfiguredTelegramBotToken(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.v2.json")
+	t.Setenv("CARRIER_CONFIG", cfgPath)
+
+	cfg := &configv2.Config{
+		ConfigVersion: configv2.CurrentVersion,
+		Channels: []configv2.Channel{
+			{ID: "telegram", Enabled: true, BotToken: "tg-token-from-config"},
+		},
+	}
+	if _, err := configv2.Save(cfg); err != nil {
+		t.Fatalf("configv2.Save error: %v", err)
+	}
+
+	token := loadConfiguredTelegramBotToken()
+	if token != "tg-token-from-config" {
+		t.Fatalf("token = %q, want tg-token-from-config", token)
+	}
+}
+
+func TestPrepareManagedAgentAddArtifactsIncludesPairedTelegramChat(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	provider := choiceOption{
+		ID:           "openai",
+		Name:         "OpenAI",
+		ProviderEnv:  "OPENAI_API_KEY",
+		ExampleModel: "openai/gpt-5.2",
+	}
+	envVars := map[string]string{
+		"OPENAI_API_KEY": "sk-test",
+	}
+
+	result, err := prepareManagedAgentAddArtifacts(
+		"openclaw",
+		"openclaw-test-instance",
+		"telegram",
+		"tg-token",
+		provider,
+		envVars,
+		"418258935",
+	)
+	if err != nil {
+		t.Fatalf("prepareManagedAgentAddArtifacts error: %v", err)
+	}
+	if result.PairedChatID != "418258935" {
+		t.Fatalf("PairedChatID = %q, want 418258935", result.PairedChatID)
+	}
+
+	raw, err := os.ReadFile(result.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config path %s: %v", result.ConfigPath, err)
+	}
+	if !strings.Contains(string(raw), `"allow_from": [`) || !strings.Contains(string(raw), `"418258935"`) {
+		t.Fatalf("expected allow_from to include paired chat id, got %s", string(raw))
 	}
 }

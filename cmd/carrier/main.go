@@ -10,8 +10,12 @@
 //	carrier uninstall <id>  Uninstall and remove a managed agent instance
 //	carrier list            List managed agent instances
 //	carrier onboard         Interactive TUI onboarding (channel/provider -> keep gateway running in background)
+//	carrier onboard --telegram-bot-token <token> --provider <provider_id>
+//	                       One-line onboarding for Telegram + provider setup
 //	carrier onboard --webui Launch WebUI onboarding (start/reuse daemon+gateway)
 //	carrier add <agent_id>  Add/install an agent via TUI flow
+//	carrier add <agent_id> --telegram-bot-token <token>
+//	                       One-line managed agent add for Telegram
 //	carrier add <agent_id> --webui
 //	                       Add/install an agent via WebUI flow
 //	carrier --help          Show usage
@@ -71,8 +75,16 @@ const (
 )
 
 type addCommandOptions struct {
-	AgentID string
-	WebUI   bool
+	AgentID          string
+	WebUI            bool
+	TelegramBotToken string
+	ProviderID       string
+}
+
+type onboardCommandOptions struct {
+	WebUI            bool
+	TelegramBotToken string
+	ProviderID       string
 }
 
 type picoclawChannel struct {
@@ -88,6 +100,7 @@ type managedAgentAddResult struct {
 	RecordPath    string
 	ChannelID     string
 	ProviderID    string
+	PairedChatID  string
 }
 
 type managedAgentConfig struct {
@@ -244,10 +257,14 @@ Usage:
   carrier uninstall <id> Uninstall and remove a managed agent instance
   carrier list           List managed agent instances
   carrier onboard        Interactive onboarding (channel/provider -> keep gateway running in background)
+  carrier onboard --telegram-bot-token <token> --provider <provider_id>
+                        One-line onboarding for Telegram + provider setup
   carrier onboard --webui
                         Launch WebUI onboarding (start/reuse daemon+gateway)
   carrier add <agent_id>
                         Add/install an agent via TUI flow
+  carrier add <agent_id> --telegram-bot-token <token>
+                        One-line managed agent add for Telegram
   carrier add <agent_id> --webui
                         Add/install an agent via WebUI flow
   carrier --help         Show this help message
@@ -305,22 +322,20 @@ func main() {
 			}
 			return
 		case "onboard":
-			if len(os.Args) >= 3 {
-				mode := strings.ToLower(strings.TrimSpace(os.Args[2]))
-				switch mode {
-				case "--webui", "--web", "webui":
-					if err := runOnboardWebUI(os.Stdout); err != nil {
-						fmt.Fprintf(os.Stderr, "onboard failed: %v\n", err)
-						os.Exit(1)
-					}
-					return
-				default:
-					fmt.Fprintf(os.Stderr, "unknown onboard option: %s\n\n", os.Args[2])
-					fmt.Fprint(os.Stderr, usage)
+			opts, err := parseOnboardCommandArgs(os.Args[2:])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "onboard failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if opts.WebUI {
+				if err := runOnboardWebUI(os.Stdout); err != nil {
+					fmt.Fprintf(os.Stderr, "onboard failed: %v\n", err)
 					os.Exit(1)
 				}
+				return
 			}
-			if err := runOnboardFlow(os.Stdin, os.Stdout, startGatewayInBackgroundAndWait); err != nil {
+			if err := runOnboardWithOptions(os.Stdin, os.Stdout, startGatewayInBackgroundAndWait, opts); err != nil {
 				fmt.Fprintf(os.Stderr, "onboard failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -339,7 +354,7 @@ func main() {
 				}
 				return
 			}
-			if err := runAddTUI(os.Stdin, os.Stdout, opts.AgentID); err != nil {
+			if err := runAddTUI(os.Stdin, os.Stdout, opts); err != nil {
 				fmt.Fprintf(os.Stderr, "add failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -362,23 +377,98 @@ func main() {
 
 func parseAddCommandArgs(args []string) (addCommandOptions, error) {
 	if len(args) == 0 {
-		return addCommandOptions{}, errors.New("usage: carrier add <agent_id> [--webui]")
+		return addCommandOptions{}, errors.New("usage: carrier add <agent_id> [--webui] [--telegram-bot-token <token>] [--provider <provider_id>]")
 	}
 	opts := addCommandOptions{
 		AgentID: strings.ToLower(strings.TrimSpace(args[0])),
 	}
+	seenTokenFlag := false
 	if opts.AgentID == "" || strings.HasPrefix(opts.AgentID, "-") {
 		return addCommandOptions{}, errors.New("agent_id is required")
 	}
-	for _, raw := range args[1:] {
-		arg := strings.ToLower(strings.TrimSpace(raw))
-		switch arg {
-		case "--webui", "--web", "webui":
+	for i := 1; i < len(args); i++ {
+		raw := strings.TrimSpace(args[i])
+		arg := strings.ToLower(raw)
+		switch {
+		case arg == "--webui" || arg == "--web" || arg == "webui":
 			opts.WebUI = true
-		case "":
+		case arg == "":
 			continue
+		case strings.HasPrefix(arg, "--telegram-bot-token="):
+			seenTokenFlag = true
+			opts.TelegramBotToken = strings.TrimSpace(raw[len("--telegram-bot-token="):])
+		case arg == "--telegram-bot-token":
+			seenTokenFlag = true
+			if i+1 >= len(args) {
+				return addCommandOptions{}, errors.New("--telegram-bot-token requires a value")
+			}
+			i++
+			opts.TelegramBotToken = strings.TrimSpace(args[i])
+		case strings.HasPrefix(arg, "--provider="):
+			opts.ProviderID = normalizeProviderID(strings.TrimSpace(raw[len("--provider="):]))
+		case arg == "--provider":
+			if i+1 >= len(args) {
+				return addCommandOptions{}, errors.New("--provider requires a value")
+			}
+			i++
+			opts.ProviderID = normalizeProviderID(strings.TrimSpace(args[i]))
 		default:
 			return addCommandOptions{}, fmt.Errorf("unknown add option: %s", raw)
+		}
+	}
+	if seenTokenFlag && strings.TrimSpace(opts.TelegramBotToken) == "" {
+		return addCommandOptions{}, errors.New("telegram bot token is required")
+	}
+	if strings.TrimSpace(opts.ProviderID) != "" {
+		if _, ok := resolveChoice(opts.ProviderID, providerOptions); !ok {
+			return addCommandOptions{}, fmt.Errorf("unknown provider %q", opts.ProviderID)
+		}
+	}
+	return opts, nil
+}
+
+func parseOnboardCommandArgs(args []string) (onboardCommandOptions, error) {
+	opts := onboardCommandOptions{}
+	seenTokenFlag := false
+	for i := 0; i < len(args); i++ {
+		raw := strings.TrimSpace(args[i])
+		arg := strings.ToLower(raw)
+		switch {
+		case arg == "--webui" || arg == "--web" || arg == "webui":
+			opts.WebUI = true
+		case arg == "":
+			continue
+		case strings.HasPrefix(arg, "--telegram-bot-token="):
+			seenTokenFlag = true
+			opts.TelegramBotToken = strings.TrimSpace(raw[len("--telegram-bot-token="):])
+		case arg == "--telegram-bot-token":
+			seenTokenFlag = true
+			if i+1 >= len(args) {
+				return onboardCommandOptions{}, errors.New("--telegram-bot-token requires a value")
+			}
+			i++
+			opts.TelegramBotToken = strings.TrimSpace(args[i])
+		case strings.HasPrefix(arg, "--provider="):
+			opts.ProviderID = normalizeProviderID(strings.TrimSpace(raw[len("--provider="):]))
+		case arg == "--provider":
+			if i+1 >= len(args) {
+				return onboardCommandOptions{}, errors.New("--provider requires a value")
+			}
+			i++
+			opts.ProviderID = normalizeProviderID(strings.TrimSpace(args[i]))
+		default:
+			return onboardCommandOptions{}, fmt.Errorf("unknown onboard option: %s", raw)
+		}
+	}
+	if opts.WebUI && (strings.TrimSpace(opts.TelegramBotToken) != "" || strings.TrimSpace(opts.ProviderID) != "") {
+		return onboardCommandOptions{}, errors.New("--webui cannot be combined with --telegram-bot-token/--provider")
+	}
+	if seenTokenFlag && strings.TrimSpace(opts.TelegramBotToken) == "" {
+		return onboardCommandOptions{}, errors.New("telegram bot token is required")
+	}
+	if strings.TrimSpace(opts.ProviderID) != "" {
+		if _, ok := resolveChoice(opts.ProviderID, providerOptions); !ok {
+			return onboardCommandOptions{}, fmt.Errorf("unknown provider %q", opts.ProviderID)
 		}
 	}
 	return opts, nil
@@ -1172,6 +1262,10 @@ func applyConfigV2Env(out io.Writer) {
 }
 
 func runOnboard(in io.Reader, out io.Writer, startGateway func() error) error {
+	return runOnboardWithOptions(in, out, startGateway, onboardCommandOptions{})
+}
+
+func runOnboardWithOptions(in io.Reader, out io.Writer, startGateway func() error, opts onboardCommandOptions) error {
 	reader := bufio.NewReader(in)
 
 	_, _ = fmt.Fprintln(out, "Carrier TUI Onboard")
@@ -1183,28 +1277,65 @@ func runOnboard(in io.Reader, out io.Writer, startGateway func() error) error {
 		return errors.New("telegram channel is unavailable")
 	}
 	_, _ = fmt.Fprintf(out, "Using channel: %s\n", channel.Name)
-	channelEnv, channelCfg, err := promptChannelCredentialsMinimal(reader, out, channel)
-	if err != nil {
-		return err
+	var (
+		channelEnv map[string]string
+		channelCfg configv2.Channel
+		err        error
+	)
+	if strings.TrimSpace(opts.TelegramBotToken) != "" {
+		channelEnv = map[string]string{
+			"CARRIER_TELEGRAM_BOT_TOKEN":      strings.TrimSpace(opts.TelegramBotToken),
+			"CARRIER_TELEGRAM_TRANSPORT_MODE": "auto",
+		}
+		channelCfg = configv2.Channel{
+			ID:            channel.ID,
+			Enabled:       true,
+			BotToken:      strings.TrimSpace(opts.TelegramBotToken),
+			TransportMode: "auto",
+		}
+		_, _ = fmt.Fprintln(out, "Using provided Telegram bot token from --telegram-bot-token.")
+	} else {
+		channelEnv, channelCfg, err = promptChannelCredentialsMinimal(reader, out, channel)
+		if err != nil {
+			return err
+		}
 	}
 	channelConfigs := []configv2.Channel{channelCfg}
 
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "Step 2/4: Configure LLM provider")
-	provider, providerReason, err := pickMinimalProviderWithReason()
-	if err != nil {
-		return err
+	var (
+		provider       choiceOption
+		providerReason string
+	)
+	if strings.TrimSpace(opts.ProviderID) != "" {
+		resolved, ok := resolveChoice(opts.ProviderID, providerOptions)
+		if !ok {
+			return fmt.Errorf("unknown provider %q", opts.ProviderID)
+		}
+		provider = resolved
+		providerReason = "explicit --provider flag"
+	} else {
+		var err error
+		provider, providerReason, err = pickMinimalProviderWithReason()
+		if err != nil {
+			return err
+		}
 	}
 	_, _ = fmt.Fprintf(out, "Auto-selected provider: %s (%s)\n", provider.Name, provider.ID)
 	_, _ = fmt.Fprintf(out, "Selection reason: %s\n", providerReason)
-	provider, override, err := promptMinimalProviderOverride(reader, out, provider)
-	if err != nil {
-		return err
-	}
-	if override {
-		_, _ = fmt.Fprintf(out, "Provider override selected: %s (%s)\n", provider.Name, provider.ID)
+	if strings.TrimSpace(opts.ProviderID) != "" {
+		_, _ = fmt.Fprintf(out, "Using provider from flag: %s (%s)\n", provider.Name, provider.ID)
 	} else {
-		_, _ = fmt.Fprintf(out, "Using provider: %s (%s)\n", provider.Name, provider.ID)
+		provider, override, err := promptMinimalProviderOverride(reader, out, provider)
+		if err != nil {
+			return err
+		}
+		if override {
+			_, _ = fmt.Fprintf(out, "Provider override selected: %s (%s)\n", provider.Name, provider.ID)
+		} else {
+			_, _ = fmt.Fprintf(out, "Using provider: %s (%s)\n", provider.Name, provider.ID)
+		}
 	}
 	providerEnv, providerCredentialProvided, err := promptProviderAuthMinimal(reader, out, provider)
 	if err != nil {
@@ -1349,8 +1480,8 @@ func ensureWebUIServices(out io.Writer) (string, error) {
 	return gatewayURL, nil
 }
 
-func runAddTUI(in io.Reader, out io.Writer, agentID string) error {
-	agentID = strings.ToLower(strings.TrimSpace(agentID))
+func runAddTUI(in io.Reader, out io.Writer, opts addCommandOptions) error {
+	agentID := strings.ToLower(strings.TrimSpace(opts.AgentID))
 	if agentID == "" {
 		return errors.New("agent_id is required")
 	}
@@ -1368,10 +1499,10 @@ func runAddTUI(in io.Reader, out io.Writer, agentID string) error {
 		_, _ = fmt.Fprintf(out, "✅ %s installed and started.\n", agentID)
 		return nil
 	}
-	return runAddManagedAgentTUI(in, out, agentID)
+	return runAddManagedAgentTUI(in, out, agentID, opts)
 }
 
-func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string) error {
+func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, opts addCommandOptions) error {
 	cfg, ok := managedAgentByID(agentID)
 	if !ok {
 		return fmt.Errorf("managed agent %q is not supported", agentID)
@@ -1392,27 +1523,44 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string) error {
 		return fmt.Errorf("%s channel is unavailable", cfg.ID)
 	}
 	_, _ = fmt.Fprintf(out, "Using channel: %s (default)\n", channel.Name)
-	token, err := promptInput(reader, out, channel.TokenLabel, true)
-	if err != nil {
-		return err
+	token := strings.TrimSpace(opts.TelegramBotToken)
+	if token != "" {
+		_, _ = fmt.Fprintln(out, "Using provided Telegram bot token from --telegram-bot-token.")
+	} else if configuredToken := loadConfiguredTelegramBotToken(); configuredToken != "" {
+		token = configuredToken
+		_, _ = fmt.Fprintln(out, "Reusing Telegram bot token from Carrier config.")
+	} else {
+		var err error
+		token, err = promptInput(reader, out, channel.TokenLabel, true)
+		if err != nil {
+			return err
+		}
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return errors.New("telegram bot token is required")
 	}
 
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "Step 2/4: Configure LLM provider")
-	provider, providerReason, err := pickMinimalProviderWithReason()
+	provider, providerReason, err := pickProviderForManagedAddWithReason(opts.ProviderID)
 	if err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(out, "Auto-selected provider: %s (%s)\n", provider.Name, provider.ID)
 	_, _ = fmt.Fprintf(out, "Selection reason: %s\n", providerReason)
-	provider, override, err := promptMinimalProviderOverride(reader, out, provider)
-	if err != nil {
-		return err
-	}
-	if override {
-		_, _ = fmt.Fprintf(out, "Provider override selected: %s (%s)\n", provider.Name, provider.ID)
+	if strings.TrimSpace(opts.ProviderID) != "" {
+		_, _ = fmt.Fprintf(out, "Using provider from flag: %s (%s)\n", provider.Name, provider.ID)
 	} else {
-		_, _ = fmt.Fprintf(out, "Using provider: %s (%s)\n", provider.Name, provider.ID)
+		provider, override, err := promptMinimalProviderOverride(reader, out, provider)
+		if err != nil {
+			return err
+		}
+		if override {
+			_, _ = fmt.Fprintf(out, "Provider override selected: %s (%s)\n", provider.Name, provider.ID)
+		} else {
+			_, _ = fmt.Fprintf(out, "Using provider: %s (%s)\n", provider.Name, provider.ID)
+		}
 	}
 	_, _ = fmt.Fprintln(out, "Saved provider credential will be reused automatically when available.")
 	providerEnv, _, err := promptProviderAuthMinimal(reader, out, provider)
@@ -1426,10 +1574,24 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string) error {
 	if err := applyEnvVars(envVars); err != nil {
 		return err
 	}
+	pairedChatID := ""
+	if strings.EqualFold(channel.ID, "telegram") {
+		if gatewayURL, gatewayErr := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); gatewayErr == nil {
+			chatID, pairErr := fetchLatestPairedChatID(gatewayURL, "telegram")
+			if pairErr != nil {
+				_, _ = fmt.Fprintf(out, "Warning: failed to query paired Telegram chat: %v\n", pairErr)
+			} else if strings.TrimSpace(chatID) != "" {
+				pairedChatID = strings.TrimSpace(chatID)
+				_, _ = fmt.Fprintf(out, "Reusing paired Telegram chat id: %s\n", pairedChatID)
+			}
+		} else {
+			_, _ = fmt.Fprintf(out, "Warning: gateway is unavailable for pairing lookup: %v\n", gatewayErr)
+		}
+	}
 
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintf(out, "Step 3/4: Prepare %s configuration\n", cfg.Name)
-	result, err := prepareManagedAgentAddArtifacts(cfg.ID, instanceID, channel.ID, token, provider, envVars)
+	result, err := prepareManagedAgentAddArtifacts(cfg.ID, instanceID, channel.ID, token, provider, envVars, pairedChatID)
 	if err != nil {
 		return err
 	}
@@ -1448,12 +1610,23 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string) error {
 	if err := daemonAgentAction(cfg.ID, "start"); err != nil {
 		return err
 	}
+	pairRequired := false
+	runtimeState := "running"
+	effectivePairedChatID := strings.TrimSpace(result.PairedChatID)
 	if strings.EqualFold(cfg.ID, "picoclaw") {
 		if pairCode, _ := daemonExtractPairCodeFromLogs(cfg.ID); strings.TrimSpace(pairCode) != "" {
 			_, _ = fmt.Fprintf(out, "PicoClaw pair code: %s\n", pairCode)
 			_, _ = fmt.Fprintf(out, "Next: send `/pair %s` in your PicoClaw Telegram bot chat.\n", pairCode)
+			if effectivePairedChatID == "" {
+				pairRequired = true
+				runtimeState = "pending_pair"
+			}
 		} else {
 			_, _ = fmt.Fprintln(out, "Pair code not detected yet. Open PicoClaw Telegram bot chat and follow `/start` -> `/pair` prompts.")
+			if effectivePairedChatID == "" {
+				pairRequired = true
+				runtimeState = "pending_pair"
+			}
 		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -1467,7 +1640,9 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string) error {
 		RecordPath:   result.RecordPath,
 		Channel:      result.ChannelID,
 		Provider:     result.ProviderID,
-		RuntimeState: "running",
+		PairRequired: pairRequired,
+		PairedChatID: effectivePairedChatID,
+		RuntimeState: runtimeState,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -1854,7 +2029,7 @@ func daemonRequestWithTimeout(method, path string, body any, timeout time.Durati
 	return raw, resp.StatusCode, fmt.Errorf("daemon request failed with status %d", resp.StatusCode)
 }
 
-func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToken string, provider choiceOption, envVars map[string]string) (*managedAgentAddResult, error) {
+func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToken string, provider choiceOption, envVars map[string]string, pairedChatID string) (*managedAgentAddResult, error) {
 	cfg, ok := managedAgentByID(agentID)
 	if !ok {
 		return nil, fmt.Errorf("managed agent %q is not supported", agentID)
@@ -1928,6 +2103,10 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 	providerItem := map[string]interface{}{
 		"credential_ref": provider.ID,
 	}
+	allowFrom := []string{}
+	if strings.TrimSpace(pairedChatID) != "" {
+		allowFrom = []string{strings.TrimSpace(pairedChatID)}
+	}
 	token := pickProviderTokenForManaged(provider, envVars)
 	if strings.EqualFold(provider.ID, "openai-codex") {
 		modelItem["auth_method"] = "oauth"
@@ -1962,7 +2141,7 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 			channelID: map[string]interface{}{
 				"enabled":    true,
 				"token":      channelToken,
-				"allow_from": []string{},
+				"allow_from": allowFrom,
 			},
 		},
 	}
@@ -1999,6 +2178,7 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 		RecordPath:    recordPath,
 		ChannelID:     channelID,
 		ProviderID:    provider.ID,
+		PairedChatID:  strings.TrimSpace(pairedChatID),
 	}, nil
 }
 
@@ -2210,6 +2390,15 @@ func pickMinimalProvider() (choiceOption, error) {
 	return provider, err
 }
 
+func normalizeProviderID(id string) string {
+	switch strings.ToLower(strings.TrimSpace(id)) {
+	case "openai-oauth", "openai_oauth", "openaioauth", "openai-device-code", "openai_device_code":
+		return "openai-codex"
+	default:
+		return strings.ToLower(strings.TrimSpace(id))
+	}
+}
+
 func pickMinimalProviderWithReason() (choiceOption, string, error) {
 	defaultID := strings.ToLower(strings.TrimSpace(os.Getenv("CARRIER_DEFAULT_PROVIDER_ID")))
 	if defaultID != "" {
@@ -2224,6 +2413,57 @@ func pickMinimalProviderWithReason() (choiceOption, string, error) {
 		return choiceOption{}, "", errors.New("no provider available")
 	}
 	return providerOptions[0], "fallback to first available provider", nil
+}
+
+func pickProviderForManagedAddWithReason(preferredProviderID string) (choiceOption, string, error) {
+	preferredProviderID = normalizeProviderID(preferredProviderID)
+	if preferredProviderID != "" {
+		if provider, ok := resolveChoice(preferredProviderID, providerOptions); ok {
+			return provider, fmt.Sprintf("explicit --provider flag (%s)", preferredProviderID), nil
+		}
+		return choiceOption{}, "", fmt.Errorf("unknown provider %q", preferredProviderID)
+	}
+
+	cfg, _, err := configv2.Load()
+	if err == nil && cfg != nil && len(cfg.ModelList) > 0 {
+		selected := cfg.ModelList[0]
+		defaultName := strings.TrimSpace(cfg.DefaultModel)
+		if defaultName != "" {
+			for _, item := range cfg.ModelList {
+				if strings.EqualFold(strings.TrimSpace(item.ModelName), defaultName) {
+					selected = item
+					break
+				}
+			}
+		}
+		cfgProviderID := normalizeProviderID(selected.ProviderID)
+		if cfgProviderID != "" {
+			if provider, ok := resolveChoice(cfgProviderID, providerOptions); ok {
+				reason := fmt.Sprintf("default provider from Carrier config (%s)", cfgProviderID)
+				if strings.TrimSpace(selected.ModelName) != "" {
+					reason = fmt.Sprintf("%s, model=%s", reason, strings.TrimSpace(selected.ModelName))
+				}
+				return provider, reason, nil
+			}
+		}
+	}
+	return pickMinimalProviderWithReason()
+}
+
+func loadConfiguredTelegramBotToken() string {
+	cfg, _, err := configv2.Load()
+	if err != nil || cfg == nil {
+		return ""
+	}
+	for _, ch := range cfg.Channels {
+		if !ch.Enabled {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(ch.ID), "telegram") {
+			return strings.TrimSpace(ch.BotToken)
+		}
+	}
+	return ""
 }
 
 func promptMinimalProviderOverride(reader *bufio.Reader, out io.Writer, selected choiceOption) (choiceOption, bool, error) {
@@ -3048,6 +3288,70 @@ func fetchDaemonPairCode(baseURL string) (string, string, error) {
 		return "", "", errors.New("daemon returned empty pairing code")
 	}
 	return code, strings.TrimSpace(issued.ExpiresAt), nil
+}
+
+func fetchLatestPairedChatID(gatewayBaseURL, provider string) (string, error) {
+	base := strings.TrimRight(strings.TrimSpace(gatewayBaseURL), "/")
+	if base == "" {
+		return "", errors.New("gateway base url is empty")
+	}
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		provider = "telegram"
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	req, err := http.NewRequest(http.MethodGet, base+"/api/v1/pairing/sessions?provider="+neturl.QueryEscape(provider), nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return "", readErr
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("pairing session query failed with status %d", resp.StatusCode)
+	}
+
+	var payload struct {
+		Sessions []struct {
+			ChatID    string `json:"chatId"`
+			CreatedAt string `json:"createdAt"`
+			LastSeen  string `json:"lastSeenAt"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", fmt.Errorf("decode pairing session payload: %w", err)
+	}
+	bestChatID := ""
+	bestTimestamp := time.Time{}
+	for _, item := range payload.Sessions {
+		chatID := strings.TrimSpace(item.ChatID)
+		if chatID == "" {
+			continue
+		}
+		ts := strings.TrimSpace(item.LastSeen)
+		if ts == "" {
+			ts = strings.TrimSpace(item.CreatedAt)
+		}
+		parsed, parseErr := time.Parse(time.RFC3339Nano, ts)
+		if parseErr != nil {
+			if bestChatID == "" {
+				bestChatID = chatID
+			}
+			continue
+		}
+		if bestChatID == "" || parsed.After(bestTimestamp) {
+			bestChatID = chatID
+			bestTimestamp = parsed
+		}
+	}
+	return bestChatID, nil
 }
 
 func addDaemonAuthHeader(req *http.Request) {
