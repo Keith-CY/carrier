@@ -2494,7 +2494,8 @@ func saveProviderCredentialFlow(reader *bufio.Reader, out io.Writer, provider ch
 func saveProviderCredentialAuto(out io.Writer, provider choiceOption, value string) error {
 	backend, err := saveProviderCredential(provider.ID, value)
 	if err != nil {
-		return fmt.Errorf("save credential: %w", err)
+		_, _ = fmt.Fprintf(out, "Warning: failed to save %s credential: %v\n", provider.Name, err)
+		return nil
 	}
 	_, _ = fmt.Fprintf(out, "Credential saved (%s).\n", backend)
 	return nil

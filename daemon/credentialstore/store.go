@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -15,6 +16,11 @@ import (
 var (
 	errCredentialNotFound           = errors.New("credential not found")
 	errCredentialBackendUnavailable = errors.New("credential backend unavailable")
+)
+
+var (
+	userHomeDirFunc = os.UserHomeDir
+	currentUserFunc = user.Current
 )
 
 func LoadProviderCredential(providerID string) (string, string, bool, error) {
@@ -164,9 +170,55 @@ func credentialStorePath() (string, error) {
 	if path := strings.TrimSpace(os.Getenv("CARRIER_CREDENTIAL_STORE")); path != "" {
 		return path, nil
 	}
-	home, err := os.UserHomeDir()
+	home, err := resolveHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home dir: %w", err)
 	}
 	return filepath.Join(home, ".carrier", "credentials.json"), nil
+}
+
+func resolveHomeDir() (string, error) {
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return home, nil
+	}
+
+	var userHomeErr error
+	if home, err := userHomeDirFunc(); err == nil {
+		trimmed := strings.TrimSpace(home)
+		if trimmed != "" {
+			return trimmed, nil
+		}
+	} else {
+		userHomeErr = err
+	}
+
+	if current, err := currentUserFunc(); err == nil && current != nil {
+		trimmed := strings.TrimSpace(current.HomeDir)
+		if trimmed != "" {
+			return trimmed, nil
+		}
+	}
+
+	if runtime.GOOS == "windows" {
+		if profile := strings.TrimSpace(os.Getenv("USERPROFILE")); profile != "" {
+			return profile, nil
+		}
+		if drive, homePath := strings.TrimSpace(os.Getenv("HOMEDRIVE")), strings.TrimSpace(os.Getenv("HOMEPATH")); drive != "" && homePath != "" {
+			return filepath.Clean(drive + homePath), nil
+		}
+	} else {
+		switch username := strings.TrimSpace(os.Getenv("USER")); username {
+		case "root":
+			return "/root", nil
+		case "":
+			return "/root", nil
+		default:
+			return filepath.Join("/home", username), nil
+		}
+	}
+
+	if userHomeErr != nil {
+		return "", userHomeErr
+	}
+	return "", errors.New("home directory unavailable")
 }
