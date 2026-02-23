@@ -2827,7 +2827,7 @@ func startBackgroundSubprocess(subcommand, logName string) error {
 		return fmt.Errorf("resolve current executable: %w", err)
 	}
 	cmd := exec.Command(exePath, subcommand)
-	cmd.Env = os.Environ()
+	cmd.Env = withResolvedHomeEnv(os.Environ())
 	if bootstrapVerboseEnabled() {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -3287,6 +3287,22 @@ func resolveCarrierHomeDir() (string, error) {
 	}
 
 	return "", errors.New("home directory unavailable")
+}
+
+func withResolvedHomeEnv(env []string) []string {
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, "HOME=") {
+			continue
+		}
+		if strings.TrimSpace(strings.TrimPrefix(entry, "HOME=")) != "" {
+			return env
+		}
+	}
+	home, err := resolveCarrierHomeDir()
+	if err != nil {
+		return env
+	}
+	return append(env, "HOME="+home)
 }
 
 func buildSlashCommandGuide(channel choiceOption) string {

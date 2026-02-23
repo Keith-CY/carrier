@@ -107,3 +107,39 @@ func TestResolveCarrierHomeDirFallsBackToRootWhenUnavailable(t *testing.T) {
 		t.Fatalf("home = %q, want /root", home)
 	}
 }
+
+func TestWithResolvedHomeEnvPreservesExistingHome(t *testing.T) {
+	env := []string{"PATH=/usr/bin", "HOME=/tmp/existing"}
+	out := withResolvedHomeEnv(env)
+	if len(out) != len(env) {
+		t.Fatalf("len(out) = %d, want %d", len(out), len(env))
+	}
+	if out[1] != "HOME=/tmp/existing" {
+		t.Fatalf("HOME entry changed: %q", out[1])
+	}
+}
+
+func TestWithResolvedHomeEnvAppendsFallbackHome(t *testing.T) {
+	resetCarrierHomeResolvers(t)
+	t.Setenv("HOME", "")
+
+	carrierUserHomeDirFunc = func() (string, error) {
+		return "", errors.New("$HOME is not defined")
+	}
+	fallbackHome := filepath.Join(t.TempDir(), "fallback-home")
+	carrierCurrentUserFunc = func() (*user.User, error) {
+		return &user.User{HomeDir: fallbackHome}, nil
+	}
+
+	out := withResolvedHomeEnv([]string{"PATH=/usr/bin"})
+	found := false
+	for _, entry := range out {
+		if entry == "HOME="+fallbackHome {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected HOME fallback entry in env: %v", out)
+	}
+}
