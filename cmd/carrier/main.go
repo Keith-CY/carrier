@@ -115,6 +115,7 @@ type managedAgentAddResult struct {
 	RecordPath    string
 	ChannelID     string
 	ProviderID    string
+	PairedChatID  string
 }
 
 type managedAgentConfig struct {
@@ -1760,18 +1761,9 @@ func summarizeConfiguredChannels(cfg *configv2.Config) string {
 }
 
 func summarizeDefaultModel(cfg *configv2.Config) string {
-	if cfg == nil || len(cfg.ModelList) == 0 {
+	pick, err := configv2.ResolveDefaultModel(cfg)
+	if err != nil || pick == nil {
 		return ""
-	}
-	pick := cfg.ModelList[0]
-	defaultName := strings.TrimSpace(cfg.DefaultModel)
-	if defaultName != "" {
-		for _, m := range cfg.ModelList {
-			if strings.EqualFold(strings.TrimSpace(m.ModelName), defaultName) {
-				pick = m
-				break
-			}
-		}
 	}
 	modelID := strings.TrimSpace(pick.Model)
 	if modelID == "" {
@@ -1784,6 +1776,18 @@ func summarizeDefaultModel(cfg *configv2.Config) string {
 		return fmt.Sprintf("%s (provider=%s)", modelID, providerID)
 	}
 	return modelID
+}
+
+func configuredDefaultProviderID() string {
+	cfg, _, err := configv2.Load()
+	if err != nil {
+		return ""
+	}
+	pick, err := configv2.ResolveDefaultModel(cfg)
+	if err != nil || pick == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(pick.ProviderID))
 }
 
 func applyConfigV2Env(out io.Writer) {
@@ -2033,14 +2037,27 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 		return fmt.Errorf("%s channel is unavailable", cfg.ID)
 	}
 	_, _ = fmt.Fprintf(out, "Using channel: %s (default)\n", channel.Name)
-	token, tokenSource := resolveManagedChannelToken(channel.ID)
-	if tokenSource != "" {
-		_, _ = fmt.Fprintf(out, "Reused %s token from %s.\n", channel.Name, tokenSource)
-	} else {
+	reuseChannelToken := managedAddReusesChannelToken(cfg.ID, channel.ID)
+	token := ""
+	tokenSource := ""
+	if reuseChannelToken {
+		token, tokenSource = resolveManagedChannelToken(channel.ID)
+		if tokenSource != "" {
+			_, _ = fmt.Fprintf(out, "Reused %s token from %s.\n", channel.Name, tokenSource)
+		}
+	}
+	if tokenSource == "" {
+		if !reuseChannelToken {
+			_, _ = fmt.Fprintf(out, "Token reuse is disabled for %s to avoid shared bot conflicts.\n", cfg.Name)
+		}
 		token, err = promptInput(reader, out, channel.TokenLabel, true)
 		if err != nil {
 			return err
 		}
+	}
+	pairedChatID, pairedChatIDSource := latestManagedPairedChatID(cfg.ID, channel.ID)
+	if pairedChatIDSource != "" {
+		_, _ = fmt.Fprintf(out, "Reused paired %s user id from %s: %s\n", channel.Name, pairedChatIDSource, pairedChatID)
 	}
 
 	_, _ = fmt.Fprintln(out, "")
@@ -2067,7 +2084,7 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintf(out, "Step 3/4: Prepare %s configuration\n", cfg.Name)
-	result, err := prepareManagedAgentAddArtifacts(cfg.ID, instanceID, channel.ID, token, provider, envVars)
+	result, err := prepareManagedAgentAddArtifacts(cfg.ID, instanceID, channel.ID, token, provider, envVars, pairedChatID)
 	if err != nil {
 		return err
 	}
@@ -2109,6 +2126,8 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 		RecordPath:   result.RecordPath,
 		Channel:      result.ChannelID,
 		Provider:     result.ProviderID,
+		PairRequired: strings.TrimSpace(result.PairedChatID) == "",
+		PairedChatID: result.PairedChatID,
 		RuntimeState: "running",
 		CreatedAt:    createdAt,
 		UpdatedAt:    now,
@@ -2153,11 +2172,18 @@ func resolveManagedChannelToken(channelID string) (string, string) {
 	return "", ""
 }
 
+func managedAddReusesChannelToken(agentID, channelID string) bool {
+	if !strings.EqualFold(strings.TrimSpace(channelID), "telegram") {
+		return true
+	}
+	return !strings.EqualFold(strings.TrimSpace(agentID), "openclaw")
+}
+
 func pickManagedAddProviderWithReason(agentID string) (choiceOption, string, error) {
-	defaultID := strings.ToLower(strings.TrimSpace(os.Getenv("CARRIER_DEFAULT_PROVIDER_ID")))
+	defaultID := configuredDefaultProviderID()
 	if defaultID != "" {
 		if p, ok := resolveChoice(defaultID, providerOptions); ok && providerCompatibleForManagedAgent(agentID, p) {
-			return p, fmt.Sprintf("environment default from CARRIER_DEFAULT_PROVIDER_ID=%s", defaultID), nil
+			return p, fmt.Sprintf("config default from config.v2 default_model (provider=%s)", defaultID), nil
 		}
 	}
 
@@ -2221,18 +2247,55 @@ func latestManagedInstanceProvider(agentID string) string {
 	}
 
 	target := strings.ToLower(strings.TrimSpace(agentID))
+	bestIdx := latestManagedInstanceIndex(instances, func(inst managedAgentInstance) bool {
+		if !managedInstanceMatchesAgent(inst, target) {
+			return false
+		}
+		return strings.TrimSpace(inst.Provider) != ""
+	})
+
+	if bestIdx < 0 {
+		return ""
+	}
+	return strings.TrimSpace(instances[bestIdx].Provider)
+}
+
+func latestManagedPairedChatID(agentID, channelID string) (string, string) {
+	instances, _, err := loadManagedInstances()
+	if err != nil || len(instances) == 0 {
+		return "", ""
+	}
+
+	targetAgent := strings.ToLower(strings.TrimSpace(agentID))
+	targetChannel := strings.ToLower(strings.TrimSpace(channelID))
+	bestIdx := latestManagedInstanceIndex(instances, func(inst managedAgentInstance) bool {
+		if !managedInstanceMatchesAgent(inst, targetAgent) {
+			return false
+		}
+		if targetChannel != "" && !strings.EqualFold(strings.TrimSpace(inst.Channel), targetChannel) {
+			return false
+		}
+		pairedChatID := strings.TrimSpace(inst.PairedChatID)
+		return pairedChatID != ""
+	})
+
+	if bestIdx < 0 {
+		return "", ""
+	}
+	return strings.TrimSpace(instances[bestIdx].PairedChatID), "latest managed instance"
+}
+
+func latestManagedInstanceIndex(instances []managedAgentInstance, match func(managedAgentInstance) bool) int {
+	if len(instances) == 0 || match == nil {
+		return -1
+	}
+
 	bestIdx := -1
 	var bestTime time.Time
 	bestHasTime := false
 
 	for i, inst := range instances {
-		if target != "" &&
-			!strings.EqualFold(strings.TrimSpace(inst.AgentID), target) &&
-			!strings.EqualFold(strings.TrimSpace(inst.Type), target) {
-			continue
-		}
-		providerID := strings.TrimSpace(inst.Provider)
-		if providerID == "" {
+		if !match(inst) {
 			continue
 		}
 		updated, hasTime := parseManagedTimestamp(inst.UpdatedAt)
@@ -2261,10 +2324,15 @@ func latestManagedInstanceProvider(agentID string) string {
 		}
 	}
 
-	if bestIdx < 0 {
-		return ""
+	return bestIdx
+}
+
+func managedInstanceMatchesAgent(inst managedAgentInstance, targetAgent string) bool {
+	if strings.TrimSpace(targetAgent) == "" {
+		return true
 	}
-	return strings.TrimSpace(instances[bestIdx].Provider)
+	return strings.EqualFold(strings.TrimSpace(inst.AgentID), targetAgent) ||
+		strings.EqualFold(strings.TrimSpace(inst.Type), targetAgent)
 }
 
 func parseManagedTimestamp(raw string) (time.Time, bool) {
@@ -2769,7 +2837,7 @@ func daemonRequestWithTimeout(method, path string, body any, timeout time.Durati
 	return raw, resp.StatusCode, fmt.Errorf("daemon request failed with status %d", resp.StatusCode)
 }
 
-func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToken string, provider choiceOption, envVars map[string]string) (*managedAgentAddResult, error) {
+func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToken string, provider choiceOption, envVars map[string]string, pairedChatID string) (*managedAgentAddResult, error) {
 	cfg, ok := managedAgentByID(agentID)
 	if !ok {
 		return nil, fmt.Errorf("managed agent %q is not supported", agentID)
@@ -2780,6 +2848,7 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 	}
 	channelID = strings.TrimSpace(channelID)
 	channelToken = strings.TrimSpace(channelToken)
+	pairedChatID = strings.TrimSpace(pairedChatID)
 	if channelID == "" {
 		return nil, fmt.Errorf("%s channel is required", cfg.ID)
 	}
@@ -2857,6 +2926,11 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 		providerItem["api_key"] = token
 	}
 
+	allowFrom := []string{}
+	if pairedChatID != "" {
+		allowFrom = []string{pairedChatID}
+	}
+
 	payload := map[string]interface{}{
 		"agents": map[string]interface{}{
 			"defaults": map[string]interface{}{
@@ -2877,7 +2951,7 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 			channelID: map[string]interface{}{
 				"enabled":    true,
 				"token":      channelToken,
-				"allow_from": []string{},
+				"allow_from": allowFrom,
 			},
 		},
 	}
@@ -2897,6 +2971,7 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 		"config_path":    configPath,
 		"channel":        channelID,
 		"provider":       provider.ID,
+		"paired_chat_id": pairedChatID,
 		"updated_at":     time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	recordRaw, err := json.MarshalIndent(record, "", "  ")
@@ -2914,6 +2989,7 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 		RecordPath:    recordPath,
 		ChannelID:     channelID,
 		ProviderID:    provider.ID,
+		PairedChatID:  pairedChatID,
 	}, nil
 }
 
@@ -3126,10 +3202,10 @@ func pickMinimalProvider() (choiceOption, error) {
 }
 
 func pickMinimalProviderWithReason() (choiceOption, string, error) {
-	defaultID := strings.ToLower(strings.TrimSpace(os.Getenv("CARRIER_DEFAULT_PROVIDER_ID")))
+	defaultID := configuredDefaultProviderID()
 	if defaultID != "" {
 		if p, ok := resolveChoice(defaultID, providerOptions); ok {
-			return p, fmt.Sprintf("environment default from CARRIER_DEFAULT_PROVIDER_ID=%s", defaultID), nil
+			return p, fmt.Sprintf("config default from config.v2 default_model (provider=%s)", defaultID), nil
 		}
 	}
 	if p, ok := resolveChoice("openai-codex", providerOptions); ok {

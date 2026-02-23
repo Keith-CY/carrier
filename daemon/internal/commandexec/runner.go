@@ -61,7 +61,7 @@ func (r ShellRunner) run(ctx context.Context, command string, onLine func(string
 
 	var cmd *exec.Cmd
 	if r.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, "wsl.exe", "bash", "-lc", command)
+		cmd = exec.CommandContext(ctx, "cmd.exe", "/C", command)
 	} else {
 		cmd = exec.CommandContext(ctx, "/bin/sh", "-lc", command)
 	}

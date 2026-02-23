@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"carrier/daemon/internal/manifest"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -135,16 +134,6 @@ func searchSubstring(s, substr string) bool {
 	return false
 }
 
-func writeMemInfoFixture(t *testing.T, memKB int) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "meminfo")
-	content := fmt.Sprintf("MemTotal:       %d kB\n", memKB)
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("write meminfo fixture: %v", err)
-	}
-	return path
-}
-
 func TestCatalogJSONHealthcheckMatchesGeneratedManifest(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "catalog", "openclaw.manifest.json")
 	fileManifest, err := manifest.LoadFile(path)
@@ -168,138 +157,98 @@ func TestCatalogJSONHealthcheckMatchesGeneratedManifest(t *testing.T) {
 func TestGetInstallCommand_Default(t *testing.T) {
 	// Ensure dev mode is off so we get the production command.
 	t.Setenv("CARRIER_DEV_MODE", "")
-	t.Setenv(openClawInstallMethodEnv, "")
-	t.Setenv(openClawDisableInstallFallbackEnv, "")
-	t.Setenv(openClawInstallMemInfoPathEnv, writeMemInfoFixture(t, 8*1024*1024))
 
 	cmd := getInstallCommand()
-
-	for _, want := range []string{
-		"curl",
-		"-fsSL",
-		`--proto "=https"`,
-		"--tlsv1.2",
-		installScriptURL,
-		"--install-method git",
-		"--no-onboard",
-	} {
-		if !strings.Contains(cmd, want) {
-			t.Errorf("install command missing %q\ngot: %s", want, cmd)
-		}
-	}
 
 	switch runtime.GOOS {
 	case "windows":
-		for _, want := range []string{
-			"try {",
-			"GetTempFileName",
-			".ps1",
-			"Move-Item",
-			"powershell -NoProfile -ExecutionPolicy Bypass -File",
-			"InstallMethod 'npm'",
-			"$env:NODE_OPTIONS='--max-old-space-size=384'",
-		} {
-			t.Run(want, func(t *testing.T) {
-				if !strings.Contains(cmd, want) {
-					t.Errorf("windows fallback command missing %q\ngot: %s", want, cmd)
-				}
-			})
+		if !strings.Contains(cmd, installPS1URL) && !strings.Contains(cmd, installCMDURL) {
+			t.Fatalf("windows install command should use official script URL, got: %s", cmd)
 		}
 	default:
 		for _, want := range []string{
-			"CARGO_BUILD_JOBS=1",
-			`NODE_OPTIONS="--max-old-space-size=384"`,
-			"OPENCLAW_NPM_LOGLEVEL=warn",
-			"SHARP_IGNORE_GLOBAL_LIBVIPS=1",
+			"sh -c",
 			"mktemp",
 			"curl -fsSL",
-			"--install-method npm --no-onboard",
+			`--proto "=https"`,
+			"--tlsv1.2",
+			installScriptURL,
+			"-o \"$tmp\"",
+			"bash \"$tmp\"",
+			"--no-onboard",
+			"--no-prompt",
 		} {
 			if !strings.Contains(cmd, want) {
-				t.Errorf("unix default command should include fallback token %q\ngot: %s", want, cmd)
+				t.Errorf("unix default install command missing %q\ngot: %s", want, cmd)
 			}
+		}
+		if strings.Contains(cmd, "| bash") {
+			t.Fatalf("unix command should not pipe directly into shell, got: %s", cmd)
+		}
+		if strings.Contains(cmd, "--install-method") || strings.Contains(cmd, " npm ") || strings.Contains(cmd, "||") {
+			t.Fatalf("unix command should not include installer fallback/method switching, got: %s", cmd)
 		}
 	}
 }
 
-func TestGetInstallCommand_ExplicitMethodDisablesFallback(t *testing.T) {
-	t.Setenv("CARRIER_DEV_MODE", "")
-	t.Setenv(openClawInstallMethodEnv, "npm")
+func TestResolveWindowsOpenClawInstallCommand_PowerShellPreferred(t *testing.T) {
+	cmd := resolveWindowsOpenClawInstallCommand(func(name string) (string, error) {
+		if strings.EqualFold(name, "powershell") || strings.EqualFold(name, "powershell.exe") {
+			return `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`, nil
+		}
+		return "", os.ErrNotExist
+	})
 
-	cmd := getInstallCommand()
-
-	if !strings.Contains(cmd, "--install-method") || !strings.Contains(cmd, "npm") {
-		t.Fatalf("expected explicit install method in command, got: %s", cmd)
+	if !strings.Contains(cmd, "powershell -NoProfile -Command") {
+		t.Fatalf("expected powershell install command, got: %s", cmd)
 	}
-	if strings.Contains(cmd, "||") || strings.Contains(cmd, "try {") {
-		t.Fatalf("explicit install method should not auto-fallback, got: %s", cmd)
+	if !strings.Contains(cmd, installPS1URL) {
+		t.Fatalf("expected powershell install URL, got: %s", cmd)
 	}
-}
-
-func TestGetInstallCommand_DisableFallback(t *testing.T) {
-	t.Setenv("CARRIER_DEV_MODE", "")
-	t.Setenv(openClawInstallMethodEnv, "")
-	t.Setenv(openClawDisableInstallFallbackEnv, "1")
-	t.Setenv(openClawInstallMemInfoPathEnv, writeMemInfoFixture(t, 8*1024*1024))
-
-	cmd := getInstallCommand()
-
-	if !strings.Contains(cmd, "--install-method git") {
-		t.Fatalf("expected strict git install command, got: %s", cmd)
+	if !strings.Contains(cmd, "iwr -useb") || !strings.Contains(cmd, "-OutFile $tmp") {
+		t.Fatalf("expected powershell command to download script to tmp file, got: %s", cmd)
 	}
-	if strings.Contains(cmd, "||") || strings.Contains(cmd, "try {") {
-		t.Fatalf("fallback should be disabled, got: %s", cmd)
+	if !strings.Contains(cmd, "& $tmp") {
+		t.Fatalf("expected powershell command to execute tmp script file, got: %s", cmd)
 	}
-}
-
-func TestGetInstallCommand_UnsafeMethodFallsBackToDefault(t *testing.T) {
-	t.Setenv("CARRIER_DEV_MODE", "")
-	t.Setenv(openClawInstallMethodEnv, "git;rm -rf /")
-	t.Setenv(openClawDisableInstallFallbackEnv, "")
-	t.Setenv(openClawInstallMemInfoPathEnv, writeMemInfoFixture(t, 8*1024*1024))
-
-	cmd := getInstallCommand()
-
-	if strings.Contains(cmd, "rm -rf") {
-		t.Fatalf("unsafe install method must not be interpolated into command: %s", cmd)
+	if strings.Contains(cmd, "| iex") {
+		t.Fatalf("did not expect powershell pipe-to-iex flow, got: %s", cmd)
 	}
-	if !strings.Contains(cmd, "--install-method git") {
-		t.Fatalf("unsafe value should fall back to git command, got: %s", cmd)
+	if !strings.Contains(cmd, "$env:OPENCLAW_NO_ONBOARD='1'") {
+		t.Fatalf("expected powershell command to disable onboarding, got: %s", cmd)
+	}
+	if !strings.Contains(cmd, "$env:OPENCLAW_INSTALL_METHOD='npm'") {
+		t.Fatalf("expected powershell command to pin install method, got: %s", cmd)
+	}
+	if !strings.Contains(cmd, "$env:OPENCLAW_NO_PROMPT='1'") {
+		t.Fatalf("expected powershell command to disable prompts, got: %s", cmd)
 	}
 }
 
-func TestGetInstallCommand_ExplicitGitUsesCargoBuildJobs(t *testing.T) {
-	t.Setenv("CARRIER_DEV_MODE", "")
-	t.Setenv(openClawInstallMethodEnv, "git")
-	t.Setenv(openClawDisableInstallFallbackEnv, "1")
+func TestResolveWindowsOpenClawInstallCommand_CmdFallback(t *testing.T) {
+	cmd := resolveWindowsOpenClawInstallCommand(func(string) (string, error) {
+		return "", os.ErrNotExist
+	})
 
-	cmd := getInstallCommand()
-	if !strings.Contains(cmd, "--install-method git") {
-		t.Fatalf("expected git install method, got: %s", cmd)
+	if strings.Contains(cmd, "powershell -NoProfile -Command") {
+		t.Fatalf("did not expect powershell command in cmd fallback path: %s", cmd)
 	}
-	if !strings.Contains(cmd, "CARGO_BUILD_JOBS=1") {
-		t.Fatalf("expected explicit git path to include CARGO_BUILD_JOBS=1, got: %s", cmd)
+	for _, want := range []string{
+		"curl -fsSL",
+		`--proto "=https"`,
+		"--tlsv1.2",
+		installCMDURL,
+		"set \"TMPF=%TEMP%\\openclaw-install-%RANDOM%%RANDOM%.cmd\"",
+		"call \"%TMPF%\"",
+		"--no-onboard",
+		"del \"%TMPF%\"",
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("cmd fallback command missing %q: %s", want, cmd)
+		}
 	}
-	if !strings.Contains(cmd, "--max-old-space-size=384") {
-		t.Fatalf("expected explicit git path to include NODE_OPTIONS max-old-space-size, got: %s", cmd)
-	}
-}
-
-func TestGetInstallCommand_LowMemoryDefaultsToNPM(t *testing.T) {
-	t.Setenv("CARRIER_DEV_MODE", "")
-	t.Setenv(openClawInstallMethodEnv, "")
-	t.Setenv(openClawDisableInstallFallbackEnv, "")
-	t.Setenv(openClawInstallMemInfoPathEnv, writeMemInfoFixture(t, 938840))
-
-	cmd := getInstallCommand()
-	if !strings.Contains(cmd, "--install-method npm") {
-		t.Fatalf("expected low-memory default to npm install method, got: %s", cmd)
-	}
-	if strings.Contains(cmd, "--install-method git") {
-		t.Fatalf("low-memory default should not keep git as primary method, got: %s", cmd)
-	}
-	if strings.Contains(cmd, "||") || strings.Contains(cmd, "try {") {
-		t.Fatalf("low-memory npm path should not include git fallback orchestration, got: %s", cmd)
+	if strings.Contains(cmd, "| iex") {
+		t.Fatalf("cmd fallback should not use powershell iex pipe flow: %s", cmd)
 	}
 }
 

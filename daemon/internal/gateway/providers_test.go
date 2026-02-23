@@ -413,11 +413,11 @@ func TestToGatewayInput(t *testing.T) {
 		Provider:  "discord",
 		ChatID:    "ch",
 		RequestID: "req-2",
-		Command:   "/install",
+		Command:   "/add",
 		Args:      []string{"openclaw"},
 	}
 	got2 := ToGatewayInput(nc2)
-	if got2 != "discord ch req-2 /install openclaw" {
+	if got2 != "discord ch req-2 /add openclaw" {
 		t.Errorf("ToGatewayInput with args: %q", got2)
 	}
 }

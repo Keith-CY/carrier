@@ -555,6 +555,61 @@ func TestInstallRetriesAfterLLMRepairAction(t *testing.T) {
 	}
 }
 
+func TestInstallSupportsMultipleAutoRepairRounds(t *testing.T) {
+	runner := &fakeRunner{
+		sequence: map[string][]runResult{
+			"install-openclaw": {
+				{result: commandexec.Result{ExitCode: 1, CombinedOutput: "install failed round 0"}, err: errors.New("install round 0 failed")},
+				{result: commandexec.Result{ExitCode: 1, CombinedOutput: "install failed round 1"}, err: errors.New("install round 1 failed")},
+				{result: commandexec.Result{ExitCode: 0, CombinedOutput: "install success round 2"}, err: nil},
+			},
+		},
+		results: map[string]runResult{
+			"cd '/tmp/openclaw-workspace' && pnpm install": {result: commandexec.Result{ExitCode: 0, CombinedOutput: "pnpm repaired"}, err: nil},
+		},
+	}
+	checker := &fakeChecker{}
+	svc := newServiceForTest(t, runner, checker)
+
+	triageCalls := 0
+	svc.triager = &fakeTriager{
+		onAnalyze: func(_ context.Context, e baseagent.Evidence) (baseagent.TriageResult, error) {
+			triageCalls++
+			if !strings.Contains(e.LastError, "install round") {
+				t.Fatalf("unexpected triage error context: %q", e.LastError)
+			}
+			return baseagent.TriageResult{
+				Resolved:                false,
+				Summary:                 "Repair dependencies and retry install",
+				SuggestedActions:        []string{"Run pnpm install", "Retry install"},
+				RequiresRemoteDiagnosis: false,
+				RepairAction: &baseagent.RepairAction{
+					Command:    "pnpm install",
+					TargetPath: "/tmp/openclaw-workspace",
+				},
+			}, nil
+		},
+	}
+
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("install should succeed after multiple auto-repair rounds, got %v", err)
+	}
+	if triageCalls != 2 {
+		t.Fatalf("expected 2 triage rounds before success, got %d", triageCalls)
+	}
+
+	wantCalls := []string{
+		"install-openclaw",
+		"cd '/tmp/openclaw-workspace' && pnpm install",
+		"install-openclaw",
+		"cd '/tmp/openclaw-workspace' && pnpm install",
+		"install-openclaw",
+	}
+	if !reflect.DeepEqual(runner.calls, wantCalls) {
+		t.Fatalf("runner calls = %#v, want %#v", runner.calls, wantCalls)
+	}
+}
+
 func TestInstallSkipsNonAllowlistedRepairAction(t *testing.T) {
 	runner := &fakeRunner{
 		results: map[string]runResult{

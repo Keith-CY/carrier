@@ -277,39 +277,39 @@ func TestHandleCommand_Agents_Success(t *testing.T) {
 	}
 }
 
-func TestHandleCommand_Install_GuiOnly(t *testing.T) {
+func TestHandleCommand_Add_GuiOnly(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
 	defer srv.Close()
 
 	tok := pairAndGetSession(sessions, "telegram", "123")
 	cmd := &GatewayCommand{
 		Provider: "telegram", ChatID: "123", RequestID: "r1",
-		Name: CmdInstall, Args: []string{"myagent"}, SessionToken: tok,
+		Name: CmdAdd, Args: []string{"myagent"}, SessionToken: tok,
 	}
 	resp := HandleCommand(context.Background(), cmd, dc, sessions, downloads, nil, onboard)
 	if resp.Result != "error" {
 		t.Fatalf("expected error, got %s: %s", resp.Result, resp.Message)
 	}
-	if resp.ErrorCode != "E_INSTALL_GUI_ONLY" {
-		t.Fatalf("expected E_INSTALL_GUI_ONLY, got %s", resp.ErrorCode)
+	if resp.ErrorCode != "E_ADD_GUI_ONLY" {
+		t.Fatalf("expected E_ADD_GUI_ONLY, got %s", resp.ErrorCode)
 	}
 	if !strings.Contains(resp.Message, "Carrier GUI") {
 		t.Fatalf("expected GUI guidance, got: %q", resp.Message)
 	}
 }
 
-func TestHandleCommand_Install_NoArgs(t *testing.T) {
+func TestHandleCommand_Add_NoArgs(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(t, nil)
 	defer srv.Close()
 
 	tok := pairAndGetSession(sessions, "telegram", "123")
 	cmd := &GatewayCommand{
 		Provider: "telegram", ChatID: "123", RequestID: "r1",
-		Name: CmdInstall, Args: []string{}, SessionToken: tok,
+		Name: CmdAdd, Args: []string{}, SessionToken: tok,
 	}
 	resp := HandleCommand(context.Background(), cmd, dc, sessions, downloads, nil, onboard)
-	if resp.ErrorCode != "E_INSTALL_GUI_ONLY" {
-		t.Errorf("expected E_INSTALL_GUI_ONLY, got %s", resp.ErrorCode)
+	if resp.ErrorCode != "E_ADD_GUI_ONLY" {
+		t.Errorf("expected E_ADD_GUI_ONLY, got %s", resp.ErrorCode)
 	}
 	if !strings.Contains(resp.Message, "Carrier GUI") {
 		t.Fatalf("expected GUI guidance, got: %q", resp.Message)

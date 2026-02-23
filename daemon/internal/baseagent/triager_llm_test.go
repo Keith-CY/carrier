@@ -2,6 +2,7 @@ package baseagent
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 )
 
@@ -42,8 +43,7 @@ func TestParseLLMTriageResponse_WithMarkdownWrapper(t *testing.T) {
 }
 
 func TestLLMTriagerAnalyze_FallbackWhenLLMUnavailable(t *testing.T) {
-	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "")
-	t.Setenv("CARRIER_DEFAULT_MODEL_ID", "")
+	t.Setenv("CARRIER_CONFIG", filepath.Join(t.TempDir(), "missing-config.v2.json"))
 
 	triager := NewLLMTriager(NoopTriager{})
 	result, err := triager.Analyze(context.Background(), Evidence{

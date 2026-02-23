@@ -103,6 +103,31 @@ func Save(cfg *Config) (string, error) {
 	return path, nil
 }
 
+// ResolveDefaultModel returns the selected default model entry in model_list.
+// Selection order:
+// 1) model_name matching default_model (case-insensitive)
+// 2) first model entry as fallback
+func ResolveDefaultModel(cfg *Config) (*Model, error) {
+	if cfg == nil {
+		return nil, errors.New("nil config")
+	}
+	if len(cfg.ModelList) == 0 {
+		return nil, errors.New("empty model_list")
+	}
+
+	pick := cfg.ModelList[0]
+	defaultName := strings.TrimSpace(cfg.DefaultModel)
+	if defaultName != "" {
+		for _, m := range cfg.ModelList {
+			if strings.EqualFold(strings.TrimSpace(m.ModelName), defaultName) {
+				pick = m
+				break
+			}
+		}
+	}
+	return &pick, nil
+}
+
 func setEnvIfUnset(key, value string) error {
 	key = strings.TrimSpace(key)
 	value = strings.TrimSpace(value)
@@ -170,37 +195,5 @@ func ApplyGatewayEnvironment(cfg *Config) error {
 			return err
 		}
 	}
-
-	// Expose default model context for components that need runtime inference.
-	defaultModel := pickDefaultModel(cfg)
-	if defaultModel != nil {
-		if err := setEnvIfUnset("CARRIER_DEFAULT_MODEL_NAME", defaultModel.ModelName); err != nil {
-			return err
-		}
-		if err := setEnvIfUnset("CARRIER_DEFAULT_MODEL_ID", defaultModel.Model); err != nil {
-			return err
-		}
-		if err := setEnvIfUnset("CARRIER_DEFAULT_PROVIDER_ID", defaultModel.ProviderID); err != nil {
-			return err
-		}
-		if err := setEnvIfUnset("CARRIER_DEFAULT_PROVIDER_ENV", defaultModel.EnvVar); err != nil {
-			return err
-		}
-	}
 	return nil
-}
-
-func pickDefaultModel(cfg *Config) *Model {
-	if cfg == nil || len(cfg.ModelList) == 0 {
-		return nil
-	}
-	defaultName := strings.TrimSpace(cfg.DefaultModel)
-	if defaultName != "" {
-		for i := range cfg.ModelList {
-			if strings.EqualFold(strings.TrimSpace(cfg.ModelList[i].ModelName), defaultName) {
-				return &cfg.ModelList[i]
-			}
-		}
-	}
-	return &cfg.ModelList[0]
 }

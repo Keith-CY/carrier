@@ -90,6 +90,12 @@ func Run() {
 	memStore := memory.NewStore(memory.WithRootDir(memRoot))
 	opts = append(opts, lifecycle.WithMemoryStore(memStore))
 
+	statePath, err := defaultLifecycleStatePath()
+	if err != nil {
+		log.Fatalf("resolve lifecycle state path: %v", err)
+	}
+	opts = append(opts, lifecycle.WithStateFile(statePath))
+
 	svc := lifecycle.NewService(baseagent.NewLLMTriager(baseagent.NoopTriager{}), opts...)
 	baseRuntime := baseagent.NewRuntime(newLifecycleAgentServiceAdapter(svc), memStore)
 
@@ -925,6 +931,23 @@ func defaultMemoryRoot() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".config", "carrier", "memory"), nil
+}
+
+func defaultLifecycleStatePath() (string, error) {
+	if raw := strings.TrimSpace(os.Getenv("CARRIER_LIFECYCLE_STATE_FILE")); raw != "" {
+		return raw, nil
+	}
+	if configDir, err := userConfigDirFunc(); err == nil {
+		if trimmed := strings.TrimSpace(configDir); trimmed != "" {
+			return filepath.Join(trimmed, "carrier", "lifecycle-state.json"), nil
+		}
+	}
+
+	home, err := resolveDaemonHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "carrier", "lifecycle-state.json"), nil
 }
 
 func resolveDaemonHomeDir() (string, error) {

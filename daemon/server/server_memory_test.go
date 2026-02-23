@@ -84,3 +84,43 @@ func TestResolveDaemonHomeDirFallsBackToRoot(t *testing.T) {
 		t.Fatalf("home = %q, want /root", home)
 	}
 }
+
+func TestDefaultLifecycleStatePathUsesConfiguredOverride(t *testing.T) {
+	resetMemoryRootResolvers(t)
+	custom := filepath.Join(t.TempDir(), "state", "lifecycle.json")
+	t.Setenv("CARRIER_LIFECYCLE_STATE_FILE", custom)
+
+	path, err := defaultLifecycleStatePath()
+	if err != nil {
+		t.Fatalf("defaultLifecycleStatePath error: %v", err)
+	}
+	if path != custom {
+		t.Fatalf("path = %q, want %q", path, custom)
+	}
+}
+
+func TestDefaultLifecycleStatePathFallsBackToHomeConfigDir(t *testing.T) {
+	resetMemoryRootResolvers(t)
+	t.Setenv("CARRIER_LIFECYCLE_STATE_FILE", "")
+	t.Setenv("HOME", "")
+
+	userConfigDirFunc = func() (string, error) {
+		return "", errors.New("neither $XDG_CONFIG_HOME nor $HOME are defined")
+	}
+	home := filepath.Join(t.TempDir(), "home")
+	currentUserFunc = func() (*user.User, error) {
+		return &user.User{HomeDir: home}, nil
+	}
+	userHomeDirFunc = func() (string, error) {
+		return "", errors.New("$HOME is not defined")
+	}
+
+	path, err := defaultLifecycleStatePath()
+	if err != nil {
+		t.Fatalf("defaultLifecycleStatePath error: %v", err)
+	}
+	want := filepath.Join(home, ".config", "carrier", "lifecycle-state.json")
+	if path != want {
+		t.Fatalf("path = %q, want %q", path, want)
+	}
+}

@@ -19,7 +19,7 @@ const (
 	baseAgentActiveMemoryPrefix = "carrier.base.active."
 )
 
-var agentActionPattern = regexp.MustCompile(`(?i)\b(install|uninstall|start|stop|status|logs|upgrade|diagnose)\s+([a-zA-Z0-9][a-zA-Z0-9._-]*)\b`)
+var agentActionPattern = regexp.MustCompile(`(?i)\b(uninstall|start|stop|status|logs|upgrade|diagnose)\s+([a-zA-Z0-9][a-zA-Z0-9._-]*)\b`)
 
 type ChatRequest struct {
 	Provider  string `json:"provider"`
@@ -143,7 +143,9 @@ func (r *Runtime) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 func wantsListAgents(lower string) bool {
 	return strings.Contains(lower, "list agents") ||
 		strings.Contains(lower, "show agents") ||
-		strings.Contains(lower, "agents") && !strings.Contains(lower, "install ")
+		strings.Contains(lower, "agents") &&
+			!strings.Contains(lower, "install ") &&
+			!strings.Contains(lower, "add ")
 }
 
 func renderAgentList(states []AgentState) string {
@@ -160,11 +162,6 @@ func renderAgentList(states []AgentState) string {
 
 func (r *Runtime) executeAgentAction(ctx context.Context, action, agentID string) (ChatResponse, error) {
 	switch action {
-	case "install":
-		return ChatResponse{
-			Message: fmt.Sprintf("Install for %s is disabled in chat. Open Carrier GUI to install and onboard agents, then manage them here.", agentID),
-			Action:  "install",
-		}, nil
 	case "uninstall":
 		if err := r.svc.Uninstall(ctx, agentID); err != nil {
 			return ChatResponse{}, err

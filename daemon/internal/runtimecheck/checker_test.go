@@ -8,7 +8,7 @@ import (
 	"carrier/daemon/internal/manifest"
 )
 
-func TestWindowsRequiresWSL(t *testing.T) {
+func TestWindowsLocalBinaryDoesNotRequireWSL(t *testing.T) {
 	checker := HostChecker{
 		GOOS: "windows",
 		Lookup: LookupFunc(func(string) (string, error) {
@@ -17,19 +17,8 @@ func TestWindowsRequiresWSL(t *testing.T) {
 	}
 
 	err := checker.Check(manifest.Manifest{Runtime: manifest.RuntimeSpec{Type: manifest.RuntimeTypeLocalBinary}})
-	if err == nil {
-		t.Fatal("expected missing WSL prerequisite error")
-	}
-
-	var preErr *PrerequisiteError
-	if !errors.As(err, &preErr) {
-		t.Fatalf("expected PrerequisiteError, got %T", err)
-	}
-	if len(preErr.Issues) != 1 {
-		t.Fatalf("expected 1 issue, got %d", len(preErr.Issues))
-	}
-	if preErr.Issues[0].Code != IssueCodeWSL2Missing {
-		t.Fatalf("expected issue code %s, got %s", IssueCodeWSL2Missing, preErr.Issues[0].Code)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
 	}
 }
 

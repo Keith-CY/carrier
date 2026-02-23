@@ -675,7 +675,7 @@ func TestProvidersEndpoint_CarrierDefaultProviderReusable(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
 	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
-	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "openai-codex")
+	writeGatewayDefaultProviderConfig(t, "openai-codex", "openai-codex/gpt-5.3-codex", "OPENAI_CODEX_TOKEN")
 	if _, err := saveProviderCredential("openai-codex", "codex-token-test"); err != nil {
 		t.Fatalf("saveProviderCredential: %v", err)
 	}
@@ -1133,7 +1133,7 @@ func TestAddEndpoint_OpenClawSuccess_AutoSelectsProviderAndChannel(t *testing.T)
 	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
 	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
 	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
-	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "openai-codex")
+	writeGatewayDefaultProviderConfig(t, "openai-codex", "openai-codex/gpt-5.3-codex", "OPENAI_CODEX_TOKEN")
 	t.Setenv("CARRIER_TELEGRAM_BOT_TOKEN", "tg-auto-token")
 
 	if _, err := saveProviderCredential("openai-codex", "codex-auto-token"); err != nil {

@@ -21,7 +21,7 @@ func TestOnboardSelectProvider_ReuseCarrierDefault(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
 	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
-	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "openai-codex")
+	writeGatewayDefaultProviderConfig(t, "openai-codex", "openai-codex/gpt-5.3-codex", "OPENAI_CODEX_TOKEN")
 
 	if _, err := saveProviderCredential("openai-codex", "codex-token-1"); err != nil {
 		t.Fatalf("saveProviderCredential: %v", err)

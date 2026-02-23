@@ -20,7 +20,7 @@ const (
 	CmdPair            CommandName = "/pair"
 	CmdChat            CommandName = "/chat"
 	CmdAgents          CommandName = "/agents"
-	CmdInstall         CommandName = "/install"
+	CmdAdd             CommandName = "/add"
 	CmdUninstall       CommandName = "/uninstall"
 	CmdStart           CommandName = "/start"
 	CmdStop            CommandName = "/stop"
@@ -36,7 +36,7 @@ var validCommands = map[CommandName]struct{}{
 	CmdPair:            {},
 	CmdChat:            {},
 	CmdAgents:          {},
-	CmdInstall:         {},
+	CmdAdd:             {},
 	CmdUninstall:       {},
 	CmdStart:           {},
 	CmdStop:            {},
@@ -170,8 +170,8 @@ func HandleCommand(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClien
 		return handleChat(ctx, cmd, daemon, actor)
 	case CmdAgents:
 		return handleAgents(ctx, cmd, daemon, actor)
-	case CmdInstall:
-		return handleInstall(ctx, cmd, daemon, actor, onboard)
+	case CmdAdd:
+		return handleAdd(ctx, cmd, daemon, actor, onboard)
 	case CmdUninstall:
 		return handleUninstall(ctx, cmd, daemon, actor)
 	case CmdStart:
@@ -326,8 +326,8 @@ func handleAgents(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient
 	}
 }
 
-func handleInstall(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, actor string, onboard *OnboardStore) GatewayResponse {
-	return installViaGUIOnlyResp(cmd.RequestID)
+func handleAdd(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, actor string, onboard *OnboardStore) GatewayResponse {
+	return addViaGUIOnlyResp(cmd.RequestID)
 }
 
 func handleUninstall(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, actor string) GatewayResponse {
@@ -574,8 +574,8 @@ func usageResp(requestID, usage string) GatewayResponse {
 	return errResp(requestID, "E_USAGE", "usage: "+usage)
 }
 
-func installViaGUIOnlyResp(requestID string) GatewayResponse {
-	return errResp(requestID, "E_INSTALL_GUI_ONLY", "Installation is disabled in chat to protect credentials. Open Carrier GUI to install/onboard agents. Chat is for management commands only.")
+func addViaGUIOnlyResp(requestID string) GatewayResponse {
+	return errResp(requestID, "E_ADD_GUI_ONLY", "Add/install is disabled in chat to protect credentials. Open Carrier GUI to add/install and onboard agents. Chat is for management commands only.")
 }
 
 func onboardViaGUIOnlyResp(requestID string) GatewayResponse {
