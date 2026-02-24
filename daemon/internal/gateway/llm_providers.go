@@ -20,7 +20,7 @@ type LLMProvider struct {
 	AuthMode     AuthMode `json:"auth_mode"`
 	EnvVar       string   `json:"env_var,omitempty"`
 	ExampleModel string   `json:"example_model,omitempty"`
-	Category     string   `json:"category"` // "builtin", "custom" (legacy "local" bucket kept for compatibility)
+	Category     string   `json:"category"` // "builtin", "custom", "generic"
 	Description  string   `json:"description,omitempty"`
 }
 
@@ -57,9 +57,9 @@ var llmProviderCatalog = []LLMProvider{
 		ID:           "openai-compatible",
 		Name:         "OpenAI-Compatible (v1)",
 		AuthMode:     AuthModeNone,
-		EnvVar:       "VLLM_API_KEY",
+		EnvVar:       "OPENAI_COMPATIBLE_API_KEY",
 		ExampleModel: "openai-compatible/your-model-id",
-		Category:     "custom",
+		Category:     "generic",
 		Description:  "OpenAI v1-compatible endpoint",
 	},
 }
@@ -110,7 +110,7 @@ func LLMProvidersByCategory() map[string][]LLMProvider {
 	result := map[string][]LLMProvider{
 		"builtin": {},
 		"custom":  {},
-		"local":   {},
+		"generic": {},
 	}
 	for _, p := range llmProviderCatalog {
 		if _, ok := result[p.Category]; !ok {
