@@ -611,7 +611,7 @@ func TestProvidersEndpoint_OK(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected by_category map, got %T", body["by_category"])
 	}
-	for _, cat := range []string{"builtin", "custom", "local"} {
+	for _, cat := range []string{"builtin", "custom", "generic"} {
 		if _, ok := byCategory[cat]; !ok {
 			t.Errorf("missing category %q in by_category", cat)
 		}

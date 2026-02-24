@@ -297,7 +297,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			"by_category": map[string]interface{}{
 				"builtin": byCategory["builtin"],
 				"custom":  byCategory["custom"],
-				"local":   byCategory["local"],
+				"generic": byCategory["generic"],
 			},
 			"carrier_default_provider": carrierDefaultProvider,
 		})
