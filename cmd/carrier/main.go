@@ -97,9 +97,10 @@ type versionCommandOptions struct {
 }
 
 type versionInfo struct {
-	Version   string `json:"version"`
-	Commit    string `json:"commit"`
-	BuildDate string `json:"buildDate"`
+	Version    string `json:"version"`
+	Commit     string `json:"commit"`
+	BuildDate  string `json:"buildDate"`
+	GoVersion  string `json:"goVersion"`
 }
 
 type picoclawChannel struct {
@@ -626,6 +627,7 @@ func runVersionCommand(out io.Writer, opts versionCommandOptions) error {
 		Version:   carrierVersion,
 		Commit:    carrierCommit,
 		BuildDate: carrierBuildDate,
+		GoVersion: runtime.Version(),
 	}
 	if opts.JSON {
 		raw, err := json.MarshalIndent(info, "", "  ")
@@ -638,6 +640,7 @@ func runVersionCommand(out io.Writer, opts versionCommandOptions) error {
 	_, _ = fmt.Fprintf(out, "carrier %s\n", info.Version)
 	_, _ = fmt.Fprintf(out, "commit: %s\n", info.Commit)
 	_, _ = fmt.Fprintf(out, "build date: %s\n", info.BuildDate)
+	_, _ = fmt.Fprintf(out, "go version: %s\n", info.GoVersion)
 	return nil
 }
 
