@@ -277,8 +277,7 @@ func buildProviderListResponse(requestID string, agent *AgentState) GatewayRespo
 
 	categoryOrder := []struct{ key, label string }{
 		{"builtin", "☁️  Built-in (API key)"},
-		{"custom", "🔐 Custom / OAuth"},
-		{"local", "🖥️  Local (no auth)"},
+		{"custom", "🔐 Custom / Compatible"},
 	}
 
 	for _, cat := range categoryOrder {

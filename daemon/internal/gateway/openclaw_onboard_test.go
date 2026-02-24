@@ -89,7 +89,7 @@ func TestPrepareOpenclawManagedOnboard_RequiresOpenAIKey(t *testing.T) {
 		SelectedAgent:    "openclaw",
 		SelectedChannel:  "telegram",
 		ChannelToken:     "telegram-token-open",
-		SelectedProvider: "vllm",
+		SelectedProvider: "openai-compatible",
 		EnvVars:          map[string]string{},
 	}
 

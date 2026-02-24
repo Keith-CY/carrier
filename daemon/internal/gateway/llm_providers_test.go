@@ -35,7 +35,7 @@ func TestGetLLMProvider_KnownProviders(t *testing.T) {
 		{"anthropic", AuthModeAPIKey, "ANTHROPIC_API_KEY", "builtin"},
 		{"openai", AuthModeAPIKey, "OPENAI_API_KEY", "builtin"},
 		{"openai-codex", AuthModeOAuthDeviceCode, "OPENAI_CODEX_TOKEN", "custom"},
-		{"vllm", AuthModeNone, "VLLM_API_KEY", "local"},
+		{"openai-compatible", AuthModeNone, "VLLM_API_KEY", "custom"},
 	}
 
 	for _, tc := range cases {
@@ -67,6 +67,16 @@ func TestGetLLMProvider_Unknown(t *testing.T) {
 	p := GetLLMProvider("nonexistent-provider")
 	if p != nil {
 		t.Errorf("expected nil for unknown provider, got %+v", p)
+	}
+}
+
+func TestGetLLMProvider_LegacyAlias(t *testing.T) {
+	p := GetLLMProvider("vllm")
+	if p == nil {
+		t.Fatal("expected non-nil provider for vllm legacy alias")
+	}
+	if p.ID != "openai-compatible" {
+		t.Fatalf("expected vllm alias to resolve to openai-compatible, got %q", p.ID)
 	}
 }
 
@@ -112,28 +122,22 @@ func TestLLMProvidersByCategory(t *testing.T) {
 		t.Error("anthropic should be in builtin category")
 	}
 
-	local := bycat["local"]
-	foundVLLM := false
-	for _, p := range local {
-		if p.ID == "vllm" {
-			foundVLLM = true
-			break
-		}
-	}
-	if !foundVLLM {
-		t.Error("vllm should be in local category")
-	}
-
 	custom := bycat["custom"]
 	foundCodex := false
+	foundOpenAICompatible := false
 	for _, p := range custom {
 		if p.ID == "openai-codex" {
 			foundCodex = true
-			break
+		}
+		if p.ID == "openai-compatible" {
+			foundOpenAICompatible = true
 		}
 	}
 	if !foundCodex {
 		t.Error("openai-codex should be in custom category")
+	}
+	if !foundOpenAICompatible {
+		t.Error("openai-compatible should be in custom category")
 	}
 }
 

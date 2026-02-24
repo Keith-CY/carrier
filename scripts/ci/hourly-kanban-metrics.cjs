@@ -1,5 +1,7 @@
 "use strict";
 
+const { createHash } = require("node:crypto");
+
 const STATE_MARKER_REGEX = /<!--\s*carrier-1h-state:([A-Za-z0-9+/=]+)\s*-->/g;
 const STATE_MARKER_NAME = "carrier-1h-state";
 const DELTA_COMMENT_MARKER = "<!-- carrier-hourly-audit-delta -->";
@@ -7,6 +9,21 @@ const DELTA_COMMENT_MARKER = "<!-- carrier-hourly-audit-delta -->";
 function toFiniteNumber(value, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizePathList(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const unique = new Set();
+  for (const value of values) {
+    const normalized = String(value || "").trim().replace(/\\/g, "/");
+    if (!normalized) {
+      continue;
+    }
+    unique.add(normalized);
+  }
+  return Array.from(unique).sort();
 }
 
 function normalizeState(input) {
@@ -30,6 +47,7 @@ function normalizeState(input) {
         value: toFiniteNumber(item?.value, 0),
       }))
       .filter((item) => item.ts),
+    testFiles: normalizePathList(state.testFiles),
     prWatchdog,
   };
 }
@@ -205,6 +223,44 @@ function computePrWatchdog(openPrs, previousState, options = {}) {
   };
 }
 
+function classifySkipState(watchdogEntry) {
+  if (!watchdogEntry || typeof watchdogEntry !== "object") {
+    return "healthy-skip";
+  }
+  return watchdogEntry.stale ? "stale-skip" : "healthy-skip";
+}
+
+function computeTestFileDelta(previousState, currentTestFiles) {
+  const prev = normalizeState(previousState);
+  const previousList = normalizePathList(prev.testFiles);
+  const currentList = normalizePathList(currentTestFiles);
+  const previousSet = new Set(previousList);
+  const currentSet = new Set(currentList);
+
+  const added = currentList.filter((item) => !previousSet.has(item));
+  const removed = previousList.filter((item) => !currentSet.has(item));
+
+  return {
+    added,
+    removed,
+    changed: added.length > 0 || removed.length > 0,
+  };
+}
+
+function buildDirtyTreeSignal(paths, source) {
+  const files = normalizePathList(paths);
+  const payload = files.join("\n");
+  const fingerprint = payload
+    ? createHash("sha256").update(payload, "utf8").digest("hex").slice(0, 16)
+    : "";
+
+  return {
+    dirtyFileCount: files.length,
+    dirtyFingerprint: fingerprint,
+    source: String(source || "unknown"),
+  };
+}
+
 function isAutomationAuditPr(entry) {
   const headRef = String(entry?.headRef || "").toLowerCase();
   const title = String(entry?.title || "").toLowerCase();
@@ -230,6 +286,7 @@ function buildAuditDeltaComment(params) {
     docsSupersededTrend,
     mergeGate,
     watchdogEntry,
+    skipClassification,
   } = params || {};
 
   const safeMetrics = normalizeState({ metrics }).metrics;
@@ -254,6 +311,7 @@ function buildAuditDeltaComment(params) {
     "- PR #" + toFiniteNumber(watchdogEntry?.number, 0) + " unchanged_runs=" + toFiniteNumber(watchdogEntry?.unchangedRuns, 0) +
       ", open_hours=" + toFiniteNumber(watchdogEntry?.openHours, 0) +
       ", last_updated_hours=" + toFiniteNumber(watchdogEntry?.lastUpdatedHours, 0),
+    "- skip classification: " + String(skipClassification || classifySkipState(watchdogEntry)),
     "",
     "Existing open audit PR detected; posting delta update instead of opening a duplicate PR.",
   ].join("\n");
@@ -262,11 +320,14 @@ function buildAuditDeltaComment(params) {
 module.exports = {
   DELTA_COMMENT_MARKER,
   buildAuditDeltaComment,
+  buildDirtyTreeSignal,
   buildPrFingerprint,
+  classifySkipState,
   computeCleanRunGate,
   computeDocsSupersededTrend,
   computeMetricDrift,
   computePrWatchdog,
+  computeTestFileDelta,
   encodeStateMarker,
   extractStateFromBody,
   formatSignedDelta,

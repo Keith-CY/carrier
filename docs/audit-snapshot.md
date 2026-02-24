@@ -1,6 +1,7 @@
 # Architecture Audit Snapshot
 
 > Generated snapshot artifact. This file is audit output and does not replace `docs/current-architecture.md`.
+> Guardrail: audit automation must fail if it mutates `docs/current-architecture.md`.
 
 - **generated_at_utc**: 2026-02-23T21:01:50Z
 - **repository**: Keith-CY/carrier
@@ -8,8 +9,8 @@
 
 ## Metrics
 - **superseded/diverged docs**: 5
-- **docs TODO/TBD/FIXME**: 1
-- **core TODO/FIXME (excluding docs)**: 1
+- **docs marker hits**: 0
+- **core marker hits (excluding docs)**: 0
 - **test files discovered**: 97
 
 ## Core Architecture Docs

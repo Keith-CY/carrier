@@ -34,19 +34,24 @@ jobs:
           CARRIER_1H_STALE_PR_RUNS: ${{ vars.CARRIER_1H_STALE_PR_RUNS || '6' }}
           CARRIER_1H_TEST_FILES_ALERT: ${{ vars.CARRIER_1H_TEST_FILES_ALERT || '5' }}
           CARRIER_1H_DOCS_SUPERSEDED_WINDOW: ${{ vars.CARRIER_1H_DOCS_SUPERSEDED_WINDOW || '24' }}
+          CARRIER_1H_CLEAN_TREE_POLICY: ${{ vars.CARRIER_1H_CLEAN_TREE_POLICY || 'fail-fast' }}
         with:
           github-token: ${{ secrets.CARRIER_PROJECTS_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('node:fs');
             const path = require('node:path');
+            const { execSync } = require('node:child_process');
             const { classifyBucket } = require('./scripts/classify-bucket');
             const {
               DELTA_COMMENT_MARKER,
               buildAuditDeltaComment,
+              buildDirtyTreeSignal,
+              classifySkipState,
               computeCleanRunGate,
               computeDocsSupersededTrend,
               computeMetricDrift,
               computePrWatchdog,
+              computeTestFileDelta,
               extractStateFromBody,
               isAutomationAuditPr,
               upsertStateMarker,
@@ -67,9 +72,12 @@ jobs:
             const stalePrRuns = Math.max(1, Number.parseInt(process.env.CARRIER_1H_STALE_PR_RUNS || '6', 10));
             const testFilesAlertThreshold = Math.max(1, Number.parseInt(process.env.CARRIER_1H_TEST_FILES_ALERT || '5', 10));
             const docsSupersededWindow = Math.max(1, Number.parseInt(process.env.CARRIER_1H_DOCS_SUPERSEDED_WINDOW || '24', 10));
+            const cleanTreePolicy = String(process.env.CARRIER_1H_CLEAN_TREE_POLICY || 'fail-fast').trim().toLowerCase();
 
             const SKIP_WALK_DIRS = new Set(['.git', 'node_modules', '.next', '.turbo', 'dist', 'bin']);
             const TEST_FILE_PATTERN = /(_test\.go|\.test\.(c?js|mjs|ts)|\.spec\.(c?js|mjs|ts))$/i;
+            const TODO_MARKER_PATTERN = /\b(?:TODO|TBD|FIXME)\b/;
+            const TODO_EXCLUDE_PATHS = new Set(['docs/audit-snapshot.md']);
 
             const formatDate = (isoValue) => {
               const value = new Date(isoValue);
@@ -124,21 +132,33 @@ jobs:
               return out;
             };
 
-            const countTodoMentions = (dirs) => {
-              let count = 0;
+            const collectTodoHits = (dirs) => {
+              const hits = [];
               for (const dir of dirs) {
                 for (const filePath of walkFiles(dir)) {
+                  const normalizedPath = filePath.replace(/^\.\//, '').replace(/\\/g, '/');
+                  if (TODO_EXCLUDE_PATHS.has(normalizedPath) || normalizedPath.startsWith('docs/issue-triage/')) {
+                    continue;
+                  }
                   if (!filePath.endsWith('.md') && !filePath.endsWith('.go') && !filePath.endsWith('.ts') && !filePath.endsWith('.js') && !filePath.endsWith('.cjs')) {
                     continue;
                   }
+
                   const content = fs.readFileSync(filePath, 'utf8');
-                  const matches = content.match(/\bTODO\b/g);
-                  if (matches) {
-                    count += matches.length;
-                  }
+                  const lines = content.split(/\r?\n/);
+                  lines.forEach((line, index) => {
+                    if (!TODO_MARKER_PATTERN.test(line)) {
+                      return;
+                    }
+                    hits.push({
+                      path: normalizedPath,
+                      line: index + 1,
+                      snippet: line.trim().slice(0, 180),
+                    });
+                  });
                 }
               }
-              return count;
+              return hits;
             };
 
             const countSupersededDocs = () => {
@@ -155,20 +175,55 @@ jobs:
               return count;
             };
 
-            const countTestFiles = () => {
-              let count = 0;
+            const listTestFiles = () => {
+              const files = [];
               for (const filePath of walkFiles('.')) {
-                const normalized = filePath.replace(/^\.\//, '');
+                const normalized = filePath.replace(/^\.\//, '').replace(/\\/g, '/');
                 if (TEST_FILE_PATTERN.test(normalized)) {
-                  count += 1;
+                  files.push(normalized);
                 }
               }
-              return count;
+              return files.sort();
             };
 
             if (!Number.isInteger(targetIssueNumber) || targetIssueNumber <= 0) {
               core.setFailed(`Invalid CARRIER_1H_ISSUE_NUMBER: ${process.env.CARRIER_1H_ISSUE_NUMBER || '(unset)'}`);
               return;
+            }
+
+            const canonicalArchitecturePath = 'docs/current-architecture.md';
+            const canonicalArchitectureBaseline = fs.existsSync(canonicalArchitecturePath)
+              ? fs.readFileSync(canonicalArchitecturePath, 'utf8')
+              : '';
+
+            const parseDirtyFiles = (statusOutput) =>
+              String(statusOutput || '')
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .map((line) => {
+                  const payload = line.slice(3).trim();
+                  const renameIndex = payload.indexOf('->');
+                  return renameIndex >= 0 ? payload.slice(renameIndex + 2).trim() : payload;
+                })
+                .filter(Boolean);
+
+            const readDirtyTreeSignal = () => {
+              const rawStatus = execSync('git status --porcelain', { encoding: 'utf8' });
+              return buildDirtyTreeSignal(parseDirtyFiles(rawStatus), 'carrier-one-hour-kanban');
+            };
+
+            let dirtyTree = readDirtyTreeSignal();
+            if (dirtyTree.dirtyFileCount > 0) {
+              core.warning(`uncommitted-changes: ${JSON.stringify(dirtyTree)}`);
+              if (cleanTreePolicy === 'auto-stash') {
+                execSync('git stash push --include-untracked --message "carrier-1h-auto-stash"', { stdio: 'pipe' });
+                dirtyTree = readDirtyTreeSignal();
+                core.info(`auto-stash-applied: ${JSON.stringify(dirtyTree)}`);
+              } else {
+                core.setFailed(`clean-tree gate blocked run: ${JSON.stringify(dirtyTree)}`);
+                return;
+              }
             }
 
             const existingIssue = await gh.rest.issues.get({
@@ -237,11 +292,16 @@ jobs:
               ].map((value) => escapeCsv(value)).join(',')),
             ];
 
+            const docsTodoHits = collectTodoHits(['docs']);
+            const coreTodoHits = collectTodoHits(['daemon', 'gateway', 'cmd', 'webui']);
+            const testFiles = listTestFiles();
+            const testFileDelta = computeTestFileDelta(previousState, testFiles);
+
             const metrics = {
-              docs_todo: countTodoMentions(['docs']),
-              core_todo: countTodoMentions(['daemon', 'gateway', 'cmd', 'webui']),
+              docs_todo: docsTodoHits.length,
+              core_todo: coreTodoHits.length,
               docs_superseded: countSupersededDocs(),
-              test_files: countTestFiles(),
+              test_files: testFiles.length,
             };
 
             const drifts = {
@@ -299,6 +359,7 @@ jobs:
               now: new Date(),
             });
 
+            const automationAuditPrs = prWatchdog.entries.filter((entry) => isAutomationAuditPr(entry));
             const staleLines = prWatchdog.staleEntries.length
               ? prWatchdog.staleEntries
                 .map((entry) =>
@@ -306,6 +367,38 @@ jobs:
                 )
                 .join('\n')
               : '- None';
+
+            const formatHitLines = (hits, limit = 25) => {
+              if (!hits.length) {
+                return ['- none'];
+              }
+              const rows = hits.slice(0, limit).map((hit) => {
+                const snippet = String(hit.snippet || '').replace(/`/g, "'");
+                return `- \`${hit.path}:${hit.line}\` ${snippet}`;
+              });
+              if (hits.length > limit) {
+                rows.push(`- ... ${hits.length - limit} more`);
+              }
+              return rows;
+            };
+
+            const formatPathLines = (items, limit = 25) => {
+              if (!items.length) {
+                return ['- none'];
+              }
+              const rows = items.slice(0, limit).map((item) => `- \`${item}\``);
+              if (items.length > limit) {
+                rows.push(`- ... ${items.length - limit} more`);
+              }
+              return rows;
+            };
+
+            const skipClassifiedLines = automationAuditPrs.length
+              ? automationAuditPrs.map((entry) => {
+                const classification = classifySkipState(entry);
+                return `- PR #${entry.number}: \`${classification}\` (unchanged_runs=${entry.unchangedRuns}/${prWatchdog.thresholdRuns})`;
+              })
+              : ['- none'];
 
             const nowLabel = formatDate(new Date());
             const summaryBody = [
@@ -327,21 +420,43 @@ jobs:
               `- docs_todo: \`${metrics.docs_todo}\` (delta: \`${formatDelta(drifts.docsTodo.hasPrevious, drifts.docsTodo.delta)}\`)`,
               `- core_todo: \`${metrics.core_todo}\` (delta: \`${formatDelta(drifts.coreTodo.hasPrevious, drifts.coreTodo.delta)}\`)`,
               `- docs_superseded: \`${metrics.docs_superseded}\` (delta: \`${formatDelta(docsSupersededTrend.previousValue != null, docsSupersededTrend.delta)}\`)`,
-              `- test_files: \`${metrics.test_files}\` (delta: \`${formatDelta(drifts.testFiles.hasPrevious, drifts.testFiles.delta)}\`)${drifts.testFiles.alert ? ' ⚠️ drift alert' : ''}`,
+              `- test_files: \`${metrics.test_files}\` (delta: \`${formatDelta(drifts.testFiles.hasPrevious, drifts.testFiles.delta)}\`) (+${testFileDelta.added.length}/-${testFileDelta.removed.length})${drifts.testFiles.alert ? ' ⚠️ drift alert' : ''}`,
               docsSupersededTrend.regression
                 ? '- docs_superseded regression detected: value increased from previous run.'
                 : '- docs_superseded trend: stable/non-regressing.',
+              '',
+              '## TODO/FIXME Hit Details',
+              '- docs marker hits:',
+              ...formatHitLines(docsTodoHits),
+              '- core marker hits:',
+              ...formatHitLines(coreTodoHits),
+              '',
+              '## Test File Delta',
+              `- changed: \`${testFileDelta.changed ? 'true' : 'false'}\``,
+              '- added:',
+              ...formatPathLines(testFileDelta.added),
+              '- removed:',
+              ...formatPathLines(testFileDelta.removed),
               '',
               '## Merge Readiness Gate',
               `- clean conditions: docs_todo=0 && core_todo=0 -> \`${mergeGate.cleanRun ? 'true' : 'false'}\``,
               `- clean streak: \`${mergeGate.cleanRunStreak}/${mergeGate.requiredRuns}\``,
               `- ready for final review: \`${mergeGate.readyForReview ? 'true' : 'false'}\``,
               '',
+              '## Clean Tree Gate',
+              `- policy: \`${cleanTreePolicy}\``,
+              `- dirtyFileCount: \`${dirtyTree.dirtyFileCount}\``,
+              `- dirtyFingerprint: \`${dirtyTree.dirtyFingerprint || 'none'}\``,
+              `- source: \`${dirtyTree.source}\``,
+              '',
               '## Stale Open PR Watchdog',
               `- threshold (unchanged runs): \`${prWatchdog.thresholdRuns}\``,
               `- open PRs tracked: \`${prWatchdog.entries.length}\``,
               `- stale PRs: \`${prWatchdog.staleEntries.length}\``,
               staleLines,
+              '',
+              '## Existing Audit PR Skip Classification',
+              ...skipClassifiedLines,
               '',
               '## CSV Export',
               '',
@@ -356,11 +471,18 @@ jobs:
               metrics,
               cleanRunStreak: mergeGate.cleanRunStreak,
               docsSupersededHistory: docsSupersededTrend.history,
+              testFiles,
               prWatchdog: prWatchdog.nextMap,
             };
             const issueBody = upsertStateMarker(summaryBody, nextState);
 
-            const automationAuditPrs = prWatchdog.entries.filter((entry) => isAutomationAuditPr(entry));
+            const canonicalArchitectureCurrent = fs.existsSync(canonicalArchitecturePath)
+              ? fs.readFileSync(canonicalArchitecturePath, 'utf8')
+              : '';
+            if (canonicalArchitectureCurrent !== canonicalArchitectureBaseline) {
+              core.setFailed('guardrail: docs/current-architecture.md was modified during audit sync; aborting.');
+              return;
+            }
 
             if (dryRun) {
               core.info('Dry run mode enabled, skip remote write.');
@@ -385,6 +507,7 @@ jobs:
                 docsSupersededTrend,
                 mergeGate,
                 watchdogEntry: entry,
+                skipClassification: classifySkipState(entry),
               });
 
               const existingComments = await gh.paginate(

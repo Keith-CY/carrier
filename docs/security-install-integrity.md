@@ -28,8 +28,9 @@ eliminate drift risk. Automated tests in `manifests_test.go` enforce this:
 
 The manifest install command delegates to the official OpenClaw installer:
 
-- **Unix (Linux/macOS/WSL):** `curl -fsSL --proto "=https" --tlsv1.2 "https://openclaw.ai/install.sh" | bash`
-- **Windows:** `powershell -NoProfile -Command "irm 'https://openclaw.ai/install.ps1' | iex"`
+- **Unix (Linux/macOS/WSL):**
+  `tmp="$(mktemp)" && curl -fsSL --proto "=https" --tlsv1.2 "https://openclaw.ai/install.sh" -o "$tmp" && bash "$tmp"; code=$?; rm -f "$tmp"; exit $code`
+- **Windows:** download installer script to a temporary file, execute it, and delete the file.
 
 Integrity verification is handled by the upstream installer.
 

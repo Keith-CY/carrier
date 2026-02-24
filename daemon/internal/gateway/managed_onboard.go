@@ -314,6 +314,8 @@ func mapCarrierProviderToManagedProvider(providerID string) string {
 	switch strings.ToLower(strings.TrimSpace(providerID)) {
 	case "openai-codex":
 		return "openai"
+	case "openai-compatible", "vllm", "openai-v1":
+		return "openai"
 	default:
 		return strings.TrimSpace(providerID)
 	}

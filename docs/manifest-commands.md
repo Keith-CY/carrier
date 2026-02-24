@@ -25,14 +25,13 @@ Platform keys correspond to Go `runtime.GOOS` values. If no platform match is fo
 
 ### Install
 
-The install command uses npm as the primary installation method with a binary fallback:
+The install command uses the official OpenClaw installer and downloads scripts to a tmpfile before execution:
 
 ```bash
-# Primary (all platforms):
-npm install -g openclaw
-
-# Fallback (Linux/macOS only):
-curl -fsSL https://raw.githubusercontent.com/Keith-CY/carrier/main/scripts/install.sh | bash
+# Linux/macOS:
+tmp_file="$(mktemp -t openclaw-install.XXXXXX)" \
+  && curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh -o "$tmp_file" \
+  && bash "$tmp_file"; code=$?; rm -f "$tmp_file"; exit $code
 ```
 
 ### Start
@@ -59,7 +58,7 @@ wsl.exe bash -lc 'openclaw --stop'
 
 ### Upgrade
 
-Same pattern as install, using `npm update -g` with binary fallback.
+Same pattern as install, using the official installer script via tmpfile execution.
 
 ## Constraints
 
