@@ -6,10 +6,13 @@ const assert = require("node:assert/strict");
 const {
   DELTA_COMMENT_MARKER,
   buildAuditDeltaComment,
+  buildDirtyTreeSignal,
+  classifySkipState,
   computeCleanRunGate,
   computeDocsSupersededTrend,
   computeMetricDrift,
   computePrWatchdog,
+  computeTestFileDelta,
   extractStateFromBody,
   formatSignedDelta,
   isAutomationAuditPr,
@@ -25,6 +28,10 @@ test("state marker roundtrip preserves metrics and streak", () => {
       test_files: 4,
     },
     cleanRunStreak: 5,
+    testFiles: [
+      "daemon/internal/lifecycle/service_test.go",
+      "gateway/src/index.test.ts",
+    ],
   };
 
   const body = upsertStateMarker("# header", original);
@@ -35,6 +42,7 @@ test("state marker roundtrip preserves metrics and streak", () => {
   assert.equal(parsed.metrics.docs_superseded, 3);
   assert.equal(parsed.metrics.test_files, 4);
   assert.equal(parsed.cleanRunStreak, 5);
+  assert.deepEqual(parsed.testFiles, original.testFiles);
 });
 
 test("computeCleanRunGate increments and resets streak", () => {
@@ -134,6 +142,43 @@ test("formatSignedDelta exports stable signed formatting", () => {
   assert.equal(formatSignedDelta(5, false), "n/a");
 });
 
+test("computeTestFileDelta reports added/removed names", () => {
+  const previousState = {
+    testFiles: [
+      "a.test.ts",
+      "daemon/internal/lifecycle/service_test.go",
+    ],
+  };
+  const current = [
+    "daemon/internal/lifecycle/service_test.go",
+    "gateway/src/index.test.ts",
+  ];
+
+  const delta = computeTestFileDelta(previousState, current);
+  assert.equal(delta.changed, true);
+  assert.deepEqual(delta.added, ["gateway/src/index.test.ts"]);
+  assert.deepEqual(delta.removed, ["a.test.ts"]);
+});
+
+test("classifySkipState maps watchdog stale status", () => {
+  assert.equal(classifySkipState({ stale: true }), "stale-skip");
+  assert.equal(classifySkipState({ stale: false }), "healthy-skip");
+  assert.equal(classifySkipState(null), "healthy-skip");
+});
+
+test("buildDirtyTreeSignal returns structured machine-friendly fields", () => {
+  const signal = buildDirtyTreeSignal([
+    " gateway/src/index.ts ",
+    "daemon/internal/gateway/server.go",
+    "gateway/src/index.ts",
+  ], "hourly-kanban");
+
+  assert.equal(signal.dirtyFileCount, 2);
+  assert.equal(signal.source, "hourly-kanban");
+  assert.equal(typeof signal.dirtyFingerprint, "string");
+  assert.equal(signal.dirtyFingerprint.length, 16);
+});
+
 test("buildAuditDeltaComment includes marker and key metrics", () => {
   const comment = buildAuditDeltaComment({
     generatedAt: "2026-02-22T08:00:00Z",
@@ -146,10 +191,12 @@ test("buildAuditDeltaComment includes marker and key metrics", () => {
     docsSupersededTrend: { previousValue: 4, delta: 0 },
     mergeGate: { cleanRunStreak: 3, requiredRuns: 3, readyForReview: true },
     watchdogEntry: { number: 1273, unchangedRuns: 6, openHours: 8, lastUpdatedHours: 1 },
+    skipClassification: "stale-skip",
   });
 
   assert.ok(comment.includes(DELTA_COMMENT_MARKER));
   assert.ok(comment.includes("docs_todo: 0"));
   assert.ok(comment.includes("ready for final review: yes"));
   assert.ok(comment.includes("PR #1273"));
+  assert.ok(comment.includes("skip classification: stale-skip"));
 });

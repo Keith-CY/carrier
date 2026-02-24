@@ -177,7 +177,7 @@ func TestOnboardSelectProvider_ValidProvider(t *testing.T) {
 	}
 }
 
-func TestOnboardSelectProvider_LocalProvider_AutoAdvance(t *testing.T) {
+func TestOnboardSelectProvider_OpenAICompatible_AutoAdvance(t *testing.T) {
 	s := NewOnboardStore()
 	key := "telegram:3"
 	s.start(key)
@@ -186,13 +186,13 @@ func TestOnboardSelectProvider_LocalProvider_AutoAdvance(t *testing.T) {
 		sess.SelectedAgent = "openclaw"
 	})
 
-	resp := onboardSelectProvider("req-1", key, "vllm", s)
+	resp := onboardSelectProvider("req-1", key, "openai-compatible", s)
 	if resp.Result != "ok" {
 		t.Errorf("expected ok, got: %+v", resp)
 	}
 	sess := s.get(key)
 	if sess.Step != OnboardAuthConfigured {
-		t.Errorf("vllm should auto-advance to auth_configured, got %q", sess.Step)
+		t.Errorf("openai-compatible should auto-advance to auth_configured, got %q", sess.Step)
 	}
 	if !strings.Contains(strings.ToLower(resp.Message), "no auth") {
 		t.Errorf("expected 'no auth' message, got: %q", resp.Message)

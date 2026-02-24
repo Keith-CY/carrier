@@ -1,5 +1,7 @@
 package gateway
 
+import "strings"
+
 // AuthMode describes how an LLM provider authenticates.
 type AuthMode string
 
@@ -18,7 +20,7 @@ type LLMProvider struct {
 	AuthMode     AuthMode `json:"auth_mode"`
 	EnvVar       string   `json:"env_var,omitempty"`
 	ExampleModel string   `json:"example_model,omitempty"`
-	Category     string   `json:"category"` // "builtin", "custom", "local"
+	Category     string   `json:"category"` // "builtin", "custom" (legacy "local" bucket kept for compatibility)
 	Description  string   `json:"description,omitempty"`
 }
 
@@ -52,12 +54,12 @@ var llmProviderCatalog = []LLMProvider{
 		Description:  "OpenAI Codex via OAuth device code flow",
 	},
 	{
-		ID:           "vllm",
+		ID:           "openai-compatible",
 		Name:         "OpenAI-Compatible (v1)",
 		AuthMode:     AuthModeNone,
 		EnvVar:       "VLLM_API_KEY",
-		ExampleModel: "vllm/your-model-id",
-		Category:     "local",
+		ExampleModel: "openai-compatible/your-model-id",
+		Category:     "custom",
 		Description:  "OpenAI v1-compatible endpoint",
 	},
 }
@@ -65,11 +67,22 @@ var llmProviderCatalog = []LLMProvider{
 // llmProviderIndex is a precomputed lookup by ID.
 var llmProviderIndex map[string]*LLMProvider
 
+// llmProviderAliases keeps backward-compatible IDs that map to canonical IDs.
+var llmProviderAliases = map[string]string{
+	"vllm":      "openai-compatible",
+	"openai-v1": "openai-compatible",
+}
+
 func init() {
 	llmProviderIndex = make(map[string]*LLMProvider, len(llmProviderCatalog))
 	for i := range llmProviderCatalog {
 		p := &llmProviderCatalog[i]
 		llmProviderIndex[p.ID] = p
+	}
+	for alias, canonicalID := range llmProviderAliases {
+		if canonical, ok := llmProviderIndex[canonicalID]; ok {
+			llmProviderIndex[alias] = canonical
+		}
 	}
 }
 
@@ -82,7 +95,12 @@ func ListLLMProviders() []LLMProvider {
 
 // GetLLMProvider returns the provider with the given ID, or nil if not found.
 func GetLLMProvider(id string) *LLMProvider {
-	p, ok := llmProviderIndex[id]
+	lookupID := strings.ToLower(strings.TrimSpace(id))
+	if canonical, ok := llmProviderAliases[lookupID]; ok {
+		lookupID = canonical
+	}
+
+	p, ok := llmProviderIndex[lookupID]
 	if !ok {
 		return nil
 	}
@@ -99,6 +117,9 @@ func LLMProvidersByCategory() map[string][]LLMProvider {
 		"local":   {},
 	}
 	for _, p := range llmProviderCatalog {
+		if _, ok := result[p.Category]; !ok {
+			result[p.Category] = []LLMProvider{}
+		}
 		result[p.Category] = append(result[p.Category], p)
 	}
 	return result

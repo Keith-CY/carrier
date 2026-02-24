@@ -12,15 +12,15 @@
     "type": "local_binary",
     "install": {
       "command_by_os": {
-        "darwin": "curl -fsSL https://openclaw.ai/install.sh | bash",
-        "linux": "curl -fsSL https://openclaw.ai/install.sh | bash",
+        "darwin": "tmp_file=\"$(mktemp -t openclaw-install.XXXXXX)\" && curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh -o \"$tmp_file\" && bash \"$tmp_file\"; code=$?; rm -f \"$tmp_file\"; exit $code",
+        "linux": "tmp_file=\"$(mktemp -t openclaw-install.XXXXXX)\" && curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh -o \"$tmp_file\" && bash \"$tmp_file\"; code=$?; rm -f \"$tmp_file\"; exit $code",
         "windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"iwr -useb https://openclaw.ai/install.ps1 | iex\" || (curl -fsSL https://openclaw.ai/install.cmd -o install.cmd && cmd.exe /c \"install.cmd && del install.cmd\")"
       }
     },
     "upgrade": {
       "command_by_os": {
-        "darwin": "curl -fsSL https://openclaw.ai/install.sh | bash",
-        "linux": "curl -fsSL https://openclaw.ai/install.sh | bash",
+        "darwin": "tmp_file=\"$(mktemp -t openclaw-install.XXXXXX)\" && curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh -o \"$tmp_file\" && bash \"$tmp_file\"; code=$?; rm -f \"$tmp_file\"; exit $code",
+        "linux": "tmp_file=\"$(mktemp -t openclaw-install.XXXXXX)\" && curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh -o \"$tmp_file\" && bash \"$tmp_file\"; code=$?; rm -f \"$tmp_file\"; exit $code",
         "windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"iwr -useb https://openclaw.ai/install.ps1 | iex\" || (curl -fsSL https://openclaw.ai/install.cmd -o install.cmd && cmd.exe /c \"install.cmd && del install.cmd\")"
       }
     },

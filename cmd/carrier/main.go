@@ -53,9 +53,10 @@ import (
 )
 
 type choiceOption struct {
-	ID    string
-	Name  string
-	Setup string
+	ID      string
+	Name    string
+	Setup   string
+	Aliases []string
 
 	AuthMode     providerAuthMode
 	ProviderEnv  string
@@ -97,10 +98,10 @@ type versionCommandOptions struct {
 }
 
 type versionInfo struct {
-	Version    string `json:"version"`
-	Commit     string `json:"commit"`
-	BuildDate  string `json:"buildDate"`
-	GoVersion  string `json:"goVersion"`
+	Version   string `json:"version"`
+	Commit    string `json:"commit"`
+	BuildDate string `json:"buildDate"`
+	GoVersion string `json:"goVersion"`
 }
 
 type picoclawChannel struct {
@@ -231,7 +232,7 @@ var providerOptions = []choiceOption{
 	{ID: "anthropic", Name: "Anthropic", Setup: "Claude direct API key", AuthMode: authModeAPIKey, ProviderEnv: "ANTHROPIC_API_KEY", ExampleModel: "anthropic/claude-sonnet-4.6"},
 	{ID: "openai", Name: "OpenAI", Setup: "GPT direct API key", AuthMode: authModeAPIKey, ProviderEnv: "OPENAI_API_KEY", ExampleModel: "openai/gpt-5.2"},
 	{ID: "openai-codex", Name: "OpenAI Codex", Setup: "OAuth device-code login", AuthMode: authModeOAuthDeviceCode, ProviderEnv: "OPENAI_CODEX_TOKEN", ExampleModel: "openai-codex/gpt-5.3-codex"},
-	{ID: "vllm", Name: "OpenAI-Compatible (v1)", Setup: "OpenAI v1-compatible endpoint", AuthMode: authModeNone, ExampleModel: "vllm/auto"},
+	{ID: "openai-compatible", Name: "OpenAI-Compatible (v1)", Setup: "OpenAI v1-compatible endpoint", AuthMode: authModeNone, ExampleModel: "openai-compatible/auto", Aliases: []string{"vllm", "openai-v1"}},
 }
 
 const (
@@ -4217,6 +4218,11 @@ func resolveChoice(input string, options []choiceOption) (choiceOption, bool) {
 	for _, opt := range options {
 		if strings.EqualFold(opt.ID, input) {
 			return opt, true
+		}
+		for _, alias := range opt.Aliases {
+			if strings.EqualFold(alias, input) {
+				return opt, true
+			}
 		}
 	}
 	return choiceOption{}, false

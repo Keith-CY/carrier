@@ -67,6 +67,16 @@ func TestPickMinimalProviderWithReasonFallsBackToOpenAICodex(t *testing.T) {
 	}
 }
 
+func TestResolveChoice_ProviderAlias(t *testing.T) {
+	provider, ok := resolveChoice("vllm", providerOptions)
+	if !ok {
+		t.Fatal("expected vllm alias to resolve")
+	}
+	if provider.ID != "openai-compatible" {
+		t.Fatalf("provider.ID = %q, want %q", provider.ID, "openai-compatible")
+	}
+}
+
 func TestLookupPIDsByPortViaProc(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(tmp, "net"), 0o755); err != nil {

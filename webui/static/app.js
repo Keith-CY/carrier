@@ -1491,18 +1491,23 @@
     if (!next.length) return [];
     if (!previous.length) return next;
 
-    const maxOverlap = Math.min(previous.length, next.length);
-    for (let overlap = maxOverlap; overlap >= 1; overlap--) {
-      let same = true;
-      for (let i = 0; i < overlap; i++) {
-        if (previous[previous.length - overlap + i] !== next[i]) {
-          same = false;
-          break;
-        }
+    // Linear-time overlap detection: longest prefix of `next` that is a suffix of `previous`.
+    const separator = Symbol('log-overlap-separator');
+    const sequence = next.concat([separator], previous);
+    const prefix = new Array(sequence.length).fill(0);
+
+    for (let i = 1; i < sequence.length; i++) {
+      let j = prefix[i - 1];
+      while (j > 0 && sequence[i] !== sequence[j]) {
+        j = prefix[j - 1];
       }
-      if (same) return next.slice(overlap);
+      if (sequence[i] === sequence[j]) {
+        j += 1;
+      }
+      prefix[i] = j;
     }
-    return next;
+    const overlap = Math.min(next.length, prefix[prefix.length - 1] || 0);
+    return next.slice(overlap);
   }
 
   function normalizeLogLevel(level) {
@@ -1633,24 +1638,30 @@
     });
   }
 
-  function highlightLogText(text, query) {
+  function appendHighlightedText(container, text, query) {
     const source = String(text == null ? '' : text);
-    if (!query) return escapeHtml(source);
+    if (!query) {
+      container.textContent = source;
+      return;
+    }
 
     const lower = source.toLowerCase();
     let i = 0;
-    let html = '';
     while (i < source.length) {
       const idx = lower.indexOf(query, i);
       if (idx === -1) {
-        html += escapeHtml(source.slice(i));
+        container.appendChild(document.createTextNode(source.slice(i)));
         break;
       }
-      html += escapeHtml(source.slice(i, idx));
-      html += '<mark class="log-highlight">' + escapeHtml(source.slice(idx, idx + query.length)) + '</mark>';
+      if (idx > i) {
+        container.appendChild(document.createTextNode(source.slice(i, idx)));
+      }
+      const mark = document.createElement('mark');
+      mark.className = 'log-highlight';
+      mark.textContent = source.slice(idx, idx + query.length);
+      container.appendChild(mark);
       i = idx + query.length;
     }
-    return html;
   }
 
   function renderLogRows(stickToBottom) {
@@ -1665,13 +1676,34 @@
     }
 
     const query = logSearchQuery;
-    output.innerHTML = visible.map(entry =>
-      '<div class="log-row log-row-data" data-level="' + escapeHtml(entry.level) + '">' +
-        '<span class="log-cell-time">' + highlightLogText(entry.timestamp, query) + '</span>' +
-        '<span class="log-cell-level"><span class="log-level-pill">' + highlightLogText(entry.level, query) + '</span></span>' +
-        '<span class="log-cell-message">' + highlightLogText(entry.message, query) + '</span>' +
-      '</div>'
-    ).join('');
+    output.textContent = '';
+    const fragment = document.createDocumentFragment();
+    visible.forEach(entry => {
+      const row = document.createElement('div');
+      row.className = 'log-row log-row-data';
+      row.dataset.level = entry.level;
+
+      const timeCell = document.createElement('span');
+      timeCell.className = 'log-cell-time';
+      appendHighlightedText(timeCell, entry.timestamp, query);
+
+      const levelCell = document.createElement('span');
+      levelCell.className = 'log-cell-level';
+      const levelPill = document.createElement('span');
+      levelPill.className = 'log-level-pill';
+      appendHighlightedText(levelPill, entry.level, query);
+      levelCell.appendChild(levelPill);
+
+      const messageCell = document.createElement('span');
+      messageCell.className = 'log-cell-message';
+      appendHighlightedText(messageCell, entry.message, query);
+
+      row.appendChild(timeCell);
+      row.appendChild(levelCell);
+      row.appendChild(messageCell);
+      fragment.appendChild(row);
+    });
+    output.appendChild(fragment);
 
     if (stickToBottom) output.scrollTop = output.scrollHeight;
     refreshLogStatus(visible.length);

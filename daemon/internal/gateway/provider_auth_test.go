@@ -64,9 +64,9 @@ func TestHandleProviderAuthInput_APIKey_Whitespace(t *testing.T) {
 }
 
 func TestHandleProviderAuthInput_None_AutoComplete(t *testing.T) {
-	p := GetLLMProvider("vllm")
+	p := GetLLMProvider("openai-compatible")
 	if p == nil {
-		t.Fatal("vllm provider not found")
+		t.Fatal("openai-compatible provider not found")
 	}
 	result, err := HandleProviderAuthInput(p, "anything")
 	if err != nil {
@@ -242,7 +242,7 @@ func TestBuildProviderAuthPrompt_GcloudADC(t *testing.T) {
 }
 
 func TestBuildProviderAuthPrompt_None(t *testing.T) {
-	p := GetLLMProvider("vllm")
+	p := GetLLMProvider("openai-compatible")
 	prompt := BuildProviderAuthPrompt(p)
 	if !strings.Contains(strings.ToLower(prompt), "no auth") {
 		t.Errorf("expected 'no auth' in prompt, got: %q", prompt)
@@ -269,7 +269,7 @@ func TestProviderEnvVarsToSet_OAuthDeviceCode(t *testing.T) {
 }
 
 func TestProviderEnvVarsToSet_None(t *testing.T) {
-	p := GetLLMProvider("vllm")
+	p := GetLLMProvider("openai-compatible")
 	m := ProviderEnvVarsToSet(p, "")
 	if len(m) != 0 {
 		t.Errorf("expected empty map for none auth, got %v", m)
