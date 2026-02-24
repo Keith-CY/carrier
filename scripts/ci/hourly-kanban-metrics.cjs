@@ -15,11 +15,15 @@ function normalizePathList(values) {
   if (!Array.isArray(values)) {
     return [];
   }
-  return values
-    .map((value) => String(value || "").trim().replace(/\\/g, "/"))
-    .filter(Boolean)
-    .filter((value, index, list) => list.indexOf(value) === index)
-    .sort();
+  const unique = new Set();
+  for (const value of values) {
+    const normalized = String(value || "").trim().replace(/\\/g, "/");
+    if (!normalized) {
+      continue;
+    }
+    unique.add(normalized);
+  }
+  return Array.from(unique).sort();
 }
 
 function normalizeState(input) {

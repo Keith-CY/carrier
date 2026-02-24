@@ -96,10 +96,6 @@ func ListLLMProviders() []LLMProvider {
 // GetLLMProvider returns the provider with the given ID, or nil if not found.
 func GetLLMProvider(id string) *LLMProvider {
 	lookupID := strings.ToLower(strings.TrimSpace(id))
-	if canonical, ok := llmProviderAliases[lookupID]; ok {
-		lookupID = canonical
-	}
-
 	p, ok := llmProviderIndex[lookupID]
 	if !ok {
 		return nil
