@@ -5,10 +5,20 @@ repo_root="$(git rev-parse --show-toplevel)"
 gateway_root="$repo_root/gateway"
 e2e_backend="${CI_E2E_BACKEND:-auto}"
 gateway_pattern="${CI_E2E_TEST_PATTERN:-integration.test.ts}"
+carrier_binary=""
+tmp_workspace=""
 
 cd "$repo_root"
 
 echo "Running end-to-end test suite..."
+
+cleanup_tmp_workspace() {
+  if [[ -n "$tmp_workspace" && -d "$tmp_workspace" ]]; then
+    rm -rf "$tmp_workspace"
+  fi
+}
+
+trap cleanup_tmp_workspace EXIT
 
 is_gateway_project() {
   [[ -d "$gateway_root" && -f "$gateway_root/package.json" ]]
@@ -38,14 +48,29 @@ run_gateway_e2e() {
 }
 
 run_carrier_e2e() {
+  local carrier_cmd="carrier"
+
   if ! command -v carrier >/dev/null 2>&1; then
-    echo "Error: carrier CLI is not available in PATH."
-    echo "Expected e2e command: carrier test e2e --report test-results/"
+    tmp_workspace="$(mktemp -d)"
+    carrier_binary="$tmp_workspace/carrier"
+
+    echo "carrier CLI not in PATH; building from source."
+    (
+      cd "$repo_root"
+      go build -o "$carrier_binary" ./cmd/carrier
+    )
+    carrier_cmd="$carrier_binary"
+  else
+    carrier_cmd="carrier"
+  fi
+
+  if [[ ! -x "$carrier_cmd" ]]; then
+    echo "Error: carrier CLI is not available."
     exit 1
   fi
 
-  echo "Falling back to carrier CLI E2E suite."
-  carrier test e2e --report test-results/
+  echo "Running carrier CLI E2E suite."
+  "$carrier_cmd" test e2e --report test-results/
 }
 
 case "${e2e_backend}" in
