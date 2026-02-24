@@ -28,23 +28,25 @@ This document records how the current open-issue set is handled in one aggregate
 | #1325 | Canonical architecture index linkage and superseded-plan pointers already present; reconfirmed with docs contract update. |
 | #1327 | Core TODO/FIXME backlog currently zero in source modules; validated in batch run and reflected in updated audit workflow output. |
 
-## Decomposition-required epics (kept as roadmap items)
+## Decomposition-required epics (consolidated handling)
 
 | Issue | Handling |
 | --- | --- |
-| #1224 | Cross-agent message bus is multi-phase architecture work; kept open as roadmap epic (not force-closed in this batch). |
-| #1227 | WebUI conversation-room model is a large feature set; kept open as roadmap epic. |
-| #1228 | WebUI virtual scroll + multi-agent tabs requires broader UI/state refactor; kept open as roadmap epic. |
-| #1232 | First-run onboarding wizard is broad product flow; kept open as roadmap epic. |
-| #1233 | Diagnose-and-fix automation is broad feature and safety surface; kept open as roadmap epic. |
-| #1234 | Starter template catalog + diff/rollback is broad feature; kept open as roadmap epic. |
-| #1236 | Secure-by-default baseline spans policy engine and CI hardening; kept open as roadmap epic. |
-| #1237 | Reversible operations + rollback-safe config requires transactional model work; kept open as roadmap epic. |
-| #1239 | Upgrade pre/post checks + rollback orchestration is broad release workflow work; kept open as roadmap epic. |
+| #1224 | Consolidated into roadmap execution rollup `#1406` (see `docs/plans/phase2-rollup-1406-execution.md`). |
+| #1227 | Consolidated into roadmap execution rollup `#1406` (see `docs/plans/phase2-rollup-1406-execution.md`). |
+| #1228 | Consolidated into roadmap execution rollup `#1406` (see `docs/plans/phase2-rollup-1406-execution.md`). |
+| #1232 | Consolidated into roadmap execution rollup `#1406` (see `docs/plans/phase2-rollup-1406-execution.md`). |
+| #1233 | Consolidated into roadmap execution rollup `#1406` (see `docs/plans/phase2-rollup-1406-execution.md`). |
+| #1234 | Consolidated into roadmap execution rollup `#1406` (see `docs/plans/phase2-rollup-1406-execution.md`). |
+| #1236 | Consolidated into roadmap execution rollup `#1406` (see `docs/plans/phase2-rollup-1406-execution.md`). |
+| #1237 | Consolidated into roadmap execution rollup `#1406` (see `docs/plans/phase2-rollup-1406-execution.md`). |
+| #1239 | Consolidated into roadmap execution rollup `#1406` (see `docs/plans/phase2-rollup-1406-execution.md`). |
+
+The full issue-range handling matrix for `#1224-#1239` is tracked in
+`docs/issue-triage/roadmap-epics-1224-1239-one-pr.md`.
 
 ## System issue intentionally kept open
 
 | Issue | Handling |
 | --- | --- |
 | #119 | Pinned hourly kanban issue is a workflow state sink and should remain open by design. |
-
