@@ -817,7 +817,7 @@
       const categoryOrder = [
         { key: 'builtin', label: '☁️ Built-in (API key)' },
         { key: 'custom',  label: '🔐 Custom / OAuth' },
-        { key: 'local',   label: '🖥️ Local (no auth)' },
+        { key: 'generic', label: '🖥️ Generic (no auth)' },
       ];
 
       categoryOrder.forEach(({ key, label }) => {

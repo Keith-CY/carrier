@@ -105,7 +105,7 @@ func GetLLMProvider(id string) *LLMProvider {
 }
 
 // LLMProvidersByCategory returns providers grouped by category.
-// Categories are returned in order: builtin, custom, local.
+// Categories are returned in order: builtin, custom, generic.
 func LLMProvidersByCategory() map[string][]LLMProvider {
 	result := map[string][]LLMProvider{
 		"builtin": {},
