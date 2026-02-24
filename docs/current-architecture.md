@@ -20,6 +20,7 @@ Use this before reading historical planning notes.
 - Post-merge smoke checklist: [`docs/runbooks/post-merge-smoke-checklist.md`](./runbooks/post-merge-smoke-checklist.md)
 - CI troubleshooting: [`docs/ci/first-response-playbook.md`](./ci/first-response-playbook.md)
 - Rollback and go-live checks: [`docs/runbooks/go-live-rollback.md`](./runbooks/go-live-rollback.md)
+- Phase-2 roadmap rollup execution: [`docs/plans/phase2-rollup-1406-execution.md`](./plans/phase2-rollup-1406-execution.md)
 
 ## Historical Plan Documents
 
