@@ -2,12 +2,18 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
+gateway_root="$repo_root/gateway"
 e2e_backend="${CI_E2E_BACKEND:-auto}"
 gateway_pattern="${CI_E2E_TEST_PATTERN:-integration.test.ts}"
 
 cd "$repo_root"
 
 echo "Running end-to-end test suite..."
+
+is_gateway_project() {
+  [[ -d "$gateway_root" && -f "$gateway_root/package.json" ]]
+}
+
 run_gateway_e2e() {
   if ! command -v bun >/dev/null 2>&1; then
     echo "Error: bun is required to run repository E2E tests."
@@ -19,7 +25,7 @@ run_gateway_e2e() {
   echo "Pattern: ${gateway_pattern}"
 
   (
-    cd "$repo_root/gateway"
+    cd "$gateway_root"
     if [[ ! -d node_modules ]]; then
       bun install --no-progress --frozen-lockfile
     fi
@@ -44,8 +50,9 @@ run_carrier_e2e() {
 
 case "${e2e_backend}" in
   gateway)
-    if [[ ! -d "$repo_root/gateway" ]]; then
-      echo "Error: CI_E2E_BACKEND=gateway but gateway directory is missing."
+    if ! is_gateway_project; then
+      echo "Error: CI_E2E_BACKEND=gateway requires ${gateway_root}/package.json."
+      echo "This repository does not appear to contain a Bun-based gateway package."
       exit 1
     fi
     run_gateway_e2e
@@ -54,7 +61,7 @@ case "${e2e_backend}" in
     run_carrier_e2e
     ;;
   auto)
-    if [[ -d "$repo_root/gateway" ]]; then
+    if is_gateway_project; then
       if command -v bun >/dev/null 2>&1; then
         run_gateway_e2e
       elif command -v carrier >/dev/null 2>&1; then

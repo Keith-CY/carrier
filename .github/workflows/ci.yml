@@ -560,5 +560,5 @@ EOF
 
       - name: Run end-to-end tests
         env:
-          CI_E2E_BACKEND: gateway
+          CI_E2E_BACKEND: auto
         run: ./scripts/run-e2e-tests.sh
