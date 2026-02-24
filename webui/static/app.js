@@ -115,18 +115,15 @@
     return isAddMode() ? 3 : 5;
   }
 
+  const MANAGED_AGENT_PROFILES = {
+    picoclaw:  { displayName: 'PicoClaw',  requiresPairing: true,  hideWebhook: true },
+    openclaw:  { displayName: 'OpenClaw',  requiresPairing: false, hideWebhook: true },
+    zeroclaw:  { displayName: 'ZeroClaw',  requiresPairing: false, hideWebhook: true },
+  };
+
   function addAgentSetupProfile() {
     const agentID = String(addTargetAgent || '').trim().toLowerCase();
-    switch (agentID) {
-      case 'picoclaw':
-        return { displayName: 'PicoClaw', requiresPairing: true, hideWebhook: true };
-      case 'openclaw':
-        return { displayName: 'OpenClaw', requiresPairing: false, hideWebhook: true };
-      case 'zeroclaw':
-        return { displayName: 'ZeroClaw', requiresPairing: false, hideWebhook: true };
-      default:
-        return null;
-    }
+    return MANAGED_AGENT_PROFILES[agentID] || null;
   }
 
   function collectEnvVars() {
