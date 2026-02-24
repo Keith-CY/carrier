@@ -21,6 +21,7 @@ const (
 	CmdChat            CommandName = "/chat"
 	CmdAgents          CommandName = "/agents"
 	CmdAdd             CommandName = "/add"
+	CmdInstall         CommandName = "/install"
 	CmdUninstall       CommandName = "/uninstall"
 	CmdStart           CommandName = "/start"
 	CmdStop            CommandName = "/stop"
@@ -37,6 +38,7 @@ var validCommands = map[CommandName]struct{}{
 	CmdChat:            {},
 	CmdAgents:          {},
 	CmdAdd:             {},
+	CmdInstall:         {},
 	CmdUninstall:       {},
 	CmdStart:           {},
 	CmdStop:            {},
@@ -164,6 +166,8 @@ func HandleCommand(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClien
 	actor := fmt.Sprintf("%s:%s", cmd.Provider, cmd.ChatID)
 
 	switch cmd.Name {
+	case CmdInstall:
+		return installViaGUIOnlyResp(cmd.RequestID)
 	case CmdOnboard:
 		return onboardViaGUIOnlyResp(cmd.RequestID)
 	case CmdChat:
@@ -580,6 +584,10 @@ func addViaGUIOnlyResp(requestID string) GatewayResponse {
 
 func onboardViaGUIOnlyResp(requestID string) GatewayResponse {
 	return errResp(requestID, "E_ONBOARD_GUI_ONLY", "Onboarding is disabled in chat to protect credentials. Open Carrier GUI to complete onboarding and credential setup.")
+}
+
+func installViaGUIOnlyResp(requestID string) GatewayResponse {
+	return errResp(requestID, "E_INSTALL_GUI_ONLY", "Install is disabled in chat to protect credentials. Open Carrier GUI to install and onboard agents.")
 }
 
 func daemonErrResp(requestID string, err error) GatewayResponse {
