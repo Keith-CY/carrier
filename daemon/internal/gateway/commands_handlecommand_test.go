@@ -337,6 +337,24 @@ func TestHandleCommand_Onboard_GuiOnly(t *testing.T) {
 	}
 }
 
+func TestHandleCommand_Install_GuiOnly(t *testing.T) {
+	sessions := NewSessionStore("", 0, nil)
+	tok := pairAndGetSession(sessions, "telegram", "123")
+	defer sessions.Stop()
+	cmd := &GatewayCommand{
+		Provider: "telegram", ChatID: "123", RequestID: "r1",
+		Name: CmdInstall, Args: []string{"openclaw"}, SessionToken: tok,
+	}
+	// The session token is not validated for GUI-only install guard and daemon is not called.
+	resp := HandleCommand(context.Background(), cmd, nil, sessions, nil, nil, nil)
+	if resp.Result != "error" {
+		t.Fatalf("expected error, got %s: %s", resp.Result, resp.Message)
+	}
+	if resp.ErrorCode != "E_INSTALL_GUI_ONLY" {
+		t.Fatalf("expected E_INSTALL_GUI_ONLY, got %s", resp.ErrorCode)
+	}
+}
+
 func TestHandleCommand_Uninstall_Success(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"POST /api/v1/agents/myagent/uninstall": func(w http.ResponseWriter, r *http.Request) {
