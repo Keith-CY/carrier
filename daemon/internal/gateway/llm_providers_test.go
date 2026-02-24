@@ -34,28 +34,7 @@ func TestGetLLMProvider_KnownProviders(t *testing.T) {
 	}{
 		{"anthropic", AuthModeAPIKey, "ANTHROPIC_API_KEY", "builtin"},
 		{"openai", AuthModeAPIKey, "OPENAI_API_KEY", "builtin"},
-		{"opencode", AuthModeAPIKey, "OPENCODE_API_KEY", "builtin"},
-		{"google", AuthModeAPIKey, "GEMINI_API_KEY", "builtin"},
-		{"groq", AuthModeAPIKey, "GROQ_API_KEY", "builtin"},
-		{"deepseek", AuthModeAPIKey, "DEEPSEEK_API_KEY", "builtin"},
-		{"mistral", AuthModeAPIKey, "MISTRAL_API_KEY", "builtin"},
-		{"xai", AuthModeAPIKey, "XAI_API_KEY", "builtin"},
-		{"openrouter", AuthModeAPIKey, "OPENROUTER_API_KEY", "builtin"},
-		{"cerebras", AuthModeAPIKey, "CEREBRAS_API_KEY", "builtin"},
-		{"zai", AuthModeAPIKey, "ZAI_API_KEY", "builtin"},
-		{"vercel-ai-gateway", AuthModeAPIKey, "AI_GATEWAY_API_KEY", "builtin"},
-		{"github-copilot", AuthModeAPIKey, "COPILOT_GITHUB_TOKEN", "builtin"},
-		{"huggingface", AuthModeAPIKey, "HUGGINGFACE_HUB_TOKEN", "builtin"},
-		{"moonshot", AuthModeAPIKey, "MOONSHOT_API_KEY", "builtin"},
-		{"kimi-coding", AuthModeAPIKey, "KIMI_API_KEY", "builtin"},
-		{"synthetic", AuthModeAPIKey, "SYNTHETIC_API_KEY", "builtin"},
-		{"minimax", AuthModeAPIKey, "MINIMAX_API_KEY", "builtin"},
 		{"openai-codex", AuthModeOAuthDeviceCode, "OPENAI_CODEX_TOKEN", "custom"},
-		{"qwen-portal", AuthModeOAuthDeviceCode, "QWEN_PORTAL_TOKEN", "custom"},
-		{"google-antigravity", AuthModeOAuthPlugin, "", "custom"},
-		{"google-gemini-cli", AuthModeOAuthPlugin, "", "custom"},
-		{"google-vertex", AuthModeGcloudADC, "", "custom"},
-		{"ollama", AuthModeNone, "", "local"},
 		{"vllm", AuthModeNone, "VLLM_API_KEY", "local"},
 	}
 
@@ -134,15 +113,15 @@ func TestLLMProvidersByCategory(t *testing.T) {
 	}
 
 	local := bycat["local"]
-	foundOllama := false
+	foundVLLM := false
 	for _, p := range local {
-		if p.ID == "ollama" {
-			foundOllama = true
+		if p.ID == "vllm" {
+			foundVLLM = true
 			break
 		}
 	}
-	if !foundOllama {
-		t.Error("ollama should be in local category")
+	if !foundVLLM {
+		t.Error("vllm should be in local category")
 	}
 
 	custom := bycat["custom"]

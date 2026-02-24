@@ -56,7 +56,7 @@ func TestHandleProviderAuthInput_APIKey_Empty(t *testing.T) {
 func TestHandleProviderAuthInput_APIKey_Whitespace(t *testing.T) {
 	prepareCredentialStore(t)
 
-	p := GetLLMProvider("mistral")
+	p := GetLLMProvider("anthropic")
 	_, err := HandleProviderAuthInput(p, "   ")
 	if err == nil {
 		t.Error("expected error for whitespace-only API key")
@@ -64,9 +64,9 @@ func TestHandleProviderAuthInput_APIKey_Whitespace(t *testing.T) {
 }
 
 func TestHandleProviderAuthInput_None_AutoComplete(t *testing.T) {
-	p := GetLLMProvider("ollama")
+	p := GetLLMProvider("vllm")
 	if p == nil {
-		t.Fatal("ollama provider not found")
+		t.Fatal("vllm provider not found")
 	}
 	result, err := HandleProviderAuthInput(p, "anything")
 	if err != nil {
@@ -157,7 +157,11 @@ func TestHandleProviderAuthInput_OAuthDeviceCode_ReuseWithoutSavedValue(t *testi
 }
 
 func TestHandleProviderAuthInput_OAuthPlugin_Confirm(t *testing.T) {
-	p := GetLLMProvider("google-antigravity")
+	p := &LLMProvider{
+		ID:       "plugin-provider",
+		Name:     "Plugin Provider",
+		AuthMode: AuthModeOAuthPlugin,
+	}
 	result, err := HandleProviderAuthInput(p, "confirm")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -168,7 +172,11 @@ func TestHandleProviderAuthInput_OAuthPlugin_Confirm(t *testing.T) {
 }
 
 func TestHandleProviderAuthInput_GcloudADC_Confirm(t *testing.T) {
-	p := GetLLMProvider("google-vertex")
+	p := &LLMProvider{
+		ID:       "vertex-provider",
+		Name:     "Vertex Provider",
+		AuthMode: AuthModeGcloudADC,
+	}
 	result, err := HandleProviderAuthInput(p, "done")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -207,7 +215,11 @@ func TestBuildProviderAuthPrompt_OAuthDeviceCode(t *testing.T) {
 }
 
 func TestBuildProviderAuthPrompt_OAuthPlugin(t *testing.T) {
-	p := GetLLMProvider("google-gemini-cli")
+	p := &LLMProvider{
+		ID:       "plugin-provider",
+		Name:     "Plugin Provider",
+		AuthMode: AuthModeOAuthPlugin,
+	}
 	prompt := BuildProviderAuthPrompt(p)
 	if !strings.Contains(prompt, "/onboard confirm") {
 		t.Errorf("expected confirm guidance in prompt, got: %q", prompt)
@@ -218,7 +230,11 @@ func TestBuildProviderAuthPrompt_OAuthPlugin(t *testing.T) {
 }
 
 func TestBuildProviderAuthPrompt_GcloudADC(t *testing.T) {
-	p := GetLLMProvider("google-vertex")
+	p := &LLMProvider{
+		ID:       "vertex-provider",
+		Name:     "Vertex Provider",
+		AuthMode: AuthModeGcloudADC,
+	}
 	prompt := BuildProviderAuthPrompt(p)
 	if !strings.Contains(prompt, "gcloud") {
 		t.Errorf("expected gcloud in prompt, got: %q", prompt)
@@ -226,7 +242,7 @@ func TestBuildProviderAuthPrompt_GcloudADC(t *testing.T) {
 }
 
 func TestBuildProviderAuthPrompt_None(t *testing.T) {
-	p := GetLLMProvider("ollama")
+	p := GetLLMProvider("vllm")
 	prompt := BuildProviderAuthPrompt(p)
 	if !strings.Contains(strings.ToLower(prompt), "no auth") {
 		t.Errorf("expected 'no auth' in prompt, got: %q", prompt)
@@ -253,7 +269,7 @@ func TestProviderEnvVarsToSet_OAuthDeviceCode(t *testing.T) {
 }
 
 func TestProviderEnvVarsToSet_None(t *testing.T) {
-	p := GetLLMProvider("ollama")
+	p := GetLLMProvider("vllm")
 	m := ProviderEnvVarsToSet(p, "")
 	if len(m) != 0 {
 		t.Errorf("expected empty map for none auth, got %v", m)
