@@ -5,20 +5,11 @@ repo_root="$(git rev-parse --show-toplevel)"
 gateway_root="$repo_root/gateway"
 e2e_backend="${CI_E2E_BACKEND:-auto}"
 gateway_pattern="${CI_E2E_TEST_PATTERN:-integration.test.ts}"
-carrier_binary=""
-tmp_workspace=""
+e2e_integration_script="$repo_root/scripts/e2e-integration.sh"
 
 cd "$repo_root"
 
 echo "Running end-to-end test suite..."
-
-cleanup_tmp_workspace() {
-  if [[ -n "$tmp_workspace" && -d "$tmp_workspace" ]]; then
-    rm -rf "$tmp_workspace"
-  fi
-}
-
-trap cleanup_tmp_workspace EXIT
 
 is_gateway_project() {
   [[ -d "$gateway_root" && -f "$gateway_root/package.json" ]]
@@ -48,29 +39,14 @@ run_gateway_e2e() {
 }
 
 run_carrier_e2e() {
-  local carrier_cmd="carrier"
-
-  if ! command -v carrier >/dev/null 2>&1; then
-    tmp_workspace="$(mktemp -d)"
-    carrier_binary="$tmp_workspace/carrier"
-
-    echo "carrier CLI not in PATH; building from source."
-    (
-      cd "$repo_root"
-      go build -o "$carrier_binary" ./cmd/carrier
-    )
-    carrier_cmd="$carrier_binary"
-  else
-    carrier_cmd="carrier"
-  fi
-
-  if [[ ! -x "$carrier_cmd" ]]; then
-    echo "Error: carrier CLI is not available."
+  if [[ ! -x "$e2e_integration_script" ]]; then
+    echo "Error: E2E integration runner not available."
+    echo "Expected executable at ${e2e_integration_script}"
     exit 1
   fi
 
-  echo "Running carrier CLI E2E suite."
-  "$carrier_cmd" test e2e --report test-results/
+  echo "Running repository integration E2E suite."
+  "$e2e_integration_script"
 }
 
 case "${e2e_backend}" in
@@ -90,10 +66,10 @@ case "${e2e_backend}" in
       if command -v bun >/dev/null 2>&1; then
         run_gateway_e2e
       elif command -v carrier >/dev/null 2>&1; then
-        echo "Warning: bun is unavailable; falling back to carrier CLI e2e backend."
+        echo "Warning: bun is unavailable; falling back to repository integration backend."
         run_carrier_e2e
       else
-        echo "Error: neither bun (gateway backend) nor carrier CLI is available."
+        echo "Error: neither bun (gateway backend) nor supported fallback backend is available."
         exit 1
       fi
     else
