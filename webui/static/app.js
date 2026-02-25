@@ -30,6 +30,7 @@
   const LOG_FILTER_LEVELS = ["DEBUG", "INFO", "WARN", "ERROR"];
   const LOG_ENTRY_LIMIT = 2000;
   let remoteHostsCache = [];
+  let sshConfigHostAliasesCache = [];
   let providerProfilesCache = [];
   let serverManageHostID = "";
   let serverManageOperationRunning = false;
@@ -43,6 +44,8 @@
   let remoteChatActiveAssistantNode = null;
   let remoteChatMessages = [];
   let remoteChatMessageSeq = 0;
+  let remoteChatTargetsLoadSeq = 0;
+  let remoteChatInstancesLoadSeq = 0;
   let remoteObservabilityData = null;
   const DEFAULT_FEATURE_FLAGS = {
     remoteControlPlaneEnabled: false,
@@ -1411,22 +1414,74 @@
     bindLogsControls();
     syncLogControls();
     renderLogRows(false);
-    const agentSelect = $("#log-agent");
-    agentSelect.textContent = "";
-    api("GET", "/api/v1/instances").then((payload) => {
-      const instances = normalizeInstances(payload);
-      instances.forEach((a) => {
-        const instanceID = a.id || a.ID || "";
-        const name = a.agent_id || a.agentID || a.type || a.id || a.ID || a.name;
-        if (!name)
-          return;
-        const opt = document.createElement("option");
-        opt.value = name;
-        opt.textContent = instanceID ? instanceID + " (" + name + ")" : name;
-        agentSelect.appendChild(opt);
-      });
-    }).catch(() => {
+    loadLogAgentOptions().catch(() => {
     });
+  }
+  async function loadLogAgentOptions() {
+    const agentSelect = $("#log-agent");
+    if (!agentSelect)
+      return;
+    const previous = String(agentSelect.value || "").trim();
+    agentSelect.textContent = "";
+    const seen = new Set;
+    function appendOption(value, label) {
+      const id = String(value || "").trim();
+      if (!id)
+        return;
+      if (seen.has(id))
+        return;
+      seen.add(id);
+      const opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = String(label || id);
+      agentSelect.appendChild(opt);
+    }
+    try {
+      const agents = normalizeAgentCatalog(await api("GET", "/api/v1/agents"));
+      agents.forEach((agent) => {
+        const id = String(agent.id || "").trim();
+        if (!id)
+          return;
+        const runtimeState = String(agent.runtimeState || agent.runtime_state || "").trim();
+        const installState = String(agent.installState || agent.install_state || "").trim();
+        const suffix = runtimeState || installState;
+        appendOption(id, suffix ? id + " (" + suffix + ")" : id);
+      });
+    } catch (_) {
+    }
+    try {
+      const instances = normalizeInstances(await api("GET", "/api/v1/instances"));
+      instances.forEach((instance) => {
+        const runtimeAgentID = String(instance.agent_id || instance.agentID || instance.type || "").trim();
+        if (!runtimeAgentID)
+          return;
+        const instanceID = String(instance.id || instance.ID || "").trim();
+        const runtimeState = String(instance.runtime_state || instance.runtimeState || "").trim();
+        const labelParts = [];
+        if (instanceID && instanceID !== runtimeAgentID)
+          labelParts.push(instanceID);
+        if (runtimeState)
+          labelParts.push(runtimeState);
+        const suffix = labelParts.length ? " [" + labelParts.join(", ") + "]" : "";
+        appendOption(runtimeAgentID, runtimeAgentID + suffix);
+      });
+    } catch (_) {
+    }
+    if (previous && seen.has(previous)) {
+      agentSelect.value = previous;
+    } else if (agentSelect.options.length) {
+      agentSelect.selectedIndex = 0;
+    }
+    if (!agentSelect.options.length) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "No agents available";
+      agentSelect.appendChild(option);
+      logStatusBase = "No local agents available. Start an agent first.";
+    } else {
+      logStatusBase = "Select an agent and click Connect.";
+    }
+    refreshLogStatus(getVisibleLogEntries().length);
   }
   function bindLogsControls() {
     if (logHandlersBound)
@@ -1807,6 +1862,72 @@
     pruneServerHostOperationCache(hosts);
     return hosts;
   }
+  async function fetchSSHConfigHostAliases() {
+    const payload = await api("GET", "/api/v1/remote/ssh-config-hosts");
+    const aliases = payload && Array.isArray(payload.hosts) ? payload.hosts : [];
+    const normalized = [];
+    const seen = new Set;
+    aliases.forEach((item) => {
+      const alias = String(item || "").trim();
+      if (!alias)
+        return;
+      if (seen.has(alias))
+        return;
+      seen.add(alias);
+      normalized.push(alias);
+    });
+    normalized.sort((a, b) => a.localeCompare(b));
+    sshConfigHostAliasesCache = normalized;
+    return normalized;
+  }
+  function renderSSHConfigHostAliasOptions(aliases, loadErr) {
+    const options = $("#server-ssh-config-host-options");
+    const select = $("#server-ssh-config-host-select");
+    const hint = $("#server-ssh-config-host-hint");
+    const list = Array.isArray(aliases) ? aliases : [];
+    if (options) {
+      options.textContent = "";
+      list.forEach((alias) => {
+        const value = String(alias || "").trim();
+        if (!value)
+          return;
+        const option = document.createElement("option");
+        option.value = value;
+        options.appendChild(option);
+      });
+    }
+    if (select) {
+      select.textContent = "";
+      const defaultOption = document.createElement("option");
+      defaultOption.value = "";
+      defaultOption.textContent = list.length ? "Select detected SSH alias\u2026" : "No detected SSH aliases";
+      select.appendChild(defaultOption);
+      list.forEach((alias) => {
+        const value = String(alias || "").trim();
+        if (!value)
+          return;
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        select.appendChild(option);
+      });
+      select.value = "";
+    }
+    if (!hint)
+      return;
+    if (loadErr) {
+      hint.textContent = "Failed to load local SSH config aliases: " + String(loadErr);
+      syncServerAuthModeInputs();
+      return;
+    }
+    if (!list.length) {
+      hint.textContent = "No aliases detected from local SSH config. You can still type one manually.";
+      syncServerAuthModeInputs();
+      return;
+    }
+    hint.textContent = "Detected " + String(list.length) + " alias(es) from local SSH config. Select from dropdown or type manually.";
+    syncServerAuthModeInputs();
+  }
   async function fetchProviderProfiles() {
     const payload = await api("GET", "/api/v1/provider-profiles");
     const profiles = payload && Array.isArray(payload.profiles) ? payload.profiles : [];
@@ -1821,6 +1942,8 @@
     const hostInput = $("#server-host");
     const keyInput = $("#server-key-path");
     const sshConfigInput = $("#server-ssh-config-host");
+    const sshConfigSelect = $("#server-ssh-config-host-select");
+    const sshConfigHint = $("#server-ssh-config-host-hint");
     if (!authMode || !hostInput || !keyInput || !sshConfigInput)
       return;
     const mode = String(authMode.value || "").trim().toLowerCase();
@@ -1828,6 +1951,14 @@
     keyInput.disabled = !privateKey;
     hostInput.disabled = false;
     sshConfigInput.disabled = privateKey;
+    if (sshConfigSelect) {
+      const hasAliases = sshConfigSelect.options.length > 1;
+      sshConfigSelect.disabled = privateKey || !hasAliases;
+      sshConfigSelect.classList.toggle("hidden", privateKey || !hasAliases);
+    }
+    if (sshConfigHint) {
+      sshConfigHint.classList.toggle("hidden", privateKey);
+    }
   }
   function updateServerEditorUI() {
     const saveBtn = $("#server-save");
@@ -2905,6 +3036,7 @@
     showView("servers");
     $("#nav").classList.remove("hidden");
     const authMode = $("#server-auth-mode");
+    const sshConfigSelect = $("#server-ssh-config-host-select");
     const refreshBtn = $("#servers-refresh");
     const saveBtn = $("#server-save");
     const cancelEditBtn = $("#server-cancel-edit");
@@ -2965,6 +3097,17 @@
       showServerManagePanel(current);
     }
     authMode.onchange = syncServerAuthModeInputs;
+    if (sshConfigSelect) {
+      sshConfigSelect.onchange = () => {
+        const picked = String(sshConfigSelect.value || "").trim();
+        if (!picked)
+          return;
+        const input = $("#server-ssh-config-host");
+        if (!input)
+          return;
+        input.value = picked;
+      };
+    }
     syncServerAuthModeInputs();
     updateServerEditorUI();
     setServerManageControlsDisabled(false);
@@ -3013,6 +3156,12 @@
         loadServerManageMemory();
       };
     refreshBtn.onclick = async () => {
+      try {
+        const aliases = await fetchSSHConfigHostAliases();
+        renderSSHConfigHostAliasOptions(aliases, "");
+      } catch (e) {
+        renderSSHConfigHostAliasOptions(sshConfigHostAliasesCache, e && e.message ? e.message : String(e));
+      }
       try {
         setMsg("#servers-msg", "", "info");
         const hosts = await fetchRemoteHosts();
@@ -3418,9 +3567,14 @@
   async function loadRemoteChatTargets() {
     const hostSelect = $("#remote-chat-host");
     const profileSelect = $("#remote-chat-profile");
+    const targetLoadSeq = ++remoteChatTargetsLoadSeq;
+    const previousHostID = String(hostSelect.value || "").trim();
+    const previousProfileID = String(profileSelect.value || "").trim();
     hostSelect.textContent = "";
     profileSelect.textContent = "";
     const [hosts, profiles] = await Promise.all([fetchRemoteHosts(), fetchProviderProfiles()]);
+    if (targetLoadSeq !== remoteChatTargetsLoadSeq)
+      return;
     hosts.forEach((host) => {
       const opt = document.createElement("option");
       opt.value = host.id;
@@ -3443,19 +3597,42 @@
       none.value = "";
       none.textContent = "none";
       profileSelect.insertBefore(none, profileSelect.firstChild);
-      profileSelect.value = "";
+      profileSelect.value = previousProfileID || "";
+    }
+    if (previousHostID) {
+      for (let i = 0;i < hostSelect.options.length; i++) {
+        if (String(hostSelect.options[i].value || "") === previousHostID) {
+          hostSelect.value = previousHostID;
+          break;
+        }
+      }
+    }
+    if (profileSelect.value !== previousProfileID) {
+      for (let i = 0;i < profileSelect.options.length; i++) {
+        if (String(profileSelect.options[i].value || "") === previousProfileID) {
+          profileSelect.value = previousProfileID;
+          break;
+        }
+      }
     }
   }
   async function loadRemoteChatInstances(hostID) {
     const instanceSelect = $("#remote-chat-instance");
+    const instanceLoadSeq = ++remoteChatInstancesLoadSeq;
     instanceSelect.textContent = "";
     if (!hostID)
       return;
     const payload = await api("GET", "/api/v1/remote/hosts/" + encodeURIComponent(hostID) + "/instances");
+    if (instanceLoadSeq !== remoteChatInstancesLoadSeq)
+      return;
     const instances = payload && Array.isArray(payload.instances) ? payload.instances : [];
+    const seen = new Set;
     instances.forEach((instance) => {
       const opt = document.createElement("option");
       const agentID = instance.agentId || instance.agentID || instance.id || "main";
+      if (seen.has(agentID))
+        return;
+      seen.add(agentID);
       opt.value = agentID;
       opt.textContent = agentID + " (" + (instance.runtimeState || "unknown") + ")";
       instanceSelect.appendChild(opt);
@@ -3680,14 +3857,9 @@
       $("#remote-chat-profile").disabled = !remoteMode;
       remoteChatSessionID = "";
       updateRemoteChatStatus(remoteMode ? "Remote target selected." : "Local target selected.", "info");
-      if (remoteMode) {
-        refreshTargets();
-        return;
-      }
       refreshTargets();
     };
     targetSelect.onchange();
-    refreshTargets();
   }
   function toFiniteNumber(value, fallback) {
     const num = Number(value);

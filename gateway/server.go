@@ -215,6 +215,14 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		}
 		handleRemoteMetrics(w, r, requestID, cfg)
 	})
+	mux.HandleFunc("/api/v1/remote/ssh-config-hosts", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleRemoteSSHConfigHosts(w, r, requestID, cfg)
+	})
 	mux.HandleFunc("/api/v1/provider-profiles", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
 		if err := checkGatewayToken(r, cfg.APIToken); err != nil {

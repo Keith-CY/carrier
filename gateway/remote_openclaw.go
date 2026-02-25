@@ -654,15 +654,40 @@ func newDefaultRemoteInstance(hostID, agentID, runtimeState string) RemoteInstan
 }
 
 func extractChatResponseText(payload map[string]interface{}) string {
-	for _, key := range []string{"message", "response", "text", "content"} {
-		if value := strings.TrimSpace(anyToString(payload[key])); value != "" {
+	for _, key := range []string{"message", "response", "text", "content", "output_text"} {
+		if value := extractChatTextFromAny(payload[key]); value != "" {
 			return value
 		}
 	}
-	if output, ok := payload["output"].(map[string]interface{}); ok {
-		for _, key := range []string{"message", "text", "content"} {
-			if value := strings.TrimSpace(anyToString(output[key])); value != "" {
-				return value
+	for _, key := range []string{"output", "payload", "payloads", "choices", "result", "data"} {
+		if value := extractChatTextFromAny(payload[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func extractChatTextFromAny(value interface{}) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case []interface{}:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if segment := extractChatTextFromAny(item); segment != "" {
+				parts = append(parts, segment)
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	case map[string]interface{}:
+		for _, key := range []string{"message", "response", "text", "content", "output_text"} {
+			if segment := extractChatTextFromAny(typed[key]); segment != "" {
+				return segment
+			}
+		}
+		for _, key := range []string{"delta", "payload", "payloads", "choices", "output", "result", "data"} {
+			if segment := extractChatTextFromAny(typed[key]); segment != "" {
+				return segment
 			}
 		}
 	}
