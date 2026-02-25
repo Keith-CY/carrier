@@ -336,6 +336,12 @@ func handleRemoteHostSessions(w http.ResponseWriter, r *http.Request, requestID 
 		return
 	}
 	sessionID := strings.TrimSpace(parts[2])
+	normalizedSessionID, sessionErr := validateRemoteSessionIdentifier(sessionID)
+	if sessionErr != nil {
+		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", sessionErr.Error()))
+		return
+	}
+	sessionID = normalizedSessionID
 	action := strings.ToLower(strings.TrimSpace(parts[3]))
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
@@ -907,19 +913,27 @@ func streamChatSSE(w http.ResponseWriter, requestID string, payload map[string]i
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	_ = writeSSEEvent(w, map[string]interface{}{"type": "start", "requestId": requestID})
+	if err := writeSSEEvent(w, map[string]interface{}{"type": "start", "requestId": requestID}); err != nil {
+		return
+	}
 	flusher.Flush()
 
 	chunks := chunkString(text, 180)
 	for _, chunk := range chunks {
-		_ = writeSSEEvent(w, map[string]interface{}{"type": "text-delta", "delta": chunk})
+		if err := writeSSEEvent(w, map[string]interface{}{"type": "text-delta", "delta": chunk}); err != nil {
+			return
+		}
 		flusher.Flush()
 	}
 	if strings.TrimSpace(sessionID) != "" {
-		_ = writeSSEEvent(w, map[string]interface{}{"type": "session", "sessionId": strings.TrimSpace(sessionID)})
+		if err := writeSSEEvent(w, map[string]interface{}{"type": "session", "sessionId": strings.TrimSpace(sessionID)}); err != nil {
+			return
+		}
 		flusher.Flush()
 	}
-	_ = writeSSEEvent(w, map[string]interface{}{"type": "finish", "finishReason": "stop"})
+	if err := writeSSEEvent(w, map[string]interface{}{"type": "finish", "finishReason": "stop"}); err != nil {
+		return
+	}
 	flusher.Flush()
 }
 
@@ -941,16 +955,20 @@ func writeSSEEvent(w http.ResponseWriter, payload map[string]interface{}) error 
 }
 
 func chunkString(input string, size int) []string {
-	if size <= 0 || len(input) <= size {
+	if size <= 0 {
 		return []string{input}
 	}
-	chunks := make([]string, 0, len(input)/size+1)
-	for len(input) > size {
-		chunks = append(chunks, input[:size])
-		input = input[size:]
+	runes := []rune(input)
+	if len(runes) <= size {
+		return []string{input}
 	}
-	if input != "" {
-		chunks = append(chunks, input)
+	chunks := make([]string, 0, len(runes)/size+1)
+	for len(runes) > size {
+		chunks = append(chunks, string(runes[:size]))
+		runes = runes[size:]
+	}
+	if len(runes) > 0 {
+		chunks = append(chunks, string(runes))
 	}
 	if len(chunks) == 0 {
 		chunks = append(chunks, "")

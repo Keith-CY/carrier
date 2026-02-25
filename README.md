@@ -241,6 +241,10 @@ Remote rollout metrics:
   - `rollout.canPromote`: rollout gate signal for full promotion
   - `rollout.reasons`: threshold-based reasons when state is not fully healthy
 
+SSH trust behavior note:
+- Remote SSH uses `StrictHostKeyChecking=accept-new` (TOFU) by default for first connection convenience.
+- For production environments, pre-populate `known_hosts` and/or use controlled SSH config to avoid implicit first-seen trust.
+
 ### Managed PicoClaw Secret Persistence
 
 - Managed instance record files (`~/.carrier/agents/*.json`) do not store channel/provider secret values.

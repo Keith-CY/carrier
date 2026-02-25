@@ -337,10 +337,11 @@ func remotePatchConfig(ctx context.Context, host RemoteHost, patch map[string]in
 		return nil, "", steps, fmt.Errorf("marshal merged remote config: %w", err)
 	}
 	delimiter := fmt.Sprintf("CARRIER_EOF_%d", time.Now().UnixNano())
-	snapshotPath := fmt.Sprintf("$HOME/.carrier/snapshots/openclaw-%d.json", time.Now().Unix())
+	snapshotUnix := time.Now().Unix()
+	snapshotPath := fmt.Sprintf("$HOME/.openclaw/snapshots/openclaw-%d.json", snapshotUnix)
 	writeCmd := fmt.Sprintf(
-		"mkdir -p \"$HOME/.openclaw\" \"$HOME/.carrier/snapshots\" && cp \"$HOME/.openclaw/openclaw.json\" %s 2>/dev/null || true && cat > \"$HOME/.openclaw/openclaw.json\" <<'%s'\n%s\n%s",
-		shellSingleQuote(snapshotPath),
+		"mkdir -p \"$HOME/.openclaw\" \"$HOME/.openclaw/snapshots\"; snapshot_path=\"$HOME/.openclaw/snapshots/openclaw-%d.json\"; cp \"$HOME/.openclaw/openclaw.json\" \"$snapshot_path\" 2>/dev/null || true; cat > \"$HOME/.openclaw/openclaw.json\" <<'%s'\n%s\n%s",
+		snapshotUnix,
 		delimiter,
 		string(raw),
 		delimiter,
@@ -425,11 +426,11 @@ func remoteArchiveSession(ctx context.Context, host RemoteHost, agentID, session
 	if err := validateAgentIdentifier(agentID); err != nil {
 		return nil, err
 	}
-	trimmedSession := strings.TrimSpace(sessionID)
-	if trimmedSession == "" {
-		return nil, fmt.Errorf("sessionId is required")
+	trimmedSession, err := validateRemoteSessionIdentifier(sessionID)
+	if err != nil {
+		return nil, err
 	}
-	cmd := fmt.Sprintf("set -e; base=\"$HOME/.openclaw/agents/%s\"; src=\"$base/sessions/%s.jsonl\"; dst=\"$base/sessions_archive/%s.jsonl\"; if [ -f \"$src\" ]; then mkdir -p \"$base/sessions_archive\"; mv \"$src\" \"$dst\"; exit 0; fi; if [ -f \"$dst\" ]; then exit 0; fi; exit 44", agentID, trimmedSession, trimmedSession)
+	cmd := fmt.Sprintf("set -e; sid=%s; base=\"$HOME/.openclaw/agents/%s\"; src=\"$base/sessions/$sid.jsonl\"; dst=\"$base/sessions_archive/$sid.jsonl\"; if [ -f \"$src\" ]; then mkdir -p \"$base/sessions_archive\"; mv \"$src\" \"$dst\"; exit 0; fi; if [ -f \"$dst\" ]; then exit 0; fi; exit 44", shellSingleQuote(trimmedSession), agentID)
 	res, err := runRemoteCommand(ctx, host, cmd)
 	steps := []remoteExecResult{res}
 	if err != nil {
@@ -448,11 +449,11 @@ func remoteDeleteSession(ctx context.Context, host RemoteHost, agentID, sessionI
 	if err := validateAgentIdentifier(agentID); err != nil {
 		return nil, err
 	}
-	trimmedSession := strings.TrimSpace(sessionID)
-	if trimmedSession == "" {
-		return nil, fmt.Errorf("sessionId is required")
+	trimmedSession, err := validateRemoteSessionIdentifier(sessionID)
+	if err != nil {
+		return nil, err
 	}
-	cmd := fmt.Sprintf("set -e; base=\"$HOME/.openclaw/agents/%s\"; rm -f \"$base/sessions/%s.jsonl\" \"$base/sessions_archive/%s.jsonl\"", agentID, trimmedSession, trimmedSession)
+	cmd := fmt.Sprintf("set -e; sid=%s; base=\"$HOME/.openclaw/agents/%s\"; rm -f \"$base/sessions/$sid.jsonl\" \"$base/sessions_archive/$sid.jsonl\"", shellSingleQuote(trimmedSession), agentID)
 	res, err := runRemoteCommand(ctx, host, cmd)
 	steps := []remoteExecResult{res}
 	if err != nil {

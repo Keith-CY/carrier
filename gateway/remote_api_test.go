@@ -491,3 +491,74 @@ func TestRemoteMetricsEndpointMethodGuard(t *testing.T) {
 		t.Fatalf("expected 405, got status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestRemoteSessionActionsRejectInvalidSessionID(t *testing.T) {
+	sshCalls := 0
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		sshCalls++
+		return remoteExecResult{ExitCode: 0}
+	})
+
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	archiveRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/sessions/bad*session/archive?agentId=main", `{}`)
+	if archiveRec.Code != http.StatusBadRequest {
+		t.Fatalf("archive invalid session status=%d body=%s", archiveRec.Code, archiveRec.Body.String())
+	}
+	if sshCalls != 0 {
+		t.Fatalf("expected no ssh command for invalid archive session id, calls=%d", sshCalls)
+	}
+
+	deleteRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/sessions/bad*session/delete?agentId=main", `{}`)
+	if deleteRec.Code != http.StatusBadRequest {
+		t.Fatalf("delete invalid session status=%d body=%s", deleteRec.Code, deleteRec.Body.String())
+	}
+	if sshCalls != 0 {
+		t.Fatalf("expected no ssh command for invalid delete session id, calls=%d", sshCalls)
+	}
+}
+
+func TestRemotePatchConfigUsesExpandedSnapshotPath(t *testing.T) {
+	var writeCommand string
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "cat \"$HOME/.openclaw/openclaw.json\""):
+			return remoteExecResult{ExitCode: 0, Stdout: `{"agents":{"defaults":{"model":"gpt-4.1"}}}`}
+		case strings.Contains(command, "cat > \"$HOME/.openclaw/openclaw.json\""):
+			writeCommand = command
+			return remoteExecResult{ExitCode: 0}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	host := RemoteHost{
+		ID:          "host-1",
+		Host:        "127.0.0.1",
+		Port:        22,
+		User:        "ubuntu",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     "~/.ssh/id_ed25519",
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	}
+	_, snapshotPath, _, err := remotePatchConfig(context.Background(), host, map[string]interface{}{
+		"agents": map[string]interface{}{
+			"defaults": map[string]interface{}{
+				"model": "gpt-5-mini",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("remotePatchConfig failed: %v", err)
+	}
+	if !strings.Contains(snapshotPath, "$HOME/.openclaw/snapshots/openclaw-") {
+		t.Fatalf("unexpected snapshot path: %q", snapshotPath)
+	}
+	if !strings.Contains(writeCommand, "snapshot_path=\"$HOME/.openclaw/snapshots/openclaw-") {
+		t.Fatalf("expected shell-expanded snapshot path assignment, command=%s", writeCommand)
+	}
+	if strings.Contains(writeCommand, "'$HOME/.openclaw/snapshots/") {
+		t.Fatalf("snapshot path should not be single-quoted with literal $HOME, command=%s", writeCommand)
+	}
+}

@@ -231,3 +231,17 @@ func validateAgentIdentifier(id string) error {
 	}
 	return nil
 }
+
+func validateRemoteSessionIdentifier(id string) (string, error) {
+	trimmed := strings.TrimSpace(id)
+	if trimmed == "" {
+		return "", fmt.Errorf("sessionId is required")
+	}
+	for _, ch := range trimmed {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.' {
+			continue
+		}
+		return "", fmt.Errorf("sessionId contains unsupported character %q", ch)
+	}
+	return trimmed, nil
+}
