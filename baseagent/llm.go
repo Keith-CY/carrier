@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -20,6 +21,8 @@ const (
 	defaultOpenAICodexBaseURL   = "https://chatgpt.com/backend-api"
 	defaultOpenRouterBaseURL    = "https://openrouter.ai/api/v1"
 	defaultBaseAgentLLMTimeout  = 45 * time.Second
+	baseAgentLLMRetryAttempts   = 3
+	baseAgentLLMRetryBackoff    = 200 * time.Millisecond
 	baseAgentMaxModelRespBytes  = 1 << 20
 	baseAgentMaxModelErrorBytes = 8 << 10
 )
@@ -30,6 +33,7 @@ type llmRequestDeps struct {
 	marshalJSON func(any) ([]byte, error)
 	readAll     func(io.Reader) ([]byte, error)
 	doRequest   func(*http.Request) (*http.Response, error)
+	sleep       func(context.Context, time.Duration) error
 }
 
 func normalizeLLMRequestDeps(deps llmRequestDeps) llmRequestDeps {
@@ -42,7 +46,63 @@ func normalizeLLMRequestDeps(deps llmRequestDeps) llmRequestDeps {
 	if deps.doRequest == nil {
 		deps.doRequest = http.DefaultClient.Do
 	}
+	if deps.sleep == nil {
+		deps.sleep = sleepWithContext
+	}
 	return deps
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func isRetryableModelRequestError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr)
+}
+
+func doModelRequestWithRetry(ctx context.Context, deps llmRequestDeps, requestTemplate *http.Request) (*http.Response, error) {
+	backoff := baseAgentLLMRetryBackoff
+	var lastErr error
+
+	for attempt := 1; attempt <= baseAgentLLMRetryAttempts; attempt++ {
+		req := requestTemplate.Clone(ctx)
+		if requestTemplate.GetBody != nil {
+			body, err := requestTemplate.GetBody()
+			if err != nil {
+				return nil, fmt.Errorf("clone model request body: %w", err)
+			}
+			req.Body = body
+		}
+
+		resp, err := deps.doRequest(req)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+
+		if attempt == baseAgentLLMRetryAttempts || !isRetryableModelRequestError(err) {
+			break
+		}
+		if err := deps.sleep(ctx, backoff); err != nil {
+			return nil, err
+		}
+		backoff *= 2
+	}
+	return nil, lastErr
 }
 
 const baseAgentSystemPrompt = "You are Carrier's built-in base agent. " +
@@ -112,21 +172,30 @@ func requestLLMCompletionWithDeps(ctx context.Context, systemPrompt, userMessage
 		}
 	}
 
-	resp, err := deps.doRequest(req)
+	resp, err := doModelRequestWithRetry(llmCtx, deps, req)
 	if err != nil {
 		return "", fmt.Errorf("model request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := deps.readAll(io.LimitReader(resp.Body, baseAgentMaxModelErrorBytes))
+		body, readErr := deps.readAll(io.LimitReader(resp.Body, baseAgentMaxModelErrorBytes))
 		if parsedErr := parseModelError(resp.StatusCode, body); parsedErr != nil {
+			if readErr != nil {
+				return "", fmt.Errorf("%w (unable to read full error response body: %v)", parsedErr, readErr)
+			}
 			return "", parsedErr
 		}
 
 		msg := strings.TrimSpace(string(body))
 		if msg == "" {
+			if readErr != nil {
+				return "", fmt.Errorf("model request failed with status %d (unable to read error response body: %v)", resp.StatusCode, readErr)
+			}
 			return "", fmt.Errorf("model request failed with status %d", resp.StatusCode)
+		}
+		if readErr != nil {
+			return "", fmt.Errorf("model request failed with status %d: %s (unable to read full error response body: %v)", resp.StatusCode, msg, readErr)
 		}
 		return "", fmt.Errorf("model request failed with status %d: %s", resp.StatusCode, msg)
 	}
