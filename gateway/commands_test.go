@@ -42,6 +42,12 @@ func TestParseInput_ValidCommands(t *testing.T) {
 			wantCmd: CmdAdd, wantArgs: []string{"myagent"}, wantSession: "session-xyz123",
 		},
 		{
+			name:         "install with argument",
+			input:        "telegram 123 req-install /install openclaw",
+			wantProvider: "telegram", wantChatID: "123", wantReqID: "req-install",
+			wantCmd: CmdInstall, wantArgs: []string{"openclaw"},
+		},
+		{
 			name:         "uninstall with session token",
 			input:        "feishu chat-abc req-3b session-xyz123 /uninstall myagent",
 			wantProvider: "feishu", wantChatID: "chat-abc", wantReqID: "req-3b",
