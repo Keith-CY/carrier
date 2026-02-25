@@ -20,6 +20,21 @@ Related follow-up issues: #1295, #1296, #1297, #1281, #1282.
 - Verify `add -> start -> stop -> uninstall` all succeed without stale instance metadata.
 - Verify failure paths return sanitized user-facing errors.
 
+4. Remote host edit closure (WebUI `#/servers`)
+- Create a remote host, click `Edit`, and verify editor enters update mode (`Update Host` + editor state text).
+- Save changes and verify card metadata reflects patched values.
+- Click `Cancel Edit` and verify form returns to create mode (`Save Host`) and state text clears.
+
+5. Provider profile and binding closure (WebUI `#/profiles`)
+- Create a provider profile, click `Edit`, patch model/provider fields, and verify card metadata updates.
+- Create a provider binding, delete the binding, and verify empty state text is rendered.
+- Select a specific `Profile Test Host`, trigger `Test`, and verify success toast/message is shown for the selected profile.
+- With `provider_binding_enabled=false`, verify binding controls remain disabled and explanatory message is visible.
+
+6. Remote observability rollout gate (WebUI `#/remote-observability`)
+- Verify rollout summary card is visible with `state`, `can promote`, and reason list.
+- Confirm status line includes `rollout=<state>` and updates after refresh.
+
 ## Redaction Boundary
 
 `RedactErrorMessage` in `gateway/redact.go` delegates to `shared/redact`.

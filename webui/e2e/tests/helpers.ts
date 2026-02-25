@@ -102,6 +102,39 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
     }),
   );
 
+  await page.route('**/api/v1/features', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        features: {
+          remoteControlPlaneEnabled: true,
+          remoteChatEnabled: true,
+          providerBindingEnabled: true,
+        },
+      }),
+    }),
+  );
+
+  await page.route('**/api/v1/remote/metrics', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        metrics: {
+          totals: { total: 0, success: 0, failure: 0, successRate: 0, avgLatencyMs: 0, minLatencyMs: 0, maxLatencyMs: 0, latencyTotalMs: 0 },
+          repair: { triggered: 0, success: 0, failure: 0, successRate: 0 },
+          chatStream: { total: 0, failure: 0, failureRate: 0 },
+          rollout: { state: 'healthy', canPromote: true, reasons: [] },
+          operations: {},
+          timestamp: '2026-02-25T00:00:00Z',
+        },
+      }),
+    }),
+  );
+
   // SSE log stream — return a small SSE payload then close
   await page.route('**/api/v1/logs/stream*', (route) =>
     route.fulfill({

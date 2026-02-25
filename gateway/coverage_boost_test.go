@@ -109,6 +109,32 @@ func TestLoadGatewayConfigFromEnvDerivesArtifactRootFromSessionDataDir(t *testin
 	}
 }
 
+func TestNormalizeGatewayConfigFeatureFlags(t *testing.T) {
+	cfg := &GatewayConfig{
+		RemoteControlPlaneEnabled: false,
+		RemoteChatEnabled:         true,
+		ProviderBindingEnabled:    true,
+	}
+	normalizeGatewayConfigFeatureFlags(cfg)
+	if cfg.RemoteChatEnabled || cfg.ProviderBindingEnabled {
+		t.Fatalf("expected dependent flags disabled when remote control plane is off: %+v", cfg)
+	}
+}
+
+func TestLoadGatewayConfigFromEnvNormalizesFeatureDependencies(t *testing.T) {
+	t.Setenv("CARRIER_REMOTE_CONTROL_PLANE_ENABLED", "false")
+	t.Setenv("CARRIER_REMOTE_CHAT_ENABLED", "true")
+	t.Setenv("CARRIER_PROVIDER_BINDING_ENABLED", "true")
+
+	cfg := LoadGatewayConfigFromEnv()
+	if cfg.RemoteControlPlaneEnabled {
+		t.Fatalf("expected remote control plane disabled, got %+v", cfg)
+	}
+	if cfg.RemoteChatEnabled || cfg.ProviderBindingEnabled {
+		t.Fatalf("expected dependent feature flags normalized to false, got %+v", cfg)
+	}
+}
+
 func TestStartGatewayReturnsListenErrorForInvalidAddress(t *testing.T) {
 	tmp := t.TempDir()
 	artifactRoot := filepath.Join(tmp, "artifacts")

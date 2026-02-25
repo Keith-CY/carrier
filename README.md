@@ -169,7 +169,7 @@ Notes:
 
 ### Prerequisites
 - Go toolchain (see `daemon/go.mod` for the required version)
-- Bun (optional; only needed for some utility scripts under `scripts/`)
+- Bun (required for WebUI TypeScript build and utility scripts)
 
 #### Toolchain quick check
 
@@ -178,13 +178,14 @@ Run the following to verify required tools are installed and print their version
 ```bash
 echo "gh:  $(gh --version | head -1)"
 echo "go:  $(go version)"
-bun --version >/dev/null 2>&1 && echo "bun: $(bun --version)" || echo "bun: (optional, not installed)"
+echo "bun: $(bun --version)"
 ```
 
 If any command fails, install the missing tool before running automation scripts. See [CONTRIBUTING.md](./CONTRIBUTING.md) for detailed CI troubleshooting.
 
 ### Install
 - Carrier/Daemon/Gateway/BaseAgent/Shared (Go): Go modules are loaded automatically when building or testing; no additional install command needed.
+- WebUI assets: source files are TypeScript in `webui/src/*.ts`; build output is generated to `webui/static/*.js` via `bash scripts/build-webui.sh`.
 
 ### Run tests / checks
 - Daemon tests:
@@ -230,6 +231,15 @@ Runtime environment variables:
 - `CARRIER_GATEWAY_PORT` (default: `8787`)
 - `CARRIER_GATEWAY_API_TOKEN` (optional on loopback; required for non-loopback bind)
 - `CARRIER_MAX_COMMAND_BODY_BYTES` (default: `65536`)
+- `CARRIER_REMOTE_CONTROL_PLANE_ENABLED` (default: `true`)
+- `CARRIER_REMOTE_CHAT_ENABLED` (default: `true`, effective only when `CARRIER_REMOTE_CONTROL_PLANE_ENABLED=true`)
+- `CARRIER_PROVIDER_BINDING_ENABLED` (default: `true`, effective only when `CARRIER_REMOTE_CONTROL_PLANE_ENABLED=true`)
+
+Remote rollout metrics:
+- `GET /api/v1/remote/metrics` returns aggregate remote-operation metrics plus `rollout` status:
+  - `rollout.state`: `healthy | canary | hold`
+  - `rollout.canPromote`: rollout gate signal for full promotion
+  - `rollout.reasons`: threshold-based reasons when state is not fully healthy
 
 ### Managed PicoClaw Secret Persistence
 
@@ -257,6 +267,7 @@ Runtime environment variables:
 
 - Pairing lifecycle and troubleshooting matrix: `docs/runbooks/pairing-lifecycle.md`
 - Go-live checklist and rollback: `docs/runbooks/go-live-rollback.md`
+- Post-merge smoke checklist (includes remote control plane flows): `docs/runbooks/post-merge-smoke-checklist.md`
 - CI first-response playbook: `docs/ci/first-response-playbook.md`
 
 ## Kanban workflow env vars

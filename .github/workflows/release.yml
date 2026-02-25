@@ -195,6 +195,17 @@ jobs:
         with:
           go-version-file: daemon/go.mod
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3
+        with:
+          bun-version: 1.1.8
+
+      - name: Build WebUI Assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/build-webui.sh
+
       - name: Build release package
         id: build
         shell: bash

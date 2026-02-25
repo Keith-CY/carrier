@@ -13,11 +13,17 @@ Source issue: #426
 1. Confirm CI is green for merge candidate.
 2. Validate daemon and gateway binaries for target platform.
 3. Run smoke path: `carrier add openclaw` -> pair -> start -> status -> logs.
-4. Verify diagnose path and artifact download URL.
-5. Confirm audit logs are generated for add/install/start/stop/diagnose.
-6. Confirm required secrets/env are present (without printing values).
-7. Confirm monitoring and health endpoint checks are active.
-8. Publish release notes and known limitations.
+4. Run remote control plane WebUI smoke:
+   - `#/servers`: create -> edit/update -> check -> delete.
+   - `#/profiles`: create/edit profile -> bind -> delete binding -> profile test with explicit host selection.
+   - `#/remote-chat`: verify stream starts for `target=remote` and `target=local`.
+   - `#/remote-observability`: verify `rollout.state=healthy` before full enablement (`canary` only for limited cohort, `hold` blocks rollout).
+5. Verify WebUI TypeScript build artifact step passes (`bash scripts/build-webui.sh`) and generated `webui/static/*.js` assets are present for packaging.
+6. Verify diagnose path and artifact download URL.
+7. Confirm audit logs are generated for add/install/start/stop/diagnose.
+8. Confirm required secrets/env are present (without printing values).
+9. Confirm monitoring and health endpoint checks are active.
+10. Publish release notes and known limitations.
 
 ## Rollback Triggers
 

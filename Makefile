@@ -1,4 +1,4 @@
-.PHONY: test test-daemon test-gateway test-openclaw-installer test-start-systemd coverage-gate lint build clean hooks help
+.PHONY: test test-daemon test-gateway test-openclaw-installer test-start-systemd coverage-gate lint build build-webui clean hooks help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -23,8 +23,11 @@ coverage-gate: ## Run multi-module coverage gate
 lint: ## Run linters (go vet)
 	cd daemon && go vet ./...
 
-build: ## Build daemon binary
+build: build-webui ## Build daemon binary
 	cd daemon && go build -o ../bin/agentd ./cmd/agentd
+
+build-webui: ## Build WebUI TypeScript assets with Bun
+	bash scripts/build-webui.sh
 
 clean: ## Remove build artifacts
 	rm -rf bin/

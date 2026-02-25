@@ -205,6 +205,41 @@ func TestDaemonClient_GetLogs(t *testing.T) {
 	}
 }
 
+func TestDaemonClient_ChatAgent(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]interface{}
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"agentId":   "openclaw",
+			"sessionId": "sess-local-1",
+			"message":   "hello local",
+		})
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	result, err := dc.ChatAgent(context.Background(), "openclaw", "hello", "sess-local-1", "actor", "req")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/api/v1/agents/openclaw/chat" {
+		t.Fatalf("unexpected path %q", gotPath)
+	}
+	if gotBody["message"] != "hello" {
+		t.Fatalf("unexpected message body: %#v", gotBody)
+	}
+	if gotBody["sessionId"] != "sess-local-1" {
+		t.Fatalf("unexpected session body: %#v", gotBody)
+	}
+	if result.AgentID != "openclaw" || result.SessionID != "sess-local-1" || result.Message != "hello local" {
+		t.Fatalf("unexpected chat result: %+v", result)
+	}
+}
+
 func TestDaemonClient_GetLogs_ClampsTail(t *testing.T) {
 	var gotPath string
 	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -569,6 +604,15 @@ func TestDaemonClient_UpgradeDiagnoseAndChatParseErrors(t *testing.T) {
 				return err
 			},
 			want: "base-agent chat response",
+		},
+		{
+			name: "agent chat parse error",
+			path: "/api/v1/agents/openclaw/chat",
+			run: func(c *DaemonClient) error {
+				_, err := c.ChatAgent(context.Background(), "openclaw", "hello", "sess-1", "actor", "req")
+				return err
+			},
+			want: "agent chat response",
 		},
 	}
 
