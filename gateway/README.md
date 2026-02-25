@@ -1,7 +1,15 @@
 # Gateway
 
-The gateway has been rewritten in Go and is now part of the daemon module.
+Carrier gateway runtime lives in this top-level Go module.
 
-See `daemon/internal/gateway/` for the implementation.
+Key responsibilities:
+- command ingress (`/command`)
+- provider webhooks (`/webhook/*`)
+- session/rate-limit/download-token handling
+- WebUI API surface (`/api/v1/*`)
 
-The TypeScript/Bun gateway has been removed.
+Run tests:
+```bash
+cd gateway
+go test ./...
+```

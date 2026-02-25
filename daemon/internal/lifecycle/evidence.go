@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"time"
 
-	"carrier/daemon/internal/baseagent"
+	"carrier/baseagent"
 )
 
 // Evidence represents structured diagnostic evidence collected during a crash or failure.

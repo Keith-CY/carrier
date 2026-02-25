@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"carrier/baseagent"
 	"carrier/daemon/internal/api"
-	"carrier/daemon/internal/baseagent"
 	"carrier/daemon/internal/catalog"
 	"carrier/daemon/internal/commandexec"
 	"carrier/daemon/internal/lifecycle"
@@ -696,4 +697,331 @@ func TestHandleUpgrade_NotInstalled(t *testing.T) {
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("expected 409 for upgrade of uninstalled agent, got %d", rr.Code)
 	}
+}
+
+type alwaysFailRunner struct{}
+
+func (alwaysFailRunner) Run(_ context.Context, _ string) (commandexec.Result, error) {
+	return commandexec.Result{ExitCode: 1, CombinedOutput: "forced failure"}, errors.New("forced runner failure")
+}
+
+type errBodyReadCloser struct{}
+
+func (errBodyReadCloser) Read(_ []byte) (int, error) {
+	return 0, errors.New("forced read failure")
+}
+
+func (errBodyReadCloser) Close() error { return nil }
+
+type failingStopProcessManager struct {
+	mu        sync.Mutex
+	running   map[string]bool
+	waiters   map[string]chan struct{}
+	stopCalls int
+	cleaned   bool
+}
+
+func newFailingStopProcessManager() *failingStopProcessManager {
+	return &failingStopProcessManager{
+		running: make(map[string]bool),
+		waiters: make(map[string]chan struct{}),
+	}
+}
+
+func (m *failingStopProcessManager) Start(agentID string, _ string, _ []string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.running[agentID] = true
+	m.waiters[agentID] = make(chan struct{})
+	return 1, nil
+}
+
+func (m *failingStopProcessManager) Stop(_ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stopCalls++
+	return errors.New("forced stop failure")
+}
+
+func (m *failingStopProcessManager) IsRunning(agentID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.running[agentID]
+}
+
+func (m *failingStopProcessManager) Wait(agentID string) error {
+	m.mu.Lock()
+	waitCh := m.waiters[agentID]
+	m.mu.Unlock()
+	if waitCh != nil {
+		<-waitCh
+	}
+	return nil
+}
+
+func (m *failingStopProcessManager) Cleanup() {
+	m.mu.Lock()
+	for id, waitCh := range m.waiters {
+		delete(m.waiters, id)
+		delete(m.running, id)
+		close(waitCh)
+	}
+	m.cleaned = true
+	m.mu.Unlock()
+}
+
+type blockingStopProcessManager struct {
+	mu      sync.Mutex
+	running map[string]bool
+	waiters map[string]chan struct{}
+	started chan struct{}
+	release chan struct{}
+}
+
+func newBlockingStopProcessManager() *blockingStopProcessManager {
+	return &blockingStopProcessManager{
+		running: make(map[string]bool),
+		waiters: make(map[string]chan struct{}),
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (m *blockingStopProcessManager) Start(agentID string, _ string, _ []string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.running[agentID] = true
+	m.waiters[agentID] = make(chan struct{})
+	return 1, nil
+}
+
+func (m *blockingStopProcessManager) Stop(agentID string) error {
+	select {
+	case <-m.started:
+	default:
+		close(m.started)
+	}
+	<-m.release
+	m.mu.Lock()
+	if waitCh := m.waiters[agentID]; waitCh != nil {
+		close(waitCh)
+		delete(m.waiters, agentID)
+	}
+	delete(m.running, agentID)
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *blockingStopProcessManager) IsRunning(agentID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.running[agentID]
+}
+
+func (m *blockingStopProcessManager) Wait(agentID string) error {
+	m.mu.Lock()
+	waitCh := m.waiters[agentID]
+	m.mu.Unlock()
+	if waitCh != nil {
+		<-waitCh
+	}
+	return nil
+}
+
+func (m *blockingStopProcessManager) Cleanup() {
+	m.mu.Lock()
+	for id, waitCh := range m.waiters {
+		delete(m.waiters, id)
+		delete(m.running, id)
+		close(waitCh)
+	}
+	m.mu.Unlock()
+}
+
+func newTestManifest(id string) manifest.Manifest {
+	return manifest.Manifest{
+		ID:      id,
+		Name:    strings.ToUpper(id),
+		Version: "1.0.0",
+		Runtime: manifest.RuntimeSpec{
+			Type:    manifest.RuntimeTypeLocalBinary,
+			Install: manifest.CommandSpec{Command: "install-" + id},
+			Upgrade: manifest.CommandSpec{Command: "upgrade-" + id},
+			Start:   manifest.CommandSpec{Command: "tail -f /dev/null"},
+			Stop:    manifest.CommandSpec{Command: "stop-" + id},
+		},
+		Memory: manifest.MemorySpec{
+			Supports:  []manifest.MemoryType{manifest.MemoryTypePerAgent},
+			MountPath: "./memory",
+		},
+		Upgrade: manifest.UpgradeSpec{
+			Channel:  "stable",
+			Strategy: manifest.UpgradeStrategyInPlaceOrReinstall,
+		},
+	}
+}
+
+func TestHandleUpgradeSuccessRound10(t *testing.T) {
+	svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithRunner(noopRunner{}), lifecycle.WithRuntimeChecker(noopChecker{}))
+	m := newTestManifest("openclaw")
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	mux := buildTestMux(svc, true)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/upgrade", strings.NewReader(`{"agentId":"openclaw"}`))
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("upgrade status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestUpgradeRouteBadBodyRound10(t *testing.T) {
+	svc := lifecycle.NewService(baseagent.NoopTriager{})
+	mux := buildTestMux(svc, true)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/upgrade", strings.NewReader(`{bad`))
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestDiagnosisHandoffSuccessRound10(t *testing.T) {
+	svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithRunner(noopRunner{}), lifecycle.WithRuntimeChecker(noopChecker{}), lifecycle.WithDiagnoseDir(t.TempDir()))
+	m := newTestManifest("openclaw")
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+	if _, err := svc.HandleFailure(context.Background(), "openclaw", "simulated crash"); err != nil {
+		t.Fatalf("HandleFailure: %v", err)
+	}
+
+	mux := buildTestMux(svc, true)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/diagnosis/handoffs", strings.NewReader(`{"agentId":"openclaw","consent":true,"actor":"telegram:42","requestId":"req-42"}`))
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	handoffID, _ := payload["id"].(string)
+	if strings.TrimSpace(handoffID) == "" {
+		t.Fatalf("expected non-empty handoff id, payload=%v", payload)
+	}
+}
+
+func TestHandleInstallMultiInstanceInstallFailureRound10(t *testing.T) {
+	svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithRunner(alwaysFailRunner{}), lifecycle.WithRuntimeChecker(noopChecker{}))
+	m := newTestManifest("openclaw")
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+	mux := buildTestMux(svc, true)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/openclaw/install", strings.NewReader(`{"multi_instance":true}`))
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestDecodeBodyReadAndChunkedOversizeRound10(t *testing.T) {
+	t.Run("read failure", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/x", nil)
+		req.Body = errBodyReadCloser{}
+		req.ContentLength = -1
+		var body map[string]any
+		if ok := decodeBody(rr, req, &body); ok {
+			t.Fatal("decodeBody should fail on read error")
+		}
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("chunked oversized body", func(t *testing.T) {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(strings.Repeat("x", maxBodySize+1)))
+		req.ContentLength = -1
+		var body map[string]any
+		if ok := decodeBody(rr, req, &body); ok {
+			t.Fatal("decodeBody should fail on oversized body")
+		}
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+		}
+	})
+}
+
+func TestStopAllAgentsErrorBranchRound10(t *testing.T) {
+	pm := newFailingStopProcessManager()
+	svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithProcessManager(pm), lifecycle.WithRunner(noopRunner{}), lifecycle.WithRuntimeChecker(noopChecker{}))
+	for _, id := range []string{"openclaw", "picoclaw"} {
+		m := newTestManifest(id)
+		if err := svc.RegisterManifest(m); err != nil {
+			t.Fatalf("register %s: %v", id, err)
+		}
+		if err := svc.Install(context.Background(), id); err != nil {
+			t.Fatalf("install %s: %v", id, err)
+		}
+		if err := svc.Start(context.Background(), id); err != nil {
+			t.Fatalf("start %s: %v", id, err)
+		}
+	}
+
+	err := stopAllAgents(context.Background(), svc)
+	if err == nil || !strings.Contains(err.Error(), "forced stop failure") {
+		t.Fatalf("expected stop failure, got %v", err)
+	}
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if pm.stopCalls == 0 {
+		t.Fatal("expected process manager Stop to be called")
+	}
+	if !pm.cleaned {
+		t.Fatal("expected process manager Cleanup to be called")
+	}
+}
+
+func TestShutdownAgentsTimeoutBranchRound10(t *testing.T) {
+	pm := newBlockingStopProcessManager()
+	svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithProcessManager(pm), lifecycle.WithRunner(noopRunner{}), lifecycle.WithRuntimeChecker(noopChecker{}))
+	m := newTestManifest("openclaw")
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("install openclaw: %v", err)
+	}
+	if err := svc.Start(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("start openclaw: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- shutdownAgents(svc, 5*time.Millisecond)
+	}()
+
+	select {
+	case <-pm.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop was not started")
+	}
+
+	err := <-done
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded, got %v", err)
+	}
+	close(pm.release)
 }

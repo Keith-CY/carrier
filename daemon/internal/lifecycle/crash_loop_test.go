@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"carrier/daemon/internal/baseagent"
+	"carrier/baseagent"
 	"carrier/daemon/internal/manifest"
 )
 

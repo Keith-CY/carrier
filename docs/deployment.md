@@ -52,7 +52,7 @@ The daemon reads configuration from a JSON file. Create `/etc/carrier/carrier.js
 ```
 
 > **Note:** If `api_token` is set, the config file must have restrictive permissions (`chmod 0600`).
-> See `daemon/internal/config/config.go` for all fields and environment variable overrides (`CARRIER_` prefix).
+> See `shared/config/config.go` for all fields and environment variable overrides (`CARRIER_` prefix).
 
 Ensure the data and diagnose directories exist:
 

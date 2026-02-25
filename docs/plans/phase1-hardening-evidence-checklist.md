@@ -8,8 +8,8 @@
 
 | Scope | Related micro task(s) | Evidence |
 |---|---|---|
-| Secret redaction rules (allowlist/denylist/pattern coverage) | #831, #836 | `docs/security/redaction-baseline.md`, `daemon/internal/redact/redact.go`, `daemon/internal/redact/redact_test.go`, `daemon/internal/gateway/redact.go`, `daemon/internal/gateway/redact_test.go`, `daemon/internal/gateway/downloads_test.go` |
-| Artifact/download token lifecycle (issue, single-use consume, cleanup) | #818 | `daemon/internal/gateway/downloads.go`, `daemon/internal/gateway/downloads_test.go`, `daemon/internal/gateway/server.go` |
+| Secret redaction rules (allowlist/denylist/pattern coverage) | #831, #836 | `docs/security/redaction-baseline.md`, `shared/redact/redact.go`, `shared/redact/redact_test.go`, `gateway/redact.go`, `gateway/redact_test.go`, `gateway/downloads_test.go` |
+| Artifact/download token lifecycle (issue, single-use consume, cleanup) | #818 | `gateway/downloads.go`, `gateway/downloads_test.go`, `gateway/server.go` |
 | Release signing and verification chain | #17, #853 | `docs/release-signing.md`, `docs/ARTIFACT_SIGNING.md`, `scripts/sign-artifacts.sh`, `scripts/verify-signature.sh`, `scripts/test-sign-artifacts.sh`, `scripts/test-verify-signature.sh` |
 
 ## Audit
@@ -28,7 +28,7 @@
 | User-facing recovery status and aligned errors | #843 | `daemon/internal/api/server.go` (`DaemonAgentState` fields), `daemon/internal/api/errors.go`, `docs/api/agent-state.md`, `docs/command-contract.md` |
 | Evidence collector interface (logs/exit/probes/trace) | #844 | `daemon/internal/lifecycle/evidence.go`, `daemon/internal/lifecycle/evidence_test.go` |
 | Structured triage/audit summary per failure cycle | #849 | `daemon/internal/lifecycle/service.go` (`HandleFailure` + audit recording), `daemon/internal/lifecycle/service_test.go`, `docs/audit-event-dictionary.md` |
-| Remote diagnosis package + explicit consent handshake | #848 | `daemon/internal/lifecycle/service.go` (`Diagnose`, `CreateRemoteDiagnosisHandoff`), `daemon/internal/api/server.go` (`/api/v1/diagnosis/handoffs`), `daemon/internal/gateway/commands.go` (`/diagnose-consent`) |
+| Remote diagnosis package + explicit consent handshake | #848 | `daemon/internal/lifecycle/service.go` (`Diagnose`, `CreateRemoteDiagnosisHandoff`), `daemon/internal/api/server.go` (`/api/v1/diagnosis/handoffs`), `gateway/commands.go` (`/diagnose-consent`) |
 
 ## Verification snapshot
 

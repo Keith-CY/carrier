@@ -169,7 +169,7 @@ test("classifySkipState maps watchdog stale status", () => {
 test("buildDirtyTreeSignal returns structured machine-friendly fields", () => {
   const signal = buildDirtyTreeSignal([
     " gateway/src/index.ts ",
-    "daemon/internal/gateway/server.go",
+    "gateway/server.go",
     "gateway/src/index.ts",
   ], "hourly-kanban");
 

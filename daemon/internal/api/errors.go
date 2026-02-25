@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"carrier/daemon/internal/lifecycle"
-	"carrier/daemon/internal/redact"
+	"carrier/shared/redact"
 )
 
 type apiError struct {

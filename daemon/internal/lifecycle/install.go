@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"carrier/daemon/internal/baseagent"
+	"carrier/baseagent"
 	"carrier/daemon/internal/manifest"
 )
 

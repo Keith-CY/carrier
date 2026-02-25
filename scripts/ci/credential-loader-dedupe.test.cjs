@@ -22,11 +22,11 @@ test("containsCredentialLoaderDefinition detects known function names", () => {
 test("validateCredentialLoaderDedup reports unexpected files", () => {
   const result = validateCredentialLoaderDedup([
     "daemon/credentialstore/store.go",
-    "daemon/internal/config/legacy.go",
+    "shared/config/legacy.go",
   ]);
 
   assert.equal(result.hasAllowed, true);
-  assert.deepEqual(result.unexpected, ["daemon/internal/config/legacy.go"]);
+  assert.deepEqual(result.unexpected, ["shared/config/legacy.go"]);
 });
 
 test("collectCredentialLoaderDefinitionFiles scans real files", () => {

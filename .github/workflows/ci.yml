@@ -196,8 +196,26 @@ jobs:
         run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -tags webui -o carrier-windows.exe ./cmd/carrier/
 
       - name: Gateway tests
-        working-directory: daemon
-        run: go test -race -count=1 ./internal/gateway/...
+        working-directory: gateway
+        run: go test -race -count=1 ./...
+
+  coverage-gate:
+    name: Coverage Gate
+    needs: classify-scope
+    if: github.event_name != 'pull_request' || needs.classify-scope.outputs.ci_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+
+      - name: Run coverage gate
+        run: bash scripts/coverage-gate.sh
 
   coverage-comment:
     name: Coverage Comment

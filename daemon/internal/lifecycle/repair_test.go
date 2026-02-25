@@ -2,10 +2,11 @@ package lifecycle
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
-	"carrier/daemon/internal/baseagent"
+	"carrier/baseagent"
 	"carrier/daemon/internal/manifest"
 )
 
@@ -299,6 +300,122 @@ func TestRepairManager_ExecuteRepair_Escalate(t *testing.T) {
 	err := rm.ExecuteRepair(action)
 	if err != ErrAllAttemptsExhausted {
 		t.Errorf("expected ErrAllAttemptsExhausted, got %v", err)
+	}
+}
+
+func TestRepairManager_ExecuteRepair_Rebind(t *testing.T) {
+	svc := NewService(baseagent.NoopTriager{})
+	rm := NewRepairManagerWithDefaults(svc)
+
+	action := RepairOutcome{
+		Type:          RepairActionRebind,
+		AgentID:       "test-agent",
+		Reason:        "port conflict",
+		SuggestedPort: 18080,
+		Timestamp:     time.Now(),
+	}
+
+	err := rm.ExecuteRepair(action)
+	if err == nil {
+		t.Fatal("expected rebind to return placeholder service-layer error")
+	}
+	if !strings.Contains(err.Error(), "service-layer port allocation") {
+		t.Fatalf("unexpected rebind error: %v", err)
+	}
+	if count := rm.GetAttemptCount(action.AgentID, RepairActionRebind); count != 1 {
+		t.Fatalf("expected 1 rebind attempt recorded, got %d", count)
+	}
+}
+
+func TestRepairManager_ExecuteRepair_Rollback_MissingBackupPath(t *testing.T) {
+	svc := NewService(baseagent.NoopTriager{})
+	rm := NewRepairManagerWithDefaults(svc)
+
+	action := RepairOutcome{
+		Type:      RepairActionRollback,
+		AgentID:   "test-agent",
+		Reason:    "version rollback",
+		Timestamp: time.Now(),
+	}
+
+	err := rm.ExecuteRepair(action)
+	if err == nil {
+		t.Fatal("expected rollback without backup path to fail")
+	}
+	if !strings.Contains(err.Error(), "valid backup path") {
+		t.Fatalf("unexpected rollback error: %v", err)
+	}
+	if count := rm.GetAttemptCount(action.AgentID, RepairActionRollback); count != 1 {
+		t.Fatalf("expected 1 rollback attempt recorded, got %d", count)
+	}
+}
+
+func TestRepairManager_ExecuteRepair_Rollback_StopFailure(t *testing.T) {
+	svc := NewService(baseagent.NoopTriager{})
+	rm := NewRepairManagerWithDefaults(svc)
+
+	action := RepairOutcome{
+		Type:       RepairActionRollback,
+		AgentID:    "missing-agent",
+		Reason:     "rollback requested",
+		BackupPath: "/tmp/backup.tar.gz",
+		Timestamp:  time.Now(),
+	}
+
+	err := rm.ExecuteRepair(action)
+	if err == nil {
+		t.Fatal("expected rollback stop failure for missing agent")
+	}
+	if !strings.Contains(err.Error(), "rollback stop failed") {
+		t.Fatalf("unexpected rollback stop error: %v", err)
+	}
+}
+
+func TestRepairManager_ExecuteRepair_Rollback_AlreadyStoppedBranch(t *testing.T) {
+	svc := NewService(baseagent.NoopTriager{})
+	rm := NewRepairManagerWithDefaults(svc)
+
+	m := manifest.Manifest{
+		ID:      "rollback-agent",
+		Name:    "Rollback Agent",
+		Version: "1.0.0",
+		Runtime: manifest.RuntimeSpec{
+			Type: manifest.RuntimeTypeLocalBinary,
+			Install: manifest.CommandSpec{
+				Command: "echo installed",
+			},
+			Start: manifest.CommandSpec{
+				Command: "sleep 1000",
+			},
+			Stop: manifest.CommandSpec{
+				Command: "echo stop",
+			},
+		},
+		Memory: manifest.MemorySpec{
+			MountPath: "/tmp/test-repair-rollback",
+			Supports:  []manifest.MemoryType{manifest.MemoryTypePerAgent},
+		},
+	}
+
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("failed to register manifest: %v", err)
+	}
+
+	// Agent is in stopped state, so Stop() returns ErrAlreadyStopped.
+	action := RepairOutcome{
+		Type:       RepairActionRollback,
+		AgentID:    m.ID,
+		Reason:     "rollback requested",
+		BackupPath: "/tmp/rollback-agent-backup.tar.gz",
+		Timestamp:  time.Now(),
+	}
+
+	err := rm.ExecuteRepair(action)
+	if err == nil {
+		t.Fatal("expected placeholder rollback restoration error")
+	}
+	if !strings.Contains(err.Error(), "backup restoration") || !strings.Contains(err.Error(), action.BackupPath) {
+		t.Fatalf("unexpected rollback placeholder error: %v", err)
 	}
 }
 

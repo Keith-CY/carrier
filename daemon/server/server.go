@@ -29,14 +29,14 @@ import (
 	"syscall"
 	"time"
 
+	"carrier/baseagent"
 	"carrier/daemon/internal/api"
-	"carrier/daemon/internal/baseagent"
 	"carrier/daemon/internal/catalog"
-	"carrier/daemon/internal/config"
 	"carrier/daemon/internal/lifecycle"
 	"carrier/daemon/internal/logging"
 	"carrier/daemon/internal/memory"
 	"carrier/daemon/internal/ratelimit"
+	"carrier/shared/config"
 )
 
 const (
@@ -97,7 +97,11 @@ func Run() {
 	opts = append(opts, lifecycle.WithStateFile(statePath))
 
 	svc := lifecycle.NewService(baseagent.NewLLMTriager(baseagent.NoopTriager{}), opts...)
-	baseRuntime := baseagent.NewRuntime(newLifecycleAgentServiceAdapter(svc), memStore)
+	var baseMemoryStore baseagent.MemoryStore
+	if memStore != nil {
+		baseMemoryStore = newBaseAgentMemoryStoreAdapter(memStore)
+	}
+	baseRuntime := baseagent.NewRuntime(newLifecycleAgentServiceAdapter(svc), baseMemoryStore)
 
 	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
 		log.Fatalf("register openclaw manifest: %v", err)
@@ -438,6 +442,59 @@ func buildHTTPMuxWithBaseAgent(
 
 type lifecycleAgentServiceAdapter struct {
 	svc *lifecycle.Service
+}
+
+type baseAgentMemoryStoreAdapter struct {
+	store *memory.Store
+}
+
+func newBaseAgentMemoryStoreAdapter(store *memory.Store) *baseAgentMemoryStoreAdapter {
+	if store == nil {
+		return nil
+	}
+	return &baseAgentMemoryStoreAdapter{store: store}
+}
+
+func (a *baseAgentMemoryStoreAdapter) Get(id string) error {
+	_, err := a.store.Get(id)
+	return err
+}
+
+func (a *baseAgentMemoryStoreAdapter) Create(id, name, version string, memType baseagent.MemoryType, owner string) error {
+	_, err := a.store.Create(id, name, version, memory.Type(memType), owner)
+	return err
+}
+
+func (a *baseAgentMemoryStoreAdapter) List() []baseagent.MemoryEntry {
+	raw := a.store.List()
+	out := make([]baseagent.MemoryEntry, 0, len(raw))
+	for _, item := range raw {
+		out = append(out, baseagent.MemoryEntry{
+			ID:    item.ID,
+			State: baseagent.MemoryState(item.State),
+		})
+	}
+	return out
+}
+
+func (a *baseAgentMemoryStoreAdapter) SetAttachmentsFromLinks(agentID string, memoryIDs []string) error {
+	return a.store.SetAttachmentsFromLinks(agentID, memoryIDs)
+}
+
+func (a *baseAgentMemoryStoreAdapter) PrepareAgentMemory(agentID string) error {
+	_, err := a.store.PrepareAgentMemory(agentID)
+	return err
+}
+
+func (a *baseAgentMemoryStoreAdapter) ExportMemory(memoryID string, opts baseagent.ExportOptions) (string, error) {
+	return a.store.ExportMemory(memoryID, memory.ExportOptions{
+		Actor:     opts.Actor,
+		RequestID: opts.RequestID,
+	})
+}
+
+func (a *baseAgentMemoryStoreAdapter) Archive(memoryID string) error {
+	return a.store.Archive(memoryID)
 }
 
 func newLifecycleAgentServiceAdapter(svc *lifecycle.Service) *lifecycleAgentServiceAdapter {

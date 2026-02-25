@@ -17,8 +17,8 @@ import (
 
 	"carrier/daemon/internal/commandexec"
 	"carrier/daemon/internal/manifest"
-	"carrier/daemon/internal/redact"
 	"carrier/daemon/internal/runtimecheck"
+	"carrier/shared/redact"
 )
 
 func (s *Service) getManifestAndState(agentID string) (manifest.Manifest, AgentState, error) {

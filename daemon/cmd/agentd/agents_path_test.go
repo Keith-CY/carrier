@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"carrier/daemon/internal/baseagent"
+	"carrier/baseagent"
 	"carrier/daemon/internal/catalog"
 	"carrier/daemon/internal/lifecycle"
 )

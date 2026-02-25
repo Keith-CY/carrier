@@ -148,7 +148,7 @@ Current daemon behavior is mixed and clients must handle both patterns:
 }
 ```
 
-Gateway transport (`daemon/internal/gateway/daemonclient.go`) first tries structured codes and falls back to HTTP-status mapping when only string errors are returned.
+Gateway transport (`gateway/daemonclient.go`) first tries structured codes and falls back to HTTP-status mapping when only string errors are returned.
 
 ## `DaemonAgentState` Field Expectations
 

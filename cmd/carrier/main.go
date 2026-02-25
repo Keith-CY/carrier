@@ -48,8 +48,8 @@ import (
 
 	"carrier/configv2"
 	"carrier/daemon/credentialstore"
-	gatewayruntime "carrier/daemon/gateway"
 	"carrier/daemon/server"
+	gatewayruntime "carrier/gateway"
 )
 
 type choiceOption struct {
