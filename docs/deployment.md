@@ -218,3 +218,17 @@ For agent upgrades (managed via the lifecycle API), the daemon automatically cre
 - Rotate secrets in `/etc/carrier/carrier.env` regularly
 - The gateway uses crypto-secure tokens — do not downgrade to sequential generation
 - Review the [security audit](../docs/security-audit-command-execution.md) for command execution hardening
+
+### SSH Remote Control Plane — Host Key Verification
+
+The remote control plane uses `StrictHostKeyChecking=accept-new` for SSH connections,
+which implements Trust-On-First-Use (TOFU): new host keys are automatically accepted
+and saved on first connection, but changed keys are rejected on subsequent connections.
+
+For production deployments, consider pre-populating `~/.ssh/known_hosts` with the
+expected host keys of remote nodes to prevent potential MITM attacks on first connection:
+
+```bash
+# Pre-populate known_hosts for a remote node
+ssh-keyscan -H <remote-host> >> ~/.ssh/known_hosts
+```
