@@ -3,7 +3,7 @@
 # Builds the daemon, starts it on a random port, exercises the HTTP API.
 # Targets ≥40% of system paths.
 #
-# Usage:  bash test/e2e/e2e_test.sh
+# Usage:  bash tests/e2e/e2e_test.sh
 
 set -euo pipefail
 

@@ -75,7 +75,7 @@ Key topics covered:
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | Contributor workflow, branching policy, and review conventions |
 | [`skills/`](./skills/) | Automation and review helper skills (PR review, NBS follow-up) |
 | [`scripts/`](./scripts/) | Development and CI helper scripts |
-| [`test/`](./test/) | Cross-module integration and end-to-end tests |
+| [`tests/`](./tests/) | Cross-module integration and end-to-end tests |
 
 ## M2 daemon scaffold status
 - Runtime prerequisite checks are implemented for local host and WSL2 requirement detection.

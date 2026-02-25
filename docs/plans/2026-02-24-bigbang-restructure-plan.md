@@ -68,11 +68,11 @@
 ### Task 5: Rename Top-Level Test Directory
 
 **Files:**
-- Move: `tests -> test`
+- Keep: `tests/` (no rename to `test/`)
 - Modify: scripts and workflows that reference `tests/`
 - Test: `./scripts/run-e2e-tests.sh` and CI command parity checks
 
-1. Rename top-level `tests` to `test`.
+1. Keep top-level `tests/` as the canonical directory name.
 2. Update shell scripts, docs, and workflow paths.
 3. Validate E2E entrypoint still resolves expected files.
 
