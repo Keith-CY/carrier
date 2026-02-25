@@ -491,13 +491,11 @@ func TestRequestLLMCompletionInjectedFailureBranches(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 
 	t.Run("marshal failure", func(t *testing.T) {
-		origMarshal := jsonMarshalFn
-		jsonMarshalFn = func(any) ([]byte, error) {
-			return nil, errors.New("marshal failed")
-		}
-		t.Cleanup(func() { jsonMarshalFn = origMarshal })
-
-		_, err := requestLLMCompletion(context.Background(), "sys", "hello")
+		_, err := requestLLMCompletionWithDeps(context.Background(), "sys", "hello", llmRequestDeps{
+			marshalJSON: func(any) ([]byte, error) {
+				return nil, errors.New("marshal failed")
+			},
+		})
 		if err == nil || !strings.Contains(err.Error(), "marshal model request") {
 			t.Fatalf("expected marshal failure, got %v", err)
 		}
@@ -511,13 +509,11 @@ func TestRequestLLMCompletionInjectedFailureBranches(t *testing.T) {
 		defer server.Close()
 		t.Setenv("CARRIER_OPENAI_BASE_URL", server.URL)
 
-		origReadAll := readAllFn
-		readAllFn = func(_ io.Reader) ([]byte, error) {
-			return nil, errors.New("read failed")
-		}
-		t.Cleanup(func() { readAllFn = origReadAll })
-
-		_, err := requestLLMCompletion(context.Background(), "sys", "hello")
+		_, err := requestLLMCompletionWithDeps(context.Background(), "sys", "hello", llmRequestDeps{
+			readAll: func(_ io.Reader) ([]byte, error) {
+				return nil, errors.New("read failed")
+			},
+		})
 		if err == nil || !strings.Contains(err.Error(), "read model response") {
 			t.Fatalf("expected read failure, got %v", err)
 		}

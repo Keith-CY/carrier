@@ -26,8 +26,24 @@ const (
 
 const openAICodexJWTClaimPath = "https://api.openai.com/auth"
 
-var jsonMarshalFn = json.Marshal
-var readAllFn = io.ReadAll
+type llmRequestDeps struct {
+	marshalJSON func(any) ([]byte, error)
+	readAll     func(io.Reader) ([]byte, error)
+	doRequest   func(*http.Request) (*http.Response, error)
+}
+
+func normalizeLLMRequestDeps(deps llmRequestDeps) llmRequestDeps {
+	if deps.marshalJSON == nil {
+		deps.marshalJSON = json.Marshal
+	}
+	if deps.readAll == nil {
+		deps.readAll = io.ReadAll
+	}
+	if deps.doRequest == nil {
+		deps.doRequest = http.DefaultClient.Do
+	}
+	return deps
+}
 
 const baseAgentSystemPrompt = "You are Carrier's built-in base agent. " +
 	"Answer in the user's language. " +
@@ -48,6 +64,12 @@ func (r *Runtime) replyWithLLM(ctx context.Context, userMessage string) (string,
 }
 
 func requestLLMCompletion(ctx context.Context, systemPrompt, userMessage string) (string, error) {
+	return requestLLMCompletionWithDeps(ctx, systemPrompt, userMessage, llmRequestDeps{})
+}
+
+func requestLLMCompletionWithDeps(ctx context.Context, systemPrompt, userMessage string, deps llmRequestDeps) (string, error) {
+	deps = normalizeLLMRequestDeps(deps)
+
 	cfg, err := resolveLLMRuntimeConfig()
 	if err != nil {
 		return "", err
@@ -63,7 +85,7 @@ func requestLLMCompletion(ctx context.Context, systemPrompt, userMessage string)
 		parseResponse = parseOpenAICodexResponses
 	}
 
-	raw, err := jsonMarshalFn(reqBody)
+	raw, err := deps.marshalJSON(reqBody)
 	if err != nil {
 		return "", fmt.Errorf("marshal model request: %w", err)
 	}
@@ -90,14 +112,14 @@ func requestLLMCompletion(ctx context.Context, systemPrompt, userMessage string)
 		}
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := deps.doRequest(req)
 	if err != nil {
 		return "", fmt.Errorf("model request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := readAllFn(io.LimitReader(resp.Body, baseAgentMaxModelErrorBytes))
+		body, _ := deps.readAll(io.LimitReader(resp.Body, baseAgentMaxModelErrorBytes))
 		if parsedErr := parseModelError(resp.StatusCode, body); parsedErr != nil {
 			return "", parsedErr
 		}
@@ -109,7 +131,7 @@ func requestLLMCompletion(ctx context.Context, systemPrompt, userMessage string)
 		return "", fmt.Errorf("model request failed with status %d: %s", resp.StatusCode, msg)
 	}
 
-	body, err := readAllFn(io.LimitReader(resp.Body, baseAgentMaxModelRespBytes))
+	body, err := deps.readAll(io.LimitReader(resp.Body, baseAgentMaxModelRespBytes))
 	if err != nil {
 		return "", fmt.Errorf("read model response: %w", err)
 	}
