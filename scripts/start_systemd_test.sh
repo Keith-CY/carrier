@@ -12,6 +12,11 @@ fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 TMP_BIN_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_BIN_DIR"' EXIT
 
+if [ "$(uname -s)" != "Linux" ]; then
+  echo "SKIP: scripts/start.sh systemd checks require Linux"
+  exit 0
+fi
+
 cat > "$TMP_BIN_DIR/openclaw" <<'EOF'
 #!/bin/sh
 echo "mock openclaw $*"

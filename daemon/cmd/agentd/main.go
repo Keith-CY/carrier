@@ -23,13 +23,13 @@ import (
 	"syscall"
 	"time"
 
+	"carrier/baseagent"
 	"carrier/daemon/internal/api"
-	"carrier/daemon/internal/baseagent"
 	"carrier/daemon/internal/catalog"
-	"carrier/daemon/internal/config"
 	"carrier/daemon/internal/lifecycle"
 	"carrier/daemon/internal/logging"
 	"carrier/daemon/internal/ratelimit"
+	"carrier/shared/config"
 )
 
 const (

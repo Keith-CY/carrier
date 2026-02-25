@@ -8,6 +8,8 @@ Use this before reading historical planning notes.
 - Product scope: [`docs/Agent_Installation_Platform_PRD.md`](./Agent_Installation_Platform_PRD.md)
 - Runtime decision: [`docs/phase1-runtime-adr.md`](./phase1-runtime-adr.md)
 - System design overview: [`ARCHITECTURE.md`](../ARCHITECTURE.md)
+- Module boundaries: `webui -> gateway -> daemon -> shared` and `webui -> gateway -> baseagent -> shared`
+- Shared/base modules: [`shared/`](../shared/), [`baseagent/`](../baseagent/), [`gateway/`](../gateway/), [`daemon/`](../daemon/), [`webui/`](../webui/)
 - Gateway command behavior: [`docs/command-contract.md`](./command-contract.md)
 - Daemon API contract: [`docs/daemon-api-contract.md`](./daemon-api-contract.md)
 - Deployment and operations: [`docs/deployment.md`](./deployment.md)

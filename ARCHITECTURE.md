@@ -2,7 +2,20 @@
 
 ## Overview
 
-Carrier is an agent lifecycle management system composed of two main components: a **daemon** (Go) that manages agents on the host, and a **gateway** (Go) that provides HTTP command/webhook ingress for remote control.
+Carrier is an agent lifecycle management system split into dedicated top-level modules:
+
+- **webui**: local visual operations UI
+- **gateway**: ingress/message bus and API aggregation
+- **daemon**: host lifecycle/runtime scheduler
+- **baseagent**: reusable base-agent policies/runtime
+- **shared**: cross-module shared data/logic (`config`, `redact`)
+
+Dependency direction:
+
+```
+webui -> gateway -> daemon -> shared
+webui -> gateway -> baseagent -> shared
+```
 
 ```
 ┌─────────────┐         HTTP           ┌─────────────┐        HTTP         ┌──────────┐
@@ -26,24 +39,37 @@ The daemon (`agentd`) is the host-side process responsible for:
 - **Agent Lifecycle** (`internal/lifecycle/`) — Install, start, stop, upgrade agents with crash-loop detection and automatic cooldown
 - **Catalog** (`internal/catalog/`) — Registry of available agent definitions
 - **Command Execution** (`internal/commandexec/`) — Sandboxed shell command runner with validation
-- **Configuration** (`internal/config/`) — Runtime configuration loading
 - **Health Checks** (`internal/health/`) — HTTP health endpoint exposing agent status
 - **Logging** (`internal/logging/`) — Structured logging with context propagation (agent name, request ID, operation)
 - **Manifest** (`internal/manifest/`) — Agent manifest schema (TOML) for declaring agent requirements
 - **Memory** (`internal/memory/`) — Per-agent and shared memory store with state transitions
-- **Redaction** (`internal/redact/`) — Sensitive data redaction for logs and diagnostics
 - **Runtime Checks** (`internal/runtimecheck/`) — Pre-flight validation (env vars, ports, dependencies)
-- **Base Agent** (`internal/baseagent/`) — Repair action policies and risk classification
 
-### Gateway (`daemon/internal/gateway/`)
+### Gateway (`gateway/`)
 
-The gateway is a Go HTTP server that:
+The gateway is a top-level Go module that:
 
 - Accepts command requests (`/command`) and provider webhooks (`/webhook/{telegram|discord|feishu}`)
 - Manages **sessions** (`session.go`) with authentication
 - Issues **download tokens** (`downloads.go`) for artifact retrieval
 - Enforces **rate limiting** (`ratelimit.go`)
 - Translates between the client protocol and daemon API
+
+### Base Agent (`baseagent/`)
+
+Base-agent logic is isolated from daemon runtime specifics:
+
+- Chat action dispatch (`runtime.go`)
+- LLM-based failure triage (`triager_llm.go`)
+- Repair policy controls (`policy.go`)
+- Shared-model configuration/redaction consumption via `shared/`
+
+### Shared (`shared/`)
+
+Cross-module shared code:
+
+- `shared/config`: runtime config and default-model config loading
+- `shared/redact`: sensitive text/env redaction logic
 
 ### Command Contract (`docs/command-contract.md`)
 

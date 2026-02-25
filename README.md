@@ -54,6 +54,7 @@ For product scope/priority decisions, use this order:
 For a detailed overview of the system design and component interactions, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 Key topics covered:
+- Top-level dependency boundaries (`webui -> gateway -> daemon -> shared`, `webui -> gateway -> baseagent -> shared`)
 - Daemon lifecycle state machine and service boundaries
 - Gateway routing and provider abstraction
 - Catalog manifest schema and validation flow
@@ -63,14 +64,18 @@ Key topics covered:
 
 | Path | Purpose |
 |------|---------|
-| [`daemon/`](./daemon/) | Go daemon — lifecycle management, catalog loading, Base Agent triage interfaces |
-| [`gateway/`](./gateway/) | Gateway docs entrypoint (runtime implementation is Go under `daemon/internal/gateway/`) |
+| [`shared/`](./shared/) | Shared Go module — cross-module config and redaction primitives |
+| [`baseagent/`](./baseagent/) | Base Agent Go module — triage policy/runtime, independently testable |
+| [`daemon/`](./daemon/) | Go daemon — lifecycle scheduling, host runtime management, daemon API |
+| [`gateway/`](./gateway/) | Go gateway module — ingress, session/rate-limit, webhook/message routing |
+| [`webui/`](./webui/) | Local WebUI static app and handler package |
 | [`catalog/`](./catalog/) | OpenClaw manifest and candidate agent list |
 | [`docs/`](./docs/) | Product requirements, implementation plan, and architecture docs |
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | System design overview and component interaction diagrams |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | Contributor workflow, branching policy, and review conventions |
 | [`skills/`](./skills/) | Automation and review helper skills (PR review, NBS follow-up) |
 | [`scripts/`](./scripts/) | Development and CI helper scripts |
+| [`test/`](./test/) | Cross-module integration and end-to-end tests |
 
 ## M2 daemon scaffold status
 - Runtime prerequisite checks are implemented for local host and WSL2 requirement detection.
@@ -134,6 +139,34 @@ Notes:
 - Chat `/install` and `/onboard` command names still exist, but onboarding/install in chat mode are intentionally blocked (`E_INSTALL_GUI_ONLY` / `E_ONBOARD_GUI_ONLY`) to protect credentials; use Carrier CLI/WebUI instead.
 - Release/package flows below are still valid and useful for non-CLI deployment scenarios.
 
+### Onboard 操作过程（可直接执行）
+
+1. 启动 bootstrap（首次安装后先做一次）
+   - 命令: `carrier`
+   - 结果预期:
+     - 若未初始化，会自动进入 onboard 引导
+     - 若已初始化，会启动/复用 daemon+gateway 并退出
+2. 手动进入 onboarding（推荐显式执行）
+   - 命令: `carrier onboard`
+   - 你需要完成:
+     - 选择通信渠道（Telegram/Discord/Feishu）
+     - 填入渠道凭证（按终端提示）
+     - 选择并配置模型提供商凭证
+3. 若需要图形化流程，使用 WebUI onboarding
+   - 命令: `carrier onboard --webui`
+   - 结果预期:
+     - 本地浏览器打开 WebUI
+     - 网关 API 可通过 `http://127.0.0.1:8787/healthz` 健康检查
+4. onboard 完成后安装一个 agent 做验收
+   - 命令: `carrier add openclaw`
+   - 结果预期:
+     - 显示 install/start 过程日志
+     - `carrier list` 可看到新增实例
+5. 常见问题快速排查
+   - `carrier gateway` 启动失败: 检查 `CARRIER_GATEWAY_PORT` 是否被占用
+   - 命令超时: 检查 `CARRIER_DAEMON_BASE_URL` 是否可访问
+   - 渠道配对失败: 重新执行 `carrier onboard` 校验渠道 token/secret
+
 ### Prerequisites
 - Go toolchain (see `daemon/go.mod` for the required version)
 - Bun (optional; only needed for some utility scripts under `scripts/`)
@@ -151,7 +184,7 @@ bun --version >/dev/null 2>&1 && echo "bun: $(bun --version)" || echo "bun: (opt
 If any command fails, install the missing tool before running automation scripts. See [CONTRIBUTING.md](./CONTRIBUTING.md) for detailed CI troubleshooting.
 
 ### Install
-- Carrier/Daemon/Gateway (Go): Go modules are loaded automatically when building or testing; no additional install command needed.
+- Carrier/Daemon/Gateway/BaseAgent/Shared (Go): Go modules are loaded automatically when building or testing; no additional install command needed.
 
 ### Run tests / checks
 - Daemon tests:
@@ -159,8 +192,17 @@ If any command fails, install the missing tool before running automation scripts
   - `go test ./...`
   - `go test ./internal/manifest -run TestLoadFileAcceptsCatalogManifest -count=1`
 - Gateway tests:
-  - `cd daemon`
-  - `go test ./internal/gateway/...`
+  - `cd gateway`
+  - `go test ./...`
+- Base Agent tests:
+  - `cd baseagent`
+  - `go test ./...`
+- Shared module tests:
+  - `cd shared`
+  - `go test ./...`
+- Coverage gate from repo root:
+  - `make coverage-gate`
+  - Strict all-module 100% mode: `COVERAGE_STRICT_100=1 make coverage-gate`
 - Full local flow from repo root (mandatory before pushing):
   - `./scripts/run-all-tests.sh`
 

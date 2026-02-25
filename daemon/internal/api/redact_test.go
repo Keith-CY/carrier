@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"carrier/daemon/internal/redact"
+	"carrier/shared/redact"
 )
 
 func TestMapLifecycleErrorRedactsSensitiveContent(t *testing.T) {

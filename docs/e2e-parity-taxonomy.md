@@ -3,8 +3,8 @@
 This document defines the parity assertion categories used for Telegram/Discord/Feishu command-path E2E tests.
 
 Reference implementation/tests:
-- `daemon/internal/gateway/providers_test.go`
-- `daemon/internal/gateway/server_test.go`
+- `gateway/providers_test.go`
+- `gateway/server_test.go`
 - `docs/plans/phase1-e2e-test-matrix.md`
 
 ## Categories

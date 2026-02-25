@@ -4,11 +4,13 @@ go 1.23
 
 toolchain go1.23.0
 
-require carrier/webui v0.0.0
-
 require (
-	github.com/google/uuid v1.6.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
+	carrier/baseagent v0.0.0
+	carrier/shared v0.0.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
-replace carrier/webui => ../webui
+replace (
+	carrier/baseagent => ../baseagent
+	carrier/shared => ../shared
+)

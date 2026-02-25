@@ -1,6 +1,9 @@
 package lifecycle
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,5 +149,58 @@ func TestFirstFailedCode(t *testing.T) {
 				t.Errorf("firstFailedCode() = %q, want %q", got, tt.wantCode)
 			}
 		})
+	}
+}
+
+func TestFindListeningSocketInodeInFile(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "tcp")
+	content := strings.Join([]string{
+		"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode",
+		"   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000   501        0 12345 1 0000000000000000 100 0 0 10 0",
+		"",
+	}, "\n")
+	if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
+		t.Fatalf("write fixture file: %v", err)
+	}
+
+	inode, err := findListeningSocketInodeInFile(tmp, 8080)
+	if err != nil {
+		t.Fatalf("findListeningSocketInodeInFile returned error: %v", err)
+	}
+	if inode != "12345" {
+		t.Fatalf("inode = %q, want %q", inode, "12345")
+	}
+}
+
+func TestFindListeningSocketInodeInFile_NotFound(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "tcp")
+	content := strings.Join([]string{
+		"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode",
+		"   0: 0100007F:1F90 00000000:0000 01 00000000:00000000 00:00000000 00000000   501        0 99999 1 0000000000000000 100 0 0 10 0",
+		"",
+	}, "\n")
+	if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
+		t.Fatalf("write fixture file: %v", err)
+	}
+
+	if _, err := findListeningSocketInodeInFile(tmp, 8080); err == nil {
+		t.Fatal("expected socket not found error")
+	}
+}
+
+func TestFindListeningSocketAndProcessHelpers(t *testing.T) {
+	if _, err := findListeningSocketInode(-1); err == nil {
+		t.Fatal("expected not found error for invalid port")
+	}
+
+	if _, _, err := findProcessBySocketInode("inode-that-does-not-exist"); err == nil {
+		t.Fatal("expected process lookup error for missing inode")
+	}
+}
+
+func TestDescribePortOccupantReturnsNonEmptyDescription(t *testing.T) {
+	got := describePortOccupant(1)
+	if strings.TrimSpace(got) == "" {
+		t.Fatal("expected non-empty process description")
 	}
 }

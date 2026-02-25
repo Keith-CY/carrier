@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"carrier/daemon/internal/lifecycle"
-	"carrier/daemon/internal/redact"
+	"carrier/shared/redact"
 )
 
 var validAgentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)

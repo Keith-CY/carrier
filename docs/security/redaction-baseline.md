@@ -2,7 +2,7 @@
 
 Source issue: #837
 
-Implementation reference: `daemon/internal/redact`
+Implementation reference: `shared/redact`
 
 ## Guarantees
 
@@ -42,6 +42,6 @@ Implementation reference: `daemon/internal/redact`
 
 ## Validation Pointers
 
-- `daemon/internal/redact/redact_test.go`
+- `shared/redact/redact_test.go`
 - `docs/audit-event-dictionary.md`
 - `docs/ci/release-artifact-retention.md`

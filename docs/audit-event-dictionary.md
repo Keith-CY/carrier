@@ -100,7 +100,7 @@ Response envelope:
 
 ## Gateway Test-Harness Audit Notes
 
-Gateway tests under `daemon/internal/gateway/` also validate request metadata propagation for test flows with fields:
+Gateway tests under `gateway/` also validate request metadata propagation for test flows with fields:
 
 - `requestId`, `actor`, `action`, `target`, `message`, `timestamp`
 

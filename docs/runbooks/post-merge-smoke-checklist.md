@@ -22,7 +22,7 @@ Related follow-up issues: #1295, #1296, #1297, #1281, #1282.
 
 ## Redaction Boundary
 
-`RedactErrorMessage` in `daemon/internal/gateway/redact.go` delegates to `daemon/internal/redact`.
+`RedactErrorMessage` in `gateway/redact.go` delegates to `shared/redact`.
 
 Current boundary:
 - Redact key/value pairs with keys containing `API_KEY`, `SECRET`, `TOKEN`, `PASSWORD`, or `CREDENTIAL`.

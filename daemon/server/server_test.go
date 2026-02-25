@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"carrier/baseagent"
 	"carrier/daemon/internal/api"
-	"carrier/daemon/internal/baseagent"
 	"carrier/daemon/internal/lifecycle"
 	"carrier/daemon/internal/manifest"
 	"carrier/daemon/internal/ratelimit"

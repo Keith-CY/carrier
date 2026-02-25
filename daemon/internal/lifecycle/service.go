@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"carrier/daemon/internal/baseagent"
+	"carrier/baseagent"
 	"carrier/daemon/internal/commandexec"
 	"carrier/daemon/internal/manifest"
 	"carrier/daemon/internal/memory"

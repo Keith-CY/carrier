@@ -70,4 +70,4 @@ Migration mapping:
 ## Source Definitions
 
 - **Go (daemon):** `daemon/internal/lifecycle/types.go` — `AgentState` struct
-- **Go (gateway):** `daemon/internal/gateway/daemonclient.go` — `AgentState` struct
+- **Go (gateway):** `gateway/daemonclient.go` — `AgentState` struct
