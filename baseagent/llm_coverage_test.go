@@ -9,7 +9,16 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
+
+type fakeNetError struct {
+	msg string
+}
+
+func (e fakeNetError) Error() string   { return e.msg }
+func (e fakeNetError) Timeout() bool   { return false }
+func (e fakeNetError) Temporary() bool { return true }
 
 func TestParseModelError(t *testing.T) {
 	tests := []struct {
@@ -491,13 +500,11 @@ func TestRequestLLMCompletionInjectedFailureBranches(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 
 	t.Run("marshal failure", func(t *testing.T) {
-		origMarshal := jsonMarshalFn
-		jsonMarshalFn = func(any) ([]byte, error) {
-			return nil, errors.New("marshal failed")
-		}
-		t.Cleanup(func() { jsonMarshalFn = origMarshal })
-
-		_, err := requestLLMCompletion(context.Background(), "sys", "hello")
+		_, err := requestLLMCompletionWithDeps(context.Background(), "sys", "hello", llmRequestDeps{
+			marshalJSON: func(any) ([]byte, error) {
+				return nil, errors.New("marshal failed")
+			},
+		})
 		if err == nil || !strings.Contains(err.Error(), "marshal model request") {
 			t.Fatalf("expected marshal failure, got %v", err)
 		}
@@ -511,15 +518,98 @@ func TestRequestLLMCompletionInjectedFailureBranches(t *testing.T) {
 		defer server.Close()
 		t.Setenv("CARRIER_OPENAI_BASE_URL", server.URL)
 
-		origReadAll := readAllFn
-		readAllFn = func(_ io.Reader) ([]byte, error) {
-			return nil, errors.New("read failed")
-		}
-		t.Cleanup(func() { readAllFn = origReadAll })
-
-		_, err := requestLLMCompletion(context.Background(), "sys", "hello")
+		_, err := requestLLMCompletionWithDeps(context.Background(), "sys", "hello", llmRequestDeps{
+			readAll: func(_ io.Reader) ([]byte, error) {
+				return nil, errors.New("read failed")
+			},
+		})
 		if err == nil || !strings.Contains(err.Error(), "read model response") {
 			t.Fatalf("expected read failure, got %v", err)
 		}
 	})
+}
+
+func TestRequestLLMCompletionWithDepsRetriesTransientErrors(t *testing.T) {
+	writeDefaultModelConfig(t, "openai", "openai/gpt-5.3", "OPENAI_API_KEY")
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+
+	attempts := 0
+	sleepCalls := 0
+	got, err := requestLLMCompletionWithDeps(context.Background(), "sys", "hello", llmRequestDeps{
+		doRequest: func(_ *http.Request) (*http.Response, error) {
+			attempts++
+			if attempts < 3 {
+				return nil, fakeNetError{msg: "temporary network failure"}
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"ok"}}]}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+		sleep: func(_ context.Context, _ time.Duration) error {
+			sleepCalls++
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected retry success, got %v", err)
+	}
+	if got != "ok" {
+		t.Fatalf("expected successful model content, got %q", got)
+	}
+	if attempts != 3 {
+		t.Fatalf("expected 3 attempts, got %d", attempts)
+	}
+	if sleepCalls != 2 {
+		t.Fatalf("expected 2 backoff sleeps, got %d", sleepCalls)
+	}
+}
+
+func TestRequestLLMCompletionWithDepsNoRetryForNonNetworkError(t *testing.T) {
+	writeDefaultModelConfig(t, "openai", "openai/gpt-5.3", "OPENAI_API_KEY")
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+
+	attempts := 0
+	sleepCalls := 0
+	_, err := requestLLMCompletionWithDeps(context.Background(), "sys", "hello", llmRequestDeps{
+		doRequest: func(_ *http.Request) (*http.Response, error) {
+			attempts++
+			return nil, errors.New("boom")
+		},
+		sleep: func(_ context.Context, _ time.Duration) error {
+			sleepCalls++
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "model request failed") {
+		t.Fatalf("expected model request failure, got %v", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("expected 1 attempt for non-network errors, got %d", attempts)
+	}
+	if sleepCalls != 0 {
+		t.Fatalf("expected no sleep for non-network errors, got %d", sleepCalls)
+	}
+}
+
+func TestRequestLLMCompletionWithDepsErrorBodyReadFailureIsReported(t *testing.T) {
+	writeDefaultModelConfig(t, "openai", "openai/gpt-5.3", "OPENAI_API_KEY")
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+
+	_, err := requestLLMCompletionWithDeps(context.Background(), "sys", "hello", llmRequestDeps{
+		doRequest: func(_ *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusBadGateway,
+				Body:       io.NopCloser(strings.NewReader("ignored")),
+				Header:     make(http.Header),
+			}, nil
+		},
+		readAll: func(_ io.Reader) ([]byte, error) {
+			return nil, errors.New("read failed")
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unable to read error response body") {
+		t.Fatalf("expected read-error context in failure message, got %v", err)
+	}
 }
