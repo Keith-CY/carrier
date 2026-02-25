@@ -24,6 +24,10 @@
       <h1>Carrier</h1>
       <nav id="nav" class="hidden">
         <a href="#/dashboard" class="nav-link" data-route="dashboard">Dashboard</a>
+        <a href="#/servers" class="nav-link" data-route="servers">Servers</a>
+        <a href="#/profiles" class="nav-link" data-route="profiles">Profiles</a>
+        <a href="#/remote-chat" class="nav-link" data-route="remote-chat">Remote Chat</a>
+        <a href="#/remote-observability" class="nav-link" data-route="remote-observability">Observability</a>
         <a href="#/logs" class="nav-link" data-route="logs">Logs</a>
         <a href="#/chat" class="nav-link" data-route="chat">Chat</a>
         <a href="#/settings" class="nav-link" data-route="settings">Settings</a>
@@ -223,6 +227,273 @@
         <button id="settings-logout" class="btn-sm btn-danger">Clear Token & Logout</button>
       </div>
     </section>
+
+    <section id="view-servers" class="view hidden">
+      <div class="section-head">
+        <h2>Remote Servers</h2>
+        <div class="section-actions">
+          <button id="servers-refresh" class="btn-sm btn-secondary">Refresh</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Add / Update Server</h3>
+        <div class="form-grid">
+          <div>
+            <label for="server-name">Name</label>
+            <input id="server-name" type="text" placeholder="prod-eu-1">
+          </div>
+          <div>
+            <label for="server-auth-mode">Auth Mode</label>
+            <select id="server-auth-mode">
+              <option value="private_key">private_key</option>
+              <option value="ssh_config">ssh_config</option>
+            </select>
+          </div>
+          <div>
+            <label for="server-host">Host</label>
+            <input id="server-host" type="text" placeholder="192.168.1.10">
+          </div>
+          <div>
+            <label for="server-port">Port</label>
+            <input id="server-port" type="text" placeholder="22">
+          </div>
+          <div>
+            <label for="server-user">User</label>
+            <input id="server-user" type="text" placeholder="ubuntu">
+          </div>
+          <div>
+            <label for="server-runtime-mode">Runtime Mode</label>
+            <select id="server-runtime-mode">
+              <option value="on_demand">on_demand</option>
+              <option value="managed_gateway">managed_gateway</option>
+            </select>
+          </div>
+          <div>
+            <label for="server-key-path">Key Path</label>
+            <input id="server-key-path" type="text" placeholder="~/.ssh/id_ed25519">
+          </div>
+          <div>
+            <label for="server-ssh-config-host">SSH Config Host</label>
+            <input id="server-ssh-config-host" type="text" placeholder="my-prod-host">
+          </div>
+        </div>
+        <div class="btn-row">
+          <button id="server-save">Save Host</button>
+          <button id="server-cancel-edit" class="btn-sm btn-secondary hidden">Cancel Edit</button>
+        </div>
+        <p id="server-editor-state" class="text-dim"></p>
+        <div id="servers-msg"></div>
+      </div>
+      <div id="servers-list" class="agent-grid" style="margin-top:12px"></div>
+      <div id="server-manage-card" class="card hidden" style="margin-top:12px">
+        <h3>Server Runtime Data</h3>
+        <p id="server-manage-host-label" class="text-dim"></p>
+        <div class="form-grid">
+          <div>
+            <label for="server-manage-agent-id">Agent ID</label>
+            <input id="server-manage-agent-id" type="text" placeholder="main" value="main">
+          </div>
+          <div>
+            <label for="server-manage-session-id">Session ID</label>
+            <input id="server-manage-session-id" type="text" placeholder="session id">
+          </div>
+          <div>
+            <label for="server-manage-log-tail">Log Tail</label>
+            <input id="server-manage-log-tail" type="text" placeholder="200" value="200">
+          </div>
+        </div>
+        <div class="btn-row">
+          <button id="server-manage-load-instances" class="btn-sm btn-secondary">Load Instances</button>
+          <button id="server-manage-instance-status" class="btn-sm btn-secondary">Instance Status</button>
+          <button id="server-manage-install-instance" class="btn-sm">Install</button>
+          <button id="server-manage-repair-instance" class="btn-sm btn-secondary">Repair</button>
+          <button id="server-manage-load-logs" class="btn-sm btn-secondary">Load Logs</button>
+        </div>
+        <pre id="server-manage-instances" class="code-block text-dim" style="margin-top:8px; min-height:72px"></pre>
+        <div id="server-manage-instance-status-out" class="manage-output" style="margin-top:8px; min-height:72px"></div>
+        <div id="server-manage-logs" class="manage-output" style="margin-top:8px; min-height:72px"></div>
+        <div class="btn-row">
+          <button id="server-manage-load-config" class="btn-sm btn-secondary">Load Config</button>
+          <button id="server-manage-apply-config" class="btn-sm">Apply Config Patch</button>
+        </div>
+        <textarea id="server-manage-config" rows="10" style="margin-top:8px" placeholder='{"agents":{"defaults":{"model":"gpt-5"}}}'></textarea>
+        <div class="btn-row" style="margin-top:10px">
+          <button id="server-manage-load-sessions" class="btn-sm btn-secondary">Load Sessions</button>
+          <button id="server-manage-archive-session" class="btn-sm btn-secondary">Archive Session</button>
+          <button id="server-manage-delete-session" class="btn-sm btn-danger">Delete Session</button>
+        </div>
+        <pre id="server-manage-sessions" class="code-block text-dim" style="margin-top:8px; min-height:72px"></pre>
+        <div class="btn-row" style="margin-top:10px">
+          <button id="server-manage-load-memory" class="btn-sm btn-secondary">Load Memory</button>
+        </div>
+        <pre id="server-manage-memory" class="code-block text-dim" style="margin-top:8px; min-height:72px"></pre>
+        <div id="server-manage-op-meta" class="manage-op-meta text-dim"></div>
+        <div id="server-manage-msg"></div>
+      </div>
+    </section>
+
+    <section id="view-profiles" class="view hidden">
+      <div class="section-head">
+        <h2>Provider Profiles</h2>
+        <div class="section-actions">
+          <button id="profiles-refresh" class="btn-sm btn-secondary">Refresh</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Create Profile</h3>
+        <div class="form-grid">
+          <div>
+            <label for="profile-name">Name</label>
+            <input id="profile-name" type="text" placeholder="openai-gpt5">
+          </div>
+          <div>
+            <label for="profile-provider">Provider</label>
+            <input id="profile-provider" type="text" placeholder="openai">
+          </div>
+          <div>
+            <label for="profile-model">Model</label>
+            <input id="profile-model" type="text" placeholder="gpt-5">
+          </div>
+          <div>
+            <label for="profile-base-url">Base URL</label>
+            <input id="profile-base-url" type="text" placeholder="https://api.openai.com/v1">
+          </div>
+          <div>
+            <label for="profile-auth-ref">Auth Ref</label>
+            <input id="profile-auth-ref" type="text" placeholder="env:OPENAI_API_KEY">
+          </div>
+          <div>
+            <label for="profile-enabled">Enabled</label>
+            <select id="profile-enabled">
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button id="profile-save">Save Profile</button>
+          <button id="profile-cancel-edit" class="btn-sm btn-secondary hidden">Cancel Edit</button>
+        </div>
+        <p id="profile-editor-state" class="text-dim"></p>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <h3>Bind Profile</h3>
+        <div class="form-grid">
+          <div>
+            <label for="binding-profile-id">Profile</label>
+            <select id="binding-profile-id"></select>
+          </div>
+          <div>
+            <label for="binding-target-type">Target Type</label>
+            <select id="binding-target-type">
+              <option value="host">host</option>
+              <option value="instance">instance</option>
+            </select>
+          </div>
+          <div>
+            <label for="binding-target-id">Target ID</label>
+            <input id="binding-target-id" type="text" placeholder="hostId or hostId:agentId">
+          </div>
+          <div>
+            <label for="profile-test-host">Profile Test Host</label>
+            <select id="profile-test-host">
+              <option value="">auto (first host)</option>
+            </select>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button id="binding-save">Bind</button>
+        </div>
+        <div id="profiles-msg"></div>
+      </div>
+
+      <div id="profiles-list" class="agent-grid" style="margin-top:12px"></div>
+      <div id="bindings-list" class="agent-grid" style="margin-top:12px"></div>
+    </section>
+
+    <section id="view-remote-chat" class="view hidden">
+      <h2>Remote Chat</h2>
+      <div class="card">
+        <div class="form-grid">
+          <div>
+            <label for="remote-chat-target">Target</label>
+            <select id="remote-chat-target">
+              <option value="remote">remote</option>
+              <option value="local">local</option>
+            </select>
+          </div>
+          <div>
+            <label for="remote-chat-host">Host</label>
+            <select id="remote-chat-host"></select>
+          </div>
+          <div>
+            <label for="remote-chat-instance">Instance</label>
+            <select id="remote-chat-instance"></select>
+          </div>
+          <div>
+            <label for="remote-chat-profile">Profile</label>
+            <select id="remote-chat-profile"></select>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button id="remote-chat-refresh" class="btn-sm btn-secondary">Refresh Targets</button>
+          <button id="remote-chat-reset-session" class="btn-sm btn-secondary">New Session</button>
+          <button id="remote-chat-cancel" class="btn-sm btn-secondary">Cancel Stream</button>
+          <button id="remote-chat-retry" class="btn-sm btn-secondary">Retry Last</button>
+        </div>
+        <p id="remote-chat-status" class="text-dim"></p>
+      </div>
+      <div id="remote-chat-messages" class="chat-messages" style="margin-top:10px"></div>
+      <div class="chat-input-row">
+        <input id="remote-chat-input" type="text" placeholder="Message remote instance…" autocomplete="off">
+        <button id="remote-chat-send">Send</button>
+      </div>
+    </section>
+
+    <section id="view-remote-observability" class="view hidden">
+      <div class="section-head">
+        <h2>Remote Observability</h2>
+        <div class="section-actions">
+          <button id="remote-observability-refresh" class="btn-sm btn-secondary">Refresh</button>
+        </div>
+      </div>
+      <div class="form-grid remote-observability-controls">
+        <div>
+          <label for="remote-observability-group">Operation Group</label>
+          <select id="remote-observability-group">
+            <option value="all">all</option>
+          </select>
+        </div>
+        <div>
+          <label for="remote-observability-anomalies">Visibility</label>
+          <label class="log-filter-pill">
+            <input id="remote-observability-anomalies" type="checkbox">
+            only anomalies
+          </label>
+        </div>
+      </div>
+      <p id="remote-observability-status" class="text-dim"></p>
+      <div id="remote-observability-summary" class="agent-grid"></div>
+      <div class="card" style="margin-top:12px">
+        <h3>Operation Metrics</h3>
+        <div class="metrics-table-wrap">
+          <table class="metrics-table" id="remote-observability-ops-table">
+            <thead>
+              <tr>
+                <th>Operation</th>
+                <th>Total</th>
+                <th>Success</th>
+                <th>Failure</th>
+                <th>Success Rate</th>
+                <th>Avg Latency</th>
+              </tr>
+            </thead>
+            <tbody id="remote-observability-ops-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   </main>
 
   <div id="add-agent-overlay" class="overlay hidden">
@@ -237,6 +508,11 @@
     </div>
   </div>
 </div>
+<script src="react.production.min.js"></script>
+<script src="react-dom.production.min.js"></script>
+<script src="remote-control-islands.js"></script>
+<script src="remote-chat-island.js"></script>
+<script src="remote-observability-island.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

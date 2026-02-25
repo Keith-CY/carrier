@@ -76,6 +76,12 @@ type RemoteDiagnosisHandoff struct {
 
 type BaseAgentChatResult = baseagent.ChatResponse
 
+type AgentChatResult struct {
+	AgentID   string `json:"agentId"`
+	SessionID string `json:"sessionId,omitempty"`
+	Message   string `json:"message"`
+}
+
 // DaemonClientError is returned when the daemon returns a non-2xx response.
 type DaemonClientError struct {
 	Code    string
@@ -318,6 +324,31 @@ func (c *DaemonClient) ChatBaseAgent(
 	var result baseagent.ChatResponse
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, fmt.Errorf("base-agent chat response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *DaemonClient) ChatAgent(
+	ctx context.Context,
+	agentID string,
+	message string,
+	sessionID string,
+	actor string,
+	requestID string,
+) (*AgentChatResult, error) {
+	payload := map[string]interface{}{
+		"message": message,
+	}
+	if strings.TrimSpace(sessionID) != "" {
+		payload["sessionId"] = strings.TrimSpace(sessionID)
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/chat", payload, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result AgentChatResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("agent chat response: %w", err)
 	}
 	return &result, nil
 }

@@ -49,6 +49,11 @@ type GatewayConfig struct {
 	// Data
 	DataDir      string // SESSION_DATA_DIR or ARTIFACT_ROOT
 	ArtifactRoot string // ARTIFACT_ROOT
+
+	// Feature flags
+	RemoteControlPlaneEnabled bool // CARRIER_REMOTE_CONTROL_PLANE_ENABLED
+	RemoteChatEnabled         bool // CARRIER_REMOTE_CHAT_ENABLED
+	ProviderBindingEnabled    bool // CARRIER_PROVIDER_BINDING_ENABLED
 }
 
 // LoadGatewayConfigFromEnv loads GatewayConfig from environment variables.
@@ -72,7 +77,20 @@ func LoadGatewayConfigFromEnv() *GatewayConfig {
 		RateLimitPerSession:     parseEnvInt("CARRIER_RATE_LIMIT_PER_SESSION", 30),
 		RateLimitGlobal:         parseEnvInt("CARRIER_RATE_LIMIT_GLOBAL", 200),
 		RateLimitWindow:         time.Duration(parseEnvInt("CARRIER_RATE_LIMIT_WINDOW_MS", 60000)) * time.Millisecond,
+		RemoteControlPlaneEnabled: parseEnvBool(
+			"CARRIER_REMOTE_CONTROL_PLANE_ENABLED",
+			true,
+		),
+		RemoteChatEnabled: parseEnvBool(
+			"CARRIER_REMOTE_CHAT_ENABLED",
+			true,
+		),
+		ProviderBindingEnabled: parseEnvBool(
+			"CARRIER_PROVIDER_BINDING_ENABLED",
+			true,
+		),
 	}
+	normalizeGatewayConfigFeatureFlags(cfg)
 
 	// Determine data dir
 	dataDir := strings.TrimSpace(os.Getenv("SESSION_DATA_DIR"))
@@ -101,6 +119,7 @@ func StartGateway(cfg *GatewayConfig) error {
 	if cfg == nil {
 		cfg = LoadGatewayConfigFromEnv()
 	}
+	normalizeGatewayConfigFeatureFlags(cfg)
 
 	// Security check
 	if cfg.APIToken == "" && !isLoopbackGateway(cfg.Hostname) {
@@ -178,6 +197,21 @@ func parseEnvInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func parseEnvBool(key string, fallback bool) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if raw == "" {
+		return fallback
+	}
+	switch raw {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }
 
 // Run starts gateway using environment-based configuration.

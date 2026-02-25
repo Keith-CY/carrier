@@ -463,6 +463,50 @@ button:disabled,
   margin-bottom: 8px;
 }
 
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.remote-observability-controls {
+  align-items: end;
+}
+
+.remote-observability-controls .log-filter-pill {
+  margin-top: 8px;
+}
+
+.metrics-table-wrap {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: auto;
+}
+
+.metrics-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 680px;
+}
+
+.metrics-table th,
+.metrics-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 0.82rem;
+}
+
+.metrics-table th {
+  color: var(--text-dim);
+  font-weight: 620;
+  background: var(--surface-muted);
+}
+
+.metrics-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
 .env-row input {
   flex: 1;
 }
@@ -693,6 +737,121 @@ button:disabled,
   width: min(100%, 520px);
 }
 
+.code-block {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(246, 248, 252, 0.86);
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.manage-output {
+  display: grid;
+  gap: 8px;
+}
+
+.manage-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-strong);
+  padding: 10px 12px;
+}
+
+.manage-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.manage-card-title {
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+
+.manage-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  font-weight: 620;
+  border: 1px solid var(--line);
+}
+
+.manage-pill-ok {
+  color: #0f6d34;
+  background: rgba(22, 163, 74, 0.12);
+  border-color: rgba(22, 163, 74, 0.22);
+}
+
+.manage-pill-warn {
+  color: #8f4900;
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.24);
+}
+
+.manage-pill-bad {
+  color: #a1121a;
+  background: rgba(239, 68, 68, 0.11);
+  border-color: rgba(239, 68, 68, 0.22);
+}
+
+.manage-kv {
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.manage-kv-label {
+  color: var(--text-dim);
+}
+
+.manage-step {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.55);
+  padding: 8px;
+  margin-top: 6px;
+}
+
+.manage-step-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.76rem;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+.manage-step-command {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.76rem;
+  word-break: break-word;
+}
+
+.manage-step-details {
+  margin-top: 6px;
+}
+
+.manage-log-section summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.manage-op-meta {
+  margin-top: 10px;
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
 @media (max-width: 860px) {
   #app {
     padding: 14px;
@@ -740,6 +899,10 @@ button:disabled,
   .env-row,
   .chat-input-row {
     flex-direction: column;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
   }
 
   .log-controls {
