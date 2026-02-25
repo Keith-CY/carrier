@@ -139,33 +139,33 @@ Notes:
 - Chat `/install` and `/onboard` command names still exist, but onboarding/install in chat mode are intentionally blocked (`E_INSTALL_GUI_ONLY` / `E_ONBOARD_GUI_ONLY`) to protect credentials; use Carrier CLI/WebUI instead.
 - Release/package flows below are still valid and useful for non-CLI deployment scenarios.
 
-### Onboard 操作过程（可直接执行）
+### Onboarding Runbook (Directly Executable)
 
-1. 启动 bootstrap（首次安装后先做一次）
-   - 命令: `carrier`
-   - 结果预期:
-     - 若未初始化，会自动进入 onboard 引导
-     - 若已初始化，会启动/复用 daemon+gateway 并退出
-2. 手动进入 onboarding（推荐显式执行）
-   - 命令: `carrier onboard`
-   - 你需要完成:
-     - 选择通信渠道（Telegram/Discord/Feishu）
-     - 填入渠道凭证（按终端提示）
-     - 选择并配置模型提供商凭证
-3. 若需要图形化流程，使用 WebUI onboarding
-   - 命令: `carrier onboard --webui`
-   - 结果预期:
-     - 本地浏览器打开 WebUI
-     - 网关 API 可通过 `http://127.0.0.1:8787/healthz` 健康检查
-4. onboard 完成后安装一个 agent 做验收
-   - 命令: `carrier add openclaw`
-   - 结果预期:
-     - 显示 install/start 过程日志
-     - `carrier list` 可看到新增实例
-5. 常见问题快速排查
-   - `carrier gateway` 启动失败: 检查 `CARRIER_GATEWAY_PORT` 是否被占用
-   - 命令超时: 检查 `CARRIER_DAEMON_BASE_URL` 是否可访问
-   - 渠道配对失败: 重新执行 `carrier onboard` 校验渠道 token/secret
+1. Run bootstrap first (one-time setup)
+   - Command: `carrier`
+   - Expected result:
+     - If not initialized, onboarding guidance starts automatically.
+     - If already initialized, daemon and gateway are started/reused and the command exits.
+2. Enter onboarding explicitly (recommended)
+   - Command: `carrier onboard`
+   - Complete the prompts:
+     - Select communication channel (Telegram/Discord/Feishu).
+     - Enter channel credentials.
+     - Select and configure model provider credentials.
+3. Use WebUI onboarding if a browser-assisted flow is preferred
+   - Command: `carrier onboard --webui`
+   - Expected result:
+     - Local browser opens the WebUI onboarding flow.
+     - Gateway health endpoint is reachable at `http://127.0.0.1:8787/healthz`.
+4. Install an agent after onboarding for validation
+   - Command: `carrier add openclaw`
+   - Expected result:
+     - Install/start logs are printed.
+     - `carrier list` includes the new instance.
+5. Quick troubleshooting
+   - `carrier gateway` startup fails: check whether `CARRIER_GATEWAY_PORT` is already in use.
+   - Command timeout: verify `CARRIER_DAEMON_BASE_URL` is reachable.
+   - Channel pairing fails: re-run `carrier onboard` and verify channel token/secret values.
 
 ### Prerequisites
 - Go toolchain (see `daemon/go.mod` for the required version)
