@@ -5,22 +5,22 @@ trackable execution buckets under issue `#1406`.
 
 ## Buckets
 
-1. Multi-agent runtime messaging
-- Source epics: `#1224`, `#1227`
-- Deliverables: daemon message bus API, routing policy, bounded queue semantics.
+### Bucket 1 — Multi-agent runtime messaging
+- **Source epics:** `#1224`, `#1227`
+- **Deliverables:** daemon message bus API, routing policy, bounded queue semantics.
 
-2. WebUI high-scale communication surfaces
-- Source epics: `#1227`, `#1228`
-- Deliverables: conversation room UX model, multi-agent log tabs, virtualization path.
+### Bucket 2 — WebUI high-scale communication surfaces
+- **Source epics:** `#1227`, `#1228`
+- **Deliverables:** conversation room UX model, multi-agent log tabs, virtualization path.
 
-3. First-run and fix-loop UX
-- Source epics: `#1232`, `#1233`, `#1234`
-- Deliverables: resumable onboarding checkpoints, diagnose-and-fix workflow,
+### Bucket 3 — First-run and fix-loop UX
+- **Source epics:** `#1232`, `#1233`, `#1234`
+- **Deliverables:** resumable onboarding checkpoints, diagnose-and-fix workflow,
   template apply preview and conflict-safe apply.
 
-4. Safe-by-default platform hardening
-- Source epics: `#1236`, `#1237`, `#1239`
-- Deliverables: secure baseline assertions, rollback-safe high-impact operations,
+### Bucket 4 — Safe-by-default platform hardening
+- **Source epics:** `#1236`, `#1237`, `#1239`
+- **Deliverables:** secure baseline assertions, rollback-safe high-impact operations,
   pre/post upgrade health gates and impact summary.
 
 ## Exit Conditions
