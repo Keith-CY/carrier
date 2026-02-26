@@ -62,6 +62,45 @@ Host "quoted-host"
 	}
 }
 
+func TestSplitSSHConfigDirective(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		line  string
+		key   string
+		value string
+		ok    bool
+	}{
+		{name: "whitespace separator", line: "Host prod-a", key: "Host", value: "prod-a", ok: true},
+		{name: "tab separator", line: "Host\tprod-a", key: "Host", value: "prod-a", ok: true},
+		{name: "equals separator", line: "Host=prod-a", key: "Host", value: "prod-a", ok: true},
+		{name: "space then equals separator", line: "Host = prod-a", key: "Host", value: "prod-a", ok: true},
+		{name: "space then tight equals separator", line: "Host =prod-a", key: "Host", value: "prod-a", ok: true},
+		{name: "tight then space equals separator", line: "Host= prod-a", key: "Host", value: "prod-a", ok: true},
+		{name: "value may contain equals", line: "ProxyCommand ssh -W %h:%p jump=host", key: "ProxyCommand", value: "ssh -W %h:%p jump=host", ok: true},
+		{name: "missing separator", line: "Host", ok: false},
+		{name: "missing value", line: "Host =", ok: false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			key, value, ok := splitSSHConfigDirective(tc.line)
+			if ok != tc.ok {
+				t.Fatalf("ok mismatch: got=%v want=%v", ok, tc.ok)
+			}
+			if key != tc.key {
+				t.Fatalf("key mismatch: got=%q want=%q", key, tc.key)
+			}
+			if value != tc.value {
+				t.Fatalf("value mismatch: got=%q want=%q", value, tc.value)
+			}
+		})
+	}
+}
+
 func TestRemoteSSHConfigHostsEndpoint(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

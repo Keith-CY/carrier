@@ -128,12 +128,16 @@ func splitSSHConfigDirective(line string) (string, string, bool) {
 	if trimmed == "" {
 		return "", "", false
 	}
-	idx := strings.IndexAny(trimmed, " \t")
+	idx := strings.IndexAny(trimmed, " \t=")
 	if idx <= 0 {
 		return "", "", false
 	}
 	key := trimmed[:idx]
-	value := strings.TrimSpace(trimmed[idx+1:])
+	value := strings.TrimLeft(trimmed[idx:], " \t")
+	if strings.HasPrefix(value, "=") {
+		value = strings.TrimLeft(value[1:], " \t")
+	}
+	value = strings.TrimSpace(value)
 	if value == "" {
 		return "", "", false
 	}
