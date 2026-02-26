@@ -518,6 +518,69 @@ func TestHandleCommand_Install_RemoteSuccess(t *testing.T) {
 	}
 }
 
+func TestHandleCommand_Install_RemoteRetriesAfterRepair(t *testing.T) {
+	sessions := NewSessionStore("", 0, nil)
+	tok := pairAndGetSession(sessions, "telegram", "123")
+	defer sessions.Stop()
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+
+	host, err := upsertRemoteHost(RemoteHost{
+		ID:          "host-retry",
+		Name:        "retry-host",
+		Host:        "127.0.0.1",
+		Port:        22,
+		User:        "ubuntu",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     "~/.ssh/id_ed25519",
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	})
+	if err != nil {
+		t.Fatalf("upsertRemoteHost: %v", err)
+	}
+
+	installAttempts := 0
+	origRunner := sshExecRunner
+	sshExecRunner = func(_ context.Context, args []string) (remoteExecResult, error) {
+		if len(args) == 0 {
+			return remoteExecResult{ExitCode: 1, Stderr: "missing ssh args"}, nil
+		}
+		command := args[len(args)-1]
+		if strings.Contains(command, "openclaw.ai/install.sh") {
+			installAttempts++
+			if installAttempts == 1 {
+				return remoteExecResult{
+					Command:    command,
+					ExitCode:   1,
+					Stderr:     "install failed",
+					DurationMs: 1,
+				}, nil
+			}
+		}
+		return remoteExecResult{
+			Command:    command,
+			ExitCode:   0,
+			Stdout:     "ok",
+			DurationMs: 1,
+		}, nil
+	}
+	t.Cleanup(func() { sshExecRunner = origRunner })
+
+	cmd := &GatewayCommand{
+		Provider: "telegram", ChatID: "123", RequestID: "r-install-retry",
+		Name: CmdInstall, Args: []string{"openclaw", host.ID}, SessionToken: tok,
+	}
+	resp := HandleCommand(context.Background(), cmd, nil, sessions, nil, nil, nil)
+	if resp.Result != "ok" {
+		t.Fatalf("expected ok, got %s: %s", resp.Result, resp.Message)
+	}
+	if installAttempts < 2 {
+		t.Fatalf("expected at least two install attempts, got %d", installAttempts)
+	}
+	if !strings.Contains(resp.Message, "attempts=2") {
+		t.Fatalf("expected attempts marker in message, got %q", resp.Message)
+	}
+}
+
 func TestHandleCommand_Uninstall_Success(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"POST /api/v1/agents/myagent/uninstall": func(w http.ResponseWriter, r *http.Request) {

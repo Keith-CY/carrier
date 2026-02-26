@@ -425,22 +425,71 @@ func handleInstall(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClien
 		return errResp(cmd.RequestID, "E_USAGE", fmt.Sprintf("remote /install currently supports openclaw only (got %s)", agentID))
 	}
 
-	installCtx, cancel := context.WithTimeout(ctx, 25*time.Minute)
+	installCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
-	result, installErr := remoteInstallOpenClaw(installCtx, host, hostID, agentID)
+	workflowResult, installErr := runRemoteInstallWorkflow(installCtx, host, hostID, agentID)
 	if installErr != nil {
 		return errResp(cmd.RequestID, "E_REMOTE_INSTALL_FAILED", installErr.Error())
 	}
 
 	message := fmt.Sprintf("remote install completed for %s on host %s", agentID, hostID)
-	if result != nil && result.GatewayMode == RemoteRuntimeModeManagedGateway {
+	if workflowResult.Install != nil && workflowResult.Install.GatewayMode == RemoteRuntimeModeManagedGateway {
 		message += " (managed gateway mode)"
+	}
+	if workflowResult.Attempts > 1 {
+		message += fmt.Sprintf("; attempts=%d", workflowResult.Attempts)
+	}
+	if workflowResult.Repaired {
+		message += "; repair_applied=true"
 	}
 	return GatewayResponse{
 		RequestID: cmd.RequestID,
 		Result:    "ok",
 		Message:   message,
 	}
+}
+
+type remoteInstallWorkflowResult struct {
+	Install  *remoteInstallResult
+	Repair   *remoteRepairResult
+	Attempts int
+	Repaired bool
+}
+
+func runRemoteInstallWorkflow(ctx context.Context, host RemoteHost, hostID, agentID string) (*remoteInstallWorkflowResult, error) {
+	out := &remoteInstallWorkflowResult{Attempts: 0}
+
+	preflight, preflightErr := checkRemoteHostAndMaybeRepair(ctx, host)
+	if preflightErr != nil {
+		return out, fmt.Errorf("remote preflight failed for host %s: %w", hostID, preflightErr)
+	}
+	if !preflight.SSHOK {
+		return out, fmt.Errorf("remote preflight failed for host %s: ssh check did not pass", hostID)
+	}
+
+	firstInstall, firstErr := remoteInstallOpenClaw(ctx, host, hostID, agentID)
+	out.Attempts = 1
+	if firstErr == nil {
+		out.Install = firstInstall
+		return out, nil
+	}
+
+	repair, repairErr := remoteRepairOpenClaw(ctx, host, hostID, agentID)
+	out.Repair = repair
+	if repair != nil && repair.Repaired {
+		out.Repaired = true
+	}
+	if repairErr != nil {
+		return out, fmt.Errorf("install failed on host %s (%v); repair step failed: %w", hostID, firstErr, repairErr)
+	}
+
+	secondInstall, secondErr := remoteInstallOpenClaw(ctx, host, hostID, agentID)
+	out.Attempts = 2
+	if secondErr != nil {
+		return out, fmt.Errorf("install failed after repair retry on host %s: %w", hostID, secondErr)
+	}
+	out.Install = secondInstall
+	return out, nil
 }
 
 func resolveInstallHostID(args []string) string {
