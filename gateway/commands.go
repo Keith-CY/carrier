@@ -345,7 +345,7 @@ func handleAgents(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient
 		lines = append(lines, fmt.Sprintf("%s %s (%s): %s, %s, health=%s", emoji, name, a.ID, installState, runtime, health))
 	}
 	if installed < len(agents) {
-		lines = append(lines, "Tip: install/onboard in Carrier GUI. Chat supports management commands only.")
+		lines = append(lines, "Tip: use Carrier CLI/TUI (`carrier install <agent_id>`, `carrier onboard`) or WebUI for install/onboard. Chat supports management commands only.")
 	}
 	return GatewayResponse{
 		RequestID: cmd.RequestID,
@@ -603,15 +603,15 @@ func usageResp(requestID, usage string) GatewayResponse {
 }
 
 func addViaGUIOnlyResp(requestID string) GatewayResponse {
-	return errResp(requestID, "E_ADD_GUI_ONLY", "Add/install is disabled in chat to protect credentials. Open Carrier GUI to add/install and onboard agents. Chat is for management commands only.")
+	return errResp(requestID, "E_ADD_GUI_ONLY", "Add/install is disabled in chat to protect credentials. Use Carrier CLI/TUI (`carrier install <agent_id>`, `carrier onboard`) or Carrier WebUI. Chat is for management commands only.")
 }
 
 func onboardViaGUIOnlyResp(requestID string) GatewayResponse {
-	return errResp(requestID, "E_ONBOARD_GUI_ONLY", "Onboarding is disabled in chat to protect credentials. Open Carrier GUI to complete onboarding and credential setup.")
+	return errResp(requestID, "E_ONBOARD_GUI_ONLY", "Onboarding is disabled in chat to protect credentials. Use Carrier CLI/TUI (`carrier onboard`) or Carrier WebUI for credential setup.")
 }
 
 func installViaGUIOnlyResp(requestID string) GatewayResponse {
-	return errResp(requestID, "E_INSTALL_GUI_ONLY", "Install is disabled in chat to protect credentials. Open Carrier GUI to install and onboard agents.")
+	return errResp(requestID, "E_INSTALL_GUI_ONLY", "Install is disabled in chat to protect credentials. Use Carrier CLI/TUI (`carrier install <agent_id>`) or Carrier WebUI.")
 }
 
 func daemonErrResp(requestID string, err error) GatewayResponse {

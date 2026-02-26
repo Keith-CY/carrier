@@ -117,26 +117,28 @@ See `CONTRIBUTING.md` for command examples and required process. For security vu
 
 ## Installation and testing
 
-### Carrier CLI flow (recommended: bootstrap → onboard → add)
+### Carrier CLI flow (recommended: bootstrap → onboard → install)
 
 Carrier CLI is now the recommended first path:
 
 1. `carrier` (bootstrap)
    - If no onboarding config exists, it starts onboarding automatically.
    - If already onboarded, it starts/reuses daemon + gateway and exits.
-2. `carrier onboard` (interactive TUI)
+2. `carrier onboard` (interactive TUI/CLI)
    - This flow is Telegram-first today.
-   - For Discord/Feishu onboarding, use `carrier onboard --webui` (or provider/manual setup) and run add flow through WebUI where needed.
-3. `carrier add <agent_id>` (managed or direct)
+   - Explicit terminal aliases are also supported: `carrier onboard --tui` and `carrier onboard --cli`.
+   - For Discord/Feishu onboarding, use `carrier onboard --webui` (or provider/manual setup) and run install flow through WebUI where needed.
+3. `carrier install <agent_id>` (managed or direct)
    - `openclaw`, `picoclaw`, and `zeroclaw`: managed-agent flow with provider/channel setup, then install/start plus instance tracking.
    - Other agent IDs: direct install + start for the daemon.
-4. `carrier add <agent_id> --webui` (browser-assisted for all managed flows)
+   - `carrier add <agent_id>` remains supported as an alias.
+4. `carrier install <agent_id> --webui` (browser-assisted for all managed flows)
 
 For full command coverage, see [`docs/carrier-cli.md`](./docs/carrier-cli.md).
 
 Notes:
 
-- Chat `/install` and `/onboard` command names still exist, but onboarding/install in chat mode are intentionally blocked (`E_INSTALL_GUI_ONLY` / `E_ONBOARD_GUI_ONLY`) to protect credentials; use Carrier CLI/WebUI instead.
+- Chat `/install` and `/onboard` command names still exist, but onboarding/install in chat mode are intentionally blocked (`E_INSTALL_GUI_ONLY` / `E_ONBOARD_GUI_ONLY`) to protect credentials; use Carrier CLI/TUI (`carrier install`, `carrier onboard`) or WebUI instead.
 - Release/package flows below are still valid and useful for non-CLI deployment scenarios.
 
 ### Onboarding Runbook (Directly Executable)
@@ -303,9 +305,9 @@ Implementation notes:
   - `curl -fsSL https://raw.githubusercontent.com/Keith-CY/carrier/main/scripts/install.sh | bash`
   - Installer behavior: resolves `main` HEAD SHA, downloads `carrier-main-<full_commit_sha>-<label>.zip`, verifies `.sha256`, installs `carrier`.
 - Do not infer latest by taking the first `/releases` entry; resolve `main` HEAD SHA and use `main-<full_commit_sha>`.
-- Use TUI flow for onboarding/install on EC2:
+- Use TUI/CLI flow for onboarding/install on EC2:
   - `carrier onboard`
-  - `carrier add openclaw`
+  - `carrier install openclaw` (or `carrier add openclaw`)
 - Chat `/install` and `/onboard` are intentionally blocked in gateway chat mode (`E_INSTALL_GUI_ONLY` / `E_ONBOARD_GUI_ONLY`) for credential safety.
 - End-to-end no-rebuild scripts:
   - Linux: `scripts/ec2-binary-tui-linux.sh` (no args defaults to latest `main` push release)
@@ -334,8 +336,8 @@ Implementation notes:
    - `/pair <code>`
    - `/agents`
    - If `/agents` returns an empty list, verify the daemon is running and successfully paired, then retry after a few seconds. If still empty, re-run `/pair <code>` with a fresh code.
-8. Install OpenClaw through Carrier CLI/WebUI (chat `/install` is intentionally blocked):
-   - `carrier add openclaw`
+8. Install OpenClaw through Carrier CLI/TUI or WebUI (chat `/install` is intentionally blocked):
+   - `carrier install openclaw` (or `carrier add openclaw`)
 9. Configure required OpenClaw environment (for example `OPENAI_API_KEY`) before start.
 10. Start and verify:
    - `/start openclaw`

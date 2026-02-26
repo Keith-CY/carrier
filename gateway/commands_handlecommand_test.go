@@ -358,8 +358,8 @@ func TestHandleCommand_Add_GuiOnly(t *testing.T) {
 	if resp.ErrorCode != "E_ADD_GUI_ONLY" {
 		t.Fatalf("expected E_ADD_GUI_ONLY, got %s", resp.ErrorCode)
 	}
-	if !strings.Contains(resp.Message, "Carrier GUI") {
-		t.Fatalf("expected GUI guidance, got: %q", resp.Message)
+	if !strings.Contains(resp.Message, "CLI/TUI") {
+		t.Fatalf("expected CLI/TUI guidance, got: %q", resp.Message)
 	}
 }
 
@@ -376,8 +376,8 @@ func TestHandleCommand_Add_NoArgs(t *testing.T) {
 	if resp.ErrorCode != "E_ADD_GUI_ONLY" {
 		t.Errorf("expected E_ADD_GUI_ONLY, got %s", resp.ErrorCode)
 	}
-	if !strings.Contains(resp.Message, "Carrier GUI") {
-		t.Fatalf("expected GUI guidance, got: %q", resp.Message)
+	if !strings.Contains(resp.Message, "CLI/TUI") {
+		t.Fatalf("expected CLI/TUI guidance, got: %q", resp.Message)
 	}
 }
 
@@ -397,8 +397,8 @@ func TestHandleCommand_Onboard_GuiOnly(t *testing.T) {
 	if resp.ErrorCode != "E_ONBOARD_GUI_ONLY" {
 		t.Fatalf("expected E_ONBOARD_GUI_ONLY, got %s", resp.ErrorCode)
 	}
-	if !strings.Contains(resp.Message, "Carrier GUI") {
-		t.Fatalf("expected GUI guidance, got: %q", resp.Message)
+	if !strings.Contains(resp.Message, "CLI/TUI") {
+		t.Fatalf("expected CLI/TUI guidance, got: %q", resp.Message)
 	}
 }
 

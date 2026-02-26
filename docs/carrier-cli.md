@@ -10,14 +10,22 @@ This page summarizes the implemented CLI command surface and the recommended usa
   - If already onboarded, it ensures daemon and gateway are running and then exits.
 - `carrier onboard`
   - Interactive onboarding flow (TUI).
+- `carrier onboard --tui` / `carrier onboard --cli`
+  - Explicit terminal onboarding mode aliases (same terminal flow).
 - `carrier onboard --webui`
   - Browser/WebUI onboarding flow.
 - `carrier add <agent_id>`
   - Add/install agent via TUI flow.
   - Managed agents (`openclaw`, `picoclaw`, `zeroclaw`) use managed-agent setup and instance tracking.
   - Non-managed agent IDs run direct daemon install + start.
+- `carrier add <agent_id> --tui` / `carrier add <agent_id> --cli`
+  - Explicit terminal add/install mode aliases (same terminal flow).
 - `carrier add <agent_id> --webui`
   - Browser/WebUI add flow.
+- `carrier install <agent_id>`
+  - Alias for `carrier add <agent_id>`.
+- `carrier install <agent_id> --tui|--cli|--webui`
+  - Alias mode flags for terminal or WebUI install flows.
 - `carrier list`
   - Lists managed agent instances with state.
 - `carrier stop`
@@ -57,7 +65,7 @@ Use `--webui` when interactive terminal access is unavailable or when onboarding
   - You are already paired in chat and need quick operational commands.
   - You are not relying on primary CLI onboarding/install flow.
 
-`/install` and `/onboard` chat commands still parse at gateway level, but onboarding/install actions in chat mode are intentionally blocked (`E_INSTALL_GUI_ONLY` / `E_ONBOARD_GUI_ONLY`) to avoid credential handling in chat.
+`/install` and `/onboard` chat commands still parse at gateway level, but onboarding/install actions in chat mode are intentionally blocked (`E_INSTALL_GUI_ONLY` / `E_ONBOARD_GUI_ONLY`) to avoid credential handling in chat. Use `carrier install` / `carrier onboard` (CLI/TUI) or WebUI.
 
 ## Concise example flows
 

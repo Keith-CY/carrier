@@ -19,6 +19,7 @@ func TestParseCarrierCommandRoutesInstanceCommands(t *testing.T) {
 		{args: []string{"carrier", "stop", "openclaw"}, wantCmd: "stop", wantArg: "openclaw"},
 		{args: []string{"carrier", "status", "openclaw"}, wantCmd: "status", wantArg: "openclaw"},
 		{args: []string{"carrier", "upgrade", "openclaw"}, wantCmd: "upgrade", wantArg: "openclaw"},
+		{args: []string{"carrier", "install", "openclaw"}, wantCmd: "install", wantArg: "openclaw"},
 	}
 
 	for _, tc := range cases {
