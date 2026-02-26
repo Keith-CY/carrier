@@ -12,7 +12,7 @@ import (
 )
 
 type scriptedTelegramAPI struct {
-	getUpdatesFn func(ctx context.Context, offset int64, timeoutSec int) ([]map[string]interface{}, error)
+	getUpdatesFn  func(ctx context.Context, offset int64, timeoutSec int) ([]map[string]interface{}, error)
 	sendMessageFn func(ctx context.Context, chatID, text string, disableWebPagePreview bool) error
 }
 
@@ -39,6 +39,10 @@ func (s *scriptedTelegramAPI) SendMessage(ctx context.Context, chatID, text stri
 	if s.sendMessageFn != nil {
 		return s.sendMessageFn(ctx, chatID, text, disableWebPagePreview)
 	}
+	return nil
+}
+
+func (s *scriptedTelegramAPI) SetMyCommands(_ context.Context, _ []telegramBotCommand) error {
 	return nil
 }
 

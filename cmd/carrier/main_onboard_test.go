@@ -15,6 +15,9 @@ func TestRunOnboardOverridesStaleDefaultModelEnv(t *testing.T) {
 	t.Setenv("CARRIER_CONFIG", filepath.Join(tmp, "config.v2.json"))
 	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
 	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	t.Setenv("CARRIER_TELEGRAM_BOT_TOKEN", "")
+	t.Setenv("CARRIER_DISCORD_BOT_TOKEN", "")
+	t.Setenv("CARRIER_DISCORD_PUBLIC_KEY", "")
 
 	// Simulate stale defaults from a previous onboarding.
 	t.Setenv("CARRIER_DEFAULT_PROVIDER_ID", "openai-codex")
@@ -44,10 +47,11 @@ func TestRunOnboardOverridesStaleDefaultModelEnv(t *testing.T) {
 	}
 
 	// Input order:
-	// 1) Telegram token
-	// 2) Provider override (switch from openai-codex to openai)
-	// 3) OpenAI API key
-	input := "tg-test-token\nopenai\nsk-test-openai\n"
+	// 1) Channel selection
+	// 2) Telegram token
+	// 3) Provider override (switch from openai-codex to openai)
+	// 4) OpenAI API key
+	input := "telegram\ntg-test-token\nopenai\nsk-test-openai\n"
 	var out bytes.Buffer
 	if err := runOnboard(strings.NewReader(input), &out, startGateway); err != nil {
 		t.Fatalf("runOnboard error: %v", err)
@@ -87,5 +91,66 @@ func TestRunOnboardOverridesStaleDefaultModelEnv(t *testing.T) {
 	}
 	if got := os.Getenv("CARRIER_DEFAULT_PROVIDER_ENV"); got != "OPENAI_CODEX_TOKEN" {
 		t.Fatalf("CARRIER_DEFAULT_PROVIDER_ENV should stay untouched, got %q", got)
+	}
+}
+
+func TestRunOnboardSupportsWebUIOnlyWithoutChannel(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("CARRIER_CONFIG", filepath.Join(tmp, "config.v2.json"))
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	t.Setenv("CARRIER_TELEGRAM_BOT_TOKEN", "")
+	t.Setenv("CARRIER_DISCORD_BOT_TOKEN", "")
+	t.Setenv("CARRIER_DISCORD_PUBLIC_KEY", "")
+
+	origDaemonHealthProbe := daemonHealthProbe
+	origGatewayHealthProbe := gatewayHealthProbe
+	origDaemonPairCodeFetcher := daemonPairCodeFetcher
+	t.Cleanup(func() {
+		daemonHealthProbe = origDaemonHealthProbe
+		gatewayHealthProbe = origGatewayHealthProbe
+		daemonPairCodeFetcher = origDaemonPairCodeFetcher
+	})
+
+	daemonHealthProbe = func(string) bool { return true }
+	gatewayHealthProbe = func(string) bool { return false }
+
+	pairCodeFetchCalls := 0
+	daemonPairCodeFetcher = func(string) (string, string, error) {
+		pairCodeFetchCalls++
+		return "", "", nil
+	}
+
+	startCalls := 0
+	startGateway := func() error {
+		startCalls++
+		return nil
+	}
+
+	// Input order:
+	// 1) Channel selection (empty => skip/WebUI-only)
+	// 2) Provider override (switch to openai)
+	// 3) OpenAI API key
+	input := "\nopenai\nsk-webui-only\n"
+	var out bytes.Buffer
+	if err := runOnboard(strings.NewReader(input), &out, startGateway); err != nil {
+		t.Fatalf("runOnboard error: %v", err)
+	}
+	if startCalls != 1 {
+		t.Fatalf("start gateway called %d times, want 1", startCalls)
+	}
+	if pairCodeFetchCalls != 0 {
+		t.Fatalf("pair code should not be fetched in WebUI-only mode, got %d calls", pairCodeFetchCalls)
+	}
+
+	cfg, _, err := configv2.Load()
+	if err != nil {
+		t.Fatalf("configv2.Load: %v", err)
+	}
+	if len(cfg.Channels) != 0 {
+		t.Fatalf("len(cfg.Channels) = %d, want 0", len(cfg.Channels))
+	}
+	if !strings.Contains(out.String(), "WebUI-only mode") {
+		t.Fatalf("stdout missing WebUI-only message: %q", out.String())
 	}
 }

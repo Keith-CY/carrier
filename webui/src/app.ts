@@ -566,6 +566,25 @@
 
     function refreshSetupContinueState() {
       if (!isAddMode()) {
+        const channel = providerSelect.value.trim().toLowerCase();
+        const channelToken = tokenInput.value.trim();
+        const channelSecret = webhookInput.value.trim();
+        if (!channel) {
+          setupBtn.disabled = true;
+          return;
+        }
+        if (channel === 'skip') {
+          setupBtn.disabled = false;
+          return;
+        }
+        if (!channelToken) {
+          setupBtn.disabled = true;
+          return;
+        }
+        if (channel === 'discord' && !channelSecret) {
+          setupBtn.disabled = true;
+          return;
+        }
         setupBtn.disabled = false;
         return;
       }
@@ -622,7 +641,7 @@
       title.textContent = 'Step 1 — Configure Chat Channel';
       providerLabel.textContent = 'Chat Channel';
       tokenLabel.textContent = 'Channel Bot Token';
-      providerSelect.value = '';
+      providerSelect.value = addChannel || 'skip';
       [...providerSelect.options].forEach(opt => { opt.disabled = false; });
       webhookInput.disabled = false;
       webhookInput.placeholder = 'Webhook verification secret';
@@ -630,11 +649,14 @@
       if (webhookLabel) webhookLabel.classList.remove('hidden');
       pairSection.classList.add('hidden');
       renderCarrierPairShortcut('');
-      setupBtn.disabled = false;
+      refreshSetupContinueState();
     }
 
     providerSelect.onchange = () => {
-      if (!isAddMode()) return;
+      if (!isAddMode()) {
+        refreshSetupContinueState();
+        return;
+      }
       const channel = providerSelect.value.trim().toLowerCase();
       if (channel !== 'telegram') {
         addChannelChatId = '';
@@ -653,7 +675,10 @@
     };
 
     tokenInput.oninput = () => {
-      if (!isAddMode()) return;
+      if (!isAddMode()) {
+        refreshSetupContinueState();
+        return;
+      }
       const inputToken = tokenInput.value.trim();
       if (inputToken !== addChannelToken) {
         addChannelChatId = '';
@@ -670,6 +695,11 @@
         updatePairInstruction();
       }
       refreshSetupContinueState();
+    };
+    webhookInput.oninput = () => {
+      if (!isAddMode()) {
+        refreshSetupContinueState();
+      }
     };
 
     if (pairUseCarrierBtn) {
@@ -750,16 +780,20 @@
         setMsg('#setup-msg', 'Please choose a chat channel.', 'error');
         return;
       }
-      if (!channelToken) {
+      if (channel !== 'skip' && !channelToken) {
         setMsg('#setup-msg', 'Please enter channel bot token.', 'error');
+        return;
+      }
+      if (channel === 'discord' && !webhookSecret) {
+        setMsg('#setup-msg', 'Please enter Discord public key.', 'error');
         return;
       }
 
       // Reuse channel fields for non-add wizard install path as well.
       addChannel = channel;
-      addChannelToken = channelToken;
-      addWebhookSecret = webhookSecret;
-      location.hash = '#/agents';
+      addChannelToken = channel === 'skip' ? '' : channelToken;
+      addWebhookSecret = channel === 'skip' ? '' : webhookSecret;
+      location.hash = '#/provider';
     };
   }
 
@@ -990,7 +1024,7 @@
       };
     }
 
-    $('#provider-back').onclick = () => { location.hash = isAddMode() ? '#/setup' : '#/agents'; };
+    $('#provider-back').onclick = () => { location.hash = '#/setup'; };
     $('#provider-skip').onclick = () => {
       selectedProvider = null;
       providerApiKey = '';
@@ -998,11 +1032,7 @@
     };
     $('#provider-next').onclick = () => {
       if (!selectedProvider) return;
-      if (isAddMode()) {
-        location.hash = '#/install';
-        return;
-      }
-      location.hash = '#/config';
+      location.hash = '#/install';
     };
   }
 
@@ -1048,18 +1078,22 @@
       // OAuth / plugin / ADC
       label.textContent = p.name + ' requires external authentication.';
       instructions.classList.remove('hidden');
-      if (isAddMode()) {
+      keyInput.classList.remove('hidden');
+      keyInput.placeholder = (p.env_var || 'Access token') + ' (optional, leave empty to reuse saved credential)';
+      keyInput.oninput = () => {
+        providerApiKey = keyInput.value.trim();
+        refreshProviderNextButton();
+      };
+      if (p.id === 'openai-codex') {
         instructions.innerHTML =
-          'Paste access token below if you are not reusing Carrier credential.';
-        keyInput.classList.remove('hidden');
-        keyInput.placeholder = 'Access token (optional)';
-        keyInput.oninput = () => {
-          providerApiKey = keyInput.value.trim();
-          refreshProviderNextButton();
-        };
+          'OAuth device-code login:<br>' +
+          '1. Open <code>https://auth.openai.com/codex/device</code><br>' +
+          '2. Enter your one-time device code and complete authorization<br>' +
+          '3. Paste <code>OPENAI_CODEX_TOKEN</code> below (or leave empty to reuse saved credential).';
       } else {
-        const cmd = 'openclaw models auth login --provider ' + p.id;
-        instructions.innerHTML = 'Run: <code>' + escapeHtml(cmd) + '</code><br>Then click Continue.';
+        instructions.innerHTML =
+          'Complete provider OAuth login, then paste access token below ' +
+          '(or leave empty to reuse saved credential).';
       }
     }
     refreshProviderNextButton();
@@ -1128,8 +1162,8 @@
     const heading = $('#view-install h3');
     if (heading) heading.textContent = isAddMode() ? 'Step 3 — Confirm Installation' : 'Step 5 — Confirm Installation';
 
-    let summary = 'Agent: ' + selectedAgent;
-    if (isAddMode()) summary += '\nChannel: ' + addChannel;
+    let summary = isAddMode() ? ('Agent: ' + selectedAgent) : 'Carrier Onboard';
+    if (addChannel) summary += '\nChannel: ' + (addChannel === 'skip' ? 'WebUI only' : addChannel);
     if (selectedProvider) summary += '\nProvider: ' + selectedProvider.name;
     $('#install-summary').textContent = summary;
 
@@ -1157,24 +1191,18 @@
           });
           lastAddResult = resp || null;
         } else {
-          if (!selectedProvider && selectedAgent === 'picoclaw') {
-            throw new Error('Please select an LLM provider for picoclaw.');
+          if (!selectedProvider) {
+            throw new Error('Please select an LLM provider.');
           }
-          const envVars = collectEnvVars();
-          if (addWebhookSecret) {
-            envVars.CARRIER_TELEGRAM_WEBHOOK_SECRET = addWebhookSecret;
-          }
-          const resp = await api('POST', '/api/v1/add', {
-            agentId: selectedAgent,
-            channel: addChannel,
+          const resp = await api('POST', '/api/v1/onboard', {
+            channel: addChannel || 'skip',
             channelToken: addChannelToken,
-            channelChatId: addChannelChatId,
-            providerId: selectedProvider ? selectedProvider.id : '',
+            channelSecret: addWebhookSecret,
+            providerId: selectedProvider.id,
             providerToken: providerApiKey,
-            reuseCredential: true,
-            envVars,
+            reuseCredential: providerApiKey ? false : true,
           });
-          lastAddResult = resp || null;
+          lastAddResult = (resp && resp.onboard) ? resp.onboard : (resp || null);
         }
         location.hash = '#/complete';
       } catch (e) {
@@ -1203,6 +1231,24 @@
       }
       if (lastAddResult.pairedChatId) lines.push('Paired chat: ' + lastAddResult.pairedChatId);
       if (lastAddResult.workspacePath) lines.push('Workspace: ' + lastAddResult.workspacePath);
+      if (lastAddResult.configPath) lines.push('Config: ' + lastAddResult.configPath);
+      detail.textContent = lines.join('\n');
+    } else if (lastAddResult) {
+      const lines = [];
+      const pairRequired = !!lastAddResult.pairRequired;
+      if (pairRequired && title) title.textContent = '⚠️ One step left: Pair your bot';
+      if (lastAddResult.webuiOnly) {
+        lines.push('Mode: WebUI only (no chat channel configured).');
+      } else if (lastAddResult.channel) {
+        lines.push('Channel: ' + lastAddResult.channel);
+      }
+      if (lastAddResult.providerId) lines.push('Provider: ' + lastAddResult.providerId);
+      if (lastAddResult.pairCode) {
+        lines.push('Pair code: ' + lastAddResult.pairCode);
+      }
+      if (pairRequired && lastAddResult.pairCode) {
+        lines.push('Send in your bot chat: /pair ' + lastAddResult.pairCode);
+      }
       if (lastAddResult.configPath) lines.push('Config: ' + lastAddResult.configPath);
       detail.textContent = lines.join('\n');
     } else {
