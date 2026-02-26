@@ -271,6 +271,15 @@
           <div>
             <label for="server-key-path">Key Path</label>
             <input id="server-key-path" type="text" placeholder="~/.ssh/id_ed25519">
+            <p class="text-dim">Optional when uploading a PEM file below.</p>
+          </div>
+          <div>
+            <label for="server-key-file">PEM Upload</label>
+            <div id="server-key-dropzone" class="file-dropzone" tabindex="0" role="button">
+              Drag and drop `.pem` here, or choose a file.
+            </div>
+            <input id="server-key-file" type="file" accept=".pem,application/x-pem-file">
+            <p id="server-key-upload-state" class="text-dim">No uploaded key selected.</p>
           </div>
           <div>
             <label for="server-ssh-config-host">SSH Config Host</label>

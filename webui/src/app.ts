@@ -40,6 +40,7 @@
   let serverManageLastOperation = null;
   let serverHostLastOperationByID = {};
   let serverEditingHostID = '';
+  let serverSelectedUploadedKey = null;
   let profileEditingProfileID = '';
   let remoteChatSessionID = '';
   let remoteChatAbortController = null;
@@ -69,6 +70,38 @@
     };
     if (token) opts.headers['Authorization'] = 'Bearer ' + token;
     if (body) opts.body = JSON.stringify(body);
+    return fetch(path, opts).then(async r => {
+      if (r.status === 401) {
+        clearToken();
+        throw new Error('Unauthorized');
+      }
+      const raw = await r.text();
+      let data = {};
+      if (raw) {
+        try {
+          data = JSON.parse(raw);
+        } catch (e) {
+          if (!r.ok) throw new Error(raw || 'Request failed (' + r.status + ')');
+          return raw;
+        }
+      }
+      if (!r.ok) {
+        const errMsg =
+          (data && data.message) ||
+          (data && data.errorCode) ||
+          (data && data.error && (data.error.message || data.error.code)) ||
+          data.error ||
+          ('Request failed (' + r.status + ')');
+        throw new Error(errMsg);
+      }
+      return data;
+    });
+  }
+
+  function apiMultipart(path, formData) {
+    const opts = { method: 'POST', headers: {} };
+    if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+    opts.body = formData;
     return fetch(path, opts).then(async r => {
       if (r.status === 401) {
         clearToken();
@@ -1917,15 +1950,35 @@
     return String(serverManageHostID || '').trim();
   }
 
+  function updateServerKeySelectionState() {
+    const status = $('#server-key-upload-state');
+    if (!status) return;
+    const key = serverSelectedUploadedKey && typeof serverSelectedUploadedKey === 'object' ? serverSelectedUploadedKey : null;
+    if (!key || !String(key.keyRef || '').trim()) {
+      status.textContent = 'No uploaded key selected.';
+      return;
+    }
+    const name = String(key.name || key.keyRef || '').trim();
+    const fp = String(key.fingerprint || '').trim();
+    status.textContent = fp ? ('Selected key: ' + name + ' (' + fp + ')') : ('Selected key: ' + name);
+  }
+
   function syncServerAuthModeInputs() {
     const authMode = $('#server-auth-mode');
     const hostInput = $('#server-host');
     const keyInput = $('#server-key-path');
+    const keyFileInput = $('#server-key-file');
+    const keyDropzone = $('#server-key-dropzone');
     const sshConfigInput = $('#server-ssh-config-host');
     if (!authMode || !hostInput || !keyInput || !sshConfigInput) return;
     const mode = String(authMode.value || '').trim().toLowerCase();
     const privateKey = mode === 'private_key';
     keyInput.disabled = !privateKey;
+    if (keyFileInput) keyFileInput.disabled = !privateKey;
+    if (keyDropzone) {
+      keyDropzone.classList.toggle('hidden', !privateKey);
+      keyDropzone.setAttribute('aria-disabled', privateKey ? 'false' : 'true');
+    }
     hostInput.disabled = false;
     sshConfigInput.disabled = privateKey;
   }
@@ -1956,12 +2009,15 @@
       '#server-ssh-config-host': '',
       '#server-runtime-mode': 'on_demand',
       '#server-auth-mode': 'private_key',
+      '#server-key-file': '',
     };
     Object.keys(defaults).forEach(selector => {
       const el = $(selector);
       if (!el) return;
       el.value = defaults[selector];
     });
+    serverSelectedUploadedKey = null;
+    updateServerKeySelectionState();
     syncServerAuthModeInputs();
   }
 
@@ -1985,6 +2041,7 @@
       '#server-port': String(host.port || 22),
       '#server-user': host.user || '',
       '#server-key-path': host.keyPath || '',
+      '#server-key-file': '',
       '#server-ssh-config-host': host.sshConfigHost || '',
       '#server-runtime-mode': host.runtimeMode || 'on_demand',
       '#server-auth-mode': host.authMode || 'private_key',
@@ -1994,6 +2051,16 @@
       if (!el) return;
       el.value = map[selector];
     });
+    if (String(host.keyRef || '').trim()) {
+      serverSelectedUploadedKey = {
+        keyRef: String(host.keyRef || '').trim(),
+        name: String(host.keyName || host.keyRef || '').trim(),
+        fingerprint: String(host.keyFingerprint || '').trim(),
+      };
+    } else {
+      serverSelectedUploadedKey = null;
+    }
+    updateServerKeySelectionState();
     syncServerAuthModeInputs();
     updateServerEditorUI();
   }
@@ -2985,6 +3052,7 @@
         'id: ' + (host.id || '-'),
         'endpoint: ' + endpoint,
         'auth: ' + (host.authMode || '-'),
+        'key: ' + (host.keyRef ? ('uploaded:' + host.keyRef) : (host.keyPath || '-')),
         'runtime: ' + (host.runtimeMode || '-'),
         'health: ' + (host.lastHealth || 'unknown'),
       ];
@@ -3054,6 +3122,40 @@
     const logsOut = $('#server-manage-logs');
     const sessionsOut = $('#server-manage-sessions');
     const memoryOut = $('#server-manage-memory');
+    const keyPathInput = $('#server-key-path');
+    const keyFileInput = $('#server-key-file');
+    const keyDropzone = $('#server-key-dropzone');
+
+    async function uploadRemoteKeyFile(file) {
+      if (!file) return;
+      const mode = String(authMode && authMode.value ? authMode.value : '').trim().toLowerCase();
+      if (mode !== 'private_key') {
+        setMsg('#servers-msg', 'PEM upload is only available for private_key auth mode.', 'error');
+        return;
+      }
+      const form = new FormData();
+      form.append('file', file);
+      try {
+        setMsg('#servers-msg', 'Uploading PEM key...', 'info');
+        const payload = await apiMultipart('/api/v1/remote/keys', form);
+        const key = payload && payload.key && typeof payload.key === 'object' ? payload.key : null;
+        if (!key || !String(key.keyRef || '').trim()) {
+          throw new Error('invalid upload response');
+        }
+        serverSelectedUploadedKey = {
+          keyRef: String(key.keyRef || '').trim(),
+          name: String(key.name || '').trim(),
+          fingerprint: String(key.fingerprint || '').trim(),
+        };
+        if (keyPathInput) keyPathInput.value = '';
+        updateServerKeySelectionState();
+        setMsg('#servers-msg', 'PEM uploaded and saved securely.', 'success');
+      } catch (e) {
+        setMsg('#servers-msg', 'PEM upload failed: ' + e.message, 'error');
+      } finally {
+        if (keyFileInput) keyFileInput.value = '';
+      }
+    }
 
     function syncServerEditSelection(hosts) {
       const list = Array.isArray(hosts) ? hosts : [];
@@ -3090,8 +3192,44 @@
 
     authMode.onchange = syncServerAuthModeInputs;
     syncServerAuthModeInputs();
+    updateServerKeySelectionState();
     updateServerEditorUI();
     setServerManageControlsDisabled(false);
+
+    if (keyPathInput) {
+      keyPathInput.oninput = () => {
+        if (String(keyPathInput.value || '').trim()) {
+          serverSelectedUploadedKey = null;
+          updateServerKeySelectionState();
+        }
+      };
+    }
+    if (keyFileInput) {
+      keyFileInput.onchange = async () => {
+        const files = keyFileInput.files;
+        if (!files || files.length === 0) return;
+        await uploadRemoteKeyFile(files[0]);
+      };
+    }
+    if (keyDropzone) {
+      keyDropzone.onclick = () => {
+        if (keyFileInput) keyFileInput.click();
+      };
+      keyDropzone.ondragover = e => {
+        e.preventDefault();
+        keyDropzone.classList.add('dragover');
+      };
+      keyDropzone.ondragleave = () => {
+        keyDropzone.classList.remove('dragover');
+      };
+      keyDropzone.ondrop = async e => {
+        e.preventDefault();
+        keyDropzone.classList.remove('dragover');
+        const files = e.dataTransfer && e.dataTransfer.files ? e.dataTransfer.files : null;
+        if (!files || files.length === 0) return;
+        await uploadRemoteKeyFile(files[0]);
+      };
+    }
 
     if (loadInstancesBtn) loadInstancesBtn.onclick = () => { loadServerManageInstances(); };
     if (instanceStatusBtn) instanceStatusBtn.onclick = () => { loadServerManageInstanceStatus(); };
@@ -3122,6 +3260,7 @@
 
     saveBtn.onclick = async () => {
       const mode = (authMode.value || '').trim().toLowerCase();
+      const selectedKey = serverSelectedUploadedKey && typeof serverSelectedUploadedKey === 'object' ? serverSelectedUploadedKey : null;
       const payload = {
         name: ($('#server-name').value || '').trim(),
         host: ($('#server-host').value || '').trim(),
@@ -3129,6 +3268,9 @@
         user: ($('#server-user').value || '').trim(),
         authMode: mode,
         keyPath: ($('#server-key-path').value || '').trim(),
+        keyRef: selectedKey && mode === 'private_key' ? String(selectedKey.keyRef || '').trim() : '',
+        keyName: selectedKey && mode === 'private_key' ? String(selectedKey.name || '').trim() : '',
+        keyFingerprint: selectedKey && mode === 'private_key' ? String(selectedKey.fingerprint || '').trim() : '',
         sshConfigHost: ($('#server-ssh-config-host').value || '').trim(),
         runtimeMode: ($('#server-runtime-mode').value || 'on_demand').trim(),
       };

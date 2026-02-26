@@ -237,10 +237,40 @@ select {
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
+input[type="file"] {
+  width: 100%;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--surface-strong);
+  color: var(--text);
+  font-size: 0.9rem;
+  padding: 10px 12px;
+}
+
 input:focus,
 select:focus {
   border-color: rgba(0, 113, 227, 0.55);
   box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.12);
+}
+
+.file-dropzone {
+  width: 100%;
+  border: 1px dashed rgba(0, 113, 227, 0.35);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.68);
+  color: var(--text-dim);
+  font-size: 0.88rem;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.file-dropzone:hover,
+.file-dropzone.dragover {
+  border-color: rgba(0, 113, 227, 0.65);
+  background: rgba(0, 113, 227, 0.08);
+  color: var(--text);
 }
 
 button,

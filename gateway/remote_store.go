@@ -188,6 +188,15 @@ func patchRemoteHost(hostID string, patch RemoteHost) (RemoteHost, error) {
 		if strings.TrimSpace(patch.KeyPath) != "" {
 			merged.KeyPath = patch.KeyPath
 		}
+		if strings.TrimSpace(patch.KeyRef) != "" {
+			merged.KeyRef = patch.KeyRef
+		}
+		if strings.TrimSpace(patch.KeyName) != "" {
+			merged.KeyName = patch.KeyName
+		}
+		if strings.TrimSpace(patch.KeyFingerprint) != "" {
+			merged.KeyFingerprint = patch.KeyFingerprint
+		}
 		if strings.TrimSpace(patch.SSHConfigHost) != "" {
 			merged.SSHConfigHost = patch.SSHConfigHost
 		}

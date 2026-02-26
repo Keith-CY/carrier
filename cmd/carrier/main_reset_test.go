@@ -32,6 +32,7 @@ func TestRunResetRemovesCarrierGeneratedData(t *testing.T) {
 	customOnboardConfig := filepath.Join(customDir, "onboard-config.json")
 	customInstances := filepath.Join(customDir, "instances.json")
 	customCredentials := filepath.Join(customDir, "credentials.json")
+	customRemoteKeys := filepath.Join(customDir, "remote-keys")
 	customRunDir := filepath.Join(customDir, "run")
 	customLogDir := filepath.Join(customDir, "logs")
 
@@ -39,6 +40,7 @@ func TestRunResetRemovesCarrierGeneratedData(t *testing.T) {
 	t.Setenv("CARRIER_ONBOARD_CONFIG", customOnboardConfig)
 	t.Setenv("CARRIER_INSTANCE_STORE", customInstances)
 	t.Setenv("CARRIER_CREDENTIAL_STORE", customCredentials)
+	t.Setenv("CARRIER_REMOTE_KEY_DIR", customRemoteKeys)
 	t.Setenv("CARRIER_BOOTSTRAP_RUN_DIR", customRunDir)
 	t.Setenv("CARRIER_BOOTSTRAP_LOG_DIR", customLogDir)
 
@@ -56,6 +58,7 @@ func TestRunResetRemovesCarrierGeneratedData(t *testing.T) {
 	mustWriteFile(t, customOnboardConfig, []byte("{}"))
 	mustWriteFile(t, customInstances, []byte("{}"))
 	mustWriteFile(t, customCredentials, []byte("{}"))
+	mustWriteFile(t, filepath.Join(customRemoteKeys, "test.pem"), []byte("PEM"))
 	mustWriteFile(t, filepath.Join(customRunDir, "daemon.pid"), []byte("123"))
 	mustWriteFile(t, filepath.Join(customLogDir, "daemon.log"), []byte("log"))
 
@@ -90,6 +93,7 @@ func TestRunResetRemovesCarrierGeneratedData(t *testing.T) {
 		customOnboardConfig,
 		customInstances,
 		customCredentials,
+		customRemoteKeys,
 		customRunDir,
 		customLogDir,
 	} {

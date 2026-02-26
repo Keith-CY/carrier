@@ -1,10 +1,13 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,6 +26,7 @@ func buildRemoteFeatureMuxWithConfigAndDaemonHandlers(t *testing.T, cfg *Gateway
 	t.Helper()
 	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(t.TempDir(), "instances.json"))
 	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+	t.Setenv("CARRIER_REMOTE_KEY_DIR", filepath.Join(t.TempDir(), "keys"))
 	resetRemoteMetricsForTests()
 
 	srv := newMockDaemon(daemonHandlers)
@@ -73,6 +77,29 @@ func decodeJSONMap(t *testing.T, rec *httptest.ResponseRecorder) map[string]inte
 	return out
 }
 
+func runMultipartRequest(t *testing.T, mux http.Handler, method, path, fieldName, fileName string, content []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile(fieldName, fileName)
+	if err != nil {
+		t.Fatalf("create multipart file field: %v", err)
+	}
+	if _, err := part.Write(content); err != nil {
+		t.Fatalf("write multipart content: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(method, path, &body)
+	req.Header.Set("Authorization", "Bearer test-gateway-token")
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	return rec
+}
+
 func configureSSHRunner(t *testing.T, fn func(command string) remoteExecResult) {
 	t.Helper()
 	orig := sshExecRunner
@@ -111,6 +138,87 @@ func createRemoteHostForTests(t *testing.T, mux http.Handler) string {
 		t.Fatalf("missing host id in response: %v", payload)
 	}
 	return hostID
+}
+
+func TestRemoteKeysUploadAndUseKeyRefInHostCheck(t *testing.T) {
+	mux := buildRemoteFeatureMux(t)
+
+	pemContent := []byte("-----BEGIN PRIVATE KEY-----\nAQID\n-----END PRIVATE KEY-----\n")
+	uploadRec := runMultipartRequest(t, mux, http.MethodPost, "/api/v1/remote/keys", "file", "aws-test.pem", pemContent)
+	if uploadRec.Code != http.StatusOK {
+		t.Fatalf("upload key status=%d body=%s", uploadRec.Code, uploadRec.Body.String())
+	}
+	uploadPayload := decodeJSONMap(t, uploadRec)
+	keyMap, _ := uploadPayload["key"].(map[string]interface{})
+	keyRef, _ := keyMap["keyRef"].(string)
+	if strings.TrimSpace(keyRef) == "" {
+		t.Fatalf("expected keyRef in upload response, payload=%v", uploadPayload)
+	}
+	keyFingerprint, _ := keyMap["fingerprint"].(string)
+	if !strings.HasPrefix(keyFingerprint, "sha256:") {
+		t.Fatalf("expected sha256 fingerprint, got %q", keyFingerprint)
+	}
+
+	createHostRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts", `{
+		"name":"ec2-host",
+		"host":"127.0.0.1",
+		"port":22,
+		"user":"ubuntu",
+		"authMode":"private_key",
+		"keyRef":"`+keyRef+`",
+		"keyName":"aws-test.pem",
+		"keyFingerprint":"`+keyFingerprint+`",
+		"runtimeMode":"on_demand"
+	}`)
+	if createHostRec.Code != http.StatusOK {
+		t.Fatalf("create host status=%d body=%s", createHostRec.Code, createHostRec.Body.String())
+	}
+	createHostPayload := decodeJSONMap(t, createHostRec)
+	hostMap, _ := createHostPayload["host"].(map[string]interface{})
+	hostID, _ := hostMap["id"].(string)
+	if strings.TrimSpace(hostID) == "" {
+		t.Fatalf("expected host id, payload=%v", createHostPayload)
+	}
+
+	var observedIPath string
+	origRunner := sshExecRunner
+	sshExecRunner = func(_ context.Context, args []string) (remoteExecResult, error) {
+		for i := 0; i < len(args)-1; i++ {
+			if args[i] == "-i" {
+				observedIPath = args[i+1]
+				break
+			}
+		}
+		cmd := ""
+		if len(args) > 0 {
+			cmd = args[len(args)-1]
+		}
+		switch {
+		case strings.Contains(cmd, "echo carrier-ssh-ok"):
+			return remoteExecResult{ExitCode: 0, Stdout: "carrier-ssh-ok\n", Command: cmd}, nil
+		case strings.Contains(cmd, "command -v openclaw"):
+			return remoteExecResult{ExitCode: 0, Command: cmd}, nil
+		default:
+			return remoteExecResult{ExitCode: 0, Command: cmd}, nil
+		}
+	}
+	t.Cleanup(func() { sshExecRunner = origRunner })
+
+	checkRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/check", `{}`)
+	if checkRec.Code != http.StatusOK {
+		t.Fatalf("check host status=%d body=%s", checkRec.Code, checkRec.Body.String())
+	}
+
+	expectedKeyPath, err := resolveRemoteKeyPath(keyRef)
+	if err != nil {
+		t.Fatalf("resolveRemoteKeyPath: %v", err)
+	}
+	if observedIPath != expectedKeyPath {
+		t.Fatalf("ssh -i key path = %q, want %q", observedIPath, expectedKeyPath)
+	}
+	if _, statErr := os.Stat(expectedKeyPath); statErr != nil {
+		t.Fatalf("expected stored PEM file to exist at %s: %v", expectedKeyPath, statErr)
+	}
 }
 
 func TestRemoteHostsCRUDAndCheck(t *testing.T) {
