@@ -54,16 +54,18 @@ func (l *AgentLoop) ProcessChat(ctx context.Context, req ChatRequest) (ChatRespo
 		return ChatResponse{Message: baseAgentHelpText()}, nil
 	}
 
-	sessionKey := resolveSessionKey(req)
 	channel := strings.TrimSpace(req.Provider)
+	chatID := strings.TrimSpace(req.ChatID)
+	requestID := strings.TrimSpace(req.RequestID)
+	sessionKey := resolveSessionKey(channel, chatID)
 
 	l.bus.PublishInbound(InboundEnvelope{
 		Channel:    channel,
-		ChatID:     strings.TrimSpace(req.ChatID),
+		ChatID:     chatID,
 		Content:    message,
 		SessionKey: sessionKey,
 		Metadata: map[string]string{
-			"request_id": strings.TrimSpace(req.RequestID),
+			"request_id": requestID,
 		},
 	})
 	l.sessions.AddMessage(sessionKey, "user", message)
@@ -75,17 +77,17 @@ func (l *AgentLoop) ProcessChat(ctx context.Context, req ChatRequest) (ChatRespo
 				Name:    "tool_route_failed",
 				Message: err.Error(),
 				Metadata: map[string]string{
-					"request_id": strings.TrimSpace(req.RequestID),
+					"request_id": requestID,
 				},
 			})
 			return ChatResponse{}, err
 		}
-		return l.finalizeResponse(sessionKey, req, resp), nil
+		return l.finalizeResponse(sessionKey, channel, chatID, requestID, resp), nil
 	}
 
 	// Best-effort fallback: if user mentioned a known agent ID, return status.
 	if resp, ok := l.bestEffortAgentStatus(ctx, message); ok {
-		return l.finalizeResponse(sessionKey, req, resp), nil
+		return l.finalizeResponse(sessionKey, channel, chatID, requestID, resp), nil
 	}
 
 	reply, err := l.providers.Reply(ctx, ProviderRequest{
@@ -100,12 +102,12 @@ func (l *AgentLoop) ProcessChat(ctx context.Context, req ChatRequest) (ChatRespo
 			Name:    "provider_reply_failed",
 			Message: err.Error(),
 			Metadata: map[string]string{
-				"request_id": strings.TrimSpace(req.RequestID),
+				"request_id": requestID,
 			},
 		})
 		return ChatResponse{}, err
 	}
-	return l.finalizeResponse(sessionKey, req, ChatResponse{
+	return l.finalizeResponse(sessionKey, channel, chatID, requestID, ChatResponse{
 		Message: strings.TrimSpace(reply),
 		Action:  "chat",
 	}), nil
@@ -135,20 +137,19 @@ func (l *AgentLoop) bestEffortAgentStatus(ctx context.Context, rawMessage string
 	return ChatResponse{}, false
 }
 
-func (l *AgentLoop) finalizeResponse(sessionKey string, req ChatRequest, resp ChatResponse) ChatResponse {
+func (l *AgentLoop) finalizeResponse(sessionKey, channel, chatID, requestID string, resp ChatResponse) ChatResponse {
 	if strings.TrimSpace(resp.Message) == "" {
 		resp.Message = "Done."
 	}
 	l.sessions.AddMessage(sessionKey, "assistant", resp.Message)
 
-	channel := strings.TrimSpace(req.Provider)
 	if !isInternalChannelName(channel) {
 		l.bus.PublishOutbound(OutboundEnvelope{
 			Channel: channel,
-			ChatID:  strings.TrimSpace(req.ChatID),
+			ChatID:  chatID,
 			Content: resp.Message,
 			Metadata: map[string]string{
-				"request_id": strings.TrimSpace(req.RequestID),
+				"request_id": requestID,
 				"action":     strings.TrimSpace(resp.Action),
 			},
 		})
@@ -158,19 +159,19 @@ func (l *AgentLoop) finalizeResponse(sessionKey string, req ChatRequest, resp Ch
 		Name:    "chat_response",
 		Message: fmt.Sprintf("action=%s", strings.TrimSpace(resp.Action)),
 		Metadata: map[string]string{
-			"request_id": strings.TrimSpace(req.RequestID),
+			"request_id": requestID,
 			"session":    sessionKey,
 		},
 	})
 	return resp
 }
 
-func resolveSessionKey(req ChatRequest) string {
-	channel := strings.ToLower(strings.TrimSpace(req.Provider))
+func resolveSessionKey(provider, chatID string) string {
+	channel := strings.ToLower(strings.TrimSpace(provider))
 	if channel == "" {
 		channel = "chat"
 	}
-	chatID := strings.TrimSpace(req.ChatID)
+	chatID = strings.TrimSpace(chatID)
 	if chatID == "" {
 		chatID = "default"
 	}

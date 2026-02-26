@@ -3,7 +3,6 @@ package baseagent
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -17,7 +16,14 @@ const (
 	baseAgentActiveMemoryPrefix = "carrier.base.active."
 )
 
-var agentActionPattern = regexp.MustCompile(`(?i)\b(uninstall|start|stop|status|logs|upgrade|diagnose)\s+([a-zA-Z0-9][a-zA-Z0-9._-]*)\b`)
+func mustRegisterProvider(pm *ProviderManager, provider Provider) {
+	if pm == nil {
+		panic("baseagent: provider manager is nil")
+	}
+	if err := pm.RegisterProvider(provider); err != nil {
+		panic(fmt.Sprintf("baseagent: register built-in provider %q failed: %v", provider.Name(), err))
+	}
+}
 
 type ChatRequest struct {
 	Provider  string `json:"provider"`
@@ -87,8 +93,8 @@ func NewRuntime(svc AgentService, memStore MemoryStore) *Runtime {
 	r.bus = NewMessageBus(0, 0, 0)
 	r.sessions = NewSessionManager(0)
 	r.providers = NewProviderManager(llmProvider)
-	_ = r.providers.RegisterProvider(localFallback)
-	_ = r.providers.RegisterProvider(NewChainProvider("llm-with-fallback", llmProvider, localFallback))
+	mustRegisterProvider(r.providers, localFallback)
+	mustRegisterProvider(r.providers, NewChainProvider("llm-with-fallback", llmProvider, localFallback))
 	r.tools = newBuiltinToolRegistry(r, r.providers, r.sessions)
 	r.channels = NewChannelManager(r.bus)
 	r.loop = NewAgentLoop(r.svc, r.tools, r.providers, r.sessions, r.bus)
@@ -243,7 +249,7 @@ func (r *Runtime) executeAgentAction(ctx context.Context, action, agentID string
 }
 
 func baseAgentHelpText() string {
-	return "Base agent manages local agents: `list agents` or `/agents`, `uninstall <agent>`, `start <agent>`, `stop <agent>`, `status <agent>`, `logs <agent>`, `upgrade <agent>`, `diagnose <agent>`. Metadata commands: `/tools`, `/providers`, `/sessions`. For install/onboard, open Carrier GUI."
+	return "Base agent manages local agents: `list agents` or `/agents`, `uninstall <agent>`, `start <agent>`, `stop <agent>`, `status <agent>`, `logs <agent>`, `upgrade <agent>`, `diagnose <agent>`. Metadata commands: `/tools`, `/providers`, `/sessions`. For install/onboard, use Carrier CLI/TUI (`carrier install <agent>`, `carrier onboard`) or WebUI."
 }
 
 func withMemoryNote(resp ChatResponse, note string, healed bool, backupRef string) ChatResponse {

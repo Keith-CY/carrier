@@ -9,11 +9,21 @@ import (
 )
 
 var slashAgentActionPattern = regexp.MustCompile(`(?i)^/(uninstall|start|stop|status|logs|upgrade|diagnose)\s+([a-zA-Z0-9][a-zA-Z0-9._-]*)\s*$`)
+var agentActionPattern = regexp.MustCompile(`(?i)\b(uninstall|start|stop|status|logs|upgrade|diagnose)\s+([a-zA-Z0-9][a-zA-Z0-9._-]*)\b`)
+
+func mustRegisterTool(registry *ToolRegistry, spec ToolSpec) {
+	if registry == nil {
+		panic("baseagent: tool registry is nil")
+	}
+	if err := registry.RegisterTool(spec); err != nil {
+		panic(fmt.Sprintf("baseagent: register built-in tool %q failed: %v", strings.TrimSpace(spec.Name), err))
+	}
+}
 
 func newBuiltinToolRegistry(rt *Runtime, providers *ProviderManager, sessions *SessionManager) *ToolRegistry {
 	registry := NewToolRegistry()
 
-	_ = registry.RegisterTool(ToolSpec{
+	mustRegisterTool(registry, ToolSpec{
 		Name:        "list_agents",
 		Description: "List currently registered agents and health/runtime status.",
 		Match: func(input string) (ToolInvocation, bool) {
@@ -37,7 +47,7 @@ func newBuiltinToolRegistry(rt *Runtime, providers *ProviderManager, sessions *S
 		},
 	})
 
-	_ = registry.RegisterTool(ToolSpec{
+	mustRegisterTool(registry, ToolSpec{
 		Name:        "agent_action",
 		Description: "Run an agent lifecycle action (start/stop/status/logs/upgrade/diagnose/uninstall).",
 		Match: func(input string) (ToolInvocation, bool) {
@@ -63,12 +73,13 @@ func newBuiltinToolRegistry(rt *Runtime, providers *ProviderManager, sessions *S
 		},
 	})
 
-	_ = registry.RegisterTool(ToolSpec{
+	mustRegisterTool(registry, ToolSpec{
 		Name:        "help",
 		Description: "Show base-agent usage commands.",
 		Match: func(input string) (ToolInvocation, bool) {
 			lower := strings.ToLower(strings.TrimSpace(input))
-			if lower == "/help" || lower == "/?" || strings.Contains(lower, "what can you do") || strings.Contains(lower, "help") {
+			switch lower {
+			case "/help", "/?", "help", "what can you do", "what can you do?", "show help":
 				return ToolInvocation{Name: "help"}, true
 			}
 			return ToolInvocation{}, false
@@ -78,7 +89,7 @@ func newBuiltinToolRegistry(rt *Runtime, providers *ProviderManager, sessions *S
 		},
 	})
 
-	_ = registry.RegisterTool(ToolSpec{
+	mustRegisterTool(registry, ToolSpec{
 		Name:        "list_tools",
 		Description: "List internal tool capabilities available to base-agent.",
 		Match: func(input string) (ToolInvocation, bool) {
@@ -96,7 +107,7 @@ func newBuiltinToolRegistry(rt *Runtime, providers *ProviderManager, sessions *S
 		},
 	})
 
-	_ = registry.RegisterTool(ToolSpec{
+	mustRegisterTool(registry, ToolSpec{
 		Name:        "list_providers",
 		Description: "List configured provider backends and current active provider.",
 		Match: func(input string) (ToolInvocation, bool) {
@@ -129,7 +140,7 @@ func newBuiltinToolRegistry(rt *Runtime, providers *ProviderManager, sessions *S
 		},
 	})
 
-	_ = registry.RegisterTool(ToolSpec{
+	mustRegisterTool(registry, ToolSpec{
 		Name:        "list_sessions",
 		Description: "Show recent chat sessions and compaction state.",
 		Match: func(input string) (ToolInvocation, bool) {

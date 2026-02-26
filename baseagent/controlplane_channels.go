@@ -207,9 +207,28 @@ func (m *ChannelManager) dispatchOutbound(ctx context.Context) {
 		ch, exists := m.channels[channelName]
 		m.mu.RUnlock()
 		if !exists {
+			m.bus.PublishEvent(LoopEvent{
+				Type:    EventError,
+				Name:    "channel_not_found",
+				Message: fmt.Sprintf("channel %s not registered", channelName),
+				Metadata: map[string]string{
+					"channel": channelName,
+					"chat_id": strings.TrimSpace(msg.ChatID),
+				},
+			})
 			continue
 		}
-		_ = ch.Send(ctx, msg)
+		if err := ch.Send(ctx, msg); err != nil {
+			m.bus.PublishEvent(LoopEvent{
+				Type:    EventError,
+				Name:    "channel_send_failed",
+				Message: fmt.Sprintf("channel %s send failed: %v", channelName, err),
+				Metadata: map[string]string{
+					"channel": channelName,
+					"chat_id": strings.TrimSpace(msg.ChatID),
+				},
+			})
+		}
 	}
 }
 

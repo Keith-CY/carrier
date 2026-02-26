@@ -8,6 +8,8 @@ import (
 	"sync"
 )
 
+const maxProviderHistoryMessageLength = 220
+
 // ToolDescriptor is a compact tool description used in provider prompting.
 type ToolDescriptor struct {
 	Name        string
@@ -265,8 +267,8 @@ func renderProviderHistory(history []ConversationMessage, window int) string {
 		if role == "" || content == "" {
 			continue
 		}
-		if len(content) > 220 {
-			content = content[:220] + "..."
+		if len(content) > maxProviderHistoryMessageLength {
+			content = content[:maxProviderHistoryMessageLength] + "..."
 		}
 		lines = append(lines, role+": "+content)
 	}

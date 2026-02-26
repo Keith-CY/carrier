@@ -173,6 +173,38 @@ func TestCallbackChannelLifecycleAndSend(t *testing.T) {
 	}
 }
 
+func TestChannelManagerDispatchPublishesSendErrorEvent(t *testing.T) {
+	bus := NewMessageBus(0, 0, 0)
+	manager := NewChannelManager(bus)
+	if err := manager.RegisterChannel("telegram", NewTelegramChannel(func(_ context.Context, _ OutboundEnvelope) error {
+		return errors.New("send failed")
+	})); err != nil {
+		t.Fatalf("register channel: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := manager.StartAll(ctx); err != nil {
+		t.Fatalf("start channels: %v", err)
+	}
+	defer manager.StopAll(context.Background())
+
+	bus.PublishOutbound(OutboundEnvelope{Channel: "telegram", ChatID: "c1", Content: "hello"})
+
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
+	defer waitCancel()
+	evt, ok := bus.ConsumeEvent(waitCtx)
+	if !ok {
+		t.Fatal("expected send failure event")
+	}
+	if evt.Name != "channel_send_failed" {
+		t.Fatalf("event name = %q, want channel_send_failed", evt.Name)
+	}
+	if evt.Type != EventError {
+		t.Fatalf("event type = %q, want %q", evt.Type, EventError)
+	}
+}
+
 func TestRuntimeMetadataCommands(t *testing.T) {
 	rt := NewRuntime(&runtimeServiceFake{}, nil)
 

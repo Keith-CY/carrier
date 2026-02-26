@@ -11,6 +11,7 @@ import (
 const (
 	defaultSessionMaxMessages = 48
 	maxSessionSummaryBytes    = 4096
+	maxCompactNoteContentSize = 140
 )
 
 // ConversationMessage is a normalized message representation stored per session.
@@ -195,8 +196,8 @@ func buildSessionCompactNote(dropped []ConversationMessage) string {
 		if content == "" {
 			continue
 		}
-		if len(content) > 140 {
-			content = content[:140] + "..."
+		if len(content) > maxCompactNoteContentSize {
+			content = content[:maxCompactNoteContentSize] + "..."
 		}
 		lines = append(lines, fmt.Sprintf("- %s: %s", msg.Role, content))
 	}
