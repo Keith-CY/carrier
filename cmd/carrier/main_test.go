@@ -287,17 +287,17 @@ func TestParseAddCommandArgsSupportsQuietOptions(t *testing.T) {
 		{
 			name: "quiet short flag after agent",
 			args: []string{"openclaw", "-q"},
-			want: addCommandOptions{AgentID: "openclaw", Quiet: true},
+			want: addCommandOptions{AgentID: "openclaw", Quiet: true, TUI: true},
 		},
 		{
 			name: "quiet long flag before agent",
 			args: []string{"--quiet", "picoclaw"},
-			want: addCommandOptions{AgentID: "picoclaw", Quiet: true},
+			want: addCommandOptions{AgentID: "picoclaw", Quiet: true, TUI: true},
 		},
 		{
 			name: "quiet typo alias supported",
 			args: []string{"zeroclaw", "--quite"},
-			want: addCommandOptions{AgentID: "zeroclaw", Quiet: true},
+			want: addCommandOptions{AgentID: "zeroclaw", Quiet: true, TUI: true},
 		},
 		{
 			name: "combined webui and quiet flags",
@@ -317,6 +317,96 @@ func TestParseAddCommandArgsSupportsQuietOptions(t *testing.T) {
 				t.Fatalf("parseAddCommandArgs(%v) = %+v, want %+v", tc.args, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseAddCommandArgsSupportsTerminalModeFlags(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want addCommandOptions
+	}{
+		{
+			name: "explicit cli mode",
+			args: []string{"openclaw", "--cli"},
+			want: addCommandOptions{AgentID: "openclaw", CLI: true, TUI: true},
+		},
+		{
+			name: "explicit tui mode",
+			args: []string{"openclaw", "--tui"},
+			want: addCommandOptions{AgentID: "openclaw", TUI: true},
+		},
+		{
+			name: "default terminal mode",
+			args: []string{"openclaw"},
+			want: addCommandOptions{AgentID: "openclaw", TUI: true},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseAddCommandArgs(tc.args)
+			if err != nil {
+				t.Fatalf("parseAddCommandArgs(%v) error: %v", tc.args, err)
+			}
+			if got != tc.want {
+				t.Fatalf("parseAddCommandArgs(%v) = %+v, want %+v", tc.args, got, tc.want)
+			}
+		})
+	}
+
+	if _, err := parseAddCommandArgs([]string{"openclaw", "--webui", "--cli"}); err == nil {
+		t.Fatal("expected conflict error when combining --webui with --cli")
+	}
+}
+
+func TestParseOnboardCommandArgsSupportsTerminalModeFlags(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want onboardCommandOptions
+	}{
+		{
+			name: "default terminal mode",
+			args: nil,
+			want: onboardCommandOptions{TUI: true},
+		},
+		{
+			name: "explicit cli mode",
+			args: []string{"--cli"},
+			want: onboardCommandOptions{CLI: true, TUI: true},
+		},
+		{
+			name: "explicit tui mode",
+			args: []string{"--tui"},
+			want: onboardCommandOptions{TUI: true},
+		},
+		{
+			name: "webui mode",
+			args: []string{"--webui"},
+			want: onboardCommandOptions{WebUI: true},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseOnboardCommandArgs(tc.args)
+			if err != nil {
+				t.Fatalf("parseOnboardCommandArgs(%v) error: %v", tc.args, err)
+			}
+			if got != tc.want {
+				t.Fatalf("parseOnboardCommandArgs(%v) = %+v, want %+v", tc.args, got, tc.want)
+			}
+		})
+	}
+
+	if _, err := parseOnboardCommandArgs([]string{"--webui", "--tui"}); err == nil {
+		t.Fatal("expected conflict error when combining --webui with --tui")
+	}
+	if _, err := parseOnboardCommandArgs([]string{"--unknown"}); err == nil {
+		t.Fatal("expected unknown option error")
 	}
 }
 

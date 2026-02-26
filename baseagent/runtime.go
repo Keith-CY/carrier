@@ -3,7 +3,6 @@ package baseagent
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -17,7 +16,14 @@ const (
 	baseAgentActiveMemoryPrefix = "carrier.base.active."
 )
 
-var agentActionPattern = regexp.MustCompile(`(?i)\b(uninstall|start|stop|status|logs|upgrade|diagnose)\s+([a-zA-Z0-9][a-zA-Z0-9._-]*)\b`)
+func mustRegisterProvider(pm *ProviderManager, provider Provider) {
+	if pm == nil {
+		panic("baseagent: provider manager is nil")
+	}
+	if err := pm.RegisterProvider(provider); err != nil {
+		panic(fmt.Sprintf("baseagent: register built-in provider %q failed: %v", provider.Name(), err))
+	}
+}
 
 type ChatRequest struct {
 	Provider  string `json:"provider"`
@@ -63,17 +69,77 @@ type Runtime struct {
 	svc    AgentService
 	memory MemoryStore
 
+	bus       *MessageBus
+	channels  *ChannelManager
+	tools     *ToolRegistry
+	providers *ProviderManager
+	sessions  *SessionManager
+	loop      *AgentLoop
+
 	mu          sync.Mutex
 	initialized bool
 	activeID    string
 }
 
 func NewRuntime(svc AgentService, memStore MemoryStore) *Runtime {
-	return &Runtime{
+	llmProvider := NewLLMProviderAdapter("llm", 8)
+	localFallback := NewStaticProvider("local-fallback", "I'm currently running in local fallback mode. Try `list agents`, `status <agent>`, `logs <agent>`, or `help`.")
+
+	r := &Runtime{
 		svc:      svc,
 		memory:   memStore,
 		activeID: baseAgentActiveMemoryV1ID,
 	}
+	r.bus = NewMessageBus(0, 0, 0)
+	r.sessions = NewSessionManager(0)
+	r.providers = NewProviderManager(llmProvider)
+	mustRegisterProvider(r.providers, localFallback)
+	mustRegisterProvider(r.providers, NewChainProvider("llm-with-fallback", llmProvider, localFallback))
+	r.tools = newBuiltinToolRegistry(r, r.providers, r.sessions)
+	r.channels = NewChannelManager(r.bus)
+	r.loop = NewAgentLoop(r.svc, r.tools, r.providers, r.sessions, r.bus)
+	r.loop.SetChannelManager(r.channels)
+	return r
+}
+
+// RegisterExternalChannel registers a concrete channel transport (e.g. telegram, discord, feishu).
+func (r *Runtime) RegisterExternalChannel(name string, sender ChannelSender) error {
+	if r == nil || r.channels == nil {
+		return fmt.Errorf("channel manager is unavailable")
+	}
+	return r.channels.RegisterChannel(name, NewCallbackChannel(name, sender))
+}
+
+// StartChannels starts all registered channels.
+func (r *Runtime) StartChannels(ctx context.Context) error {
+	if r == nil || r.channels == nil {
+		return fmt.Errorf("channel manager is unavailable")
+	}
+	return r.channels.StartAll(ctx)
+}
+
+// StopChannels stops all registered channels.
+func (r *Runtime) StopChannels(ctx context.Context) error {
+	if r == nil || r.channels == nil {
+		return fmt.Errorf("channel manager is unavailable")
+	}
+	return r.channels.StopAll(ctx)
+}
+
+// RegisterProvider registers a provider implementation into the provider manager.
+func (r *Runtime) RegisterProvider(provider Provider) error {
+	if r == nil || r.providers == nil {
+		return fmt.Errorf("provider manager is unavailable")
+	}
+	return r.providers.RegisterProvider(provider)
+}
+
+// SetActiveProvider sets the active provider by name.
+func (r *Runtime) SetActiveProvider(name string) error {
+	if r == nil || r.providers == nil {
+		return fmt.Errorf("provider manager is unavailable")
+	}
+	return r.providers.SetActiveProvider(name)
 }
 
 func (r *Runtime) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
@@ -87,53 +153,21 @@ func (r *Runtime) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 		healNote = "Base-agent memory check failed; continuing with safe mode."
 	}
 
-	lower := strings.ToLower(msg)
-	if wantsListAgents(lower) {
-		text := renderAgentList(r.svc.ListAgents())
-		return withMemoryNote(ChatResponse{Message: text, Action: "list_agents"}, healNote, healed, backupRef), nil
-	}
-
-	if matches := agentActionPattern.FindStringSubmatch(msg); len(matches) == 3 {
-		action := strings.ToLower(strings.TrimSpace(matches[1]))
-		agentID := strings.TrimSpace(matches[2])
-		resp, err := r.executeAgentAction(ctx, action, agentID)
-		if err != nil {
-			return withMemoryNote(ChatResponse{
-				Message: fmt.Sprintf("%s %s failed: %v", action, agentID, err),
-				Action:  action,
-			}, healNote, healed, backupRef), nil
-		}
-		return withMemoryNote(resp, healNote, healed, backupRef), nil
-	}
-
-	if strings.Contains(lower, "help") || strings.Contains(lower, "what can you do") {
-		return withMemoryNote(ChatResponse{Message: baseAgentHelpText(), Action: "help"}, healNote, healed, backupRef), nil
-	}
-
-	// Best-effort fallback: if user mentioned a known agent ID, return status.
-	for _, s := range r.svc.ListAgents() {
-		if strings.Contains(lower, strings.ToLower(s.ID)) {
-			resp, err := r.executeAgentAction(ctx, "status", s.ID)
-			if err == nil {
-				return withMemoryNote(resp, healNote, healed, backupRef), nil
-			}
-		}
-	}
-
-	reply, err := r.replyWithLLM(ctx, msg)
+	resp, err := r.loop.ProcessChat(ctx, req)
 	if err != nil {
 		return withMemoryNote(ChatResponse{
 			Message: fmt.Sprintf("%s\n%s", explainLLMUnavailable(err), baseAgentHelpText()),
 			Action:  "help",
 		}, healNote, healed, backupRef), nil
 	}
-	return withMemoryNote(ChatResponse{
-		Message: reply,
-		Action:  "chat",
-	}, healNote, healed, backupRef), nil
+	return withMemoryNote(resp, healNote, healed, backupRef), nil
 }
 
 func wantsListAgents(lower string) bool {
+	lower = strings.TrimSpace(lower)
+	if strings.HasPrefix(lower, "/agents") || lower == "/list agents" {
+		return true
+	}
 	return strings.Contains(lower, "list agents") ||
 		strings.Contains(lower, "show agents") ||
 		strings.Contains(lower, "agents") &&
@@ -154,6 +188,9 @@ func renderAgentList(states []AgentState) string {
 }
 
 func (r *Runtime) executeAgentAction(ctx context.Context, action, agentID string) (ChatResponse, error) {
+	if r.svc == nil {
+		return ChatResponse{}, fmt.Errorf("agent service is unavailable")
+	}
 	switch action {
 	case "uninstall":
 		if err := r.svc.Uninstall(ctx, agentID); err != nil {
@@ -212,7 +249,7 @@ func (r *Runtime) executeAgentAction(ctx context.Context, action, agentID string
 }
 
 func baseAgentHelpText() string {
-	return "Base agent manages local agents: `list agents`, `uninstall <agent>`, `start <agent>`, `stop <agent>`, `status <agent>`, `logs <agent>`, `upgrade <agent>`, `diagnose <agent>`. For install/onboard, open Carrier GUI."
+	return "Base agent manages local agents: `list agents` or `/agents`, `uninstall <agent>`, `start <agent>`, `stop <agent>`, `status <agent>`, `logs <agent>`, `upgrade <agent>`, `diagnose <agent>`. Metadata commands: `/tools`, `/providers`, `/sessions`. For install/onboard, use Carrier CLI/TUI (`carrier install <agent>`, `carrier onboard`) or WebUI."
 }
 
 func withMemoryNote(resp ChatResponse, note string, healed bool, backupRef string) ChatResponse {

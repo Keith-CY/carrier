@@ -20,6 +20,9 @@ const (
 	CmdPair            CommandName = "/pair"
 	CmdChat            CommandName = "/chat"
 	CmdAgents          CommandName = "/agents"
+	CmdTools           CommandName = "/tools"
+	CmdProviders       CommandName = "/providers"
+	CmdSessions        CommandName = "/sessions"
 	CmdAdd             CommandName = "/add"
 	CmdInstall         CommandName = "/install"
 	CmdUninstall       CommandName = "/uninstall"
@@ -37,6 +40,9 @@ var validCommands = map[CommandName]struct{}{
 	CmdPair:            {},
 	CmdChat:            {},
 	CmdAgents:          {},
+	CmdTools:           {},
+	CmdProviders:       {},
+	CmdSessions:        {},
 	CmdAdd:             {},
 	CmdInstall:         {},
 	CmdUninstall:       {},
@@ -174,6 +180,12 @@ func HandleCommand(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClien
 		return handleChat(ctx, cmd, daemon, actor)
 	case CmdAgents:
 		return handleAgents(ctx, cmd, daemon, actor)
+	case CmdTools:
+		return handleBaseAgentMeta(ctx, cmd, daemon, actor, "/tools")
+	case CmdProviders:
+		return handleBaseAgentMeta(ctx, cmd, daemon, actor, "/providers")
+	case CmdSessions:
+		return handleBaseAgentMeta(ctx, cmd, daemon, actor, "/sessions")
 	case CmdAdd:
 		return handleAdd(ctx, cmd, daemon, actor, onboard)
 	case CmdUninstall:
@@ -259,6 +271,18 @@ func handleChat(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, 
 	if message == "" {
 		return usageResp(cmd.RequestID, "/chat <message>")
 	}
+	return handleBaseAgentMessage(ctx, cmd, daemon, actor, message)
+}
+
+func handleBaseAgentMeta(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, actor, metaCommand string) GatewayResponse {
+	message := strings.TrimSpace(metaCommand)
+	if message == "" {
+		return errResp(cmd.RequestID, "E_USAGE", "metadata command is empty")
+	}
+	return handleBaseAgentMessage(ctx, cmd, daemon, actor, message)
+}
+
+func handleBaseAgentMessage(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, actor, message string) GatewayResponse {
 	chatResult, err := daemon.ChatBaseAgent(ctx, cmd.Provider, cmd.ChatID, cmd.RequestID, message, actor)
 	if err != nil {
 		return daemonErrResp(cmd.RequestID, err)
@@ -321,7 +345,7 @@ func handleAgents(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient
 		lines = append(lines, fmt.Sprintf("%s %s (%s): %s, %s, health=%s", emoji, name, a.ID, installState, runtime, health))
 	}
 	if installed < len(agents) {
-		lines = append(lines, "Tip: install/onboard in Carrier GUI. Chat supports management commands only.")
+		lines = append(lines, "Tip: use Carrier CLI/TUI (`carrier install <agent_id>`, `carrier onboard`) or WebUI for install/onboard. Chat supports management commands only.")
 	}
 	return GatewayResponse{
 		RequestID: cmd.RequestID,
@@ -579,15 +603,15 @@ func usageResp(requestID, usage string) GatewayResponse {
 }
 
 func addViaGUIOnlyResp(requestID string) GatewayResponse {
-	return errResp(requestID, "E_ADD_GUI_ONLY", "Add/install is disabled in chat to protect credentials. Open Carrier GUI to add/install and onboard agents. Chat is for management commands only.")
+	return errResp(requestID, "E_ADD_GUI_ONLY", "Add/install is disabled in chat to protect credentials. Use Carrier CLI/TUI (`carrier install <agent_id>`, `carrier onboard`) or Carrier WebUI. Chat is for management commands only.")
 }
 
 func onboardViaGUIOnlyResp(requestID string) GatewayResponse {
-	return errResp(requestID, "E_ONBOARD_GUI_ONLY", "Onboarding is disabled in chat to protect credentials. Open Carrier GUI to complete onboarding and credential setup.")
+	return errResp(requestID, "E_ONBOARD_GUI_ONLY", "Onboarding is disabled in chat to protect credentials. Use Carrier CLI/TUI (`carrier onboard`) or Carrier WebUI for credential setup.")
 }
 
 func installViaGUIOnlyResp(requestID string) GatewayResponse {
-	return errResp(requestID, "E_INSTALL_GUI_ONLY", "Install is disabled in chat to protect credentials. Open Carrier GUI to install and onboard agents.")
+	return errResp(requestID, "E_INSTALL_GUI_ONLY", "Install is disabled in chat to protect credentials. Use Carrier CLI/TUI (`carrier install <agent_id>`) or Carrier WebUI.")
 }
 
 func daemonErrResp(requestID string, err error) GatewayResponse {

@@ -12,11 +12,15 @@
 //	carrier upgrade <id|name> Upgrade a managed agent instance
 //	carrier uninstall <id|name> Uninstall and remove a managed agent instance
 //	carrier list            List managed agent instances
-//	carrier onboard         Interactive TUI onboarding (channel/provider -> keep gateway running in background)
+//	carrier onboard [--tui|--cli]
+//	                       Interactive terminal onboarding (channel/provider -> keep gateway running in background)
 //	carrier onboard --webui Launch WebUI onboarding (start/reuse daemon+gateway)
-//	carrier add <agent_id>  Add/install an agent via TUI flow
+//	carrier add <agent_id> [--tui|--cli]
+//	                       Add/install an agent via terminal flow
 //	carrier add <agent_id> --webui
 //	                       Add/install an agent via WebUI flow
+//	carrier install <agent_id> [--tui|--cli|--webui]
+//	                       Alias for `carrier add <agent_id>`
 //	carrier --help          Show usage
 package main
 
@@ -78,7 +82,15 @@ const (
 type addCommandOptions struct {
 	AgentID string
 	WebUI   bool
+	CLI     bool
+	TUI     bool
 	Quiet   bool
+}
+
+type onboardCommandOptions struct {
+	WebUI bool
+	CLI   bool
+	TUI   bool
 }
 
 type updateCommandOptions struct {
@@ -296,11 +308,14 @@ Usage:
   carrier upgrade <id|name> Upgrade a managed agent instance
   carrier uninstall <id|name> Uninstall and remove a managed agent instance
   carrier list           List managed agent instances
-  carrier onboard        Interactive onboarding (channel/provider -> keep gateway running in background)
+  carrier onboard [--tui|--cli]
+                        Interactive terminal onboarding (channel/provider -> keep gateway running in background)
   carrier onboard --webui
                         Launch WebUI onboarding (start/reuse daemon+gateway)
-  carrier add <agent_id> [--webui] [-q|--quiet]
-                        Add/install an agent (default: show install logs; use -q for quiet mode)
+  carrier add <agent_id> [--tui|--cli|--webui] [-q|--quiet]
+                        Add/install an agent (default: terminal flow; use -q for quiet mode)
+  carrier install <agent_id> [--tui|--cli|--webui] [-q|--quiet]
+                        Alias for carrier add <agent_id>
   carrier --help         Show this help message
 
 Notes:
@@ -395,42 +410,40 @@ func main() {
 			}
 			return
 		case "onboard":
-			if len(commandArgs) >= 1 {
-				mode := strings.ToLower(strings.TrimSpace(commandArgs[0]))
-				switch mode {
-				case "--webui", "--web", "webui":
-					if err := runOnboardWebUI(os.Stdout); err != nil {
-						fmt.Fprintf(os.Stderr, "onboard failed: %v\n", err)
-						os.Exit(1)
-					}
-					return
-				default:
-					fmt.Fprintf(os.Stderr, "unknown onboard option: %s\n\n", commandArgs[0])
-					fmt.Fprint(os.Stderr, usage)
+			opts, err := parseOnboardCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "onboard failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if opts.WebUI {
+				if err := runOnboardWebUI(os.Stdout); err != nil {
+					fmt.Fprintf(os.Stderr, "onboard failed: %v\n", err)
 					os.Exit(1)
 				}
+				return
 			}
 			if err := runOnboardFlow(os.Stdin, os.Stdout, startGatewayInBackgroundAndWait); err != nil {
 				fmt.Fprintf(os.Stderr, "onboard failed: %v\n", err)
 				os.Exit(1)
 			}
 			return
-		case "add":
+		case "add", "install":
 			opts, err := parseAddCommandArgs(commandArgs)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "add failed: %v\n\n", err)
+				fmt.Fprintf(os.Stderr, "%s failed: %v\n\n", command, err)
 				fmt.Fprint(os.Stderr, usage)
 				os.Exit(1)
 			}
 			if opts.WebUI {
 				if err := runAddWebUI(os.Stdout, opts.AgentID); err != nil {
-					fmt.Fprintf(os.Stderr, "add failed: %v\n", err)
+					fmt.Fprintf(os.Stderr, "%s failed: %v\n", command, err)
 					os.Exit(1)
 				}
 				return
 			}
 			if err := runAddTUI(os.Stdin, os.Stdout, opts.AgentID, opts.Quiet); err != nil {
-				fmt.Fprintf(os.Stderr, "add failed: %v\n", err)
+				fmt.Fprintf(os.Stderr, "%s failed: %v\n", command, err)
 				os.Exit(1)
 			}
 			return
@@ -503,6 +516,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "onboard", args[2:], nil
 	case "add":
 		return "add", args[2:], nil
+	case "install":
+		return "install", args[2:], nil
 	case "--help", "-h", "help":
 		return "help", nil, nil
 	case "version", "--version", "-v", "-V":
@@ -516,7 +531,7 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 
 func parseAddCommandArgs(args []string) (addCommandOptions, error) {
 	if len(args) == 0 {
-		return addCommandOptions{}, errors.New("usage: carrier add <agent_id> [--webui] [-q|--quiet]")
+		return addCommandOptions{}, errors.New("usage: carrier add <agent_id> [--tui|--cli|--webui] [-q|--quiet] (alias: carrier install <agent_id>)")
 	}
 
 	opts := addCommandOptions{}
@@ -525,6 +540,10 @@ func parseAddCommandArgs(args []string) (addCommandOptions, error) {
 		switch arg {
 		case "--webui", "--web", "webui":
 			opts.WebUI = true
+		case "--cli", "cli":
+			opts.CLI = true
+		case "--tui", "tui":
+			opts.TUI = true
 		case "-q", "--quiet", "--quite": // "--quite" is an intentional typo alias for common misspelling
 			opts.Quiet = true
 		case "":
@@ -541,6 +560,49 @@ func parseAddCommandArgs(args []string) (addCommandOptions, error) {
 	}
 	if opts.AgentID == "" {
 		return addCommandOptions{}, errors.New("agent_id is required")
+	}
+	terminalModeRequested := opts.CLI || opts.TUI
+	if opts.WebUI && terminalModeRequested {
+		return addCommandOptions{}, errors.New("cannot combine --webui with --cli/--tui")
+	}
+	if opts.CLI {
+		// CLI mode is a terminal onboarding/install path implemented by TUI prompts.
+		opts.TUI = true
+	}
+	if !opts.WebUI && !terminalModeRequested {
+		opts.TUI = true
+	}
+	return opts, nil
+}
+
+func parseOnboardCommandArgs(args []string) (onboardCommandOptions, error) {
+	opts := onboardCommandOptions{}
+	for _, raw := range args {
+		arg := strings.ToLower(strings.TrimSpace(raw))
+		switch arg {
+		case "--webui", "--web", "webui":
+			opts.WebUI = true
+		case "--cli", "cli":
+			opts.CLI = true
+		case "--tui", "tui":
+			opts.TUI = true
+		case "":
+			continue
+		default:
+			return onboardCommandOptions{}, fmt.Errorf("unknown onboard option: %s", raw)
+		}
+	}
+
+	terminalModeRequested := opts.CLI || opts.TUI
+	if opts.WebUI && terminalModeRequested {
+		return onboardCommandOptions{}, errors.New("cannot combine --webui with --cli/--tui")
+	}
+	if opts.CLI {
+		// CLI mode is a terminal onboarding path implemented by TUI prompts.
+		opts.TUI = true
+	}
+	if !opts.WebUI && !terminalModeRequested {
+		opts.TUI = true
 	}
 	return opts, nil
 }
@@ -916,6 +978,7 @@ func runBootstrap(in io.Reader, out io.Writer) error {
 	_, _ = fmt.Fprintln(out, "Terminal is ready for the next command.")
 	_, _ = fmt.Fprintln(out, "Examples:")
 	_, _ = fmt.Fprintln(out, "  - carrier add picoclaw")
+	_, _ = fmt.Fprintln(out, "  - carrier install picoclaw")
 	_, _ = fmt.Fprintln(out, "  - carrier add picoclaw --webui")
 	_, _ = fmt.Fprintln(out, "  - carrier list")
 	return nil
@@ -4299,7 +4362,7 @@ func withResolvedHomeEnv(env []string) []string {
 
 func buildSlashCommandGuide(channel choiceOption) string {
 	return fmt.Sprintf(
-		"Next step in %s:\n1. Open your bot chat and send `/pair <PAIR_CODE>`\n2. Then send `/agents`\n3. Open Carrier GUI to install/onboard additional agents\n4. Use `/start <agent_id>` to start installed agents",
+		"Next step in %s:\n1. Open your bot chat and send `/pair <PAIR_CODE>`\n2. Then send `/agents`\n3. Use `carrier install <agent_id>` / `carrier onboard` in terminal, or open Carrier WebUI for guided setup\n4. Use `/start <agent_id>` to start installed agents",
 		channel.Name,
 	)
 }
