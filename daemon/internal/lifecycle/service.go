@@ -221,7 +221,7 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		triager = baseagent.NoopTriager{}
 	}
 
-	processLogDir := filepath.Join(os.TempDir(), "agentd-process-logs")
+	processLogDir := filepath.Join(os.TempDir(), "carrier-daemon-process-logs")
 	exitCodes := make(map[string]*int)
 	logs := make(map[string][]string)
 
@@ -236,8 +236,8 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		triager:            triager,
 		checker:            runtimecheck.NewHostChecker(),
 		runner:             commandexec.NewShellRunner(),
-		diagnoseDir:        filepath.Join(os.TempDir(), "agentd-diagnose"),
-		auditLogDir:        filepath.Join(os.TempDir(), "agentd-audit"),
+		diagnoseDir:        filepath.Join(os.TempDir(), "carrier-daemon-diagnose"),
+		auditLogDir:        filepath.Join(os.TempDir(), "carrier-daemon-audit"),
 		logLimit:           1000,
 		handoffTTL:         24 * time.Hour,
 		now:                time.Now,

@@ -1,6 +1,6 @@
 // Package server exposes the daemon HTTP API as a callable Run function.
-// This allows the unified carrier binary to launch the daemon without
-// duplicating the bootstrap logic that lives in cmd/agentd.
+// This allows the unified carrier binary to launch daemon mode without
+// duplicating bootstrap logic in cmd/carrier.
 package server
 
 import (
@@ -64,7 +64,7 @@ var (
 // signal is received or the server encounters a fatal error.
 func Run() {
 	logger := logging.Init()
-	logger.Info("initializing agentd")
+	logger.Info("initializing carrier daemon")
 
 	cfg, err := config.Load("config.json")
 	if err != nil {
@@ -113,8 +113,8 @@ func Run() {
 		log.Printf("WARN: register picoclaw manifest: %v (skipping)", err)
 	}
 
-	logger.Info("agentd scaffold booted")
-	fmt.Printf("agentd scaffold booted (listen=%s:%d log=%s/%s)\n",
+	logger.Info("carrier daemon booted")
+	fmt.Printf("carrier daemon booted (listen=%s:%d log=%s/%s)\n",
 		cfg.Server.Host, cfg.Server.Port, cfg.Log.Level, cfg.Log.Format)
 	fmt.Println("catalog (active):")
 	for _, entry := range catalog.ActiveEntries() {
@@ -182,7 +182,7 @@ func Run() {
 	if err := shutdownAgents(svc, shutdownTimeout); err != nil {
 		log.Fatalf("shutdown error: %v", err)
 	}
-	fmt.Println("agentd stopped gracefully")
+	fmt.Println("carrier daemon stopped gracefully")
 }
 
 func buildHTTPMux(

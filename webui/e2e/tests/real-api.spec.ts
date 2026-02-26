@@ -5,9 +5,9 @@ import { test, expect } from '@playwright/test';
  * Skipped by default; set SKIP_REAL_API=0 or unset it to run.
  * 
  * To run locally:
- *   cd daemon && go build -tags webui ./cmd/agentd
- *   ./agentd &
- *   SKIP_REAL_API=0 npx playwright test real-api
+ *   go build -o ./bin/carrier ./cmd/carrier
+ *   ./bin/carrier daemon &
+ *   SKIP_REAL_API=0 bunx playwright test real-api
  */
 test.describe('real API', () => {
   const skip = process.env.SKIP_REAL_API !== '0';

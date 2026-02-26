@@ -18,13 +18,13 @@ This document records the pass over all open issues with titles starting with `t
 | #630 | Addressed in this PR | Added action pinning guard script + tests and wired guard into CI. |
 | #634 | Addressed in this PR | Added malformed numeric tail regressions that cover strict parsing edge cases (`+`, `-`, mixed, decimal). |
 | #642 | Already covered on main | Daemon HTTP error envelope/content-type behavior is exercised in daemon API/mux tests. |
-| #643 | Already covered on main | `daemon/cmd/agentd/main_test.go` covers HTTP mux routes and auth/error branches. |
+| #643 | Already covered on main | `daemon/server/server_test.go` covers HTTP mux routes and auth/error branches. |
 | #644 | Already covered on main | `daemon/internal/catalog/manifests_test.go` now covers manifest/install command helpers. |
 | #645 | Already covered on main | Lifecycle option and service API coverage exists across lifecycle test suite. |
 | #646 | Already covered on main | `gateway/daemonclient_test.go` covers daemon transport branches. |
 | #647 | Already covered on main | `gateway/server_test.go` has broad route/path/error coverage. |
 | #648 | Already covered on main | `gateway/providers_test.go` contains extensive edge-case parser coverage. |
-| #649 | Already covered on main | `daemon/internal/api/server_test.go` and `daemon/cmd/agentd/main_test.go` cover API handlers. |
+| #649 | Already covered on main | `daemon/internal/api/server_test.go` and `daemon/server/server_test.go` cover API handlers. |
 | #650 | Addressed in this PR | Added rate-limiter boundary and expired-window pruning tests; implemented expired session pruning. |
 | #652 | Addressed in this PR | Added idempotency tests for `startPeriodicCleanup()`/`stopPeriodicCleanup()`. |
 | #654 | Addressed in this PR | Extracted NBS parser logic into tested module; added deterministic dedupe regression tests. |

@@ -36,7 +36,7 @@ State transitions:
 Current implementation keeps per-agent command logs in an in-memory ring buffer (default limit: `1000` entries).
 
 Persistent log/artifact output is written when diagnose is requested:
-- default `diagnose_dir`: `<os temp dir>/agentd-diagnose` (if not overridden by `WithDiagnoseDir`)
+- default `diagnose_dir`: `<os temp dir>/carrier-daemon-diagnose` (if not overridden by `WithDiagnoseDir`)
 - artifact path pattern: `<diagnose_dir>/<agent>-diagnose-<UTC timestamp>.zip`
 - zip entries include:
   - `logs.txt`
@@ -76,9 +76,9 @@ Missing/corrupt snapshot handling:
 Safe local reset procedure:
 
 ```bash
-sudo systemctl stop carrier-agentd
+sudo systemctl stop carrier-daemon
 sudo rm -f /var/lib/carrier/state.json   # NOTE: this discards pending diagnose-consent records
-sudo systemctl start carrier-agentd
+sudo systemctl start carrier-daemon
 curl -s http://127.0.0.1:8081/healthz
 ```
 

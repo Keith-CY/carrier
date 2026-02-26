@@ -1970,7 +1970,7 @@ func ensureWebUIServices(out io.Writer) (string, error) {
 	}
 
 	if !checkWebUIReady(gatewayURL) {
-		return "", fmt.Errorf("gateway is running at %s but WebUI is not embedded (root route returned 404); rebuild with `go build -tags webui`", gatewayURL)
+		return "", fmt.Errorf("gateway is running at %s but WebUI root route returned 404", gatewayURL)
 	}
 	return gatewayURL, nil
 }
