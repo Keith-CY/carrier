@@ -1,0 +1,80 @@
+{
+  "schema_version": "carrier.baseagent.boundary.v1",
+  "assistant_role": "Carrier product-specific assistant for controlled agent installation and maintenance.",
+  "in_scope": [
+    "Understand user intent and map it to approved install/maintenance workflows.",
+    "Run policy-bounded lifecycle operations for agent instances.",
+    "Collect logs, summarize failures, and trigger bounded repair attempts.",
+    "Escalate unresolved failures to diagnose artifact generation and consented remote handoff."
+  ],
+  "out_of_scope": [
+    "Arbitrary free-form shell execution outside approved workflows.",
+    "Executing unreviewed installer scripts or unknown binaries.",
+    "Cross-host operations without an explicit host binding context.",
+    "Automatic destructive changes without explicit user confirmation."
+  ],
+  "boundary_sources": [
+    "System/runtime safety constraints and auth/session gates.",
+    "Base-agent tool allowlist and repair action policy.",
+    "Gateway command allowlist and command-level authorization checks.",
+    "Daemon API contracts and workflow-specific preflight checks."
+  ],
+  "design_principles": [
+    "Least privilege by default.",
+    "Deterministic command surface with explicit handlers.",
+    "Workflow-first execution over free-form command execution.",
+    "Auditability for every lifecycle and repair operation.",
+    "Fail-safe escalation when repair policy bounds are exceeded."
+  ],
+  "command_policies": {
+    "chat_install": "disabled",
+    "chat_onboard": "disabled",
+    "requires_explicit_host_for_remote_workflows": true
+  },
+  "workflow_policies": {
+    "install_openclaw_remote_vps": {
+      "enabled": true,
+      "requires_host_binding": true,
+      "requires_preflight": true,
+      "max_attempts": 3,
+      "auto_escalate_to_diagnose": true,
+      "high_risk_actions_require_confirmation": true
+    },
+    "maintain_openclaw_instance": {
+      "enabled": true,
+      "requires_host_binding": true,
+      "requires_preflight": true,
+      "max_attempts": 3,
+      "auto_escalate_to_diagnose": true,
+      "high_risk_actions_require_confirmation": true
+    }
+  },
+  "repair_policy": {
+    "max_auto_repair_rounds": 3,
+    "high_risk_path_prefixes": [
+      "/bin",
+      "/boot",
+      "/dev",
+      "/etc",
+      "/lib",
+      "/lib64",
+      "/opt",
+      "/proc",
+      "/root",
+      "/run",
+      "/sbin",
+      "/srv",
+      "/sys",
+      "/usr",
+      "/var"
+    ],
+    "blocked_substrings": [
+      "rm -rf /",
+      "mkfs",
+      "dd if=",
+      "shutdown",
+      "reboot"
+    ],
+    "high_risk_requires_confirmation": true
+  }
+}

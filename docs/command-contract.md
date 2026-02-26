@@ -5,6 +5,7 @@ This document defines the unified input/output contract for all gateway commands
 Related references:
 - Daemon payload examples: `./daemon-api-contract.md`
 - Cross-provider parity taxonomy: `./e2e-parity-taxonomy.md`
+- Base-agent boundary policy spec: `../baseagent/spec/baseagent-boundary.v1.json`
 
 ## Input Format
 
@@ -109,7 +110,8 @@ Installs an agent.
 
 - **Args:** `agent_id` (required)
 - **Requires session:** yes
-- **Current behavior:** chat path is intentionally blocked for credential safety.
+- **Policy gate:** behavior is controlled by boundary policy `command_policies.chat_install`.
+- **Current policy value:** `disabled` (chat path intentionally blocked for credential safety).
 - **Result:** `{ result: "error", errorCode: "E_INSTALL_GUI_ONLY", message: "...Open Carrier GUI to install/onboard agents..." }`
 - **Alternative flows:** `carrier add <agent_id>` (TUI) or WebUI add flow.
 
@@ -119,9 +121,18 @@ Starts onboarding.
 
 - **Args:** none
 - **Requires session:** yes
-- **Current behavior:** chat path is intentionally blocked for credential safety.
+- **Policy gate:** behavior is controlled by boundary policy `command_policies.chat_onboard`.
+- **Current policy value:** `disabled` (chat path intentionally blocked for credential safety).
 - **Result:** `{ result: "error", errorCode: "E_ONBOARD_GUI_ONLY", message: "...Open Carrier GUI..." }`
 - **Alternative flows:** `carrier onboard` (TUI) or `carrier onboard --webui`.
+
+### `/boundaries`
+
+Returns the current BaseAgent boundary summary generated from the executable policy spec.
+
+- **Args:** none
+- **Requires session:** yes
+- **Success:** `{ result: "ok", message: "BaseAgent boundaries: ..." }`
 
 ### `/start <agent_id>`
 
