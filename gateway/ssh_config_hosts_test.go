@@ -62,6 +62,23 @@ Host "quoted-host"
 	}
 }
 
+func TestListLocalSSHConfigHosts_CustomPathOverride(t *testing.T) {
+	dir := t.TempDir()
+	customConfig := filepath.Join(dir, "my_ssh_config")
+	if err := os.WriteFile(customConfig, []byte("Host custom-host-1\nHost custom-host-2\n"), 0o600); err != nil {
+		t.Fatalf("write custom config: %v", err)
+	}
+
+	hosts, err := listLocalSSHConfigHosts(customConfig)
+	if err != nil {
+		t.Fatalf("listLocalSSHConfigHosts with override error: %v", err)
+	}
+	want := []string{"custom-host-1", "custom-host-2"}
+	if !slices.Equal(hosts, want) {
+		t.Fatalf("unexpected hosts: got=%v want=%v", hosts, want)
+	}
+}
+
 func TestSplitSSHConfigDirective(t *testing.T) {
 	t.Parallel()
 
