@@ -163,6 +163,50 @@ func TestOnboardConfirm_ManagedOpenClawSuccessIncludesSetupNotes(t *testing.T) {
 	}
 }
 
+func TestOnboardConfirm_ManagedOpenClawSuccessWithPendingChannelSetup(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/openclaw/install": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		},
+		"POST /api/v1/agents/openclaw/start": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		},
+		"GET /api/v1/agents/openclaw/status": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"statuses": []map[string]interface{}{{
+					"id":           "openclaw",
+					"name":         "OpenClaw",
+					"installState": "installed",
+					"runtimeState": "running",
+					"health":       "healthy",
+				}},
+			})
+		},
+	})
+
+	store := NewOnboardStore()
+	key := "telegram:managed-openclaw-pending-channel"
+	seedManagedEnvConfiguredSession(store, key, "openclaw", "telegram", "", "openai", map[string]string{
+		"OPENAI_API_KEY": "sk-openclaw",
+	})
+	store.update(key, func(s *OnboardSession) {
+		s.ChannelSetupPending = true
+	})
+
+	resp := onboardConfirm(context.Background(), "req-managed-openclaw-pending-channel", key, "yes", daemon, store, "telegram:123")
+	if resp.Result != "ok" {
+		t.Fatalf("expected managed openclaw success, got %+v", resp)
+	}
+	if !strings.Contains(resp.Message, "Channel token setup is pending.") {
+		t.Fatalf("expected pending channel setup note, got %q", resp.Message)
+	}
+}
+
 func TestOnboardConfirm_PicoClawPairHintFromLogs(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)

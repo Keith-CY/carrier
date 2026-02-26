@@ -495,11 +495,18 @@ func TestOnboardSelectChannel_Openclaw(t *testing.T) {
 	if resp.Result != "ok" {
 		t.Fatalf("expected ok, got %+v", resp)
 	}
-	if !strings.Contains(resp.Message, "OpenClaw channel selected") {
-		t.Fatalf("expected openclaw channel prompt, got %q", resp.Message)
+	if !strings.Contains(resp.Message, "OpenClaw channel selected") || !strings.Contains(resp.Message, "skips bot token input") {
+		t.Fatalf("expected openclaw chat token-skip prompt, got %q", resp.Message)
 	}
-	if got := s.get(key).Step; got != OnboardChannelToken {
-		t.Fatalf("expected channel token step, got %q", got)
+	sess := s.get(key)
+	if got := sess.Step; got != OnboardAgentSelected {
+		t.Fatalf("expected agent selected step, got %q", got)
+	}
+	if !sess.ChannelSetupPending || sess.ChannelToken != "" {
+		t.Fatalf("expected channel setup pending with empty token, got %+v", sess)
+	}
+	if !strings.Contains(resp.Message, "Choose an LLM Provider") {
+		t.Fatalf("expected provider list after channel selection, got %q", resp.Message)
 	}
 }
 
@@ -516,10 +523,14 @@ func TestOnboardSelectChannel_Zeroclaw(t *testing.T) {
 	if resp.Result != "ok" {
 		t.Fatalf("expected ok, got %+v", resp)
 	}
-	if !strings.Contains(resp.Message, "ZeroClaw channel selected") {
-		t.Fatalf("expected zeroclaw channel prompt, got %q", resp.Message)
+	if !strings.Contains(resp.Message, "ZeroClaw channel selected") || !strings.Contains(resp.Message, "Configure channel token in Web UI") {
+		t.Fatalf("expected zeroclaw chat token-skip prompt, got %q", resp.Message)
 	}
-	if got := s.get(key).Step; got != OnboardChannelToken {
-		t.Fatalf("expected channel token step, got %q", got)
+	sess := s.get(key)
+	if got := sess.Step; got != OnboardAgentSelected {
+		t.Fatalf("expected agent selected step, got %q", got)
+	}
+	if !sess.ChannelSetupPending || sess.ChannelToken != "" {
+		t.Fatalf("expected channel setup pending with empty token, got %+v", sess)
 	}
 }

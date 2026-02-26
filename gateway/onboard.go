@@ -26,15 +26,16 @@ const (
 
 // OnboardSession is the state for a single chat's onboard flow.
 type OnboardSession struct {
-	Step              OnboardStep
-	InstanceID        string
-	SelectedAgent     string
-	SelectedAgentName string
-	SelectedChannel   string
-	ChannelToken      string
-	SelectedProvider  string // LLMProvider.ID
-	WorkspacePath     string
-	EnvVars           map[string]string
+	Step                OnboardStep
+	InstanceID          string
+	SelectedAgent       string
+	SelectedAgentName   string
+	SelectedChannel     string
+	ChannelToken        string
+	ChannelSetupPending bool
+	SelectedProvider    string // LLMProvider.ID
+	WorkspacePath       string
+	EnvVars             map[string]string
 }
 
 // OnboardStore tracks per-session onboard state.
@@ -228,13 +229,26 @@ func onboardSelectChannel(requestID, sessionKey, input string, store *OnboardSto
 	}
 	store.update(sessionKey, func(s *OnboardSession) {
 		s.SelectedChannel = channel.ID
-		s.Step = OnboardChannelToken
+		s.ChannelToken = ""
+		s.ChannelSetupPending = true
+		s.Step = OnboardAgentSelected
 	})
-	return GatewayResponse{
-		RequestID: requestID,
-		Result:    "ok",
-		Message:   renderManagedChannelTokenPrompt(sess.SelectedAgent, channel),
+	name := strings.TrimSpace(sess.SelectedAgentName)
+	if name == "" {
+		name = managedAgentDisplayName(sess.SelectedAgent)
 	}
+	if name == "" {
+		name = sess.SelectedAgent
+	}
+	resp := buildProviderListResponse(requestID, &AgentState{ID: sess.SelectedAgent, Name: name})
+	resp.Message = strings.TrimSpace(fmt.Sprintf(
+		"✅ %s channel selected: **%s** (`%s`).\n\n🔒 Chat onboarding skips bot token input to avoid exposing secrets in chat history.\nConfigure channel token in Web UI after install.\n\n%s",
+		managedAgentDisplayName(sess.SelectedAgent),
+		channel.Name,
+		channel.ID,
+		resp.Message,
+	))
+	return resp
 }
 
 func onboardCaptureChannelToken(requestID, sessionKey, input string, store *OnboardStore) GatewayResponse {
@@ -242,12 +256,13 @@ func onboardCaptureChannelToken(requestID, sessionKey, input string, store *Onbo
 	if sess == nil {
 		return errResp(requestID, "E_USAGE", "No active session. Run `/onboard` to start.")
 	}
-	token := strings.TrimSpace(input)
-	if token == "" {
-		return errResp(requestID, "E_USAGE", "Bot token cannot be empty. Please paste the token to continue.")
+	if !isManagedAgent(sess.SelectedAgent) {
+		store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardAgentSelected })
+		return errResp(requestID, "E_USAGE", "Channel token input is only valid for managed agents.")
 	}
 	store.update(sessionKey, func(s *OnboardSession) {
-		s.ChannelToken = token
+		s.ChannelToken = ""
+		s.ChannelSetupPending = true
 		s.Step = OnboardAgentSelected
 	})
 	name := strings.TrimSpace(sess.SelectedAgentName)
@@ -256,11 +271,15 @@ func onboardCaptureChannelToken(requestID, sessionKey, input string, store *Onbo
 	}
 	agent := &AgentState{ID: sess.SelectedAgent, Name: name}
 	resp := buildProviderListResponse(requestID, agent)
-	agentLabel := "agent"
-	if isManagedAgent(sess.SelectedAgent) {
-		agentLabel = managedAgentDisplayName(sess.SelectedAgent)
+	channelID := strings.TrimSpace(sess.SelectedChannel)
+	if channelID == "" {
+		channelID = "selected channel"
 	}
-	resp.Message = strings.TrimSpace(fmt.Sprintf("✅ Channel configured for %s: `%s`.\n%s", agentLabel, sess.SelectedChannel, resp.Message))
+	resp.Message = strings.TrimSpace(fmt.Sprintf(
+		"🔒 Bot token entry in chat onboarding is disabled to protect secrets.\nConfigure token for `%s` in Web UI, then continue.\n\n%s",
+		channelID,
+		resp.Message,
+	))
 	return resp
 }
 
@@ -528,6 +547,9 @@ func onboardEnvInput(requestID, sessionKey, input string, store *OnboardStore) G
 		channelLine := ""
 		if sess.SelectedChannel != "" {
 			channelLine = fmt.Sprintf("\nChannel: %s", sess.SelectedChannel)
+			if sess.ChannelSetupPending {
+				channelLine += " (token setup pending in Web UI)"
+			}
 		}
 		providerLine := ""
 		if sess.SelectedProvider != "" {
@@ -582,6 +604,9 @@ func onboardConfirm(ctx context.Context, requestID, sessionKey, input string, da
 		setupNotes = append(setupNotes, fmt.Sprintf("%s workspace: %s", managedAgentDisplayName(agentID), result.WorkspacePath))
 		setupNotes = append(setupNotes, fmt.Sprintf("%s config: %s", managedAgentDisplayName(agentID), result.ConfigPath))
 		setupNotes = append(setupNotes, fmt.Sprintf("Carrier record: %s", result.RecordPath))
+		if sess.ChannelSetupPending {
+			setupNotes = append(setupNotes, "Channel token setup is pending. Configure it in Web UI before using chat commands.")
+		}
 	}
 	if err := applyOnboardEnvVars(sess.EnvVars); err != nil {
 		store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardEnvConfigured })

@@ -90,24 +90,23 @@ func TestHandleOnboard_RoutesActiveSessionReply(t *testing.T) {
 	sessionKey := "telegram:active"
 	store.start(sessionKey)
 	store.update(sessionKey, func(s *OnboardSession) {
-		s.Step = OnboardChannelToken
+		s.Step = OnboardChannelSelect
 		s.SelectedAgent = "openclaw"
 		s.SelectedAgentName = "OpenClaw"
-		s.SelectedChannel = "telegram"
 	})
 
 	resp := handleOnboard(context.Background(), &GatewayCommand{
 		Provider:  "telegram",
 		ChatID:    "active",
 		RequestID: "req-active",
-		Args:      []string{"bot-token-1"},
+		Args:      []string{"telegram"},
 	}, daemon, store)
-	if resp.Result != "ok" || !strings.Contains(resp.Message, "Channel configured for OpenClaw") {
-		t.Fatalf("expected token capture response, got %+v", resp)
+	if resp.Result != "ok" || !strings.Contains(resp.Message, "skips bot token input") {
+		t.Fatalf("expected token-skip response, got %+v", resp)
 	}
 	sess := store.get(sessionKey)
-	if sess.Step != OnboardAgentSelected || sess.ChannelToken != "bot-token-1" {
-		t.Fatalf("unexpected session state after token capture: %+v", sess)
+	if sess.Step != OnboardAgentSelected || !sess.ChannelSetupPending || sess.ChannelToken != "" {
+		t.Fatalf("unexpected session state after channel select: %+v", sess)
 	}
 }
 
@@ -238,18 +237,24 @@ func TestOnboardCaptureChannelToken_Branches(t *testing.T) {
 		s.SelectedAgentName = "OpenClaw"
 		s.SelectedChannel = "telegram"
 	})
-	resp = onboardCaptureChannelToken("req-empty", "telegram:token", "   ", store)
-	if resp.Result != "error" || resp.ErrorCode != "E_USAGE" {
-		t.Fatalf("expected usage error for empty token, got %+v", resp)
+	resp = onboardCaptureChannelToken("req-skip", "telegram:token", "   ", store)
+	if resp.Result != "ok" || !strings.Contains(resp.Message, "disabled to protect secrets") {
+		t.Fatalf("expected token-skip response, got %+v", resp)
 	}
 
-	resp = onboardCaptureChannelToken("req-ok", "telegram:token", "t-123", store)
-	if resp.Result != "ok" || !strings.Contains(resp.Message, "Channel configured for OpenClaw") {
-		t.Fatalf("expected successful capture response, got %+v", resp)
-	}
 	sess := store.get("telegram:token")
-	if sess.ChannelToken != "t-123" || sess.Step != OnboardAgentSelected {
-		t.Fatalf("unexpected session after token capture: %+v", sess)
+	if sess.ChannelToken != "" || sess.Step != OnboardAgentSelected || !sess.ChannelSetupPending {
+		t.Fatalf("unexpected session after token skip: %+v", sess)
+	}
+
+	store.start("telegram:token-worker")
+	store.update("telegram:token-worker", func(s *OnboardSession) {
+		s.Step = OnboardChannelToken
+		s.SelectedAgent = "worker"
+	})
+	resp = onboardCaptureChannelToken("req-worker", "telegram:token-worker", "t-123", store)
+	if resp.Result != "error" || resp.ErrorCode != "E_USAGE" {
+		t.Fatalf("expected usage error for non-managed agent, got %+v", resp)
 	}
 }
 
@@ -299,6 +304,8 @@ func TestRenderManagedChannelPrompt(t *testing.T) {
 	}
 	if got := renderManagedChannelPrompt("openclaw"); !strings.Contains(got, "Choose a channel for OpenClaw") {
 		t.Fatalf("expected openclaw channel prompt, got %q", got)
+	} else if !strings.Contains(got, "configure it later in Web UI") {
+		t.Fatalf("expected web ui guidance in channel prompt, got %q", got)
 	}
 }
 
