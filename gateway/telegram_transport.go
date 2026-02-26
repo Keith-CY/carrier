@@ -497,5 +497,6 @@ func carrierTelegramDefaultCommands() []telegramBotCommand {
 		{Command: "tools", Description: "List base-agent tools"},
 		{Command: "providers", Description: "Show provider backends"},
 		{Command: "sessions", Description: "List base-agent sessions"},
+		{Command: "boundaries", Description: "Explain base-agent boundaries"},
 	}
 }

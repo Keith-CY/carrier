@@ -279,11 +279,18 @@ func TestHandleCommand_MetadataCommandsRouteToBaseAgent(t *testing.T) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			if req["message"] != "/tools" {
-				t.Fatalf("message = %v, want /tools", req["message"])
+			message, _ := req["message"].(string)
+			reply := "metadata"
+			switch message {
+			case "/tools":
+				reply = "Available tools (7): ..."
+			case "/boundaries":
+				reply = "BaseAgent boundaries: ..."
+			default:
+				t.Fatalf("unexpected metadata message = %q", message)
 			}
 			if err := json.NewEncoder(w).Encode(map[string]interface{}{
-				"message": "Available tools (7): ...",
+				"message": reply,
 			}); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -293,16 +300,39 @@ func TestHandleCommand_MetadataCommandsRouteToBaseAgent(t *testing.T) {
 	defer srv.Close()
 
 	tok := pairAndGetSession(sessions, "telegram", "123")
-	cmd := &GatewayCommand{
-		Provider: "telegram", ChatID: "123", RequestID: "r-tools",
-		Name: CmdTools, SessionToken: tok,
+	tests := []struct {
+		name        string
+		commandName CommandName
+		requestID   string
+		contains    string
+	}{
+		{
+			name:        "tools command",
+			commandName: CmdTools,
+			requestID:   "r-tools",
+			contains:    "Available tools",
+		},
+		{
+			name:        "boundaries command",
+			commandName: CmdBoundaries,
+			requestID:   "r-boundaries",
+			contains:    "BaseAgent boundaries",
+		},
 	}
-	resp := HandleCommand(context.Background(), cmd, dc, sessions, downloads, nil, onboard)
-	if resp.Result != "ok" {
-		t.Fatalf("expected ok, got %s: %s", resp.Result, resp.Message)
-	}
-	if !strings.Contains(resp.Message, "Available tools") {
-		t.Fatalf("unexpected message: %q", resp.Message)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := &GatewayCommand{
+				Provider: "telegram", ChatID: "123", RequestID: tc.requestID,
+				Name: tc.commandName, SessionToken: tok,
+			}
+			resp := HandleCommand(context.Background(), cmd, dc, sessions, downloads, nil, onboard)
+			if resp.Result != "ok" {
+				t.Fatalf("expected ok, got %s: %s", resp.Result, resp.Message)
+			}
+			if !strings.Contains(resp.Message, tc.contains) {
+				t.Fatalf("unexpected message: %q", resp.Message)
+			}
+		})
 	}
 }
 

@@ -249,7 +249,24 @@ func (r *Runtime) executeAgentAction(ctx context.Context, action, agentID string
 }
 
 func baseAgentHelpText() string {
-	return "Base agent manages local agents: `list agents` or `/agents`, `uninstall <agent>`, `start <agent>`, `stop <agent>`, `status <agent>`, `logs <agent>`, `upgrade <agent>`, `diagnose <agent>`. Metadata commands: `/tools`, `/providers`, `/sessions`. For install/onboard, use Carrier CLI/TUI (`carrier install <agent>`, `carrier onboard`) or WebUI."
+	return "Base agent manages local agents: `list agents` or `/agents`, `uninstall <agent>`, `start <agent>`, `stop <agent>`, `status <agent>`, `logs <agent>`, `upgrade <agent>`, `diagnose <agent>`. Metadata commands: `/tools`, `/providers`, `/sessions`, `/boundaries`. For install/onboard, use Carrier CLI/TUI (`carrier install <agent>`, `carrier onboard`) or WebUI."
+}
+
+func baseAgentBoundariesText() string {
+	return strings.Join([]string{
+		"BaseAgent boundaries:",
+		"1) Scope: I can run local agent lifecycle commands and expose metadata (`/tools`, `/providers`, `/sessions`).",
+		"2) Out of scope: install/onboard, channel setup, and other privileged operations are handled by Carrier CLI/TUI/WebUI and gateway/daemon flows.",
+		"3) Where boundaries come from:",
+		"- Policy and system constraints at runtime initialization.",
+		"- Explicit tool allowlist in `baseagent/builtin_tools.go` (what commands can be executed).",
+		"- Gateway command allowlist and auth/session checks in `gateway/commands.go` (what can be called over channels).",
+		"- Daemon API contracts and provider routing in base-agent runtime.",
+		"4) Boundary design principles:",
+		"- Least privilege: only explicit commands are routable.",
+		"- Deterministic control plane: slash commands map to fixed handlers.",
+		"- Safety and resilience: auth/session gates, bounded session memory, and provider fallback when LLM is unavailable.",
+	}, "\n")
 }
 
 func withMemoryNote(resp ChatResponse, note string, healed bool, backupRef string) ChatResponse {

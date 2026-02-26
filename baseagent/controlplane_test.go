@@ -231,4 +231,12 @@ func TestRuntimeMetadataCommands(t *testing.T) {
 	if resp.Action != "sessions" || !strings.Contains(resp.Message, "Recent sessions") {
 		t.Fatalf("unexpected sessions response: %+v", resp)
 	}
+
+	resp, err = rt.Chat(context.Background(), ChatRequest{Provider: "cli", ChatID: "unit", Message: "/boundaries"})
+	if err != nil {
+		t.Fatalf("boundaries command failed: %v", err)
+	}
+	if resp.Action != "boundaries" || !strings.Contains(resp.Message, "BaseAgent boundaries") {
+		t.Fatalf("unexpected boundaries response: %+v", resp)
+	}
 }

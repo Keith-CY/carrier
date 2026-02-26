@@ -23,6 +23,7 @@ const (
 	CmdTools           CommandName = "/tools"
 	CmdProviders       CommandName = "/providers"
 	CmdSessions        CommandName = "/sessions"
+	CmdBoundaries      CommandName = "/boundaries"
 	CmdAdd             CommandName = "/add"
 	CmdInstall         CommandName = "/install"
 	CmdUninstall       CommandName = "/uninstall"
@@ -43,6 +44,7 @@ var validCommands = map[CommandName]struct{}{
 	CmdTools:           {},
 	CmdProviders:       {},
 	CmdSessions:        {},
+	CmdBoundaries:      {},
 	CmdAdd:             {},
 	CmdInstall:         {},
 	CmdUninstall:       {},
@@ -186,6 +188,8 @@ func HandleCommand(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClien
 		return handleBaseAgentMeta(ctx, cmd, daemon, actor, "/providers")
 	case CmdSessions:
 		return handleBaseAgentMeta(ctx, cmd, daemon, actor, "/sessions")
+	case CmdBoundaries:
+		return handleBaseAgentMeta(ctx, cmd, daemon, actor, "/boundaries")
 	case CmdAdd:
 		return handleAdd(ctx, cmd, daemon, actor, onboard)
 	case CmdUninstall:
