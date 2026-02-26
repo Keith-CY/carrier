@@ -70,6 +70,9 @@ type GatewayResponse = {
 | `E_SESSION_REQUIRED`             | Chat is not paired; must run `/pair` first            |
 | `E_INSTALL_GUI_ONLY`            | Chat install is disabled; use Carrier TUI/WebUI       |
 | `E_ONBOARD_GUI_ONLY`            | Chat onboarding is disabled; use Carrier TUI/WebUI    |
+| `E_HOST_BINDING_REQUIRED`        | Install requires a bound/selected remote host         |
+| `E_REMOTE_INSTALL_FAILED`        | Remote host install flow failed                       |
+| `E_REMOTE_HOST_NOT_FOUND`        | Referenced remote host does not exist                 |
 | `E_NOT_INSTALLED`                | Agent is not installed                                |
 | `E_ALREADY_RUNNING`              | Agent is already running                              |
 | `E_ALREADY_STOPPED`              | Agent is already stopped                              |
@@ -104,16 +107,17 @@ Lists all known agents and their install status.
 - **Requires session:** yes
 - **Success:** `{ result: "ok", message: "listed <n> agents (<m> installed)" }`
 
-### `/install <agent_id>`
+### `/install <agent_id> <host_id>`
 
 Installs an agent.
 
-- **Args:** `agent_id` (required)
+- **Args:** `agent_id` (required), `host_id` (required when policy requires host binding; current default)
 - **Requires session:** yes
 - **Policy gate:** behavior is controlled by boundary policy `command_policies.chat_install`.
-- **Current policy value:** `disabled` (chat path intentionally blocked for credential safety).
-- **Result:** `{ result: "error", errorCode: "E_INSTALL_GUI_ONLY", message: "...Open Carrier GUI to install/onboard agents..." }`
-- **Alternative flows:** `carrier add <agent_id>` (TUI) or WebUI add flow.
+- **Current policy value:** `requires_host_binding`.
+- **Success:** `{ result: "ok", message: "remote install completed for <agent_id> on host <host_id>" }`
+- **Errors:** `E_USAGE`, `E_HOST_BINDING_REQUIRED`, `E_REMOTE_HOST_NOT_FOUND`, `E_REMOTE_INSTALL_FAILED`
+- **Notes:** current remote chat install path supports `openclaw` only.
 
 ### `/onboard`
 

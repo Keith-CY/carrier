@@ -214,7 +214,7 @@ func fallbackBoundarySpec() BoundarySpec {
 			"Auditability for lifecycle and repair operations.",
 		},
 		CommandPolicies: CommandPolicies{
-			ChatInstall:                      chatPolicyDisabled,
+			ChatInstall:                      chatPolicyRequiresHostBinding,
 			ChatOnboard:                      chatPolicyDisabled,
 			RequiresExplicitHostForWorkflows: true,
 		},

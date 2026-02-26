@@ -27,7 +27,7 @@
     "Fail-safe escalation when repair policy bounds are exceeded."
   ],
   "command_policies": {
-    "chat_install": "disabled",
+    "chat_install": "requires_host_binding",
     "chat_onboard": "disabled",
     "requires_explicit_host_for_remote_workflows": true
   },

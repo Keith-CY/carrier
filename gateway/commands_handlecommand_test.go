@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -432,21 +433,88 @@ func TestHandleCommand_Onboard_GuiOnly(t *testing.T) {
 	}
 }
 
-func TestHandleCommand_Install_GuiOnly(t *testing.T) {
+func TestHandleCommand_Install_RequiresHostBinding(t *testing.T) {
 	sessions := NewSessionStore("", 0, nil)
 	tok := pairAndGetSession(sessions, "telegram", "123")
 	defer sessions.Stop()
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
 	cmd := &GatewayCommand{
 		Provider: "telegram", ChatID: "123", RequestID: "r1",
 		Name: CmdInstall, Args: []string{"openclaw"}, SessionToken: tok,
 	}
-	// The session token is not validated for GUI-only install guard and daemon is not called.
 	resp := HandleCommand(context.Background(), cmd, nil, sessions, nil, nil, nil)
 	if resp.Result != "error" {
 		t.Fatalf("expected error, got %s: %s", resp.Result, resp.Message)
 	}
-	if resp.ErrorCode != "E_INSTALL_GUI_ONLY" {
-		t.Fatalf("expected E_INSTALL_GUI_ONLY, got %s", resp.ErrorCode)
+	if resp.ErrorCode != "E_HOST_BINDING_REQUIRED" {
+		t.Fatalf("expected E_HOST_BINDING_REQUIRED, got %s", resp.ErrorCode)
+	}
+}
+
+func TestHandleCommand_Install_RemoteHostNotFound(t *testing.T) {
+	sessions := NewSessionStore("", 0, nil)
+	tok := pairAndGetSession(sessions, "telegram", "123")
+	defer sessions.Stop()
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+
+	cmd := &GatewayCommand{
+		Provider: "telegram", ChatID: "123", RequestID: "r-install-missing-host",
+		Name: CmdInstall, Args: []string{"openclaw", "host-missing"}, SessionToken: tok,
+	}
+	resp := HandleCommand(context.Background(), cmd, nil, sessions, nil, nil, nil)
+	if resp.Result != "error" {
+		t.Fatalf("expected error, got %s: %s", resp.Result, resp.Message)
+	}
+	if resp.ErrorCode != "E_REMOTE_HOST_NOT_FOUND" {
+		t.Fatalf("expected E_REMOTE_HOST_NOT_FOUND, got %s", resp.ErrorCode)
+	}
+}
+
+func TestHandleCommand_Install_RemoteSuccess(t *testing.T) {
+	sessions := NewSessionStore("", 0, nil)
+	tok := pairAndGetSession(sessions, "telegram", "123")
+	defer sessions.Stop()
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+
+	host, err := upsertRemoteHost(RemoteHost{
+		ID:          "host-openclaw",
+		Name:        "openclaw-host",
+		Host:        "127.0.0.1",
+		Port:        22,
+		User:        "ubuntu",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     "~/.ssh/id_ed25519",
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	})
+	if err != nil {
+		t.Fatalf("upsertRemoteHost: %v", err)
+	}
+
+	origRunner := sshExecRunner
+	sshExecRunner = func(_ context.Context, args []string) (remoteExecResult, error) {
+		if len(args) == 0 {
+			return remoteExecResult{ExitCode: 1, Stderr: "missing ssh args"}, nil
+		}
+		command := args[len(args)-1]
+		return remoteExecResult{
+			Command:    command,
+			ExitCode:   0,
+			Stdout:     "ok",
+			DurationMs: 1,
+		}, nil
+	}
+	t.Cleanup(func() { sshExecRunner = origRunner })
+
+	cmd := &GatewayCommand{
+		Provider: "telegram", ChatID: "123", RequestID: "r-install-ok",
+		Name: CmdInstall, Args: []string{"openclaw", host.ID}, SessionToken: tok,
+	}
+	resp := HandleCommand(context.Background(), cmd, nil, sessions, nil, nil, nil)
+	if resp.Result != "ok" {
+		t.Fatalf("expected ok, got %s: %s", resp.Result, resp.Message)
+	}
+	if !strings.Contains(resp.Message, "remote install completed for openclaw on host") {
+		t.Fatalf("unexpected response message: %q", resp.Message)
 	}
 }
 
