@@ -36,6 +36,12 @@ func TestParseInput_ValidCommands(t *testing.T) {
 			wantCmd: CmdAgents, wantArgs: []string{},
 		},
 		{
+			name:         "tools command",
+			input:        "telegram 123 req-tools /tools",
+			wantProvider: "telegram", wantChatID: "123", wantReqID: "req-tools",
+			wantCmd: CmdTools, wantArgs: []string{},
+		},
+		{
 			name:         "add with session token",
 			input:        "feishu chat-abc req-3 session-xyz123 /add myagent",
 			wantProvider: "feishu", wantChatID: "chat-abc", wantReqID: "req-3",

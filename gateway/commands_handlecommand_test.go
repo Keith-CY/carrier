@@ -271,6 +271,41 @@ func TestHandleCommand_Chat_NoArgs(t *testing.T) {
 	}
 }
 
+func TestHandleCommand_MetadataCommandsRouteToBaseAgent(t *testing.T) {
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
+		"POST /api/v1/base-agent/chat": func(w http.ResponseWriter, r *http.Request) {
+			var req map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if req["message"] != "/tools" {
+				t.Fatalf("message = %v, want /tools", req["message"])
+			}
+			if err := json.NewEncoder(w).Encode(map[string]interface{}{
+				"message": "Available tools (7): ...",
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		},
+	})
+	defer srv.Close()
+
+	tok := pairAndGetSession(sessions, "telegram", "123")
+	cmd := &GatewayCommand{
+		Provider: "telegram", ChatID: "123", RequestID: "r-tools",
+		Name: CmdTools, SessionToken: tok,
+	}
+	resp := HandleCommand(context.Background(), cmd, dc, sessions, downloads, nil, onboard)
+	if resp.Result != "ok" {
+		t.Fatalf("expected ok, got %s: %s", resp.Result, resp.Message)
+	}
+	if !strings.Contains(resp.Message, "Available tools") {
+		t.Fatalf("unexpected message: %q", resp.Message)
+	}
+}
+
 func TestHandleCommand_Agents_Success(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"GET /api/v1/agents": func(w http.ResponseWriter, r *http.Request) {

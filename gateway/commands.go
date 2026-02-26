@@ -20,6 +20,9 @@ const (
 	CmdPair            CommandName = "/pair"
 	CmdChat            CommandName = "/chat"
 	CmdAgents          CommandName = "/agents"
+	CmdTools           CommandName = "/tools"
+	CmdProviders       CommandName = "/providers"
+	CmdSessions        CommandName = "/sessions"
 	CmdAdd             CommandName = "/add"
 	CmdInstall         CommandName = "/install"
 	CmdUninstall       CommandName = "/uninstall"
@@ -37,6 +40,9 @@ var validCommands = map[CommandName]struct{}{
 	CmdPair:            {},
 	CmdChat:            {},
 	CmdAgents:          {},
+	CmdTools:           {},
+	CmdProviders:       {},
+	CmdSessions:        {},
 	CmdAdd:             {},
 	CmdInstall:         {},
 	CmdUninstall:       {},
@@ -174,6 +180,12 @@ func HandleCommand(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClien
 		return handleChat(ctx, cmd, daemon, actor)
 	case CmdAgents:
 		return handleAgents(ctx, cmd, daemon, actor)
+	case CmdTools:
+		return handleBaseAgentMeta(ctx, cmd, daemon, actor, "/tools")
+	case CmdProviders:
+		return handleBaseAgentMeta(ctx, cmd, daemon, actor, "/providers")
+	case CmdSessions:
+		return handleBaseAgentMeta(ctx, cmd, daemon, actor, "/sessions")
 	case CmdAdd:
 		return handleAdd(ctx, cmd, daemon, actor, onboard)
 	case CmdUninstall:
@@ -259,6 +271,18 @@ func handleChat(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, 
 	if message == "" {
 		return usageResp(cmd.RequestID, "/chat <message>")
 	}
+	return handleBaseAgentMessage(ctx, cmd, daemon, actor, message)
+}
+
+func handleBaseAgentMeta(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, actor, metaCommand string) GatewayResponse {
+	message := strings.TrimSpace(metaCommand)
+	if message == "" {
+		return errResp(cmd.RequestID, "E_USAGE", "metadata command is empty")
+	}
+	return handleBaseAgentMessage(ctx, cmd, daemon, actor, message)
+}
+
+func handleBaseAgentMessage(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, actor, message string) GatewayResponse {
 	chatResult, err := daemon.ChatBaseAgent(ctx, cmd.Provider, cmd.ChatID, cmd.RequestID, message, actor)
 	if err != nil {
 		return daemonErrResp(cmd.RequestID, err)
