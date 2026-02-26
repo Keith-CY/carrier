@@ -328,8 +328,8 @@ Implementation notes:
    - Windows PowerShell: `Get-FileHash .\carrier-*.zip -Algorithm SHA256`
 4. Extract the ZIP to a local folder.
 5. Start the daemon from the extracted folder:
-   - macOS/Linux: `./agentd`
-   - Windows PowerShell: `.\agentd.exe`
+   - macOS/Linux: `./carrier daemon`
+   - Windows PowerShell: `.\carrier.exe daemon`
 6. Get your pairing code from the daemon terminal output (format: `pair-<hex>`). If needed, you can also issue one via API: `curl -s -X POST http://127.0.0.1:9090/api/v1/pairing/codes`.
    - Note: `PAIR_CODE` has a short TTL (currently 5 minutes). If pairing fails due to expiration, request a fresh code and retry `/pair <code>`.
 7. Use your chat provider flow (Telegram/Discord/Feishu) to pair and run commands:
@@ -355,8 +355,8 @@ If install/start fails, run `/diagnose openclaw` and use the generated artifact 
    - Windows PowerShell：`Get-FileHash .\carrier-*.zip -Algorithm SHA256`
 4. 解压 ZIP 到本地目录。
 5. 运行解压目录里的 daemon：
-   - macOS/Linux：`./agentd`
-   - Windows PowerShell：`.\agentd.exe`
+   - macOS/Linux：`./carrier daemon`
+   - Windows PowerShell：`.\carrier.exe daemon`
 6. 从 daemon 终端输出里获取配对码（格式：`pair-<hex>`）。如需手动申请，也可调用 API：`curl -s -X POST http://127.0.0.1:9090/api/v1/pairing/codes`。
    - 说明：`PAIR_CODE` 有较短有效期（当前为 5 分钟）。若因过期导致配对失败，请重新获取新配对码后再执行 `/pair <code>`。
 7. 通过 Telegram/Discord/Feishu 配对后执行：
@@ -382,7 +382,7 @@ Use this as a quick pass/fail checklist when validating the README flow:
 2. **Checksum**
    - Verification command is available for your OS and returns success.
 3. **Daemon start**
-   - `agentd` starts and prints a usable `PAIR_CODE`.
+   - `carrier daemon` starts and prints a usable `PAIR_CODE`.
 4. **Pair**
    - `/pair <code>` returns success before TTL expires.
 5. **Add path**
@@ -399,7 +399,7 @@ Use this as a quick pass/fail checklist when validating the README flow:
 1. **下载**：能在 [Releases](https://github.com/Keith-CY/carrier/releases) 找到匹配 ZIP 与 `.sha256`。
    - 产物命名建议为 `carrier-<commit-sha>-<os>-<arch>.zip`，对应校验文件为 `carrier-<commit-sha>-<os>-<arch>.zip.sha256`。
 2. **校验**：对应系统校验命令可用且结果成功。
-3. **启动 daemon**：`agentd` 启动后可看到可用 `PAIR_CODE`。
+3. **启动 daemon**：`carrier daemon` 启动后可看到可用 `PAIR_CODE`。
 4. **配对**：`/pair <code>` 在有效期内返回成功。
 5. **安装链路**：`carrier add openclaw` 能成功完成。
 6. **启动与状态**：`/start openclaw` 成功，`/status openclaw` 显示 healthy/running。

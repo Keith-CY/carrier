@@ -1,5 +1,3 @@
-//go:build webui
-
 package main
 
 import (
@@ -14,4 +12,3 @@ func init() {
 		return webui.Handler()
 	})
 }
-

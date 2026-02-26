@@ -20,7 +20,7 @@ webui -> gateway -> baseagent -> shared
 ```
 ┌─────────────┐         HTTP           ┌─────────────┐        HTTP         ┌──────────┐
 │ Chat/Webhook │ ───────────────────► │   Gateway    │ ─────────────────► │  Daemon   │
-│   Clients    │   (commands/events)   │    (Go)      │   (JSON over API)  │ (agentd)  │
+│   Clients    │   (commands/events)   │    (Go)      │   (JSON over API)  │ (carrier daemon) │
 └─────────────┘                        └─────────────┘                     └──────────┘
                                                                                 │
                                                                           ┌─────┴─────┐
@@ -34,7 +34,7 @@ webui -> gateway -> baseagent -> shared
 
 ### Daemon (`daemon/`)
 
-The daemon (`agentd`) is the host-side process responsible for:
+The daemon (`carrier daemon`) is the host-side process responsible for:
 
 - **Agent Lifecycle** (`internal/lifecycle/`) — Install, start, stop, upgrade agents with crash-loop detection and automatic cooldown
 - **Catalog** (`internal/catalog/`) — Registry of available agent definitions

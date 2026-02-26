@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # E2E test suite for Carrier daemon.
-# Builds the daemon, starts it on a random port, exercises the HTTP API.
+# Builds the unified carrier binary, starts daemon mode on a random port, exercises the HTTP API.
 # Targets ≥40% of system paths.
 #
 # Usage:  bash tests/e2e/e2e_test.sh
@@ -85,9 +85,8 @@ export PATH="/tmp/go/bin:$PATH"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-log "Building daemon…"
-cd daemon && go build -o "$TMPDIR/agentd" ./cmd/agentd
-cd "$REPO_ROOT"
+log "Building carrier..."
+go build -o "$TMPDIR/carrier" ./cmd/carrier
 log "Build OK"
 
 ###############################################################################
@@ -105,8 +104,8 @@ export CARRIER_LOG_LEVEL="debug"
 export CARRIER_LOG_FORMAT="text"
 export OPENAI_API_KEY="sk-fake-e2e-test-key-00000000000000000000"
 
-log "Starting daemon on port $DAEMON_PORT…"
-"$TMPDIR/agentd" > "$TMPDIR/daemon.log" 2>&1 &
+log "Starting daemon on port ${DAEMON_PORT}..."
+"$TMPDIR/carrier" daemon > "$TMPDIR/daemon.log" 2>&1 &
 DAEMON_PID=$!
 CLEANUP_PIDS+=("$DAEMON_PID")
 

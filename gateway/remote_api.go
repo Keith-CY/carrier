@@ -157,6 +157,28 @@ func handleRemoteMetrics(w http.ResponseWriter, r *http.Request, requestID strin
 	})
 }
 
+func handleRemoteSSHConfigHosts(w http.ResponseWriter, r *http.Request, requestID string, cfg *GatewayConfig) {
+	flags := effectiveGatewayFeatureFlags(cfg)
+	if !flags.RemoteControlPlaneEnabled {
+		writeJSON(w, http.StatusNotFound, gatewayErrBody("E_NOT_FOUND", "remote control plane is disabled"))
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+		return
+	}
+	hosts, err := listLocalSSHConfigHosts()
+	if err != nil {
+		writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load local ssh config hosts", "load local ssh config hosts", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"requestId": requestID,
+		"result":    "ok",
+		"hosts":     hosts,
+	})
+}
+
 func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID, hostID string, host RemoteHost, parts []string) {
 	if len(parts) == 2 {
 		if r.Method != http.MethodGet {

@@ -25,7 +25,7 @@ Before running stress tests, ensure the Carrier daemon is running:
 
 ```bash
 # Start daemon (adjust path as needed)
-./agentd &
+./carrier daemon &
 
 # Verify daemon is accessible
 curl -s http://127.0.0.1:9090/api/v1/agents
@@ -287,7 +287,7 @@ Error: Cannot connect to daemon at http://127.0.0.1:9090
 ```
 
 **Solutions:**
-- Verify daemon is running: `ps aux | grep agentd`
+- Verify daemon is running: `ps aux | grep "carrier daemon"`
 - Check daemon logs for startup errors
 - Confirm port 9090 is not blocked by firewall
 - Try custom URL: `--daemon-url http://localhost:9090`
@@ -375,10 +375,8 @@ jobs:
       
       - name: Start daemon
         run: |
-          cd daemon
-          go build -o ../agentd ./cmd/agentd
-          cd ..
-          ./agentd &
+          go build -o ./carrier ./cmd/carrier
+          ./carrier daemon &
           sleep 3
       
       - name: Run stress tests
