@@ -41,8 +41,7 @@ const (
 
 	// Official OpenClaw installer URLs
 	installScriptURL = "https://openclaw.ai/install.sh"
-	installPS1URL    = "https://openclaw.ai/install.ps1"
-	installCMDURL    = "https://openclaw.ai/install.cmd"
+	openclawWSLHint  = "OpenClaw on Windows requires WSL2 with at least one Linux distro. Run: wsl --install -d Ubuntu"
 
 	// PicoClaw release URL pattern
 	picoClawReleaseBaseURL = "https://github.com/sipeed/picoclaw/releases/latest/download"
@@ -67,11 +66,20 @@ func getInstallCommand() string {
 	}
 }
 
+func quotePowerShellLiteral(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+func wrapWindowsWSLBashCommand(shCommand string) string {
+	return fmt.Sprintf(`powershell -NoProfile -Command "$ErrorActionPreference='Stop';$distro=(wsl -l -q | %% { $_.Replace([char]0,'').Trim() } | ? { $_ -ne '' } | Select-Object -First 1);if ([string]::IsNullOrWhiteSpace($distro)) { Write-Error %s; exit 1 }; wsl -d $distro -- bash -lc %s"`, quotePowerShellLiteral(openclawWSLHint), quotePowerShellLiteral(shCommand))
+}
+
 func resolveWindowsOpenClawInstallCommand(lookPath func(string) (string, error)) string {
+	installInWSL := fmt.Sprintf(`set -e; tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT; curl -fsSL --proto "=https" --tlsv1.2 %s -o "$tmp"; OPENCLAW_INSTALL_METHOD=npm OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 bash "$tmp" --no-onboard --no-prompt`, installScriptURL)
 	if commandExistsOnHost(lookPath, "powershell") || commandExistsOnHost(lookPath, "powershell.exe") {
-		return fmt.Sprintf(`powershell -NoProfile -Command "$ErrorActionPreference='Stop';$env:OPENCLAW_INSTALL_METHOD='npm';$env:OPENCLAW_NO_ONBOARD='1';$env:OPENCLAW_NO_PROMPT='1';$tmp=Join-Path $env:TEMP ('openclaw-install-' + [guid]::NewGuid().ToString() + '.ps1');try { iwr -useb %s -OutFile $tmp; & $tmp } finally { Remove-Item $tmp -ErrorAction SilentlyContinue }"`, installPS1URL)
+		return wrapWindowsWSLBashCommand(installInWSL)
 	}
-	return fmt.Sprintf(`set "OPENCLAW_NO_ONBOARD=1" && set "OPENCLAW_NO_PROMPT=1" && set "TMPF=%%TEMP%%\openclaw-install-%%RANDOM%%%%RANDOM%%.cmd" && curl -fsSL --proto "=https" --tlsv1.2 %s -o "%%TMPF%%" && call "%%TMPF%%" --no-onboard && del "%%TMPF%%"`, installCMDURL)
+	return fmt.Sprintf(`echo %s && exit /b 1`, openclawWSLHint+" PowerShell is required.")
 }
 
 func commandExistsOnHost(lookPath func(string) (string, error), name string) bool {
@@ -108,7 +116,8 @@ echo "Dev placeholder created at $HOME/.local/bin/openclaw" >&2
 func getStartCommand() string {
 	switch runtime.GOOS {
 	case "windows":
-		return "openclaw gateway"
+		startInWSL := `set -e; export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; if command -v openclaw >/dev/null 2>&1; then exec "$(command -v openclaw)" gateway; fi; echo "openclaw executable not found inside WSL (checked PATH)" >&2; exit 127`
+		return wrapWindowsWSLBashCommand(startInWSL)
 	default:
 		// Git installs create a ~/.local/bin wrapper, while npm installs may
 		// place openclaw in npm's global bin dir. Resolve both without forcing
@@ -121,7 +130,8 @@ func getStartCommand() string {
 func getStopCommand() string {
 	switch runtime.GOOS {
 	case "windows":
-		return "openclaw gateway stop"
+		stopInWSL := `set -e; export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; if command -v openclaw >/dev/null 2>&1; then exec "$(command -v openclaw)" gateway stop; fi; echo "openclaw executable not found inside WSL (checked PATH)" >&2; exit 127`
+		return wrapWindowsWSLBashCommand(stopInWSL)
 	default:
 		return `sh -c 'if [ -x "$HOME/.local/bin/openclaw" ]; then exec "$HOME/.local/bin/openclaw" gateway stop; elif [ -x "$HOME/.npm-global/bin/openclaw" ]; then exec "$HOME/.npm-global/bin/openclaw" gateway stop; elif command -v openclaw >/dev/null 2>&1; then exec "$(command -v openclaw)" gateway stop; else echo "openclaw executable not found (checked $HOME/.local/bin/openclaw, $HOME/.npm-global/bin/openclaw, and PATH)" >&2; exit 127; fi'`
 	}

@@ -288,6 +288,8 @@ var daemonHealthProbe = checkDaemonHealth
 var daemonBackgroundStarter = startDaemonInBackground
 var gatewayBackgroundStarter = startGatewayInBackground
 var runStopFlow = runStop
+var carrierGOOS = runtime.GOOS
+var windowsWSLListDistros = listWindowsWSLDistros
 var writeBootstrapPIDFileFunc = writeBootstrapPIDFile
 var terminateBackgroundProcessFunc = terminateBackgroundProcess
 var daemonPairCodeFetcher = fetchDaemonPairCode
@@ -1707,6 +1709,47 @@ func isInteractiveReader(in io.Reader) bool {
 		return false
 	}
 	return (info.Mode() & os.ModeCharDevice) != 0
+}
+
+func listWindowsWSLDistros() ([]string, error) {
+	cmd := exec.Command("wsl.exe", "-l", "-q")
+	raw, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(raw))
+		if msg == "" {
+			return nil, fmt.Errorf("wsl -l -q: %w", err)
+		}
+		return nil, fmt.Errorf("wsl -l -q: %w (%s)", err, msg)
+	}
+
+	lines := strings.Split(strings.ReplaceAll(string(raw), "\r", ""), "\n")
+	distros := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(strings.ReplaceAll(line, "\x00", ""))
+		if trimmed == "" {
+			continue
+		}
+		distros = append(distros, trimmed)
+	}
+	return distros, nil
+}
+
+func ensureWindowsWSLPrereqForOpenClaw(agentID string) error {
+	if !strings.EqualFold(strings.TrimSpace(agentID), "openclaw") {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(carrierGOOS), "windows") {
+		return nil
+	}
+
+	distros, err := windowsWSLListDistros()
+	if err != nil {
+		return fmt.Errorf("openclaw on Windows requires WSL2; failed to query WSL distros: %w", err)
+	}
+	if len(distros) == 0 {
+		return errors.New("openclaw on Windows requires WSL2 with at least one Linux distro installed. Run `wsl --install -d Ubuntu` and retry")
+	}
+	return nil
 }
 
 func runRemoteInstallStream(out io.Writer, hostID, agentID string) error {
@@ -3191,6 +3234,9 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 	cfg, ok := managedAgentByID(agentID)
 	if !ok {
 		return fmt.Errorf("managed agent %q is not supported", agentID)
+	}
+	if err := ensureWindowsWSLPrereqForOpenClaw(cfg.ID); err != nil {
+		return err
 	}
 	reader := bufio.NewReader(in)
 	_, _ = fmt.Fprintln(out, "Carrier Add (TUI)")

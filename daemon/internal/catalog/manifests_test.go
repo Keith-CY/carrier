@@ -162,8 +162,15 @@ func TestGetInstallCommand_Default(t *testing.T) {
 
 	switch runtime.GOOS {
 	case "windows":
-		if !strings.Contains(cmd, installPS1URL) && !strings.Contains(cmd, installCMDURL) {
-			t.Fatalf("windows install command should use official script URL, got: %s", cmd)
+		for _, want := range []string{
+			"powershell -NoProfile -Command",
+			"wsl -l -q",
+			"wsl -d $distro -- bash -lc",
+			installScriptURL,
+		} {
+			if !strings.Contains(cmd, want) {
+				t.Fatalf("windows install command missing %q, got: %s", want, cmd)
+			}
 		}
 	default:
 		for _, want := range []string{
@@ -202,26 +209,17 @@ func TestResolveWindowsOpenClawInstallCommand_PowerShellPreferred(t *testing.T) 
 	if !strings.Contains(cmd, "powershell -NoProfile -Command") {
 		t.Fatalf("expected powershell install command, got: %s", cmd)
 	}
-	if !strings.Contains(cmd, installPS1URL) {
-		t.Fatalf("expected powershell install URL, got: %s", cmd)
+	if !strings.Contains(cmd, installScriptURL) {
+		t.Fatalf("expected official shell install URL, got: %s", cmd)
 	}
-	if !strings.Contains(cmd, "iwr -useb") || !strings.Contains(cmd, "-OutFile $tmp") {
-		t.Fatalf("expected powershell command to download script to tmp file, got: %s", cmd)
+	if !strings.Contains(cmd, "wsl -l -q") || !strings.Contains(cmd, "wsl -d $distro -- bash -lc") {
+		t.Fatalf("expected powershell command to run installer in WSL, got: %s", cmd)
 	}
-	if !strings.Contains(cmd, "& $tmp") {
-		t.Fatalf("expected powershell command to execute tmp script file, got: %s", cmd)
+	if !strings.Contains(cmd, "OPENCLAW_INSTALL_METHOD=npm") {
+		t.Fatalf("expected powershell command to pin install method in WSL, got: %s", cmd)
 	}
-	if strings.Contains(cmd, "| iex") {
-		t.Fatalf("did not expect powershell pipe-to-iex flow, got: %s", cmd)
-	}
-	if !strings.Contains(cmd, "$env:OPENCLAW_NO_ONBOARD='1'") {
-		t.Fatalf("expected powershell command to disable onboarding, got: %s", cmd)
-	}
-	if !strings.Contains(cmd, "$env:OPENCLAW_INSTALL_METHOD='npm'") {
-		t.Fatalf("expected powershell command to pin install method, got: %s", cmd)
-	}
-	if !strings.Contains(cmd, "$env:OPENCLAW_NO_PROMPT='1'") {
-		t.Fatalf("expected powershell command to disable prompts, got: %s", cmd)
+	if !strings.Contains(cmd, "--no-onboard --no-prompt") {
+		t.Fatalf("expected powershell command to disable onboarding/prompt, got: %s", cmd)
 	}
 }
 
@@ -230,25 +228,14 @@ func TestResolveWindowsOpenClawInstallCommand_CmdFallback(t *testing.T) {
 		return "", os.ErrNotExist
 	})
 
-	if strings.Contains(cmd, "powershell -NoProfile -Command") {
-		t.Fatalf("did not expect powershell command in cmd fallback path: %s", cmd)
-	}
 	for _, want := range []string{
-		"curl -fsSL",
-		`--proto "=https"`,
-		"--tlsv1.2",
-		installCMDURL,
-		"set \"TMPF=%TEMP%\\openclaw-install-%RANDOM%%RANDOM%.cmd\"",
-		"call \"%TMPF%\"",
-		"--no-onboard",
-		"del \"%TMPF%\"",
+		"PowerShell is required",
+		"requires WSL2",
+		"exit /b 1",
 	} {
 		if !strings.Contains(cmd, want) {
-			t.Fatalf("cmd fallback command missing %q: %s", want, cmd)
+			t.Fatalf("cmd fallback command missing %q, got: %s", want, cmd)
 		}
-	}
-	if strings.Contains(cmd, "| iex") {
-		t.Fatalf("cmd fallback should not use powershell iex pipe flow: %s", cmd)
 	}
 }
 

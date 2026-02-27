@@ -118,7 +118,6 @@ done
 require_cmd curl
 require_cmd jq
 require_cmd ssh
-require_cmd go
 require_cmd carrier
 
 if [[ -z "$HOST_ID" || -z "$HOST_ADDR" || -z "$PORT" || -z "$SSH_USER" || -z "$KEY_PATH" ]]; then
@@ -176,6 +175,7 @@ start_gateway_if_needed() {
   fi
 
   echo "[pre] bootstrapping local carrier runtime (daemon + gateway)"
+  require_cmd go
   mkdir -p "$TMP_DIR/go-cache"
   GOCACHE="$TMP_DIR/go-cache" go run ./cmd/carrier >"$TMP_DIR/carrier-bootstrap.log" 2>&1 || true
   for _ in $(seq 1 60); do
