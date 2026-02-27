@@ -315,8 +315,8 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 			Mode string `json:"mode"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid request body: "+err.Error()))
-			return
+            writeInternalGatewayError(w, http.StatusBadRequest, "E_BAD_REQUEST", "invalid request body", "decoding sync request", err)
+            return
 		}
 		startedAt := time.Now()
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
