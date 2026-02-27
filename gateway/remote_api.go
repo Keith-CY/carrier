@@ -364,7 +364,14 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 			Mode string `json:"mode"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeInternalGatewayError(w, http.StatusBadRequest, "E_BAD_REQUEST", "invalid request body", "decoding sync request", err)
+			writeInternalGatewayError(
+				w,
+				http.StatusBadRequest,
+				"E_BAD_REQUEST",
+				"invalid request body",
+				"decoding sync request",
+				err,
+			)
 			return
 		}
 		startedAt := time.Now()
@@ -458,7 +465,14 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 			Commit string `json:"commit"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeInternalGatewayError(w, http.StatusBadRequest, "E_BAD_REQUEST", "invalid request body", "decoding rollback request", err)
+			writeInternalGatewayError(
+				w,
+				http.StatusBadRequest,
+				"E_BAD_REQUEST",
+				"invalid request body",
+				"decoding rollback request",
+				err,
+			)
 			return
 		}
 		startedAt := time.Now()
@@ -848,7 +862,14 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 			HostID string `json:"hostId"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeInternalGatewayError(w, http.StatusBadRequest, "E_BAD_REQUEST", "invalid request body", "decoding profile-test request", err)
+			writeInternalGatewayError(
+				w,
+				http.StatusBadRequest,
+				"E_BAD_REQUEST",
+				"invalid request body",
+				"decoding profile-test request",
+				err,
+			)
 			return
 		}
 		if strings.TrimSpace(req.HostID) == "" {
