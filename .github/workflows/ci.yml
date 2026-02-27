@@ -220,11 +220,14 @@ jobs:
   coverage-comment:
     name: Coverage Comment
     # Reuse coverage artifacts from daemon-tests instead of re-running tests (#1170).
-    needs: daemon-tests
-    if: github.event_name == 'pull_request'
+    needs:
+      - classify-scope
+      - daemon-tests
+    if: github.event_name == 'pull_request' && needs.classify-scope.outputs.ci_only != 'true' && always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      issues: write
       pull-requests: write
     steps:
       - name: Checkout
@@ -237,9 +240,17 @@ jobs:
 
       - name: Download daemon coverage artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        continue-on-error: true
         with:
           name: daemon-coverage
           path: daemon
+
+      - name: Collect daemon coverage when artifact is unavailable
+        if: hashFiles('daemon/coverage.out') == ''
+        run: |
+          set -euo pipefail
+          cd daemon
+          go test ./... -coverprofile=coverage.out
 
       - name: Collect head branch coverage
         run: |
