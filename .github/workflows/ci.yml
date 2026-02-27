@@ -245,6 +245,10 @@ jobs:
           name: daemon-coverage
           path: daemon
 
+      # Fallback: re-run daemon tests to generate coverage if the artifact from
+      # the daemon-tests job is missing. This is expected for docs-only PRs
+      # (fast, no daemon changes). Note: if someone force-skips daemon-tests
+      # on a code PR, this will silently re-run the full daemon test suite.
       - name: Collect daemon coverage when artifact is unavailable
         if: hashFiles('daemon/coverage.out') == ''
         run: |
