@@ -164,9 +164,9 @@ assert_ok "/agents" "$RESP"
 RESP=$(send_cmd "telegram test-chat req-3 /status" "$SESSION_TOKEN")
 assert_ok "/status" "$RESP"
 
-# Test: /install is blocked in chat (GUI-only onboarding)
+# Test: /install requires host binding in chat mode
 RESP=$(send_cmd "telegram test-chat req-4 /install openclaw" "$SESSION_TOKEN")
-assert_error_code "/install openclaw blocked in chat" "$RESP" "E_INSTALL_GUI_ONLY"
+assert_error_code "/install openclaw requires host binding" "$RESP" "E_HOST_BINDING_REQUIRED"
 
 # Test: /status after install attempt
 RESP=$(send_cmd "telegram test-chat req-5 /status openclaw" "$SESSION_TOKEN")
