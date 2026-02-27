@@ -278,6 +278,106 @@ func TestManagedAddReusesChannelTokenPolicy(t *testing.T) {
 	}
 }
 
+func TestEnsureWindowsWSLPrereqForOpenClawSkipsNonOpenClaw(t *testing.T) {
+	origGOOS := carrierGOOS
+	origLister := windowsWSLListDistros
+	t.Cleanup(func() {
+		carrierGOOS = origGOOS
+		windowsWSLListDistros = origLister
+	})
+
+	carrierGOOS = "windows"
+	windowsWSLListDistros = func() ([]string, error) {
+		t.Fatal("windowsWSLListDistros should not be called for non-openclaw agent")
+		return nil, nil
+	}
+
+	if err := ensureWindowsWSLPrereqForOpenClaw("picoclaw"); err != nil {
+		t.Fatalf("ensureWindowsWSLPrereqForOpenClaw(picoclaw) error: %v", err)
+	}
+}
+
+func TestEnsureWindowsWSLPrereqForOpenClawSkipsNonWindows(t *testing.T) {
+	origGOOS := carrierGOOS
+	origLister := windowsWSLListDistros
+	t.Cleanup(func() {
+		carrierGOOS = origGOOS
+		windowsWSLListDistros = origLister
+	})
+
+	carrierGOOS = "linux"
+	windowsWSLListDistros = func() ([]string, error) {
+		t.Fatal("windowsWSLListDistros should not be called on non-windows")
+		return nil, nil
+	}
+
+	if err := ensureWindowsWSLPrereqForOpenClaw("openclaw"); err != nil {
+		t.Fatalf("ensureWindowsWSLPrereqForOpenClaw(openclaw) error: %v", err)
+	}
+}
+
+func TestEnsureWindowsWSLPrereqForOpenClawRejectsMissingDistros(t *testing.T) {
+	origGOOS := carrierGOOS
+	origLister := windowsWSLListDistros
+	t.Cleanup(func() {
+		carrierGOOS = origGOOS
+		windowsWSLListDistros = origLister
+	})
+
+	carrierGOOS = "windows"
+	windowsWSLListDistros = func() ([]string, error) {
+		return nil, nil
+	}
+
+	err := ensureWindowsWSLPrereqForOpenClaw("openclaw")
+	if err == nil {
+		t.Fatal("expected missing WSL distro error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "requires wsl2") {
+		t.Fatalf("expected WSL2 requirement in error, got: %v", err)
+	}
+}
+
+func TestEnsureWindowsWSLPrereqForOpenClawAcceptsAvailableDistro(t *testing.T) {
+	origGOOS := carrierGOOS
+	origLister := windowsWSLListDistros
+	t.Cleanup(func() {
+		carrierGOOS = origGOOS
+		windowsWSLListDistros = origLister
+	})
+
+	carrierGOOS = "windows"
+	windowsWSLListDistros = func() ([]string, error) {
+		return []string{"Ubuntu-24.04"}, nil
+	}
+
+	if err := ensureWindowsWSLPrereqForOpenClaw("openclaw"); err != nil {
+		t.Fatalf("ensureWindowsWSLPrereqForOpenClaw(openclaw) error: %v", err)
+	}
+}
+
+func TestEnsureWindowsWSLPrereqForOpenClawPropagatesQueryError(t *testing.T) {
+	origGOOS := carrierGOOS
+	origLister := windowsWSLListDistros
+	t.Cleanup(func() {
+		carrierGOOS = origGOOS
+		windowsWSLListDistros = origLister
+	})
+
+	carrierGOOS = "windows"
+	windowsWSLListDistros = func() ([]string, error) {
+		return nil, errors.New("wsl query failed")
+	}
+
+	err := ensureWindowsWSLPrereqForOpenClaw("openclaw")
+	if err == nil {
+		t.Fatal("expected query failure error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "failed to query wsl") {
+		t.Fatalf("expected query failure context in error, got: %v", err)
+	}
+}
+
 func TestParseAddCommandArgsSupportsQuietOptions(t *testing.T) {
 	cases := []struct {
 		name string
