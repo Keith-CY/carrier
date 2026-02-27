@@ -179,6 +179,133 @@ func ensureRemoteHealthyForOperation(ctx context.Context, host RemoteHost) (heal
 	return true, true, steps, nil
 }
 
+func remoteInstallAgent(ctx context.Context, host RemoteHost, hostID, agentID string) (*remoteInstallResult, error) {
+	switch normalizeRemoteInstallAgentID(agentID) {
+	case "openclaw":
+		return remoteInstallOpenClaw(ctx, host, hostID, agentID)
+	case "picoclaw":
+		return remoteInstallPicoClaw(ctx, host, hostID, agentID)
+	case "zeroclaw":
+		return remoteInstallZeroClaw(ctx, host, hostID, agentID)
+	default:
+		return nil, fmt.Errorf("unsupported remote install agent %q", strings.TrimSpace(agentID))
+	}
+}
+
+func remoteInstallAgentStreaming(
+	ctx context.Context,
+	host RemoteHost,
+	hostID, agentID string,
+	onChunk func(remoteStreamChunk),
+) (*remoteInstallResult, error) {
+	switch normalizeRemoteInstallAgentID(agentID) {
+	case "openclaw":
+		return remoteInstallOpenClawStreaming(ctx, host, hostID, agentID, onChunk)
+	case "picoclaw":
+		return remoteInstallPicoClawStreaming(ctx, host, hostID, agentID, onChunk)
+	case "zeroclaw":
+		return remoteInstallZeroClawStreaming(ctx, host, hostID, agentID, onChunk)
+	default:
+		return nil, fmt.Errorf("unsupported remote install agent %q", strings.TrimSpace(agentID))
+	}
+}
+
+func normalizeRemoteInstallAgentID(agentID string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(agentID))
+	switch trimmed {
+	case "", "main", "openclaw":
+		return "openclaw"
+	default:
+		return trimmed
+	}
+}
+
+func remoteInstallPicoClaw(ctx context.Context, host RemoteHost, hostID, agentID string) (*remoteInstallResult, error) {
+	return remoteInstallBinaryRelease(ctx, host, hostID, agentID, "picoclaw", remotePicoClawInstallCommand(), nil)
+}
+
+func remoteInstallPicoClawStreaming(ctx context.Context, host RemoteHost, hostID, agentID string, onChunk func(remoteStreamChunk)) (*remoteInstallResult, error) {
+	return remoteInstallBinaryRelease(ctx, host, hostID, agentID, "picoclaw", remotePicoClawInstallCommand(), onChunk)
+}
+
+func remoteInstallZeroClaw(ctx context.Context, host RemoteHost, hostID, agentID string) (*remoteInstallResult, error) {
+	return remoteInstallBinaryRelease(ctx, host, hostID, agentID, "zeroclaw", remoteZeroClawInstallCommand(), nil)
+}
+
+func remoteInstallZeroClawStreaming(ctx context.Context, host RemoteHost, hostID, agentID string, onChunk func(remoteStreamChunk)) (*remoteInstallResult, error) {
+	return remoteInstallBinaryRelease(ctx, host, hostID, agentID, "zeroclaw", remoteZeroClawInstallCommand(), onChunk)
+}
+
+func remoteInstallBinaryRelease(
+	ctx context.Context,
+	host RemoteHost,
+	hostID, agentID string,
+	action string,
+	command string,
+	onChunk func(remoteStreamChunk),
+) (*remoteInstallResult, error) {
+	if err := validateAgentIdentifier(agentID); err != nil {
+		return nil, err
+	}
+	result := &remoteInstallResult{
+		HostID:      hostID,
+		AgentID:     agentID,
+		Installed:   false,
+		GatewayMode: host.RuntimeMode,
+		Steps:       []remoteExecResult{},
+	}
+	var (
+		res remoteExecResult
+		err error
+	)
+	if onChunk != nil {
+		res, err = runRemoteCommandStream(ctx, host, command, onChunk)
+	} else {
+		res, err = runRemoteCommand(ctx, host, command)
+	}
+	if err != nil {
+		return result, err
+	}
+	result.Steps = append(result.Steps, res)
+	if res.ExitCode != 0 {
+		return result, remoteCommandError(res, "install "+action)
+	}
+	result.Installed = true
+	return result, nil
+}
+
+func remotePicoClawInstallCommand() string {
+	tag := remoteInstallReleaseTag("picoclaw", "v0.1.2")
+	return fmt.Sprintf(
+		"set -euo pipefail; arch=\"$(uname -m)\"; case \"$arch\" in x86_64|amd64) arch=\"x86_64\" ;; aarch64|arm64) arch=\"arm64\" ;; armv7l|armv6l) arch=\"armv6\" ;; riscv64) arch=\"riscv64\" ;; *) echo \"unsupported arch: $arch\" >&2; exit 2 ;; esac; tmp=\"$(mktemp -d)\"; trap 'rm -rf \"$tmp\"' EXIT; asset=\"picoclaw_Linux_${arch}.tar.gz\"; url=\"https://github.com/sipeed/picoclaw/releases/download/%s/${asset}\"; curl -fsSL \"$url\" -o \"$tmp/picoclaw.tar.gz\"; tar -xzf \"$tmp/picoclaw.tar.gz\" -C \"$tmp\"; bin=\"$(find \"$tmp\" -type f -name 'picoclaw*' -perm -u+x | head -n 1)\"; [ -n \"$bin\" ] || { echo \"picoclaw binary not found in release archive\" >&2; exit 3; }; mkdir -p \"$HOME/.local/bin\" \"$HOME/.picoclaw\"; install -m 0755 \"$bin\" \"$HOME/.local/bin/picoclaw\"; \"$HOME/.local/bin/picoclaw\" --version 2>&1 || true",
+		tag,
+	)
+}
+
+func remoteZeroClawInstallCommand() string {
+	tag := remoteInstallReleaseTag("zeroclaw", "v0.1.7")
+	return fmt.Sprintf(
+		"set -euo pipefail; arch=\"$(uname -m)\"; case \"$arch\" in x86_64|amd64) target=\"x86_64-unknown-linux-gnu\" ;; aarch64|arm64) target=\"aarch64-unknown-linux-gnu\" ;; armv7l|armv6l) target=\"armv7-unknown-linux-gnueabihf\" ;; *) echo \"unsupported arch: $arch\" >&2; exit 2 ;; esac; tmp=\"$(mktemp -d)\"; trap 'rm -rf \"$tmp\"' EXIT; asset=\"zeroclaw-${target}.tar.gz\"; url=\"https://github.com/zeroclaw-labs/zeroclaw/releases/download/%s/${asset}\"; curl -fsSL \"$url\" -o \"$tmp/zeroclaw.tar.gz\"; tar -xzf \"$tmp/zeroclaw.tar.gz\" -C \"$tmp\"; bin=\"$(find \"$tmp\" -type f -name 'zeroclaw*' -perm -u+x | head -n 1)\"; [ -n \"$bin\" ] || { echo \"zeroclaw binary not found in release archive\" >&2; exit 3; }; mkdir -p \"$HOME/.local/bin\" \"$HOME/.zeroclaw\"; install -m 0755 \"$bin\" \"$HOME/.local/bin/zeroclaw\"; \"$HOME/.local/bin/zeroclaw\" --version 2>&1 || true",
+		tag,
+	)
+}
+
+func remoteInstallReleaseTag(agentID, fallback string) string {
+	lock := loadManagedCompatLock()
+	compat, ok := lock.Agents[strings.ToLower(strings.TrimSpace(agentID))]
+	if !ok {
+		return fallback
+	}
+	version := strings.TrimSpace(compat.RecommendedVersion)
+	if version == "" {
+		return fallback
+	}
+	if strings.HasPrefix(strings.ToLower(version), "v") {
+		return version
+	}
+	return "v" + version
+}
+
 func remoteInstallOpenClaw(ctx context.Context, host RemoteHost, hostID, agentID string) (*remoteInstallResult, error) {
 	if err := validateAgentIdentifier(agentID); err != nil {
 		return nil, err

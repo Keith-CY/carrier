@@ -119,6 +119,7 @@ require_cmd curl
 require_cmd jq
 require_cmd ssh
 require_cmd go
+require_cmd carrier
 
 if [[ -z "$HOST_ID" || -z "$HOST_ADDR" || -z "$PORT" || -z "$SSH_USER" || -z "$KEY_PATH" ]]; then
   echo "error: missing required arguments" >&2
@@ -256,19 +257,27 @@ else
 fi
 
 echo "[2/7] install/verify remote OpenClaw"
-install_cmd=(scripts/remote-openclaw-install.sh
+install_cmd=(carrier remote add openclaw
   --host-id "$HOST_ID"
   --host "$HOST_ADDR"
   --port "$PORT"
   --user "$SSH_USER"
   --key-path "$KEY_PATH"
-  --agent-id "$AGENT_ID"
-  --gateway-url "$GATEWAY_URL"
   --runtime-mode "$RUNTIME_MODE")
 if [[ "$SKIP_RECONNECT_CHECK" -eq 1 ]]; then
   install_cmd+=(--skip-reconnect-check)
 fi
-"${install_cmd[@]}"
+gateway_host_port="$(printf '%s' "$GATEWAY_URL" | sed -E 's#^https?://##; s#/.*$##')"
+carrier_gateway_host="${gateway_host_port%%:*}"
+carrier_gateway_port="${gateway_host_port##*:}"
+if [[ "$carrier_gateway_host" == "$carrier_gateway_port" ]]; then
+  if [[ "$GATEWAY_URL" == https://* ]]; then
+    carrier_gateway_port="443"
+  else
+    carrier_gateway_port="80"
+  fi
+fi
+CARRIER_GATEWAY_HOST="$carrier_gateway_host" CARRIER_GATEWAY_PORT="$carrier_gateway_port" "${install_cmd[@]}"
 
 echo "[3/7] verify remote OpenClaw CLI and ensure workspace git repo"
 ssh_remote "set -e; export LC_ALL=C LANG=C PATH=\"\$HOME/.npm-global/bin:\$HOME/.local/bin:\$PATH\"; command -v openclaw; openclaw --version | head -n 1; mkdir -p $(q "$WORKSPACE_ROOT"); cd $(q "$WORKSPACE_ROOT"); if [ ! -d .git ]; then git init >/dev/null 2>&1; git config user.email carrier@example.local; git config user.name carrier-bot; fi; pwd"

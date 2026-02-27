@@ -110,25 +110,23 @@ type versionCommandOptions struct {
 }
 
 type remoteCommandOptions struct {
-	Action          string
-	HostID          string
-	AgentID         string
-	Mode            string
-	Commit          string
-	Backend         string
-	WorkspaceRoot   string
-	ProfileJSON     string
-	Capability      string
-	Path            string
-	Content         string
-	WriteMode       string
-	Command         string
-	CWD             string
-	TimeoutSec      int
-	StdoutPath      string
-	StderrPath      string
-	AppendOutput    bool
-	ResumeSessionID string
+	Action             string
+	AgentID            string
+	InstallAgentID     string
+	HostID             string
+	HostName           string
+	HostAddr           string
+	Port               int
+	User               string
+	KeyPath            string
+	RuntimeMode        string
+	CheckRetries       int
+	CheckRetryDelaySec int
+	SkipReconnectCheck bool
+	SyncChannels       []string
+	SyncProviders      []string
+	TelegramAllowFrom  []string
+	DiscordAllowFrom   []string
 }
 
 type versionInfo struct {
@@ -262,6 +260,8 @@ var channelOptions = []choiceOption{
 	{ID: "wecom", Name: "WeCom", Setup: "Medium (CorpID + webhook setup)", TokenEnv: "CARRIER_WECOM_BOT_TOKEN"},
 }
 
+var onboardChannelOptions = channelOptions
+
 var providerOptions = []choiceOption{
 	{ID: "anthropic", Name: "Anthropic", Setup: "Claude direct API key", AuthMode: authModeAPIKey, ProviderEnv: "ANTHROPIC_API_KEY", ExampleModel: "anthropic/claude-sonnet-4.6"},
 	{ID: "openai", Name: "OpenAI", Setup: "GPT direct API key", AuthMode: authModeAPIKey, ProviderEnv: "OPENAI_API_KEY", ExampleModel: "openai/gpt-5.2"},
@@ -287,6 +287,7 @@ var gatewayHealthProbe = checkGatewayHealth
 var daemonHealthProbe = checkDaemonHealth
 var daemonBackgroundStarter = startDaemonInBackground
 var gatewayBackgroundStarter = startGatewayInBackground
+var runStopFlow = runStop
 var writeBootstrapPIDFileFunc = writeBootstrapPIDFile
 var terminateBackgroundProcessFunc = terminateBackgroundProcess
 var daemonPairCodeFetcher = fetchDaemonPairCode
@@ -324,6 +325,7 @@ Usage:
     --check, --yes, --dry-run, --force, --channel <stable|beta|dev>, --tag <dist-tag|version>, --timeout <seconds>, --json, --no-restart
   carrier gateway        Start gateway HTTP server
   carrier stop           Stop background daemon and gateway
+  carrier reset          Stop Carrier services and remove local Carrier-generated data
   carrier stop <id|name> Stop a managed agent instance
   carrier start <id|name> Start a managed agent instance
   carrier status <id|name> Show status for a managed agent instance
@@ -338,19 +340,18 @@ Usage:
                         Add/install an agent (default: terminal flow; use -q for quiet mode)
   carrier install <agent_id> [--tui|--cli|--webui] [-q|--quiet]
                         Alias for carrier add <agent_id>
-  carrier remote <action> <host_id> <agent_id> [options]
-                        Remote instance control via gateway API
-                        actions:
-                          sync [--mode <always_push|pull_validate_push|manual>]
-                          sync-status
-                          diagnose
-                          reconcile
-                          rollback [--commit <hash>]
-                          codeagent-install [--backend <codex|opencode>] [--workspace-root <path>]
-                          codeagent-configure [--backend <codex|opencode>] [--workspace-root <path>] [--profile-json <json>]
-                          codeagent-health [--backend <codex|opencode>] [--workspace-root <path>]
-                          codeagent-version [--backend <codex|opencode>]
-                          codeagent-run --capability <read_file|write_file|apply_patch|run_shell|run_shell_redirect> [--backend <codex|opencode>] [--workspace-root <path>] [--path <file>] [--content <text>] [--write-mode <overwrite|append>] [--command <shell>] [--cwd <dir>] [--timeout-sec <n>] [--stdout-path <file>] [--stderr-path <file>] [--append-output] [--resume-session-id <id>]
+  carrier remote add <agent_id> --host-id <id> --host <ip-or-domain> --port <port> --user <ssh-user> --key-path <private-key-path> [options]
+                        Deterministic remote install workflow via gateway API
+                        agent_id: openclaw | picoclaw | zeroclaw
+                        options:
+                          [--name <display-name>]
+                          [--runtime-mode <on_demand|managed_gateway>]
+                          [--sync-channel <telegram|discord|feishu>]...
+                          [--sync-provider <provider-id>]...
+                          [--telegram-allow-from <id>]...
+                          [--discord-allow-from <id>]...
+                          [--check-retries <n>] [--check-retry-delay <seconds>]
+                          [--skip-reconnect-check]
   carrier --help         Show this help message
 
 Notes:
@@ -391,6 +392,12 @@ func main() {
 			}
 			if err := runStop(os.Stdout); err != nil {
 				fmt.Fprintf(os.Stderr, "stop failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "reset":
+			if err := runReset(os.Stdout); err != nil {
+				fmt.Fprintf(os.Stderr, "reset failed: %v\n", err)
 				os.Exit(1)
 			}
 			return
@@ -451,7 +458,7 @@ func main() {
 				fmt.Fprint(os.Stderr, usage)
 				os.Exit(1)
 			}
-			if err := runRemoteInstanceCommand(os.Stdout, opts); err != nil {
+			if err := runRemoteAddCommand(os.Stdin, os.Stdout, opts); err != nil {
 				fmt.Fprintf(os.Stderr, "remote failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -549,6 +556,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "gateway", args[2:], nil
 	case "stop":
 		return "stop", args[2:], nil
+	case "reset":
+		return "reset", args[2:], nil
 	case "start":
 		return "start", args[2:], nil
 	case "status":
@@ -672,207 +681,185 @@ func parseVersionCommandArgs(args []string) (versionCommandOptions, error) {
 }
 
 func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
-	if len(args) < 3 {
-		return remoteCommandOptions{}, errors.New("usage: carrier remote <action> <host_id> <agent_id> [options]")
+	if len(args) < 2 {
+		return remoteCommandOptions{}, errors.New("usage: carrier remote add <agent_id> --host-id <id> --host <ip-or-domain> --port <port> --user <ssh-user> --key-path <private-key-path> [options]")
 	}
 
 	opts := remoteCommandOptions{
-		Action:        strings.ToLower(strings.TrimSpace(args[0])),
-		HostID:        strings.TrimSpace(args[1]),
-		AgentID:       strings.TrimSpace(args[2]),
-		Backend:       "codex",
-		WorkspaceRoot: "/workspace",
+		Action:             strings.ToLower(strings.TrimSpace(args[0])),
+		AgentID:            strings.ToLower(strings.TrimSpace(args[1])),
+		Port:               22,
+		RuntimeMode:        "on_demand",
+		CheckRetries:       10,
+		CheckRetryDelaySec: 2,
+		SyncChannels:       []string{},
+		SyncProviders:      []string{},
+		TelegramAllowFrom:  []string{},
+		DiscordAllowFrom:   []string{},
 	}
-	if opts.Action == "" {
-		return remoteCommandOptions{}, errors.New("remote action is required")
-	}
-	if opts.HostID == "" {
-		return remoteCommandOptions{}, errors.New("remote host_id is required")
-	}
-	if opts.AgentID == "" {
-		return remoteCommandOptions{}, errors.New("remote agent_id is required")
-	}
-
-	validActions := map[string]bool{
-		"sync":                true,
-		"sync-status":         true,
-		"diagnose":            true,
-		"reconcile":           true,
-		"rollback":            true,
-		"codeagent-install":   true,
-		"codeagent-configure": true,
-		"codeagent-health":    true,
-		"codeagent-version":   true,
-		"codeagent-run":       true,
-	}
-	if !validActions[opts.Action] {
+	if opts.Action != "add" {
 		return remoteCommandOptions{}, fmt.Errorf("unsupported remote action: %s", opts.Action)
 	}
+	switch opts.AgentID {
+	case "openclaw", "picoclaw", "zeroclaw":
+	default:
+		return remoteCommandOptions{}, fmt.Errorf("unsupported remote agent_id: %s (expected one of openclaw, picoclaw, zeroclaw)", opts.AgentID)
+	}
+	// OpenClaw runtime install endpoint uses the default agent slot "main".
+	if opts.AgentID == "openclaw" {
+		opts.InstallAgentID = "main"
+	} else {
+		opts.InstallAgentID = opts.AgentID
+	}
 
-	for i := 3; i < len(args); i++ {
+	for i := 2; i < len(args); i++ {
 		raw := strings.TrimSpace(args[i])
 		if raw == "" {
 			continue
 		}
 		switch strings.ToLower(raw) {
-		case "--mode":
-			value, next, err := parseRequiredFlagValue(args, i, "--mode")
+		case "--host-id":
+			value, next, err := parseRequiredFlagValue(args, i, "--host-id")
 			if err != nil {
 				return remoteCommandOptions{}, err
 			}
-			opts.Mode = strings.ToLower(strings.TrimSpace(value))
+			opts.HostID = strings.TrimSpace(value)
 			i = next
-		case "--commit":
-			value, next, err := parseRequiredFlagValue(args, i, "--commit")
+		case "--name":
+			value, next, err := parseRequiredFlagValue(args, i, "--name")
 			if err != nil {
 				return remoteCommandOptions{}, err
 			}
-			opts.Commit = strings.TrimSpace(value)
+			opts.HostName = strings.TrimSpace(value)
 			i = next
-		case "--backend":
-			value, next, err := parseRequiredFlagValue(args, i, "--backend")
+		case "--host":
+			value, next, err := parseRequiredFlagValue(args, i, "--host")
 			if err != nil {
 				return remoteCommandOptions{}, err
 			}
-			opts.Backend = strings.ToLower(strings.TrimSpace(value))
+			opts.HostAddr = strings.TrimSpace(value)
 			i = next
-		case "--workspace-root":
-			value, next, err := parseRequiredFlagValue(args, i, "--workspace-root")
+		case "--port":
+			value, next, err := parseRequiredFlagValue(args, i, "--port")
 			if err != nil {
 				return remoteCommandOptions{}, err
 			}
-			opts.WorkspaceRoot = strings.TrimSpace(value)
+			port, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || port < 1 || port > 65535 {
+				return remoteCommandOptions{}, fmt.Errorf("invalid --port value: %s", value)
+			}
+			opts.Port = port
 			i = next
-		case "--profile-json":
-			value, next, err := parseRequiredFlagValue(args, i, "--profile-json")
+		case "--user":
+			value, next, err := parseRequiredFlagValue(args, i, "--user")
 			if err != nil {
 				return remoteCommandOptions{}, err
 			}
-			opts.ProfileJSON = strings.TrimSpace(value)
+			opts.User = strings.TrimSpace(value)
 			i = next
-		case "--capability":
-			value, next, err := parseRequiredFlagValue(args, i, "--capability")
+		case "--key-path":
+			value, next, err := parseRequiredFlagValue(args, i, "--key-path")
 			if err != nil {
 				return remoteCommandOptions{}, err
 			}
-			opts.Capability = strings.ToLower(strings.TrimSpace(value))
+			opts.KeyPath = strings.TrimSpace(value)
 			i = next
-		case "--path":
-			value, next, err := parseRequiredFlagValue(args, i, "--path")
+		case "--runtime-mode":
+			value, next, err := parseRequiredFlagValue(args, i, "--runtime-mode")
 			if err != nil {
 				return remoteCommandOptions{}, err
 			}
-			opts.Path = strings.TrimSpace(value)
+			opts.RuntimeMode = strings.ToLower(strings.TrimSpace(value))
 			i = next
-		case "--content":
-			value, next, err := parseRequiredFlagValue(args, i, "--content")
+		case "--sync-channel":
+			value, next, err := parseRequiredFlagValue(args, i, "--sync-channel")
 			if err != nil {
 				return remoteCommandOptions{}, err
 			}
-			opts.Content = value
+			opts.SyncChannels = append(opts.SyncChannels, strings.ToLower(strings.TrimSpace(value)))
 			i = next
-		case "--write-mode":
-			value, next, err := parseRequiredFlagValue(args, i, "--write-mode")
+		case "--sync-provider":
+			value, next, err := parseRequiredFlagValue(args, i, "--sync-provider")
 			if err != nil {
 				return remoteCommandOptions{}, err
 			}
-			opts.WriteMode = strings.ToLower(strings.TrimSpace(value))
+			opts.SyncProviders = append(opts.SyncProviders, strings.ToLower(strings.TrimSpace(value)))
 			i = next
-		case "--command":
-			value, next, err := parseRequiredFlagValue(args, i, "--command")
+		case "--telegram-allow-from":
+			value, next, err := parseRequiredFlagValue(args, i, "--telegram-allow-from")
 			if err != nil {
 				return remoteCommandOptions{}, err
 			}
-			opts.Command = value
+			opts.TelegramAllowFrom = append(opts.TelegramAllowFrom, strings.TrimSpace(value))
 			i = next
-		case "--cwd":
-			value, next, err := parseRequiredFlagValue(args, i, "--cwd")
+		case "--discord-allow-from":
+			value, next, err := parseRequiredFlagValue(args, i, "--discord-allow-from")
 			if err != nil {
 				return remoteCommandOptions{}, err
 			}
-			opts.CWD = strings.TrimSpace(value)
+			opts.DiscordAllowFrom = append(opts.DiscordAllowFrom, strings.TrimSpace(value))
 			i = next
-		case "--timeout-sec":
-			value, next, err := parseRequiredFlagValue(args, i, "--timeout-sec")
+		case "--check-retries":
+			value, next, err := parseRequiredFlagValue(args, i, "--check-retries")
 			if err != nil {
 				return remoteCommandOptions{}, err
 			}
-			seconds, convErr := strconv.Atoi(strings.TrimSpace(value))
-			if convErr != nil || seconds <= 0 {
-				return remoteCommandOptions{}, fmt.Errorf("invalid --timeout-sec value: %s", value)
+			retries, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || retries < 0 {
+				return remoteCommandOptions{}, fmt.Errorf("invalid --check-retries value: %s", value)
 			}
-			opts.TimeoutSec = seconds
+			opts.CheckRetries = retries
 			i = next
-		case "--stdout-path":
-			value, next, err := parseRequiredFlagValue(args, i, "--stdout-path")
+		case "--check-retry-delay":
+			value, next, err := parseRequiredFlagValue(args, i, "--check-retry-delay")
 			if err != nil {
 				return remoteCommandOptions{}, err
 			}
-			opts.StdoutPath = strings.TrimSpace(value)
-			i = next
-		case "--stderr-path":
-			value, next, err := parseRequiredFlagValue(args, i, "--stderr-path")
-			if err != nil {
-				return remoteCommandOptions{}, err
+			delay, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || delay < 0 {
+				return remoteCommandOptions{}, fmt.Errorf("invalid --check-retry-delay value: %s", value)
 			}
-			opts.StderrPath = strings.TrimSpace(value)
+			opts.CheckRetryDelaySec = delay
 			i = next
-		case "--append-output":
-			opts.AppendOutput = true
-		case "--resume-session-id":
-			value, next, err := parseRequiredFlagValue(args, i, "--resume-session-id")
-			if err != nil {
-				return remoteCommandOptions{}, err
-			}
-			opts.ResumeSessionID = strings.TrimSpace(value)
-			i = next
+		case "--skip-reconnect-check":
+			opts.SkipReconnectCheck = true
 		default:
 			return remoteCommandOptions{}, fmt.Errorf("unknown remote option: %s", raw)
 		}
 	}
 
-	if opts.Mode != "" {
-		switch opts.Mode {
-		case "always_push", "pull_validate_push", "manual":
+	if opts.HostID == "" {
+		return remoteCommandOptions{}, errors.New("--host-id is required")
+	}
+	if opts.HostName == "" {
+		opts.HostName = opts.HostID
+	}
+	if opts.HostAddr == "" {
+		return remoteCommandOptions{}, errors.New("--host is required")
+	}
+	if opts.User == "" {
+		return remoteCommandOptions{}, errors.New("--user is required")
+	}
+	if opts.KeyPath == "" {
+		return remoteCommandOptions{}, errors.New("--key-path is required")
+	}
+	switch opts.RuntimeMode {
+	case "on_demand", "managed_gateway":
+	default:
+		return remoteCommandOptions{}, fmt.Errorf("invalid --runtime-mode value: %s", opts.RuntimeMode)
+	}
+	for _, channel := range opts.SyncChannels {
+		switch channel {
+		case "telegram", "discord", "feishu":
 		default:
-			return remoteCommandOptions{}, fmt.Errorf("invalid --mode value: %s", opts.Mode)
+			return remoteCommandOptions{}, fmt.Errorf("invalid --sync-channel value: %s", channel)
 		}
 	}
-	if opts.Backend != "" {
-		switch opts.Backend {
-		case "codex", "opencode":
-		default:
-			return remoteCommandOptions{}, fmt.Errorf("invalid --backend value: %s", opts.Backend)
+	for _, provider := range opts.SyncProviders {
+		if strings.TrimSpace(provider) == "" {
+			return remoteCommandOptions{}, errors.New("--sync-provider cannot be empty")
 		}
 	}
-	if opts.WriteMode != "" {
-		switch opts.WriteMode {
-		case "overwrite", "append":
-		default:
-			return remoteCommandOptions{}, fmt.Errorf("invalid --write-mode value: %s", opts.WriteMode)
-		}
-	}
-	if opts.Action == "codeagent-run" {
-		if opts.Capability == "" {
-			if strings.TrimSpace(opts.Command) != "" {
-				opts.Capability = "run_shell"
-			} else {
-				return remoteCommandOptions{}, errors.New("--capability is required for codeagent-run")
-			}
-		}
-		switch opts.Capability {
-		case "read_file", "write_file", "apply_patch", "run_shell", "run_shell_redirect":
-		default:
-			return remoteCommandOptions{}, fmt.Errorf("invalid --capability value: %s", opts.Capability)
-		}
-	}
-	if opts.Action == "codeagent-configure" && strings.TrimSpace(opts.ProfileJSON) != "" {
-		var parsed map[string]interface{}
-		if err := json.Unmarshal([]byte(opts.ProfileJSON), &parsed); err != nil {
-			return remoteCommandOptions{}, fmt.Errorf("invalid --profile-json payload: %w", err)
-		}
-	}
-
 	return opts, nil
 }
 
@@ -1278,6 +1265,53 @@ func runStop(out io.Writer) error {
 	return nil
 }
 
+func runReset(out io.Writer) error {
+	if runStopFlow != nil {
+		if err := runStopFlow(out); err != nil {
+			_, _ = fmt.Fprintf(out, "warning: stop flow before reset failed: %v\n", err)
+		}
+	}
+
+	paths := make([]string, 0, 16)
+	home, err := resolveCarrierHomeDir()
+	if err == nil {
+		paths = append(paths,
+			filepath.Join(home, ".carrier"),
+			filepath.Join(home, ".picoclaw"),
+			filepath.Join(home, ".openclaw"),
+			filepath.Join(home, ".zeroclaw"),
+		)
+	}
+	for _, key := range []string{
+		"CARRIER_CONFIG",
+		"CARRIER_ONBOARD_CONFIG",
+		"CARRIER_INSTANCE_STORE",
+		"CARRIER_CREDENTIAL_STORE",
+		"CARRIER_REMOTE_KEY_DIR",
+		"CARRIER_BOOTSTRAP_RUN_DIR",
+		"CARRIER_BOOTSTRAP_LOG_DIR",
+	} {
+		if path := strings.TrimSpace(os.Getenv(key)); path != "" {
+			paths = append(paths, path)
+		}
+	}
+
+	seen := map[string]bool{}
+	for _, raw := range paths {
+		path := strings.TrimSpace(raw)
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		if err := os.RemoveAll(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove %s: %w", path, err)
+		}
+	}
+
+	_, _ = fmt.Fprintln(out, "reset complete")
+	return nil
+}
+
 func runStartInstance(out io.Writer, target string) error {
 	instances, path, err := loadManagedInstances()
 	if err != nil {
@@ -1443,119 +1477,814 @@ func runListInstances(out io.Writer) error {
 	return nil
 }
 
-func runRemoteInstanceCommand(out io.Writer, opts remoteCommandOptions) error {
+type remoteHostCheckResponse struct {
+	Check struct {
+		SSHOK         bool `json:"sshOk"`
+		OpenClawFound bool `json:"openclawFound"`
+	} `json:"check"`
+	Instances                []remoteInstanceSummary `json:"instances"`
+	PendingPullInstances     []remoteInstanceSummary `json:"pendingPullInstances"`
+	PullConfirmationRequired bool                    `json:"pullConfirmationRequired"`
+}
+
+type remoteInstancesListResponse struct {
+	Instances []remoteInstanceSummary `json:"instances"`
+}
+
+type remoteInstanceSummary struct {
+	ID      string `json:"id"`
+	AgentID string `json:"agentId"`
+}
+
+func runRemoteAddCommand(in io.Reader, out io.Writer, opts remoteCommandOptions) error {
+	if opts.Action != "add" {
+		return fmt.Errorf("unsupported remote action: %s", opts.Action)
+	}
+	agentName := remoteAgentDisplayName(opts.AgentID)
 	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
 		return err
 	}
 
-	basePath := fmt.Sprintf(
-		"/api/v1/remote/hosts/%s/instances/%s",
-		neturl.PathEscape(strings.TrimSpace(opts.HostID)),
-		neturl.PathEscape(strings.TrimSpace(opts.AgentID)),
-	)
-
-	method := http.MethodPost
-	path := basePath
-	var body any = map[string]interface{}{}
-	timeout := 2 * time.Minute
-
-	switch opts.Action {
-	case "sync":
-		path += "/sync"
-		payload := map[string]interface{}{}
-		if strings.TrimSpace(opts.Mode) != "" {
-			payload["mode"] = strings.TrimSpace(opts.Mode)
-		}
-		body = payload
-	case "sync-status":
-		method = http.MethodGet
-		path += "/sync/status"
-		body = nil
-	case "diagnose":
-		path += "/diagnose"
-	case "reconcile":
-		path += "/reconcile"
-	case "rollback":
-		path += "/rollback"
-		payload := map[string]interface{}{}
-		if strings.TrimSpace(opts.Commit) != "" {
-			payload["commit"] = strings.TrimSpace(opts.Commit)
-		}
-		body = payload
-	case "codeagent-install":
-		path += "/codeagent/install"
-		body = map[string]interface{}{
-			"backend":       strings.TrimSpace(opts.Backend),
-			"workspaceRoot": strings.TrimSpace(opts.WorkspaceRoot),
-		}
-		timeout = 6 * time.Minute
-	case "codeagent-configure":
-		path += "/codeagent/configure"
-		profile := map[string]interface{}{}
-		if strings.TrimSpace(opts.ProfileJSON) != "" {
-			if err := json.Unmarshal([]byte(opts.ProfileJSON), &profile); err != nil {
-				return fmt.Errorf("decode --profile-json: %w", err)
-			}
-		}
-		body = map[string]interface{}{
-			"backend":       strings.TrimSpace(opts.Backend),
-			"workspaceRoot": strings.TrimSpace(opts.WorkspaceRoot),
-			"profile":       profile,
-		}
-	case "codeagent-health":
-		method = http.MethodGet
-		path += "/codeagent/health"
-		query := neturl.Values{}
-		query.Set("backend", strings.TrimSpace(opts.Backend))
-		query.Set("workspaceRoot", strings.TrimSpace(opts.WorkspaceRoot))
-		path += "?" + query.Encode()
-		body = nil
-		timeout = 30 * time.Second
-	case "codeagent-version":
-		method = http.MethodGet
-		path += "/codeagent/version"
-		query := neturl.Values{}
-		query.Set("backend", strings.TrimSpace(opts.Backend))
-		path += "?" + query.Encode()
-		body = nil
-		timeout = 30 * time.Second
-	case "codeagent-run":
-		path += "/codeagent/run"
-		body = map[string]interface{}{
-			"backend":         strings.TrimSpace(opts.Backend),
-			"workspaceRoot":   strings.TrimSpace(opts.WorkspaceRoot),
-			"capability":      strings.TrimSpace(opts.Capability),
-			"path":            strings.TrimSpace(opts.Path),
-			"content":         opts.Content,
-			"writeMode":       strings.TrimSpace(opts.WriteMode),
-			"command":         strings.TrimSpace(opts.Command),
-			"cwd":             strings.TrimSpace(opts.CWD),
-			"timeoutSec":      opts.TimeoutSec,
-			"stdoutPath":      strings.TrimSpace(opts.StdoutPath),
-			"stderrPath":      strings.TrimSpace(opts.StderrPath),
-			"appendOutput":    opts.AppendOutput,
-			"resumeSessionId": strings.TrimSpace(opts.ResumeSessionID),
-		}
-		timeout = 3 * time.Minute
-	default:
-		return fmt.Errorf("unsupported remote action: %s", opts.Action)
+	printRemoteStep(out, 1, 8, fmt.Sprintf("Register or update remote host: %s", opts.HostID))
+	hostPayload := map[string]interface{}{
+		"id":          opts.HostID,
+		"name":        opts.HostName,
+		"host":        opts.HostAddr,
+		"port":        opts.Port,
+		"user":        opts.User,
+		"authMode":    "private_key",
+		"keyPath":     opts.KeyPath,
+		"runtimeMode": opts.RuntimeMode,
+	}
+	if _, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/remote/hosts", hostPayload, 30*time.Second); err != nil {
+		return err
 	}
 
-	raw, _, err := gatewayRequestWithTimeout(method, path, body, timeout)
+	printRemoteStep(out, 2, 8, "Verify remote host connectivity")
+	preCheck, err := runRemoteHostCheckWithRetry(opts.HostID, opts.CheckRetries, opts.CheckRetryDelaySec, false, nil)
 	if err != nil {
 		return err
 	}
-	var payload interface{}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		_, _ = fmt.Fprintln(out, strings.TrimSpace(string(raw)))
+	printRemoteCheckSummary(out, preCheck, "")
+	if preCheck.Check.OpenClawFound {
+		_, _ = fmt.Fprintf(out, "  Existing %s runtime detected; upgrade-safe install will run.\n", agentName)
+	} else {
+		_, _ = fmt.Fprintf(out, "  %s runtime not detected; fresh install will run.\n", agentName)
+	}
+
+	printRemoteStep(out, 3, 8, fmt.Sprintf("Install %s on remote host", agentName))
+	if err := runRemoteInstallStream(out, opts.HostID, opts.InstallAgentID); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "  %s installation stream completed successfully.\n", agentName)
+
+	if len(opts.SyncChannels) > 0 || len(opts.SyncProviders) > 0 {
+		printRemoteStep(out, 4, 8, "Sync selected local configuration")
+		if err := runRemoteSelectedConfigSync(opts); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintln(out, "  Local configuration sync completed.")
+	} else {
+		printRemoteStep(out, 4, 8, "Sync selected local configuration")
+		_, _ = fmt.Fprintln(out, "  Skipped (no --sync-channel/--sync-provider provided).")
+	}
+
+	printRemoteStep(out, 5, 8, "Post-install health check")
+	postCheck, err := runRemoteHostCheckWithRetry(opts.HostID, opts.CheckRetries, opts.CheckRetryDelaySec, false, nil)
+	if err != nil {
+		return err
+	}
+	postCheck, err = maybeConfirmPullForPendingInstances(in, out, opts.HostID, postCheck)
+	if err != nil {
+		return err
+	}
+	printRemoteCheckSummary(out, postCheck, "")
+
+	printRemoteStep(out, 6, 8, "List remote instances")
+	if err := printRemoteInstances(out, opts.HostID, "Detected instances"); err != nil {
+		return err
+	}
+
+	if opts.SkipReconnectCheck {
+		printRemoteStep(out, 7, 8, "Reconnect simulation skipped (--skip-reconnect-check)")
+		printRemoteStep(out, 8, 8, "Reconnect verification skipped (--skip-reconnect-check)")
+		_, _ = fmt.Fprintln(out, colorizeForTTY(out, fmt.Sprintf("Completed: %s remote install finished for host %s.", agentName, opts.HostID), ansiGreenBold))
 		return nil
 	}
-	formatted, err := json.MarshalIndent(payload, "", "  ")
+
+	printRemoteStep(out, 7, 8, "Reconnect simulation (remove host record and re-register)")
+	if _, _, err := gatewayRequestWithTimeout(http.MethodDelete, "/api/v1/remote/hosts/"+neturl.PathEscape(opts.HostID), nil, 30*time.Second); err != nil {
+		return err
+	}
+	if _, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/remote/hosts", hostPayload, 30*time.Second); err != nil {
+		return err
+	}
+
+	printRemoteStep(out, 8, 8, "Reconnect verification and instance refresh")
+	reconnectCheck, err := runRemoteHostCheckWithRetry(opts.HostID, opts.CheckRetries, opts.CheckRetryDelaySec, false, nil)
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintln(out, string(formatted))
+	reconnectCheck, err = maybeConfirmPullForPendingInstances(in, out, opts.HostID, reconnectCheck)
+	if err != nil {
+		return err
+	}
+	printRemoteCheckSummary(out, reconnectCheck, "Reconnect verification")
+	if err := printRemoteInstances(out, opts.HostID, "Instances after reconnect"); err != nil {
+		return err
+	}
+
+	_, _ = fmt.Fprintln(out, colorizeForTTY(out, fmt.Sprintf("Completed: %s is installed on host %s and reconnect verification passed.", agentName, opts.HostID), ansiGreenBold))
 	return nil
+}
+
+func printRemoteInstances(out io.Writer, hostID, label string) error {
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, "/api/v1/remote/hosts/"+neturl.PathEscape(strings.TrimSpace(hostID))+"/instances", nil, 30*time.Second)
+	if err != nil {
+		return err
+	}
+	var payload remoteInstancesListResponse
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return fmt.Errorf("decode instances response: %w", err)
+	}
+	names := summarizeRemoteInstanceNames(payload.Instances)
+	if len(names) == 0 {
+		_, _ = fmt.Fprintf(out, "  %s: none\n", strings.TrimSpace(label))
+		return nil
+	}
+	_, _ = fmt.Fprintf(out, "  %s: %s\n", strings.TrimSpace(label), strings.Join(names, ", "))
+	return nil
+}
+
+func runRemoteHostCheckWithRetry(hostID string, retries int, delaySec int, pullNew bool, pullAgentIDs []string) (remoteHostCheckResponse, error) {
+	if retries < 0 {
+		retries = 0
+	}
+	if delaySec < 0 {
+		delaySec = 0
+	}
+	var lastErr error
+	for attempt := 0; attempt <= retries; attempt++ {
+		resp, err := runRemoteHostCheck(hostID, pullNew, pullAgentIDs)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if attempt == retries {
+			break
+		}
+		if delaySec > 0 {
+			time.Sleep(time.Duration(delaySec) * time.Second)
+		}
+	}
+	return remoteHostCheckResponse{}, lastErr
+}
+
+func runRemoteHostCheck(hostID string, pullNew bool, pullAgentIDs []string) (remoteHostCheckResponse, error) {
+	payload := map[string]interface{}{}
+	if pullNew {
+		payload["pullNewInstances"] = true
+	}
+	ids := make([]string, 0, len(pullAgentIDs))
+	for _, id := range pullAgentIDs {
+		trimmed := strings.ToLower(strings.TrimSpace(id))
+		if trimmed == "" {
+			continue
+		}
+		ids = append(ids, trimmed)
+	}
+	if len(ids) > 0 {
+		payload["pullAgentIds"] = ids
+	}
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/remote/hosts/"+neturl.PathEscape(strings.TrimSpace(hostID))+"/check", payload, 45*time.Second)
+	if err != nil {
+		return remoteHostCheckResponse{}, err
+	}
+	var resp remoteHostCheckResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return remoteHostCheckResponse{}, fmt.Errorf("decode host check response: %w", err)
+	}
+	return resp, nil
+}
+
+func maybeConfirmPullForPendingInstances(in io.Reader, out io.Writer, hostID string, checkResp remoteHostCheckResponse) (remoteHostCheckResponse, error) {
+	if !checkResp.PullConfirmationRequired || len(checkResp.PendingPullInstances) == 0 {
+		return checkResp, nil
+	}
+	pendingIDs := summarizeRemoteInstanceNames(checkResp.PendingPullInstances)
+	if len(pendingIDs) == 0 {
+		return checkResp, nil
+	}
+	_, _ = fmt.Fprintf(out, "  Discovered %d previously unknown remote instance(s): %s\n", len(pendingIDs), strings.Join(pendingIDs, ", "))
+	if !isInteractiveReader(in) {
+		_, _ = fmt.Fprintln(out, "  Non-interactive input detected; skipping import of newly discovered remote configs.")
+		return checkResp, nil
+	}
+	reader := bufio.NewReader(in)
+	confirm, err := promptYesNo(reader, out, "Import these remote instance configs into local Carrier profile store?", false)
+	if err != nil {
+		return checkResp, err
+	}
+	if !confirm {
+		_, _ = fmt.Fprintln(out, "  Skipped importing newly discovered remote instance configs.")
+		return checkResp, nil
+	}
+	confirmed, err := runRemoteHostCheck(hostID, true, pendingIDs)
+	if err != nil {
+		return checkResp, err
+	}
+	_, _ = fmt.Fprintf(out, "  Imported %d remote instance config(s) into local Carrier profile store.\n", len(pendingIDs))
+	return confirmed, nil
+}
+
+func isInteractiveReader(in io.Reader) bool {
+	file, ok := in.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
+}
+
+func runRemoteInstallStream(out io.Writer, hostID, agentID string) error {
+	base := strings.TrimRight(strings.TrimSpace(gatewayProbeBaseURL()), "/")
+	if base == "" {
+		return errors.New("gateway base url is empty")
+	}
+	path := fmt.Sprintf("%s/api/v1/remote/hosts/%s/instances/%s/install/stream", base, neturl.PathEscape(strings.TrimSpace(hostID)), neturl.PathEscape(strings.TrimSpace(agentID)))
+	req, err := http.NewRequest(http.MethodPost, path, bytes.NewBufferString("{}"))
+	if err != nil {
+		return fmt.Errorf("build install stream request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	addGatewayAuthHeader(req)
+
+	client := &http.Client{Timeout: 30 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("remote install stream request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		if readErr != nil {
+			return fmt.Errorf("remote install stream failed with status %d", resp.StatusCode)
+		}
+		return fmt.Errorf("remote install stream failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
+	installed := false
+	emitted := map[string]bool{}
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		eventRaw := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if eventRaw == "" {
+			continue
+		}
+		var payload map[string]interface{}
+		if err := json.Unmarshal([]byte(eventRaw), &payload); err != nil {
+			continue
+		}
+		eventType := strings.ToLower(strings.TrimSpace(anyToString(payload["type"])))
+		switch eventType {
+		case "log":
+			stream := strings.TrimSpace(anyToString(payload["stream"]))
+			logLine := strings.TrimSpace(anyToString(payload["line"]))
+			if logLine == "" {
+				continue
+			}
+			message, warning, ok := formatRemoteInstallLogLine(stream, logLine)
+			if !ok {
+				continue
+			}
+			if emitted[message] {
+				continue
+			}
+			emitted[message] = true
+			if warning {
+				_, _ = fmt.Fprintf(out, "  %s\n", colorizeForTTY(out, "Warning: "+message, ansiYellow))
+			} else {
+				style := ansiCyan
+				lowerMessage := strings.ToLower(strings.TrimSpace(message))
+				if strings.Contains(lowerMessage, "installed successfully") || strings.Contains(lowerMessage, "upgrade completed") {
+					style = ansiGreen
+				}
+				_, _ = fmt.Fprintf(out, "  %s\n", colorizeForTTY(out, message, style))
+			}
+		case "error":
+			message := strings.TrimSpace(anyToString(payload["message"]))
+			if message == "" {
+				message = "remote install stream returned error"
+			}
+			return errors.New(message)
+		case "result":
+			installObj, _ := payload["install"].(map[string]interface{})
+			installed = anyToBool(installObj["installed"])
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read install stream: %w", err)
+	}
+	if !installed {
+		return errors.New("remote install stream finished without installed=true")
+	}
+	return nil
+}
+
+const (
+	ansiReset     = "\033[0m"
+	ansiCyanBold  = "\033[1;36m"
+	ansiCyan      = "\033[36m"
+	ansiGreen     = "\033[32m"
+	ansiGreenBold = "\033[1;32m"
+	ansiYellow    = "\033[33m"
+)
+
+func printRemoteStep(out io.Writer, index, total int, message string) {
+	line := fmt.Sprintf("[%d/%d] %s", index, total, strings.TrimSpace(message))
+	_, _ = fmt.Fprintln(out, colorizeForTTY(out, line, ansiCyanBold))
+}
+
+func colorizeForTTY(out io.Writer, text, ansiCode string) string {
+	if !supportsANSIColor(out) || strings.TrimSpace(ansiCode) == "" {
+		return text
+	}
+	return ansiCode + text + ansiReset
+}
+
+func supportsANSIColor(out io.Writer) bool {
+	if strings.TrimSpace(os.Getenv("NO_COLOR")) != "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("TERM")), "dumb") {
+		return false
+	}
+	file, ok := out.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
+}
+
+func remoteAgentDisplayName(agentID string) string {
+	switch strings.ToLower(strings.TrimSpace(agentID)) {
+	case "openclaw":
+		return "OpenClaw"
+	case "picoclaw":
+		return "PicoClaw"
+	case "zeroclaw":
+		return "ZeroClaw"
+	default:
+		return strings.TrimSpace(agentID)
+	}
+}
+
+func printRemoteCheckSummary(out io.Writer, check remoteHostCheckResponse, label string) {
+	label = strings.TrimSpace(label)
+	if label != "" {
+		_, _ = fmt.Fprintf(out, "  %s:\n", label)
+	}
+	if check.Check.SSHOK {
+		_, _ = fmt.Fprintln(out, "  SSH connectivity: OK.")
+	} else {
+		_, _ = fmt.Fprintln(out, "  SSH connectivity: FAILED.")
+	}
+	if check.Check.OpenClawFound {
+		_, _ = fmt.Fprintln(out, "  OpenClaw runtime: detected.")
+	} else {
+		_, _ = fmt.Fprintln(out, "  OpenClaw runtime: not detected.")
+	}
+}
+
+func summarizeRemoteInstanceNames(instances []remoteInstanceSummary) []string {
+	names := make([]string, 0, len(instances))
+	for _, inst := range instances {
+		agentID := strings.ToLower(strings.TrimSpace(inst.AgentID))
+		if agentID == "" {
+			id := strings.TrimSpace(inst.ID)
+			if idx := strings.LastIndex(id, ":"); idx >= 0 && idx+1 < len(id) {
+				agentID = strings.ToLower(strings.TrimSpace(id[idx+1:]))
+			} else {
+				agentID = strings.ToLower(strings.TrimSpace(id))
+			}
+		}
+		if agentID == "" {
+			continue
+		}
+		names = append(names, agentID)
+	}
+	return dedupeLowerStrings(names)
+}
+
+func formatRemoteInstallLogLine(stream, line string) (string, bool, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return "", false, false
+	}
+	lower := strings.ToLower(trimmed)
+	switch {
+	case strings.Contains(lower, "existing openclaw installation detected"):
+		return "Existing OpenClaw installation found; upgrading in place.", false, true
+	case strings.Contains(lower, "installing openclaw v"):
+		return trimmed, false, true
+	case strings.Contains(lower, "openclaw installed successfully"):
+		return trimmed, false, true
+	case strings.Contains(lower, "upgrade complete"):
+		return "Upgrade completed.", false, true
+	case strings.Contains(lower, "doctor failed; skipping plugin updates"):
+		return "Doctor step reported a non-blocking issue; plugin updates were skipped.", true, true
+	case strings.HasPrefix(lower, "dashboard url:"):
+		return trimmed, false, true
+	case strings.Contains(lower, "setlocale:"):
+		return "Remote locale warning (non-blocking): " + trimmed, true, true
+	case strings.EqualFold(strings.TrimSpace(stream), "stderr") && strings.Contains(lower, "warning"):
+		return "Remote warning: " + trimmed, true, true
+	default:
+		return "", false, false
+	}
+}
+
+func runRemoteSelectedConfigSync(opts remoteCommandOptions) error {
+	cfg, _, err := configv2.Load()
+	if err != nil {
+		return fmt.Errorf("load local config.v2: %w", err)
+	}
+	if cfg == nil {
+		return errors.New("local config.v2 is not available")
+	}
+
+	patch, err := buildRemoteConfigPatch(opts, cfg)
+	if err != nil {
+		return err
+	}
+	if len(patch) == 0 {
+		return nil
+	}
+	path := fmt.Sprintf("/api/v1/remote/hosts/%s/instances/%s/config", neturl.PathEscape(strings.TrimSpace(opts.HostID)), neturl.PathEscape(strings.TrimSpace(opts.InstallAgentID)))
+	body := map[string]interface{}{"patch": patch}
+	_, _, err = gatewayRequestWithTimeout(http.MethodPatch, path, body, 90*time.Second)
+	return err
+}
+
+func buildRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Config) (map[string]interface{}, error) {
+	if strings.EqualFold(opts.AgentID, "zeroclaw") {
+		return buildZeroClawRemoteConfigPatch(opts, cfg)
+	}
+	return buildJSONRemoteConfigPatch(opts, cfg)
+}
+
+func buildJSONRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Config) (map[string]interface{}, error) {
+	patch := map[string]interface{}{}
+	if len(opts.SyncChannels) > 0 {
+		channelPatch := map[string]interface{}{}
+		for _, selected := range dedupeLowerStrings(opts.SyncChannels) {
+			local, ok := findLocalChannel(cfg, selected)
+			if !ok {
+				return nil, fmt.Errorf("local channel %q is not configured", selected)
+			}
+			token := strings.TrimSpace(local.BotToken)
+			if token == "" {
+				return nil, fmt.Errorf("local channel %q has empty bot_token", selected)
+			}
+			entry := map[string]interface{}{
+				"enabled": true,
+				"token":   token,
+			}
+			if secret := strings.TrimSpace(local.WebhookSecret); secret != "" {
+				entry["webhook_secret"] = secret
+			}
+			allowFrom := make([]string, 0)
+			switch selected {
+			case "telegram":
+				if len(opts.TelegramAllowFrom) > 0 {
+					allowFrom = append(allowFrom, dedupeTrimmedStrings(opts.TelegramAllowFrom)...)
+				}
+			case "discord":
+				if len(opts.DiscordAllowFrom) > 0 {
+					allowFrom = append(allowFrom, dedupeTrimmedStrings(opts.DiscordAllowFrom)...)
+				}
+			}
+			if len(allowFrom) == 0 {
+				allowFrom = dedupeTrimmedStrings(local.AllowFrom)
+			}
+			if len(allowFrom) > 0 {
+				entry["allow_from"] = allowFrom
+			}
+			channelPatch[selected] = entry
+		}
+		patch["channels"] = channelPatch
+	}
+
+	if len(opts.SyncProviders) > 0 {
+		defaultModelName := strings.TrimSpace(cfg.DefaultModel)
+		defaultProviderKey := ""
+		defaultManagedModel := ""
+		modelList := make([]interface{}, 0, len(opts.SyncProviders))
+		providers := map[string]interface{}{}
+
+		for _, requestedProvider := range dedupeLowerStrings(opts.SyncProviders) {
+			model, ok := resolveLocalModelForProvider(cfg, requestedProvider)
+			if !ok {
+				return nil, fmt.Errorf("local provider %q is not found in model_list", requestedProvider)
+			}
+			managedProviderKey, managedModelName, managedModelID, providerItem, modelItem, err := buildManagedProviderAndModelEntry(model)
+			if err != nil {
+				return nil, err
+			}
+			providers[managedProviderKey] = providerItem
+			modelList = append(modelList, modelItem)
+			if defaultProviderKey == "" {
+				defaultProviderKey = managedProviderKey
+				defaultManagedModel = managedModelName
+			}
+			if defaultModelName != "" && (strings.EqualFold(defaultModelName, strings.TrimSpace(model.ModelName)) || strings.EqualFold(defaultModelName, strings.TrimSpace(model.Model))) {
+				defaultProviderKey = managedProviderKey
+				defaultManagedModel = managedModelName
+			}
+			_ = managedModelID
+		}
+
+		patch["providers"] = providers
+		patch["model_list"] = modelList
+		if defaultProviderKey != "" && defaultManagedModel != "" {
+			patch["agents"] = map[string]interface{}{
+				"defaults": map[string]interface{}{
+					"provider": defaultProviderKey,
+					"model":    defaultManagedModel,
+				},
+			}
+		}
+	}
+	return patch, nil
+}
+
+func buildZeroClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Config) (map[string]interface{}, error) {
+	syncChannels := dedupeLowerStrings(opts.SyncChannels)
+	syncProviders := dedupeLowerStrings(opts.SyncProviders)
+	if (len(syncChannels) == 0) != (len(syncProviders) == 0) {
+		return nil, errors.New("zeroclaw sync requires both --sync-channel and --sync-provider to avoid overwriting existing remote config")
+	}
+
+	var (
+		defaultProvider = "openai"
+		defaultModel    = "openai/gpt-5.3-codex"
+		defaultAPIKey   = ""
+	)
+	if len(syncProviders) > 0 {
+		model, ok := resolveLocalModelForProvider(cfg, syncProviders[0])
+		if !ok {
+			return nil, fmt.Errorf("local provider %q is not found in model_list", syncProviders[0])
+		}
+		modelID := strings.TrimSpace(model.Model)
+		if modelID == "" {
+			modelID = strings.TrimSpace(model.ModelName)
+		}
+		providerID := strings.TrimSpace(model.ProviderID)
+		if vendor, _, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(vendor) != "" {
+			providerID = strings.TrimSpace(vendor)
+		}
+		defaultProvider = mapCarrierProviderToManagedProvider(providerID)
+		defaultModel = modelID
+		credentialRef := strings.TrimSpace(model.CredentialRef)
+		if credentialRef == "" {
+			credentialRef = strings.TrimSpace(model.ProviderID)
+		}
+		token, _, okCred, err := loadProviderCredential(credentialRef)
+		if err != nil {
+			return nil, fmt.Errorf("load provider credential %q: %w", credentialRef, err)
+		}
+		if !strings.EqualFold(strings.TrimSpace(model.ProviderID), "openai-codex") {
+			if !okCred || strings.TrimSpace(token) == "" {
+				return nil, fmt.Errorf("missing credential for provider %q (ref=%q)", model.ProviderID, credentialRef)
+			}
+			defaultAPIKey = strings.TrimSpace(token)
+		}
+	}
+
+	channelSections := make([]string, 0)
+	for _, selected := range syncChannels {
+		local, ok := findLocalChannel(cfg, selected)
+		if !ok {
+			return nil, fmt.Errorf("local channel %q is not configured", selected)
+		}
+		token := strings.TrimSpace(local.BotToken)
+		if token == "" {
+			return nil, fmt.Errorf("local channel %q has empty bot_token", selected)
+		}
+		allowFrom := []string{}
+		switch selected {
+		case "telegram":
+			if len(opts.TelegramAllowFrom) > 0 {
+				allowFrom = dedupeTrimmedStrings(opts.TelegramAllowFrom)
+			}
+		case "discord":
+			if len(opts.DiscordAllowFrom) > 0 {
+				allowFrom = dedupeTrimmedStrings(opts.DiscordAllowFrom)
+			}
+		}
+		if len(allowFrom) == 0 {
+			allowFrom = dedupeTrimmedStrings(local.AllowFrom)
+		}
+		quotedUsers := make([]string, 0, len(allowFrom))
+		for _, userID := range allowFrom {
+			quotedUsers = append(quotedUsers, strconv.Quote(userID))
+		}
+		users := "[]"
+		if len(quotedUsers) > 0 {
+			users = "[" + strings.Join(quotedUsers, ", ") + "]"
+		}
+		channelSections = append(channelSections,
+			fmt.Sprintf("[channels_config.%s]", selected),
+			fmt.Sprintf("bot_token = %s", strconv.Quote(token)),
+			fmt.Sprintf("allowed_users = %s", users),
+			"mention_only = false",
+		)
+	}
+	if len(channelSections) == 0 {
+		channelSections = append(channelSections,
+			"[channels_config.telegram]",
+			"bot_token = \"\"",
+			"allowed_users = []",
+			"mention_only = false",
+		)
+	}
+
+	lines := []string{
+		"# Generated by Carrier CLI remote add",
+		fmt.Sprintf("api_key = %s", strconv.Quote(defaultAPIKey)),
+		fmt.Sprintf("default_provider = %s", strconv.Quote(defaultProvider)),
+		fmt.Sprintf("default_model = %s", strconv.Quote(defaultModel)),
+		"default_temperature = 0.7",
+		"",
+		"[agent]",
+		"max_tool_iterations = 20",
+		"",
+	}
+	lines = append(lines, channelSections...)
+	return map[string]interface{}{
+		"raw_toml": strings.Join(lines, "\n") + "\n",
+	}, nil
+}
+
+func resolveLocalModelForProvider(cfg *configv2.Config, requestedProvider string) (configv2.Model, bool) {
+	target := strings.ToLower(strings.TrimSpace(requestedProvider))
+	targetCanonical := mapCarrierProviderToManagedProvider(target)
+	for _, model := range cfg.ModelList {
+		providerID := strings.ToLower(strings.TrimSpace(model.ProviderID))
+		if providerID == target {
+			return model, true
+		}
+	}
+	for _, model := range cfg.ModelList {
+		providerID := strings.ToLower(strings.TrimSpace(model.ProviderID))
+		if mapCarrierProviderToManagedProvider(providerID) == targetCanonical {
+			return model, true
+		}
+	}
+	return configv2.Model{}, false
+}
+
+func buildManagedProviderAndModelEntry(model configv2.Model) (providerKey string, modelName string, modelID string, providerItem map[string]interface{}, modelItem map[string]interface{}, err error) {
+	modelID = strings.TrimSpace(model.Model)
+	modelName = strings.TrimSpace(model.ModelName)
+	if modelID == "" && modelName == "" {
+		return "", "", "", nil, nil, errors.New("model entry has empty model and model_name")
+	}
+	if modelID == "" {
+		modelID = modelName
+	}
+	if modelName == "" {
+		if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
+			modelName = strings.TrimSpace(name)
+		} else {
+			modelName = modelID
+		}
+	}
+
+	providerKey = strings.TrimSpace(model.ProviderID)
+	if vendor, _, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(vendor) != "" {
+		providerKey = strings.TrimSpace(vendor)
+	}
+	providerKey = mapCarrierProviderToManagedProvider(providerKey)
+	if providerKey == "" {
+		providerKey = "openai"
+	}
+
+	credentialRef := strings.TrimSpace(model.CredentialRef)
+	if credentialRef == "" {
+		credentialRef = strings.TrimSpace(model.ProviderID)
+	}
+	providerItem = map[string]interface{}{
+		"credential_ref": credentialRef,
+	}
+	modelItem = map[string]interface{}{
+		"model_name": modelName,
+		"model":      modelID,
+	}
+	if strings.EqualFold(strings.TrimSpace(model.ProviderID), "openai-codex") {
+		providerItem["auth_method"] = "oauth"
+		modelItem["auth_method"] = "oauth"
+		return providerKey, modelName, modelID, providerItem, modelItem, nil
+	}
+
+	token, _, ok, credErr := loadProviderCredential(credentialRef)
+	if credErr != nil {
+		return "", "", "", nil, nil, fmt.Errorf("load provider credential %q: %w", credentialRef, credErr)
+	}
+	if !ok || strings.TrimSpace(token) == "" {
+		return "", "", "", nil, nil, fmt.Errorf("missing credential for provider %q (ref=%q)", model.ProviderID, credentialRef)
+	}
+	providerItem["api_key"] = strings.TrimSpace(token)
+	return providerKey, modelName, modelID, providerItem, modelItem, nil
+}
+
+func findLocalChannel(cfg *configv2.Config, channelID string) (configv2.Channel, bool) {
+	target := strings.ToLower(strings.TrimSpace(channelID))
+	for _, channel := range cfg.Channels {
+		if strings.EqualFold(strings.TrimSpace(channel.ID), target) {
+			return channel, true
+		}
+	}
+	return configv2.Channel{}, false
+}
+
+func dedupeLowerStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		trimmed := strings.ToLower(strings.TrimSpace(raw))
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func dedupeTrimmedStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func anyToString(value interface{}) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	case json.Number:
+		return typed.String()
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'f', -1, 64)
+	case int:
+		return strconv.Itoa(typed)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	case bool:
+		return strconv.FormatBool(typed)
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
+	}
+}
+
+func anyToBool(value interface{}) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		lower := strings.ToLower(strings.TrimSpace(typed))
+		return lower == "true" || lower == "1" || lower == "yes"
+	case float64:
+		return typed != 0
+	case int:
+		return typed != 0
+	default:
+		return false
+	}
 }
 
 func resolveManagedInstanceTarget(instances []managedAgentInstance, target string) (managedAgentInstance, int, error) {
@@ -2248,16 +2977,23 @@ func runOnboard(in io.Reader, out io.Writer, startGateway func() error) error {
 	_, _ = fmt.Fprintln(out, "-------------------")
 	_, _ = fmt.Fprintln(out, "Tip: for browser onboarding, run `carrier onboard --webui` and open http://127.0.0.1:8787/")
 	_, _ = fmt.Fprintln(out, "Step 1/4: Configure chat channel")
-	channel, ok := resolveChoice("telegram", channelOptions)
-	if !ok {
-		return errors.New("telegram channel is unavailable")
-	}
-	_, _ = fmt.Fprintf(out, "Using channel: %s\n", channel.Name)
-	channelEnv, channelCfg, err := promptChannelCredentialsMinimal(reader, out, channel)
+	channel, hasChannel, err := promptMinimalChannelSelection(reader, out)
 	if err != nil {
 		return err
 	}
-	channelConfigs := []configv2.Channel{channelCfg}
+	channelEnv := map[string]string{}
+	channelConfigs := []configv2.Channel{}
+	if hasChannel {
+		_, _ = fmt.Fprintf(out, "Using channel: %s\n", channel.Name)
+		var channelCfg configv2.Channel
+		channelEnv, channelCfg, err = promptChannelCredentialsMinimal(reader, out, channel)
+		if err != nil {
+			return err
+		}
+		channelConfigs = append(channelConfigs, channelCfg)
+	} else {
+		_, _ = fmt.Fprintln(out, "WebUI-only mode: skipping chat channel configuration.")
+	}
 
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "Step 2/4: Configure LLM provider")
@@ -2336,7 +3072,11 @@ func runOnboard(in io.Reader, out io.Writer, startGateway func() error) error {
 	}
 	_, _ = fmt.Fprintln(out, "Step 3/4: Credential setup complete")
 	_, _ = fmt.Fprintln(out, "Step 4/4: Launch gateway")
-	_, _ = fmt.Fprintf(out, "Selected channel: %s\n", channel.Name)
+	if hasChannel {
+		_, _ = fmt.Fprintf(out, "Selected channel: %s\n", channel.Name)
+	} else {
+		_, _ = fmt.Fprintln(out, "Selected channel: WebUI-only")
+	}
 	_, _ = fmt.Fprintf(out, "Selected provider: %s\n", provider.Name)
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "Ensuring daemon is running...")
@@ -2345,11 +3085,17 @@ func runOnboard(in io.Reader, out io.Writer, startGateway func() error) error {
 	if err != nil {
 		return err
 	}
-	printDaemonPairCode(out, daemonURL)
+	if hasChannel {
+		printDaemonPairCode(out, daemonURL)
+	}
 
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "Starting gateway...")
-	_, _ = fmt.Fprintln(out, buildSlashCommandGuide(channel))
+	if hasChannel {
+		_, _ = fmt.Fprintln(out, buildSlashCommandGuide(channel))
+	} else {
+		_, _ = fmt.Fprintln(out, "WebUI-only mode: connect from browser UI instead of chat slash commands.")
+	}
 
 	if _, err := ensureGatewayRunning(out, startGateway); err != nil {
 		return err
@@ -3509,6 +4255,8 @@ func mapCarrierProviderToManagedProvider(providerID string) string {
 	switch strings.ToLower(strings.TrimSpace(providerID)) {
 	case "openai-codex":
 		return "openai"
+	case "openai-compatible", "vllm", "openai-v1":
+		return "openai"
 	default:
 		return strings.TrimSpace(providerID)
 	}
@@ -3717,6 +4465,30 @@ func pickMinimalProviderWithReason() (choiceOption, string, error) {
 	return providerOptions[0], "fallback to first available provider", nil
 }
 
+func promptMinimalChannelSelection(reader *bufio.Reader, out io.Writer) (choiceOption, bool, error) {
+	if reader == nil {
+		if channel, ok := resolveChoice("telegram", onboardChannelOptions); ok {
+			return channel, true, nil
+		}
+		return choiceOption{}, false, errors.New("telegram channel is unavailable")
+	}
+	_, _ = fmt.Fprintln(out, "Type channel id to enable chat onboarding (telegram), or press Enter for WebUI-only mode.")
+	_, _ = fmt.Fprint(out, "Channel id [telegram/WebUI-only]: ")
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return choiceOption{}, false, err
+	}
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return choiceOption{}, false, nil
+	}
+	channel, ok := resolveChoice(trimmed, onboardChannelOptions)
+	if !ok {
+		return choiceOption{}, false, fmt.Errorf("unknown channel %q", trimmed)
+	}
+	return channel, true, nil
+}
+
 func promptMinimalProviderOverride(reader *bufio.Reader, out io.Writer, selected choiceOption) (choiceOption, bool, error) {
 	if reader == nil {
 		return selected, false, nil
@@ -3754,9 +4526,22 @@ func promptChannelCredentialsMinimal(reader *bufio.Reader, out io.Writer, channe
 		ID:      channel.ID,
 		Enabled: true,
 	}
-	token, err := promptInput(reader, out, "Telegram bot token (required, from @BotFather)", true)
-	if err != nil {
-		return nil, configv2.Channel{}, err
+	token := ""
+	if existingToken, source := resolveManagedChannelToken("telegram"); strings.TrimSpace(existingToken) != "" {
+		reuse, err := promptYesNo(reader, out, fmt.Sprintf("Reuse existing Telegram token from %s", source), true)
+		if err != nil {
+			return nil, configv2.Channel{}, err
+		}
+		if reuse {
+			token = strings.TrimSpace(existingToken)
+		}
+	}
+	if token == "" {
+		var err error
+		token, err = promptInput(reader, out, "Telegram bot token (required, from @BotFather)", true)
+		if err != nil {
+			return nil, configv2.Channel{}, err
+		}
 	}
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -3772,10 +4557,12 @@ func promptChannelCredentialsMinimal(reader *bufio.Reader, out io.Writer, channe
 func promptProviderAuthMinimal(reader *bufio.Reader, out io.Writer, provider choiceOption) (map[string]string, bool, error) {
 	switch provider.AuthMode {
 	case authModeAPIKey:
-		value, backend, ok, err := loadProviderCredential(provider.ID)
-		if err == nil && ok && strings.TrimSpace(value) != "" && strings.TrimSpace(provider.ProviderEnv) != "" {
-			_, _ = fmt.Fprintf(out, "Reusing saved %s credential (%s).\n", provider.Name, backend)
-			return map[string]string{provider.ProviderEnv: strings.TrimSpace(value)}, true, nil
+		reused, ok, err := maybeReuseSavedProviderCredential(reader, out, provider)
+		if err != nil {
+			return nil, false, err
+		}
+		if ok {
+			return reused, true, nil
 		}
 		label := fmt.Sprintf("%s API key", provider.Name)
 		apiKey, err := promptInput(reader, out, label, true)
@@ -3791,10 +4578,12 @@ func promptProviderAuthMinimal(reader *bufio.Reader, out io.Writer, provider cho
 		}
 		return map[string]string{provider.ProviderEnv: apiKey}, true, nil
 	case authModeOAuthDeviceCode:
-		value, backend, ok, err := loadProviderCredential(provider.ID)
-		if err == nil && ok && strings.TrimSpace(value) != "" && strings.TrimSpace(provider.ProviderEnv) != "" {
-			_, _ = fmt.Fprintf(out, "Reusing saved %s credential (%s).\n", provider.Name, backend)
-			return map[string]string{provider.ProviderEnv: strings.TrimSpace(value)}, true, nil
+		reused, ok, err := maybeReuseSavedProviderCredential(reader, out, provider)
+		if err != nil {
+			return nil, false, err
+		}
+		if ok {
+			return reused, true, nil
 		}
 		if provider.ID == "openai-codex" {
 			token, err := runOpenAICodexDeviceCodeFlow(out)
@@ -3954,7 +4743,7 @@ func maybeReuseSavedProviderCredential(reader *bufio.Reader, out io.Writer, prov
 	if strings.TrimSpace(provider.ProviderEnv) == "" {
 		return nil, false, nil
 	}
-	value, backend, ok, err := loadProviderCredential(provider.ID)
+	value, backend, ok, err := loadProviderCredentialWithEnv(provider)
 	if err != nil {
 		_, _ = fmt.Fprintf(out, "Warning: failed to read saved credential for %s: %v\n", provider.Name, err)
 		return nil, false, nil
@@ -3970,6 +4759,23 @@ func maybeReuseSavedProviderCredential(reader *bufio.Reader, out io.Writer, prov
 		return nil, false, nil
 	}
 	return map[string]string{provider.ProviderEnv: value}, true, nil
+}
+
+func loadProviderCredentialWithEnv(provider choiceOption) (string, string, bool, error) {
+	if envKey := strings.TrimSpace(provider.ProviderEnv); envKey != "" {
+		if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+			return value, fmt.Sprintf("environment variable %s", envKey), true, nil
+		}
+	}
+	value, backend, ok, err := loadProviderCredential(provider.ID)
+	if err != nil || !ok {
+		return "", "", false, err
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", "", false, nil
+	}
+	return trimmed, backend, true, nil
 }
 
 func saveProviderCredentialFlow(reader *bufio.Reader, out io.Writer, provider choiceOption, value string) error {

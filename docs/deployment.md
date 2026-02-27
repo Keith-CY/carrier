@@ -26,13 +26,6 @@ curl -fsSL https://raw.githubusercontent.com/Keith-CY/carrier/main/scripts/insta
 carrier --version
 ```
 
-Source build option:
-
-```bash
-go build -o carrier ./cmd/carrier
-sudo install -o root -g root -m 0755 carrier /usr/local/bin/carrier
-```
-
 ## 3) Runtime Configuration
 
 Daemon config source:
@@ -194,10 +187,10 @@ Restore:
 
 ## 8) Remote VPS OpenClaw Deployment
 
-Operationally, remote OpenClaw rollout should use deterministic script flow:
+Operationally, remote rollout should use deterministic CLI flow:
 
 ```bash
-scripts/remote-openclaw-install.sh \
+carrier remote add openclaw \
   --host-id <id> \
   --host <ip-or-domain> \
   --port <port> \
@@ -206,6 +199,19 @@ scripts/remote-openclaw-install.sh \
 ```
 
 This wraps gateway remote APIs with fixed sequencing and retry behavior.
+
+Optional: sync selected local onboarding config to remote instance:
+
+```bash
+carrier remote add openclaw \
+  --host-id <id> \
+  --host <ip-or-domain> \
+  --port <port> \
+  --user <ssh-user> \
+  --key-path <private-key-path> \
+  --sync-channel telegram \
+  --sync-provider openai
+```
 
 ## 9) Security Considerations
 

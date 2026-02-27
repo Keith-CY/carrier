@@ -296,7 +296,7 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 		startedAt := time.Now()
 		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Minute)
 		defer cancel()
-		installResult, err := remoteInstallOpenClaw(ctx, host, hostID, agentID)
+		installResult, err := remoteInstallAgent(ctx, host, hostID, agentID)
 		recordRemoteOperationMetric(remoteOpInstancesInstall, startedAt, err)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_REMOTE_INSTALL_FAILED", err.Error()))
@@ -304,6 +304,61 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "install": installResult})
 		return
+	case "config":
+		switch r.Method {
+		case http.MethodGet:
+			startedAt := time.Now()
+			ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+			defer cancel()
+			cfg, snapshot, steps, err := remoteReadConfigForAgent(ctx, host, agentID)
+			recordRemoteOperationMetric(remoteOpConfigRead, startedAt, err)
+			if err != nil {
+				writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_REMOTE_CONFIG_FAILED", err.Error()))
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"requestId": requestID,
+				"result":    "ok",
+				"config":    cfg,
+				"snapshot":  snapshot,
+				"steps":     steps,
+			})
+			return
+		case http.MethodPatch:
+			var body map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
+				return
+			}
+			patch := body
+			if candidate, ok := body["patch"].(map[string]interface{}); ok {
+				patch = candidate
+			}
+			if len(patch) == 0 {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "patch payload cannot be empty"))
+				return
+			}
+			startedAt := time.Now()
+			ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+			defer cancel()
+			merged, snapshot, steps, err := remotePatchConfigForAgent(ctx, host, agentID, patch)
+			recordRemoteOperationMetric(remoteOpConfigPatch, startedAt, err)
+			if err != nil {
+				writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_REMOTE_CONFIG_PATCH_FAILED", err.Error()))
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"requestId": requestID,
+				"result":    "ok",
+				"config":    merged,
+				"snapshot":  snapshot,
+				"steps":     steps,
+			})
+			return
+		default:
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
 	case "repair":
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
@@ -546,7 +601,7 @@ func streamRemoteInstallResponse(w http.ResponseWriter, r *http.Request, request
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Minute)
 	defer cancel()
 
-	installResult, installErr := remoteInstallOpenClawStreaming(ctx, host, hostID, agentID, func(chunk remoteStreamChunk) {
+	installResult, installErr := remoteInstallAgentStreaming(ctx, host, hostID, agentID, func(chunk remoteStreamChunk) {
 		line := strings.TrimSpace(RedactErrorMessage(chunk.Text))
 		if line == "" {
 			return
