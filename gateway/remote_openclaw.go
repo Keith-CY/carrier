@@ -586,7 +586,7 @@ func remoteGetLogs(ctx context.Context, host RemoteHost, agentID string, tail in
 }
 
 func remoteReadConfig(ctx context.Context, host RemoteHost) (map[string]interface{}, string, []remoteExecResult, error) {
-	cmd := "cat \"$HOME/.openclaw/openclaw.json\""
+	cmd := "if [ -f \"$HOME/.openclaw/openclaw.json\" ]; then cat \"$HOME/.openclaw/openclaw.json\"; else echo '{}'; fi"
 	res, err := runRemoteCommand(ctx, host, cmd)
 	if err != nil {
 		return nil, "", []remoteExecResult{res}, err
