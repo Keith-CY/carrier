@@ -1,49 +1,60 @@
-# Go-live Checklist and Rollback Steps
+# Go-Live Checklist and Rollback
 
 Source issue: #426
 
 ## Cross-links
 
-- Deployment guide: `docs/deployment.md`
-- Pairing runbook: `docs/runbooks/pairing-lifecycle.md`
-- CI first response: `docs/ci/first-response-playbook.md`
+- Deployment guide: [`docs/deployment.md`](../deployment.md)
+- Pairing runbook: [`docs/runbooks/pairing-lifecycle.md`](./pairing-lifecycle.md)
+- CI first response: [`docs/ci/first-response-playbook.md`](../ci/first-response-playbook.md)
 
 ## Go-live Checklist
 
-1. Confirm CI is green for merge candidate.
-2. Validate daemon and gateway binaries for target platform.
-3. Run smoke path: `carrier add openclaw` -> pair -> start -> status -> logs.
-4. Run remote control plane WebUI smoke:
-   - `#/servers`: create -> edit/update -> check -> delete.
-   - `#/profiles`: create/edit profile -> bind -> delete binding -> profile test with explicit host selection.
-   - `#/remote-chat`: verify stream starts for `target=remote` and `target=local`.
-   - `#/remote-observability`: verify `rollout.state=healthy` before full enablement (`canary` only for limited cohort, `hold` blocks rollout).
-5. Verify WebUI TypeScript build artifact step passes (`bash scripts/build-webui.sh`) and generated `webui/static/*.js` assets are present for packaging.
-6. Verify diagnose path and artifact download URL.
-7. Confirm audit logs are generated for add/install/start/stop/diagnose.
-8. Confirm required secrets/env are present (without printing values).
-9. Confirm monitoring and health endpoint checks are active.
-10. Publish release notes and known limitations.
+1. Confirm required CI checks are green for merge candidate.
+2. Validate target platform binaries (`carrier --version`).
+3. Start services and verify health:
+   - daemon: `http://127.0.0.1:9090/healthz`
+   - gateway: `http://127.0.0.1:8787/healthz`
+4. Run local smoke:
+   - `carrier onboard` (or `carrier onboard --webui`)
+   - `carrier add openclaw`
+   - `carrier status openclaw`
+5. Run remote control-plane smoke:
+   - host create/update/check/delete
+   - provider profile create/edit/test
+   - remote observability rollout card status
+6. Run deterministic remote install smoke:
+   - `scripts/remote-openclaw-install.sh ...`
+   - verify host check returns `openclawFound=true`
+7. Validate first-discovery confirmation path:
+   - newly discovered instances appear in `pendingPullInstances`
+   - confirmation re-check clears pending list
+8. Verify audit logs and diagnose path.
+9. Confirm required secrets/env are present (without printing secret values).
+10. Publish release notes and known limits.
 
 ## Rollback Triggers
 
 - repeated start failures on healthy hosts
 - critical security regression
-- diagnose artifacts missing or corrupted
-- unsupported command failures on core P0 path
+- diagnose artifacts missing/corrupted
+- deterministic remote install path regresses
+- remote discovery/confirmation flow regresses
 
 ## Rollback Procedure
 
 1. Stop rollout and freeze new changes.
 2. Revert to last known good release tag.
-3. Restart daemon/gateway with previous binaries.
-4. Validate health endpoint and P0 command path.
-5. Re-run pairing and one OpenClaw lifecycle smoke test.
-6. Capture incident summary and root-cause tracking issue.
+3. Restart daemon and gateway with previous binary.
+4. Re-verify `/healthz` endpoints.
+5. Re-run one local OpenClaw lifecycle smoke.
+6. Re-run one remote install smoke (`scripts/remote-openclaw-install.sh`).
+7. Capture incident summary and open root-cause tracking issue.
 
 ## Post-Rollback Validation
 
-- `/health` returns healthy.
-- `carrier add openclaw` works in TUI/WebUI.
-- `/pair`, `/start`, `/status`, `/stop` execute normally in chat mode.
-- audit log and diagnose commands remain available.
+- daemon and gateway `/healthz` return `{"status":"ok"}`
+- `carrier add openclaw` works in CLI/TUI/WebUI
+- chat management commands (`/pair`, `/agents`, `/start`, `/status`, `/stop`) work
+- if chat `/install` policy is enabled, `/install openclaw <host_id>` works as expected
+- diagnose and audit paths remain available

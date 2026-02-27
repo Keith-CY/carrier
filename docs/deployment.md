@@ -1,92 +1,102 @@
-# Production Deployment Guide
+# Carrier Deployment Guide
 
-This guide covers deploying the Carrier daemon (`carrier`) and gateway in a production environment.
+This guide reflects the current runtime model:
+- one `carrier` binary
+- daemon service (`carrier daemon`)
+- gateway service (`carrier gateway`)
 
 Related runbooks:
+- [`docs/runbooks/go-live-rollback.md`](./runbooks/go-live-rollback.md)
+- [`docs/runbooks/pairing-lifecycle.md`](./runbooks/pairing-lifecycle.md)
+- [`docs/ci/first-response-playbook.md`](./ci/first-response-playbook.md)
 
-- Go-live + rollback: `docs/runbooks/go-live-rollback.md`
-- Pairing lifecycle troubleshooting: `docs/runbooks/pairing-lifecycle.md`
-- CI first response: `docs/ci/first-response-playbook.md`
+## 1) Prerequisites
 
-For lifecycle state transitions, crash-loop behavior, and operator troubleshooting, see `docs/daemon-lifecycle-runtime.md`.
+- Linux host (amd64/arm64 recommended for production)
+- systemd
+- dedicated non-root user (example: `carrier`)
+- TLS/ingress policy if exposing gateway outside loopback
 
-## Prerequisites
+## 2) Install Binary
 
-- **Go 1.22+** (build from source) or a pre-built binary
-- **Linux** (amd64 or arm64) — the daemon uses `/proc` for port-occupant detection
-- **systemd** (recommended for service management)
-- A dedicated non-root user (e.g., `carrier`)
+Recommended (release script):
 
-## Build
+```bash
+curl -fsSL https://raw.githubusercontent.com/Keith-CY/carrier/main/scripts/install.sh | bash
+carrier --version
+```
+
+Source build option:
 
 ```bash
 go build -o carrier ./cmd/carrier
-```
-
-## Gateway
-
-The gateway has been rewritten in Go and is now part of the daemon binary.
-No separate build step is required — the daemon serves the gateway API directly.
-
-## Configuration
-
-The daemon reads configuration from a JSON file. Create `/etc/carrier/carrier.json`:
-
-```json
-{
-  "server": {
-    "host": "127.0.0.1",
-    "port": 9090,
-    "api_token": ""
-  },
-  "log": {
-    "level": "info",
-    "format": "json"
-  },
-  "lifecycle": {
-    "crash_threshold": 3,
-    "crash_window": "5m",
-    "crash_cooldown": "5m"
-  }
-}
-```
-
-> **Note:** If `api_token` is set, the config file must have restrictive permissions (`chmod 0600`).
-> See `shared/config/config.go` for all fields and environment variable overrides (`CARRIER_` prefix).
-
-Ensure the data and diagnose directories exist:
-
-```bash
-sudo mkdir -p /var/lib/carrier/{data,diagnose}
-sudo chown carrier:carrier /var/lib/carrier/{data,diagnose}
-```
-
-### Environment Variables
-
-Agent manifests may declare required environment variables. Set them in the systemd unit or a dedicated env file:
-
-```bash
-# /etc/carrier/carrier.env
-# Example — adjust per your agent manifests
-MY_AGENT_API_KEY=changeme
-```
-
-## Installation
-
-```bash
 sudo install -o root -g root -m 0755 carrier /usr/local/bin/carrier
-sudo install -o root -g root -m 0755 carrier-gateway /usr/local/bin/carrier-gateway
 ```
 
-## systemd Service
+## 3) Runtime Configuration
 
-### Daemon (`carrier`)
+Daemon config source:
+- loads `config.json` in current working directory if present
+- then applies `CARRIER_*` env overrides
 
-Create `/etc/systemd/system/carrier-daemon.service`:
+Important daemon env vars:
+- `CARRIER_SERVER_HOST` (default `127.0.0.1`)
+- `CARRIER_SERVER_PORT` (default `9090`)
+- `CARRIER_SERVER_API_TOKEN` (required when binding daemon to non-loopback host)
+
+Important gateway env vars:
+- `CARRIER_GATEWAY_HOST` (default `127.0.0.1`)
+- `CARRIER_GATEWAY_PORT` (default `8787`)
+- `CARRIER_GATEWAY_API_TOKEN` (required when binding gateway to non-loopback host)
+- `CARRIER_DAEMON_BASE_URL` (default `http://127.0.0.1:9090`)
+- `CARRIER_SERVER_API_TOKEN` (gateway->daemon bearer token when daemon token is enabled)
+
+Remote feature flags:
+- `CARRIER_REMOTE_CONTROL_PLANE_ENABLED` (default `true`)
+- `CARRIER_REMOTE_CHAT_ENABLED` (default `true`)
+- `CARRIER_PROVIDER_BINDING_ENABLED` (default `true`)
+
+## 4) systemd Units
+
+Create runtime directories:
+
+```bash
+sudo mkdir -p /var/lib/carrier
+sudo chown carrier:carrier /var/lib/carrier
+```
+
+Optional env file:
+
+```bash
+sudo mkdir -p /etc/carrier
+sudo touch /etc/carrier/carrier.env
+sudo chmod 600 /etc/carrier/carrier.env
+```
+
+Example `/etc/carrier/carrier.env`:
+
+```bash
+# daemon
+CARRIER_SERVER_HOST=127.0.0.1
+CARRIER_SERVER_PORT=9090
+
+# gateway
+CARRIER_GATEWAY_HOST=127.0.0.1
+CARRIER_GATEWAY_PORT=8787
+CARRIER_DAEMON_BASE_URL=http://127.0.0.1:9090
+
+# optional hardening for non-loopback binds
+# CARRIER_SERVER_API_TOKEN=<daemon_token>
+# CARRIER_GATEWAY_API_TOKEN=<gateway_token>
+```
+
+### Daemon unit
+
+`/etc/systemd/system/carrier-daemon.service`
 
 ```ini
 [Unit]
-Description=Carrier Agent Daemon
+Description=Carrier Daemon
 After=network-online.target
 Wants=network-online.target
 
@@ -94,13 +104,11 @@ Wants=network-online.target
 Type=simple
 User=carrier
 Group=carrier
-ExecStart=/usr/local/bin/carrier --config /etc/carrier/carrier.json
+WorkingDirectory=/var/lib/carrier
 EnvironmentFile=-/etc/carrier/carrier.env
+ExecStart=/usr/local/bin/carrier daemon
 Restart=on-failure
 RestartSec=5s
-LimitNOFILE=65536
-
-# Hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -110,9 +118,9 @@ ReadWritePaths=/var/lib/carrier
 WantedBy=multi-user.target
 ```
 
-### Gateway
+### Gateway unit
 
-Create `/etc/systemd/system/carrier-gateway.service`:
+`/etc/systemd/system/carrier-gateway.service`
 
 ```ini
 [Unit]
@@ -124,11 +132,11 @@ Wants=network-online.target
 Type=simple
 User=carrier
 Group=carrier
-ExecStart=/usr/local/bin/carrier-gateway
+WorkingDirectory=/var/lib/carrier
+EnvironmentFile=-/etc/carrier/carrier.env
+ExecStart=/usr/local/bin/carrier gateway
 Restart=on-failure
 RestartSec=5s
-LimitNOFILE=65536
-
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -138,97 +146,82 @@ ReadWritePaths=/var/lib/carrier
 WantedBy=multi-user.target
 ```
 
-### Enable and Start
+Enable/start:
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now carrier-daemon carrier-gateway
 ```
 
-## Health Monitoring
+## 5) Health Checks
 
-The daemon exposes a health endpoint (default port 8081):
+- Daemon: `GET http://127.0.0.1:9090/healthz`
+- Gateway: `GET http://127.0.0.1:8787/healthz`
+
+Readiness:
+- Daemon also exposes `GET /readyz`
+
+Quick verify:
 
 ```bash
-curl -s http://localhost:8081/healthz
+curl -fsS http://127.0.0.1:9090/healthz
+curl -fsS http://127.0.0.1:8787/healthz
 ```
 
-Integrate with your monitoring stack (Prometheus, Datadog, etc.):
+## 6) Upgrade
 
-- **Liveness**: `GET /healthz` — returns 200 when the daemon process is alive
-- **Readiness**: check that agents report `healthy` via the status API
-
-### Alerting Recommendations
-
-| Condition | Alert |
-|-----------|-------|
-| `/healthz` returns non-200 for >30s | Critical |
-| Agent in `crashing` state for >5m | Warning |
-| Audit buffer >80% full | Warning |
-| Disk usage on data dir >90% | Critical |
-
-## Logging
-
-With structured logging enabled (`log_format: "json"`), logs are written to stdout and captured by journald:
+1. install new `carrier` binary
+2. restart services:
 
 ```bash
-journalctl -u carrier-daemon -f --output=json
+sudo systemctl restart carrier-daemon carrier-gateway
 ```
 
-Ship logs to your aggregation platform (ELK, Loki, etc.) via journald or a sidecar.
+3. re-check health endpoints and smoke commands
 
-## Backup
+## 7) Backup and Recovery
 
-### What to Back Up
+Back up at least:
+- `/etc/carrier/`
+- `/var/lib/carrier/`
+- user config under `~/.carrier/` for operator accounts that run local onboarding/control
 
-- `/etc/carrier/` — configuration files and env
-- `/var/lib/carrier/data/` — agent state, manifests, memory store
-- `/var/lib/carrier/diagnose/` — diagnostic bundles and upgrade backups
+Restore:
+1. stop services
+2. restore files
+3. start services
+4. verify `/healthz` and basic command path
 
-### Backup Strategy
+## 8) Remote VPS OpenClaw Deployment
+
+Operationally, remote OpenClaw rollout should use deterministic script flow:
 
 ```bash
-# Daily backup example (add to cron)
-tar czf /backup/carrier-$(date +%Y%m%d).tar.gz \
-  /etc/carrier/ \
-  /var/lib/carrier/data/
+scripts/remote-openclaw-install.sh \
+  --host-id <id> \
+  --host <ip-or-domain> \
+  --port <port> \
+  --user <ssh-user> \
+  --key-path <private-key-path>
 ```
 
-### Restore
+This wraps gateway remote APIs with fixed sequencing and retry behavior.
 
-1. Stop services: `sudo systemctl stop carrier-daemon carrier-gateway`
-2. Restore files from backup
-3. Start services: `sudo systemctl start carrier-daemon carrier-gateway`
-4. Verify health: `curl http://localhost:8081/healthz`
+## 9) Security Considerations
 
-## Upgrade Procedure
+- Run as a non-root user with minimal privileges.
+- Keep `ProtectSystem=strict` and `NoNewPrivileges=true` in systemd units.
+- Rotate secrets in `/etc/carrier/carrier.env` regularly.
+- If daemon/gateway bind to non-loopback, enforce API tokens.
 
-1. Build or download the new binary
-2. Stop the service: `sudo systemctl stop carrier-daemon`
-3. Replace the binary: `sudo install -o root -g root -m 0755 carrier /usr/local/bin/carrier`
-4. Start the service: `sudo systemctl start carrier-daemon`
-5. Verify: `curl http://localhost:8081/healthz`
+### SSH Host Key Verification
 
-For agent upgrades (managed via the lifecycle API), the daemon automatically creates pre-upgrade backups in the diagnose directory.
+Remote control plane SSH uses `StrictHostKeyChecking=accept-new` (TOFU):
+- first-seen host keys are accepted and stored
+- changed host keys are rejected on later connections
 
-## Security Considerations
-
-- Run as a non-root user with minimal privileges
-- Use `ProtectSystem=strict` and `NoNewPrivileges=true` in systemd
-- Rotate secrets in `/etc/carrier/carrier.env` regularly
-- The gateway uses crypto-secure tokens — do not downgrade to sequential generation
-- Review the [security audit](../docs/security-audit-command-execution.md) for command execution hardening
-
-### SSH Remote Control Plane — Host Key Verification
-
-The remote control plane uses `StrictHostKeyChecking=accept-new` for SSH connections,
-which implements Trust-On-First-Use (TOFU): new host keys are automatically accepted
-and saved on first connection, but changed keys are rejected on subsequent connections.
-
-For production deployments, consider pre-populating `~/.ssh/known_hosts` with the
-expected host keys of remote nodes to prevent potential MITM attacks on first connection:
+For production, pre-populate `known_hosts` where possible:
 
 ```bash
-# Pre-populate known_hosts for a remote node
 ssh-keyscan -H <remote-host> >> ~/.ssh/known_hosts
 ```
