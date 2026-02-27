@@ -6,13 +6,17 @@ toolchain go1.23.0
 
 require (
 	carrier/baseagent v0.0.0
+	carrier/codeagent v0.0.0
 	carrier/daemon v0.0.0
+	carrier/profilesync v0.0.0
 	carrier/shared v0.0.0
 	github.com/google/uuid v1.6.0
 )
 
 replace (
 	carrier/baseagent => ../baseagent
+	carrier/codeagent => ../codeagent
 	carrier/daemon => ../daemon
+	carrier/profilesync => ../profilesync
 	carrier/shared => ../shared
 )

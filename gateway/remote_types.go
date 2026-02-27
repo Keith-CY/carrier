@@ -30,23 +30,20 @@ const (
 )
 
 type RemoteHost struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Host           string            `json:"host,omitempty"`
-	Port           int               `json:"port,omitempty"`
-	User           string            `json:"user,omitempty"`
-	AuthMode       RemoteAuthMode    `json:"authMode"`
-	KeyPath        string            `json:"keyPath,omitempty"`
-	KeyRef         string            `json:"keyRef,omitempty"`
-	KeyName        string            `json:"keyName,omitempty"`
-	KeyFingerprint string            `json:"keyFingerprint,omitempty"`
-	SSHConfigHost  string            `json:"sshConfigHost,omitempty"`
-	RuntimeMode    RemoteRuntimeMode `json:"runtimeMode"`
-	LastHealth     RemoteHealth      `json:"lastHealth,omitempty"`
-	LastCheckAt    string            `json:"lastCheckAt,omitempty"`
-	LastError      string            `json:"lastError,omitempty"`
-	CreatedAt      string            `json:"createdAt"`
-	UpdatedAt      string            `json:"updatedAt"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Host          string            `json:"host,omitempty"`
+	Port          int               `json:"port,omitempty"`
+	User          string            `json:"user,omitempty"`
+	AuthMode      RemoteAuthMode    `json:"authMode"`
+	KeyPath       string            `json:"keyPath,omitempty"`
+	SSHConfigHost string            `json:"sshConfigHost,omitempty"`
+	RuntimeMode   RemoteRuntimeMode `json:"runtimeMode"`
+	LastHealth    RemoteHealth      `json:"lastHealth,omitempty"`
+	LastCheckAt   string            `json:"lastCheckAt,omitempty"`
+	LastError     string            `json:"lastError,omitempty"`
+	CreatedAt     string            `json:"createdAt"`
+	UpdatedAt     string            `json:"updatedAt"`
 }
 
 type RemoteInstance struct {
@@ -80,7 +77,7 @@ type ProviderBinding struct {
 	ProfileID  string `json:"profileId"`
 	TargetType string `json:"targetType"` // host | instance
 	TargetID   string `json:"targetId"`
-	SyncMode   string `json:"syncMode"` // always_push
+	SyncMode   string `json:"syncMode"` // always_push | pull_validate_push | manual
 	CreatedAt  string `json:"createdAt"`
 	UpdatedAt  string `json:"updatedAt"`
 }
@@ -99,6 +96,31 @@ type RemoteMemoryEntry struct {
 	ModifiedAt int64  `json:"modifiedAt"`
 }
 
+type RemoteInstanceSyncStatus struct {
+	HostID              string                 `json:"hostId"`
+	AgentID             string                 `json:"agentId"`
+	SyncMode            string                 `json:"syncMode"`
+	DriftState          string                 `json:"driftState"`
+	LastSyncStatus      string                 `json:"lastSyncStatus"`
+	LastSyncAt          string                 `json:"lastSyncAt,omitempty"`
+	LastDiagnoseAt      string                 `json:"lastDiagnoseAt,omitempty"`
+	LastDiagnoseResult  string                 `json:"lastDiagnoseResult,omitempty"`
+	LastReconcileAt     string                 `json:"lastReconcileAt,omitempty"`
+	LastRollbackAt      string                 `json:"lastRollbackAt,omitempty"`
+	LastRemoteHash      string                 `json:"lastRemoteHash,omitempty"`
+	LastCommonCommit    string                 `json:"lastCommonCommit,omitempty"`
+	LastLocalCommit     string                 `json:"lastLocalCommit,omitempty"`
+	LastRemoteCommit    string                 `json:"lastRemoteCommit,omitempty"`
+	LastCanonicalConfig map[string]interface{} `json:"lastCanonicalConfig,omitempty"`
+	UpdatedAt           string                 `json:"updatedAt"`
+}
+
+const (
+	providerBindingSyncModeAlwaysPush       = "always_push"
+	providerBindingSyncModePullValidatePush = "pull_validate_push"
+	providerBindingSyncModeManual           = "manual"
+)
+
 func nowTimestamp() string {
 	return time.Now().UTC().Format(time.RFC3339Nano)
 }
@@ -110,9 +132,6 @@ func normalizeRemoteHost(input RemoteHost) RemoteHost {
 	h.Host = strings.TrimSpace(h.Host)
 	h.User = strings.TrimSpace(h.User)
 	h.KeyPath = strings.TrimSpace(h.KeyPath)
-	h.KeyRef = strings.TrimSpace(h.KeyRef)
-	h.KeyName = strings.TrimSpace(h.KeyName)
-	h.KeyFingerprint = strings.TrimSpace(h.KeyFingerprint)
 	h.SSHConfigHost = strings.TrimSpace(h.SSHConfigHost)
 	h.LastError = strings.TrimSpace(h.LastError)
 	if h.AuthMode == "" {
@@ -146,13 +165,8 @@ func validateRemoteHost(h RemoteHost) error {
 		if h.Host == "" {
 			return fmt.Errorf("host is required for private_key auth mode")
 		}
-		if h.KeyPath == "" && h.KeyRef == "" {
-			return fmt.Errorf("keyPath or keyRef is required for private_key auth mode")
-		}
-		if h.KeyRef != "" {
-			if _, err := resolveRemoteKeyPath(h.KeyRef); err != nil {
-				return fmt.Errorf("invalid keyRef: %w", err)
-			}
+		if h.KeyPath == "" {
+			return fmt.Errorf("keyPath is required for private_key auth mode")
 		}
 	case RemoteAuthModeSSHConfig:
 		if h.SSHConfigHost == "" && h.Host == "" {
@@ -203,9 +217,9 @@ func normalizeProviderBinding(in ProviderBinding) ProviderBinding {
 	b.ProfileID = strings.TrimSpace(b.ProfileID)
 	b.TargetType = strings.ToLower(strings.TrimSpace(b.TargetType))
 	b.TargetID = strings.TrimSpace(b.TargetID)
-	b.SyncMode = strings.ToLower(strings.TrimSpace(b.SyncMode))
+	b.SyncMode = normalizeProviderBindingSyncMode(b.SyncMode)
 	if b.SyncMode == "" {
-		b.SyncMode = "always_push"
+		b.SyncMode = providerBindingSyncModeAlwaysPush
 	}
 	return b
 }
@@ -223,10 +237,27 @@ func validateProviderBinding(b ProviderBinding) error {
 	if b.TargetID == "" {
 		return fmt.Errorf("targetId is required")
 	}
-	if b.SyncMode != "always_push" {
-		return fmt.Errorf("syncMode must be always_push")
+	if err := validateProviderBindingSyncMode(b.SyncMode); err != nil {
+		return err
 	}
 	return nil
+}
+
+func normalizeProviderBindingSyncMode(raw string) string {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	if mode == "" {
+		return providerBindingSyncModeAlwaysPush
+	}
+	return mode
+}
+
+func validateProviderBindingSyncMode(mode string) error {
+	switch normalizeProviderBindingSyncMode(mode) {
+	case providerBindingSyncModeAlwaysPush, providerBindingSyncModePullValidatePush, providerBindingSyncModeManual:
+		return nil
+	default:
+		return fmt.Errorf("syncMode must be one of always_push, pull_validate_push, manual")
+	}
 }
 
 func validateAgentIdentifier(id string) error {

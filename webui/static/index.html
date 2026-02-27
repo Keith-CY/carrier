@@ -83,7 +83,7 @@
           <option value="">Select…</option>
           <option value="telegram">Telegram</option>
           <option value="discord">Discord</option>
-          <option value="skip">WebUI only (no channel)</option>
+          <option value="feishu">Feishu</option>
         </select>
         <label for="provider-token" id="setup-token-label">Token</label>
         <input type="password" id="provider-token" placeholder="Bot token">
@@ -299,15 +299,6 @@
           <div>
             <label for="server-key-path">Key Path</label>
             <input id="server-key-path" type="text" placeholder="~/.ssh/id_ed25519">
-            <p class="text-dim">Optional when uploading a PEM file below.</p>
-          </div>
-          <div>
-            <label for="server-key-file">PEM Upload</label>
-            <div id="server-key-dropzone" class="file-dropzone" tabindex="0" role="button">
-              Drag and drop `.pem` here, or choose a file.
-            </div>
-            <input id="server-key-file" type="file" accept=".pem,application/x-pem-file">
-            <p id="server-key-upload-state" class="text-dim">No uploaded key selected.</p>
           </div>
           <div>
             <label for="server-ssh-config-host">SSH Config Host</label>
@@ -341,6 +332,58 @@
             <label for="server-manage-log-tail">Log Tail</label>
             <input id="server-manage-log-tail" type="text" placeholder="200" value="200">
           </div>
+          <div>
+            <label for="server-manage-sync-mode">Sync Mode</label>
+            <select id="server-manage-sync-mode">
+              <option value="pull_validate_push" selected>pull_validate_push</option>
+              <option value="always_push">always_push</option>
+              <option value="manual">manual</option>
+            </select>
+          </div>
+          <div>
+            <label for="server-manage-rollback-commit">Rollback Commit <span class="text-dim">(optional)</span></label>
+            <input id="server-manage-rollback-commit" type="text" placeholder="commit hash">
+          </div>
+          <div>
+            <label for="server-manage-codeagent-backend">CodeAgent Backend</label>
+            <select id="server-manage-codeagent-backend">
+              <option value="codex" selected>codex</option>
+              <option value="opencode">opencode</option>
+            </select>
+          </div>
+          <div>
+            <label for="server-manage-codeagent-workspace-root">CodeAgent Workspace Root</label>
+            <input id="server-manage-codeagent-workspace-root" type="text" value="/workspace" placeholder="/workspace">
+          </div>
+          <div>
+            <label for="server-manage-codeagent-capability">CodeAgent Capability</label>
+            <select id="server-manage-codeagent-capability">
+              <option value="run_shell" selected>run_shell</option>
+              <option value="read_file">read_file</option>
+              <option value="write_file">write_file</option>
+              <option value="apply_patch">apply_patch</option>
+              <option value="run_shell_redirect">run_shell_redirect</option>
+            </select>
+          </div>
+          <div>
+            <label for="server-manage-codeagent-write-mode">CodeAgent Write Mode</label>
+            <select id="server-manage-codeagent-write-mode">
+              <option value="overwrite" selected>overwrite</option>
+              <option value="append">append</option>
+            </select>
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <label for="server-manage-codeagent-command">CodeAgent Command <span class="text-dim">(for run_shell)</span></label>
+            <input id="server-manage-codeagent-command" type="text" placeholder="echo hello from remote">
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <label for="server-manage-codeagent-path">CodeAgent Path <span class="text-dim">(for file capabilities)</span></label>
+            <input id="server-manage-codeagent-path" type="text" placeholder="README.md">
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <label for="server-manage-codeagent-content">CodeAgent Content <span class="text-dim">(for write/apply_patch)</span></label>
+            <textarea id="server-manage-codeagent-content" rows="4" placeholder="content or patch payload"></textarea>
+          </div>
         </div>
         <div class="btn-row">
           <button id="server-manage-load-instances" class="btn-sm btn-secondary">Load Instances</button>
@@ -348,6 +391,19 @@
           <button id="server-manage-install-instance" class="btn-sm">Install (Live)</button>
           <button id="server-manage-repair-instance" class="btn-sm btn-secondary">Repair</button>
           <button id="server-manage-load-logs" class="btn-sm btn-secondary">Load Logs</button>
+        </div>
+        <div class="btn-row" style="margin-top:8px">
+          <button id="server-manage-sync-instance" class="btn-sm btn-secondary">Sync</button>
+          <button id="server-manage-sync-status" class="btn-sm btn-secondary">Sync Status</button>
+          <button id="server-manage-diagnose-instance" class="btn-sm btn-secondary">Diagnose Drift</button>
+          <button id="server-manage-reconcile-instance" class="btn-sm btn-secondary">Reconcile</button>
+          <button id="server-manage-rollback-instance" class="btn-sm btn-danger">Rollback</button>
+        </div>
+        <div class="btn-row" style="margin-top:8px">
+          <button id="server-manage-codeagent-install" class="btn-sm">CodeAgent Install</button>
+          <button id="server-manage-codeagent-health" class="btn-sm btn-secondary">CodeAgent Health</button>
+          <button id="server-manage-codeagent-version" class="btn-sm btn-secondary">CodeAgent Version</button>
+          <button id="server-manage-codeagent-run" class="btn-sm btn-secondary">CodeAgent Run</button>
         </div>
         <pre id="server-manage-instances" class="code-block text-dim" style="margin-top:8px; min-height:72px"></pre>
         <div id="server-manage-instance-status-out" class="manage-output" style="margin-top:8px; min-height:72px"></div>

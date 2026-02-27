@@ -224,6 +224,15 @@ test.describe('Remote Control Plane Views', () => {
     let repairCalls = 0;
     let statusCalls = 0;
     let logsCalls = 0;
+    let syncCalls = 0;
+    let syncStatusCalls = 0;
+    let diagnoseCalls = 0;
+    let reconcileCalls = 0;
+    let rollbackCalls = 0;
+    let codeagentInstallCalls = 0;
+    let codeagentHealthCalls = 0;
+    let codeagentVersionCalls = 0;
+    let codeagentRunCalls = 0;
 
     await page.route('**/api/v1/remote/hosts', async (route) =>
       route.fulfill({
@@ -307,7 +316,7 @@ test.describe('Remote Control Plane Views', () => {
       });
     });
 
-    await page.route('**/api/v1/remote/hosts/*/instances/*/install', async (route) => {
+    await page.route('**/api/v1/remote/hosts/*/instances/*/install*', async (route) => {
       installCalls += 1;
       await new Promise((resolve) => setTimeout(resolve, 250));
       return route.fulfill({
@@ -320,6 +329,173 @@ test.describe('Remote Control Plane Views', () => {
             hostId: 'host-1',
             agentId: 'main',
             installed: true,
+          },
+        }),
+      });
+    });
+
+    await page.route('**/api/v1/remote/hosts/*/instances/*/sync/status', async (route) => {
+      syncStatusCalls += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          requestId: 'req-sync-status-1',
+          result: 'ok',
+          status: {
+            hostId: 'host-1',
+            agentId: 'main',
+            syncMode: 'pull_validate_push',
+            driftState: 'in_sync',
+            lastSyncStatus: 'success',
+          },
+        }),
+      });
+    });
+
+    await page.route('**/api/v1/remote/hosts/*/instances/*/sync', async (route) => {
+      syncCalls += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          requestId: 'req-sync-1',
+          result: 'ok',
+          sync: {
+            hostId: 'host-1',
+            agentId: 'main',
+            mode: 'pull_validate_push',
+            driftState: 'in_sync',
+          },
+          steps: [{ command: 'sync pull', exitCode: 0 }],
+        }),
+      });
+    });
+
+    await page.route('**/api/v1/remote/hosts/*/instances/*/diagnose', async (route) => {
+      diagnoseCalls += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          requestId: 'req-diagnose-1',
+          result: 'ok',
+          diagnose: {
+            hostId: 'host-1',
+            agentId: 'main',
+            result: 'healthy',
+            driftState: 'in_sync',
+          },
+          steps: [{ command: 'diagnose drift', exitCode: 0 }],
+        }),
+      });
+    });
+
+    await page.route('**/api/v1/remote/hosts/*/instances/*/reconcile', async (route) => {
+      reconcileCalls += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          requestId: 'req-reconcile-1',
+          result: 'ok',
+          reconcile: {
+            hostId: 'host-1',
+            agentId: 'main',
+            reconciled: true,
+            driftState: 'in_sync',
+          },
+          steps: [{ command: 'apply config', exitCode: 0 }],
+        }),
+      });
+    });
+
+    await page.route('**/api/v1/remote/hosts/*/instances/*/rollback', async (route) => {
+      rollbackCalls += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          requestId: 'req-rollback-1',
+          result: 'ok',
+          rollback: {
+            hostId: 'host-1',
+            agentId: 'main',
+            rolledBack: true,
+            fromCommit: 'abc123',
+            newCommit: 'def456',
+          },
+          steps: [{ command: 'rollback profile', exitCode: 0 }],
+        }),
+      });
+    });
+
+    await page.route('**/api/v1/remote/hosts/*/instances/*/codeagent/install', async (route) => {
+      codeagentInstallCalls += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          requestId: 'req-codeagent-install-1',
+          result: 'ok',
+          install: {
+            backend: 'codex',
+            workspaceRoot: '/workspace',
+            installed: true,
+            version: 'codex 1.0.0',
+          },
+        }),
+      });
+    });
+
+    await page.route('**/api/v1/remote/hosts/*/instances/*/codeagent/health*', async (route) => {
+      codeagentHealthCalls += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          requestId: 'req-codeagent-health-1',
+          result: 'ok',
+          health: {
+            backend: 'codex',
+            healthy: true,
+          },
+        }),
+      });
+    });
+
+    await page.route('**/api/v1/remote/hosts/*/instances/*/codeagent/version*', async (route) => {
+      codeagentVersionCalls += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          requestId: 'req-codeagent-version-1',
+          result: 'ok',
+          version: {
+            backend: 'codex',
+            value: 'codex 1.0.0',
+          },
+        }),
+      });
+    });
+
+    await page.route('**/api/v1/remote/hosts/*/instances/*/codeagent/run', async (route) => {
+      codeagentRunCalls += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          requestId: 'req-codeagent-run-1',
+          result: 'ok',
+          run: {
+            backend: 'codex',
+            result: {
+              ok: true,
+              exit_code: 0,
+              stdout: 'hello from codeagent',
+              policy_decision: 'allow',
+            },
           },
         }),
       });
@@ -445,6 +621,43 @@ test.describe('Remote Control Plane Views', () => {
     await expect(page.locator('#server-manage-op-meta')).toContainText('operation=instance_logs');
     await expect(page.locator('#server-manage-op-meta')).toContainText('requestId=req-logs-1');
     await expect(page.locator('#server-manage-op-meta')).toContainText('duration=');
+
+    await page.click('#server-manage-sync-instance');
+    await expect.poll(() => syncCalls).toBe(1);
+    await expect(page.locator('#server-manage-instance-status-out')).toContainText('drift state: in_sync');
+
+    await page.click('#server-manage-sync-status');
+    await expect.poll(() => syncStatusCalls).toBe(1);
+    await expect(page.locator('#server-manage-instance-status-out')).toContainText('sync status: success');
+
+    await page.click('#server-manage-diagnose-instance');
+    await expect.poll(() => diagnoseCalls).toBe(1);
+    await expect(page.locator('#server-manage-instance-status-out')).toContainText('diagnose result: healthy');
+
+    await page.click('#server-manage-reconcile-instance');
+    await expect.poll(() => reconcileCalls).toBe(1);
+    await expect(page.locator('#server-manage-instance-status-out')).toContainText('reconciled: true');
+
+    await page.click('#server-manage-rollback-instance');
+    await expect.poll(() => rollbackCalls).toBe(1);
+    await expect(page.locator('#server-manage-instance-status-out')).toContainText('rolled back: true');
+
+    await page.fill('#server-manage-codeagent-command', 'echo hello');
+    await page.click('#server-manage-codeagent-install');
+    await expect.poll(() => codeagentInstallCalls).toBe(1);
+    await expect(page.locator('#server-manage-instance-status-out')).toContainText('backend: codex');
+
+    await page.click('#server-manage-codeagent-health');
+    await expect.poll(() => codeagentHealthCalls).toBe(1);
+    await expect(page.locator('#server-manage-instance-status-out')).toContainText('healthy: true');
+
+    await page.click('#server-manage-codeagent-version');
+    await expect.poll(() => codeagentVersionCalls).toBe(1);
+    await expect(page.locator('#server-manage-instance-status-out')).toContainText('backend: codex');
+
+    await page.click('#server-manage-codeagent-run');
+    await expect.poll(() => codeagentRunCalls).toBe(1);
+    await expect(page.locator('#server-manage-logs')).toContainText('hello from codeagent');
 
     const loadConfigBtn = page.locator('#server-manage-load-config');
     await loadConfigBtn.click();

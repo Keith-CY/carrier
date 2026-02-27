@@ -41,7 +41,6 @@
   let serverManageLastOperation = null;
   let serverHostLastOperationByID = {};
   let serverEditingHostID = '';
-  let serverSelectedUploadedKey = null;
   let profileEditingProfileID = '';
   let serverManageInstallStreamAbortController = null;
   let serverManageLiveLogLines = [];
@@ -83,38 +82,6 @@
     };
     if (token) opts.headers['Authorization'] = 'Bearer ' + token;
     if (body) opts.body = JSON.stringify(body);
-    return fetch(path, opts).then(async r => {
-      if (r.status === 401) {
-        clearToken();
-        throw new Error('Unauthorized');
-      }
-      const raw = await r.text();
-      let data = {};
-      if (raw) {
-        try {
-          data = JSON.parse(raw);
-        } catch (e) {
-          if (!r.ok) throw new Error(raw || 'Request failed (' + r.status + ')');
-          return raw;
-        }
-      }
-      if (!r.ok) {
-        const errMsg =
-          (data && data.message) ||
-          (data && data.errorCode) ||
-          (data && data.error && (data.error.message || data.error.code)) ||
-          data.error ||
-          ('Request failed (' + r.status + ')');
-        throw new Error(errMsg);
-      }
-      return data;
-    });
-  }
-
-  function apiMultipart(path, formData) {
-    const opts = { method: 'POST', headers: {} };
-    if (token) opts.headers['Authorization'] = 'Bearer ' + token;
-    opts.body = formData;
     return fetch(path, opts).then(async r => {
       if (r.status === 401) {
         clearToken();
@@ -612,25 +579,6 @@
 
     function refreshSetupContinueState() {
       if (!isAddMode()) {
-        const channel = providerSelect.value.trim().toLowerCase();
-        const channelToken = tokenInput.value.trim();
-        const channelSecret = webhookInput.value.trim();
-        if (!channel) {
-          setupBtn.disabled = true;
-          return;
-        }
-        if (channel === 'skip') {
-          setupBtn.disabled = false;
-          return;
-        }
-        if (!channelToken) {
-          setupBtn.disabled = true;
-          return;
-        }
-        if (channel === 'discord' && !channelSecret) {
-          setupBtn.disabled = true;
-          return;
-        }
         setupBtn.disabled = false;
         return;
       }
@@ -687,7 +635,7 @@
       title.textContent = 'Step 1 — Configure Chat Channel';
       providerLabel.textContent = 'Chat Channel';
       tokenLabel.textContent = 'Channel Bot Token';
-      providerSelect.value = addChannel || 'skip';
+      providerSelect.value = '';
       [...providerSelect.options].forEach(opt => { opt.disabled = false; });
       webhookInput.disabled = false;
       webhookInput.placeholder = 'Webhook verification secret';
@@ -695,14 +643,11 @@
       if (webhookLabel) webhookLabel.classList.remove('hidden');
       pairSection.classList.add('hidden');
       renderCarrierPairShortcut('');
-      refreshSetupContinueState();
+      setupBtn.disabled = false;
     }
 
     providerSelect.onchange = () => {
-      if (!isAddMode()) {
-        refreshSetupContinueState();
-        return;
-      }
+      if (!isAddMode()) return;
       const channel = providerSelect.value.trim().toLowerCase();
       if (channel !== 'telegram') {
         addChannelChatId = '';
@@ -721,10 +666,7 @@
     };
 
     tokenInput.oninput = () => {
-      if (!isAddMode()) {
-        refreshSetupContinueState();
-        return;
-      }
+      if (!isAddMode()) return;
       const inputToken = tokenInput.value.trim();
       if (inputToken !== addChannelToken) {
         addChannelChatId = '';
@@ -741,11 +683,6 @@
         updatePairInstruction();
       }
       refreshSetupContinueState();
-    };
-    webhookInput.oninput = () => {
-      if (!isAddMode()) {
-        refreshSetupContinueState();
-      }
     };
 
     if (pairUseCarrierBtn) {
@@ -826,20 +763,16 @@
         setMsg('#setup-msg', 'Please choose a chat channel.', 'error');
         return;
       }
-      if (channel !== 'skip' && !channelToken) {
+      if (!channelToken) {
         setMsg('#setup-msg', 'Please enter channel bot token.', 'error');
-        return;
-      }
-      if (channel === 'discord' && !webhookSecret) {
-        setMsg('#setup-msg', 'Please enter Discord public key.', 'error');
         return;
       }
 
       // Reuse channel fields for non-add wizard install path as well.
       addChannel = channel;
-      addChannelToken = channel === 'skip' ? '' : channelToken;
-      addWebhookSecret = channel === 'skip' ? '' : webhookSecret;
-      location.hash = '#/provider';
+      addChannelToken = channelToken;
+      addWebhookSecret = webhookSecret;
+      location.hash = '#/agents';
     };
   }
 
@@ -1070,7 +1003,7 @@
       };
     }
 
-    $('#provider-back').onclick = () => { location.hash = '#/setup'; };
+    $('#provider-back').onclick = () => { location.hash = isAddMode() ? '#/setup' : '#/agents'; };
     $('#provider-skip').onclick = () => {
       selectedProvider = null;
       providerApiKey = '';
@@ -1078,7 +1011,11 @@
     };
     $('#provider-next').onclick = () => {
       if (!selectedProvider) return;
-      location.hash = '#/install';
+      if (isAddMode()) {
+        location.hash = '#/install';
+        return;
+      }
+      location.hash = '#/config';
     };
   }
 
@@ -1124,22 +1061,18 @@
       // OAuth / plugin / ADC
       label.textContent = p.name + ' requires external authentication.';
       instructions.classList.remove('hidden');
-      keyInput.classList.remove('hidden');
-      keyInput.placeholder = (p.env_var || 'Access token') + ' (optional, leave empty to reuse saved credential)';
-      keyInput.oninput = () => {
-        providerApiKey = keyInput.value.trim();
-        refreshProviderNextButton();
-      };
-      if (p.id === 'openai-codex') {
+      if (isAddMode()) {
         instructions.innerHTML =
-          'OAuth device-code login:<br>' +
-          '1. Open <code>https://auth.openai.com/codex/device</code><br>' +
-          '2. Enter your one-time device code and complete authorization<br>' +
-          '3. Paste <code>OPENAI_CODEX_TOKEN</code> below (or leave empty to reuse saved credential).';
+          'Paste access token below if you are not reusing Carrier credential.';
+        keyInput.classList.remove('hidden');
+        keyInput.placeholder = 'Access token (optional)';
+        keyInput.oninput = () => {
+          providerApiKey = keyInput.value.trim();
+          refreshProviderNextButton();
+        };
       } else {
-        instructions.innerHTML =
-          'Complete provider OAuth login, then paste access token below ' +
-          '(or leave empty to reuse saved credential).';
+        const cmd = 'openclaw models auth login --provider ' + p.id;
+        instructions.innerHTML = 'Run: <code>' + escapeHtml(cmd) + '</code><br>Then click Continue.';
       }
     }
     refreshProviderNextButton();
@@ -1208,8 +1141,8 @@
     const heading = $('#view-install h3');
     if (heading) heading.textContent = isAddMode() ? 'Step 3 — Confirm Installation' : 'Step 5 — Confirm Installation';
 
-    let summary = isAddMode() ? ('Agent: ' + selectedAgent) : 'Carrier Onboard';
-    if (addChannel) summary += '\nChannel: ' + (addChannel === 'skip' ? 'WebUI only' : addChannel);
+    let summary = 'Agent: ' + selectedAgent;
+    if (isAddMode()) summary += '\nChannel: ' + addChannel;
     if (selectedProvider) summary += '\nProvider: ' + selectedProvider.name;
     $('#install-summary').textContent = summary;
 
@@ -1237,18 +1170,24 @@
           });
           lastAddResult = resp || null;
         } else {
-          if (!selectedProvider) {
-            throw new Error('Please select an LLM provider.');
+          if (!selectedProvider && selectedAgent === 'picoclaw') {
+            throw new Error('Please select an LLM provider for picoclaw.');
           }
-          const resp = await api('POST', '/api/v1/onboard', {
-            channel: addChannel || 'skip',
+          const envVars = collectEnvVars();
+          if (addWebhookSecret) {
+            envVars.CARRIER_TELEGRAM_WEBHOOK_SECRET = addWebhookSecret;
+          }
+          const resp = await api('POST', '/api/v1/add', {
+            agentId: selectedAgent,
+            channel: addChannel,
             channelToken: addChannelToken,
-            channelSecret: addWebhookSecret,
-            providerId: selectedProvider.id,
+            channelChatId: addChannelChatId,
+            providerId: selectedProvider ? selectedProvider.id : '',
             providerToken: providerApiKey,
-            reuseCredential: providerApiKey ? false : true,
+            reuseCredential: true,
+            envVars,
           });
-          lastAddResult = (resp && resp.onboard) ? resp.onboard : (resp || null);
+          lastAddResult = resp || null;
         }
         location.hash = '#/complete';
       } catch (e) {
@@ -1277,24 +1216,6 @@
       }
       if (lastAddResult.pairedChatId) lines.push('Paired chat: ' + lastAddResult.pairedChatId);
       if (lastAddResult.workspacePath) lines.push('Workspace: ' + lastAddResult.workspacePath);
-      if (lastAddResult.configPath) lines.push('Config: ' + lastAddResult.configPath);
-      detail.textContent = lines.join('\n');
-    } else if (lastAddResult) {
-      const lines = [];
-      const pairRequired = !!lastAddResult.pairRequired;
-      if (pairRequired && title) title.textContent = '⚠️ One step left: Pair your bot';
-      if (lastAddResult.webuiOnly) {
-        lines.push('Mode: WebUI only (no chat channel configured).');
-      } else if (lastAddResult.channel) {
-        lines.push('Channel: ' + lastAddResult.channel);
-      }
-      if (lastAddResult.providerId) lines.push('Provider: ' + lastAddResult.providerId);
-      if (lastAddResult.pairCode) {
-        lines.push('Pair code: ' + lastAddResult.pairCode);
-      }
-      if (pairRequired && lastAddResult.pairCode) {
-        lines.push('Send in your bot chat: /pair ' + lastAddResult.pairCode);
-      }
       if (lastAddResult.configPath) lines.push('Config: ' + lastAddResult.configPath);
       detail.textContent = lines.join('\n');
     } else {
@@ -2073,25 +1994,10 @@
     return String(serverManageHostID || '').trim();
   }
 
-  function updateServerKeySelectionState() {
-    const status = $('#server-key-upload-state');
-    if (!status) return;
-    const key = serverSelectedUploadedKey && typeof serverSelectedUploadedKey === 'object' ? serverSelectedUploadedKey : null;
-    if (!key || !String(key.keyRef || '').trim()) {
-      status.textContent = 'No uploaded key selected.';
-      return;
-    }
-    const name = String(key.name || key.keyRef || '').trim();
-    const fp = String(key.fingerprint || '').trim();
-    status.textContent = fp ? ('Selected key: ' + name + ' (' + fp + ')') : ('Selected key: ' + name);
-  }
-
   function syncServerAuthModeInputs() {
     const authMode = $('#server-auth-mode');
     const hostInput = $('#server-host');
     const keyInput = $('#server-key-path');
-    const keyFileInput = $('#server-key-file');
-    const keyDropzone = $('#server-key-dropzone');
     const sshConfigInput = $('#server-ssh-config-host');
     const sshConfigSelect = $('#server-ssh-config-host-select');
     const sshConfigHint = $('#server-ssh-config-host-hint');
@@ -2099,11 +2005,6 @@
     const mode = String(authMode.value || '').trim().toLowerCase();
     const privateKey = mode === 'private_key';
     keyInput.disabled = !privateKey;
-    if (keyFileInput) keyFileInput.disabled = !privateKey;
-    if (keyDropzone) {
-      keyDropzone.classList.toggle('hidden', !privateKey);
-      keyDropzone.setAttribute('aria-disabled', privateKey ? 'false' : 'true');
-    }
     hostInput.disabled = false;
     sshConfigInput.disabled = privateKey;
     if (sshConfigSelect) {
@@ -2142,15 +2043,12 @@
       '#server-ssh-config-host': '',
       '#server-runtime-mode': 'on_demand',
       '#server-auth-mode': 'private_key',
-      '#server-key-file': '',
     };
     Object.keys(defaults).forEach(selector => {
       const el = $(selector);
       if (!el) return;
       el.value = defaults[selector];
     });
-    serverSelectedUploadedKey = null;
-    updateServerKeySelectionState();
     syncServerAuthModeInputs();
   }
 
@@ -2174,7 +2072,6 @@
       '#server-port': String(host.port || 22),
       '#server-user': host.user || '',
       '#server-key-path': host.keyPath || '',
-      '#server-key-file': '',
       '#server-ssh-config-host': host.sshConfigHost || '',
       '#server-runtime-mode': host.runtimeMode || 'on_demand',
       '#server-auth-mode': host.authMode || 'private_key',
@@ -2184,16 +2081,6 @@
       if (!el) return;
       el.value = map[selector];
     });
-    if (String(host.keyRef || '').trim()) {
-      serverSelectedUploadedKey = {
-        keyRef: String(host.keyRef || '').trim(),
-        name: String(host.keyName || host.keyRef || '').trim(),
-        fingerprint: String(host.keyFingerprint || '').trim(),
-      };
-    } else {
-      serverSelectedUploadedKey = null;
-    }
-    updateServerKeySelectionState();
     syncServerAuthModeInputs();
     updateServerEditorUI();
   }
@@ -2447,6 +2334,60 @@
     return parsed;
   }
 
+  function getServerManageSyncMode() {
+    const input = $('#server-manage-sync-mode');
+    const value = input && input.value ? input.value.trim() : '';
+    if (value === 'always_push' || value === 'manual') return value;
+    return 'pull_validate_push';
+  }
+
+  function getServerManageRollbackCommit() {
+    const input = $('#server-manage-rollback-commit');
+    return input && input.value ? input.value.trim() : '';
+  }
+
+  function getServerManageCodeAgentBackend() {
+    const input = $('#server-manage-codeagent-backend');
+    const value = input && input.value ? input.value.trim().toLowerCase() : '';
+    if (value === 'opencode') return 'opencode';
+    return 'codex';
+  }
+
+  function getServerManageCodeAgentWorkspaceRoot() {
+    const input = $('#server-manage-codeagent-workspace-root');
+    const value = input && input.value ? input.value.trim() : '';
+    return value || '/workspace';
+  }
+
+  function getServerManageCodeAgentCapability() {
+    const input = $('#server-manage-codeagent-capability');
+    const value = input && input.value ? input.value.trim().toLowerCase() : '';
+    if (!value) return 'run_shell';
+    return value;
+  }
+
+  function getServerManageCodeAgentWriteMode() {
+    const input = $('#server-manage-codeagent-write-mode');
+    const value = input && input.value ? input.value.trim().toLowerCase() : '';
+    if (value === 'append') return 'append';
+    return 'overwrite';
+  }
+
+  function getServerManageCodeAgentCommand() {
+    const input = $('#server-manage-codeagent-command');
+    return input && input.value ? input.value.trim() : '';
+  }
+
+  function getServerManageCodeAgentPath() {
+    const input = $('#server-manage-codeagent-path');
+    return input && input.value ? input.value.trim() : '';
+  }
+
+  function getServerManageCodeAgentContent() {
+    const input = $('#server-manage-codeagent-content');
+    return input && typeof input.value === 'string' ? input.value : '';
+  }
+
   function pickRemoteInstanceAgentID(instance) {
     if (!instance || typeof instance !== 'object') return 'main';
     const fromAgentID = String(instance.agentId || instance.agentID || '').trim();
@@ -2548,12 +2489,47 @@
       statusCard.appendChild(row);
     }
 
+    function appendBoolKV(label, value) {
+      if (typeof value !== 'boolean') return;
+      appendKV(label, value ? 'true' : 'false');
+    }
+
+    function appendNumberKV(label, value) {
+      if (!Number.isFinite(Number(value))) return;
+      appendKV(label, String(value));
+    }
+
     appendKV('id', current.id || current.ID || '');
     appendKV('runtime', runtimeState || 'unknown');
     appendKV('health', health || 'unknown');
     if (installed !== null) appendKV('install status', installed ? 'installed' : 'not installed');
     if (repaired !== null) appendKV('repair status', repaired ? 'repaired' : 'not repaired');
     if (gatewayHealthy !== null) appendKV('gateway', gatewayHealthy ? 'healthy' : 'unhealthy');
+    appendKV('sync mode', current.syncMode || current.sync_mode || '');
+    appendKV('drift state', current.driftState || current.drift_state || '');
+    appendKV('sync status', current.lastSyncStatus || current.last_sync_status || current.status || '');
+    appendKV('sync at', current.lastSyncAt || current.last_sync_at || '');
+    appendKV('diagnose at', current.lastDiagnoseAt || current.last_diagnose_at || '');
+    appendKV('diagnose result', current.lastDiagnoseResult || current.last_diagnose_result || current.result || '');
+    appendKV('reconcile at', current.lastReconcileAt || current.last_reconcile_at || '');
+    appendKV('rollback at', current.lastRollbackAt || current.last_rollback_at || '');
+    appendKV('from commit', current.fromCommit || current.from_commit || '');
+    appendKV('new commit', current.newCommit || current.new_commit || '');
+    appendKV('local commit', current.lastLocalCommit || current.last_local_commit || '');
+    appendKV('common commit', current.lastCommonCommit || current.last_common_commit || '');
+    appendKV('remote hash', current.lastRemoteHash || current.last_remote_hash || '');
+    appendKV('backend', current.backend || '');
+    appendKV('policy decision', current.policy_decision || current.policyDecision || '');
+    appendKV('policy reason', current.policy_reason || current.policyReason || '');
+    appendNumberKV('exit code', current.exit_code != null ? current.exit_code : current.exitCode);
+    appendNumberKV('duration ms', current.duration_ms != null ? current.duration_ms : current.durationMs);
+    appendNumberKV('cost estimate usd', current.cost_estimate_usd != null ? current.cost_estimate_usd : current.costEstimateUSD);
+    appendBoolKV('reconciled', current.reconciled);
+    appendBoolKV('rolled back', current.rolledBack != null ? current.rolledBack : current.rolled_back);
+    appendBoolKV('restored snapshot', current.restoredSnapshot != null ? current.restoredSnapshot : current.restored_snapshot);
+    appendBoolKV('healthy', current.healthy);
+    appendBoolKV('configured', current.configured);
+    appendBoolKV('ok', current.ok);
     out.appendChild(statusCard);
 
     const stepsCard = document.createElement('div');
@@ -3070,12 +3046,30 @@
       'server-manage-install-instance',
       'server-manage-repair-instance',
       'server-manage-load-logs',
+      'server-manage-sync-instance',
+      'server-manage-sync-status',
+      'server-manage-diagnose-instance',
+      'server-manage-reconcile-instance',
+      'server-manage-rollback-instance',
+      'server-manage-codeagent-install',
+      'server-manage-codeagent-health',
+      'server-manage-codeagent-version',
+      'server-manage-codeagent-run',
       'server-manage-load-config',
       'server-manage-apply-config',
       'server-manage-load-sessions',
       'server-manage-archive-session',
       'server-manage-delete-session',
       'server-manage-load-memory',
+      'server-manage-sync-mode',
+      'server-manage-rollback-commit',
+      'server-manage-codeagent-backend',
+      'server-manage-codeagent-workspace-root',
+      'server-manage-codeagent-capability',
+      'server-manage-codeagent-write-mode',
+      'server-manage-codeagent-command',
+      'server-manage-codeagent-path',
+      'server-manage-codeagent-content',
       'server-manage-chat-input',
       'server-manage-chat-send',
       'server-manage-chat-reset-session',
@@ -3542,6 +3536,215 @@
     await runServerManageOperation('load-logs', task);
   }
 
+  async function syncServerManageInstance() {
+    const target = validateServerManageInstanceTarget();
+    if (!target.hostID || !target.agentID) return;
+    const mode = getServerManageSyncMode();
+    await runServerManageOperation('sync-instance', async () => {
+      renderServerManageProgress('Sync', target.hostID + ':' + target.agentID);
+      setMsg('#server-manage-msg', 'Sync in progress for ' + target.agentID + ' (mode=' + mode + ')...', 'info');
+      try {
+        const path = '/api/v1/remote/hosts/' + encodeURIComponent(target.hostID) + '/instances/' + encodeURIComponent(target.agentID) + '/sync';
+        const payload = await serverManageAPI('POST', path, { mode: mode }, 'instance_sync');
+        renderServerManageInstanceStatus(payload.sync || {}, payload.steps || []);
+        setMsg('#server-manage-msg', 'Sync completed for ' + target.agentID + '.', 'success');
+      } catch (e) {
+        setMsg('#server-manage-msg', 'Sync failed: ' + e.message, 'error');
+      }
+    });
+  }
+
+  async function loadServerManageSyncStatus() {
+    const target = validateServerManageInstanceTarget();
+    if (!target.hostID || !target.agentID) return;
+    await runServerManageOperation('sync-status', async () => {
+      renderServerManageProgress('Sync Status', target.hostID + ':' + target.agentID);
+      setMsg('#server-manage-msg', 'Loading sync status for ' + target.agentID + '...', 'info');
+      try {
+        const path = '/api/v1/remote/hosts/' + encodeURIComponent(target.hostID) + '/instances/' + encodeURIComponent(target.agentID) + '/sync/status';
+        const payload = await serverManageAPI('GET', path, null, 'instance_sync_status');
+        renderServerManageInstanceStatus(payload.status || {}, []);
+        setMsg('#server-manage-msg', 'Sync status loaded for ' + target.agentID + '.', 'success');
+      } catch (e) {
+        setMsg('#server-manage-msg', 'Load sync status failed: ' + e.message, 'error');
+      }
+    });
+  }
+
+  async function diagnoseServerManageInstance() {
+    const target = validateServerManageInstanceTarget();
+    if (!target.hostID || !target.agentID) return;
+    await runServerManageOperation('diagnose-instance', async () => {
+      renderServerManageProgress('Diagnose Drift', target.hostID + ':' + target.agentID);
+      setMsg('#server-manage-msg', 'Diagnosing drift for ' + target.agentID + '...', 'info');
+      try {
+        const path = '/api/v1/remote/hosts/' + encodeURIComponent(target.hostID) + '/instances/' + encodeURIComponent(target.agentID) + '/diagnose';
+        const payload = await serverManageAPI('POST', path, {}, 'instance_diagnose');
+        renderServerManageInstanceStatus(payload.diagnose || {}, payload.steps || []);
+        setMsg('#server-manage-msg', 'Diagnose completed for ' + target.agentID + '.', 'success');
+      } catch (e) {
+        setMsg('#server-manage-msg', 'Diagnose failed: ' + e.message, 'error');
+      }
+    });
+  }
+
+  async function reconcileServerManageInstance() {
+    const target = validateServerManageInstanceTarget();
+    if (!target.hostID || !target.agentID) return;
+    await runServerManageOperation('reconcile-instance', async () => {
+      renderServerManageProgress('Reconcile', target.hostID + ':' + target.agentID);
+      setMsg('#server-manage-msg', 'Reconciling ' + target.agentID + '...', 'info');
+      try {
+        const path = '/api/v1/remote/hosts/' + encodeURIComponent(target.hostID) + '/instances/' + encodeURIComponent(target.agentID) + '/reconcile';
+        const payload = await serverManageAPI('POST', path, {}, 'instance_reconcile');
+        renderServerManageInstanceStatus(payload.reconcile || {}, payload.steps || []);
+        setMsg('#server-manage-msg', 'Reconcile completed for ' + target.agentID + '.', 'success');
+      } catch (e) {
+        setMsg('#server-manage-msg', 'Reconcile failed: ' + e.message, 'error');
+      }
+    });
+  }
+
+  async function rollbackServerManageInstance() {
+    const target = validateServerManageInstanceTarget();
+    if (!target.hostID || !target.agentID) return;
+    const commit = getServerManageRollbackCommit();
+    await runServerManageOperation('rollback-instance', async () => {
+      renderServerManageProgress('Rollback', target.hostID + ':' + target.agentID);
+      setMsg('#server-manage-msg', 'Rollback in progress for ' + target.agentID + '...', 'info');
+      try {
+        const path = '/api/v1/remote/hosts/' + encodeURIComponent(target.hostID) + '/instances/' + encodeURIComponent(target.agentID) + '/rollback';
+        const body = {};
+        if (commit) body.commit = commit;
+        const payload = await serverManageAPI('POST', path, body, 'instance_rollback');
+        renderServerManageInstanceStatus(payload.rollback || {}, payload.steps || []);
+        setMsg('#server-manage-msg', 'Rollback completed for ' + target.agentID + '.', 'success');
+      } catch (e) {
+        setMsg('#server-manage-msg', 'Rollback failed: ' + e.message, 'error');
+      }
+    });
+  }
+
+  async function installServerManageCodeAgent() {
+    const target = validateServerManageInstanceTarget();
+    if (!target.hostID || !target.agentID) return;
+    const backend = getServerManageCodeAgentBackend();
+    const workspaceRoot = getServerManageCodeAgentWorkspaceRoot();
+    await runServerManageOperation('codeagent-install', async () => {
+      renderServerManageProgress('CodeAgent Install', target.hostID + ':' + target.agentID);
+      setMsg('#server-manage-msg', 'Installing codeagent (' + backend + ') for ' + target.agentID + '...', 'info');
+      try {
+        const path = '/api/v1/remote/hosts/' + encodeURIComponent(target.hostID) + '/instances/' + encodeURIComponent(target.agentID) + '/codeagent/install';
+        const payload = await serverManageAPI('POST', path, {
+          backend: backend,
+          workspaceRoot: workspaceRoot,
+        }, 'codeagent_install');
+        renderServerManageInstanceStatus(payload.install || {}, []);
+        setMsg('#server-manage-msg', 'CodeAgent install completed for ' + target.agentID + '.', 'success');
+      } catch (e) {
+        setMsg('#server-manage-msg', 'CodeAgent install failed: ' + e.message, 'error');
+      }
+    });
+  }
+
+  async function healthServerManageCodeAgent() {
+    const target = validateServerManageInstanceTarget();
+    if (!target.hostID || !target.agentID) return;
+    const backend = getServerManageCodeAgentBackend();
+    const workspaceRoot = getServerManageCodeAgentWorkspaceRoot();
+    await runServerManageOperation('codeagent-health', async () => {
+      renderServerManageProgress('CodeAgent Health', target.hostID + ':' + target.agentID);
+      setMsg('#server-manage-msg', 'Checking codeagent health (' + backend + ') for ' + target.agentID + '...', 'info');
+      try {
+        const path = '/api/v1/remote/hosts/' + encodeURIComponent(target.hostID) + '/instances/' + encodeURIComponent(target.agentID) + '/codeagent/health?backend=' + encodeURIComponent(backend) + '&workspaceRoot=' + encodeURIComponent(workspaceRoot);
+        const payload = await serverManageAPI('GET', path, null, 'codeagent_health');
+        renderServerManageInstanceStatus(payload.health || {}, []);
+        setMsg('#server-manage-msg', 'CodeAgent health check completed for ' + target.agentID + '.', 'success');
+      } catch (e) {
+        setMsg('#server-manage-msg', 'CodeAgent health check failed: ' + e.message, 'error');
+      }
+    });
+  }
+
+  async function versionServerManageCodeAgent() {
+    const target = validateServerManageInstanceTarget();
+    if (!target.hostID || !target.agentID) return;
+    const backend = getServerManageCodeAgentBackend();
+    await runServerManageOperation('codeagent-version', async () => {
+      renderServerManageProgress('CodeAgent Version', target.hostID + ':' + target.agentID);
+      setMsg('#server-manage-msg', 'Loading codeagent version (' + backend + ') for ' + target.agentID + '...', 'info');
+      try {
+        const path = '/api/v1/remote/hosts/' + encodeURIComponent(target.hostID) + '/instances/' + encodeURIComponent(target.agentID) + '/codeagent/version?backend=' + encodeURIComponent(backend);
+        const payload = await serverManageAPI('GET', path, null, 'codeagent_version');
+        renderServerManageInstanceStatus(payload.version || { backend: backend }, []);
+        setMsg('#server-manage-msg', 'CodeAgent version loaded for ' + target.agentID + '.', 'success');
+      } catch (e) {
+        setMsg('#server-manage-msg', 'CodeAgent version failed: ' + e.message, 'error');
+      }
+    });
+  }
+
+  async function runServerManageCodeAgent() {
+    const target = validateServerManageInstanceTarget();
+    if (!target.hostID || !target.agentID) return;
+    const backend = getServerManageCodeAgentBackend();
+    const workspaceRoot = getServerManageCodeAgentWorkspaceRoot();
+    const capability = getServerManageCodeAgentCapability();
+    const command = getServerManageCodeAgentCommand();
+    const pathInput = getServerManageCodeAgentPath();
+    const content = getServerManageCodeAgentContent();
+    const writeMode = getServerManageCodeAgentWriteMode();
+
+    if ((capability === 'run_shell' || capability === 'run_shell_redirect') && !command) {
+      setMsg('#server-manage-msg', 'CodeAgent command is required for run_shell capability.', 'error');
+      return;
+    }
+    if ((capability === 'read_file' || capability === 'write_file') && !pathInput) {
+      setMsg('#server-manage-msg', 'CodeAgent path is required for file capabilities.', 'error');
+      return;
+    }
+    if ((capability === 'write_file' || capability === 'apply_patch') && !content) {
+      setMsg('#server-manage-msg', 'CodeAgent content is required for write/apply_patch.', 'error');
+      return;
+    }
+
+    await runServerManageOperation('codeagent-run', async () => {
+      renderServerManageProgress('CodeAgent Run', target.hostID + ':' + target.agentID);
+      setMsg('#server-manage-msg', 'Running codeagent capability ' + capability + ' on ' + target.agentID + '...', 'info');
+      try {
+        const endpoint = '/api/v1/remote/hosts/' + encodeURIComponent(target.hostID) + '/instances/' + encodeURIComponent(target.agentID) + '/codeagent/run';
+        const payload = await serverManageAPI('POST', endpoint, {
+          backend: backend,
+          workspaceRoot: workspaceRoot,
+          capability: capability,
+          command: command,
+          path: pathInput,
+          content: content,
+          writeMode: writeMode,
+        }, 'codeagent_run');
+        const runBlock = payload && payload.run && typeof payload.run === 'object' ? payload.run : {};
+        const runResult = runBlock && runBlock.result && typeof runBlock.result === 'object' ? runBlock.result : {};
+        renderServerManageInstanceStatus(runResult, []);
+
+        const stdout = runResult && runResult.stdout ? String(runResult.stdout) : '';
+        const stderr = runResult && runResult.stderr ? String(runResult.stderr) : '';
+        const parts = [];
+        if (stdout.trim()) parts.push('[stdout]\n' + stdout.trim());
+        if (stderr.trim()) parts.push('[stderr]\n' + stderr.trim());
+        renderServerManageLogs(parts.join('\n\n'));
+
+        const policyDecision = String(runResult.policy_decision || '').trim();
+        if (policyDecision === 'deny' || policyDecision === 'ask') {
+          setMsg('#server-manage-msg', 'CodeAgent run blocked by policy (' + policyDecision + ').', 'error');
+          return;
+        }
+        setMsg('#server-manage-msg', 'CodeAgent run completed for ' + target.agentID + '.', 'success');
+      } catch (e) {
+        setMsg('#server-manage-msg', 'CodeAgent run failed: ' + e.message, 'error');
+      }
+    });
+  }
+
   function renderServersList(hosts) {
     const wrap = $('#servers-list');
     if (!wrap) return;
@@ -3637,7 +3840,6 @@
         'id: ' + (host.id || '-'),
         'endpoint: ' + endpoint,
         'auth: ' + (host.authMode || '-'),
-        'key: ' + (host.keyRef ? ('uploaded:' + host.keyRef) : (host.keyPath || '-')),
         'runtime: ' + (host.runtimeMode || '-'),
         'health: ' + (host.lastHealth || 'unknown'),
       ];
@@ -3697,6 +3899,15 @@
     const installInstanceBtn = $('#server-manage-install-instance');
     const repairInstanceBtn = $('#server-manage-repair-instance');
     const loadLogsBtn = $('#server-manage-load-logs');
+    const syncInstanceBtn = $('#server-manage-sync-instance');
+    const syncStatusBtn = $('#server-manage-sync-status');
+    const diagnoseInstanceBtn = $('#server-manage-diagnose-instance');
+    const reconcileInstanceBtn = $('#server-manage-reconcile-instance');
+    const rollbackInstanceBtn = $('#server-manage-rollback-instance');
+    const codeAgentInstallBtn = $('#server-manage-codeagent-install');
+    const codeAgentHealthBtn = $('#server-manage-codeagent-health');
+    const codeAgentVersionBtn = $('#server-manage-codeagent-version');
+    const codeAgentRunBtn = $('#server-manage-codeagent-run');
     const loadConfigBtn = $('#server-manage-load-config');
     const applyConfigBtn = $('#server-manage-apply-config');
     const loadSessionsBtn = $('#server-manage-load-sessions');
@@ -3715,40 +3926,6 @@
     const diagnosisOut = $('#server-manage-diagnosis');
     const sessionsOut = $('#server-manage-sessions');
     const memoryOut = $('#server-manage-memory');
-    const keyPathInput = $('#server-key-path');
-    const keyFileInput = $('#server-key-file');
-    const keyDropzone = $('#server-key-dropzone');
-
-    async function uploadRemoteKeyFile(file) {
-      if (!file) return;
-      const mode = String(authMode && authMode.value ? authMode.value : '').trim().toLowerCase();
-      if (mode !== 'private_key') {
-        setMsg('#servers-msg', 'PEM upload is only available for private_key auth mode.', 'error');
-        return;
-      }
-      const form = new FormData();
-      form.append('file', file);
-      try {
-        setMsg('#servers-msg', 'Uploading PEM key...', 'info');
-        const payload = await apiMultipart('/api/v1/remote/keys', form);
-        const key = payload && payload.key && typeof payload.key === 'object' ? payload.key : null;
-        if (!key || !String(key.keyRef || '').trim()) {
-          throw new Error('invalid upload response');
-        }
-        serverSelectedUploadedKey = {
-          keyRef: String(key.keyRef || '').trim(),
-          name: String(key.name || '').trim(),
-          fingerprint: String(key.fingerprint || '').trim(),
-        };
-        if (keyPathInput) keyPathInput.value = '';
-        updateServerKeySelectionState();
-        setMsg('#servers-msg', 'PEM uploaded and saved securely.', 'success');
-      } catch (e) {
-        setMsg('#servers-msg', 'PEM upload failed: ' + e.message, 'error');
-      } finally {
-        if (keyFileInput) keyFileInput.value = '';
-      }
-    }
 
     function syncServerEditSelection(hosts) {
       const list = Array.isArray(hosts) ? hosts : [];
@@ -3800,52 +3977,25 @@
       };
     }
     syncServerAuthModeInputs();
-    updateServerKeySelectionState();
     updateServerEditorUI();
     setServerManageControlsDisabled(false);
     renderServerManageChatMessages();
     updateServerManageChatStatus('Ready to chat with selected SSG agent.', 'info');
-
-    if (keyPathInput) {
-      keyPathInput.oninput = () => {
-        if (String(keyPathInput.value || '').trim()) {
-          serverSelectedUploadedKey = null;
-          updateServerKeySelectionState();
-        }
-      };
-    }
-    if (keyFileInput) {
-      keyFileInput.onchange = async () => {
-        const files = keyFileInput.files;
-        if (!files || files.length === 0) return;
-        await uploadRemoteKeyFile(files[0]);
-      };
-    }
-    if (keyDropzone) {
-      keyDropzone.onclick = () => {
-        if (keyFileInput) keyFileInput.click();
-      };
-      keyDropzone.ondragover = e => {
-        e.preventDefault();
-        keyDropzone.classList.add('dragover');
-      };
-      keyDropzone.ondragleave = () => {
-        keyDropzone.classList.remove('dragover');
-      };
-      keyDropzone.ondrop = async e => {
-        e.preventDefault();
-        keyDropzone.classList.remove('dragover');
-        const files = e.dataTransfer && e.dataTransfer.files ? e.dataTransfer.files : null;
-        if (!files || files.length === 0) return;
-        await uploadRemoteKeyFile(files[0]);
-      };
-    }
 
     if (loadInstancesBtn) loadInstancesBtn.onclick = () => { loadServerManageInstances(); };
     if (instanceStatusBtn) instanceStatusBtn.onclick = () => { loadServerManageInstanceStatus(); };
     if (installInstanceBtn) installInstanceBtn.onclick = () => { installServerManageInstance(); };
     if (repairInstanceBtn) repairInstanceBtn.onclick = () => { repairServerManageInstance(); };
     if (loadLogsBtn) loadLogsBtn.onclick = () => { loadServerManageLogs(); };
+    if (syncInstanceBtn) syncInstanceBtn.onclick = () => { syncServerManageInstance(); };
+    if (syncStatusBtn) syncStatusBtn.onclick = () => { loadServerManageSyncStatus(); };
+    if (diagnoseInstanceBtn) diagnoseInstanceBtn.onclick = () => { diagnoseServerManageInstance(); };
+    if (reconcileInstanceBtn) reconcileInstanceBtn.onclick = () => { reconcileServerManageInstance(); };
+    if (rollbackInstanceBtn) rollbackInstanceBtn.onclick = () => { rollbackServerManageInstance(); };
+    if (codeAgentInstallBtn) codeAgentInstallBtn.onclick = () => { installServerManageCodeAgent(); };
+    if (codeAgentHealthBtn) codeAgentHealthBtn.onclick = () => { healthServerManageCodeAgent(); };
+    if (codeAgentVersionBtn) codeAgentVersionBtn.onclick = () => { versionServerManageCodeAgent(); };
+    if (codeAgentRunBtn) codeAgentRunBtn.onclick = () => { runServerManageCodeAgent(); };
     if (loadConfigBtn) loadConfigBtn.onclick = () => { loadServerManageConfig(); };
     if (applyConfigBtn) applyConfigBtn.onclick = () => { applyServerManageConfigPatch(); };
     if (loadSessionsBtn) loadSessionsBtn.onclick = () => { loadServerManageSessions(); };
@@ -3918,7 +4068,6 @@
 
     saveBtn.onclick = async () => {
       const mode = (authMode.value || '').trim().toLowerCase();
-      const selectedKey = serverSelectedUploadedKey && typeof serverSelectedUploadedKey === 'object' ? serverSelectedUploadedKey : null;
       const payload = {
         name: ($('#server-name').value || '').trim(),
         host: ($('#server-host').value || '').trim(),
@@ -3926,9 +4075,6 @@
         user: ($('#server-user').value || '').trim(),
         authMode: mode,
         keyPath: ($('#server-key-path').value || '').trim(),
-        keyRef: selectedKey && mode === 'private_key' ? String(selectedKey.keyRef || '').trim() : '',
-        keyName: selectedKey && mode === 'private_key' ? String(selectedKey.name || '').trim() : '',
-        keyFingerprint: selectedKey && mode === 'private_key' ? String(selectedKey.fingerprint || '').trim() : '',
         sshConfigHost: ($('#server-ssh-config-host').value || '').trim(),
         runtimeMode: ($('#server-runtime-mode').value || 'on_demand').trim(),
       };

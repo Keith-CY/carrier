@@ -1,14 +1,13 @@
 package gateway
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +25,6 @@ func buildRemoteFeatureMuxWithConfigAndDaemonHandlers(t *testing.T, cfg *Gateway
 	t.Helper()
 	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(t.TempDir(), "instances.json"))
 	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
-	t.Setenv("CARRIER_REMOTE_KEY_DIR", filepath.Join(t.TempDir(), "keys"))
 	resetRemoteMetricsForTests()
 
 	srv := newMockDaemon(daemonHandlers)
@@ -77,27 +75,13 @@ func decodeJSONMap(t *testing.T, rec *httptest.ResponseRecorder) map[string]inte
 	return out
 }
 
-func runMultipartRequest(t *testing.T, mux http.Handler, method, path, fieldName, fileName string, content []byte) *httptest.ResponseRecorder {
-	t.Helper()
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	part, err := writer.CreateFormFile(fieldName, fileName)
-	if err != nil {
-		t.Fatalf("create multipart file field: %v", err)
+func extractHeredocPayload(command string) string {
+	re := regexp.MustCompile(`(?s)<<'[^']+'\n(.*)\n[^\n]+$`)
+	matches := re.FindStringSubmatch(command)
+	if len(matches) != 2 {
+		return ""
 	}
-	if _, err := part.Write(content); err != nil {
-		t.Fatalf("write multipart content: %v", err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("close multipart writer: %v", err)
-	}
-
-	req := httptest.NewRequest(method, path, &body)
-	req.Header.Set("Authorization", "Bearer test-gateway-token")
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	return rec
+	return strings.TrimSpace(matches[1])
 }
 
 func configureSSHRunner(t *testing.T, fn func(command string) remoteExecResult) {
@@ -155,87 +139,6 @@ func createRemoteHostForTests(t *testing.T, mux http.Handler) string {
 		t.Fatalf("missing host id in response: %v", payload)
 	}
 	return hostID
-}
-
-func TestRemoteKeysUploadAndUseKeyRefInHostCheck(t *testing.T) {
-	mux := buildRemoteFeatureMux(t)
-
-	pemContent := []byte("-----BEGIN PRIVATE KEY-----\nAQID\n-----END PRIVATE KEY-----\n")
-	uploadRec := runMultipartRequest(t, mux, http.MethodPost, "/api/v1/remote/keys", "file", "aws-test.pem", pemContent)
-	if uploadRec.Code != http.StatusOK {
-		t.Fatalf("upload key status=%d body=%s", uploadRec.Code, uploadRec.Body.String())
-	}
-	uploadPayload := decodeJSONMap(t, uploadRec)
-	keyMap, _ := uploadPayload["key"].(map[string]interface{})
-	keyRef, _ := keyMap["keyRef"].(string)
-	if strings.TrimSpace(keyRef) == "" {
-		t.Fatalf("expected keyRef in upload response, payload=%v", uploadPayload)
-	}
-	keyFingerprint, _ := keyMap["fingerprint"].(string)
-	if !strings.HasPrefix(keyFingerprint, "sha256:") {
-		t.Fatalf("expected sha256 fingerprint, got %q", keyFingerprint)
-	}
-
-	createHostRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts", `{
-		"name":"ec2-host",
-		"host":"127.0.0.1",
-		"port":22,
-		"user":"ubuntu",
-		"authMode":"private_key",
-		"keyRef":"`+keyRef+`",
-		"keyName":"aws-test.pem",
-		"keyFingerprint":"`+keyFingerprint+`",
-		"runtimeMode":"on_demand"
-	}`)
-	if createHostRec.Code != http.StatusOK {
-		t.Fatalf("create host status=%d body=%s", createHostRec.Code, createHostRec.Body.String())
-	}
-	createHostPayload := decodeJSONMap(t, createHostRec)
-	hostMap, _ := createHostPayload["host"].(map[string]interface{})
-	hostID, _ := hostMap["id"].(string)
-	if strings.TrimSpace(hostID) == "" {
-		t.Fatalf("expected host id, payload=%v", createHostPayload)
-	}
-
-	var observedIPath string
-	origRunner := sshExecRunner
-	sshExecRunner = func(_ context.Context, args []string) (remoteExecResult, error) {
-		for i := 0; i < len(args)-1; i++ {
-			if args[i] == "-i" {
-				observedIPath = args[i+1]
-				break
-			}
-		}
-		cmd := ""
-		if len(args) > 0 {
-			cmd = args[len(args)-1]
-		}
-		switch {
-		case strings.Contains(cmd, "echo carrier-ssh-ok"):
-			return remoteExecResult{ExitCode: 0, Stdout: "carrier-ssh-ok\n", Command: cmd}, nil
-		case strings.Contains(cmd, "command -v openclaw"):
-			return remoteExecResult{ExitCode: 0, Command: cmd}, nil
-		default:
-			return remoteExecResult{ExitCode: 0, Command: cmd}, nil
-		}
-	}
-	t.Cleanup(func() { sshExecRunner = origRunner })
-
-	checkRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/check", `{}`)
-	if checkRec.Code != http.StatusOK {
-		t.Fatalf("check host status=%d body=%s", checkRec.Code, checkRec.Body.String())
-	}
-
-	expectedKeyPath, err := resolveRemoteKeyPath(keyRef)
-	if err != nil {
-		t.Fatalf("resolveRemoteKeyPath: %v", err)
-	}
-	if observedIPath != expectedKeyPath {
-		t.Fatalf("ssh -i key path = %q, want %q", observedIPath, expectedKeyPath)
-	}
-	if _, statErr := os.Stat(expectedKeyPath); statErr != nil {
-		t.Fatalf("expected stored PEM file to exist at %s: %v", expectedKeyPath, statErr)
-	}
 }
 
 func TestRemoteHostsCRUDAndCheck(t *testing.T) {
@@ -722,5 +625,309 @@ func TestRemotePatchConfigUsesExpandedSnapshotPath(t *testing.T) {
 	}
 	if strings.Contains(writeCommand, "'$HOME/.openclaw/snapshots/") {
 		t.Fatalf("snapshot path should not be single-quoted with literal $HOME, command=%s", writeCommand)
+	}
+}
+
+func TestProviderBindingsAcceptExtendedSyncModes(t *testing.T) {
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "cat \"$HOME/.openclaw/openclaw.json\""):
+			return remoteExecResult{ExitCode: 0, Stdout: `{"agents":{"defaults":{"provider":"openai","model":"gpt-4.1"}}}`}
+		case strings.Contains(command, "cat > \"$HOME/.openclaw/openclaw.json\""):
+			return remoteExecResult{ExitCode: 0}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	createProfileRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/provider-profiles", `{
+		"name":"sync-mode-test",
+		"provider":"openai",
+		"model":"gpt-5"
+	}`)
+	if createProfileRec.Code != http.StatusOK {
+		t.Fatalf("create profile status=%d body=%s", createProfileRec.Code, createProfileRec.Body.String())
+	}
+	createPayload := decodeJSONMap(t, createProfileRec)
+	profile, _ := createPayload["profile"].(map[string]interface{})
+	profileID, _ := profile["id"].(string)
+	if profileID == "" {
+		t.Fatalf("missing profile id in payload=%v", createPayload)
+	}
+
+	for _, syncMode := range []string{"pull_validate_push", "manual"} {
+		rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/provider-bindings", `{
+			"profileId":"`+profileID+`",
+			"targetType":"host",
+			"targetId":"`+hostID+`",
+			"syncMode":"`+syncMode+`"
+		}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("syncMode=%s expected 200 got status=%d body=%s", syncMode, rec.Code, rec.Body.String())
+		}
+		payload := decodeJSONMap(t, rec)
+		binding, _ := payload["binding"].(map[string]interface{})
+		if got, _ := binding["syncMode"].(string); got != syncMode {
+			t.Fatalf("syncMode=%s got binding.syncMode=%q payload=%v", syncMode, got, payload)
+		}
+	}
+}
+
+func TestRemoteInstanceSyncDiagnoseAndReconcile(t *testing.T) {
+	configPatchWrites := 0
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "cat \"$HOME/.openclaw/openclaw.json\""):
+			return remoteExecResult{ExitCode: 0, Stdout: `{"agents":{"defaults":{"provider":"openai","model":"gpt-4.1"}}}`}
+		case strings.Contains(command, "cat > \"$HOME/.openclaw/openclaw.json\""):
+			configPatchWrites++
+			return remoteExecResult{ExitCode: 0}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	syncRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/sync", `{"mode":"pull_validate_push"}`)
+	if syncRec.Code != http.StatusOK {
+		t.Fatalf("sync status=%d body=%s", syncRec.Code, syncRec.Body.String())
+	}
+	syncPayload := decodeJSONMap(t, syncRec)
+	syncMap, _ := syncPayload["sync"].(map[string]interface{})
+	if syncMap == nil {
+		t.Fatalf("missing sync payload: %v", syncPayload)
+	}
+	if got, _ := syncMap["status"].(string); got != "in_sync" {
+		t.Fatalf("expected sync status=in_sync got=%q payload=%v", got, syncPayload)
+	}
+	if got, _ := syncMap["mode"].(string); got != "pull_validate_push" {
+		t.Fatalf("expected sync mode pull_validate_push got=%q payload=%v", got, syncPayload)
+	}
+
+	statusRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/remote/hosts/"+hostID+"/instances/main/sync/status", "")
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("sync status api status=%d body=%s", statusRec.Code, statusRec.Body.String())
+	}
+	statusPayload := decodeJSONMap(t, statusRec)
+	statusMap, _ := statusPayload["status"].(map[string]interface{})
+	if statusMap == nil {
+		t.Fatalf("missing status payload: %v", statusPayload)
+	}
+	if got, _ := statusMap["driftState"].(string); got != "in_sync" {
+		t.Fatalf("expected driftState=in_sync got=%q payload=%v", got, statusPayload)
+	}
+
+	diagnoseRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/diagnose", `{}`)
+	if diagnoseRec.Code != http.StatusOK {
+		t.Fatalf("diagnose status=%d body=%s", diagnoseRec.Code, diagnoseRec.Body.String())
+	}
+	diagnosePayload := decodeJSONMap(t, diagnoseRec)
+	diagnoseMap, _ := diagnosePayload["diagnose"].(map[string]interface{})
+	if diagnoseMap == nil {
+		t.Fatalf("missing diagnose payload: %v", diagnosePayload)
+	}
+	if got, _ := diagnoseMap["result"].(string); got != "healthy" {
+		t.Fatalf("expected diagnose result healthy got=%q payload=%v", got, diagnosePayload)
+	}
+
+	reconcileRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/reconcile", `{}`)
+	if reconcileRec.Code != http.StatusOK {
+		t.Fatalf("reconcile status=%d body=%s", reconcileRec.Code, reconcileRec.Body.String())
+	}
+	reconcilePayload := decodeJSONMap(t, reconcileRec)
+	reconcileMap, _ := reconcilePayload["reconcile"].(map[string]interface{})
+	if reconcileMap == nil {
+		t.Fatalf("missing reconcile payload: %v", reconcilePayload)
+	}
+	if reconciled, _ := reconcileMap["reconciled"].(bool); !reconciled {
+		t.Fatalf("expected reconciled=true payload=%v", reconcilePayload)
+	}
+	if configPatchWrites < 1 {
+		t.Fatalf("expected at least one config patch write during reconcile, writes=%d", configPatchWrites)
+	}
+}
+
+func TestRemoteRollbackRestoresConfigFromGitProfile(t *testing.T) {
+	t.Setenv("CARRIER_PROFILESYNC_REPO", t.TempDir())
+
+	remoteConfig := `{"agents":{"defaults":{"provider":"openai","model":"gpt-4.1"}}}`
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "cat \"$HOME/.openclaw/openclaw.json\""):
+			return remoteExecResult{ExitCode: 0, Stdout: remoteConfig}
+		case strings.Contains(command, "cat > \"$HOME/.openclaw/openclaw.json\""):
+			payload := extractHeredocPayload(command)
+			if strings.TrimSpace(payload) != "" {
+				remoteConfig = payload
+			}
+			return remoteExecResult{ExitCode: 0}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	syncRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/sync", `{"mode":"pull_validate_push"}`)
+	if syncRec.Code != http.StatusOK {
+		t.Fatalf("sync status=%d body=%s", syncRec.Code, syncRec.Body.String())
+	}
+	statusRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/remote/hosts/"+hostID+"/instances/main/sync/status", "")
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("sync status api status=%d body=%s", statusRec.Code, statusRec.Body.String())
+	}
+	statusPayload := decodeJSONMap(t, statusRec)
+	statusMap, _ := statusPayload["status"].(map[string]interface{})
+	if statusMap == nil {
+		t.Fatalf("missing status payload: %v", statusPayload)
+	}
+	commit, _ := statusMap["lastLocalCommit"].(string)
+	if commit == "" {
+		t.Fatalf("expected lastLocalCommit in sync status payload=%v", statusPayload)
+	}
+
+	patchRec := runJSONRequest(t, mux, http.MethodPatch, "/api/v1/remote/hosts/"+hostID+"/config", `{
+		"patch":{"agents":{"defaults":{"model":"gpt-5"}}}
+	}`)
+	if patchRec.Code != http.StatusOK {
+		t.Fatalf("config patch status=%d body=%s", patchRec.Code, patchRec.Body.String())
+	}
+
+	diagnoseRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/diagnose", `{}`)
+	if diagnoseRec.Code != http.StatusOK {
+		t.Fatalf("diagnose status=%d body=%s", diagnoseRec.Code, diagnoseRec.Body.String())
+	}
+	diagnosePayload := decodeJSONMap(t, diagnoseRec)
+	diagnoseMap, _ := diagnosePayload["diagnose"].(map[string]interface{})
+	if got, _ := diagnoseMap["result"].(string); got != "drift_detected" {
+		t.Fatalf("expected diagnose result drift_detected got=%q payload=%v", got, diagnosePayload)
+	}
+
+	rollbackRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/rollback", `{"commit":"`+commit+`"}`)
+	if rollbackRec.Code != http.StatusOK {
+		t.Fatalf("rollback status=%d body=%s", rollbackRec.Code, rollbackRec.Body.String())
+	}
+	rollbackPayload := decodeJSONMap(t, rollbackRec)
+	rollbackMap, _ := rollbackPayload["rollback"].(map[string]interface{})
+	if rollbackMap == nil {
+		t.Fatalf("missing rollback payload=%v", rollbackPayload)
+	}
+	if rolledBack, _ := rollbackMap["rolledBack"].(bool); !rolledBack {
+		t.Fatalf("expected rolledBack=true payload=%v", rollbackPayload)
+	}
+
+	configRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/remote/hosts/"+hostID+"/config", "")
+	if configRec.Code != http.StatusOK {
+		t.Fatalf("config read status=%d body=%s", configRec.Code, configRec.Body.String())
+	}
+	configPayload := decodeJSONMap(t, configRec)
+	configMap, _ := configPayload["config"].(map[string]interface{})
+	agents, _ := configMap["agents"].(map[string]interface{})
+	defaults, _ := agents["defaults"].(map[string]interface{})
+	model, _ := defaults["model"].(string)
+	if model != "gpt-4.1" {
+		t.Fatalf("expected model restored to gpt-4.1, got %q payload=%v", model, configPayload)
+	}
+}
+
+func TestRemoteCodeAgentLifecycleAndAudit(t *testing.T) {
+	auditPath := filepath.Join(t.TempDir(), "gateway-audit.jsonl")
+	t.Setenv("CARRIER_GATEWAY_AUDIT_LOG", auditPath)
+
+	sshCalls := 0
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		sshCalls++
+		switch {
+		case strings.Contains(command, "command -v codex"):
+			return remoteExecResult{ExitCode: 0}
+		case strings.Contains(command, "command -v opencode"):
+			return remoteExecResult{ExitCode: 0}
+		case strings.Contains(command, "codex") && strings.Contains(command, "--version"):
+			return remoteExecResult{ExitCode: 0, Stdout: "codex 1.0.0"}
+		case strings.Contains(command, "opencode") && strings.Contains(command, "--version"):
+			return remoteExecResult{ExitCode: 0, Stdout: "opencode 1.0.0"}
+		case strings.Contains(command, "codex") && strings.Contains(command, "exec"):
+			return remoteExecResult{ExitCode: 0, Stdout: `{"ok":true}`}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	installRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/codeagent/install", `{
+		"backend":"codex",
+		"workspaceRoot":"/workspace"
+	}`)
+	if installRec.Code != http.StatusOK {
+		t.Fatalf("codeagent install status=%d body=%s", installRec.Code, installRec.Body.String())
+	}
+
+	versionRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/remote/hosts/"+hostID+"/instances/main/codeagent/version?backend=opencode", "")
+	if versionRec.Code != http.StatusOK {
+		t.Fatalf("codeagent version status=%d body=%s", versionRec.Code, versionRec.Body.String())
+	}
+	versionPayload := decodeJSONMap(t, versionRec)
+	versionMap, _ := versionPayload["version"].(map[string]interface{})
+	if backend, _ := versionMap["backend"].(string); backend != "opencode" {
+		t.Fatalf("expected backend opencode in version payload=%v", versionPayload)
+	}
+
+	runRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/codeagent/run", `{
+		"backend":"codex",
+		"workspaceRoot":"/workspace",
+		"capability":"run_shell",
+		"command":"ls -la"
+	}`)
+	if runRec.Code != http.StatusOK {
+		t.Fatalf("codeagent run status=%d body=%s", runRec.Code, runRec.Body.String())
+	}
+	runPayload := decodeJSONMap(t, runRec)
+	runMap, _ := runPayload["run"].(map[string]interface{})
+	resultMap, _ := runMap["result"].(map[string]interface{})
+	if ok, _ := resultMap["ok"].(bool); !ok {
+		t.Fatalf("expected codeagent run ok=true payload=%v", runPayload)
+	}
+	if decision, _ := resultMap["policy_decision"].(string); decision != "allow" {
+		t.Fatalf("expected policy allow payload=%v", runPayload)
+	}
+	if estimate, _ := resultMap["cost_estimate_usd"].(float64); estimate <= 0 {
+		t.Fatalf("expected positive cost estimate payload=%v", runPayload)
+	}
+
+	beforeDangerCallCount := sshCalls
+	denyRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/codeagent/run", `{
+		"backend":"codex",
+		"workspaceRoot":"/workspace",
+		"capability":"run_shell",
+		"command":"rm -rf /"
+	}`)
+	if denyRec.Code != http.StatusOK {
+		t.Fatalf("codeagent deny run status=%d body=%s", denyRec.Code, denyRec.Body.String())
+	}
+	denyPayload := decodeJSONMap(t, denyRec)
+	denyRun, _ := denyPayload["run"].(map[string]interface{})
+	denyResult, _ := denyRun["result"].(map[string]interface{})
+	if decision, _ := denyResult["policy_decision"].(string); decision != "deny" {
+		t.Fatalf("expected deny decision payload=%v", denyPayload)
+	}
+	if sshCalls != beforeDangerCallCount {
+		t.Fatalf("expected denied command to avoid ssh execution, before=%d after=%d", beforeDangerCallCount, sshCalls)
+	}
+
+	rawAudit, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit file failed: %v", err)
+	}
+	text := string(rawAudit)
+	if !strings.Contains(text, `"action":"remote_codeagent_run"`) {
+		t.Fatalf("expected remote_codeagent_run audit entry, audit=%s", text)
 	}
 }
