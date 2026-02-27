@@ -24,8 +24,8 @@ The `scripts/stress-test.sh` script provides reliability stress testing for the 
 Before running stress tests, ensure the Carrier daemon is running:
 
 ```bash
-# Start daemon (adjust path as needed)
-./carrier daemon &
+# Start daemon
+carrier daemon &
 
 # Verify daemon is accessible
 curl -s http://127.0.0.1:9090/api/v1/agents
@@ -375,8 +375,8 @@ jobs:
       
       - name: Start daemon
         run: |
-          go build -o ./carrier ./cmd/carrier
-          ./carrier daemon &
+          curl -fsSL https://raw.githubusercontent.com/Keith-CY/carrier/main/scripts/install.sh | bash
+          carrier daemon &
           sleep 3
       
       - name: Run stress tests

@@ -1500,11 +1500,12 @@ func runRemoteAddCommand(in io.Reader, out io.Writer, opts remoteCommandOptions)
 	if opts.Action != "add" {
 		return fmt.Errorf("unsupported remote action: %s", opts.Action)
 	}
+	agentName := remoteAgentDisplayName(opts.AgentID)
 	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
 		return err
 	}
 
-	_, _ = fmt.Fprintf(out, "[1/8] upsert remote host: %s\n", opts.HostID)
+	printRemoteStep(out, 1, 8, fmt.Sprintf("Register or update remote host: %s", opts.HostID))
 	hostPayload := map[string]interface{}{
 		"id":          opts.HostID,
 		"name":        opts.HostName,
@@ -1519,28 +1520,36 @@ func runRemoteAddCommand(in io.Reader, out io.Writer, opts remoteCommandOptions)
 		return err
 	}
 
-	_, _ = fmt.Fprintln(out, "[2/8] pre-check host")
+	printRemoteStep(out, 2, 8, "Verify remote host connectivity")
 	preCheck, err := runRemoteHostCheckWithRetry(opts.HostID, opts.CheckRetries, opts.CheckRetryDelaySec, false, nil)
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "  sshOk=%t openclawFound=%t\n", preCheck.Check.SSHOK, preCheck.Check.OpenClawFound)
+	printRemoteCheckSummary(out, preCheck, "")
+	if preCheck.Check.OpenClawFound {
+		_, _ = fmt.Fprintf(out, "  Existing %s runtime detected; upgrade-safe install will run.\n", agentName)
+	} else {
+		_, _ = fmt.Fprintf(out, "  %s runtime not detected; fresh install will run.\n", agentName)
+	}
 
-	_, _ = fmt.Fprintf(out, "[3/8] install %s (stream)\n", opts.AgentID)
+	printRemoteStep(out, 3, 8, fmt.Sprintf("Install %s on remote host", agentName))
 	if err := runRemoteInstallStream(out, opts.HostID, opts.InstallAgentID); err != nil {
 		return err
 	}
+	_, _ = fmt.Fprintf(out, "  %s installation stream completed successfully.\n", agentName)
 
 	if len(opts.SyncChannels) > 0 || len(opts.SyncProviders) > 0 {
-		_, _ = fmt.Fprintln(out, "[4/8] sync selected local config")
+		printRemoteStep(out, 4, 8, "Sync selected local configuration")
 		if err := runRemoteSelectedConfigSync(opts); err != nil {
 			return err
 		}
+		_, _ = fmt.Fprintln(out, "  Local configuration sync completed.")
 	} else {
-		_, _ = fmt.Fprintln(out, "[4/8] sync selected local config skipped")
+		printRemoteStep(out, 4, 8, "Sync selected local configuration")
+		_, _ = fmt.Fprintln(out, "  Skipped (no --sync-channel/--sync-provider provided).")
 	}
 
-	_, _ = fmt.Fprintln(out, "[5/8] post-check host")
+	printRemoteStep(out, 5, 8, "Post-install health check")
 	postCheck, err := runRemoteHostCheckWithRetry(opts.HostID, opts.CheckRetries, opts.CheckRetryDelaySec, false, nil)
 	if err != nil {
 		return err
@@ -1549,21 +1558,21 @@ func runRemoteAddCommand(in io.Reader, out io.Writer, opts remoteCommandOptions)
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "  sshOk=%t openclawFound=%t\n", postCheck.Check.SSHOK, postCheck.Check.OpenClawFound)
+	printRemoteCheckSummary(out, postCheck, "")
 
-	_, _ = fmt.Fprintln(out, "[6/8] list instances")
-	if err := printRemoteInstances(out, opts.HostID, "  instances"); err != nil {
+	printRemoteStep(out, 6, 8, "List remote instances")
+	if err := printRemoteInstances(out, opts.HostID, "Detected instances"); err != nil {
 		return err
 	}
 
 	if opts.SkipReconnectCheck {
-		_, _ = fmt.Fprintln(out, "[7/8] reconnect check skipped")
-		_, _ = fmt.Fprintln(out, "[8/8] reconnect check skipped")
-		_, _ = fmt.Fprintf(out, "done: remote add flow succeeded for host=%s agent=%s\n", opts.HostID, opts.AgentID)
+		printRemoteStep(out, 7, 8, "Reconnect simulation skipped (--skip-reconnect-check)")
+		printRemoteStep(out, 8, 8, "Reconnect verification skipped (--skip-reconnect-check)")
+		_, _ = fmt.Fprintln(out, colorizeForTTY(out, fmt.Sprintf("Completed: %s remote install finished for host %s.", agentName, opts.HostID), ansiGreenBold))
 		return nil
 	}
 
-	_, _ = fmt.Fprintln(out, "[7/8] reconnect simulation (delete + re-upsert)")
+	printRemoteStep(out, 7, 8, "Reconnect simulation (remove host record and re-register)")
 	if _, _, err := gatewayRequestWithTimeout(http.MethodDelete, "/api/v1/remote/hosts/"+neturl.PathEscape(opts.HostID), nil, 30*time.Second); err != nil {
 		return err
 	}
@@ -1571,7 +1580,7 @@ func runRemoteAddCommand(in io.Reader, out io.Writer, opts remoteCommandOptions)
 		return err
 	}
 
-	_, _ = fmt.Fprintln(out, "[8/8] reconnect check + list")
+	printRemoteStep(out, 8, 8, "Reconnect verification and instance refresh")
 	reconnectCheck, err := runRemoteHostCheckWithRetry(opts.HostID, opts.CheckRetries, opts.CheckRetryDelaySec, false, nil)
 	if err != nil {
 		return err
@@ -1580,12 +1589,12 @@ func runRemoteAddCommand(in io.Reader, out io.Writer, opts remoteCommandOptions)
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "  reconnect.sshOk=%t reconnect.openclawFound=%t\n", reconnectCheck.Check.SSHOK, reconnectCheck.Check.OpenClawFound)
-	if err := printRemoteInstances(out, opts.HostID, "  reconnect.instances"); err != nil {
+	printRemoteCheckSummary(out, reconnectCheck, "Reconnect verification")
+	if err := printRemoteInstances(out, opts.HostID, "Instances after reconnect"); err != nil {
 		return err
 	}
 
-	_, _ = fmt.Fprintf(out, "done: remote add flow succeeded for host=%s agent=%s\n", opts.HostID, opts.AgentID)
+	_, _ = fmt.Fprintln(out, colorizeForTTY(out, fmt.Sprintf("Completed: %s is installed on host %s and reconnect verification passed.", agentName, opts.HostID), ansiGreenBold))
 	return nil
 }
 
@@ -1598,19 +1607,12 @@ func printRemoteInstances(out io.Writer, hostID, label string) error {
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return fmt.Errorf("decode instances response: %w", err)
 	}
-	ids := make([]string, 0, len(payload.Instances))
-	for _, inst := range payload.Instances {
-		id := strings.TrimSpace(inst.ID)
-		if id == "" {
-			continue
-		}
-		ids = append(ids, id)
-	}
-	if len(ids) == 0 {
-		_, _ = fmt.Fprintf(out, "%s=<none>\n", label)
+	names := summarizeRemoteInstanceNames(payload.Instances)
+	if len(names) == 0 {
+		_, _ = fmt.Fprintf(out, "  %s: none\n", strings.TrimSpace(label))
 		return nil
 	}
-	_, _ = fmt.Fprintf(out, "%s=%s\n", label, strings.Join(ids, ","))
+	_, _ = fmt.Fprintf(out, "  %s: %s\n", strings.TrimSpace(label), strings.Join(names, ", "))
 	return nil
 }
 
@@ -1669,36 +1671,29 @@ func maybeConfirmPullForPendingInstances(in io.Reader, out io.Writer, hostID str
 	if !checkResp.PullConfirmationRequired || len(checkResp.PendingPullInstances) == 0 {
 		return checkResp, nil
 	}
-	pendingIDs := make([]string, 0, len(checkResp.PendingPullInstances))
-	for _, inst := range checkResp.PendingPullInstances {
-		agentID := strings.ToLower(strings.TrimSpace(inst.AgentID))
-		if agentID == "" {
-			continue
-		}
-		pendingIDs = append(pendingIDs, agentID)
-	}
+	pendingIDs := summarizeRemoteInstanceNames(checkResp.PendingPullInstances)
 	if len(pendingIDs) == 0 {
 		return checkResp, nil
 	}
-	_, _ = fmt.Fprintf(out, "  pendingPullInstances=%s\n", strings.Join(pendingIDs, ","))
+	_, _ = fmt.Fprintf(out, "  Discovered %d previously unknown remote instance(s): %s\n", len(pendingIDs), strings.Join(pendingIDs, ", "))
 	if !isInteractiveReader(in) {
-		_, _ = fmt.Fprintln(out, "  non-interactive input detected, skip pulling newly discovered instance configs")
+		_, _ = fmt.Fprintln(out, "  Non-interactive input detected; skipping import of newly discovered remote configs.")
 		return checkResp, nil
 	}
 	reader := bufio.NewReader(in)
-	confirm, err := promptYesNo(reader, out, "Pull newly discovered remote instance configs to local Carrier profile store?", false)
+	confirm, err := promptYesNo(reader, out, "Import these remote instance configs into local Carrier profile store?", false)
 	if err != nil {
 		return checkResp, err
 	}
 	if !confirm {
-		_, _ = fmt.Fprintln(out, "  skip remote config pull for pending instances")
+		_, _ = fmt.Fprintln(out, "  Skipped importing newly discovered remote instance configs.")
 		return checkResp, nil
 	}
 	confirmed, err := runRemoteHostCheck(hostID, true, pendingIDs)
 	if err != nil {
 		return checkResp, err
 	}
-	_, _ = fmt.Fprintln(out, "  pulled pending instance configs")
+	_, _ = fmt.Fprintf(out, "  Imported %d remote instance config(s) into local Carrier profile store.\n", len(pendingIDs))
 	return confirmed, nil
 }
 
@@ -1744,6 +1739,7 @@ func runRemoteInstallStream(out io.Writer, hostID, agentID string) error {
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 	installed := false
+	emitted := map[string]bool{}
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if !strings.HasPrefix(line, "data:") {
@@ -1765,10 +1761,24 @@ func runRemoteInstallStream(out io.Writer, hostID, agentID string) error {
 			if logLine == "" {
 				continue
 			}
-			if stream == "" {
-				stream = "log"
+			message, warning, ok := formatRemoteInstallLogLine(stream, logLine)
+			if !ok {
+				continue
 			}
-			_, _ = fmt.Fprintf(out, "  [%s] %s\n", stream, logLine)
+			if emitted[message] {
+				continue
+			}
+			emitted[message] = true
+			if warning {
+				_, _ = fmt.Fprintf(out, "  %s\n", colorizeForTTY(out, "Warning: "+message, ansiYellow))
+			} else {
+				style := ansiCyan
+				lowerMessage := strings.ToLower(strings.TrimSpace(message))
+				if strings.Contains(lowerMessage, "installed successfully") || strings.Contains(lowerMessage, "upgrade completed") {
+					style = ansiGreen
+				}
+				_, _ = fmt.Fprintf(out, "  %s\n", colorizeForTTY(out, message, style))
+			}
 		case "error":
 			message := strings.TrimSpace(anyToString(payload["message"]))
 			if message == "" {
@@ -1787,6 +1797,123 @@ func runRemoteInstallStream(out io.Writer, hostID, agentID string) error {
 		return errors.New("remote install stream finished without installed=true")
 	}
 	return nil
+}
+
+const (
+	ansiReset     = "\033[0m"
+	ansiCyanBold  = "\033[1;36m"
+	ansiCyan      = "\033[36m"
+	ansiGreen     = "\033[32m"
+	ansiGreenBold = "\033[1;32m"
+	ansiYellow    = "\033[33m"
+)
+
+func printRemoteStep(out io.Writer, index, total int, message string) {
+	line := fmt.Sprintf("[%d/%d] %s", index, total, strings.TrimSpace(message))
+	_, _ = fmt.Fprintln(out, colorizeForTTY(out, line, ansiCyanBold))
+}
+
+func colorizeForTTY(out io.Writer, text, ansiCode string) string {
+	if !supportsANSIColor(out) || strings.TrimSpace(ansiCode) == "" {
+		return text
+	}
+	return ansiCode + text + ansiReset
+}
+
+func supportsANSIColor(out io.Writer) bool {
+	if strings.TrimSpace(os.Getenv("NO_COLOR")) != "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("TERM")), "dumb") {
+		return false
+	}
+	file, ok := out.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
+}
+
+func remoteAgentDisplayName(agentID string) string {
+	switch strings.ToLower(strings.TrimSpace(agentID)) {
+	case "openclaw":
+		return "OpenClaw"
+	case "picoclaw":
+		return "PicoClaw"
+	case "zeroclaw":
+		return "ZeroClaw"
+	default:
+		return strings.TrimSpace(agentID)
+	}
+}
+
+func printRemoteCheckSummary(out io.Writer, check remoteHostCheckResponse, label string) {
+	label = strings.TrimSpace(label)
+	if label != "" {
+		_, _ = fmt.Fprintf(out, "  %s:\n", label)
+	}
+	if check.Check.SSHOK {
+		_, _ = fmt.Fprintln(out, "  SSH connectivity: OK.")
+	} else {
+		_, _ = fmt.Fprintln(out, "  SSH connectivity: FAILED.")
+	}
+	if check.Check.OpenClawFound {
+		_, _ = fmt.Fprintln(out, "  OpenClaw runtime: detected.")
+	} else {
+		_, _ = fmt.Fprintln(out, "  OpenClaw runtime: not detected.")
+	}
+}
+
+func summarizeRemoteInstanceNames(instances []remoteInstanceSummary) []string {
+	names := make([]string, 0, len(instances))
+	for _, inst := range instances {
+		agentID := strings.ToLower(strings.TrimSpace(inst.AgentID))
+		if agentID == "" {
+			id := strings.TrimSpace(inst.ID)
+			if idx := strings.LastIndex(id, ":"); idx >= 0 && idx+1 < len(id) {
+				agentID = strings.ToLower(strings.TrimSpace(id[idx+1:]))
+			} else {
+				agentID = strings.ToLower(strings.TrimSpace(id))
+			}
+		}
+		if agentID == "" {
+			continue
+		}
+		names = append(names, agentID)
+	}
+	return dedupeLowerStrings(names)
+}
+
+func formatRemoteInstallLogLine(stream, line string) (string, bool, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return "", false, false
+	}
+	lower := strings.ToLower(trimmed)
+	switch {
+	case strings.Contains(lower, "existing openclaw installation detected"):
+		return "Existing OpenClaw installation found; upgrading in place.", false, true
+	case strings.Contains(lower, "installing openclaw v"):
+		return trimmed, false, true
+	case strings.Contains(lower, "openclaw installed successfully"):
+		return trimmed, false, true
+	case strings.Contains(lower, "upgrade complete"):
+		return "Upgrade completed.", false, true
+	case strings.Contains(lower, "doctor failed; skipping plugin updates"):
+		return "Doctor step reported a non-blocking issue; plugin updates were skipped.", true, true
+	case strings.HasPrefix(lower, "dashboard url:"):
+		return trimmed, false, true
+	case strings.Contains(lower, "setlocale:"):
+		return "Remote locale warning (non-blocking): " + trimmed, true, true
+	case strings.EqualFold(strings.TrimSpace(stream), "stderr") && strings.Contains(lower, "warning"):
+		return "Remote warning: " + trimmed, true, true
+	default:
+		return "", false, false
+	}
 }
 
 func runRemoteSelectedConfigSync(opts remoteCommandOptions) error {

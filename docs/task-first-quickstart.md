@@ -1,6 +1,7 @@
 # Task-First Quickstart
 
 This guide is optimized for execution, not architecture reading.
+All commands below assume `carrier` is installed and available in `PATH`.
 
 ## Task 1: Install Carrier On Local Machine
 
@@ -9,15 +10,6 @@ Recommended:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Keith-CY/carrier/main/scripts/install.sh | bash
 carrier --version
-```
-
-Source build alternative:
-
-```bash
-git clone https://github.com/Keith-CY/carrier.git
-cd carrier
-go build -o ./carrier ./cmd/carrier
-./carrier --version
 ```
 
 ## Task 2: Onboard Carrier
@@ -58,7 +50,6 @@ Expected result:
 Prerequisites:
 - SSH host/user/key ready
 - local gateway running (`carrier` bootstrap can start it)
-- local tools available: `curl`, `jq`
 
 Minimal flow:
 
@@ -81,13 +72,33 @@ carrier remote add openclaw \
   --user ubuntu \
   --key-path ~/.ssh/id_ed25519 \
   --sync-channel telegram \
-  --sync-provider openai-codex
+  --sync-provider openai
+```
+
+Optional: install PicoClaw and ZeroClaw on the same host
+
+```bash
+carrier remote add picoclaw \
+  --host-id vps-1 \
+  --host 203.0.113.10 \
+  --port 22 \
+  --user ubuntu \
+  --key-path ~/.ssh/id_ed25519
+```
+
+```bash
+carrier remote add zeroclaw \
+  --host-id vps-1 \
+  --host 203.0.113.10 \
+  --port 22 \
+  --user ubuntu \
+  --key-path ~/.ssh/id_ed25519
 ```
 
 Expected result:
-- command finishes with `done: remote add flow succeeded ...`
-- remote host check returns `openclawFound=true`
-- instance list includes `<host-id>:main`
+- command finishes with `Completed: OpenClaw ...`
+- post-install check shows `SSH connectivity: OK.`
+- instance list includes `main`
 
 ## Task 5: Validate Full Remote Agent Matrix (Optional)
 

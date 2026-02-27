@@ -170,7 +170,7 @@ func TestRunRemoteAddCommandWorkflowWithoutSync(t *testing.T) {
 	if upsertCalls != 1 || installCalls != 1 || checkCalls != 2 || listCalls != 1 {
 		t.Fatalf("unexpected call counts: upsert=%d check=%d install=%d list=%d", upsertCalls, checkCalls, installCalls, listCalls)
 	}
-	if !strings.Contains(out.String(), "done: remote add flow succeeded") {
+	if !strings.Contains(out.String(), "Completed: OpenClaw remote install finished for host host-1.") {
 		t.Fatalf("output missing success message: %s", out.String())
 	}
 }

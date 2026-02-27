@@ -20,9 +20,12 @@ Carrier is a local control plane for onboarding agent credentials, installing ma
 
 ## Quick Start
 
+All commands below assume `carrier` is already installed and available in `PATH`.
+You do not need to run them from the Carrier repository directory.
+
 ### 1) Install Carrier
 
-#### Option A: Install from release script (recommended)
+Install from release script (recommended):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Keith-CY/carrier/main/scripts/install.sh | bash
@@ -32,15 +35,6 @@ carrier --version
 Notes:
 - Installer resolves `main` HEAD SHA, downloads `carrier-main-<full_sha>-<platform>.zip`, verifies `.sha256`, then installs `carrier`.
 - Default install path is `/usr/local/bin/carrier` (falls back to `~/.local/bin/carrier` when needed).
-
-#### Option B: Build from source
-
-```bash
-git clone https://github.com/Keith-CY/carrier.git
-cd carrier
-go build -o ./carrier ./cmd/carrier
-./carrier --version
-```
 
 ### 2) Onboard Carrier
 
@@ -88,7 +82,6 @@ Use `carrier remote add` to run a fixed, repeatable sequence:
 
 - Local gateway reachable at `http://127.0.0.1:8787` (`carrier` bootstrap can start it).
 - SSH access to VPS (`host`, `port`, `user`, private key path).
-- Local tools: `curl`, `jq`.
 
 #### Minimal example
 
@@ -113,12 +106,32 @@ carrier remote add openclaw \
   --user ubuntu \
   --key-path ~/.ssh/id_ed25519 \
   --sync-channel telegram \
-  --sync-provider openai-codex
+  --sync-provider openai
 ```
 
 Optional allow-list flags:
 - `--telegram-allow-from <id>`
 - `--discord-allow-from <id>`
+
+Install other supported agents on VPS:
+
+```bash
+carrier remote add picoclaw \
+  --host-id vps-1 \
+  --host 203.0.113.10 \
+  --port 22 \
+  --user ubuntu \
+  --key-path ~/.ssh/id_ed25519
+```
+
+```bash
+carrier remote add zeroclaw \
+  --host-id vps-1 \
+  --host 203.0.113.10 \
+  --port 22 \
+  --user ubuntu \
+  --key-path ~/.ssh/id_ed25519
+```
 
 ### 5) Full Remote Matrix Validation (Optional)
 

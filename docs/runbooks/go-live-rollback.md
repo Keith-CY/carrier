@@ -24,11 +24,21 @@ Source issue: #426
    - provider profile create/edit/test
    - remote observability rollout card status
 6. Run deterministic remote install smoke:
-   - `carrier remote add openclaw ...`
-   - verify host check returns `openclawFound=true`
+   - run:
+     ```bash
+     carrier remote add openclaw \
+       --host-id <host-id> \
+       --host <ip-or-domain> \
+       --port <ssh-port> \
+       --user <ssh-user> \
+       --key-path <private-key-path>
+     ```
+   - verify post-install output shows:
+     - `SSH connectivity: OK.`
+     - `OpenClaw runtime: detected.`
 7. Validate first-discovery confirmation path:
-   - newly discovered instances appear in `pendingPullInstances`
-   - confirmation re-check clears pending list
+   - newly discovered instances are listed in the interactive confirmation prompt
+   - after confirmation, output reports successful config import for discovered instances
 8. Verify audit logs and diagnose path.
 9. Confirm required secrets/env are present (without printing secret values).
 10. Publish release notes and known limits.

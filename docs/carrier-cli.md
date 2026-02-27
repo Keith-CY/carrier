@@ -1,6 +1,7 @@
 # Carrier CLI Reference
 
 This document reflects the current `carrier --help` command surface.
+All command blocks below assume `carrier` is installed and available in `PATH`.
 
 ## Command Surface
 
@@ -89,6 +90,20 @@ carrier onboard --webui
 carrier add openclaw --webui
 ```
 
+### Install local managed agents
+
+```bash
+carrier add openclaw
+```
+
+```bash
+carrier add picoclaw
+```
+
+```bash
+carrier add zeroclaw
+```
+
 ### Install OpenClaw on VPS
 
 ```bash
@@ -110,7 +125,75 @@ carrier remote add openclaw \
   --user ubuntu \
   --key-path ~/.ssh/id_ed25519 \
   --sync-channel telegram \
-  --sync-provider openai-codex
+  --sync-provider openai
+```
+
+### Install PicoClaw on VPS
+
+```bash
+carrier remote add picoclaw \
+  --host-id vps-1 \
+  --host 203.0.113.10 \
+  --port 22 \
+  --user ubuntu \
+  --key-path ~/.ssh/id_ed25519
+```
+
+### Install ZeroClaw on VPS
+
+```bash
+carrier remote add zeroclaw \
+  --host-id vps-1 \
+  --host 203.0.113.10 \
+  --port 22 \
+  --user ubuntu \
+  --key-path ~/.ssh/id_ed25519
+```
+
+### Skip reconnect verification (faster install path)
+
+```bash
+carrier remote add openclaw \
+  --host-id vps-1 \
+  --host 203.0.113.10 \
+  --port 22 \
+  --user ubuntu \
+  --key-path ~/.ssh/id_ed25519 \
+  --skip-reconnect-check
+```
+
+### Daily lifecycle commands
+
+```bash
+carrier list
+```
+
+```bash
+carrier status <id|name>
+```
+
+```bash
+carrier start <id|name>
+```
+
+```bash
+carrier stop <id|name>
+```
+
+```bash
+carrier upgrade <id|name>
+```
+
+```bash
+carrier uninstall <id|name>
+```
+
+```bash
+carrier stop
+```
+
+```bash
+carrier reset
 ```
 
 ## Behavior Notes
