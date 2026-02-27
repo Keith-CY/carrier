@@ -90,6 +90,23 @@ func configureSSHRunner(t *testing.T, fn func(command string) remoteExecResult) 
 	})
 }
 
+func configureSSHStreamRunner(t *testing.T, fn func(command string, onChunk func(remoteStreamChunk)) remoteExecResult) {
+	t.Helper()
+	orig := sshExecStreamRunner
+	sshExecStreamRunner = func(_ context.Context, args []string, onChunk func(remoteStreamChunk)) (remoteExecResult, error) {
+		if len(args) == 0 {
+			return remoteExecResult{ExitCode: 1, Stderr: "missing ssh args"}, nil
+		}
+		cmd := args[len(args)-1]
+		result := fn(cmd, onChunk)
+		result.Command = cmd
+		return result, nil
+	}
+	t.Cleanup(func() {
+		sshExecStreamRunner = orig
+	})
+}
+
 func createRemoteHostForTests(t *testing.T, mux http.Handler) string {
 	t.Helper()
 	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts", `{
@@ -300,6 +317,43 @@ func TestRemoteChatStreamSSE(t *testing.T) {
 	unifiedBody := unifiedRec.Body.String()
 	if !strings.Contains(unifiedBody, `"type":"text-delta"`) || !strings.Contains(unifiedBody, `"type":"finish"`) {
 		t.Fatalf("expected sse events in unified remote stream body: %s", unifiedBody)
+	}
+}
+
+func TestRemoteInstallStreamSSE(t *testing.T) {
+	configureSSHStreamRunner(t, func(command string, onChunk func(remoteStreamChunk)) remoteExecResult {
+		if strings.Contains(command, "install.sh") {
+			if onChunk != nil {
+				onChunk(remoteStreamChunk{Stream: "stdout", Text: "download complete"})
+				onChunk(remoteStreamChunk{Stream: "stdout", Text: "install complete"})
+			}
+			return remoteExecResult{ExitCode: 0, Stdout: "download complete\ninstall complete"}
+		}
+		return remoteExecResult{ExitCode: 0}
+	})
+
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/install/stream", `{}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("install stream status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"type":"start"`) {
+		t.Fatalf("expected start event in stream body: %s", body)
+	}
+	if !strings.Contains(body, `"type":"log"`) {
+		t.Fatalf("expected log event in stream body: %s", body)
+	}
+	if !strings.Contains(body, `"line":"download complete"`) {
+		t.Fatalf("expected streamed install output in body: %s", body)
+	}
+	if !strings.Contains(body, `"type":"result"`) || !strings.Contains(body, `"installed":true`) {
+		t.Fatalf("expected result event with installed=true in body: %s", body)
+	}
+	if !strings.Contains(body, `"type":"finish"`) {
+		t.Fatalf("expected finish event in stream body: %s", body)
 	}
 }
 

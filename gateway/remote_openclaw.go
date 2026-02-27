@@ -148,6 +148,46 @@ func remoteInstallOpenClaw(ctx context.Context, host RemoteHost, hostID, agentID
 	return result, nil
 }
 
+func remoteInstallOpenClawStreaming(
+	ctx context.Context,
+	host RemoteHost,
+	hostID, agentID string,
+	onChunk func(remoteStreamChunk),
+) (*remoteInstallResult, error) {
+	if err := validateAgentIdentifier(agentID); err != nil {
+		return nil, err
+	}
+	result := &remoteInstallResult{
+		HostID:      hostID,
+		AgentID:     agentID,
+		Installed:   false,
+		GatewayMode: host.RuntimeMode,
+		Steps:       []remoteExecResult{},
+	}
+
+	installCmd := "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-prompt --no-onboard 2>&1"
+	installRes, err := runRemoteCommandStream(ctx, host, installCmd, onChunk)
+	if err != nil {
+		return result, err
+	}
+	result.Steps = append(result.Steps, installRes)
+	if installRes.ExitCode != 0 {
+		return result, remoteCommandError(installRes, "install openclaw")
+	}
+	if host.RuntimeMode == RemoteRuntimeModeManagedGateway {
+		restartRes, runErr := runRemoteCommandStream(ctx, host, "openclaw gateway restart 2>&1 || openclaw gateway start 2>&1", onChunk)
+		if runErr != nil {
+			return result, runErr
+		}
+		result.Steps = append(result.Steps, restartRes)
+		if restartRes.ExitCode != 0 {
+			return result, remoteCommandError(restartRes, "start managed gateway")
+		}
+	}
+	result.Installed = true
+	return result, nil
+}
+
 func remoteListInstancesForHost(ctx context.Context, host RemoteHost, hostID string) ([]RemoteInstance, []remoteExecResult, error) {
 	steps := []remoteExecResult{}
 	_, _, preflightSteps, err := ensureRemoteHealthyForOperation(ctx, host)

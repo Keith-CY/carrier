@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -226,6 +227,19 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "instance": status, "steps": steps})
 		return
 	case "install":
+		if len(parts) >= 5 {
+			subAction := strings.ToLower(strings.TrimSpace(parts[4]))
+			if subAction != "stream" {
+				writeJSON(w, http.StatusNotFound, gatewayErrBody("E_USAGE", "unsupported remote install action"))
+				return
+			}
+			if r.Method != http.MethodPost {
+				writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+				return
+			}
+			streamRemoteInstallResponse(w, r, requestID, hostID, host, agentID)
+			return
+		}
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
@@ -278,6 +292,84 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 		writeJSON(w, http.StatusNotFound, gatewayErrBody("E_USAGE", "unsupported remote instance action"))
 		return
 	}
+}
+
+func streamRemoteInstallResponse(w http.ResponseWriter, r *http.Request, requestID, hostID string, host RemoteHost, agentID string) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, gatewayErrBody("E_INTERNAL", "streaming not supported"))
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Request-Id", requestID)
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	var writeMu sync.Mutex
+	emit := func(payload map[string]interface{}) bool {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		if err := writeSSEEvent(w, payload); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	if !emit(map[string]interface{}{
+		"type":      "start",
+		"requestId": requestID,
+		"hostId":    hostID,
+		"agentId":   agentID,
+	}) {
+		return
+	}
+
+	startedAt := time.Now()
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Minute)
+	defer cancel()
+
+	installResult, installErr := remoteInstallOpenClawStreaming(ctx, host, hostID, agentID, func(chunk remoteStreamChunk) {
+		line := strings.TrimSpace(RedactErrorMessage(chunk.Text))
+		if line == "" {
+			return
+		}
+		ok := emit(map[string]interface{}{
+			"type":   "log",
+			"stream": chunk.Stream,
+			"line":   line,
+		})
+		if !ok {
+			cancel()
+		}
+	})
+	recordRemoteOperationMetric(remoteOpInstancesInstall, startedAt, installErr)
+
+	if installResult != nil {
+		_ = emit(map[string]interface{}{
+			"type":    "result",
+			"install": installResult,
+		})
+	}
+	if installErr != nil {
+		_ = emit(map[string]interface{}{
+			"type":      "error",
+			"errorCode": "E_REMOTE_INSTALL_FAILED",
+			"message":   RedactErrorMessage(installErr.Error()),
+		})
+		_ = emit(map[string]interface{}{
+			"type":         "finish",
+			"finishReason": "error",
+		})
+		return
+	}
+	_ = emit(map[string]interface{}{
+		"type":         "finish",
+		"finishReason": "stop",
+	})
 }
 
 func handleRemoteHostConfig(w http.ResponseWriter, r *http.Request, requestID string, host RemoteHost) {
