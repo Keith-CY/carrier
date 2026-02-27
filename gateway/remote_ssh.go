@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -242,6 +243,9 @@ func buildSSHArgs(host RemoteHost, remoteCommand string) ([]string, error) {
 	return args, nil
 }
 
+// shellSingleQuote is the canonical shell-safe quoting function for remote command arguments.
+// It wraps input in single quotes and escapes embedded single quotes using the '\'' idiom.
+// Used in security-sensitive paths (e.g. wrapRemoteCommandForSSH) to prevent shell injection.
 func shellSingleQuote(input string) string {
 	if input == "" {
 		return "''"
@@ -285,6 +289,10 @@ func remoteCommandError(result remoteExecResult, action string) error {
 	return fmt.Errorf("%s failed (exit %d): %s", action, result.ExitCode, RedactErrorMessage(stderr))
 }
 
+// wrapRemoteCommandForSSH wraps a command for execution via SSH using bash -lc.
+// Note: bash -lc loads the remote user's login profile (.bash_profile / .bashrc),
+// which ensures consistent PATH resolution but means any side effects in those
+// files will execute on every remote command invocation.
 func wrapRemoteCommandForSSH(command string) string {
 	cmd := strings.TrimSpace(command)
 	if cmd == "" {
@@ -358,6 +366,7 @@ func repairKnownHostEntries(host RemoteHost) error {
 			}
 			continue
 		}
+		log.Printf("[gateway] repairKnownHostEntries: skipped entry %q removal error: %v", entry, err)
 		lastErr = err
 	}
 	if repaired || lastErr == nil {
