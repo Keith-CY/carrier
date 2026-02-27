@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -12,6 +13,7 @@ import (
 type managedAgentConfig struct {
 	ID             string
 	ConfigDir      string
+	ConfigFile     string
 	RequiredEnvKey string
 }
 
@@ -19,21 +21,28 @@ type managedOnboardResult struct {
 	WorkspacePath string
 	ConfigPath    string
 	RecordPath    string
+	RendererID    string
+	ConfigFormat  string
+	AgentVersion  string
+	VersionSource string
 }
 
 var managedAgents = map[string]managedAgentConfig{
 	"picoclaw": {
-		ID:        "picoclaw",
-		ConfigDir: ".picoclaw",
+		ID:         "picoclaw",
+		ConfigDir:  ".picoclaw",
+		ConfigFile: "config.json",
 	},
 	"openclaw": {
 		ID:             "openclaw",
 		ConfigDir:      ".openclaw",
+		ConfigFile:     "config.json",
 		RequiredEnvKey: "OPENAI_API_KEY",
 	},
 	"zeroclaw": {
-		ID:        "zeroclaw",
-		ConfigDir: ".zeroclaw",
+		ID:         "zeroclaw",
+		ConfigDir:  ".zeroclaw",
+		ConfigFile: "config.toml",
 	},
 }
 
@@ -183,6 +192,12 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	if err != nil {
 		return nil, fmt.Errorf("resolve home dir: %w", err)
 	}
+
+	renderer, err := resolveManagedRenderer(cfg.ID)
+	if err != nil {
+		return nil, fmt.Errorf("select %s config renderer: %w", cfg.ID, err)
+	}
+
 	instanceID := strings.TrimSpace(sess.InstanceID)
 	if instanceID == "" {
 		instanceID = cfg.ID
@@ -191,7 +206,7 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	if workspacePath == "" {
 		workspacePath = filepath.Join(home, cfg.ConfigDir, "instances", instanceID, "workspace")
 	}
-	configPath := filepath.Join(home, cfg.ConfigDir, "config.json")
+	configPath := resolveManagedConfigPath(home, cfg, renderer)
 	recordPath := filepath.Join(home, ".carrier", "agents", instanceID+".json")
 
 	if err := os.MkdirAll(workspacePath, 0o700); err != nil {
@@ -228,25 +243,12 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 		providerKey = strings.TrimSpace(vendor)
 	}
 	providerKey = mapCarrierProviderToManagedProvider(providerKey)
-	modelItem := map[string]interface{}{
-		"model_name": modelName,
-		"model":      modelID,
-	}
-	providerItem := map[string]interface{}{
-		"credential_ref": provider.ID,
-	}
-	token := pickProviderToken(provider, sess.EnvVars)
-	if strings.EqualFold(provider.ID, "openai-codex") {
-		modelItem["auth_method"] = "oauth"
-		providerItem["auth_method"] = "oauth"
-		if strings.EqualFold(cfg.ID, "picoclaw") {
-			accountID := extractOpenAIAccountID(token)
-			if err := savePicoclawAuthCredential(home, "openai", token, accountID); err != nil {
-				return nil, fmt.Errorf("write picoclaw auth store: %w", err)
-			}
+	providerToken := pickProviderToken(provider, sess.EnvVars)
+	if strings.EqualFold(provider.ID, "openai-codex") && strings.EqualFold(cfg.ID, "picoclaw") {
+		accountID := extractOpenAIAccountID(providerToken)
+		if err := savePicoclawAuthCredential(home, "openai", providerToken, accountID); err != nil {
+			return nil, fmt.Errorf("write picoclaw auth store: %w", err)
 		}
-	} else if token != "" {
-		providerItem["api_key"] = token
 	}
 
 	chatID := actorChatID(actor)
@@ -254,6 +256,126 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	if chatID != "" {
 		allowFrom = append(allowFrom, chatID)
 	}
+
+	configRaw, err := renderManagedConfigBytes(
+		renderer,
+		cfg,
+		sess.SelectedChannel,
+		channelToken,
+		channelSetupPending,
+		allowFrom,
+		provider,
+		providerKey,
+		providerToken,
+		modelID,
+		modelName,
+		workspacePath,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("render %s config (%s): %w", cfg.ID, renderer.RendererID, err)
+	}
+	if err := os.WriteFile(configPath, configRaw, 0o600); err != nil {
+		return nil, fmt.Errorf("write %s config: %w", cfg.ID, err)
+	}
+
+	record := map[string]interface{}{
+		"instance_id":           instanceID,
+		"agent_id":              cfg.ID,
+		"workspace_path":        workspacePath,
+		"config_path":           configPath,
+		"channel":               sess.SelectedChannel,
+		"channel_setup_pending": channelSetupPending,
+		"provider":              provider.ID,
+		"renderer_id":           renderer.RendererID,
+		"config_format":         renderer.ConfigFormat,
+		"agent_version":         renderer.AgentVersion,
+		"version_source":        renderer.VersionSource,
+		"compat_repository":     renderer.Repository,
+		"compat_fingerprint":    renderer.ExpectedFingerprint,
+		"compat_version_range":  renderer.VersionRange,
+		"updated_at":            time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	recordRaw, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal carrier record: %w", err)
+	}
+	if err := os.WriteFile(recordPath, append(recordRaw, '\n'), 0o600); err != nil {
+		return nil, fmt.Errorf("write carrier record: %w", err)
+	}
+
+	return &managedOnboardResult{
+		WorkspacePath: workspacePath,
+		ConfigPath:    configPath,
+		RecordPath:    recordPath,
+		RendererID:    renderer.RendererID,
+		ConfigFormat:  renderer.ConfigFormat,
+		AgentVersion:  renderer.AgentVersion,
+		VersionSource: renderer.VersionSource,
+	}, nil
+}
+
+func resolveManagedConfigPath(home string, cfg managedAgentConfig, renderer managedRendererSelection) string {
+	configPath := strings.TrimSpace(renderer.ConfigPath)
+	if configPath == "" {
+		configPath = filepath.Join(home, cfg.ConfigDir, cfg.ConfigFile)
+	}
+	if strings.HasPrefix(configPath, "~/") {
+		return filepath.Join(home, strings.TrimPrefix(configPath, "~/"))
+	}
+	if filepath.IsAbs(configPath) {
+		return filepath.Clean(configPath)
+	}
+	return filepath.Join(home, cfg.ConfigDir, configPath)
+}
+
+func renderManagedConfigBytes(
+	renderer managedRendererSelection,
+	cfg managedAgentConfig,
+	channelID, channelToken string,
+	channelSetupPending bool,
+	allowFrom []string,
+	provider *LLMProvider,
+	providerKey, providerToken, modelID, modelName, workspacePath string,
+) ([]byte, error) {
+	switch strings.ToLower(strings.TrimSpace(renderer.ConfigFormat)) {
+	case "toml":
+		if strings.EqualFold(cfg.ID, "zeroclaw") {
+			return renderZeroClawConfigTOML(channelID, channelToken, channelSetupPending, allowFrom, providerKey, providerToken, modelID), nil
+		}
+		return nil, fmt.Errorf("toml renderer is not supported for %s", cfg.ID)
+	case "json":
+		payload := buildManagedJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerToken, modelID, modelName, workspacePath)
+		raw, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			return nil, err
+		}
+		return append(raw, '\n'), nil
+	default:
+		return nil, fmt.Errorf("unsupported config format %q", renderer.ConfigFormat)
+	}
+}
+
+func buildManagedJSONConfigPayload(
+	channelID, channelToken string,
+	channelSetupPending bool,
+	allowFrom []string,
+	provider *LLMProvider,
+	providerKey, providerToken, modelID, modelName, workspacePath string,
+) map[string]interface{} {
+	modelItem := map[string]interface{}{
+		"model_name": modelName,
+		"model":      modelID,
+	}
+	providerItem := map[string]interface{}{
+		"credential_ref": provider.ID,
+	}
+	if strings.EqualFold(provider.ID, "openai-codex") {
+		modelItem["auth_method"] = "oauth"
+		providerItem["auth_method"] = "oauth"
+	} else if providerToken != "" {
+		providerItem["api_key"] = providerToken
+	}
+
 	channelConfig := map[string]interface{}{
 		"enabled":    true,
 		"allow_from": allowFrom,
@@ -265,10 +387,10 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 		channelConfig["token"] = channelToken
 	}
 	channels := map[string]interface{}{
-		sess.SelectedChannel: channelConfig,
+		channelID: channelConfig,
 	}
 
-	payload := map[string]interface{}{
+	return map[string]interface{}{
 		"agents": map[string]interface{}{
 			"defaults": map[string]interface{}{
 				"workspace":             workspacePath,
@@ -286,38 +408,66 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 		},
 		"channels": channels,
 	}
+}
 
-	raw, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("marshal %s config: %w", cfg.ID, err)
+func renderZeroClawConfigTOML(
+	channelID, channelToken string,
+	channelSetupPending bool,
+	allowFrom []string,
+	providerKey, providerToken, modelID string,
+) []byte {
+	if strings.TrimSpace(channelID) == "" {
+		channelID = "telegram"
 	}
-	if err := os.WriteFile(configPath, append(raw, '\n'), 0o600); err != nil {
-		return nil, fmt.Errorf("write %s config: %w", cfg.ID, err)
+	if strings.TrimSpace(providerKey) == "" {
+		providerKey = "openrouter"
 	}
-
-	record := map[string]interface{}{
-		"instance_id":           instanceID,
-		"agent_id":              cfg.ID,
-		"workspace_path":        workspacePath,
-		"config_path":           configPath,
-		"channel":               sess.SelectedChannel,
-		"channel_setup_pending": channelSetupPending,
-		"provider":              provider.ID,
-		"updated_at":            time.Now().UTC().Format(time.RFC3339Nano),
+	if strings.TrimSpace(modelID) == "" {
+		modelID = "anthropic/claude-sonnet-4-6"
 	}
-	recordRaw, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("marshal carrier record: %w", err)
-	}
-	if err := os.WriteFile(recordPath, append(recordRaw, '\n'), 0o600); err != nil {
-		return nil, fmt.Errorf("write carrier record: %w", err)
+	if strings.TrimSpace(providerToken) == "" {
+		providerToken = ""
 	}
 
-	return &managedOnboardResult{
-		WorkspacePath: workspacePath,
-		ConfigPath:    configPath,
-		RecordPath:    recordPath,
-	}, nil
+	allowedUsers := "[]"
+	if len(allowFrom) > 0 {
+		quoted := make([]string, 0, len(allowFrom))
+		for _, raw := range allowFrom {
+			id := strings.TrimSpace(raw)
+			if id == "" {
+				continue
+			}
+			quoted = append(quoted, strconv.Quote(id))
+		}
+		if len(quoted) > 0 {
+			allowedUsers = "[" + strings.Join(quoted, ", ") + "]"
+		}
+	}
+
+	lines := []string{
+		"# Generated by Carrier managed onboarding",
+		"# Edit manually if you need advanced ZeroClaw settings.",
+		"",
+		fmt.Sprintf("api_key = %s", strconv.Quote(providerToken)),
+		fmt.Sprintf("default_provider = %s", strconv.Quote(providerKey)),
+		fmt.Sprintf("default_model = %s", strconv.Quote(modelID)),
+		"default_temperature = 0.7",
+		"",
+		"[agent]",
+		"max_tool_iterations = 20",
+		"",
+		fmt.Sprintf("[channels_config.%s]", channelID),
+		fmt.Sprintf("bot_token = %s", strconv.Quote(channelToken)),
+		fmt.Sprintf("allowed_users = %s", allowedUsers),
+		"mention_only = false",
+	}
+	if channelSetupPending {
+		lines = append(lines,
+			"",
+			"# channel setup is pending; configure channel token in Web UI before enabling channel start",
+		)
+	}
+	return []byte(strings.Join(lines, "\n") + "\n")
 }
 
 func mapCarrierProviderToManagedProvider(providerID string) string {

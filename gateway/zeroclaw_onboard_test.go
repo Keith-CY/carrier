@@ -16,9 +16,10 @@ func TestParseZeroclawChannel(t *testing.T) {
 	}
 }
 
-func TestPrepareZeroclawManagedOnboard_WritesConfigAndRecord(t *testing.T) {
+func TestPrepareZeroclawManagedOnboard_WritesTOMLConfigAndRecord(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("CARRIER_MANAGED_ZEROCLAW_VERSION", "0.1.7")
 
 	sess := &OnboardSession{
 		SelectedAgent:    "zeroclaw",
@@ -37,6 +38,9 @@ func TestPrepareZeroclawManagedOnboard_WritesConfigAndRecord(t *testing.T) {
 	if result.WorkspacePath == "" || result.ConfigPath == "" || result.RecordPath == "" {
 		t.Fatalf("expected non-empty output paths, got %+v", result)
 	}
+	if !strings.HasSuffix(result.ConfigPath, "config.toml") {
+		t.Fatalf("expected zeroclaw config.toml path, got %q", result.ConfigPath)
+	}
 	if got := strings.TrimSpace(sess.EnvVars["ZEROCLAW_API_KEY"]); got != "sk-zeroclaw-123" {
 		t.Fatalf("expected ZEROCLAW_API_KEY populated from provider token, got %q", got)
 	}
@@ -45,9 +49,18 @@ func TestPrepareZeroclawManagedOnboard_WritesConfigAndRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read config: %v", err)
 	}
-	var cfg map[string]interface{}
-	if err := json.Unmarshal(cfgRaw, &cfg); err != nil {
-		t.Fatalf("parse config json: %v", err)
+	cfgText := string(cfgRaw)
+	for _, snippet := range []string{
+		`api_key = "sk-zeroclaw-123"`,
+		`default_provider = "openai"`,
+		`default_model = "openai/`,
+		`[channels_config.telegram]`,
+		`bot_token = "telegram-token-zero"`,
+		`allowed_users = ["418258935"]`,
+	} {
+		if !strings.Contains(cfgText, snippet) {
+			t.Fatalf("expected config to contain %q, got:\n%s", snippet, cfgText)
+		}
 	}
 
 	recordRaw, err := os.ReadFile(result.RecordPath)
@@ -61,7 +74,33 @@ func TestPrepareZeroclawManagedOnboard_WritesConfigAndRecord(t *testing.T) {
 	if record["agent_id"] != "zeroclaw" {
 		t.Fatalf("unexpected agent_id: %v", record["agent_id"])
 	}
+	if record["renderer_id"] != "zeroclaw.toml.v1" {
+		t.Fatalf("unexpected renderer_id: %v", record["renderer_id"])
+	}
+	if record["config_format"] != "toml" {
+		t.Fatalf("unexpected config_format: %v", record["config_format"])
+	}
 	if strings.Contains(string(recordRaw), "sk-zeroclaw-123") || strings.Contains(string(recordRaw), "telegram-token-zero") {
 		t.Fatalf("managed record should not contain secret token values: %s", recordRaw)
+	}
+}
+
+func TestPrepareZeroclawManagedOnboard_RejectsUnsupportedVersion(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("CARRIER_MANAGED_ZEROCLAW_VERSION", "2.0.0")
+
+	sess := &OnboardSession{
+		SelectedAgent:    "zeroclaw",
+		SelectedChannel:  "telegram",
+		ChannelToken:     "telegram-token-zero",
+		SelectedProvider: "openai",
+		EnvVars: map[string]string{
+			"OPENAI_API_KEY": "sk-zeroclaw-123",
+		},
+	}
+
+	if _, err := prepareManagedOnboard("zeroclaw", sess, "telegram:418258935"); err == nil || !strings.Contains(err.Error(), "unsupported zeroclaw version") {
+		t.Fatalf("expected unsupported version error, got %v", err)
 	}
 }

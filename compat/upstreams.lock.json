@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-02-27T00:00:00Z",
+  "agents": {
+    "openclaw": {
+      "repository": "openclaw/openclaw",
+      "recommended_version": "2026.2.26",
+      "supported_renderers": [
+        {
+          "id": "openclaw.json.v1",
+          "version_range": ">=0.0.0",
+          "config_format": "json",
+          "config_path": "~/.openclaw/config.json"
+        }
+      ],
+      "tracked_files": [
+        {
+          "path": "docs/gateway/configuration-reference.md",
+          "sha": "9bbf0328fc9c4470a2f2fb5d6ee02c94711dca86"
+        },
+        {
+          "path": "src/channels/plugins/config-schema.ts",
+          "sha": "75074ae569d9a895a7a2bf93d2c29058a7417caf"
+        },
+        {
+          "path": "src/config/config.ts",
+          "sha": "df667d498b12e045fc706893af1f7356f7de493d"
+        },
+        {
+          "path": "src/gateway/protocol/schema/config.ts",
+          "sha": "150cd6b4ad189d7cf74671e0ed2a420af976b0f6"
+        }
+      ],
+      "expected_fingerprint": "sha256:c6abd8d448495b1d5976a08bf3677a3f91c82f260d1f792c19e69b8865c23601"
+    },
+    "picoclaw": {
+      "repository": "sipeed/picoclaw",
+      "recommended_version": "0.1.2",
+      "supported_renderers": [
+        {
+          "id": "picoclaw.json.v1",
+          "version_range": ">=0.1.0 <1.0.0",
+          "config_format": "json",
+          "config_path": "~/.picoclaw/config.json"
+        }
+      ],
+      "tracked_files": [
+        {
+          "path": "config/config.example.json",
+          "sha": "9575039f8787754be78d39051ffafb85d904d295"
+        },
+        {
+          "path": "pkg/config/config.go",
+          "sha": "ca5803c35b4cc5cd38cc51158ab04cf1c138d2f4"
+        }
+      ],
+      "expected_fingerprint": "sha256:93c8d9ef27c45a44fbffeaedb26aa6032f0b2b4bc18c5a95f4020d624b4653da"
+    },
+    "zeroclaw": {
+      "repository": "zeroclaw-labs/zeroclaw",
+      "recommended_version": "0.1.7",
+      "supported_renderers": [
+        {
+          "id": "zeroclaw.toml.v1",
+          "version_range": ">=0.1.0 <1.0.0",
+          "config_format": "toml",
+          "config_path": "~/.zeroclaw/config.toml"
+        }
+      ],
+      "tracked_files": [
+        {
+          "path": "dev/config.template.toml",
+          "sha": "eae418c1a379fe83456b49963327d695e4774dfa"
+        },
+        {
+          "path": "docs/config-reference.md",
+          "sha": "4fa30452c6ab6fe0ed8dc7be62bc38e4161b32dc"
+        },
+        {
+          "path": "src/config/schema.rs",
+          "sha": "669396b6452dcb26f8dd52b3a0c96e786582cc22"
+        }
+      ],
+      "expected_fingerprint": "sha256:27f0c017721f28eeacceaaa8604b4d227e87e2d2c3755b1ae24c5e3105094a1f"
+    }
+  }
+}
