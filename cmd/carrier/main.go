@@ -3947,10 +3947,15 @@ func findKeychainCredentialCLI(service string) (string, bool) {
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		message := strings.ToLower(strings.TrimSpace(stderr.String()))
+		messageRaw := strings.TrimSpace(stderr.String())
+		message := strings.ToLower(messageRaw)
 		if strings.Contains(message, "could not be found") || strings.Contains(message, "item not found") {
 			return "", false
 		}
+		if messageRaw == "" {
+			messageRaw = err.Error()
+		}
+		_, _ = fmt.Fprintf(os.Stderr, "warning: find keychain credential for service %q failed: %s\n", service, messageRaw)
 		return "", false
 	}
 	value := strings.TrimSpace(string(out))

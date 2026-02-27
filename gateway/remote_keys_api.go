@@ -1,11 +1,14 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 )
+
+const remoteKeyUploadRequestMaxBytes int64 = remoteKeyUploadMaxBytes + 64*1024
 
 func handleRemoteKeys(w http.ResponseWriter, r *http.Request, requestID string, cfg *GatewayConfig) {
 	flags := effectiveGatewayFeatureFlags(cfg)
@@ -19,7 +22,13 @@ func handleRemoteKeys(w http.ResponseWriter, r *http.Request, requestID string, 
 		return
 	}
 
-	if err := r.ParseMultipartForm(remoteKeyUploadMaxBytes + 4096); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, remoteKeyUploadRequestMaxBytes)
+	if err := r.ParseMultipartForm(remoteKeyUploadRequestMaxBytes); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", fmt.Sprintf("request body exceeds %d bytes", remoteKeyUploadRequestMaxBytes)))
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request must be multipart/form-data"))
 		return
 	}
