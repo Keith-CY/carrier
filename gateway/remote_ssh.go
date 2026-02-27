@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -174,8 +175,22 @@ func buildSSHArgs(host RemoteHost, remoteCommand string) ([]string, error) {
 		args = append(args, "-p", strconv.Itoa(h.Port))
 	}
 	if h.AuthMode == RemoteAuthModePrivateKey {
+		keyPath := strings.TrimSpace(h.KeyPath)
+		if strings.TrimSpace(h.KeyRef) != "" {
+			resolved, resolveErr := resolveRemoteKeyPath(h.KeyRef)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			if _, statErr := os.Stat(resolved); statErr != nil {
+				return nil, fmt.Errorf("resolve keyRef %q: %w", h.KeyRef, statErr)
+			}
+			keyPath = resolved
+		}
+		if keyPath == "" {
+			return nil, fmt.Errorf("private_key auth mode requires keyPath or keyRef")
+		}
 		args = append(args,
-			"-i", filepath.Clean(h.KeyPath),
+			"-i", filepath.Clean(keyPath),
 			"-o", "IdentitiesOnly=yes",
 		)
 	}

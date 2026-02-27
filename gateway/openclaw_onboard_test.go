@@ -59,6 +59,24 @@ func TestPrepareOpenclawManagedOnboard_WritesConfigAndRecord(t *testing.T) {
 	if defaults["workspace"] != result.WorkspacePath {
 		t.Fatalf("workspace mismatch: got %v want %s", defaults["workspace"], result.WorkspacePath)
 	}
+	channels, ok := cfg["channels"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected channels object, got %#v", cfg["channels"])
+	}
+	telegram, ok := channels["telegram"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected channels.telegram object, got %#v", channels["telegram"])
+	}
+	if telegram["enabled"] != true {
+		t.Fatalf("expected channels.telegram.enabled=true, got %#v", telegram["enabled"])
+	}
+	token, _ := telegram["token"].(string)
+	if got := strings.TrimSpace(token); got != "telegram-token-open" {
+		t.Fatalf("expected channels.telegram.token to be persisted, got %q", got)
+	}
+	if _, ok := telegram["setup_pending"]; ok {
+		t.Fatalf("did not expect setup_pending for non-pending channel config")
+	}
 
 	recordRaw, err := os.ReadFile(result.RecordPath)
 	if err != nil {
@@ -76,6 +94,82 @@ func TestPrepareOpenclawManagedOnboard_WritesConfigAndRecord(t *testing.T) {
 	}
 	if strings.Contains(string(recordRaw), "sk-openclaw-123") || strings.Contains(string(recordRaw), "telegram-token-open") {
 		t.Fatalf("managed record should not contain secret token values: %s", recordRaw)
+	}
+}
+
+func TestPrepareOpenclawManagedOnboard_AllowsPendingChannelSetupWithoutToken(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	sess := &OnboardSession{
+		SelectedAgent:       "openclaw",
+		SelectedChannel:     "telegram",
+		ChannelSetupPending: true,
+		SelectedProvider:    "openai",
+		EnvVars: map[string]string{
+			"OPENAI_API_KEY": "sk-openclaw-pending",
+		},
+	}
+
+	result, err := prepareManagedOnboard("openclaw", sess, "telegram:418258935")
+	if err != nil {
+		t.Fatalf("prepareManagedOnboard: %v", err)
+	}
+
+	cfgRaw, err := os.ReadFile(result.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(cfgRaw, &cfg); err != nil {
+		t.Fatalf("parse config json: %v", err)
+	}
+	channels, ok := cfg["channels"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected channels object, got %#v", cfg["channels"])
+	}
+	telegram, ok := channels["telegram"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected channels.telegram object, got %#v", channels["telegram"])
+	}
+	if telegram["enabled"] != false {
+		t.Fatalf("expected channels.telegram.enabled=false when setup is pending, got %#v", telegram["enabled"])
+	}
+	if telegram["setup_pending"] != true {
+		t.Fatalf("expected channels.telegram.setup_pending=true, got %#v", telegram["setup_pending"])
+	}
+	if _, ok := telegram["token"]; ok {
+		t.Fatalf("did not expect channels.telegram.token when setup is pending")
+	}
+
+	recordRaw, err := os.ReadFile(result.RecordPath)
+	if err != nil {
+		t.Fatalf("read record: %v", err)
+	}
+	var record map[string]interface{}
+	if err := json.Unmarshal(recordRaw, &record); err != nil {
+		t.Fatalf("parse record json: %v", err)
+	}
+	if record["channel_setup_pending"] != true {
+		t.Fatalf("expected channel_setup_pending=true in record, got %#v", record["channel_setup_pending"])
+	}
+}
+
+func TestPrepareOpenclawManagedOnboard_RequiresChannelTokenWhenNotPending(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	sess := &OnboardSession{
+		SelectedAgent:    "openclaw",
+		SelectedChannel:  "telegram",
+		SelectedProvider: "openai",
+		EnvVars: map[string]string{
+			"OPENAI_API_KEY": "sk-openclaw-123",
+		},
+	}
+
+	if _, err := prepareManagedOnboard("openclaw", sess, "telegram:418258935"); err == nil || !strings.Contains(err.Error(), "channel token is required") {
+		t.Fatalf("expected channel token required error, got %v", err)
 	}
 }
 

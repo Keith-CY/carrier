@@ -68,6 +68,22 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
     route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }),
   );
 
+  await page.route('**/api/v1/onboard', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        onboard: {
+          channel: 'skip',
+          providerId: 'openai',
+          webuiOnly: true,
+          pairRequired: false,
+        },
+      }),
+    }),
+  );
+
   await page.route('**/api/v1/agents/*/stop', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }),
   );

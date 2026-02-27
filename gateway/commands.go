@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"context"
 	"fmt"
 	"log"
@@ -23,6 +24,7 @@ const (
 	CmdTools           CommandName = "/tools"
 	CmdProviders       CommandName = "/providers"
 	CmdSessions        CommandName = "/sessions"
+	CmdBoundaries      CommandName = "/boundaries"
 	CmdAdd             CommandName = "/add"
 	CmdInstall         CommandName = "/install"
 	CmdUninstall       CommandName = "/uninstall"
@@ -43,6 +45,7 @@ var validCommands = map[CommandName]struct{}{
 	CmdTools:           {},
 	CmdProviders:       {},
 	CmdSessions:        {},
+	CmdBoundaries:      {},
 	CmdAdd:             {},
 	CmdInstall:         {},
 	CmdUninstall:       {},
@@ -173,7 +176,7 @@ func HandleCommand(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClien
 
 	switch cmd.Name {
 	case CmdInstall:
-		return installViaGUIOnlyResp(cmd.RequestID)
+		return handleInstall(ctx, cmd, daemon, actor)
 	case CmdOnboard:
 		return onboardViaGUIOnlyResp(cmd.RequestID)
 	case CmdChat:
@@ -186,6 +189,8 @@ func HandleCommand(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClien
 		return handleBaseAgentMeta(ctx, cmd, daemon, actor, "/providers")
 	case CmdSessions:
 		return handleBaseAgentMeta(ctx, cmd, daemon, actor, "/sessions")
+	case CmdBoundaries:
+		return handleBaseAgentMeta(ctx, cmd, daemon, actor, "/boundaries")
 	case CmdAdd:
 		return handleAdd(ctx, cmd, daemon, actor, onboard)
 	case CmdUninstall:
@@ -345,7 +350,7 @@ func handleAgents(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient
 		lines = append(lines, fmt.Sprintf("%s %s (%s): %s, %s, health=%s", emoji, name, a.ID, installState, runtime, health))
 	}
 	if installed < len(agents) {
-		lines = append(lines, "Tip: use Carrier CLI/TUI (`carrier install <agent_id>`, `carrier onboard`) or WebUI for install/onboard. Chat supports management commands only.")
+		lines = append(lines, "Tip: `/install` supports remote OpenClaw install with host binding (`/install openclaw <host_id>`). Use Carrier CLI/TUI/WebUI for local install and onboarding.")
 	}
 	return GatewayResponse{
 		RequestID: cmd.RequestID,
@@ -356,6 +361,151 @@ func handleAgents(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient
 
 func handleAdd(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, actor string, onboard *OnboardStore) GatewayResponse {
 	return addViaGUIOnlyResp(cmd.RequestID)
+}
+
+func handleInstall(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, actor string) GatewayResponse {
+	spec := baseagent.ActiveBoundarySpec()
+	mode := strings.ToLower(strings.TrimSpace(spec.CommandPolicies.ChatInstall))
+	if mode == "" {
+		mode = "disabled"
+	}
+
+	switch mode {
+	case "disabled":
+		return installViaGUIOnlyResp(cmd.RequestID)
+	case "enabled", "requires_host_binding":
+		// valid policy modes
+	default:
+		log.Printf("[gateway] invalid chat_install policy mode %q, fallback to disabled", mode)
+		return installViaGUIOnlyResp(cmd.RequestID)
+	}
+
+	if len(cmd.Args) == 0 {
+		if mode == "requires_host_binding" || spec.CommandPolicies.RequiresExplicitHostForWorkflows {
+			return usageResp(cmd.RequestID, "/install <agent_id> <host_id>")
+		}
+		return usageResp(cmd.RequestID, "/install <agent_id>")
+	}
+
+	agentID := strings.TrimSpace(cmd.Args[0])
+	if agentID == "" {
+		return usageResp(cmd.RequestID, "/install <agent_id>")
+	}
+	if err := validateAgentIdentifier(agentID); err != nil {
+		return errResp(cmd.RequestID, "E_USAGE", err.Error())
+	}
+
+	requiresHostBinding := mode == "requires_host_binding" || spec.CommandPolicies.RequiresExplicitHostForWorkflows
+	if !requiresHostBinding {
+		if daemon == nil {
+			return errResp(cmd.RequestID, "E_COMMAND_FAILED", "daemon client is unavailable")
+		}
+		if err := daemon.InstallAgent(ctx, agentID, actor, cmd.RequestID); err != nil {
+			return daemonErrResp(cmd.RequestID, err)
+		}
+		return GatewayResponse{
+			RequestID: cmd.RequestID,
+			Result:    "ok",
+			Message:   fmt.Sprintf("install completed for %s", agentID),
+		}
+	}
+
+	hostID := resolveInstallHostID(cmd.Args[1:])
+	if hostID == "" {
+		return errResp(cmd.RequestID, "E_HOST_BINDING_REQUIRED", "install requires host binding; use /install <agent_id> <host_id>")
+	}
+	host, ok, err := getRemoteHost(hostID)
+	if err != nil {
+		return errResp(cmd.RequestID, "E_COMMAND_FAILED", fmt.Sprintf("failed to resolve host binding: %v", err))
+	}
+	if !ok {
+		return errResp(cmd.RequestID, "E_REMOTE_HOST_NOT_FOUND", fmt.Sprintf("remote host %s not found", hostID))
+	}
+	if !strings.EqualFold(agentID, "openclaw") {
+		return errResp(cmd.RequestID, "E_USAGE", fmt.Sprintf("remote /install currently supports openclaw only (got %s)", agentID))
+	}
+
+	installCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+	workflowResult, installErr := runRemoteInstallWorkflow(installCtx, host, hostID, agentID)
+	if installErr != nil {
+		return errResp(cmd.RequestID, "E_REMOTE_INSTALL_FAILED", installErr.Error())
+	}
+
+	message := fmt.Sprintf("remote install completed for %s on host %s", agentID, hostID)
+	if workflowResult.Install != nil && workflowResult.Install.GatewayMode == RemoteRuntimeModeManagedGateway {
+		message += " (managed gateway mode)"
+	}
+	if workflowResult.Attempts > 1 {
+		message += fmt.Sprintf("; attempts=%d", workflowResult.Attempts)
+	}
+	if workflowResult.Repaired {
+		message += "; repair_applied=true"
+	}
+	return GatewayResponse{
+		RequestID: cmd.RequestID,
+		Result:    "ok",
+		Message:   message,
+	}
+}
+
+type remoteInstallWorkflowResult struct {
+	Install  *remoteInstallResult
+	Repair   *remoteRepairResult
+	Attempts int
+	Repaired bool
+}
+
+func runRemoteInstallWorkflow(ctx context.Context, host RemoteHost, hostID, agentID string) (*remoteInstallWorkflowResult, error) {
+	out := &remoteInstallWorkflowResult{Attempts: 0}
+
+	preflight, preflightErr := checkRemoteHostAndMaybeRepair(ctx, host)
+	if preflightErr != nil {
+		return out, fmt.Errorf("remote preflight failed for host %s: %w", hostID, preflightErr)
+	}
+	if !preflight.SSHOK {
+		return out, fmt.Errorf("remote preflight failed for host %s: ssh check did not pass", hostID)
+	}
+
+	firstInstall, firstErr := remoteInstallOpenClaw(ctx, host, hostID, agentID)
+	out.Attempts = 1
+	if firstErr == nil {
+		out.Install = firstInstall
+		return out, nil
+	}
+
+	repair, repairErr := remoteRepairOpenClaw(ctx, host, hostID, agentID)
+	out.Repair = repair
+	if repair != nil && repair.Repaired {
+		out.Repaired = true
+	}
+	if repairErr != nil {
+		return out, fmt.Errorf("install failed on host %s (%v); repair step failed: %w", hostID, firstErr, repairErr)
+	}
+
+	secondInstall, secondErr := remoteInstallOpenClaw(ctx, host, hostID, agentID)
+	out.Attempts = 2
+	if secondErr != nil {
+		return out, fmt.Errorf("install failed after repair retry on host %s: %w", hostID, secondErr)
+	}
+	out.Install = secondInstall
+	return out, nil
+}
+
+func resolveInstallHostID(args []string) string {
+	for _, raw := range args {
+		candidate := strings.TrimSpace(raw)
+		if candidate == "" {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(candidate), "host=") {
+			candidate = strings.TrimSpace(candidate[len("host="):])
+		}
+		if candidate != "" {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func handleUninstall(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, actor string) GatewayResponse {

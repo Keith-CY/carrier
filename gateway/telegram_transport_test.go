@@ -12,6 +12,7 @@ type fakeTelegramAPI struct {
 	setWebhookCalls int
 	getInfoCalls    int
 	deleteCalls     int
+	setCmdCalls     int
 
 	setWebhookErr error
 	getInfoErr    error
@@ -43,6 +44,11 @@ func (f *fakeTelegramAPI) GetUpdates(_ context.Context, _ int64, _ int) ([]map[s
 }
 
 func (f *fakeTelegramAPI) SendMessage(_ context.Context, _ string, _ string, _ bool) error {
+	return nil
+}
+
+func (f *fakeTelegramAPI) SetMyCommands(_ context.Context, _ []telegramBotCommand) error {
+	f.setCmdCalls++
 	return nil
 }
 
@@ -350,6 +356,12 @@ func TestTelegramBotAPI_MethodWrappers(t *testing.T) {
 	if err := api.SetWebhook(context.Background(), "https://public.example.com/webhook/telegram", "sec123"); err != nil {
 		t.Fatalf("SetWebhook: %v", err)
 	}
+	if err := api.SetMyCommands(context.Background(), []telegramBotCommand{
+		{Command: "pair", Description: "Pair chat"},
+		{Command: "agents", Description: "List agents"},
+	}); err != nil {
+		t.Fatalf("SetMyCommands: %v", err)
+	}
 	info, err := api.GetWebhookInfo(context.Background())
 	if err != nil {
 		t.Fatalf("GetWebhookInfo: %v", err)
@@ -371,20 +383,27 @@ func TestTelegramBotAPI_MethodWrappers(t *testing.T) {
 		t.Fatalf("updates length = %d, want 1", len(updates))
 	}
 
-	if len(calls) != 5 {
-		t.Fatalf("expected 5 calls, got %d", len(calls))
+	if len(calls) != 6 {
+		t.Fatalf("expected 6 calls, got %d", len(calls))
 	}
 	if calls[0].Method != "setWebhook" || calls[0].Payload["secret_token"] != "sec123" {
 		t.Fatalf("unexpected setWebhook payload: %+v", calls[0])
 	}
-	if calls[2].Method != "deleteWebhook" || calls[2].Payload["drop_pending_updates"] != false {
-		t.Fatalf("unexpected deleteWebhook payload: %+v", calls[2])
+	if calls[1].Method != "setMyCommands" {
+		t.Fatalf("unexpected setMyCommands call: %+v", calls[1])
 	}
-	if calls[3].Method != "sendMessage" || calls[3].Payload["disable_web_page_preview"] != true {
-		t.Fatalf("unexpected sendMessage payload: %+v", calls[3])
+	commands, ok := calls[1].Payload["commands"].([]interface{})
+	if !ok || len(commands) != 2 {
+		t.Fatalf("unexpected setMyCommands payload: %+v", calls[1].Payload)
 	}
-	if calls[4].Method != "getUpdates" || calls[4].Payload["timeout"] != float64(30) {
-		t.Fatalf("unexpected getUpdates payload: %+v", calls[4])
+	if calls[3].Method != "deleteWebhook" || calls[3].Payload["drop_pending_updates"] != false {
+		t.Fatalf("unexpected deleteWebhook payload: %+v", calls[3])
+	}
+	if calls[4].Method != "sendMessage" || calls[4].Payload["disable_web_page_preview"] != true {
+		t.Fatalf("unexpected sendMessage payload: %+v", calls[4])
+	}
+	if calls[5].Method != "getUpdates" || calls[5].Payload["timeout"] != float64(30) {
+		t.Fatalf("unexpected getUpdates payload: %+v", calls[5])
 	}
 }
 

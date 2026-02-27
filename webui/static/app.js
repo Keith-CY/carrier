@@ -37,6 +37,7 @@
   let serverManageLastOperation = null;
   let serverHostLastOperationByID = {};
   let serverEditingHostID = "";
+  let serverSelectedUploadedKey = null;
   let profileEditingProfileID = "";
   let serverManageInstallStreamAbortController = null;
   let serverManageLiveLogLines = [];
@@ -77,6 +78,34 @@
       opts.headers["Authorization"] = "Bearer " + token;
     if (body)
       opts.body = JSON.stringify(body);
+    return fetch(path, opts).then(async (r) => {
+      if (r.status === 401) {
+        clearToken();
+        throw new Error("Unauthorized");
+      }
+      const raw = await r.text();
+      let data = {};
+      if (raw) {
+        try {
+          data = JSON.parse(raw);
+        } catch (e) {
+          if (!r.ok)
+            throw new Error(raw || "Request failed (" + r.status + ")");
+          return raw;
+        }
+      }
+      if (!r.ok) {
+        const errMsg = data && data.message || data && data.errorCode || data && data.error && (data.error.message || data.error.code) || data.error || "Request failed (" + r.status + ")";
+        throw new Error(errMsg);
+      }
+      return data;
+    });
+  }
+  function apiMultipart(path, formData) {
+    const opts = { method: "POST", headers: {} };
+    if (token)
+      opts.headers["Authorization"] = "Bearer " + token;
+    opts.body = formData;
     return fetch(path, opts).then(async (r) => {
       if (r.status === 401) {
         clearToken();
@@ -589,6 +618,25 @@
     }
     function refreshSetupContinueState() {
       if (!isAddMode()) {
+        const channel2 = providerSelect.value.trim().toLowerCase();
+        const channelToken2 = tokenInput.value.trim();
+        const channelSecret = webhookInput.value.trim();
+        if (!channel2) {
+          setupBtn.disabled = true;
+          return;
+        }
+        if (channel2 === "skip") {
+          setupBtn.disabled = false;
+          return;
+        }
+        if (!channelToken2) {
+          setupBtn.disabled = true;
+          return;
+        }
+        if (channel2 === "discord" && !channelSecret) {
+          setupBtn.disabled = true;
+          return;
+        }
         setupBtn.disabled = false;
         return;
       }
@@ -646,7 +694,7 @@
       title.textContent = "Step 1 \u2014 Configure Chat Channel";
       providerLabel.textContent = "Chat Channel";
       tokenLabel.textContent = "Channel Bot Token";
-      providerSelect.value = "";
+      providerSelect.value = addChannel || "skip";
       [...providerSelect.options].forEach((opt) => {
         opt.disabled = false;
       });
@@ -657,11 +705,13 @@
         webhookLabel.classList.remove("hidden");
       pairSection.classList.add("hidden");
       renderCarrierPairShortcut("");
-      setupBtn.disabled = false;
+      refreshSetupContinueState();
     }
     providerSelect.onchange = () => {
-      if (!isAddMode())
+      if (!isAddMode()) {
+        refreshSetupContinueState();
         return;
+      }
       const channel = providerSelect.value.trim().toLowerCase();
       if (channel !== "telegram") {
         addChannelChatId = "";
@@ -679,8 +729,10 @@
       refreshSetupContinueState();
     };
     tokenInput.oninput = () => {
-      if (!isAddMode())
+      if (!isAddMode()) {
+        refreshSetupContinueState();
         return;
+      }
       const inputToken = tokenInput.value.trim();
       if (inputToken !== addChannelToken) {
         addChannelChatId = "";
@@ -697,6 +749,11 @@
         updatePairInstruction();
       }
       refreshSetupContinueState();
+    };
+    webhookInput.oninput = () => {
+      if (!isAddMode()) {
+        refreshSetupContinueState();
+      }
     };
     if (pairUseCarrierBtn) {
       pairUseCarrierBtn.onclick = () => {
@@ -774,14 +831,18 @@
         setMsg("#setup-msg", "Please choose a chat channel.", "error");
         return;
       }
-      if (!channelToken) {
+      if (channel !== "skip" && !channelToken) {
         setMsg("#setup-msg", "Please enter channel bot token.", "error");
         return;
       }
+      if (channel === "discord" && !webhookSecret) {
+        setMsg("#setup-msg", "Please enter Discord public key.", "error");
+        return;
+      }
       addChannel = channel;
-      addChannelToken = channelToken;
-      addWebhookSecret = webhookSecret;
-      location.hash = "#/agents";
+      addChannelToken = channel === "skip" ? "" : channelToken;
+      addWebhookSecret = channel === "skip" ? "" : webhookSecret;
+      location.hash = "#/provider";
     };
   }
   async function initAgents() {
@@ -991,7 +1052,7 @@
       };
     }
     $("#provider-back").onclick = () => {
-      location.hash = isAddMode() ? "#/setup" : "#/agents";
+      location.hash = "#/setup";
     };
     $("#provider-skip").onclick = () => {
       selectedProvider = null;
@@ -1001,11 +1062,7 @@
     $("#provider-next").onclick = () => {
       if (!selectedProvider)
         return;
-      if (isAddMode()) {
-        location.hash = "#/install";
-        return;
-      }
-      location.hash = "#/config";
+      location.hash = "#/install";
     };
   }
   function authModeBadgeText(mode) {
@@ -1052,17 +1109,16 @@
     } else {
       label.textContent = p.name + " requires external authentication.";
       instructions.classList.remove("hidden");
-      if (isAddMode()) {
-        instructions.innerHTML = "Paste access token below if you are not reusing Carrier credential.";
-        keyInput.classList.remove("hidden");
-        keyInput.placeholder = "Access token (optional)";
-        keyInput.oninput = () => {
-          providerApiKey = keyInput.value.trim();
-          refreshProviderNextButton();
-        };
+      keyInput.classList.remove("hidden");
+      keyInput.placeholder = (p.env_var || "Access token") + " (optional, leave empty to reuse saved credential)";
+      keyInput.oninput = () => {
+        providerApiKey = keyInput.value.trim();
+        refreshProviderNextButton();
+      };
+      if (p.id === "openai-codex") {
+        instructions.innerHTML = "OAuth device-code login:<br>1. Open <code>https://auth.openai.com/codex/device</code><br>2. Enter your one-time device code and complete authorization<br>3. Paste <code>OPENAI_CODEX_TOKEN</code> below (or leave empty to reuse saved credential).";
       } else {
-        const cmd = "openclaw models auth login --provider " + p.id;
-        instructions.innerHTML = "Run: <code>" + escapeHtml(cmd) + "</code><br>Then click Continue.";
+        instructions.innerHTML = "Complete provider OAuth login, then paste access token below (or leave empty to reuse saved credential).";
       }
     }
     refreshProviderNextButton();
@@ -1127,9 +1183,9 @@
     const heading = $("#view-install h3");
     if (heading)
       heading.textContent = isAddMode() ? "Step 3 \u2014 Confirm Installation" : "Step 5 \u2014 Confirm Installation";
-    let summary = "Agent: " + selectedAgent;
-    if (isAddMode())
-      summary += "\nChannel: " + addChannel;
+    let summary = isAddMode() ? "Agent: " + selectedAgent : "Carrier Onboard";
+    if (addChannel)
+      summary += "\nChannel: " + (addChannel === "skip" ? "WebUI only" : addChannel);
     if (selectedProvider)
       summary += "\nProvider: " + selectedProvider.name;
     $("#install-summary").textContent = summary;
@@ -1159,24 +1215,18 @@
           });
           lastAddResult = resp || null;
         } else {
-          if (!selectedProvider && selectedAgent === "picoclaw") {
-            throw new Error("Please select an LLM provider for picoclaw.");
+          if (!selectedProvider) {
+            throw new Error("Please select an LLM provider.");
           }
-          const envVars = collectEnvVars();
-          if (addWebhookSecret) {
-            envVars.CARRIER_TELEGRAM_WEBHOOK_SECRET = addWebhookSecret;
-          }
-          const resp = await api("POST", "/api/v1/add", {
-            agentId: selectedAgent,
-            channel: addChannel,
+          const resp = await api("POST", "/api/v1/onboard", {
+            channel: addChannel || "skip",
             channelToken: addChannelToken,
-            channelChatId: addChannelChatId,
-            providerId: selectedProvider ? selectedProvider.id : "",
+            channelSecret: addWebhookSecret,
+            providerId: selectedProvider.id,
             providerToken: providerApiKey,
-            reuseCredential: true,
-            envVars
+            reuseCredential: providerApiKey ? false : true
           });
-          lastAddResult = resp || null;
+          lastAddResult = resp && resp.onboard ? resp.onboard : resp || null;
         }
         location.hash = "#/complete";
       } catch (e) {
@@ -1209,6 +1259,27 @@
         lines.push("Paired chat: " + lastAddResult.pairedChatId);
       if (lastAddResult.workspacePath)
         lines.push("Workspace: " + lastAddResult.workspacePath);
+      if (lastAddResult.configPath)
+        lines.push("Config: " + lastAddResult.configPath);
+      detail.textContent = lines.join("\n");
+    } else if (lastAddResult) {
+      const lines = [];
+      const pairRequired = !!lastAddResult.pairRequired;
+      if (pairRequired && title)
+        title.textContent = "\u26A0\uFE0F One step left: Pair your bot";
+      if (lastAddResult.webuiOnly) {
+        lines.push("Mode: WebUI only (no chat channel configured).");
+      } else if (lastAddResult.channel) {
+        lines.push("Channel: " + lastAddResult.channel);
+      }
+      if (lastAddResult.providerId)
+        lines.push("Provider: " + lastAddResult.providerId);
+      if (lastAddResult.pairCode) {
+        lines.push("Pair code: " + lastAddResult.pairCode);
+      }
+      if (pairRequired && lastAddResult.pairCode) {
+        lines.push("Send in your bot chat: /pair " + lastAddResult.pairCode);
+      }
       if (lastAddResult.configPath)
         lines.push("Config: " + lastAddResult.configPath);
       detail.textContent = lines.join("\n");
@@ -1947,10 +2018,25 @@
   function getServerManageHostID() {
     return String(serverManageHostID || "").trim();
   }
+  function updateServerKeySelectionState() {
+    const status = $("#server-key-upload-state");
+    if (!status)
+      return;
+    const key = serverSelectedUploadedKey && typeof serverSelectedUploadedKey === "object" ? serverSelectedUploadedKey : null;
+    if (!key || !String(key.keyRef || "").trim()) {
+      status.textContent = "No uploaded key selected.";
+      return;
+    }
+    const name = String(key.name || key.keyRef || "").trim();
+    const fp = String(key.fingerprint || "").trim();
+    status.textContent = fp ? "Selected key: " + name + " (" + fp + ")" : "Selected key: " + name;
+  }
   function syncServerAuthModeInputs() {
     const authMode = $("#server-auth-mode");
     const hostInput = $("#server-host");
     const keyInput = $("#server-key-path");
+    const keyFileInput = $("#server-key-file");
+    const keyDropzone = $("#server-key-dropzone");
     const sshConfigInput = $("#server-ssh-config-host");
     const sshConfigSelect = $("#server-ssh-config-host-select");
     const sshConfigHint = $("#server-ssh-config-host-hint");
@@ -1959,6 +2045,12 @@
     const mode = String(authMode.value || "").trim().toLowerCase();
     const privateKey = mode === "private_key";
     keyInput.disabled = !privateKey;
+    if (keyFileInput)
+      keyFileInput.disabled = !privateKey;
+    if (keyDropzone) {
+      keyDropzone.classList.toggle("hidden", !privateKey);
+      keyDropzone.setAttribute("aria-disabled", privateKey ? "false" : "true");
+    }
     hostInput.disabled = false;
     sshConfigInput.disabled = privateKey;
     if (sshConfigSelect) {
@@ -1994,7 +2086,8 @@
       "#server-key-path": "",
       "#server-ssh-config-host": "",
       "#server-runtime-mode": "on_demand",
-      "#server-auth-mode": "private_key"
+      "#server-auth-mode": "private_key",
+      "#server-key-file": ""
     };
     Object.keys(defaults).forEach((selector) => {
       const el = $(selector);
@@ -2002,6 +2095,8 @@
         return;
       el.value = defaults[selector];
     });
+    serverSelectedUploadedKey = null;
+    updateServerKeySelectionState();
     syncServerAuthModeInputs();
   }
   function resetServerEditor(clearForm) {
@@ -2025,6 +2120,7 @@
       "#server-port": String(host.port || 22),
       "#server-user": host.user || "",
       "#server-key-path": host.keyPath || "",
+      "#server-key-file": "",
       "#server-ssh-config-host": host.sshConfigHost || "",
       "#server-runtime-mode": host.runtimeMode || "on_demand",
       "#server-auth-mode": host.authMode || "private_key"
@@ -2035,6 +2131,16 @@
         return;
       el.value = map[selector];
     });
+    if (String(host.keyRef || "").trim()) {
+      serverSelectedUploadedKey = {
+        keyRef: String(host.keyRef || "").trim(),
+        name: String(host.keyName || host.keyRef || "").trim(),
+        fingerprint: String(host.keyFingerprint || "").trim()
+      };
+    } else {
+      serverSelectedUploadedKey = null;
+    }
+    updateServerKeySelectionState();
     syncServerAuthModeInputs();
     updateServerEditorUI();
   }
@@ -3440,6 +3546,7 @@
         "id: " + (host.id || "-"),
         "endpoint: " + endpoint,
         "auth: " + (host.authMode || "-"),
+        "key: " + (host.keyRef ? "uploaded:" + host.keyRef : host.keyPath || "-"),
         "runtime: " + (host.runtimeMode || "-"),
         "health: " + (host.lastHealth || "unknown")
       ];
@@ -3510,6 +3617,42 @@
     const diagnosisOut = $("#server-manage-diagnosis");
     const sessionsOut = $("#server-manage-sessions");
     const memoryOut = $("#server-manage-memory");
+    const keyPathInput = $("#server-key-path");
+    const keyFileInput = $("#server-key-file");
+    const keyDropzone = $("#server-key-dropzone");
+    async function uploadRemoteKeyFile(file) {
+      if (!file)
+        return;
+      const mode = String(authMode && authMode.value ? authMode.value : "").trim().toLowerCase();
+      if (mode !== "private_key") {
+        setMsg("#servers-msg", "PEM upload is only available for private_key auth mode.", "error");
+        return;
+      }
+      const form = new FormData;
+      form.append("file", file);
+      try {
+        setMsg("#servers-msg", "Uploading PEM key...", "info");
+        const payload = await apiMultipart("/api/v1/remote/keys", form);
+        const key = payload && payload.key && typeof payload.key === "object" ? payload.key : null;
+        if (!key || !String(key.keyRef || "").trim()) {
+          throw new Error("invalid upload response");
+        }
+        serverSelectedUploadedKey = {
+          keyRef: String(key.keyRef || "").trim(),
+          name: String(key.name || "").trim(),
+          fingerprint: String(key.fingerprint || "").trim()
+        };
+        if (keyPathInput)
+          keyPathInput.value = "";
+        updateServerKeySelectionState();
+        setMsg("#servers-msg", "PEM uploaded and saved securely.", "success");
+      } catch (e) {
+        setMsg("#servers-msg", "PEM upload failed: " + e.message, "error");
+      } finally {
+        if (keyFileInput)
+          keyFileInput.value = "";
+      }
+    }
     function syncServerEditSelection(hosts) {
       const list = Array.isArray(hosts) ? hosts : [];
       const current = String(serverEditingHostID || "").trim();
@@ -3570,8 +3713,46 @@
       };
     }
     syncServerAuthModeInputs();
+    updateServerKeySelectionState();
     updateServerEditorUI();
     setServerManageControlsDisabled(false);
+    if (keyPathInput) {
+      keyPathInput.oninput = () => {
+        if (String(keyPathInput.value || "").trim()) {
+          serverSelectedUploadedKey = null;
+          updateServerKeySelectionState();
+        }
+      };
+    }
+    if (keyFileInput) {
+      keyFileInput.onchange = async () => {
+        const files = keyFileInput.files;
+        if (!files || files.length === 0)
+          return;
+        await uploadRemoteKeyFile(files[0]);
+      };
+    }
+    if (keyDropzone) {
+      keyDropzone.onclick = () => {
+        if (keyFileInput)
+          keyFileInput.click();
+      };
+      keyDropzone.ondragover = (e) => {
+        e.preventDefault();
+        keyDropzone.classList.add("dragover");
+      };
+      keyDropzone.ondragleave = () => {
+        keyDropzone.classList.remove("dragover");
+      };
+      keyDropzone.ondrop = async (e) => {
+        e.preventDefault();
+        keyDropzone.classList.remove("dragover");
+        const files = e.dataTransfer && e.dataTransfer.files ? e.dataTransfer.files : null;
+        if (!files || files.length === 0)
+          return;
+        await uploadRemoteKeyFile(files[0]);
+      };
+    }
     renderServerManageChatMessages();
     updateServerManageChatStatus("Ready to chat with selected SSG agent.", "info");
     if (loadInstancesBtn)
@@ -3685,6 +3866,7 @@
     };
     saveBtn.onclick = async () => {
       const mode = (authMode.value || "").trim().toLowerCase();
+      const selectedKey = serverSelectedUploadedKey && typeof serverSelectedUploadedKey === "object" ? serverSelectedUploadedKey : null;
       const payload = {
         name: ($("#server-name").value || "").trim(),
         host: ($("#server-host").value || "").trim(),
@@ -3692,6 +3874,9 @@
         user: ($("#server-user").value || "").trim(),
         authMode: mode,
         keyPath: ($("#server-key-path").value || "").trim(),
+        keyRef: selectedKey && mode === "private_key" ? String(selectedKey.keyRef || "").trim() : "",
+        keyName: selectedKey && mode === "private_key" ? String(selectedKey.name || "").trim() : "",
+        keyFingerprint: selectedKey && mode === "private_key" ? String(selectedKey.fingerprint || "").trim() : "",
         sshConfigHost: ($("#server-ssh-config-host").value || "").trim(),
         runtimeMode: ($("#server-runtime-mode").value || "on_demand").trim()
       };

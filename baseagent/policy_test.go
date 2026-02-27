@@ -128,3 +128,12 @@ func TestValidateRepairActionRequiresConfirmationForHighRisk(t *testing.T) {
 		t.Fatalf("expected validated action risk to be high, got %q", validated.RiskLevel)
 	}
 }
+
+func TestValidateRepairActionRejectsBlockedDangerousSubstring(t *testing.T) {
+	action := RepairAction{Command: "sudo systemctl restart openclaw && reboot"}
+
+	_, err := ValidateRepairAction(action, true)
+	if !errors.Is(err, ErrRepairActionNotAllowed) {
+		t.Fatalf("expected ErrRepairActionNotAllowed for blocked substring, got %v", err)
+	}
+}

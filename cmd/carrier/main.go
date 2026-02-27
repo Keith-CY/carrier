@@ -6,6 +6,7 @@
 //	carrier daemon          Start daemon HTTP API server (foreground)
 //	carrier gateway         Start gateway HTTP server
 //	carrier stop            Stop background daemon and gateway started by Carrier
+//	carrier reset           Stop services and remove Carrier-generated data for fresh onboarding
 //	carrier stop <id|name>  Stop a managed agent instance
 //	carrier start <id|name> Start a managed agent instance
 //	carrier status <id|name> Show status for a managed agent instance
@@ -240,6 +241,25 @@ var channelOptions = []choiceOption{
 	{ID: "wecom", Name: "WeCom", Setup: "Medium (CorpID + webhook setup)", TokenEnv: "CARRIER_WECOM_BOT_TOKEN"},
 }
 
+var onboardChannelOptions = []choiceOption{
+	{
+		ID: "telegram", Name: "Telegram", Setup: "Bot token",
+		TokenEnv: "CARRIER_TELEGRAM_BOT_TOKEN", RequireToken: true,
+		SecretEnv: "CARRIER_TELEGRAM_WEBHOOK_SECRET",
+	},
+	{
+		ID: "discord", Name: "Discord", Setup: "Bot token + public key",
+		TokenEnv: "CARRIER_DISCORD_BOT_TOKEN", RequireToken: true,
+		SecretEnv: "CARRIER_DISCORD_PUBLIC_KEY",
+	},
+	{
+		ID:      "skip",
+		Name:    "WebUI only",
+		Setup:   "No chat channel (browser interaction only)",
+		Aliases: []string{"none", "webui", "no-channel"},
+	},
+}
+
 var providerOptions = []choiceOption{
 	{ID: "anthropic", Name: "Anthropic", Setup: "Claude direct API key", AuthMode: authModeAPIKey, ProviderEnv: "ANTHROPIC_API_KEY", ExampleModel: "anthropic/claude-sonnet-4.6"},
 	{ID: "openai", Name: "OpenAI", Setup: "GPT direct API key", AuthMode: authModeAPIKey, ProviderEnv: "OPENAI_API_KEY", ExampleModel: "openai/gpt-5.2"},
@@ -270,6 +290,7 @@ var terminateBackgroundProcessFunc = terminateBackgroundProcess
 var daemonPairCodeFetcher = fetchDaemonPairCode
 var openBrowserFunc = openBrowserURL
 var runOnboardFlow = runOnboard
+var runStopFlow = runStop
 var ensureWebUIServicesFlow = ensureWebUIServices
 var execGitCommand = func(ctx context.Context, workingDir string, args ...string) (string, error) {
 	if ctx == nil {
@@ -296,6 +317,7 @@ Usage:
   carrier -v             Print version metadata
   carrier -V             Print version metadata
   carrier daemon         Start daemon HTTP API server (foreground)
+  carrier reset          Stop services and remove Carrier-generated data
   carrier update         Update to a newer git ref
   carrier update --check  Show current and target without applying changes
   Common update options:
@@ -356,6 +378,17 @@ func main() {
 			}
 			if err := runStop(os.Stdout); err != nil {
 				fmt.Fprintf(os.Stderr, "stop failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "reset":
+			if len(commandArgs) > 0 {
+				fmt.Fprintln(os.Stderr, "reset failed: this command does not accept arguments")
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runReset(os.Stdout); err != nil {
+				fmt.Fprintf(os.Stderr, "reset failed: %v\n", err)
 				os.Exit(1)
 			}
 			return
@@ -502,6 +535,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "gateway", args[2:], nil
 	case "stop":
 		return "stop", args[2:], nil
+	case "reset":
+		return "reset", args[2:], nil
 	case "start":
 		return "start", args[2:], nil
 	case "status":
@@ -1008,6 +1043,207 @@ func runStop(out io.Writer) error {
 	}
 	_, _ = fmt.Fprintln(out, "No background daemon/gateway process was stopped.")
 	return nil
+}
+
+func runReset(out io.Writer) error {
+	_, _ = fmt.Fprintln(out, "Carrier Reset")
+	_, _ = fmt.Fprintln(out, "-------------")
+	_, _ = fmt.Fprintln(out, "Stopping background services before cleanup...")
+	if err := runStopFlow(out); err != nil {
+		return fmt.Errorf("stop background services: %w", err)
+	}
+
+	targets, err := collectCarrierResetTargets()
+	if err != nil {
+		return err
+	}
+
+	_, _ = fmt.Fprintln(out, "Removing Carrier-generated data...")
+	var removeErrs []error
+	for _, target := range targets {
+		removed, removeErr := removeResetTarget(target)
+		switch {
+		case removeErr != nil:
+			removeErrs = append(removeErrs, removeErr)
+			_, _ = fmt.Fprintf(out, "- failed: %s (%v)\n", target, removeErr)
+		case removed:
+			_, _ = fmt.Fprintf(out, "- removed: %s\n", target)
+		default:
+			_, _ = fmt.Fprintf(out, "- not found: %s\n", target)
+		}
+	}
+
+	keychainRemoved, keychainEnabled, keychainErr := resetProviderCredentialsFromKeychain()
+	if keychainEnabled {
+		if keychainErr != nil {
+			removeErrs = append(removeErrs, keychainErr)
+			_, _ = fmt.Fprintf(out, "- keychain cleanup failed: %v\n", keychainErr)
+		} else if keychainRemoved > 0 {
+			_, _ = fmt.Fprintf(out, "- keychain credentials removed: %d\n", keychainRemoved)
+		} else {
+			_, _ = fmt.Fprintln(out, "- keychain credentials removed: 0")
+		}
+	}
+
+	if len(removeErrs) > 0 {
+		return errors.Join(removeErrs...)
+	}
+
+	_, _ = fmt.Fprintln(out, "✅ reset complete")
+	_, _ = fmt.Fprintln(out, "Run `carrier onboard` to start a fresh onboarding flow.")
+	return nil
+}
+
+func collectCarrierResetTargets() ([]string, error) {
+	home, err := resolveCarrierHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home dir for reset: %w", err)
+	}
+	configPath, err := onboardConfigPath(os.Getenv, resolveCarrierHomeDir)
+	if err != nil {
+		return nil, err
+	}
+	instancePath, err := managedInstancesPath()
+	if err != nil {
+		return nil, err
+	}
+	credentialPath, err := resetCredentialStorePath()
+	if err != nil {
+		return nil, err
+	}
+
+	var targets []string
+	seen := make(map[string]struct{})
+	addTarget := func(path string) {
+		normalized, ok := normalizeResetTarget(path)
+		if !ok {
+			return
+		}
+		if _, exists := seen[normalized]; exists {
+			return
+		}
+		seen[normalized] = struct{}{}
+		targets = append(targets, normalized)
+	}
+
+	addTarget(filepath.Join(home, ".carrier"))
+	addTarget(filepath.Join(home, ".picoclaw"))
+	addTarget(filepath.Join(home, ".openclaw"))
+	addTarget(filepath.Join(home, ".zeroclaw"))
+	addTarget(configPath)
+	addTarget(instancePath)
+	addTarget(credentialPath)
+
+	for _, key := range []string{
+		"CARRIER_CONFIG",
+		"CARRIER_ONBOARD_CONFIG",
+		"CARRIER_INSTANCE_STORE",
+		"CARRIER_CREDENTIAL_STORE",
+		"CARRIER_REMOTE_KEY_DIR",
+		"CARRIER_BOOTSTRAP_RUN_DIR",
+		"CARRIER_BOOTSTRAP_LOG_DIR",
+	} {
+		addTarget(os.Getenv(key))
+	}
+
+	sort.Strings(targets)
+	return targets, nil
+}
+
+func normalizeResetTarget(path string) (string, bool) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", false
+	}
+	cleaned := filepath.Clean(trimmed)
+	if cleaned == "" || cleaned == "." || cleaned == string(filepath.Separator) {
+		return "", false
+	}
+	if runtime.GOOS == "windows" {
+		volume := filepath.VolumeName(cleaned)
+		if volume != "" {
+			remainder := strings.Trim(strings.TrimPrefix(cleaned, volume), `\/`)
+			if remainder == "" {
+				return "", false
+			}
+		}
+	}
+	return cleaned, true
+}
+
+func removeResetTarget(path string) (bool, error) {
+	if _, err := os.Lstat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat %s: %w", path, err)
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return false, fmt.Errorf("remove %s: %w", path, err)
+	}
+	return true, nil
+}
+
+func resetCredentialStorePath() (string, error) {
+	if path := strings.TrimSpace(os.Getenv("CARRIER_CREDENTIAL_STORE")); path != "" {
+		return path, nil
+	}
+	home, err := resolveCarrierHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir for credential store: %w", err)
+	}
+	return filepath.Join(home, ".carrier", "credentials.json"), nil
+}
+
+func resetProviderCredentialsFromKeychain() (deleted int, enabled bool, err error) {
+	if runtime.GOOS != "darwin" {
+		return 0, false, nil
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CARRIER_DISABLE_KEYCHAIN")), "1") {
+		return 0, false, nil
+	}
+	if _, lookErr := exec.LookPath("security"); lookErr != nil {
+		return 0, false, nil
+	}
+
+	enabled = true
+	var errs []error
+	seen := make(map[string]struct{})
+	for _, provider := range providerOptions {
+		providerID := strings.TrimSpace(provider.ID)
+		if providerID == "" {
+			continue
+		}
+		service := providerCredentialServiceName(providerID)
+		if _, exists := seen[service]; exists {
+			continue
+		}
+		seen[service] = struct{}{}
+
+		cmd := exec.Command("security", "delete-generic-password", "-a", "carrier", "-s", service)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if runErr := cmd.Run(); runErr != nil {
+			message := strings.ToLower(strings.TrimSpace(stderr.String()))
+			if strings.Contains(message, "could not be found") || strings.Contains(message, "item not found") {
+				continue
+			}
+			if message == "" {
+				message = runErr.Error()
+			}
+			errs = append(errs, fmt.Errorf("delete keychain credential %s: %s", service, message))
+			continue
+		}
+		deleted++
+	}
+	if len(errs) > 0 {
+		return deleted, true, errors.Join(errs...)
+	}
+	return deleted, true, nil
+}
+
+func providerCredentialServiceName(providerID string) string {
+	return "carrier.provider." + strings.TrimSpace(providerID)
 }
 
 func runStartInstance(out io.Writer, target string) error {
@@ -1867,16 +2103,23 @@ func runOnboard(in io.Reader, out io.Writer, startGateway func() error) error {
 	_, _ = fmt.Fprintln(out, "-------------------")
 	_, _ = fmt.Fprintln(out, "Tip: for browser onboarding, run `carrier onboard --webui` and open http://127.0.0.1:8787/")
 	_, _ = fmt.Fprintln(out, "Step 1/4: Configure chat channel")
-	channel, ok := resolveChoice("telegram", channelOptions)
-	if !ok {
-		return errors.New("telegram channel is unavailable")
-	}
-	_, _ = fmt.Fprintf(out, "Using channel: %s\n", channel.Name)
-	channelEnv, channelCfg, err := promptChannelCredentialsMinimal(reader, out, channel)
+	channel, err := promptOnboardChannelMinimal(reader, out)
 	if err != nil {
 		return err
 	}
-	channelConfigs := []configv2.Channel{channelCfg}
+	channelEnv := map[string]string{}
+	channelConfigs := []configv2.Channel{}
+	if strings.EqualFold(channel.ID, "skip") {
+		_, _ = fmt.Fprintln(out, "Using mode: WebUI only (skip channel setup)")
+	} else {
+		_, _ = fmt.Fprintf(out, "Using channel: %s\n", channel.Name)
+		var channelCfg configv2.Channel
+		channelEnv, channelCfg, err = promptChannelCredentialsMinimal(reader, out, channel)
+		if err != nil {
+			return err
+		}
+		channelConfigs = append(channelConfigs, channelCfg)
+	}
 
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "Step 2/4: Configure LLM provider")
@@ -1953,9 +2196,15 @@ func runOnboard(in io.Reader, out io.Writer, startGateway func() error) error {
 		sort.Strings(envKeys)
 		_, _ = fmt.Fprintf(out, "Configured env vars for this process: %s\n", strings.Join(envKeys, ", "))
 	}
-	_, _ = fmt.Fprintln(out, "Step 3/4: Credential setup complete")
+	if strings.EqualFold(channel.ID, "skip") {
+		_, _ = fmt.Fprintln(out, "Step 3/4: Pair setup skipped (WebUI-only mode)")
+	} else {
+		_, _ = fmt.Fprintln(out, "Step 3/4: Pair setup")
+	}
 	_, _ = fmt.Fprintln(out, "Step 4/4: Launch gateway")
-	_, _ = fmt.Fprintf(out, "Selected channel: %s\n", channel.Name)
+	if !strings.EqualFold(channel.ID, "skip") {
+		_, _ = fmt.Fprintf(out, "Selected channel: %s\n", channel.Name)
+	}
 	_, _ = fmt.Fprintf(out, "Selected provider: %s\n", provider.Name)
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "Ensuring daemon is running...")
@@ -1964,11 +2213,17 @@ func runOnboard(in io.Reader, out io.Writer, startGateway func() error) error {
 	if err != nil {
 		return err
 	}
-	printDaemonPairCode(out, daemonURL)
+	if !strings.EqualFold(channel.ID, "skip") {
+		printDaemonPairCode(out, daemonURL)
+	}
 
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintln(out, "Starting gateway...")
-	_, _ = fmt.Fprintln(out, buildSlashCommandGuide(channel))
+	if !strings.EqualFold(channel.ID, "skip") {
+		_, _ = fmt.Fprintln(out, buildSlashCommandGuide(channel))
+	} else {
+		_, _ = fmt.Fprintln(out, "WebUI-only mode: open Carrier WebUI to interact without chat channel pairing.")
+	}
 
 	if _, err := ensureGatewayRunning(out, startGateway); err != nil {
 		return err
@@ -2226,6 +2481,31 @@ func resolveManagedChannelToken(channelID string) (string, string) {
 		}
 		if token := strings.TrimSpace(ch.BotToken); token != "" {
 			return token, "Carrier config channels"
+		}
+	}
+	return "", ""
+}
+
+func resolveManagedChannelSecret(channelID, secretEnv string) (string, string) {
+	channelID = strings.ToLower(strings.TrimSpace(channelID))
+	secretEnv = strings.TrimSpace(secretEnv)
+	if channelID == "" || secretEnv == "" {
+		return "", ""
+	}
+	if value := strings.TrimSpace(os.Getenv(secretEnv)); value != "" {
+		return value, fmt.Sprintf("environment variable %s", secretEnv)
+	}
+
+	cfg, _, err := configv2.Load()
+	if err != nil || cfg == nil {
+		return "", ""
+	}
+	for _, ch := range cfg.Channels {
+		if !strings.EqualFold(ch.ID, channelID) {
+			continue
+		}
+		if value := strings.TrimSpace(ch.WebhookSecret); value != "" {
+			return value, "Carrier config channels"
 		}
 	}
 	return "", ""
@@ -3307,34 +3587,101 @@ func promptMinimalProviderOverride(reader *bufio.Reader, out io.Writer, selected
 	return override, true, nil
 }
 
+func promptOnboardChannelMinimal(reader *bufio.Reader, out io.Writer) (choiceOption, error) {
+	_, _ = fmt.Fprintln(out, "Available channels:")
+	for i, ch := range onboardChannelOptions {
+		_, _ = fmt.Fprintf(out, "%d) %s (%s)\n", i+1, ch.Name, ch.Setup)
+	}
+	choice, err := promptInput(reader, out, "Choose channel [telegram|discord|skip] (default: skip)", false)
+	if err != nil {
+		return choiceOption{}, err
+	}
+	choice = strings.TrimSpace(choice)
+	if choice == "" {
+		choice = "skip"
+	}
+	channel, ok := resolveChoice(choice, onboardChannelOptions)
+	if !ok {
+		return choiceOption{}, fmt.Errorf("unknown channel %q (expected telegram, discord, or skip)", choice)
+	}
+	return channel, nil
+}
+
 func promptChannelCredentialsMinimal(reader *bufio.Reader, out io.Writer, channel choiceOption) (map[string]string, configv2.Channel, error) {
 	env := make(map[string]string)
 	cfg := configv2.Channel{
 		ID:      channel.ID,
 		Enabled: true,
 	}
-	token, err := promptInput(reader, out, "Telegram bot token (required, from @BotFather)", true)
-	if err != nil {
-		return nil, configv2.Channel{}, err
+	switch strings.ToLower(strings.TrimSpace(channel.ID)) {
+	case "telegram":
+		token, reused, err := maybeReuseExistingChannelToken(reader, out, channel)
+		if err != nil {
+			return nil, configv2.Channel{}, err
+		}
+		if !reused {
+			token, err = promptInput(reader, out, "Telegram bot token (required, from @BotFather)", true)
+			if err != nil {
+				return nil, configv2.Channel{}, err
+			}
+		}
+		token = strings.TrimSpace(token)
+		if token == "" {
+			return nil, configv2.Channel{}, errors.New("telegram bot token is required")
+		}
+		cfg.BotToken = token
+		cfg.TransportMode = "auto"
+		env["CARRIER_TELEGRAM_BOT_TOKEN"] = token
+		env["CARRIER_TELEGRAM_TRANSPORT_MODE"] = "auto"
+		return env, cfg, nil
+	case "discord":
+		token, reused, err := maybeReuseExistingChannelToken(reader, out, channel)
+		if err != nil {
+			return nil, configv2.Channel{}, err
+		}
+		if !reused {
+			token, err = promptInput(reader, out, "Discord bot token (required, from Discord Developer Portal)", true)
+			if err != nil {
+				return nil, configv2.Channel{}, err
+			}
+		}
+		token = strings.TrimSpace(token)
+		if token == "" {
+			return nil, configv2.Channel{}, errors.New("discord bot token is required")
+		}
+		publicKey, secretReused, err := maybeReuseExistingChannelSecret(reader, out, channel)
+		if err != nil {
+			return nil, configv2.Channel{}, err
+		}
+		if !secretReused {
+			publicKey, err = promptInput(reader, out, "Discord public key (required, from Discord Developer Portal)", true)
+			if err != nil {
+				return nil, configv2.Channel{}, err
+			}
+		}
+		publicKey = strings.TrimSpace(publicKey)
+		if publicKey == "" {
+			return nil, configv2.Channel{}, errors.New("discord public key is required")
+		}
+		cfg.BotToken = token
+		cfg.WebhookSecret = publicKey
+		env["CARRIER_DISCORD_BOT_TOKEN"] = token
+		env["CARRIER_DISCORD_PUBLIC_KEY"] = publicKey
+		return env, cfg, nil
+	default:
+		return nil, configv2.Channel{}, fmt.Errorf("unsupported onboarding channel %q", channel.ID)
 	}
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return nil, configv2.Channel{}, errors.New("telegram bot token is required")
-	}
-	cfg.BotToken = token
-	cfg.TransportMode = "auto"
-	env["CARRIER_TELEGRAM_BOT_TOKEN"] = token
-	env["CARRIER_TELEGRAM_TRANSPORT_MODE"] = "auto"
-	return env, cfg, nil
 }
 
 func promptProviderAuthMinimal(reader *bufio.Reader, out io.Writer, provider choiceOption) (map[string]string, bool, error) {
 	switch provider.AuthMode {
 	case authModeAPIKey:
-		value, backend, ok, err := loadProviderCredential(provider.ID)
-		if err == nil && ok && strings.TrimSpace(value) != "" && strings.TrimSpace(provider.ProviderEnv) != "" {
-			_, _ = fmt.Fprintf(out, "Reusing saved %s credential (%s).\n", provider.Name, backend)
-			return map[string]string{provider.ProviderEnv: strings.TrimSpace(value)}, true, nil
+		reused, ok, err := maybeReuseSavedProviderCredential(reader, out, provider)
+		if err != nil {
+			return nil, false, err
+		}
+		if ok {
+			return reused, true, nil
 		}
 		label := fmt.Sprintf("%s API key", provider.Name)
 		apiKey, err := promptInput(reader, out, label, true)
@@ -3350,10 +3697,12 @@ func promptProviderAuthMinimal(reader *bufio.Reader, out io.Writer, provider cho
 		}
 		return map[string]string{provider.ProviderEnv: apiKey}, true, nil
 	case authModeOAuthDeviceCode:
-		value, backend, ok, err := loadProviderCredential(provider.ID)
-		if err == nil && ok && strings.TrimSpace(value) != "" && strings.TrimSpace(provider.ProviderEnv) != "" {
-			_, _ = fmt.Fprintf(out, "Reusing saved %s credential (%s).\n", provider.Name, backend)
-			return map[string]string{provider.ProviderEnv: strings.TrimSpace(value)}, true, nil
+		reused, ok, err := maybeReuseSavedProviderCredential(reader, out, provider)
+		if err != nil {
+			return nil, false, err
+		}
+		if ok {
+			return reused, true, nil
 		}
 		if provider.ID == "openai-codex" {
 			token, err := runOpenAICodexDeviceCodeFlow(out)
@@ -3390,6 +3739,36 @@ func promptProviderAuthMinimal(reader *bufio.Reader, out io.Writer, provider cho
 	default:
 		return nil, false, fmt.Errorf("unsupported provider auth mode: %s", provider.AuthMode)
 	}
+}
+
+func maybeReuseExistingChannelToken(reader *bufio.Reader, out io.Writer, channel choiceOption) (string, bool, error) {
+	token, source := resolveManagedChannelToken(channel.ID)
+	if strings.TrimSpace(token) == "" {
+		return "", false, nil
+	}
+	reuse, err := promptYesNo(reader, out, fmt.Sprintf("Reuse existing %s token from %s", channel.Name, source), true)
+	if err != nil {
+		return "", false, err
+	}
+	if !reuse {
+		return "", false, nil
+	}
+	return strings.TrimSpace(token), true, nil
+}
+
+func maybeReuseExistingChannelSecret(reader *bufio.Reader, out io.Writer, channel choiceOption) (string, bool, error) {
+	secret, source := resolveManagedChannelSecret(channel.ID, channel.SecretEnv)
+	if strings.TrimSpace(secret) == "" {
+		return "", false, nil
+	}
+	reuse, err := promptYesNo(reader, out, fmt.Sprintf("Reuse existing %s secret from %s", channel.Name, source), true)
+	if err != nil {
+		return "", false, err
+	}
+	if !reuse {
+		return "", false, nil
+	}
+	return strings.TrimSpace(secret), true, nil
 }
 
 func promptChannelCredentials(reader *bufio.Reader, out io.Writer, channel choiceOption) (map[string]string, configv2.Channel, error) {
@@ -3513,13 +3892,25 @@ func maybeReuseSavedProviderCredential(reader *bufio.Reader, out io.Writer, prov
 	if strings.TrimSpace(provider.ProviderEnv) == "" {
 		return nil, false, nil
 	}
+	if value := strings.TrimSpace(os.Getenv(provider.ProviderEnv)); value != "" {
+		reuse, err := promptYesNo(reader, out, fmt.Sprintf("Reuse existing %s credential from environment variable %s", provider.Name, provider.ProviderEnv), true)
+		if err != nil {
+			return nil, false, err
+		}
+		if reuse {
+			return map[string]string{provider.ProviderEnv: value}, true, nil
+		}
+	}
 	value, backend, ok, err := loadProviderCredential(provider.ID)
 	if err != nil {
 		_, _ = fmt.Fprintf(out, "Warning: failed to read saved credential for %s: %v\n", provider.Name, err)
 		return nil, false, nil
 	}
 	if !ok {
-		return nil, false, nil
+		value, backend, ok = loadProviderCredentialFallback(provider.ID)
+		if !ok {
+			return nil, false, nil
+		}
 	}
 	reuse, err := promptYesNo(reader, out, fmt.Sprintf("Reuse saved %s credential from %s", provider.Name, backend), true)
 	if err != nil {
@@ -3529,6 +3920,49 @@ func maybeReuseSavedProviderCredential(reader *bufio.Reader, out io.Writer, prov
 		return nil, false, nil
 	}
 	return map[string]string{provider.ProviderEnv: value}, true, nil
+}
+
+func loadProviderCredentialFallback(providerID string) (string, string, bool) {
+	service := providerCredentialServiceName(providerID)
+	value, ok := findKeychainCredentialCLI(service)
+	if !ok {
+		return "", "", false
+	}
+	return value, "macOS-keychain(cli)", true
+}
+
+func findKeychainCredentialCLI(service string) (string, bool) {
+	if runtime.GOOS != "darwin" {
+		return "", false
+	}
+	service = strings.TrimSpace(service)
+	if service == "" {
+		return "", false
+	}
+	if _, err := exec.LookPath("security"); err != nil {
+		return "", false
+	}
+	cmd := exec.Command("security", "find-generic-password", "-a", "carrier", "-s", service, "-w")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		messageRaw := strings.TrimSpace(stderr.String())
+		message := strings.ToLower(messageRaw)
+		if strings.Contains(message, "could not be found") || strings.Contains(message, "item not found") {
+			return "", false
+		}
+		if messageRaw == "" {
+			messageRaw = err.Error()
+		}
+		_, _ = fmt.Fprintf(os.Stderr, "warning: find keychain credential for service %q failed: %s\n", service, messageRaw)
+		return "", false
+	}
+	value := strings.TrimSpace(string(out))
+	if value == "" {
+		return "", false
+	}
+	return value, true
 }
 
 func saveProviderCredentialFlow(reader *bufio.Reader, out io.Writer, provider choiceOption, value string) error {
@@ -4361,8 +4795,12 @@ func withResolvedHomeEnv(env []string) []string {
 }
 
 func buildSlashCommandGuide(channel choiceOption) string {
+	channelName := strings.TrimSpace(channel.Name)
+	if channelName == "" {
+		channelName = "chat channel"
+	}
 	return fmt.Sprintf(
-		"Next step in %s:\n1. Open your bot chat and send `/pair <PAIR_CODE>`\n2. Then send `/agents`\n3. Use `carrier install <agent_id>` / `carrier onboard` in terminal, or open Carrier WebUI for guided setup\n4. Use `/start <agent_id>` to start installed agents",
-		channel.Name,
+		"Next step in %s:\n1. Open your bot chat and send `/pair <PAIR_CODE>`\n2. After pairing, send normal commands in chat\n3. You can also use Carrier WebUI for browser interaction",
+		channelName,
 	)
 }

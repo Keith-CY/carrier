@@ -11,8 +11,6 @@ import (
 	"carrier/daemon/internal/manifest"
 )
 
-const maxInstallAutoRepairRounds = 3
-
 func (s *Service) Install(ctx context.Context, agentID string) error {
 	m, _, err := s.getManifestAndState(agentID)
 	if err != nil {
@@ -107,9 +105,13 @@ func (s *Service) genericRepairLoop(
 	exhaustedWrap func(retryCount int, currentErr error) error,
 	retryAction func(round int) error,
 ) error {
+	roundBudget := baseagent.InstallAutoRepairRoundBudget()
+	if roundBudget <= 0 {
+		roundBudget = 1
+	}
 	currentErr := initialErr
-	for round := 1; round <= maxInstallAutoRepairRounds; round++ {
-		s.appendLog(agentID, fmt.Sprintf("auto-repair round %d/%d for %s", round, maxInstallAutoRepairRounds, operationName))
+	for round := 1; round <= roundBudget; round++ {
+		s.appendLog(agentID, fmt.Sprintf("auto-repair round %d/%d for %s", round, roundBudget, operationName))
 		if repaired := s.triageInstallFailure(ctx, opCtx, agentID, currentErr); !repaired {
 			return currentErr
 		}
@@ -119,7 +121,7 @@ func (s *Service) genericRepairLoop(
 		}
 		currentErr = roundFailureWrap(round, retryErr)
 	}
-	return exhaustedWrap(maxInstallAutoRepairRounds, currentErr)
+	return exhaustedWrap(roundBudget, currentErr)
 }
 
 func (s *Service) triageInstallFailure(ctx, opCtx context.Context, agentID string, runErr error) bool {

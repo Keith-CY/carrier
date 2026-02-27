@@ -185,8 +185,29 @@ func patchRemoteHost(hostID string, patch RemoteHost) (RemoteHost, error) {
 		if strings.TrimSpace(string(patch.AuthMode)) != "" {
 			merged.AuthMode = patch.AuthMode
 		}
-		if strings.TrimSpace(patch.KeyPath) != "" {
-			merged.KeyPath = patch.KeyPath
+		patchKeyPath := strings.TrimSpace(patch.KeyPath)
+		patchKeyRef := strings.TrimSpace(patch.KeyRef)
+		switch {
+		case patchKeyRef != "":
+			// keyRef and keyPath are mutually exclusive; keyRef wins when provided.
+			merged.KeyRef = patchKeyRef
+			merged.KeyPath = ""
+			if strings.TrimSpace(patch.KeyName) != "" {
+				merged.KeyName = patch.KeyName
+			} else {
+				merged.KeyName = ""
+			}
+			if strings.TrimSpace(patch.KeyFingerprint) != "" {
+				merged.KeyFingerprint = patch.KeyFingerprint
+			} else {
+				merged.KeyFingerprint = ""
+			}
+		case patchKeyPath != "":
+			// When users switch back to keyPath, clear previously selected uploaded key metadata.
+			merged.KeyPath = patchKeyPath
+			merged.KeyRef = ""
+			merged.KeyName = ""
+			merged.KeyFingerprint = ""
 		}
 		if strings.TrimSpace(patch.SSHConfigHost) != "" {
 			merged.SSHConfigHost = patch.SSHConfigHost

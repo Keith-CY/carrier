@@ -173,6 +173,24 @@ func newBuiltinToolRegistry(rt *Runtime, providers *ProviderManager, sessions *S
 		},
 	})
 
+	mustRegisterTool(registry, ToolSpec{
+		Name:        "show_boundaries",
+		Description: "Explain base-agent capability boundaries, sources, and design rationale.",
+		Match: func(input string) (ToolInvocation, bool) {
+			lower := strings.ToLower(strings.TrimSpace(input))
+			if lower == "/boundaries" || lower == "show boundaries" || lower == "list boundaries" || lower == "what are your boundaries" {
+				return ToolInvocation{Name: "show_boundaries"}, true
+			}
+			return ToolInvocation{}, false
+		},
+		Run: func(_ context.Context, _ ToolInvocation) (ChatResponse, error) {
+			return ChatResponse{
+				Message: baseAgentBoundariesText(),
+				Action:  "boundaries",
+			}, nil
+		},
+	})
+
 	return registry
 }
 

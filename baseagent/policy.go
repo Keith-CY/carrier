@@ -68,24 +68,6 @@ var allowlistedRepairActionRules = []repairActionRule{
 	},
 }
 
-var systemDirectories = []string{
-	"/bin",
-	"/boot",
-	"/dev",
-	"/etc",
-	"/lib",
-	"/lib64",
-	"/opt",
-	"/proc",
-	"/root",
-	"/run",
-	"/sbin",
-	"/srv",
-	"/sys",
-	"/usr",
-	"/var",
-}
-
 func IsRepairActionAllowlisted(action RepairAction) bool {
 	// Also check with sudo stripped, so "sudo systemctl restart x" matches "systemctl restart x"
 	stripped := action
@@ -102,27 +84,36 @@ func IsRepairActionAllowlisted(action RepairAction) bool {
 }
 
 func ClassifyRepairActionRisk(action RepairAction) RiskLevel {
+	policy := activeRepairPolicy()
 	if action.RiskLevel == RiskHigh {
 		return RiskHigh
 	}
 	if usesSudo(action.Command) {
 		return RiskHigh
 	}
-	if touchesSystemDirectory(action.TargetPath) {
+	if touchesHighRiskPath(action.TargetPath, policy.HighRiskPathPrefixes) {
 		return RiskHigh
 	}
 	return RiskLow
 }
 
 func ValidateRepairAction(action RepairAction, confirmed bool) (RepairAction, error) {
+	policy := activeRepairPolicy()
+	if isBlockedRepairCommand(action.Command, policy.BlockedSubstrings) {
+		return action, ErrRepairActionNotAllowed
+	}
 	action.RiskLevel = ClassifyRepairActionRisk(action)
 	if !IsRepairActionAllowlisted(action) {
 		return action, ErrRepairActionNotAllowed
 	}
-	if action.RiskLevel == RiskHigh && !confirmed {
+	if action.RiskLevel == RiskHigh && policy.HighRiskRequiresConfirmation && !confirmed {
 		return action, ErrRepairActionNeedsConfirmation
 	}
 	return action, nil
+}
+
+func activeRepairPolicy() RepairPolicy {
+	return ActiveBoundarySpec().RepairPolicy
 }
 
 func usesSudo(command string) bool {
@@ -133,13 +124,34 @@ func usesSudo(command string) bool {
 	return false
 }
 
-func touchesSystemDirectory(targetPath string) bool {
+func touchesHighRiskPath(targetPath string, prefixes []string) bool {
 	if strings.TrimSpace(targetPath) == "" {
 		return false
 	}
 	cleanPath := filepath.Clean(targetPath)
-	for _, dir := range systemDirectories {
-		if cleanPath == dir || strings.HasPrefix(cleanPath, dir+"/") {
+	for _, dir := range prefixes {
+		cleanDir := filepath.Clean(strings.TrimSpace(dir))
+		if cleanDir == "." || cleanDir == "/" {
+			continue
+		}
+		if cleanPath == cleanDir || strings.HasPrefix(cleanPath, cleanDir+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func isBlockedRepairCommand(command string, blockedSubstrings []string) bool {
+	lowerCommand := strings.ToLower(strings.TrimSpace(command))
+	if lowerCommand == "" {
+		return false
+	}
+	for _, blocked := range blockedSubstrings {
+		blockedTrimmed := strings.ToLower(strings.TrimSpace(blocked))
+		if blockedTrimmed == "" {
+			continue
+		}
+		if strings.Contains(lowerCommand, blockedTrimmed) {
 			return true
 		}
 	}

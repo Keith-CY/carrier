@@ -30,20 +30,23 @@ const (
 )
 
 type RemoteHost struct {
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	Host          string            `json:"host,omitempty"`
-	Port          int               `json:"port,omitempty"`
-	User          string            `json:"user,omitempty"`
-	AuthMode      RemoteAuthMode    `json:"authMode"`
-	KeyPath       string            `json:"keyPath,omitempty"`
-	SSHConfigHost string            `json:"sshConfigHost,omitempty"`
-	RuntimeMode   RemoteRuntimeMode `json:"runtimeMode"`
-	LastHealth    RemoteHealth      `json:"lastHealth,omitempty"`
-	LastCheckAt   string            `json:"lastCheckAt,omitempty"`
-	LastError     string            `json:"lastError,omitempty"`
-	CreatedAt     string            `json:"createdAt"`
-	UpdatedAt     string            `json:"updatedAt"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Host           string            `json:"host,omitempty"`
+	Port           int               `json:"port,omitempty"`
+	User           string            `json:"user,omitempty"`
+	AuthMode       RemoteAuthMode    `json:"authMode"`
+	KeyPath        string            `json:"keyPath,omitempty"`
+	KeyRef         string            `json:"keyRef,omitempty"`
+	KeyName        string            `json:"keyName,omitempty"`
+	KeyFingerprint string            `json:"keyFingerprint,omitempty"`
+	SSHConfigHost  string            `json:"sshConfigHost,omitempty"`
+	RuntimeMode    RemoteRuntimeMode `json:"runtimeMode"`
+	LastHealth     RemoteHealth      `json:"lastHealth,omitempty"`
+	LastCheckAt    string            `json:"lastCheckAt,omitempty"`
+	LastError      string            `json:"lastError,omitempty"`
+	CreatedAt      string            `json:"createdAt"`
+	UpdatedAt      string            `json:"updatedAt"`
 }
 
 type RemoteInstance struct {
@@ -107,6 +110,9 @@ func normalizeRemoteHost(input RemoteHost) RemoteHost {
 	h.Host = strings.TrimSpace(h.Host)
 	h.User = strings.TrimSpace(h.User)
 	h.KeyPath = strings.TrimSpace(h.KeyPath)
+	h.KeyRef = strings.TrimSpace(h.KeyRef)
+	h.KeyName = strings.TrimSpace(h.KeyName)
+	h.KeyFingerprint = strings.TrimSpace(h.KeyFingerprint)
 	h.SSHConfigHost = strings.TrimSpace(h.SSHConfigHost)
 	h.LastError = strings.TrimSpace(h.LastError)
 	if h.AuthMode == "" {
@@ -140,8 +146,13 @@ func validateRemoteHost(h RemoteHost) error {
 		if h.Host == "" {
 			return fmt.Errorf("host is required for private_key auth mode")
 		}
-		if h.KeyPath == "" {
-			return fmt.Errorf("keyPath is required for private_key auth mode")
+		if h.KeyPath == "" && h.KeyRef == "" {
+			return fmt.Errorf("keyPath or keyRef is required for private_key auth mode")
+		}
+		if h.KeyRef != "" {
+			if _, err := resolveRemoteKeyPath(h.KeyRef); err != nil {
+				return fmt.Errorf("invalid keyRef: %w", err)
+			}
 		}
 	case RemoteAuthModeSSHConfig:
 		if h.SSHConfigHost == "" && h.Host == "" {

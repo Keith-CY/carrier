@@ -41,10 +41,16 @@ type telegramAPI interface {
 	DeleteWebhook(ctx context.Context) error
 	GetUpdates(ctx context.Context, offset int64, timeoutSec int) ([]map[string]interface{}, error)
 	SendMessage(ctx context.Context, chatID, text string, disableWebPagePreview bool) error
+	SetMyCommands(ctx context.Context, commands []telegramBotCommand) error
 }
 
 type telegramWebhookInfo struct {
 	URL string `json:"url"`
+}
+
+type telegramBotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
 }
 
 type telegramBotAPI struct {
@@ -118,6 +124,28 @@ func (a *telegramBotAPI) SendMessage(ctx context.Context, chatID, text string, d
 		payload["disable_web_page_preview"] = true
 	}
 	return a.call(ctx, "sendMessage", payload, nil)
+}
+
+func (a *telegramBotAPI) SetMyCommands(ctx context.Context, commands []telegramBotCommand) error {
+	safe := make([]telegramBotCommand, 0, len(commands))
+	for _, cmd := range commands {
+		command := strings.TrimSpace(cmd.Command)
+		description := strings.TrimSpace(cmd.Description)
+		if command == "" || description == "" {
+			continue
+		}
+		safe = append(safe, telegramBotCommand{
+			Command:     command,
+			Description: description,
+		})
+	}
+	if len(safe) == 0 {
+		return nil
+	}
+	payload := map[string]interface{}{
+		"commands": safe,
+	}
+	return a.call(ctx, "setMyCommands", payload, nil)
 }
 
 type telegramAPIEnvelope struct {
@@ -200,6 +228,10 @@ func startTelegramTransport(
 	}
 
 	api := newTelegramBotAPI(token, cfg.TelegramAPIBaseURL, nil)
+	if err := api.SetMyCommands(ctx, carrierTelegramDefaultCommands()); err != nil {
+		// Command menu is UX-only; transport should continue even if this fails.
+		log.Printf("[gateway/telegram] warning: setMyCommands failed: %v", err)
+	}
 	decision, err := resolveTelegramTransportMode(ctx, cfg, api)
 	if err != nil {
 		setTelegramTransportStatus(mode, "error", "RESOLUTION_FAILED", err.Error(), "Verify telegram transport configuration.")
@@ -453,4 +485,18 @@ func isPublicWebhookHost(host string) bool {
 		}
 	}
 	return true
+}
+
+func carrierTelegramDefaultCommands() []telegramBotCommand {
+	return []telegramBotCommand{
+		{Command: "pair", Description: "Link this chat with Carrier (/pair <code>)"},
+		{Command: "chat", Description: "Chat with base agent (/chat <message>)"},
+		{Command: "agents", Description: "List managed agents"},
+		{Command: "status", Description: "Show agent status (/status [agent_id])"},
+		{Command: "logs", Description: "Show logs (/logs [agent_id] [tail])"},
+		{Command: "tools", Description: "List base-agent tools"},
+		{Command: "providers", Description: "Show provider backends"},
+		{Command: "sessions", Description: "List base-agent sessions"},
+		{Command: "boundaries", Description: "Explain base-agent boundaries"},
+	}
 }

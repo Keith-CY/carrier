@@ -249,7 +249,11 @@ func (r *Runtime) executeAgentAction(ctx context.Context, action, agentID string
 }
 
 func baseAgentHelpText() string {
-	return "Base agent manages local agents: `list agents` or `/agents`, `uninstall <agent>`, `start <agent>`, `stop <agent>`, `status <agent>`, `logs <agent>`, `upgrade <agent>`, `diagnose <agent>`. Metadata commands: `/tools`, `/providers`, `/sessions`. For install/onboard, use Carrier CLI/TUI (`carrier install <agent>`, `carrier onboard`) or WebUI."
+	return "Base agent manages local agents: `list agents` or `/agents`, `uninstall <agent>`, `start <agent>`, `stop <agent>`, `status <agent>`, `logs <agent>`, `upgrade <agent>`, `diagnose <agent>`. Metadata commands: `/tools`, `/providers`, `/sessions`, `/boundaries`. For install/onboard, use Carrier CLI/TUI (`carrier install <agent>`, `carrier onboard`) or WebUI."
+}
+
+func baseAgentBoundariesText() string {
+	return ActiveBoundarySpec().RenderSummary()
 }
 
 func withMemoryNote(resp ChatResponse, note string, healed bool, backupRef string) ChatResponse {

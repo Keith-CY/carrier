@@ -109,6 +109,7 @@ func renderManagedChannelPrompt(agentID string) string {
 	}
 	lines = append(lines, "")
 	lines = append(lines, "Reply with the channel ID (e.g. `/onboard telegram`).")
+	lines = append(lines, "Bot token input is skipped in chat onboarding; configure it later in Web UI.")
 	return strings.Join(lines, "\n")
 }
 
@@ -148,7 +149,9 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	if strings.TrimSpace(sess.SelectedChannel) == "" {
 		return nil, fmt.Errorf("%s channel is required", cfg.ID)
 	}
-	if strings.TrimSpace(sess.ChannelToken) == "" {
+	channelToken := strings.TrimSpace(sess.ChannelToken)
+	channelSetupPending := sess.ChannelSetupPending
+	if !channelSetupPending && channelToken == "" {
 		return nil, fmt.Errorf("%s channel token is required", cfg.ID)
 	}
 	if strings.TrimSpace(sess.SelectedProvider) == "" {
@@ -251,12 +254,18 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	if chatID != "" {
 		allowFrom = append(allowFrom, chatID)
 	}
+	channelConfig := map[string]interface{}{
+		"enabled":    true,
+		"allow_from": allowFrom,
+	}
+	if channelSetupPending {
+		channelConfig["enabled"] = false
+		channelConfig["setup_pending"] = true
+	} else {
+		channelConfig["token"] = channelToken
+	}
 	channels := map[string]interface{}{
-		sess.SelectedChannel: map[string]interface{}{
-			"enabled":    true,
-			"token":      sess.ChannelToken,
-			"allow_from": allowFrom,
-		},
+		sess.SelectedChannel: channelConfig,
 	}
 
 	payload := map[string]interface{}{
@@ -287,13 +296,14 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	}
 
 	record := map[string]interface{}{
-		"instance_id":    instanceID,
-		"agent_id":       cfg.ID,
-		"workspace_path": workspacePath,
-		"config_path":    configPath,
-		"channel":        sess.SelectedChannel,
-		"provider":       provider.ID,
-		"updated_at":     time.Now().UTC().Format(time.RFC3339Nano),
+		"instance_id":           instanceID,
+		"agent_id":              cfg.ID,
+		"workspace_path":        workspacePath,
+		"config_path":           configPath,
+		"channel":               sess.SelectedChannel,
+		"channel_setup_pending": channelSetupPending,
+		"provider":              provider.ID,
+		"updated_at":            time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	recordRaw, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {

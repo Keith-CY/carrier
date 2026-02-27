@@ -103,6 +103,18 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		}
 		handleWebUIAdd(w, r, requestID, daemon)
 	})
+	mux.HandleFunc("/api/v1/onboard", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleWebUIOnboard(w, r, requestID, daemon)
+	})
 	mux.HandleFunc("/api/v1/telegram/pair/init", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
 		if r.Method != http.MethodPost {
@@ -198,6 +210,14 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			return
 		}
 		handleRemoteHosts(w, r, requestID, cfg)
+	})
+	mux.HandleFunc("/api/v1/remote/keys", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleRemoteKeys(w, r, requestID, cfg)
 	})
 	mux.HandleFunc("/api/v1/remote/hosts/", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())

@@ -29,6 +29,9 @@ func TestE2ECarrierBinaryOnboardOpenAIAPIKey(t *testing.T) {
 	t.Setenv("CARRIER_CONFIG", filepath.Join(tmp, "config.v2.json"))
 	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
 	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	t.Setenv("CARRIER_TELEGRAM_BOT_TOKEN", "")
+	t.Setenv("CARRIER_DISCORD_BOT_TOKEN", "")
+	t.Setenv("CARRIER_DISCORD_PUBLIC_KEY", "")
 
 	pairCode := "pair-0123456789abcdef0123456789abcdef"
 	pairExpiresAt := time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339Nano)
@@ -68,7 +71,7 @@ func TestE2ECarrierBinaryOnboardOpenAIAPIKey(t *testing.T) {
 	setProbeEnvFromURL(t, "CARRIER_GATEWAY_HOST", "CARRIER_GATEWAY_PORT", gateway.URL)
 
 	bin := buildCarrierBinary(t)
-	stdout, stderr, err := runCarrierBinary(t, bin, "tg-test-token\nopenai\nsk-test-openai\n", "onboard")
+	stdout, stderr, err := runCarrierBinary(t, bin, "telegram\ntg-test-token\nopenai\nsk-test-openai\n", "onboard")
 	if err != nil {
 		t.Fatalf("carrier onboard failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -270,8 +273,8 @@ func TestE2ECarrierBinaryAddOpenClawReusesPairedUserAndProviderCredential(t *tes
 	if !strings.Contains(stdout, "Reused paired Telegram user id from latest managed instance: "+pairedChatID) {
 		t.Fatalf("stdout missing paired chat reuse message: %q", stdout)
 	}
-	if !strings.Contains(stdout, "Reusing saved OpenAI credential") {
-		t.Fatalf("stdout missing provider credential reuse message: %q", stdout)
+	if !strings.Contains(stdout, "Reuse saved OpenAI credential") && !strings.Contains(stdout, "Reusing saved OpenAI credential") {
+		t.Fatalf("stdout missing provider credential reuse prompt/message: %q", stdout)
 	}
 	if !strings.Contains(stdout, "Token reuse is disabled for OpenClaw") {
 		t.Fatalf("stdout missing token reuse policy message: %q", stdout)
