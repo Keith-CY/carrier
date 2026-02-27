@@ -28,6 +28,7 @@ type remoteStreamChunk struct {
 
 var sshExecRunner = defaultSSHExecRunner
 var sshExecStreamRunner = defaultSSHExecStreamRunner
+var knownHostsRepairer = repairKnownHostEntries
 
 func defaultSSHExecRunner(ctx context.Context, args []string) (remoteExecResult, error) {
 	cmd := exec.CommandContext(ctx, "ssh", args...)
@@ -134,12 +135,18 @@ func defaultSSHExecStreamRunner(ctx context.Context, args []string, onChunk func
 }
 
 func runRemoteCommand(ctx context.Context, host RemoteHost, command string) (remoteExecResult, error) {
-	args, err := buildSSHArgs(host, command)
+	args, err := buildSSHArgs(host, wrapRemoteCommandForSSH(command))
 	if err != nil {
 		return remoteExecResult{}, err
 	}
 	result, err := sshExecRunner(ctx, args)
 	result.Command = command
+	if shouldRepairKnownHostMismatch(result, err) {
+		if repairErr := knownHostsRepairer(host); repairErr == nil {
+			result, err = sshExecRunner(ctx, args)
+			result.Command = command
+		}
+	}
 	return result, err
 }
 
@@ -173,12 +180,18 @@ func runRemoteCommandWithRetry(ctx context.Context, host RemoteHost, command str
 }
 
 func runRemoteCommandStream(ctx context.Context, host RemoteHost, command string, onChunk func(remoteStreamChunk)) (remoteExecResult, error) {
-	args, err := buildSSHArgs(host, command)
+	args, err := buildSSHArgs(host, wrapRemoteCommandForSSH(command))
 	if err != nil {
 		return remoteExecResult{}, err
 	}
 	result, err := sshExecStreamRunner(ctx, args, onChunk)
 	result.Command = command
+	if shouldRepairKnownHostMismatch(result, err) {
+		if repairErr := knownHostsRepairer(host); repairErr == nil {
+			result, err = sshExecStreamRunner(ctx, args, onChunk)
+			result.Command = command
+		}
+	}
 	return result, err
 }
 
@@ -269,4 +282,85 @@ func remoteCommandError(result remoteExecResult, action string) error {
 		stderr = "remote command failed"
 	}
 	return fmt.Errorf("%s failed (exit %d): %s", action, result.ExitCode, RedactErrorMessage(stderr))
+}
+
+func wrapRemoteCommandForSSH(command string) string {
+	cmd := strings.TrimSpace(command)
+	if cmd == "" {
+		return command
+	}
+	script := "export LC_ALL=C LANG=C; export PATH=\"$HOME/.npm-global/bin:$HOME/.local/bin:$PATH\"; " + cmd
+	return "bash -lc " + shellSingleQuote(script)
+}
+
+func shouldRepairKnownHostMismatch(result remoteExecResult, err error) bool {
+	if err != nil {
+		return false
+	}
+	if result.ExitCode == 0 {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(result.Stderr + "\n" + result.Stdout))
+	if text == "" {
+		return false
+	}
+	if strings.Contains(text, "remote host identification has changed") {
+		return true
+	}
+	if strings.Contains(text, "host key verification failed") && strings.Contains(text, "offending") {
+		return true
+	}
+	return false
+}
+
+func repairKnownHostEntries(host RemoteHost) error {
+	h := normalizeRemoteHost(host)
+	targetHost := strings.TrimSpace(h.Host)
+	if h.AuthMode == RemoteAuthModeSSHConfig {
+		targetHost = strings.TrimSpace(h.SSHConfigHost)
+		if targetHost == "" {
+			targetHost = strings.TrimSpace(h.Host)
+		}
+	}
+	if targetHost == "" {
+		return fmt.Errorf("target host is empty")
+	}
+
+	port := h.Port
+	if port == 0 {
+		port = 22
+	}
+
+	entries := []string{}
+	if port == 22 {
+		entries = append(entries, targetHost)
+	} else {
+		entries = append(entries, fmt.Sprintf("[%s]:%d", targetHost, port), targetHost)
+	}
+
+	var firstErr error
+	seen := map[string]struct{}{}
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if _, ok := seen[entry]; ok {
+			continue
+		}
+		seen[entry] = struct{}{}
+		cmd := exec.Command("ssh-keygen", "-R", entry)
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			continue
+		}
+		msg := strings.ToLower(strings.TrimSpace(string(output)))
+		if strings.Contains(msg, "not found in") {
+			continue
+		}
+		if firstErr == nil {
+			firstErr = fmt.Errorf("ssh-keygen -R %s failed: %w", entry, err)
+		}
+	}
+	return firstErr
 }

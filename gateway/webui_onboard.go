@@ -40,12 +40,13 @@ type onboardBaseAgentSpec struct {
 }
 
 type onboardConfigChannel struct {
-	ID            string `json:"id"`
-	BotToken      string `json:"bot_token,omitempty"`
-	WebhookSecret string `json:"webhook_secret,omitempty"`
-	WebhookURL    string `json:"webhook_url,omitempty"`
-	TransportMode string `json:"transport_mode,omitempty"`
-	Enabled       bool   `json:"enabled"`
+	ID            string   `json:"id"`
+	BotToken      string   `json:"bot_token,omitempty"`
+	WebhookSecret string   `json:"webhook_secret,omitempty"`
+	WebhookURL    string   `json:"webhook_url,omitempty"`
+	TransportMode string   `json:"transport_mode,omitempty"`
+	AllowFrom     []string `json:"allow_from,omitempty"`
+	Enabled       bool     `json:"enabled"`
 }
 
 type onboardConfigModel struct {

@@ -91,7 +91,7 @@ func configureSSHRunner(t *testing.T, fn func(command string) remoteExecResult) 
 		if len(args) == 0 {
 			return remoteExecResult{ExitCode: 1, Stderr: "missing ssh args"}, nil
 		}
-		cmd := args[len(args)-1]
+		cmd := unwrapSSHWrappedCommand(args[len(args)-1])
 		result := fn(cmd)
 		result.Command = cmd
 		return result, nil
@@ -108,7 +108,7 @@ func configureSSHStreamRunner(t *testing.T, fn func(command string, onChunk func
 		if len(args) == 0 {
 			return remoteExecResult{ExitCode: 1, Stderr: "missing ssh args"}, nil
 		}
-		cmd := args[len(args)-1]
+		cmd := unwrapSSHWrappedCommand(args[len(args)-1])
 		result := fn(cmd, onChunk)
 		result.Command = cmd
 		return result, nil
@@ -116,6 +116,18 @@ func configureSSHStreamRunner(t *testing.T, fn func(command string, onChunk func
 	t.Cleanup(func() {
 		sshExecStreamRunner = orig
 	})
+}
+
+func unwrapSSHWrappedCommand(command string) string {
+	const prefix = "bash -lc '"
+	if !strings.HasPrefix(command, prefix) || !strings.HasSuffix(command, "'") {
+		return command
+	}
+	inner := strings.TrimSuffix(strings.TrimPrefix(command, prefix), "'")
+	inner = strings.ReplaceAll(inner, "'\\''", "'")
+	inner = strings.TrimPrefix(inner, "export LC_ALL=C LANG=C; ")
+	inner = strings.TrimPrefix(inner, "export PATH=\"$HOME/.npm-global/bin:$HOME/.local/bin:$PATH\"; ")
+	return inner
 }
 
 func createRemoteHostForTests(t *testing.T, mux http.Handler) string {
@@ -833,6 +845,52 @@ func TestRemoteRollbackRestoresConfigFromGitProfile(t *testing.T) {
 	model, _ := defaults["model"].(string)
 	if model != "gpt-4.1" {
 		t.Fatalf("expected model restored to gpt-4.1, got %q payload=%v", model, configPayload)
+	}
+}
+
+func TestRemotePatchConfigCreatesMissingConfigFile(t *testing.T) {
+	remoteConfig := ""
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.HasPrefix(command, "if [ -f \"$HOME/.openclaw/openclaw.json\" ]"):
+			if strings.TrimSpace(remoteConfig) == "" {
+				return remoteExecResult{ExitCode: 0, Stdout: "{}"}
+			}
+			return remoteExecResult{ExitCode: 0, Stdout: remoteConfig}
+		case strings.Contains(command, "cat > \"$HOME/.openclaw/openclaw.json\""):
+			payload := extractHeredocPayload(command)
+			if strings.TrimSpace(payload) != "" {
+				remoteConfig = payload
+			}
+			return remoteExecResult{ExitCode: 0}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	patchRec := runJSONRequest(t, mux, http.MethodPatch, "/api/v1/remote/hosts/"+hostID+"/config", `{
+		"patch":{"agents":{"defaults":{"provider":"openai","model":"gpt-4.1"}}}
+	}`)
+	if patchRec.Code != http.StatusOK {
+		t.Fatalf("config patch status=%d body=%s", patchRec.Code, patchRec.Body.String())
+	}
+
+	configRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/remote/hosts/"+hostID+"/config", "")
+	if configRec.Code != http.StatusOK {
+		t.Fatalf("config read status=%d body=%s", configRec.Code, configRec.Body.String())
+	}
+	configPayload := decodeJSONMap(t, configRec)
+	configMap, _ := configPayload["config"].(map[string]interface{})
+	agents, _ := configMap["agents"].(map[string]interface{})
+	defaults, _ := agents["defaults"].(map[string]interface{})
+	if got, _ := defaults["provider"].(string); got != "openai" {
+		t.Fatalf("expected provider openai, got %q payload=%v", got, configPayload)
+	}
+	if got, _ := defaults["model"].(string); got != "gpt-4.1" {
+		t.Fatalf("expected model gpt-4.1, got %q payload=%v", got, configPayload)
 	}
 }
 

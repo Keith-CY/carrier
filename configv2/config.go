@@ -31,12 +31,13 @@ type BaseAgentSpec struct {
 }
 
 type Channel struct {
-	ID            string `json:"id"`
-	BotToken      string `json:"bot_token,omitempty"`
-	WebhookSecret string `json:"webhook_secret,omitempty"`
-	WebhookURL    string `json:"webhook_url,omitempty"`
-	TransportMode string `json:"transport_mode,omitempty"` // auto|webhook|polling
-	Enabled       bool   `json:"enabled"`
+	ID            string   `json:"id"`
+	BotToken      string   `json:"bot_token,omitempty"`
+	WebhookSecret string   `json:"webhook_secret,omitempty"`
+	WebhookURL    string   `json:"webhook_url,omitempty"`
+	TransportMode string   `json:"transport_mode,omitempty"` // auto|webhook|polling
+	AllowFrom     []string `json:"allow_from,omitempty"`
+	Enabled       bool     `json:"enabled"`
 }
 
 type Model struct {
