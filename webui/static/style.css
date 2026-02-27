@@ -883,6 +883,13 @@ button:disabled,
   line-height: 1.4;
 }
 
+.manage-chat-messages {
+  min-height: 180px;
+  max-height: 300px;
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+
 main {
   display: grid;
   gap: 16px;

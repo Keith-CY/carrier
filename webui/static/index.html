@@ -336,13 +336,29 @@
         <div class="btn-row">
           <button id="server-manage-load-instances" class="btn-sm btn-secondary">Load Instances</button>
           <button id="server-manage-instance-status" class="btn-sm btn-secondary">Instance Status</button>
-          <button id="server-manage-install-instance" class="btn-sm">Install</button>
+          <button id="server-manage-install-instance" class="btn-sm">Install (Live)</button>
           <button id="server-manage-repair-instance" class="btn-sm btn-secondary">Repair</button>
           <button id="server-manage-load-logs" class="btn-sm btn-secondary">Load Logs</button>
         </div>
         <pre id="server-manage-instances" class="code-block text-dim" style="margin-top:8px; min-height:72px"></pre>
         <div id="server-manage-instance-status-out" class="manage-output" style="margin-top:8px; min-height:72px"></div>
         <div id="server-manage-logs" class="manage-output" style="margin-top:8px; min-height:72px"></div>
+        <p id="server-manage-stream-status" class="text-dim"></p>
+        <div id="server-manage-diagnosis" class="manage-output" style="margin-top:8px"></div>
+        <div class="card" style="margin-top:10px">
+          <h4>SSG Agent Chat</h4>
+          <div id="server-manage-chat-messages" class="chat-messages manage-chat-messages"></div>
+          <div class="chat-input-row">
+            <input id="server-manage-chat-input" type="text" placeholder="Message selected remote agent…" autocomplete="off">
+            <button id="server-manage-chat-send" class="btn-sm">Send</button>
+          </div>
+          <div class="btn-row" style="margin-top:8px">
+            <button id="server-manage-chat-reset-session" class="btn-sm btn-secondary">New Session</button>
+            <button id="server-manage-chat-cancel" class="btn-sm btn-secondary">Cancel Stream</button>
+            <button id="server-manage-chat-retry" class="btn-sm btn-secondary">Retry Last</button>
+          </div>
+          <p id="server-manage-chat-status" class="text-dim"></p>
+        </div>
         <div class="btn-row">
           <button id="server-manage-load-config" class="btn-sm btn-secondary">Load Config</button>
           <button id="server-manage-apply-config" class="btn-sm">Apply Config Patch</button>
