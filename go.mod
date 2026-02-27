@@ -4,8 +4,10 @@ go 1.23.8
 
 require (
 	carrier/baseagent v0.0.0 // indirect
+	carrier/codeagent v0.0.0 // indirect
 	carrier/daemon v0.0.0
 	carrier/gateway v0.0.0
+	carrier/profilesync v0.0.0 // indirect
 	carrier/shared v0.0.0 // indirect
 	carrier/webui v0.0.0
 )
@@ -17,8 +19,10 @@ require (
 
 replace (
 	carrier/baseagent => ./baseagent
+	carrier/codeagent => ./codeagent
 	carrier/daemon => ./daemon
 	carrier/gateway => ./gateway
+	carrier/profilesync => ./profilesync
 	carrier/shared => ./shared
 	carrier/webui => ./webui
 )
