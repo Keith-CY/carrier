@@ -100,6 +100,9 @@ jobs:
           - label: linux-x64
             runs_on: ubuntu-latest
             binary_name: carrier
+          - label: darwin-x64
+            runs_on: macos-latest
+            binary_name: carrier
           - label: windows-x64
             runs_on: windows-latest
             binary_name: carrier.exe
