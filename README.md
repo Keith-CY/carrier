@@ -7,7 +7,7 @@ Carrier is a local control plane for onboarding agent credentials, installing ma
 - Local bootstrap/onboarding via CLI/TUI/WebUI.
 - Managed local install lifecycle for `openclaw`, `picoclaw`, `zeroclaw`.
 - Remote host control-plane APIs (host upsert/check/install/list/config/sync).
-- Deterministic remote OpenClaw install script (no LLM decision path).
+- Deterministic remote install CLI workflow (`carrier remote add`, no LLM decision path).
 - Remote instance discovery with confirmation-gated config pull for newly discovered instances.
 
 ## Core Docs
@@ -61,7 +61,7 @@ carrier onboard --webui
 Notes:
 - Onboarding stores config at `${CARRIER_CONFIG:-~/.carrier/config.v2.json}`.
 - Chat `/onboard` is intentionally blocked for credential safety.
-- Chat `/install` is policy-gated; default policy supports remote OpenClaw install with explicit host binding (`/install openclaw <host_id>`).
+- Chat `/install` is policy-gated; default policy requires explicit host binding (`/install <agent_id> <host_id>`).
 
 ### 3) Install OpenClaw Locally
 
@@ -73,13 +73,13 @@ carrier list
 
 `carrier install openclaw` is an alias of `carrier add openclaw`.
 
-### 4) Install OpenClaw To VPS (Deterministic)
+### 4) Install Agent To VPS (Deterministic)
 
-Use `scripts/remote-openclaw-install.sh` to run a fixed, repeatable sequence:
+Use `carrier remote add` to run a fixed, repeatable sequence:
 
 1. upsert remote host
 2. pre-check host
-3. install OpenClaw via remote install stream
+3. install agent via remote install stream
 4. post-check host
 5. list instances
 6. reconnect simulation check (optional)
@@ -93,7 +93,7 @@ Use `scripts/remote-openclaw-install.sh` to run a fixed, repeatable sequence:
 #### Minimal example
 
 ```bash
-scripts/remote-openclaw-install.sh \
+carrier remote add openclaw \
   --host-id vps-1 \
   --host 203.0.113.10 \
   --port 22 \
@@ -103,10 +103,10 @@ scripts/remote-openclaw-install.sh \
 
 #### Install with selected local config sync
 
-If you already onboarded locally and want to push selected local channel/provider settings to remote `openclaw.json`:
+If you already onboarded locally and want to push selected local channel/provider settings to remote config:
 
 ```bash
-scripts/remote-openclaw-install.sh \
+carrier remote add openclaw \
   --host-id vps-1 \
   --host 203.0.113.10 \
   --port 22 \
@@ -157,8 +157,8 @@ carrier install <agent_id>
 
 ## Remote Control Notes
 
-- `carrier remote ...` currently covers sync/diagnose/reconcile/rollback/codeagent actions.
-- OpenClaw remote installation is currently provided by `scripts/remote-openclaw-install.sh` (gateway API wrapper).
+- `carrier remote add` is the canonical deterministic remote install command.
+- Remote install currently supports `openclaw`, `picoclaw`, `zeroclaw`.
 - On first host check, newly discovered remote instances may require explicit confirmation before pulling config to local repo.
 - Chat `/install` can perform remote install when boundary policy allows it (default: requires host binding).
 
@@ -169,10 +169,10 @@ carrier install <agent_id>
   - verify `http://127.0.0.1:8787/healthz`
 - Remote host check failures:
   - verify SSH key path and remote login
-  - retry host check from script (`--check-retries`, `--check-retry-delay`)
+  - retry host check from CLI (`--check-retries`, `--check-retry-delay`)
 - OpenClaw runtime issues:
   - `carrier status openclaw`
-  - `carrier remote diagnose <host_id> <agent_id>` (for remote instance)
+  - rerun `carrier remote add openclaw ... --skip-reconnect-check`
 
 ## Development
 

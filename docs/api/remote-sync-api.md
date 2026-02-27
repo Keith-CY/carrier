@@ -62,6 +62,30 @@ List managed instances for the host.
 
 ## Instance Sync Endpoints
 
+### `GET /api/v1/remote/hosts/:hostId/instances/:agentId/config`
+
+Reads instance-level config for the target agent (`openclaw`, `picoclaw`, `zeroclaw`).
+
+### `PATCH /api/v1/remote/hosts/:hostId/instances/:agentId/config`
+
+Applies config patch to the target instance.
+
+Request body:
+
+```json
+{
+  "patch": {
+    "channels": {
+      "telegram": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
+
+For `zeroclaw`, use `patch.raw_toml` to send full TOML content.
+
 ### `POST /api/v1/remote/hosts/:hostId/instances/:agentId/sync`
 
 Run profile sync for one instance.
@@ -111,4 +135,4 @@ Response includes rollback outcome (`rolledBack`, `fromCommit`, `newCommit`).
 
 - Remote sync status is persisted in remote control store (`instanceSyncs`).
 - Existing provider profile APIs remain backward-compatible.
-- Remote OpenClaw installation itself is usually orchestrated through `scripts/remote-openclaw-install.sh`, which wraps these APIs in a deterministic sequence.
+- Remote install is orchestrated through `carrier remote add ...`, which wraps these APIs in a deterministic sequence.

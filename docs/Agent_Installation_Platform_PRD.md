@@ -100,7 +100,7 @@ Input:
 - `agent_id` in catalog allowlist
 
 Notes:
-- Chat `/install` is policy-gated; default policy supports remote OpenClaw install with explicit host binding (`/install openclaw <host_id>`).
+- Chat `/install` is policy-gated; default policy requires explicit host binding (`/install <agent_id> <host_id>`).
 - Local installation entrypoint remains Carrier CLI/TUI/WebUI (`carrier add <agent>` / `carrier install <agent>`).
 
 Steps:
@@ -388,5 +388,5 @@ Memory criteria:
 2. WSL2 distro and shell assumptions for Windows support baseline
 3. Remote diagnosis handoff schema and privacy policy contract
 Notes:
-- Chat `/install` is policy-gated; default policy supports remote OpenClaw install with explicit host binding (`/install openclaw <host_id>`).
+- Chat `/install` is policy-gated; default policy requires explicit host binding (`/install <agent_id> <host_id>`).
 - Local installation entrypoint remains Carrier CLI/TUI/WebUI (`carrier add <agent>` / `carrier install <agent>`).

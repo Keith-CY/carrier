@@ -63,7 +63,7 @@ Prerequisites:
 Minimal flow:
 
 ```bash
-scripts/remote-openclaw-install.sh \
+carrier remote add openclaw \
   --host-id vps-1 \
   --host 203.0.113.10 \
   --port 22 \
@@ -74,7 +74,7 @@ scripts/remote-openclaw-install.sh \
 Selected local config sync flow:
 
 ```bash
-scripts/remote-openclaw-install.sh \
+carrier remote add openclaw \
   --host-id vps-1 \
   --host 203.0.113.10 \
   --port 22 \
@@ -85,7 +85,7 @@ scripts/remote-openclaw-install.sh \
 ```
 
 Expected result:
-- script finishes with `done: remote openclaw install flow succeeded ...`
+- command finishes with `done: remote add flow succeeded ...`
 - remote host check returns `openclawFound=true`
 - instance list includes `<host-id>:main`
 
@@ -110,7 +110,7 @@ This runs deterministic validation for OpenClaw + PicoClaw + ZeroClaw + codeagen
 | SSH check failed | verify host/port/user/key and remote network access |
 | missing local channel/provider during `--sync-*` | complete `carrier onboard` first or pass correct IDs |
 | chat returns `E_ONBOARD_GUI_ONLY` | run onboarding via CLI/TUI/WebUI (`carrier onboard`, `carrier onboard --webui`) |
-| chat `/install` returns `E_HOST_BINDING_REQUIRED` | provide host binding: `/install openclaw <host_id>` |
+| chat `/install` returns `E_HOST_BINDING_REQUIRED` | provide host binding: `/install <agent_id> <host_id>` |
 
 References:
 - CLI command surface: [`docs/carrier-cli.md`](./carrier-cli.md)

@@ -128,7 +128,6 @@ Installs an agent.
 - **Current policy value:** `requires_host_binding`.
 - **Default behavior with current policy:**
   - requires explicit host binding (`/install <agent_id> <host_id>`)
-  - remote install path currently supports `openclaw` only
 - **Success:** `{ result: "ok", message: "remote install completed for <agent_id> on host <host_id>" }`
 - **Errors:** `E_USAGE`, `E_INSTALL_GUI_ONLY`, `E_HOST_BINDING_REQUIRED`, `E_REMOTE_HOST_NOT_FOUND`, `E_REMOTE_INSTALL_FAILED`
 - **Notes:** when `chat_install` policy is `disabled`, `/install` returns `E_INSTALL_GUI_ONLY`.

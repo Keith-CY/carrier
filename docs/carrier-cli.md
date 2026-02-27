@@ -44,26 +44,32 @@ Onboarding writes config to `${CARRIER_CONFIG:-~/.carrier/config.v2.json}`.
 
 Managed agent IDs currently include `openclaw`, `picoclaw`, `zeroclaw`.
 
-### Remote instance operations
+### Remote deterministic install
 
-`carrier remote <action> <host_id> <agent_id> [options]`
+`carrier remote add <agent_id> --host-id <id> --host <ip-or-domain> --port <port> --user <ssh-user> --key-path <private-key-path> [options]`
 
-Supported actions:
+Supported `agent_id` values:
 
-- `sync [--mode <always_push|pull_validate_push|manual>]`
-- `sync-status`
-- `diagnose`
-- `reconcile`
-- `rollback [--commit <hash>]`
-- `codeagent-install [--backend <codex|opencode>] [--workspace-root <path>]`
-- `codeagent-configure [--backend <codex|opencode>] [--workspace-root <path>] [--profile-json <json>]`
-- `codeagent-health [--backend <codex|opencode>] [--workspace-root <path>]`
-- `codeagent-version [--backend <codex|opencode>]`
-- `codeagent-run --capability <...> [backend/workspace/options]`
+- `openclaw`
+- `picoclaw`
+- `zeroclaw`
 
-Important:
-- Remote OpenClaw installation itself is currently done by script: `scripts/remote-openclaw-install.sh`.
-- `carrier remote` is currently focused on sync/diagnose/codeagent operations after host/instance is available.
+Options:
+
+- `--name <display-name>`
+- `--runtime-mode <on_demand|managed_gateway>`
+- `--sync-channel <telegram|discord|feishu>` (repeatable)
+- `--sync-provider <provider-id>` (repeatable)
+- `--telegram-allow-from <id>` (repeatable)
+- `--discord-allow-from <id>` (repeatable)
+- `--check-retries <n>`
+- `--check-retry-delay <seconds>`
+- `--skip-reconnect-check`
+
+Behavior:
+
+- Runs a fixed sequence: upsert host -> pre-check -> install(stream) -> optional local config sync -> post-check -> list -> optional reconnect check.
+- Newly discovered remote instances require explicit confirmation before pulling their configs to local profile store.
 
 ## Recommended Workflows
 
@@ -86,7 +92,7 @@ carrier add openclaw --webui
 ### Install OpenClaw on VPS
 
 ```bash
-scripts/remote-openclaw-install.sh \
+carrier remote add openclaw \
   --host-id vps-1 \
   --host 203.0.113.10 \
   --port 22 \
@@ -97,7 +103,7 @@ scripts/remote-openclaw-install.sh \
 With selected local config sync:
 
 ```bash
-scripts/remote-openclaw-install.sh \
+carrier remote add openclaw \
   --host-id vps-1 \
   --host 203.0.113.10 \
   --port 22 \
@@ -112,5 +118,5 @@ scripts/remote-openclaw-install.sh \
 - Gateway default: `http://127.0.0.1:8787`
 - Daemon default: `http://127.0.0.1:9090`
 - Chat `/onboard` is intentionally blocked for credential safety.
-- Chat `/install` is policy-gated; default policy requires explicit host binding and supports remote OpenClaw install (`/install openclaw <host_id>`).
+- Chat `/install` is policy-gated; default policy requires explicit host binding (`/install <agent_id> <host_id>`).
 - For newly discovered remote instances, config pull can require explicit confirmation.

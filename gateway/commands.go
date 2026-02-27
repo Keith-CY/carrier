@@ -350,7 +350,7 @@ func handleAgents(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient
 		lines = append(lines, fmt.Sprintf("%s %s (%s): %s, %s, health=%s", emoji, name, a.ID, installState, runtime, health))
 	}
 	if installed < len(agents) {
-		lines = append(lines, "Tip: `/install` supports remote OpenClaw install with host binding (`/install openclaw <host_id>`). Use Carrier CLI/TUI/WebUI for local install and onboarding.")
+		lines = append(lines, "Tip: `/install` supports remote install with host binding (`/install <agent_id> <host_id>`). Use Carrier CLI/TUI/WebUI for local install and onboarding.")
 	}
 	return GatewayResponse{
 		RequestID: cmd.RequestID,
@@ -421,10 +421,6 @@ func handleInstall(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClien
 	if !ok {
 		return errResp(cmd.RequestID, "E_REMOTE_HOST_NOT_FOUND", fmt.Sprintf("remote host %s not found", hostID))
 	}
-	if !strings.EqualFold(agentID, "openclaw") {
-		return errResp(cmd.RequestID, "E_USAGE", fmt.Sprintf("remote /install currently supports openclaw only (got %s)", agentID))
-	}
-
 	installCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 	workflowResult, installErr := runRemoteInstallWorkflow(installCtx, host, hostID, agentID)
@@ -467,11 +463,15 @@ func runRemoteInstallWorkflow(ctx context.Context, host RemoteHost, hostID, agen
 		return out, fmt.Errorf("remote preflight failed for host %s: ssh check did not pass", hostID)
 	}
 
-	firstInstall, firstErr := remoteInstallOpenClaw(ctx, host, hostID, agentID)
+	firstInstall, firstErr := remoteInstallAgent(ctx, host, hostID, agentID)
 	out.Attempts = 1
 	if firstErr == nil {
 		out.Install = firstInstall
 		return out, nil
+	}
+
+	if normalizeRemoteInstallAgentID(agentID) != "openclaw" {
+		return out, fmt.Errorf("install failed on host %s: %w", hostID, firstErr)
 	}
 
 	repair, repairErr := remoteRepairOpenClaw(ctx, host, hostID, agentID)
@@ -483,7 +483,7 @@ func runRemoteInstallWorkflow(ctx context.Context, host RemoteHost, hostID, agen
 		return out, fmt.Errorf("install failed on host %s (%v); repair step failed: %w", hostID, firstErr, repairErr)
 	}
 
-	secondInstall, secondErr := remoteInstallOpenClaw(ctx, host, hostID, agentID)
+	secondInstall, secondErr := remoteInstallAgent(ctx, host, hostID, agentID)
 	out.Attempts = 2
 	if secondErr != nil {
 		return out, fmt.Errorf("install failed after repair retry on host %s: %w", hostID, secondErr)
