@@ -1,0 +1,295 @@
+name: Packaged Binary E2E
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - '.github/kanban-config.json'
+      - '.github/workflows/review-nbs-followup.yml'
+  push:
+    branches: [main]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - '.github/kanban-config.json'
+      - '.github/workflows/review-nbs-followup.yml'
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-packaged-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-packages:
+    name: Build Package (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            label: linux-x64
+            ext: ''
+          - goos: darwin
+            goarch: amd64
+            label: darwin-x64
+            ext: ''
+          - goos: windows
+            goarch: amd64
+            label: windows-x64
+            ext: '.exe'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3
+        with:
+          bun-version: 1.1.8
+
+      - name: Build WebUI assets
+        run: bash scripts/build-webui.sh
+
+      - name: Build package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          archive_name="carrier-e2e-${{ matrix.label }}"
+          binary_name="carrier${{ matrix.ext }}"
+          package_file="${archive_name}.zip"
+
+          CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
+            go build -tags webui -trimpath -o "dist/${binary_name}" ./cmd/carrier
+
+          (cd dist && zip -j "${package_file}" "${binary_name}")
+          (cd dist && sha256sum "${package_file}" > "${package_file}.sha256")
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: package-${{ matrix.label }}
+          retention-days: 7
+          path: |
+            dist/carrier-e2e-${{ matrix.label }}.zip
+            dist/carrier-e2e-${{ matrix.label }}.zip.sha256
+          if-no-files-found: error
+
+  binary-smoke:
+    name: Binary Smoke (${{ matrix.label }})
+    needs: build-packages
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        include:
+          - label: linux-x64
+            runs_on: ubuntu-latest
+            binary_name: carrier
+          - label: darwin-x64
+            runs_on: macos-13
+            binary_name: carrier
+          - label: windows-x64
+            runs_on: windows-latest
+            binary_name: carrier.exe
+    steps:
+      - name: Download package artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: package-${{ matrix.label }}
+          path: ${{ runner.temp }}/package
+
+      - name: Verify checksum + extract package (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pkg_dir="${RUNNER_TEMP}/package"
+          zip_name="carrier-e2e-${{ matrix.label }}.zip"
+          sha_name="${zip_name}.sha256"
+
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd "$pkg_dir" && sha256sum -c "$sha_name")
+          else
+            expected="$(awk '{print $1}' "$pkg_dir/$sha_name")"
+            actual="$(shasum -a 256 "$pkg_dir/$zip_name" | awk '{print $1}')"
+            if [[ "$expected" != "$actual" ]]; then
+              echo "checksum mismatch: expected=$expected actual=$actual" >&2
+              exit 1
+            fi
+          fi
+
+          unzip -q "$pkg_dir/$zip_name" -d "$pkg_dir/extracted"
+          chmod +x "$pkg_dir/extracted/${{ matrix.binary_name }}"
+          echo "CARRIER_BIN=$pkg_dir/extracted/${{ matrix.binary_name }}" >> "$GITHUB_ENV"
+
+      - name: Verify checksum + extract package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $pkgDir = Join-Path $env:RUNNER_TEMP "package"
+          $zipName = "carrier-e2e-${{ matrix.label }}.zip"
+          $shaName = "$zipName.sha256"
+          $zipPath = Join-Path $pkgDir $zipName
+          $shaPath = Join-Path $pkgDir $shaName
+
+          $expected = ((Get-Content -Path $shaPath -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "checksum mismatch: expected=$expected actual=$actual"
+          }
+
+          $extractDir = Join-Path $pkgDir "extracted"
+          Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+          $carrierBin = Join-Path $extractDir "${{ matrix.binary_name }}"
+          "CARRIER_BIN=$carrierBin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Run binary smoke (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CARRIER_BIN" --version
+          "$CARRIER_BIN" version --json
+          "$CARRIER_BIN" --help | grep -F "carrier remote add" >/dev/null
+          "$CARRIER_BIN" list
+          "$CARRIER_BIN" stop
+
+      - name: Run binary smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & $env:CARRIER_BIN --version
+          & $env:CARRIER_BIN version --json
+          $helpOut = & $env:CARRIER_BIN --help
+          if (-not ($helpOut | Select-String -SimpleMatch "carrier remote add")) {
+            throw "missing remote add help entry"
+          }
+          & $env:CARRIER_BIN list
+          & $env:CARRIER_BIN stop
+
+  full-remote-vps:
+    name: Full Remote VPS E2E (Linux)
+    needs: [build-packages, binary-smoke]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Download Linux package artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: package-linux-x64
+          path: ${{ runner.temp }}/package
+
+      - name: Run remote VPS agent suite via packaged binary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pkg_dir="${RUNNER_TEMP}/package"
+          zip_name="carrier-e2e-linux-x64.zip"
+          sha_name="${zip_name}.sha256"
+
+          (cd "$pkg_dir" && sha256sum -c "$sha_name")
+          unzip -q "$pkg_dir/$zip_name" -d "$pkg_dir/extracted"
+          chmod +x "$pkg_dir/extracted/carrier"
+          export PATH="$pkg_dir/extracted:$PATH"
+
+          carrier --version
+
+          ssh-keygen -t ed25519 -N '' -f "${RUNNER_TEMP}/id_ed25519" >/dev/null
+
+          docker build -t carrier-remote-vps-ci -f tests/fixtures/remote-vps/Dockerfile .
+          docker run -d --name carrier-remote-vps-ci \
+            -e AUTHORIZED_KEY="$(cat "${RUNNER_TEMP}/id_ed25519.pub")" \
+            -p 2224:22 \
+            carrier-remote-vps-ci >/dev/null
+
+          daemon_log="${RUNNER_TEMP}/carrier-daemon.log"
+          gateway_log="${RUNNER_TEMP}/carrier-gateway.log"
+          suite_log="${RUNNER_TEMP}/remote-vps-suite.log"
+          container_log="${RUNNER_TEMP}/remote-vps-container.log"
+
+          cleanup() {
+            set +e
+            carrier stop >/dev/null 2>&1 || true
+            if [[ -n "${GATEWAY_PID:-}" ]]; then
+              kill "$GATEWAY_PID" >/dev/null 2>&1 || true
+            fi
+            if [[ -n "${DAEMON_PID:-}" ]]; then
+              kill "$DAEMON_PID" >/dev/null 2>&1 || true
+            fi
+            docker logs carrier-remote-vps-ci >"$container_log" 2>&1 || true
+            docker rm -f carrier-remote-vps-ci >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for attempt in $(seq 1 60); do
+            if ssh -i "${RUNNER_TEMP}/id_ed25519" -p 2224 -o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 carrier@127.0.0.1 "echo ssh-ready" >/dev/null 2>&1; then
+              break
+            fi
+            if [[ "$attempt" -eq 60 ]]; then
+              echo "remote VPS SSH endpoint did not become ready in time" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+
+          carrier daemon >"$daemon_log" 2>&1 &
+          DAEMON_PID=$!
+          carrier gateway >"$gateway_log" 2>&1 &
+          GATEWAY_PID=$!
+
+          for attempt in $(seq 1 90); do
+            if curl -fsS "http://127.0.0.1:9090/readyz" >/dev/null 2>&1 && \
+               curl -fsS "http://127.0.0.1:8787/healthz" >/dev/null 2>&1; then
+              break
+            fi
+            if [[ "$attempt" -eq 90 ]]; then
+              echo "carrier daemon/gateway did not become ready in time" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+
+          scripts/remote-vps-agent-suite.sh \
+            --host-id ci-docker-vps \
+            --host 127.0.0.1 \
+            --port 2224 \
+            --user carrier \
+            --key-path "${RUNNER_TEMP}/id_ed25519" \
+            --gateway-url http://127.0.0.1:8787 \
+            --workspace-root /home/carrier/workspace \
+            --runtime-mode on_demand \
+            --no-gateway-autostart | tee "$suite_log"
+
+      - name: Upload full-flow logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: packaged-binary-e2e-remote-vps-logs
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/carrier-daemon.log
+            ${{ runner.temp }}/carrier-gateway.log
+            ${{ runner.temp }}/remote-vps-suite.log
+            ${{ runner.temp }}/remote-vps-container.log
