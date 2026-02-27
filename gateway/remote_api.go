@@ -3,7 +3,9 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -106,6 +108,23 @@ func handleRemoteHosts(w http.ResponseWriter, r *http.Request, requestID string,
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
+		var req struct {
+			PullNewInstances bool     `json:"pullNewInstances"`
+			PullAgentIDs     []string `json:"pullAgentIds"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
+			return
+		}
+		pullAgentIDs := map[string]bool{}
+		for _, raw := range req.PullAgentIDs {
+			agentID := strings.ToLower(strings.TrimSpace(raw))
+			if agentID == "" {
+				continue
+			}
+			pullAgentIDs[agentID] = true
+		}
+
 		startedAt := time.Now()
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		defer cancel()
@@ -116,12 +135,42 @@ func handleRemoteHosts(w http.ResponseWriter, r *http.Request, requestID string,
 			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_REMOTE_CHECK_FAILED", checkErr.Error()))
 			return
 		}
+		discoveredInstances, pendingPullInstances, discoverSteps, discoverErr := remoteDiscoverInstancesAndSyncProfiles(
+			ctx,
+			host,
+			hostID,
+			remoteDiscoveryPullOptions{
+				PullNew:         req.PullNewInstances,
+				PullNewAgentIDs: pullAgentIDs,
+			},
+		)
+		if discoverErr != nil {
+			checkResult.Details = append(checkResult.Details, "remote agent discovery failed: "+discoverErr.Error())
+		} else if len(discoveredInstances) > 0 {
+			checkResult.Steps = append(checkResult.Steps, discoverSteps...)
+		}
+		hasDetectedInstance := false
+		for _, inst := range discoveredInstances {
+			agentID := strings.TrimSpace(strings.ToLower(inst.AgentID))
+			if agentID == "" || agentID == "main" {
+				continue
+			}
+			hasDetectedInstance = true
+			break
+		}
 		health := RemoteHealthUnhealthy
-		if checkResult.SSHOK && checkResult.OpenClawFound && checkResult.GatewayHealthy {
+		if checkResult.SSHOK && (hasDetectedInstance || (checkResult.OpenClawFound && checkResult.GatewayHealthy)) {
 			health = RemoteHealthHealthy
 		}
 		_ = updateRemoteHostHealth(hostID, health, strings.Join(checkResult.Details, "; "))
-		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "check": checkResult})
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"requestId":                requestID,
+			"result":                   "ok",
+			"check":                    checkResult,
+			"instances":                discoveredInstances,
+			"pendingPullInstances":     pendingPullInstances,
+			"pullConfirmationRequired": len(pendingPullInstances) > 0,
+		})
 		return
 	case "instances":
 		handleRemoteHostInstances(w, r, requestID, hostID, host, parts)
@@ -315,8 +364,8 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 			Mode string `json:"mode"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-            writeInternalGatewayError(w, http.StatusBadRequest, "E_BAD_REQUEST", "invalid request body", "decoding sync request", err)
-            return
+			writeInternalGatewayError(w, http.StatusBadRequest, "E_BAD_REQUEST", "invalid request body", "decoding sync request", err)
+			return
 		}
 		startedAt := time.Now()
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
@@ -409,8 +458,8 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 			Commit string `json:"commit"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-            writeInternalGatewayError(w, http.StatusBadRequest, "E_BAD_REQUEST", "invalid request body", "decoding rollback request", err)
-            return
+			writeInternalGatewayError(w, http.StatusBadRequest, "E_BAD_REQUEST", "invalid request body", "decoding rollback request", err)
+			return
 		}
 		startedAt := time.Now()
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
@@ -799,8 +848,8 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 			HostID string `json:"hostId"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-            writeInternalGatewayError(w, http.StatusBadRequest, "E_BAD_REQUEST", "invalid request body", "decoding profile-test request", err)
-            return
+			writeInternalGatewayError(w, http.StatusBadRequest, "E_BAD_REQUEST", "invalid request body", "decoding profile-test request", err)
+			return
 		}
 		if strings.TrimSpace(req.HostID) == "" {
 			writeJSON(w, http.StatusOK, map[string]interface{}{

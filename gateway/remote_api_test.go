@@ -199,6 +199,215 @@ func TestRemoteHostsCRUDAndCheck(t *testing.T) {
 	}
 }
 
+func TestRemoteHostCheckDiscoversAndPullsPicoZeroClawConfigs(t *testing.T) {
+	repoRoot := filepath.Join(t.TempDir(), "profiles-repo")
+	t.Setenv("CARRIER_PROFILESYNC_REPO", repoRoot)
+
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "echo carrier-ssh-ok"):
+			return remoteExecResult{ExitCode: 0, Stdout: "carrier-ssh-ok\n"}
+		case strings.Contains(command, "command -v openclaw"):
+			return remoteExecResult{ExitCode: 1}
+		case strings.Contains(command, "cat \"$HOME/.picoclaw/config.json\""):
+			return remoteExecResult{ExitCode: 0, Stdout: `{"provider":"openai","model":"gpt-4.1-mini"}`}
+		case strings.Contains(command, "cat \"$HOME/.zeroclaw/config.toml\""):
+			return remoteExecResult{ExitCode: 0, Stdout: "api_key = \"zk-test\"\nmodel = \"gpt-4.1\""}
+		case strings.Contains(command, "if [ -f \"$HOME/.picoclaw/config.json\" ]"):
+			return remoteExecResult{ExitCode: 0, Stdout: "1\n"}
+		case strings.Contains(command, "if [ -f \"$HOME/.zeroclaw/config.toml\" ]"):
+			return remoteExecResult{ExitCode: 0, Stdout: "1\n"}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	checkRecNoPull := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/check", `{}`)
+	if checkRecNoPull.Code != http.StatusOK {
+		t.Fatalf("check(no pull) status=%d body=%s", checkRecNoPull.Code, checkRecNoPull.Body.String())
+	}
+	checkPayload := decodeJSONMap(t, checkRecNoPull)
+	rawInstances, _ := checkPayload["instances"].([]interface{})
+	if len(rawInstances) < 2 {
+		t.Fatalf("expected discovered instances in check payload, got %+v", checkPayload)
+	}
+	rawPending, _ := checkPayload["pendingPullInstances"].([]interface{})
+	if len(rawPending) < 2 {
+		t.Fatalf("expected pending pull instances before confirmation, got %+v", checkPayload)
+	}
+
+	sanitize := strings.NewReplacer("/", "_", "\\", "_", ":", "_", "..", "_")
+	picoInstanceID := sanitize.Replace(remoteInstanceProfileID(hostID, "picoclaw"))
+	zeroInstanceID := sanitize.Replace(remoteInstanceProfileID(hostID, "zeroclaw"))
+
+	picoMetadataPath := filepath.Join(repoRoot, "instances", picoInstanceID, "metadata.json")
+	if _, err := os.Stat(picoMetadataPath); err == nil {
+		t.Fatalf("expected no local pull before confirmation, but found %s", picoMetadataPath)
+	}
+
+	checkRecPull := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/check", `{"pullNewInstances":true}`)
+	if checkRecPull.Code != http.StatusOK {
+		t.Fatalf("check(pull confirm) status=%d body=%s", checkRecPull.Code, checkRecPull.Body.String())
+	}
+	pullPayload := decodeJSONMap(t, checkRecPull)
+	if required, _ := pullPayload["pullConfirmationRequired"].(bool); required {
+		t.Fatalf("expected no pending pull after confirmation, payload=%v", pullPayload)
+	}
+
+	picoMetadataRaw, err := os.ReadFile(picoMetadataPath)
+	if err != nil {
+		t.Fatalf("read picoclaw metadata: %v", err)
+	}
+	var picoMetadata map[string]interface{}
+	if err := json.Unmarshal(picoMetadataRaw, &picoMetadata); err != nil {
+		t.Fatalf("parse picoclaw metadata: %v", err)
+	}
+	if strings.TrimSpace(anyToString(picoMetadata["agentId"])) != "picoclaw" {
+		t.Fatalf("unexpected picoclaw metadata: %+v", picoMetadata)
+	}
+
+	zeroMetadataPath := filepath.Join(repoRoot, "instances", zeroInstanceID, "metadata.json")
+	zeroMetadataRaw, err := os.ReadFile(zeroMetadataPath)
+	if err != nil {
+		t.Fatalf("read zeroclaw metadata: %v", err)
+	}
+	var zeroMetadata map[string]interface{}
+	if err := json.Unmarshal(zeroMetadataRaw, &zeroMetadata); err != nil {
+		t.Fatalf("parse zeroclaw metadata: %v", err)
+	}
+	if strings.TrimSpace(anyToString(zeroMetadata["agentId"])) != "zeroclaw" {
+		t.Fatalf("unexpected zeroclaw metadata: %+v", zeroMetadata)
+	}
+
+	zeroProfilePath := filepath.Join(repoRoot, "instances", zeroInstanceID, "openclaw.json")
+	zeroProfileRaw, err := os.ReadFile(zeroProfilePath)
+	if err != nil {
+		t.Fatalf("read zeroclaw canonical profile: %v", err)
+	}
+	var zeroProfile map[string]interface{}
+	if err := json.Unmarshal(zeroProfileRaw, &zeroProfile); err != nil {
+		t.Fatalf("parse zeroclaw canonical profile: %v", err)
+	}
+	if !strings.Contains(anyToString(zeroProfile["raw_toml"]), "api_key = \"zk-test\"") {
+		t.Fatalf("expected zeroclaw raw_toml in canonical profile, got %+v", zeroProfile)
+	}
+}
+
+func TestRemoteSyncSupportsPicoAndZeroClaw(t *testing.T) {
+	repoRoot := filepath.Join(t.TempDir(), "profiles-repo")
+	t.Setenv("CARRIER_PROFILESYNC_REPO", repoRoot)
+
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "cat \"$HOME/.picoclaw/config.json\""):
+			return remoteExecResult{ExitCode: 0, Stdout: `{"provider":"openai","model":"gpt-4.1-mini"}`}
+		case strings.Contains(command, "cat \"$HOME/.zeroclaw/config.toml\""):
+			return remoteExecResult{ExitCode: 0, Stdout: "api_key = \"zk-sync\"\nmodel = \"gpt-4.1\""}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	for _, agentID := range []string{"picoclaw", "zeroclaw"} {
+		syncRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/"+agentID+"/sync", `{"mode":"pull_validate_push"}`)
+		if syncRec.Code != http.StatusOK {
+			t.Fatalf("sync %s status=%d body=%s", agentID, syncRec.Code, syncRec.Body.String())
+		}
+		syncPayload := decodeJSONMap(t, syncRec)
+		syncMap, _ := syncPayload["sync"].(map[string]interface{})
+		if strings.TrimSpace(anyToString(syncMap["status"])) != "in_sync" {
+			t.Fatalf("expected in_sync for %s, payload=%v", agentID, syncPayload)
+		}
+	}
+
+	sanitize := strings.NewReplacer("/", "_", "\\", "_", ":", "_", "..", "_")
+	picoInstanceID := sanitize.Replace(remoteInstanceProfileID(hostID, "picoclaw"))
+	zeroInstanceID := sanitize.Replace(remoteInstanceProfileID(hostID, "zeroclaw"))
+
+	picoMetadataPath := filepath.Join(repoRoot, "instances", picoInstanceID, "metadata.json")
+	picoMetadataRaw, err := os.ReadFile(picoMetadataPath)
+	if err != nil {
+		t.Fatalf("read picoclaw metadata: %v", err)
+	}
+	var picoMetadata map[string]interface{}
+	if err := json.Unmarshal(picoMetadataRaw, &picoMetadata); err != nil {
+		t.Fatalf("parse picoclaw metadata: %v", err)
+	}
+	if strings.TrimSpace(anyToString(picoMetadata["agentId"])) != "picoclaw" {
+		t.Fatalf("unexpected picoclaw metadata after sync: %+v", picoMetadata)
+	}
+
+	zeroProfilePath := filepath.Join(repoRoot, "instances", zeroInstanceID, "openclaw.json")
+	zeroProfileRaw, err := os.ReadFile(zeroProfilePath)
+	if err != nil {
+		t.Fatalf("read zeroclaw canonical profile after sync: %v", err)
+	}
+	var zeroProfile map[string]interface{}
+	if err := json.Unmarshal(zeroProfileRaw, &zeroProfile); err != nil {
+		t.Fatalf("parse zeroclaw canonical profile after sync: %v", err)
+	}
+	if !strings.Contains(anyToString(zeroProfile["raw_toml"]), "api_key = \"zk-sync\"") {
+		t.Fatalf("expected zeroclaw raw_toml after sync, got %+v", zeroProfile)
+	}
+}
+
+func TestRemoteHostCheckSelectivePullNewInstances(t *testing.T) {
+	repoRoot := filepath.Join(t.TempDir(), "profiles-repo")
+	t.Setenv("CARRIER_PROFILESYNC_REPO", repoRoot)
+
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "echo carrier-ssh-ok"):
+			return remoteExecResult{ExitCode: 0, Stdout: "carrier-ssh-ok\n"}
+		case strings.Contains(command, "command -v openclaw"):
+			return remoteExecResult{ExitCode: 1}
+		case strings.Contains(command, "cat \"$HOME/.picoclaw/config.json\""):
+			return remoteExecResult{ExitCode: 0, Stdout: `{"provider":"openai","model":"gpt-4.1-mini"}`}
+		case strings.Contains(command, "cat \"$HOME/.zeroclaw/config.toml\""):
+			return remoteExecResult{ExitCode: 0, Stdout: "api_key = \"zk-selective\"\nmodel = \"gpt-4.1\""}
+		case strings.Contains(command, "if [ -f \"$HOME/.picoclaw/config.json\" ]"):
+			return remoteExecResult{ExitCode: 0, Stdout: "1\n"}
+		case strings.Contains(command, "if [ -f \"$HOME/.zeroclaw/config.toml\" ]"):
+			return remoteExecResult{ExitCode: 0, Stdout: "1\n"}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	checkRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/check", `{"pullNewInstances":true,"pullAgentIds":["picoclaw"]}`)
+	if checkRec.Code != http.StatusOK {
+		t.Fatalf("check selective pull status=%d body=%s", checkRec.Code, checkRec.Body.String())
+	}
+	payload := decodeJSONMap(t, checkRec)
+	pending, _ := payload["pendingPullInstances"].([]interface{})
+	if len(pending) != 1 {
+		t.Fatalf("expected one pending instance after selective pull, got %+v", payload)
+	}
+	pendingEntry, _ := pending[0].(map[string]interface{})
+	if strings.TrimSpace(strings.ToLower(anyToString(pendingEntry["agentId"]))) != "zeroclaw" {
+		t.Fatalf("expected pending zeroclaw, got %+v", pendingEntry)
+	}
+
+	sanitize := strings.NewReplacer("/", "_", "\\", "_", ":", "_", "..", "_")
+	picoInstanceID := sanitize.Replace(remoteInstanceProfileID(hostID, "picoclaw"))
+	zeroInstanceID := sanitize.Replace(remoteInstanceProfileID(hostID, "zeroclaw"))
+	if _, err := os.Stat(filepath.Join(repoRoot, "instances", picoInstanceID, "metadata.json")); err != nil {
+		t.Fatalf("expected picoclaw metadata pulled: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "instances", zeroInstanceID, "metadata.json")); err == nil {
+		t.Fatalf("expected zeroclaw metadata not pulled in selective mode")
+	}
+}
+
 func TestProviderProfilesPatchAndBinding(t *testing.T) {
 	configureSSHRunner(t, func(command string) remoteExecResult {
 		switch {

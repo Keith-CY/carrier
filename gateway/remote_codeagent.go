@@ -373,7 +373,7 @@ func remoteInstallCodeAgentBinary(ctx context.Context, host RemoteHost, backend 
 	case "codex":
 		installCommand = "command -v codex >/dev/null 2>&1 || npm install -g @openai/codex >/dev/null 2>&1 || bun add -g @openai/codex >/dev/null 2>&1"
 	case "opencode":
-		installCommand = "command -v opencode >/dev/null 2>&1 || npm install -g opencode >/dev/null 2>&1 || bun add -g opencode >/dev/null 2>&1"
+		installCommand = "command -v opencode >/dev/null 2>&1 || npm install -g opencode-ai >/dev/null 2>&1 || bun add -g opencode-ai >/dev/null 2>&1"
 	default:
 		return fmt.Errorf("unsupported backend %q", backend)
 	}

@@ -3764,8 +3764,28 @@
         setMsg('#servers-msg', 'Running health check: ' + (host.name || host.id || key) + '...', 'info');
         try {
           const path = '/api/v1/remote/hosts/' + encodeURIComponent(key) + '/check';
-          await serverManageAPI('POST', path, {}, 'host_check');
-          setMsg('#servers-msg', 'Health check completed: ' + (host.name || host.id || key), 'success');
+          let checkPayload = await serverManageAPI('POST', path, {}, 'host_check');
+          const pendingPull = checkPayload && Array.isArray(checkPayload.pendingPullInstances)
+            ? checkPayload.pendingPullInstances
+            : [];
+          if (pendingPull.length > 0) {
+            const pendingAgentIDs = pendingPull
+              .map(instance => pickRemoteInstanceAgentID(instance))
+              .map(id => String(id || '').trim())
+              .filter(Boolean);
+            const prompt = pendingAgentIDs.length > 0
+              ? 'Discovered new remote instances (' + pendingAgentIDs.join(', ') + '). Pull configs to local machine now?'
+              : 'Discovered new remote instances. Pull configs to local machine now?';
+            const confirmed = window.confirm(prompt);
+            if (confirmed) {
+              checkPayload = await serverManageAPI('POST', path, { pullNewInstances: true }, 'host_check_confirm_pull');
+              setMsg('#servers-msg', 'Health check completed and pulled new instance configs: ' + (host.name || host.id || key), 'success');
+            } else {
+              setMsg('#servers-msg', 'Health check completed (new instance config pull skipped): ' + (host.name || host.id || key), 'success');
+            }
+          } else {
+            setMsg('#servers-msg', 'Health check completed: ' + (host.name || host.id || key), 'success');
+          }
           if (getServerManageHostID() === key) {
             setMsg('#server-manage-msg', 'Host health check completed.', 'success');
           }
