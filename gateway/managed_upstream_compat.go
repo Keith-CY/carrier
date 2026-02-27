@@ -61,7 +61,10 @@ type semVer struct {
 var (
 	semVerTextPattern  = regexp.MustCompile(`(?i)\bv?(\d+)\.(\d+)\.(\d+)\b`)
 	semVerExactPattern = regexp.MustCompile(`(?i)^v?(\d+)\.(\d+)\.(\d+)$`)
-	rangeTokenPattern  = regexp.MustCompile(`^(>=|<=|>|<|=)?v?(\d+\.\d+\.\d+)$`)
+	// rangeTokenPattern matches version range tokens like ">=1.2.3", "<2.0.0", or bare "1.2.3".
+	// Note: a bare version (no operator prefix) is treated as exact equality ("="),
+	// not as ">=" (npm-style). This is intentional for deterministic managed config rendering.
+	rangeTokenPattern = regexp.MustCompile(`^(>=|<=|>|<|=)?v?(\d+\.\d+\.\d+)$`)
 
 	managedCompatLockOnce sync.Once
 	managedCompatLock     upstreamCompatLock
