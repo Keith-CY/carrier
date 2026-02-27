@@ -31,14 +31,14 @@ func TestAdapterResumeFallback(t *testing.T) {
 	calls := []string{}
 	runner := func(_ context.Context, command string, args []string) (RunResult, error) {
 		calls = append(calls, command+" "+strings.Join(args, " "))
-		withResume := false
+		withSession := false
 		for idx := range args {
-			if args[idx] == "--resume" {
-				withResume = true
+			if args[idx] == "--session" {
+				withSession = true
 				break
 			}
 		}
-		if withResume {
+		if withSession {
 			return RunResult{ExitCode: 1, Stderr: "failed to resume session"}, nil
 		}
 		return RunResult{ExitCode: 0, Stdout: `{"ok":true}`}, nil
@@ -59,11 +59,11 @@ func TestAdapterResumeFallback(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("expected two opencode invocations, got %d (%v)", len(calls), calls)
 	}
-	if !strings.Contains(calls[0], "--resume") {
-		t.Fatalf("expected first call to include --resume, calls=%v", calls)
+	if !strings.Contains(calls[0], "--session") {
+		t.Fatalf("expected first call to include --session, calls=%v", calls)
 	}
-	if strings.Contains(calls[1], "--resume") {
-		t.Fatalf("expected second call to omit --resume, calls=%v", calls)
+	if strings.Contains(calls[1], "--session") {
+		t.Fatalf("expected second call to omit --session, calls=%v", calls)
 	}
 }
 

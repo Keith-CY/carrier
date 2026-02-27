@@ -125,10 +125,11 @@ func (a *Adapter) Supports(capability contract.Capability) bool {
 }
 
 func (a *Adapter) buildExecArgs(request contract.RunRequest, includeResume bool) []string {
-	args := []string{"exec", a.requestPrompt(request), "--json"}
+	args := []string{"run"}
 	if includeResume && strings.TrimSpace(request.ResumeSessionID) != "" {
-		args = append(args, "--resume", strings.TrimSpace(request.ResumeSessionID))
+		args = append(args, "--session", strings.TrimSpace(request.ResumeSessionID))
 	}
+	args = append(args, a.requestPrompt(request))
 	return args
 }
 

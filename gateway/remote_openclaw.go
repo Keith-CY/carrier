@@ -13,6 +13,27 @@ import (
 	"carrier/profilesync"
 )
 
+const (
+	remoteOpenClawConfigPath = "$HOME/.openclaw/openclaw.json"
+	remotePicoClawConfigPath = "$HOME/.picoclaw/config.json"
+	remoteZeroClawConfigPath = "$HOME/.zeroclaw/config.toml"
+)
+
+type remoteDiscoveryPullOptions struct {
+	PullNew         bool
+	PullNewAgentIDs map[string]bool
+}
+
+func (o remoteDiscoveryPullOptions) allowPullNewFor(agentID string) bool {
+	if !o.PullNew {
+		return false
+	}
+	if len(o.PullNewAgentIDs) == 0 {
+		return true
+	}
+	return o.PullNewAgentIDs[strings.ToLower(strings.TrimSpace(agentID))]
+}
+
 type remoteHostCheckResult struct {
 	SSHOK          bool               `json:"sshOk"`
 	OpenClawFound  bool               `json:"openclawFound"`
@@ -233,36 +254,234 @@ func remoteInstallOpenClawStreaming(
 }
 
 func remoteListInstancesForHost(ctx context.Context, host RemoteHost, hostID string) ([]RemoteInstance, []remoteExecResult, error) {
-	steps := []remoteExecResult{}
-	_, _, preflightSteps, err := ensureRemoteHealthyForOperation(ctx, host)
-	steps = append(steps, preflightSteps...)
+	instances, _, steps, err := remoteDiscoverInstancesAndSyncProfiles(ctx, host, hostID, remoteDiscoveryPullOptions{})
 	if err != nil {
 		return nil, steps, err
 	}
+	if len(instances) == 0 {
+		return []RemoteInstance{newDefaultRemoteInstance(hostID, "main", "unknown")}, steps, nil
+	}
+	return instances, steps, nil
+}
 
+func remoteDiscoverInstancesAndSyncProfiles(
+	ctx context.Context,
+	host RemoteHost,
+	hostID string,
+	opts remoteDiscoveryPullOptions,
+) ([]RemoteInstance, []RemoteInstance, []remoteExecResult, error) {
+	steps := []remoteExecResult{}
+	instances := []RemoteInstance{}
+	pendingPull := []RemoteInstance{}
+
+	openClawInstalledRes, runErr := runRemoteCommand(ctx, host, "command -v openclaw >/dev/null 2>&1")
+	if runErr != nil {
+		return nil, nil, append(steps, openClawInstalledRes), runErr
+	}
+	steps = append(steps, openClawInstalledRes)
+	if openClawInstalledRes.ExitCode == 0 {
+		openClawInstances, openClawPendingPull, openClawSteps, err := remoteDiscoverOpenClawInstances(ctx, host, hostID, opts)
+		steps = append(steps, openClawSteps...)
+		if err != nil {
+			return nil, nil, steps, err
+		}
+		instances = append(instances, openClawInstances...)
+		pendingPull = append(pendingPull, openClawPendingPull...)
+	}
+
+	picoExists, picoSteps, err := remoteConfigFileExists(ctx, host, remotePicoClawConfigPath)
+	steps = append(steps, picoSteps...)
+	if err != nil {
+		return nil, nil, steps, err
+	}
+	if picoExists {
+		now := nowTimestamp()
+		picoInst := RemoteInstance{
+			ID:           hostID + ":picoclaw",
+			HostID:       hostID,
+			AgentID:      "picoclaw",
+			RuntimeState: "unknown",
+			Health:       "unknown",
+			ConfigPath:   remotePicoClawConfigPath,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+		instances = append(instances, picoInst)
+		if remoteInstanceAlreadyTracked(hostID, "picoclaw") || opts.allowPullNewFor("picoclaw") {
+			cfg, _, cfgSteps, cfgErr := remoteReadConfigForAgent(ctx, host, "picoclaw")
+			steps = append(steps, cfgSteps...)
+			if cfgErr != nil {
+				return nil, nil, steps, cfgErr
+			}
+			if err := remoteSaveDiscoveredProfile(hostID, "picoclaw", cfg); err != nil {
+				return nil, nil, steps, err
+			}
+		} else {
+			pendingPull = append(pendingPull, picoInst)
+		}
+	}
+
+	zeroExists, zeroSteps, err := remoteConfigFileExists(ctx, host, remoteZeroClawConfigPath)
+	steps = append(steps, zeroSteps...)
+	if err != nil {
+		return nil, nil, steps, err
+	}
+	if zeroExists {
+		now := nowTimestamp()
+		zeroInst := RemoteInstance{
+			ID:           hostID + ":zeroclaw",
+			HostID:       hostID,
+			AgentID:      "zeroclaw",
+			RuntimeState: "unknown",
+			Health:       "unknown",
+			ConfigPath:   remoteZeroClawConfigPath,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+		instances = append(instances, zeroInst)
+		if remoteInstanceAlreadyTracked(hostID, "zeroclaw") || opts.allowPullNewFor("zeroclaw") {
+			cfg, _, cfgSteps, cfgErr := remoteReadConfigForAgent(ctx, host, "zeroclaw")
+			steps = append(steps, cfgSteps...)
+			if cfgErr != nil {
+				return nil, nil, steps, cfgErr
+			}
+			if err := remoteSaveDiscoveredProfile(hostID, "zeroclaw", cfg); err != nil {
+				return nil, nil, steps, err
+			}
+		} else {
+			pendingPull = append(pendingPull, zeroInst)
+		}
+	}
+
+	return dedupeRemoteInstances(instances), dedupeRemoteInstances(pendingPull), steps, nil
+}
+
+func remoteDiscoverOpenClawInstances(
+	ctx context.Context,
+	host RemoteHost,
+	hostID string,
+	opts remoteDiscoveryPullOptions,
+) ([]RemoteInstance, []RemoteInstance, []remoteExecResult, error) {
+	steps := []remoteExecResult{}
 	listRes, runErr := runRemoteCommand(ctx, host, "openclaw agents list --json 2>/dev/null")
 	if runErr != nil {
-		return nil, steps, runErr
+		return nil, nil, append(steps, listRes), runErr
 	}
 	steps = append(steps, listRes)
+
+	var instances []RemoteInstance
 	if listRes.ExitCode != 0 {
-		fallback := []RemoteInstance{newDefaultRemoteInstance(hostID, "main", "unknown")}
-		return fallback, steps, nil
+		instances = []RemoteInstance{newDefaultRemoteInstance(hostID, "main", "unknown")}
+	} else {
+		instances = parseOpenClawInstances(hostID, listRes.Stdout)
+		if len(instances) == 0 {
+			instances = []RemoteInstance{newDefaultRemoteInstance(hostID, "main", "unknown")}
+		}
 	}
-	payload := strings.TrimSpace(listRes.Stdout)
+
+	toPull := make([]RemoteInstance, 0, len(instances))
+	pendingPull := []RemoteInstance{}
+	for _, inst := range instances {
+		if remoteInstanceAlreadyTracked(hostID, inst.AgentID) || opts.allowPullNewFor(inst.AgentID) {
+			toPull = append(toPull, inst)
+			continue
+		}
+		pendingPull = append(pendingPull, inst)
+	}
+
+	if len(toPull) > 0 {
+		cfg, _, cfgSteps, cfgErr := remoteReadConfigForAgent(ctx, host, "main")
+		steps = append(steps, cfgSteps...)
+		if cfgErr != nil {
+			return nil, nil, steps, cfgErr
+		}
+		for _, inst := range toPull {
+			if err := remoteSaveDiscoveredProfile(hostID, inst.AgentID, cfg); err != nil {
+				return nil, nil, steps, err
+			}
+		}
+	}
+	return instances, dedupeRemoteInstances(pendingPull), steps, nil
+}
+
+func remoteConfigFileExists(ctx context.Context, host RemoteHost, path string) (bool, []remoteExecResult, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return false, nil, nil
+	}
+	cmd := fmt.Sprintf("if [ -f %q ]; then echo 1; else echo 0; fi", trimmed)
+	res, err := runRemoteCommand(ctx, host, cmd)
+	if err != nil {
+		return false, []remoteExecResult{res}, err
+	}
+	steps := []remoteExecResult{res}
+	if res.ExitCode != 0 {
+		return false, steps, remoteCommandError(res, "check remote config file")
+	}
+	out := strings.TrimSpace(strings.ToLower(res.Stdout))
+	return out == "1" || out == "true" || out == "yes", steps, nil
+}
+
+func remoteSaveDiscoveredProfile(hostID, agentID string, config map[string]interface{}) error {
+	instanceID := remoteInstanceProfileID(hostID, agentID)
+	localCommit, _, err := profilesync.SaveInstanceProfile(instanceID, hostID, agentID, config, "remote-discovery-pull")
+	if err != nil {
+		return err
+	}
+	now := nowTimestamp()
+	status := RemoteInstanceSyncStatus{
+		HostID:              hostID,
+		AgentID:             agentID,
+		SyncMode:            providerBindingSyncModePullValidatePush,
+		DriftState:          "in_sync",
+		LastSyncStatus:      "success",
+		LastSyncAt:          now,
+		LastRemoteHash:      hashRemoteConfig(config),
+		LastCanonicalConfig: config,
+		LastLocalCommit:     localCommit,
+		LastCommonCommit:    localCommit,
+	}
+	_, err = upsertRemoteInstanceSyncStatus(status)
+	return err
+}
+
+func remoteInstanceAlreadyTracked(hostID, agentID string) bool {
+	_, ok, err := getRemoteInstanceSyncStatus(hostID, agentID)
+	return err == nil && ok
+}
+
+func dedupeRemoteInstances(instances []RemoteInstance) []RemoteInstance {
+	if len(instances) <= 1 {
+		return instances
+	}
+	seen := map[string]bool{}
+	out := make([]RemoteInstance, 0, len(instances))
+	for _, inst := range instances {
+		key := strings.ToLower(strings.TrimSpace(inst.ID))
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, inst)
+	}
+	return out
+}
+
+func parseOpenClawInstances(hostID, stdout string) []RemoteInstance {
+	payload := strings.TrimSpace(stdout)
 	if payload == "" {
-		return []RemoteInstance{newDefaultRemoteInstance(hostID, "main", "unknown")}, steps, nil
+		return nil
 	}
 	jsonPayload := extractJSONObjectOrArray(payload)
 	if strings.TrimSpace(jsonPayload) == "" {
-		return []RemoteInstance{newDefaultRemoteInstance(hostID, "main", "unknown")}, steps, nil
+		return nil
 	}
 	var entries []map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonPayload), &entries); err != nil {
-		return []RemoteInstance{newDefaultRemoteInstance(hostID, "main", "unknown")}, steps, nil
+		return nil
 	}
 	if len(entries) == 0 {
-		return []RemoteInstance{newDefaultRemoteInstance(hostID, "main", "unknown")}, steps, nil
+		return nil
 	}
 	instances := make([]RemoteInstance, 0, len(entries))
 	now := nowTimestamp()
@@ -291,14 +510,36 @@ func remoteListInstancesForHost(ctx context.Context, host RemoteHost, hostID str
 			AgentID:      agentID,
 			RuntimeState: runtimeState,
 			Health:       health,
-			ConfigPath:   "$HOME/.openclaw/openclaw.json",
+			ConfigPath:   remoteOpenClawConfigPath,
 			MemoryPath:   fmt.Sprintf("$HOME/.openclaw/agents/%s/memory", agentID),
 			SessionPath:  fmt.Sprintf("$HOME/.openclaw/agents/%s/sessions", agentID),
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		})
 	}
-	return instances, steps, nil
+	return instances
+}
+
+func remoteReadConfigForAgent(ctx context.Context, host RemoteHost, agentID string) (map[string]interface{}, string, []remoteExecResult, error) {
+	switch strings.ToLower(strings.TrimSpace(agentID)) {
+	case "picoclaw":
+		return remoteReadPicoClawConfig(ctx, host)
+	case "zeroclaw":
+		return remoteReadZeroClawConfig(ctx, host)
+	default:
+		return remoteReadConfig(ctx, host)
+	}
+}
+
+func remotePatchConfigForAgent(ctx context.Context, host RemoteHost, agentID string, patch map[string]interface{}) (map[string]interface{}, string, []remoteExecResult, error) {
+	switch strings.ToLower(strings.TrimSpace(agentID)) {
+	case "picoclaw":
+		return remotePatchPicoClawConfig(ctx, host, patch)
+	case "zeroclaw":
+		return remotePatchZeroClawConfig(ctx, host, patch)
+	default:
+		return remotePatchConfig(ctx, host, patch)
+	}
 }
 
 func remoteGetInstanceStatus(ctx context.Context, host RemoteHost, hostID, agentID string) (RemoteInstance, []remoteExecResult, error) {
@@ -326,7 +567,7 @@ func remoteSyncInstanceConfig(ctx context.Context, host RemoteHost, hostID, agen
 	if err := validateProviderBindingSyncMode(mode); err != nil {
 		return nil, nil, err
 	}
-	config, _, steps, err := remoteReadConfig(ctx, host)
+	config, _, steps, err := remoteReadConfigForAgent(ctx, host, agentID)
 	if err != nil {
 		return nil, steps, err
 	}
@@ -384,7 +625,7 @@ func remoteDiagnoseInstanceConfig(ctx context.Context, host RemoteHost, hostID, 
 	if err := validateAgentIdentifier(agentID); err != nil {
 		return nil, nil, err
 	}
-	config, _, steps, err := remoteReadConfig(ctx, host)
+	config, _, steps, err := remoteReadConfigForAgent(ctx, host, agentID)
 	if err != nil {
 		return nil, steps, err
 	}
@@ -427,7 +668,7 @@ func remoteReconcileInstanceConfig(ctx context.Context, host RemoteHost, hostID,
 	if len(status.LastCanonicalConfig) == 0 {
 		return nil, nil, fmt.Errorf("instance is not synced yet")
 	}
-	updatedConfig, _, steps, err := remotePatchConfig(ctx, host, status.LastCanonicalConfig)
+	updatedConfig, _, steps, err := remotePatchConfigForAgent(ctx, host, agentID, status.LastCanonicalConfig)
 	if err != nil {
 		return nil, steps, err
 	}
@@ -481,7 +722,7 @@ func remoteRollbackInstanceConfig(ctx context.Context, host RemoteHost, hostID, 
 	if err != nil {
 		return nil, nil, err
 	}
-	updatedConfig, _, steps, err := remotePatchConfig(ctx, host, profileAtCommit)
+	updatedConfig, _, steps, err := remotePatchConfigForAgent(ctx, host, agentID, profileAtCommit)
 	if err != nil {
 		return nil, steps, err
 	}
@@ -606,6 +847,59 @@ func remoteReadConfig(ctx context.Context, host RemoteHost) (map[string]interfac
 	return out, text, steps, nil
 }
 
+func remoteReadPicoClawConfig(ctx context.Context, host RemoteHost) (map[string]interface{}, string, []remoteExecResult, error) {
+	cmd := "if [ -f \"$HOME/.picoclaw/config.json\" ]; then cat \"$HOME/.picoclaw/config.json\"; else echo '{}'; fi"
+	res, err := runRemoteCommand(ctx, host, cmd)
+	if err != nil {
+		return nil, "", []remoteExecResult{res}, err
+	}
+	steps := []remoteExecResult{res}
+	if res.ExitCode != 0 {
+		return nil, "", steps, remoteCommandError(res, "read picoclaw config")
+	}
+	text := strings.TrimSpace(res.Stdout)
+	if text == "" {
+		return map[string]interface{}{}, "{}", steps, nil
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		return nil, text, steps, fmt.Errorf("parse picoclaw config json: %w", err)
+	}
+	return out, text, steps, nil
+}
+
+func remoteReadZeroClawConfig(ctx context.Context, host RemoteHost) (map[string]interface{}, string, []remoteExecResult, error) {
+	cmd := "if [ -f \"$HOME/.zeroclaw/config.toml\" ]; then cat \"$HOME/.zeroclaw/config.toml\"; else echo ''; fi"
+	res, err := runRemoteCommand(ctx, host, cmd)
+	if err != nil {
+		return nil, "", []remoteExecResult{res}, err
+	}
+	steps := []remoteExecResult{res}
+	if res.ExitCode != 0 {
+		return nil, "", steps, remoteCommandError(res, "read zeroclaw config")
+	}
+	text := strings.TrimSpace(res.Stdout)
+	return zeroClawCanonicalConfig(text), text, steps, nil
+}
+
+func zeroClawCanonicalConfig(raw string) map[string]interface{} {
+	return map[string]interface{}{
+		"_carrier_meta": map[string]interface{}{
+			"runtime":    "zeroclaw",
+			"format":     "toml",
+			"configPath": remoteZeroClawConfigPath,
+		},
+		"raw_toml": strings.TrimSpace(raw),
+	}
+}
+
+func zeroClawRawFromCanonical(payload map[string]interface{}) string {
+	if payload == nil {
+		return ""
+	}
+	return strings.TrimSpace(anyToString(payload["raw_toml"]))
+}
+
 func remotePatchConfig(ctx context.Context, host RemoteHost, patch map[string]interface{}) (map[string]interface{}, string, []remoteExecResult, error) {
 	current, currentRaw, steps, err := remoteReadConfig(ctx, host)
 	if err != nil {
@@ -636,6 +930,74 @@ func remotePatchConfig(ctx context.Context, host RemoteHost, patch map[string]in
 		return nil, snapshotPath, steps, remoteCommandError(writeRes, "write remote config")
 	}
 	return merged, snapshotPath, steps, nil
+}
+
+func remotePatchPicoClawConfig(ctx context.Context, host RemoteHost, patch map[string]interface{}) (map[string]interface{}, string, []remoteExecResult, error) {
+	current, currentRaw, steps, err := remoteReadPicoClawConfig(ctx, host)
+	if err != nil {
+		return nil, "", steps, err
+	}
+	merged := deepMergeJSON(current, patch)
+	raw, err := json.MarshalIndent(merged, "", "  ")
+	if err != nil {
+		return nil, "", steps, fmt.Errorf("marshal merged picoclaw config: %w", err)
+	}
+	delimiter := fmt.Sprintf("CARRIER_EOF_%d", time.Now().UnixNano())
+	snapshotUnix := time.Now().Unix()
+	snapshotPath := fmt.Sprintf("$HOME/.picoclaw/snapshots/picoclaw-%d.json", snapshotUnix)
+	writeCmd := fmt.Sprintf(
+		"mkdir -p \"$HOME/.picoclaw\" \"$HOME/.picoclaw/snapshots\"; snapshot_path=\"$HOME/.picoclaw/snapshots/picoclaw-%d.json\"; cp \"$HOME/.picoclaw/config.json\" \"$snapshot_path\" 2>/dev/null || true; cat > \"$HOME/.picoclaw/config.json\" <<'%s'\n%s\n%s",
+		snapshotUnix,
+		delimiter,
+		string(raw),
+		delimiter,
+	)
+	writeRes, runErr := runRemoteCommand(ctx, host, writeCmd)
+	steps = append(steps, writeRes)
+	if runErr != nil {
+		return nil, snapshotPath, steps, runErr
+	}
+	if writeRes.ExitCode != 0 {
+		_ = currentRaw
+		return nil, snapshotPath, steps, remoteCommandError(writeRes, "write picoclaw config")
+	}
+	return merged, snapshotPath, steps, nil
+}
+
+func remotePatchZeroClawConfig(ctx context.Context, host RemoteHost, patch map[string]interface{}) (map[string]interface{}, string, []remoteExecResult, error) {
+	rawToml := zeroClawRawFromCanonical(patch)
+	if rawToml == "" {
+		return nil, "", nil, fmt.Errorf("zeroclaw patch requires raw_toml")
+	}
+	readCmd := "if [ -f \"$HOME/.zeroclaw/config.toml\" ]; then cat \"$HOME/.zeroclaw/config.toml\"; else echo ''; fi"
+	readRes, runErr := runRemoteCommand(ctx, host, readCmd)
+	if runErr != nil {
+		return nil, "", []remoteExecResult{readRes}, runErr
+	}
+	steps := []remoteExecResult{readRes}
+	if readRes.ExitCode != 0 {
+		return nil, "", steps, remoteCommandError(readRes, "read zeroclaw config before patch")
+	}
+
+	delimiter := fmt.Sprintf("CARRIER_EOF_%d", time.Now().UnixNano())
+	snapshotUnix := time.Now().Unix()
+	snapshotPath := fmt.Sprintf("$HOME/.zeroclaw/snapshots/zeroclaw-%d.toml", snapshotUnix)
+	writeCmd := fmt.Sprintf(
+		"mkdir -p \"$HOME/.zeroclaw\" \"$HOME/.zeroclaw/snapshots\"; snapshot_path=\"$HOME/.zeroclaw/snapshots/zeroclaw-%d.toml\"; cp \"$HOME/.zeroclaw/config.toml\" \"$snapshot_path\" 2>/dev/null || true; cat > \"$HOME/.zeroclaw/config.toml\" <<'%s'\n%s\n%s",
+		snapshotUnix,
+		delimiter,
+		rawToml,
+		delimiter,
+	)
+	writeRes, writeErr := runRemoteCommand(ctx, host, writeCmd)
+	steps = append(steps, writeRes)
+	if writeErr != nil {
+		return nil, snapshotPath, steps, writeErr
+	}
+	if writeRes.ExitCode != 0 {
+		return nil, snapshotPath, steps, remoteCommandError(writeRes, "write zeroclaw config")
+	}
+	return zeroClawCanonicalConfig(rawToml), snapshotPath, steps, nil
 }
 
 func deepMergeJSON(base map[string]interface{}, patch map[string]interface{}) map[string]interface{} {
@@ -949,7 +1311,7 @@ func newDefaultRemoteInstance(hostID, agentID, runtimeState string) RemoteInstan
 		AgentID:      agentID,
 		RuntimeState: runtimeState,
 		Health:       "unknown",
-		ConfigPath:   "$HOME/.openclaw/openclaw.json",
+		ConfigPath:   remoteOpenClawConfigPath,
 		MemoryPath:   fmt.Sprintf("$HOME/.openclaw/agents/%s/memory", agentID),
 		SessionPath:  fmt.Sprintf("$HOME/.openclaw/agents/%s/sessions", agentID),
 		CreatedAt:    now,

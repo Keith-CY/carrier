@@ -125,7 +125,7 @@ func (a *Adapter) Supports(capability contract.Capability) bool {
 }
 
 func (a *Adapter) buildExecArgs(request contract.RunRequest, includeResume bool) []string {
-	args := []string{"exec", a.requestPrompt(request), "--json"}
+	args := []string{"exec", a.requestPrompt(request), "--json", "--skip-git-repo-check"}
 	if includeResume && strings.TrimSpace(request.ResumeSessionID) != "" {
 		args = append(args, "--resume", strings.TrimSpace(request.ResumeSessionID))
 	}
