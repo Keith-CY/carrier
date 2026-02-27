@@ -320,6 +320,27 @@ map_provider_to_managed() {
   esac
 }
 
+lookup_local_model_for_provider() {
+  local provider_id="$1"
+  local provider_managed model_json
+  model_json="$(jq -c --arg pid "$provider_id" '[.model_list[]? | select(((.provider_id // "")|ascii_downcase)==($pid|ascii_downcase))] | first // empty' "$CONFIG_PATH")"
+  if [[ -n "$model_json" && "$model_json" != "null" ]]; then
+    printf '%s' "$model_json"
+    return 0
+  fi
+
+  provider_managed="$(map_provider_to_managed "$provider_id")"
+  model_json="$(jq -c --arg managed "$provider_managed" '
+    def canonical(pid):
+      if pid=="openai-codex" or pid=="openai-compatible" or pid=="vllm" or pid=="openai-v1"
+      then "openai"
+      else pid
+      end;
+    [.model_list[]? | select(canonical((.provider_id // "")|ascii_downcase) == ($managed|ascii_downcase))] | first // empty
+  ' "$CONFIG_PATH")"
+  printf '%s' "$model_json"
+}
+
 load_local_credential() {
   local provider_id="$1"
   local token=""
@@ -407,10 +428,16 @@ sync_selected_local_config() {
     merge_patch_file "$patch_file" "$channel_patch"
   done
 
-  local provider_id model_json model_raw model_name_raw provider_key defaults_model credential_ref auth_mode provider_patch token
+  local provider_id model_json model_raw model_name_raw provider_key defaults_model credential_ref auth_mode token
+  local provider_models_json provider_entries_json provider_defaults_json provider_patch local_default_model default_locked
+  provider_models_json="[]"
+  provider_entries_json="{}"
+  provider_defaults_json='{}'
+  local_default_model="$(jq -r '.default_model // ""' "$CONFIG_PATH" | tr -d '\r' | sed 's/[[:space:]]*$//')"
+  default_locked=0
   for provider in "${SYNC_PROVIDERS[@]}"; do
     provider_id="$(printf '%s' "$provider" | tr '[:upper:]' '[:lower:]')"
-    model_json="$(jq -c --arg pid "$provider_id" '[.model_list[]? | select((.provider_id|ascii_downcase)==($pid|ascii_downcase))] | first // empty' "$CONFIG_PATH")"
+    model_json="$(lookup_local_model_for_provider "$provider_id")"
     if [[ -z "$model_json" || "$model_json" == "null" ]]; then
       echo "[config sync] local provider '$provider_id' not found in model_list of $CONFIG_PATH" >&2
       return 1
@@ -449,40 +476,64 @@ sync_selected_local_config() {
       return 1
     fi
 
-    provider_patch="$(jq -n \
+    provider_entries_json="$(jq -cn \
+      --argjson providers "$provider_entries_json" \
       --arg providerKey "$provider_key" \
+      --arg providerID "$provider_id" \
+      --arg credentialRef "$credential_ref" \
+      --arg token "$token" \
+      '
+      $providers
+      | .[$providerKey] = {
+          credential_ref: (if ($credentialRef|length)>0 then $credentialRef else $providerID end)
+        }
+      | if ($providerID == "openai-codex") then
+          .[$providerKey].auth_method = "oauth"
+        else .
+        end
+      | if ($token|length) > 0 and ($providerID != "openai-codex") then .[$providerKey].api_key = $token else . end')"
+
+    provider_models_json="$(jq -cn \
+      --argjson items "$provider_models_json" \
       --arg providerID "$provider_id" \
       --arg modelName "$defaults_model" \
       --arg modelRaw "$model_raw" \
-      --arg credentialRef "$credential_ref" \
-      --arg token "$token" \
+      '
+      $items + [{
+        model_name: $modelName,
+        model: (if ($modelRaw|length)>0 then $modelRaw else $modelName end)
+      }]
+      | if ($providerID == "openai-codex") then .[-1].auth_method = "oauth" else . end
+      ' )"
+
+    if [[ "$provider_defaults_json" == "{}" ]]; then
+      provider_defaults_json="$(jq -n --arg provider "$provider_key" --arg model "$defaults_model" '{provider:$provider, model:$model}')"
+    fi
+    if [[ $default_locked -eq 0 && -n "$local_default_model" ]]; then
+      if [[ "$defaults_model" == "$local_default_model" || "$model_name_raw" == "$local_default_model" || "$model_raw" == "$local_default_model" ]]; then
+        provider_defaults_json="$(jq -n --arg provider "$provider_key" --arg model "$defaults_model" '{provider:$provider, model:$model}')"
+        default_locked=1
+      fi
+    fi
+  done
+
+  if (( ${#SYNC_PROVIDERS[@]} > 0 )); then
+    provider_patch="$(jq -n \
+      --argjson defaults "$provider_defaults_json" \
+      --argjson modelList "$provider_models_json" \
+      --argjson providers "$provider_entries_json" \
       '{
         agents: {
           defaults: {
-            provider: $providerKey,
-            model: $modelName
+            provider: $defaults.provider,
+            model: $defaults.model
           }
         },
-        model_list: [
-          {
-            model_name: $modelName,
-            model: (if ($modelRaw|length)>0 then $modelRaw else $modelName end)
-          }
-        ],
-        providers: {
-          ($providerKey): {
-            credential_ref: (if ($credentialRef|length)>0 then $credentialRef else $providerID end)
-          }
-        }
-      }
-      | if ($providerID == "openai-codex") then
-          .model_list[0].auth_method = "oauth"
-          | .providers[$providerKey].auth_method = "oauth"
-        else .
-        end
-      | if ($token|length) > 0 and ($providerID != "openai-codex") then .providers[$providerKey].api_key = $token else . end')"
+        model_list: ($modelList | unique_by(.model_name + "|" + .model)),
+        providers: $providers
+      }')"
     merge_patch_file "$patch_file" "$provider_patch"
-  done
+  fi
 
   local payload code
   payload="$(jq -c '{patch:.}' "$patch_file")"

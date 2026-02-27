@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -153,6 +154,49 @@ func TestShouldRepairKnownHostMismatch(t *testing.T) {
 		Stderr:   "Permission denied (publickey).",
 	}, nil) {
 		t.Fatalf("did not expect non-host-key failure to trigger repair")
+	}
+}
+
+func TestRepairKnownHostEntriesReturnsNilWhenAnyEntryRepaired(t *testing.T) {
+	origRemover := knownHostEntryRemover
+	defer func() { knownHostEntryRemover = origRemover }()
+
+	knownHostEntryRemover = func(entry string) (bool, error) {
+		if strings.HasPrefix(entry, "[") {
+			return false, fmt.Errorf("simulated removal failure for %s", entry)
+		}
+		return true, nil
+	}
+
+	err := repairKnownHostEntries(RemoteHost{
+		Host:     "127.0.0.1",
+		Port:     2222,
+		User:     "carrier",
+		AuthMode: RemoteAuthModePrivateKey,
+		KeyPath:  "/tmp/id_ed25519",
+	})
+	if err != nil {
+		t.Fatalf("expected nil error when at least one entry is repaired, got %v", err)
+	}
+}
+
+func TestRepairKnownHostEntriesReturnsErrorWhenAllEntriesFail(t *testing.T) {
+	origRemover := knownHostEntryRemover
+	defer func() { knownHostEntryRemover = origRemover }()
+
+	knownHostEntryRemover = func(entry string) (bool, error) {
+		return false, fmt.Errorf("simulated removal failure for %s", entry)
+	}
+
+	err := repairKnownHostEntries(RemoteHost{
+		Host:     "127.0.0.1",
+		Port:     2222,
+		User:     "carrier",
+		AuthMode: RemoteAuthModePrivateKey,
+		KeyPath:  "/tmp/id_ed25519",
+	})
+	if err == nil {
+		t.Fatalf("expected error when all known_hosts removals fail")
 	}
 }
 

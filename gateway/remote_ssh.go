@@ -29,6 +29,7 @@ type remoteStreamChunk struct {
 var sshExecRunner = defaultSSHExecRunner
 var sshExecStreamRunner = defaultSSHExecStreamRunner
 var knownHostsRepairer = repairKnownHostEntries
+var knownHostEntryRemover = defaultKnownHostEntryRemover
 
 func defaultSSHExecRunner(ctx context.Context, args []string) (remoteExecResult, error) {
 	cmd := exec.CommandContext(ctx, "ssh", args...)
@@ -338,7 +339,8 @@ func repairKnownHostEntries(host RemoteHost) error {
 		entries = append(entries, fmt.Sprintf("[%s]:%d", targetHost, port), targetHost)
 	}
 
-	var firstErr error
+	repaired := false
+	var lastErr error
 	seen := map[string]struct{}{}
 	for _, entry := range entries {
 		entry = strings.TrimSpace(entry)
@@ -349,18 +351,30 @@ func repairKnownHostEntries(host RemoteHost) error {
 			continue
 		}
 		seen[entry] = struct{}{}
-		cmd := exec.Command("ssh-keygen", "-R", entry)
-		output, err := cmd.CombinedOutput()
+		removed, err := knownHostEntryRemover(entry)
 		if err == nil {
+			if removed {
+				repaired = true
+			}
 			continue
 		}
-		msg := strings.ToLower(strings.TrimSpace(string(output)))
-		if strings.Contains(msg, "not found in") {
-			continue
-		}
-		if firstErr == nil {
-			firstErr = fmt.Errorf("ssh-keygen -R %s failed: %w", entry, err)
-		}
+		lastErr = err
 	}
-	return firstErr
+	if repaired || lastErr == nil {
+		return nil
+	}
+	return lastErr
+}
+
+func defaultKnownHostEntryRemover(entry string) (bool, error) {
+	cmd := exec.Command("ssh-keygen", "-R", entry)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return true, nil
+	}
+	msg := strings.ToLower(strings.TrimSpace(string(output)))
+	if strings.Contains(msg, "not found in") {
+		return false, nil
+	}
+	return false, fmt.Errorf("ssh-keygen -R %s failed: %w", entry, err)
 }
