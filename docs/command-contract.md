@@ -68,7 +68,8 @@ type GatewayResponse = {
 | `E_AUTH_INVALID`                 | Provided session token is invalid                     |
 | `E_PAIR_CODE_INVALID`            | Pairing code is invalid or expired                    |
 | `E_SESSION_REQUIRED`             | Chat is not paired; must run `/pair` first            |
-| `E_INSTALL_GUI_ONLY`            | Chat install is disabled; use Carrier TUI/WebUI       |
+| `E_ADD_GUI_ONLY`                | Chat add/install shortcut is disabled; use Carrier CLI/TUI/WebUI |
+| `E_INSTALL_GUI_ONLY`            | Chat install command is disabled by policy; use Carrier CLI/TUI/WebUI |
 | `E_ONBOARD_GUI_ONLY`            | Chat onboarding is disabled; use Carrier TUI/WebUI    |
 | `E_HOST_BINDING_REQUIRED`        | Install requires a bound/selected remote host         |
 | `E_REMOTE_INSTALL_FAILED`        | Remote host install flow failed                       |
@@ -107,6 +108,16 @@ Lists all known agents and their install status.
 - **Requires session:** yes
 - **Success:** `{ result: "ok", message: "listed <n> agents (<m> installed)" }`
 
+### `/add <agent_id>`
+
+Add/install shortcut in chat context.
+
+- **Args:** `agent_id` (required)
+- **Requires session:** yes
+- **Current behavior:** intentionally blocked for credential safety.
+- **Result:** `{ result: "error", errorCode: "E_ADD_GUI_ONLY", message: "...Use Carrier CLI/TUI..." }`
+- **Alternative flows:** `carrier add <agent_id>` / `carrier install <agent_id>` / WebUI.
+
 ### `/install <agent_id> <host_id>`
 
 Installs an agent.
@@ -115,9 +126,12 @@ Installs an agent.
 - **Requires session:** yes
 - **Policy gate:** behavior is controlled by boundary policy `command_policies.chat_install`.
 - **Current policy value:** `requires_host_binding`.
+- **Default behavior with current policy:**
+  - requires explicit host binding (`/install <agent_id> <host_id>`)
+  - remote install path currently supports `openclaw` only
 - **Success:** `{ result: "ok", message: "remote install completed for <agent_id> on host <host_id>" }`
-- **Errors:** `E_USAGE`, `E_HOST_BINDING_REQUIRED`, `E_REMOTE_HOST_NOT_FOUND`, `E_REMOTE_INSTALL_FAILED`
-- **Notes:** current remote chat install path supports `openclaw` only.
+- **Errors:** `E_USAGE`, `E_INSTALL_GUI_ONLY`, `E_HOST_BINDING_REQUIRED`, `E_REMOTE_HOST_NOT_FOUND`, `E_REMOTE_INSTALL_FAILED`
+- **Notes:** when `chat_install` policy is `disabled`, `/install` returns `E_INSTALL_GUI_ONLY`.
 
 ### `/onboard`
 

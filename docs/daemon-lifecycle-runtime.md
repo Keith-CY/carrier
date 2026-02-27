@@ -79,7 +79,7 @@ Safe local reset procedure:
 sudo systemctl stop carrier-daemon
 sudo rm -f /var/lib/carrier/state.json   # NOTE: this discards pending diagnose-consent records
 sudo systemctl start carrier-daemon
-curl -s http://127.0.0.1:8081/healthz
+curl -s http://127.0.0.1:9090/healthz
 ```
 
 Use the reset flow only for local troubleshooting or planned maintenance windows.

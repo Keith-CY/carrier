@@ -92,8 +92,9 @@ Successful flow should include:
 
 ## 5) Important Behavioral Note
 
-Chat commands `/install` and `/onboard` are intentionally blocked in gateway chat mode (`E_INSTALL_GUI_ONLY` / `E_ONBOARD_GUI_ONLY`).
-
-Use either:
-- TUI (`carrier onboard`, `carrier add picoclaw`, `carrier add openclaw`), or
-- WebUI (`carrier onboard --webui`, `carrier add picoclaw --webui`, `carrier add openclaw --webui`).
+- Chat `/onboard` is intentionally blocked (`E_ONBOARD_GUI_ONLY`).
+- Chat `/install` is policy-gated. With current default policy (`requires_host_binding`), it supports remote OpenClaw install with explicit host binding:
+  - `/install openclaw <host_id>`
+- Local install should still be done with CLI/TUI/WebUI:
+  - TUI: `carrier onboard`, `carrier add picoclaw`, `carrier add openclaw`
+  - WebUI: `carrier onboard --webui`, `carrier add picoclaw --webui`, `carrier add openclaw --webui`

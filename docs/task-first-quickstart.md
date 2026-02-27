@@ -1,88 +1,117 @@
-# Task-First Quickstart and Troubleshooting
+# Task-First Quickstart
 
-This guide is task-oriented.
-It is the fastest path from clean machine to a working first session.
+This guide is optimized for execution, not architecture reading.
 
-## Task 1: 5-Minute First Setup
+## Task 1: Install Carrier On Local Machine
 
-Prerequisites:
-- Go 1.23+ (matches `daemon/go.mod` / `toolchain go1.23.0`)
-- Bun 1.0+ (required by gateway validation scripts)
-- Repository cloned
+Recommended:
 
-Commands:
 ```bash
-./scripts/run-all-tests.sh
+curl -fsSL https://raw.githubusercontent.com/Keith-CY/carrier/main/scripts/install.sh | bash
+carrier --version
 ```
 
-Expected output:
-- daemon tests pass
-- gateway checks pass
+Source build alternative:
 
-Rollback notes:
-- If any check fails, do not continue with release/install workflows.
-- Move to Task 3 (common failure triage) before retrying.
+```bash
+git clone https://github.com/Keith-CY/carrier.git
+cd carrier
+go build -o ./carrier ./cmd/carrier
+./carrier --version
+```
 
-## Task 2: Connect Provider and Verify Health
+## Task 2: Onboard Carrier
+
+```bash
+# bootstrap
+carrier
+
+# explicit onboarding
+carrier onboard
+```
+
+WebUI flow:
+
+```bash
+carrier onboard --webui
+```
+
+Expected result:
+- onboarding completes without error
+- config exists at `${CARRIER_CONFIG:-~/.carrier/config.v2.json}`
+- gateway health is reachable at `http://127.0.0.1:8787/healthz`
+
+## Task 3: Install OpenClaw Locally
+
+```bash
+carrier add openclaw
+carrier status openclaw
+carrier list
+```
+
+Expected result:
+- `openclaw` exists in managed instance list
+- status is reachable and not in install-pending failure
+
+## Task 4: Install OpenClaw To VPS
 
 Prerequisites:
-- daemon running
-- pairing code available
+- SSH host/user/key ready
+- local gateway running (`carrier` bootstrap can start it)
+- local tools available: `curl`, `jq`
 
-Commands:
-```text
-carrier add openclaw
-/pair <code>
-/agents
-/start openclaw
-/status openclaw
+Minimal flow:
+
+```bash
+scripts/remote-openclaw-install.sh \
+  --host-id vps-1 \
+  --host 203.0.113.10 \
+  --port 22 \
+  --user ubuntu \
+  --key-path ~/.ssh/id_ed25519
 ```
 
-Expected output:
-- `carrier add openclaw` completes install/start for OpenClaw
-- `/pair` returns success
-- `/status openclaw` reports running/healthy
+Selected local config sync flow:
 
-Rollback notes:
-- If startup fails, run `/stop openclaw` and then `/diagnose openclaw`.
-- If chat reports `E_INSTALL_GUI_ONLY`, use `carrier add <agent_id>` in TUI/WebUI; chat install is intentionally blocked.
-- Keep diagnose artifacts with request IDs before retrying.
+```bash
+scripts/remote-openclaw-install.sh \
+  --host-id vps-1 \
+  --host 203.0.113.10 \
+  --port 22 \
+  --user ubuntu \
+  --key-path ~/.ssh/id_ed25519 \
+  --sync-channel telegram \
+  --sync-provider openai-codex
+```
 
-## Task 3: Fix Common Failures Quickly
+Expected result:
+- script finishes with `done: remote openclaw install flow succeeded ...`
+- remote host check returns `openclawFound=true`
+- instance list includes `<host-id>:main`
 
-Use this decision table first:
+## Task 5: Validate Full Remote Agent Matrix (Optional)
+
+```bash
+scripts/remote-vps-agent-suite.sh \
+  --host-id vps-1 \
+  --host 127.0.0.1 \
+  --port 2224 \
+  --user carrier \
+  --key-path /tmp/carrier-e2e-keys/id_ed25519
+```
+
+This runs deterministic validation for OpenClaw + PicoClaw + ZeroClaw + codeagent backends.
+
+## Task 6: Common Failures
 
 | Signal | Action |
 |---|---|
-| `E_PAIR_CODE_INVALID` | Request a new pair code and retry `/pair` immediately |
-| `E_SESSION_REQUIRED` | Re-run `/pair <code>` before non-pair commands |
-| start fails with missing env | Set required env vars and retry `/start` |
-| port conflict | stop conflicting process, then retry `/start` |
+| `gateway not healthy` | run `carrier` or `carrier gateway`, then check `http://127.0.0.1:8787/healthz` |
+| SSH check failed | verify host/port/user/key and remote network access |
+| missing local channel/provider during `--sync-*` | complete `carrier onboard` first or pass correct IDs |
+| chat returns `E_ONBOARD_GUI_ONLY` | run onboarding via CLI/TUI/WebUI (`carrier onboard`, `carrier onboard --webui`) |
+| chat `/install` returns `E_HOST_BINDING_REQUIRED` | provide host binding: `/install openclaw <host_id>` |
 
-Detailed references:
-- Pairing failures: [`docs/runbooks/pairing-lifecycle.md`](./runbooks/pairing-lifecycle.md)
-- CI/test failures: [`docs/ci/first-response-playbook.md`](./ci/first-response-playbook.md)
-
-Rollback notes:
-- After one corrected retry, if failure repeats, escalate with request ID and logs.
-
-## Task 4: Safe Upgrade and Rollback
-
-Prerequisites:
-- agent currently installed
-- maintenance window confirmed
-
-Commands:
-```text
-/status openclaw
-/upgrade openclaw
-/status openclaw
-```
-
-Expected output:
-- upgrade succeeds and returns a version bump
-- post-upgrade status is healthy
-
-Rollback notes:
-- If upgrade fails, use captured pre-upgrade backup guidance in error output.
-- Follow runbook: [`docs/runbooks/go-live-rollback.md`](./runbooks/go-live-rollback.md).
+References:
+- CLI command surface: [`docs/carrier-cli.md`](./carrier-cli.md)
+- Pairing lifecycle runbook: [`docs/runbooks/pairing-lifecycle.md`](./runbooks/pairing-lifecycle.md)

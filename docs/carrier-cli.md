@@ -1,107 +1,116 @@
-# Carrier CLI reference
+# Carrier CLI Reference
 
-This page summarizes the implemented CLI command surface and the recommended usage flow.
+This document reflects the current `carrier --help` command surface.
 
-## Command surface
+## Command Surface
+
+### Bootstrap and runtime
 
 - `carrier`
-  - Bootstrap command.
-  - If no onboard config exists, it runs `carrier onboard`.
-  - If already onboarded, it ensures daemon and gateway are running and then exits.
-- `carrier onboard`
-  - Interactive onboarding flow (TUI).
-- `carrier onboard --tui` / `carrier onboard --cli`
-  - Explicit terminal onboarding mode aliases (same terminal flow).
-- `carrier onboard --webui`
-  - Browser/WebUI onboarding flow.
-- `carrier add <agent_id>`
-  - Add/install agent via TUI flow.
-  - Managed agents (`openclaw`, `picoclaw`, `zeroclaw`) use managed-agent setup and instance tracking.
-  - Non-managed agent IDs run direct daemon install + start.
-- `carrier add <agent_id> --tui` / `carrier add <agent_id> --cli`
-  - Explicit terminal add/install mode aliases (same terminal flow).
-- `carrier add <agent_id> --webui`
-  - Browser/WebUI add flow.
-- `carrier install <agent_id>`
-  - Alias for `carrier add <agent_id>`.
-- `carrier install <agent_id> --tui|--cli|--webui`
-  - Alias mode flags for terminal or WebUI install flows.
-- `carrier list`
-  - Lists managed agent instances with state.
-- `carrier stop`
-  - Stops background services started by Carrier: daemon and gateway.
-- `carrier start <id|name>`
-  - Starts one managed agent instance.
-- `carrier stop <id|name>`
-  - Stops one managed agent instance.
-- `carrier status <id|name>`
-  - Shows install/runtime status for one managed agent instance.
-- `carrier upgrade <id|name>`
-  - Upgrades one managed agent instance.
-- `carrier uninstall <id|name>`
-  - Uninstalls and removes a managed agent instance.
+  - Bootstrap entrypoint.
+  - If not onboarded, enters onboarding flow.
+  - If onboarded, ensures daemon + gateway are running and exits.
 - `carrier daemon`
-  - Starts Carrier daemon in the foreground.
+  - Start daemon API server in foreground.
 - `carrier gateway`
-  - Starts Carrier gateway in the foreground.
+  - Start gateway API server in foreground.
+- `carrier stop`
+  - Stop background daemon and gateway services.
+- `carrier version` / `carrier --version` / `carrier -v` / `carrier -V`
+  - Print version metadata.
+- `carrier update [options]`
+  - Update local Carrier to target ref/channel.
 
-## Recommended flow (bootstrap-first)
+### Onboarding
 
-1. `carrier`
-2. `carrier onboard` (Telegram-first TUI flow)
-3. `carrier add <agent_id>`
+- `carrier onboard`
+- `carrier onboard --tui`
+- `carrier onboard --cli`
+- `carrier onboard --webui`
 
-Use `--webui` when interactive terminal access is unavailable or when onboarding needs a browser-assisted path.
+Onboarding writes config to `${CARRIER_CONFIG:-~/.carrier/config.v2.json}`.
 
-## TUI vs WebUI vs chat commands
+### Managed local instance lifecycle
 
-- Use TUI when:
-  - You are running from terminal and can complete setup interactively.
-  - Provider setup is comfortable in terminal.
-- Use WebUI when:
-  - You are doing Telegram-less onboarding (Discord/Feishu) or using managed agents from a browser flow.
-  - Manual setup of provider credentials is needed outside the TUI path.
-- Use chat commands when:
-  - You are already paired in chat and need quick operational commands.
-  - You are not relying on primary CLI onboarding/install flow.
+- `carrier add <agent_id> [--tui|--cli|--webui] [-q|--quiet]`
+- `carrier install <agent_id> [--tui|--cli|--webui] [-q|--quiet]`
+  - Alias of `carrier add`.
+- `carrier list`
+- `carrier start <id|name>`
+- `carrier stop <id|name>`
+- `carrier status <id|name>`
+- `carrier upgrade <id|name>`
+- `carrier uninstall <id|name>`
 
-`/install` and `/onboard` chat commands still parse at gateway level, but onboarding/install actions in chat mode are intentionally blocked (`E_INSTALL_GUI_ONLY` / `E_ONBOARD_GUI_ONLY`) to avoid credential handling in chat. Use `carrier install` / `carrier onboard` (CLI/TUI) or WebUI.
+Managed agent IDs currently include `openclaw`, `picoclaw`, `zeroclaw`.
 
-## Concise example flows
+### Remote instance operations
 
-- Local CLI bootstrap + managed TUI add
+`carrier remote <action> <host_id> <agent_id> [options]`
+
+Supported actions:
+
+- `sync [--mode <always_push|pull_validate_push|manual>]`
+- `sync-status`
+- `diagnose`
+- `reconcile`
+- `rollback [--commit <hash>]`
+- `codeagent-install [--backend <codex|opencode>] [--workspace-root <path>]`
+- `codeagent-configure [--backend <codex|opencode>] [--workspace-root <path>] [--profile-json <json>]`
+- `codeagent-health [--backend <codex|opencode>] [--workspace-root <path>]`
+- `codeagent-version [--backend <codex|opencode>]`
+- `codeagent-run --capability <...> [backend/workspace/options]`
+
+Important:
+- Remote OpenClaw installation itself is currently done by script: `scripts/remote-openclaw-install.sh`.
+- `carrier remote` is currently focused on sync/diagnose/codeagent operations after host/instance is available.
+
+## Recommended Workflows
+
+### Local first-time setup
 
 ```bash
 carrier
 carrier onboard
 carrier add openclaw
 carrier status openclaw
-carrier list
 ```
 
-- Browser/WebUI onboarding + managed add (Discord/Feishu recommended)
+WebUI variant:
 
 ```bash
 carrier onboard --webui
 carrier add openclaw --webui
-carrier list
 ```
 
-- Direct add flow for non-managed agents
+### Install OpenClaw on VPS
 
 ```bash
-carrier add <agent_id>
-carrier stop
-# For managed-instance flows:
-carrier start <id|name>
-carrier stop <id|name>
-carrier status <id|name>
-carrier upgrade <id|name>
-carrier uninstall <id|name>
+scripts/remote-openclaw-install.sh \
+  --host-id vps-1 \
+  --host 203.0.113.10 \
+  --port 22 \
+  --user ubuntu \
+  --key-path ~/.ssh/id_ed25519
 ```
 
-## Daemon and gateway helpers
+With selected local config sync:
 
-- `carrier stop` only manages background carrier services and does not remove instance metadata.
-- `carrier start|stop|status|upgrade|uninstall <id|name>` accept either the instance ID or the instance name (for example, `openclaw`).
-- `carrier daemon` and `carrier gateway` are foreground commands and keep process running until interrupted.
+```bash
+scripts/remote-openclaw-install.sh \
+  --host-id vps-1 \
+  --host 203.0.113.10 \
+  --port 22 \
+  --user ubuntu \
+  --key-path ~/.ssh/id_ed25519 \
+  --sync-channel telegram \
+  --sync-provider openai-codex
+```
+
+## Behavior Notes
+
+- Gateway default: `http://127.0.0.1:8787`
+- Daemon default: `http://127.0.0.1:9090`
+- Chat `/onboard` is intentionally blocked for credential safety.
+- Chat `/install` is policy-gated; default policy requires explicit host binding and supports remote OpenClaw install (`/install openclaw <host_id>`).
+- For newly discovered remote instances, config pull can require explicit confirmation.
