@@ -12,15 +12,23 @@ import (
 
 const maxSSHConfigIncludeDepth = 8
 
-func listLocalSSHConfigHosts() ([]string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("resolve home dir: %w", err)
+// listLocalSSHConfigHosts parses SSH config hosts. When configPath is empty it
+// defaults to ~/.ssh/config; pass an explicit path to override (useful when
+// the SSH config lives in a non-standard location).
+func listLocalSSHConfigHosts(configPath ...string) ([]string, error) {
+	var sshConfigPath string
+	if len(configPath) > 0 && configPath[0] != "" {
+		sshConfigPath = configPath[0]
+	} else {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("resolve home dir: %w", err)
+		}
+		sshConfigPath = filepath.Join(home, ".ssh", "config")
 	}
-	configPath := filepath.Join(home, ".ssh", "config")
 	hosts := map[string]struct{}{}
 	seenFiles := map[string]struct{}{}
-	if err := collectSSHConfigHostsFromFile(configPath, 0, seenFiles, hosts); err != nil {
+	if err := collectSSHConfigHostsFromFile(sshConfigPath, 0, seenFiles, hosts); err != nil {
 		return nil, err
 	}
 	list := make([]string, 0, len(hosts))
