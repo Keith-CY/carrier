@@ -11,4 +11,4 @@ Current scope in this phase:
 
 This module is intentionally independent from `codeagent/`.
 
-When `git` is unavailable in constrained environments, the storage helper transparently falls back to a local commit-like history format while keeping the same API semantics.
+When `git` is unavailable, `profilesync` attempts to install Git automatically (using the host package manager) and continues with git-backed storage. If installation cannot be completed, the operation fails with an explicit error.
