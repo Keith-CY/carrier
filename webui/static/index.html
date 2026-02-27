@@ -23,14 +23,38 @@
     <div class="header-left">
       <h1>Carrier</h1>
       <nav id="nav" class="hidden">
-        <a href="#/dashboard" class="nav-link" data-route="dashboard">Dashboard</a>
-        <a href="#/servers" class="nav-link" data-route="servers">Servers</a>
-        <a href="#/profiles" class="nav-link" data-route="profiles">Profiles</a>
-        <a href="#/remote-chat" class="nav-link" data-route="remote-chat">Remote Chat</a>
-        <a href="#/remote-observability" class="nav-link" data-route="remote-observability">Observability</a>
-        <a href="#/logs" class="nav-link" data-route="logs">Logs</a>
-        <a href="#/chat" class="nav-link" data-route="chat">Chat</a>
-        <a href="#/settings" class="nav-link" data-route="settings">Settings</a>
+        <a href="#/dashboard" class="nav-link" data-route="dashboard">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1"></rect><rect x="14" y="4" width="6" height="6" rx="1"></rect><rect x="4" y="14" width="6" height="6" rx="1"></rect><rect x="14" y="14" width="6" height="6" rx="1"></rect></svg></span>
+          <span class="nav-text">Dashboard</span>
+        </a>
+        <a href="#/servers" class="nav-link" data-route="servers">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1.5"></rect><rect x="3" y="10" width="18" height="5" rx="1.5"></rect><rect x="3" y="16" width="18" height="5" rx="1.5"></rect></svg></span>
+          <span class="nav-text">Servers</span>
+        </a>
+        <a href="#/profiles" class="nav-link" data-route="profiles">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"></circle><path d="M4 20c1.8-4 5-6 8-6s6.2 2 8 6"></path></svg></span>
+          <span class="nav-text">Profiles</span>
+        </a>
+        <a href="#/remote-chat" class="nav-link" data-route="remote-chat">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 6h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9l-4 3v-3H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"></path></svg></span>
+          <span class="nav-text">Remote Chat</span>
+        </a>
+        <a href="#/remote-observability" class="nav-link" data-route="remote-observability">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 19h16"></path><path d="M7 17V9"></path><path d="M12 17V5"></path><path d="M17 17v-7"></path></svg></span>
+          <span class="nav-text">Observability</span>
+        </a>
+        <a href="#/logs" class="nav-link" data-route="logs">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z"></path><path d="M15 3v5h5"></path><path d="M10 12h6M10 16h6"></path></svg></span>
+          <span class="nav-text">Logs</span>
+        </a>
+        <a href="#/chat" class="nav-link" data-route="chat">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H8l-4 3v-3H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path></svg></span>
+          <span class="nav-text">Chat</span>
+        </a>
+        <a href="#/settings" class="nav-link" data-route="settings">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M19 12a7 7 0 0 0-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 0 0-1.7-1l-.3-2.6h-4l-.3 2.6a7 7 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7 7 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 1.7 1l.3 2.6h4l.3-2.6a7 7 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6c.1-.3.1-.7.1-1z"></path></svg></span>
+          <span class="nav-text">Settings</span>
+        </a>
       </nav>
     </div>
     <div class="header-right">
@@ -179,30 +203,34 @@
       <div id="agent-detail-content"></div>
     </section>
 
-    <section id="view-logs" class="view hidden">
-      <h2>Logs</h2>
-      <div class="log-controls">
-        <label for="log-agent">Agent:</label>
-        <select id="log-agent"></select>
-        <button id="log-connect" class="btn-sm">Connect</button>
-        <button id="log-pause" class="btn-sm btn-secondary" type="button">Pause</button>
-        <button id="log-clear" class="btn-sm btn-secondary" type="button">Clear</button>
-        <input id="log-search" type="text" placeholder="Search logs…" autocomplete="off" aria-label="Search logs">
+    <section id="view-logs" class="view hidden view-logs-surface">
+      <div class="section-head">
+        <h2>Logs</h2>
       </div>
-      <div class="log-filters" role="group" aria-label="Filter log levels">
-        <label class="log-filter-pill"><input id="log-filter-debug" type="checkbox" checked>DEBUG</label>
-        <label class="log-filter-pill"><input id="log-filter-info" type="checkbox" checked>INFO</label>
-        <label class="log-filter-pill"><input id="log-filter-warn" type="checkbox" checked>WARN</label>
-        <label class="log-filter-pill"><input id="log-filter-error" type="checkbox" checked>ERROR</label>
-      </div>
-      <p id="log-status" class="text-dim log-status"></p>
-      <div class="log-table">
-        <div class="log-row log-row-header" aria-hidden="true">
-          <span class="log-cell-time">Timestamp</span>
-          <span class="log-cell-level">Level</span>
-          <span class="log-cell-message">Message</span>
+      <div class="card logs-panel">
+        <div class="log-controls">
+          <label for="log-agent">Agent:</label>
+          <select id="log-agent"></select>
+          <button id="log-connect" class="btn-sm">Connect</button>
+          <button id="log-pause" class="btn-sm btn-secondary" type="button">Pause</button>
+          <button id="log-clear" class="btn-sm btn-secondary" type="button">Clear</button>
+          <input id="log-search" type="text" placeholder="Search logs…" autocomplete="off" aria-label="Search logs">
         </div>
-        <div id="log-output" class="log-rows" role="log" aria-live="polite"></div>
+        <div class="log-filters" role="group" aria-label="Filter log levels">
+          <label class="log-filter-pill"><input id="log-filter-debug" type="checkbox" checked>DEBUG</label>
+          <label class="log-filter-pill"><input id="log-filter-info" type="checkbox" checked>INFO</label>
+          <label class="log-filter-pill"><input id="log-filter-warn" type="checkbox" checked>WARN</label>
+          <label class="log-filter-pill"><input id="log-filter-error" type="checkbox" checked>ERROR</label>
+        </div>
+        <p id="log-status" class="text-dim log-status"></p>
+        <div class="log-table">
+          <div class="log-row log-row-header" aria-hidden="true">
+            <span class="log-cell-time">Timestamp</span>
+            <span class="log-cell-level">Level</span>
+            <span class="log-cell-message">Message</span>
+          </div>
+          <div id="log-output" class="log-rows" role="log" aria-live="polite"></div>
+        </div>
       </div>
     </section>
 
@@ -228,7 +256,7 @@
       </div>
     </section>
 
-    <section id="view-servers" class="view hidden">
+    <section id="view-servers" class="view hidden view-servers-surface">
       <div class="section-head">
         <h2>Remote Servers</h2>
         <div class="section-actions">
@@ -283,7 +311,10 @@
           </div>
           <div>
             <label for="server-ssh-config-host">SSH Config Host</label>
-            <input id="server-ssh-config-host" type="text" placeholder="my-prod-host">
+            <input id="server-ssh-config-host" type="text" list="server-ssh-config-host-options" placeholder="my-prod-host">
+            <datalist id="server-ssh-config-host-options"></datalist>
+            <select id="server-ssh-config-host-select" class="hidden" style="margin-top:8px"></select>
+            <p id="server-ssh-config-host-hint" class="text-dim"></p>
           </div>
         </div>
         <div class="btn-row">
@@ -293,8 +324,8 @@
         <p id="server-editor-state" class="text-dim"></p>
         <div id="servers-msg"></div>
       </div>
-      <div id="servers-list" class="agent-grid" style="margin-top:12px"></div>
-      <div id="server-manage-card" class="card hidden" style="margin-top:12px">
+      <div id="servers-list" class="agent-grid server-host-list"></div>
+      <div id="server-manage-card" class="card hidden servers-manage-panel">
         <h3>Server Runtime Data</h3>
         <p id="server-manage-host-label" class="text-dim"></p>
         <div class="form-grid">
@@ -314,13 +345,29 @@
         <div class="btn-row">
           <button id="server-manage-load-instances" class="btn-sm btn-secondary">Load Instances</button>
           <button id="server-manage-instance-status" class="btn-sm btn-secondary">Instance Status</button>
-          <button id="server-manage-install-instance" class="btn-sm">Install</button>
+          <button id="server-manage-install-instance" class="btn-sm">Install (Live)</button>
           <button id="server-manage-repair-instance" class="btn-sm btn-secondary">Repair</button>
           <button id="server-manage-load-logs" class="btn-sm btn-secondary">Load Logs</button>
         </div>
         <pre id="server-manage-instances" class="code-block text-dim" style="margin-top:8px; min-height:72px"></pre>
         <div id="server-manage-instance-status-out" class="manage-output" style="margin-top:8px; min-height:72px"></div>
         <div id="server-manage-logs" class="manage-output" style="margin-top:8px; min-height:72px"></div>
+        <p id="server-manage-stream-status" class="text-dim"></p>
+        <div id="server-manage-diagnosis" class="manage-output" style="margin-top:8px"></div>
+        <div class="card" style="margin-top:10px">
+          <h4>SSG Agent Chat</h4>
+          <div id="server-manage-chat-messages" class="chat-messages manage-chat-messages"></div>
+          <div class="chat-input-row">
+            <input id="server-manage-chat-input" type="text" placeholder="Message selected remote agent…" autocomplete="off">
+            <button id="server-manage-chat-send" class="btn-sm">Send</button>
+          </div>
+          <div class="btn-row" style="margin-top:8px">
+            <button id="server-manage-chat-reset-session" class="btn-sm btn-secondary">New Session</button>
+            <button id="server-manage-chat-cancel" class="btn-sm btn-secondary">Cancel Stream</button>
+            <button id="server-manage-chat-retry" class="btn-sm btn-secondary">Retry Last</button>
+          </div>
+          <p id="server-manage-chat-status" class="text-dim"></p>
+        </div>
         <div class="btn-row">
           <button id="server-manage-load-config" class="btn-sm btn-secondary">Load Config</button>
           <button id="server-manage-apply-config" class="btn-sm">Apply Config Patch</button>
@@ -421,9 +468,9 @@
       <div id="bindings-list" class="agent-grid" style="margin-top:12px"></div>
     </section>
 
-    <section id="view-remote-chat" class="view hidden">
+    <section id="view-remote-chat" class="view hidden view-remote-chat-surface">
       <h2>Remote Chat</h2>
-      <div class="card">
+      <div class="card remote-chat-toolbar">
         <div class="form-grid">
           <div>
             <label for="remote-chat-target">Target</label>
@@ -453,10 +500,14 @@
         </div>
         <p id="remote-chat-status" class="text-dim"></p>
       </div>
-      <div id="remote-chat-messages" class="chat-messages" style="margin-top:10px"></div>
-      <div class="chat-input-row">
-        <input id="remote-chat-input" type="text" placeholder="Message remote instance…" autocomplete="off">
-        <button id="remote-chat-send">Send</button>
+      <div class="card remote-chat-thread">
+        <div id="remote-chat-messages" class="chat-messages"></div>
+      </div>
+      <div class="card remote-chat-compose">
+        <div class="chat-input-row">
+          <input id="remote-chat-input" type="text" placeholder="Message remote instance…" autocomplete="off">
+          <button id="remote-chat-send">Send</button>
+        </div>
       </div>
     </section>
 

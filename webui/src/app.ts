@@ -34,6 +34,7 @@
   const LOG_FILTER_LEVELS = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
   const LOG_ENTRY_LIMIT = 2000;
   let remoteHostsCache = [];
+  let sshConfigHostAliasesCache = [];
   let providerProfilesCache = [];
   let serverManageHostID = '';
   let serverManageOperationRunning = false;
@@ -42,12 +43,24 @@
   let serverEditingHostID = '';
   let serverSelectedUploadedKey = null;
   let profileEditingProfileID = '';
+  let serverManageInstallStreamAbortController = null;
+  let serverManageLiveLogLines = [];
+  let serverManageDiagnosisPending = false;
+  let serverManageDiagnosisText = '';
+  let serverManageChatSessionID = '';
+  let serverManageChatAbortController = null;
+  let serverManageChatLastInput = '';
+  let serverManageChatActiveAssistantNode = null;
+  let serverManageChatMessages = [];
+  let serverManageChatMessageSeq = 0;
   let remoteChatSessionID = '';
   let remoteChatAbortController = null;
   let remoteChatLastInput = '';
   let remoteChatActiveAssistantNode = null;
   let remoteChatMessages = [];
   let remoteChatMessageSeq = 0;
+  let remoteChatTargetsLoadSeq = 0;
+  let remoteChatInstancesLoadSeq = 0;
   let remoteObservabilityData = null;
   const DEFAULT_FEATURE_FLAGS = {
     remoteControlPlaneEnabled: false,
@@ -1514,23 +1527,70 @@
     bindLogsControls();
     syncLogControls();
     renderLogRows(false);
+    loadLogAgentOptions().catch(() => {});
+  }
 
+  async function loadLogAgentOptions() {
     const agentSelect = $('#log-agent');
+    if (!agentSelect) return;
+    const previous = String(agentSelect.value || '').trim();
     agentSelect.textContent = '';
+    const seen = new Set();
 
-    // Populate instance list (mapped to runtime agent id for logs)
-    api('GET', '/api/v1/instances').then(payload => {
-      const instances = normalizeInstances(payload);
-      instances.forEach(a => {
-        const instanceID = a.id || a.ID || '';
-        const name = a.agent_id || a.agentID || a.type || a.id || a.ID || a.name;
-        if (!name) return;
-        const opt = document.createElement('option');
-        opt.value = name;
-        opt.textContent = instanceID ? (instanceID + ' (' + name + ')') : name;
-        agentSelect.appendChild(opt);
+    function appendOption(value, label) {
+      const id = String(value || '').trim();
+      if (!id) return;
+      if (seen.has(id)) return;
+      seen.add(id);
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = String(label || id);
+      agentSelect.appendChild(opt);
+    }
+
+    try {
+      const agents = normalizeAgentCatalog(await api('GET', '/api/v1/agents'));
+      agents.forEach(agent => {
+        const id = String(agent.id || '').trim();
+        if (!id) return;
+        const runtimeState = String(agent.runtimeState || agent.runtime_state || '').trim();
+        const installState = String(agent.installState || agent.install_state || '').trim();
+        const suffix = runtimeState || installState;
+        appendOption(id, suffix ? (id + ' (' + suffix + ')') : id);
       });
-    }).catch(() => {});
+    } catch (_) {}
+
+    try {
+      const instances = normalizeInstances(await api('GET', '/api/v1/instances'));
+      instances.forEach(instance => {
+        const runtimeAgentID = String(instance.agent_id || instance.agentID || instance.type || '').trim();
+        if (!runtimeAgentID) return;
+        const instanceID = String(instance.id || instance.ID || '').trim();
+        const runtimeState = String(instance.runtime_state || instance.runtimeState || '').trim();
+        const labelParts = [];
+        if (instanceID && instanceID !== runtimeAgentID) labelParts.push(instanceID);
+        if (runtimeState) labelParts.push(runtimeState);
+        const suffix = labelParts.length ? (' [' + labelParts.join(', ') + ']') : '';
+        appendOption(runtimeAgentID, runtimeAgentID + suffix);
+      });
+    } catch (_) {}
+
+    if (previous && seen.has(previous)) {
+      agentSelect.value = previous;
+    } else if (agentSelect.options.length) {
+      agentSelect.selectedIndex = 0;
+    }
+
+    if (!agentSelect.options.length) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'No agents available';
+      agentSelect.appendChild(option);
+      logStatusBase = 'No local agents available. Start an agent first.';
+    } else {
+      logStatusBase = 'Select an agent and click Connect.';
+    }
+    refreshLogStatus(getVisibleLogEntries().length);
   }
 
   function bindLogsControls() {
@@ -1939,6 +1999,69 @@
     return hosts;
   }
 
+  async function fetchSSHConfigHostAliases() {
+    const payload = await api('GET', '/api/v1/remote/ssh-config-hosts');
+    const aliases = payload && Array.isArray(payload.hosts) ? payload.hosts : [];
+    const normalized = [];
+    const seen = new Set();
+    aliases.forEach(item => {
+      const alias = String(item || '').trim();
+      if (!alias) return;
+      if (seen.has(alias)) return;
+      seen.add(alias);
+      normalized.push(alias);
+    });
+    normalized.sort((a, b) => a.localeCompare(b));
+    sshConfigHostAliasesCache = normalized;
+    return normalized;
+  }
+
+  function renderSSHConfigHostAliasOptions(aliases, loadErr) {
+    const options = $('#server-ssh-config-host-options');
+    const select = $('#server-ssh-config-host-select');
+    const hint = $('#server-ssh-config-host-hint');
+    const list = Array.isArray(aliases) ? aliases : [];
+    if (options) {
+      options.textContent = '';
+      list.forEach(alias => {
+        const value = String(alias || '').trim();
+        if (!value) return;
+        const option = document.createElement('option');
+        option.value = value;
+        options.appendChild(option);
+      });
+    }
+    if (select) {
+      select.textContent = '';
+      const defaultOption = document.createElement('option');
+      defaultOption.value = '';
+      defaultOption.textContent = list.length ? 'Select detected SSH alias…' : 'No detected SSH aliases';
+      select.appendChild(defaultOption);
+      list.forEach(alias => {
+        const value = String(alias || '').trim();
+        if (!value) return;
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        select.appendChild(option);
+      });
+      select.value = '';
+    }
+    if (!hint) return;
+    if (loadErr) {
+      hint.textContent = 'Failed to load local SSH config aliases: ' + String(loadErr);
+      syncServerAuthModeInputs();
+      return;
+    }
+    if (!list.length) {
+      hint.textContent = 'No aliases detected from local SSH config. You can still type one manually.';
+      syncServerAuthModeInputs();
+      return;
+    }
+    hint.textContent = 'Detected ' + String(list.length) + ' alias(es) from local SSH config. Select from dropdown or type manually.';
+    syncServerAuthModeInputs();
+  }
+
   async function fetchProviderProfiles() {
     const payload = await api('GET', '/api/v1/provider-profiles');
     const profiles = payload && Array.isArray(payload.profiles) ? payload.profiles : [];
@@ -1970,6 +2093,8 @@
     const keyFileInput = $('#server-key-file');
     const keyDropzone = $('#server-key-dropzone');
     const sshConfigInput = $('#server-ssh-config-host');
+    const sshConfigSelect = $('#server-ssh-config-host-select');
+    const sshConfigHint = $('#server-ssh-config-host-hint');
     if (!authMode || !hostInput || !keyInput || !sshConfigInput) return;
     const mode = String(authMode.value || '').trim().toLowerCase();
     const privateKey = mode === 'private_key';
@@ -1981,6 +2106,14 @@
     }
     hostInput.disabled = false;
     sshConfigInput.disabled = privateKey;
+    if (sshConfigSelect) {
+      const hasAliases = sshConfigSelect.options.length > 1;
+      sshConfigSelect.disabled = privateKey || !hasAliases;
+      sshConfigSelect.classList.toggle('hidden', privateKey || !hasAliases);
+    }
+    if (sshConfigHint) {
+      sshConfigHint.classList.toggle('hidden', privateKey);
+    }
   }
 
   function updateServerEditorUI() {
@@ -2545,6 +2678,165 @@
     });
   }
 
+  function updateServerManageStreamStatus(text, type) {
+    const el = $('#server-manage-stream-status');
+    if (!el) return;
+    el.textContent = text || '';
+    el.classList.remove('msg-error', 'msg-success', 'msg-info');
+    if (type) el.classList.add('msg-' + type);
+  }
+
+  function renderServerManageDiagnosis(text, state) {
+    const out = $('#server-manage-diagnosis');
+    if (!out) return;
+    out.textContent = '';
+    const body = String(text || '').trim();
+    if (!body) return;
+
+    let pillState = 'manage-pill-warn';
+    let title = 'BaseAgent Diagnosis';
+    const normalized = String(state || '').trim().toLowerCase();
+    if (normalized === 'ok') {
+      pillState = 'manage-pill-ok';
+      title = 'BaseAgent Diagnosis';
+    } else if (normalized === 'error') {
+      pillState = 'manage-pill-bad';
+      title = 'BaseAgent Diagnosis Failed';
+    } else if (normalized === 'running') {
+      pillState = 'manage-pill-warn';
+      title = 'BaseAgent Analyzing';
+    }
+
+    const card = document.createElement('div');
+    card.className = 'manage-card';
+
+    const header = document.createElement('div');
+    header.className = 'manage-card-header';
+    const h = document.createElement('div');
+    h.className = 'manage-card-title';
+    h.textContent = title;
+    const pill = document.createElement('span');
+    pill.className = 'manage-pill ' + pillState;
+    pill.textContent = normalized || 'info';
+    header.appendChild(h);
+    header.appendChild(pill);
+    card.appendChild(header);
+
+    const pre = document.createElement('pre');
+    pre.className = 'code-block';
+    pre.textContent = body;
+    card.appendChild(pre);
+    out.appendChild(card);
+  }
+
+  function redactInstallLogLine(line) {
+    return String(line || '')
+      .replace(/\b[A-Za-z0-9._%+-]+:[A-Za-z0-9._%+-]+@/g, '***:***@')
+      .replace(/\b(sk|rk|pk)-[A-Za-z0-9_-]{10,}\b/g, '$1-***')
+      .replace(/\b(token|secret|password|apikey|api_key)\s*[:=]\s*[^\s]+/gi, '$1=***');
+  }
+
+  function appendServerManageLiveLogLine(line, stream) {
+    const clean = redactInstallLogLine(String(line || '').trim());
+    if (!clean) return;
+    const prefix = stream === 'stderr' ? '[stderr] ' : '';
+    serverManageLiveLogLines.push(prefix + clean);
+    if (serverManageLiveLogLines.length > 800) {
+      serverManageLiveLogLines = serverManageLiveLogLines.slice(serverManageLiveLogLines.length - 800);
+    }
+    renderServerManageLogs('--- install-stream.log ---\n' + serverManageLiveLogLines.join('\n'));
+  }
+
+  function isInstallAnomalyLine(line) {
+    const text = String(line || '').trim().toLowerCase();
+    if (!text) return false;
+    const patterns = [
+      'error',
+      'failed',
+      'panic',
+      'exception',
+      'permission denied',
+      'timed out',
+      'no such file',
+      'cannot',
+      'denied',
+    ];
+    return patterns.some(pattern => text.includes(pattern));
+  }
+
+  async function requestBaseAgentInstallDiagnosis(hostID, agentID, lines) {
+    const tail = (Array.isArray(lines) ? lines : []).slice(-20).join('\n');
+    const prompt = [
+      'Diagnose remote OpenClaw install progress and likely failure cause.',
+      'Host: ' + String(hostID || ''),
+      'Agent: ' + String(agentID || ''),
+      'Recent install logs:',
+      tail || '(empty)',
+      'Return concise diagnosis and next 3 actions.',
+    ].join('\n');
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+
+    const response = await fetch('/api/v1/chat/stream', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        target: 'local',
+        message: prompt,
+        provider: 'webui',
+        sessionId: '',
+        chatId: '',
+      }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || 'diagnosis request failed (' + response.status + ')');
+    }
+    if (!response.body || !response.body.getReader) {
+      throw new Error('diagnosis stream is not supported in this browser');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let output = '';
+    for (;;) {
+      const step = await reader.read();
+      if (step.done) break;
+      buffer += decoder.decode(step.value, { stream: true });
+      buffer = parseSSEFrames(buffer, payload => {
+        if (String(payload && payload.type ? payload.type : '') === 'text-delta') {
+          output += String(payload.delta || '');
+        }
+      });
+    }
+    buffer = parseSSEFrames(buffer, payload => {
+      if (String(payload && payload.type ? payload.type : '') === 'text-delta') {
+        output += String(payload.delta || '');
+      }
+    });
+    return String(output || '').trim();
+  }
+
+  function maybeRunServerManageDiagnosis(hostID, agentID) {
+    if (serverManageDiagnosisPending || serverManageDiagnosisText) return;
+    serverManageDiagnosisPending = true;
+    renderServerManageDiagnosis('Analyzing install logs with local BaseAgent...', 'running');
+    requestBaseAgentInstallDiagnosis(hostID, agentID, serverManageLiveLogLines)
+      .then(text => {
+        serverManageDiagnosisText = text || 'No diagnosis returned.';
+        renderServerManageDiagnosis(serverManageDiagnosisText, 'ok');
+      })
+      .catch(err => {
+        serverManageDiagnosisText = 'BaseAgent diagnosis unavailable: ' + (err && err.message ? err.message : String(err));
+        renderServerManageDiagnosis(serverManageDiagnosisText, 'error');
+      })
+      .finally(() => {
+        serverManageDiagnosisPending = false;
+      });
+  }
+
   function renderServerManageSessions(entries) {
     const out = $('#server-manage-sessions');
     if (!out) return;
@@ -2579,10 +2871,163 @@
     }).join('\n');
   }
 
+  function renderServerManageChatMessages() {
+    const wrap = $('#server-manage-chat-messages');
+    if (!wrap) return;
+    const island = window.CarrierRemoteChatIsland;
+    if (island && typeof island.renderMessages === 'function' && island.renderMessages(wrap, serverManageChatMessages)) {
+      return;
+    }
+    wrap.textContent = '';
+    serverManageChatMessages.forEach(message => {
+      const msg = document.createElement('div');
+      msg.className = 'chat-msg';
+      const sender = document.createElement('span');
+      sender.className = 'sender';
+      sender.textContent = (message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Agent' : 'Carrier') + ':';
+      const body = document.createElement('span');
+      body.className = 'body';
+      body.textContent = ' ' + String(message.text || '');
+      msg.appendChild(sender);
+      msg.appendChild(body);
+      wrap.appendChild(msg);
+    });
+    wrap.scrollTop = wrap.scrollHeight;
+  }
+
+  function appendServerManageChatMessage(role, text) {
+    serverManageChatMessageSeq += 1;
+    const messageID = 'server-manage-chat-msg-' + String(serverManageChatMessageSeq);
+    serverManageChatMessages.push({
+      id: messageID,
+      role: String(role || 'system'),
+      text: String(text || ''),
+    });
+    renderServerManageChatMessages();
+    return messageID;
+  }
+
+  function appendServerManageChatMessageDelta(messageID, delta) {
+    const id = String(messageID || '');
+    if (!id) return;
+    const index = serverManageChatMessages.findIndex(message => String(message.id || '') === id);
+    if (index < 0) return;
+    serverManageChatMessages[index].text = String(serverManageChatMessages[index].text || '') + String(delta || '');
+    renderServerManageChatMessages();
+  }
+
+  function updateServerManageChatStatus(text, type) {
+    const el = $('#server-manage-chat-status');
+    if (!el) return;
+    el.textContent = text || '';
+    el.classList.remove('msg-error', 'msg-success', 'msg-info');
+    if (type) el.classList.add('msg-' + type);
+  }
+
+  async function sendServerManageChat(inputText) {
+    const target = validateServerManageInstanceTarget();
+    if (!target.hostID || !target.agentID) return;
+    const message = (inputText || '').trim();
+    if (!message) {
+      updateServerManageChatStatus('message is required.', 'error');
+      return;
+    }
+    serverManageChatLastInput = message;
+    appendServerManageChatMessage('user', message);
+    serverManageChatActiveAssistantNode = appendServerManageChatMessage('assistant', '');
+
+    if (serverManageChatAbortController) {
+      serverManageChatAbortController.abort();
+      serverManageChatAbortController = null;
+    }
+    const controller = new AbortController();
+    serverManageChatAbortController = controller;
+    updateServerManageChatStatus('Streaming response...', 'info');
+
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = 'Bearer ' + token;
+      const response = await fetch('/api/v1/chat/stream', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          target: 'remote',
+          hostId: target.hostID,
+          agentId: target.agentID,
+          message: message,
+          sessionId: serverManageChatSessionID || '',
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'remote chat failed (' + response.status + ')');
+      }
+      if (!response.body || !response.body.getReader) {
+        throw new Error('streaming body is not supported in this browser');
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const step = await reader.read();
+        if (step.done) break;
+        buffer += decoder.decode(step.value, { stream: true });
+        buffer = parseSSEFrames(buffer, payload => {
+          const eventType = String(payload && payload.type ? payload.type : '').trim();
+          if (eventType === 'text-delta') {
+            if (serverManageChatActiveAssistantNode) {
+              appendServerManageChatMessageDelta(serverManageChatActiveAssistantNode, String(payload.delta || ''));
+            }
+            return;
+          }
+          if (eventType === 'session') {
+            serverManageChatSessionID = String(payload.sessionId || '').trim();
+            updateServerManageChatStatus('Session: ' + serverManageChatSessionID, 'info');
+            return;
+          }
+          if (eventType === 'finish') {
+            updateServerManageChatStatus('Stream finished.', 'success');
+          }
+        });
+      }
+      buffer = parseSSEFrames(buffer, () => {});
+      updateServerManageChatStatus('Stream finished.', 'success');
+    } catch (e) {
+      if (e.name === 'AbortError') {
+        updateServerManageChatStatus('Stream cancelled.', 'info');
+      } else {
+        updateServerManageChatStatus('Stream failed: ' + e.message, 'error');
+      }
+    } finally {
+      if (serverManageChatAbortController === controller) {
+        serverManageChatAbortController = null;
+      }
+      serverManageChatActiveAssistantNode = null;
+    }
+  }
+
+  function resetServerManageChatState() {
+    if (serverManageChatAbortController) {
+      serverManageChatAbortController.abort();
+      serverManageChatAbortController = null;
+    }
+    serverManageChatSessionID = '';
+    serverManageChatLastInput = '';
+    serverManageChatActiveAssistantNode = null;
+    serverManageChatMessages = [];
+    renderServerManageChatMessages();
+    updateServerManageChatStatus('Ready to chat with selected SSG agent.', 'info');
+  }
+
   function showServerManagePanel(hostID) {
     const card = $('#server-manage-card');
     const hostLabel = $('#server-manage-host-label');
     if (!card || !hostLabel) return;
+    if (serverManageInstallStreamAbortController) {
+      serverManageInstallStreamAbortController.abort();
+      serverManageInstallStreamAbortController = null;
+    }
     const key = String(hostID || '').trim();
     if (!key) {
       card.classList.add('hidden');
@@ -2597,8 +3042,14 @@
     renderServerManageInstances([]);
     renderServerManageInstanceStatus({}, []);
     renderServerManageLogs('');
+    updateServerManageStreamStatus('', 'info');
+    serverManageLiveLogLines = [];
+    serverManageDiagnosisText = '';
+    serverManageDiagnosisPending = false;
+    renderServerManageDiagnosis('', '');
     renderServerManageSessions([]);
     renderServerManageMemory([]);
+    resetServerManageChatState();
     setServerManageOperationMeta(null);
     setMsg('#server-manage-msg', '', 'info');
   }
@@ -2625,6 +3076,11 @@
       'server-manage-archive-session',
       'server-manage-delete-session',
       'server-manage-load-memory',
+      'server-manage-chat-input',
+      'server-manage-chat-send',
+      'server-manage-chat-reset-session',
+      'server-manage-chat-cancel',
+      'server-manage-chat-retry',
       'server-manage-agent-id',
       'server-manage-session-id',
       'server-manage-log-tail',
@@ -2896,19 +3352,148 @@
     await runServerManageOperation('instance-status', task);
   }
 
+  async function streamServerManageInstall(target) {
+    const path = '/api/v1/remote/hosts/' + encodeURIComponent(target.hostID) + '/instances/' + encodeURIComponent(target.agentID) + '/install/stream';
+    const startedAt = performance.now();
+    let requestID = '';
+    let installPayload = null;
+    let streamError = '';
+    let finishReason = '';
+
+    if (serverManageInstallStreamAbortController) {
+      serverManageInstallStreamAbortController.abort();
+      serverManageInstallStreamAbortController = null;
+    }
+    serverManageLiveLogLines = [];
+    serverManageDiagnosisText = '';
+    serverManageDiagnosisPending = false;
+    renderServerManageLogs('');
+    renderServerManageDiagnosis('', '');
+    updateServerManageStreamStatus('Connecting stream...', 'info');
+
+    const controller = new AbortController();
+    serverManageInstallStreamAbortController = controller;
+
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = 'Bearer ' + token;
+
+      const response = await fetch(path, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({}),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'install stream failed (' + response.status + ')');
+      }
+      if (!response.body || !response.body.getReader) {
+        throw new Error('streaming body is not supported in this browser');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const step = await reader.read();
+        if (step.done) break;
+        buffer += decoder.decode(step.value, { stream: true });
+        buffer = parseSSEFrames(buffer, payload => {
+          const eventType = String(payload && payload.type ? payload.type : '').trim();
+          if (eventType === 'start') {
+            requestID = String(payload.requestId || '').trim();
+            updateServerManageStreamStatus('Install stream started.', 'info');
+            return;
+          }
+          if (eventType === 'log') {
+            const line = String(payload.line || '');
+            const stream = String(payload.stream || 'stdout');
+            appendServerManageLiveLogLine(line, stream);
+            if (isInstallAnomalyLine(line)) {
+              updateServerManageStreamStatus('Potential issue detected in install output. Running BaseAgent diagnosis...', 'info');
+              maybeRunServerManageDiagnosis(target.hostID, target.agentID);
+            }
+            return;
+          }
+          if (eventType === 'result') {
+            installPayload = payload.install || null;
+            const steps = installPayload && Array.isArray(installPayload.steps) ? installPayload.steps : [];
+            renderServerManageInstanceStatus(installPayload || {}, steps);
+            updateServerManageStreamStatus('Install stream returned result.', 'info');
+            return;
+          }
+          if (eventType === 'error') {
+            streamError = String(payload.message || payload.error || 'remote install failed');
+            updateServerManageStreamStatus('Install stream error: ' + streamError, 'error');
+            return;
+          }
+          if (eventType === 'finish') {
+            finishReason = String(payload.finishReason || '').trim();
+            return;
+          }
+        });
+      }
+      buffer = parseSSEFrames(buffer, payload => {
+        const eventType = String(payload && payload.type ? payload.type : '').trim();
+        if (eventType === 'error') {
+          streamError = String(payload.message || payload.error || 'remote install failed');
+        }
+        if (eventType === 'finish') {
+          finishReason = String(payload.finishReason || '').trim();
+        }
+      });
+
+      const success = !streamError && (!finishReason || finishReason === 'stop');
+      setServerManageOperationMeta({
+        operation: 'instance_install_stream',
+        success: success,
+        requestId: requestID,
+        durationMs: performance.now() - startedAt,
+        path: path,
+        error: success ? '' : streamError || ('finishReason=' + finishReason),
+      });
+
+      return {
+        install: installPayload,
+        requestId: requestID,
+        error: streamError,
+        finishReason: finishReason,
+      };
+    } catch (e) {
+      const errMsg = e && e.message ? e.message : String(e);
+      setServerManageOperationMeta({
+        operation: 'instance_install_stream',
+        success: false,
+        durationMs: performance.now() - startedAt,
+        path: path,
+        error: errMsg,
+      });
+      throw e;
+    } finally {
+      if (serverManageInstallStreamAbortController === controller) {
+        serverManageInstallStreamAbortController = null;
+      }
+    }
+  }
+
   async function installServerManageInstance() {
     const target = validateServerManageInstanceTarget();
     if (!target.hostID || !target.agentID) return;
-    await runServerManageOperation('install', async () => {
-      renderServerManageProgress('Install', target.hostID + ':' + target.agentID);
-      setMsg('#server-manage-msg', 'Install in progress for ' + target.agentID + '...', 'info');
+    await runServerManageOperation('install-stream', async () => {
+      renderServerManageProgress('Install (Live)', target.hostID + ':' + target.agentID);
+      setMsg('#server-manage-msg', 'Live install in progress for ' + target.agentID + '...', 'info');
       try {
-        const path = '/api/v1/remote/hosts/' + encodeURIComponent(target.hostID) + '/instances/' + encodeURIComponent(target.agentID) + '/install';
-        const payload = await serverManageAPI('POST', path, {}, 'instance_install');
-        renderServerManageInstanceStatus(payload.install || {}, payload.steps || []);
+        const result = await streamServerManageInstall(target);
+        if (result && result.error) {
+          setMsg('#server-manage-msg', 'Install failed: ' + result.error, 'error');
+          return;
+        }
+        updateServerManageStreamStatus('Install stream finished.', 'success');
         setMsg('#server-manage-msg', 'Install completed for ' + target.agentID + '.', 'success');
         await loadServerManageInstances({ silent: true, skipLock: true });
       } catch (e) {
+        updateServerManageStreamStatus('Install stream failed.', 'error');
         setMsg('#server-manage-msg', 'Install failed: ' + e.message, 'error');
       }
     });
@@ -3102,6 +3687,7 @@
     $('#nav').classList.remove('hidden');
 
     const authMode = $('#server-auth-mode');
+    const sshConfigSelect = $('#server-ssh-config-host-select');
     const refreshBtn = $('#servers-refresh');
     const saveBtn = $('#server-save');
     const cancelEditBtn = $('#server-cancel-edit');
@@ -3117,9 +3703,16 @@
     const archiveSessionBtn = $('#server-manage-archive-session');
     const deleteSessionBtn = $('#server-manage-delete-session');
     const loadMemoryBtn = $('#server-manage-load-memory');
+    const chatInput = $('#server-manage-chat-input');
+    const chatSendBtn = $('#server-manage-chat-send');
+    const chatResetBtn = $('#server-manage-chat-reset-session');
+    const chatCancelBtn = $('#server-manage-chat-cancel');
+    const chatRetryBtn = $('#server-manage-chat-retry');
     const instancesOut = $('#server-manage-instances');
     const instanceStatusOut = $('#server-manage-instance-status-out');
     const logsOut = $('#server-manage-logs');
+    const streamStatusOut = $('#server-manage-stream-status');
+    const diagnosisOut = $('#server-manage-diagnosis');
     const sessionsOut = $('#server-manage-sessions');
     const memoryOut = $('#server-manage-memory');
     const keyPathInput = $('#server-key-path');
@@ -3181,9 +3774,15 @@
         if (instancesOut) instancesOut.textContent = '';
         if (instanceStatusOut) instanceStatusOut.textContent = '';
         if (logsOut) logsOut.textContent = '';
+        if (streamStatusOut) streamStatusOut.textContent = '';
+        if (diagnosisOut) diagnosisOut.textContent = '';
+        serverManageLiveLogLines = [];
+        serverManageDiagnosisText = '';
+        serverManageDiagnosisPending = false;
         if (sessionsOut) sessionsOut.textContent = '';
         if (memoryOut) memoryOut.textContent = '';
         setServerManageOperationMeta(null);
+        resetServerManageChatState();
         setMsg('#server-manage-msg', '', 'info');
         return;
       }
@@ -3191,10 +3790,21 @@
     }
 
     authMode.onchange = syncServerAuthModeInputs;
+    if (sshConfigSelect) {
+      sshConfigSelect.onchange = () => {
+        const picked = String(sshConfigSelect.value || '').trim();
+        if (!picked) return;
+        const input = $('#server-ssh-config-host');
+        if (!input) return;
+        input.value = picked;
+      };
+    }
     syncServerAuthModeInputs();
     updateServerKeySelectionState();
     updateServerEditorUI();
     setServerManageControlsDisabled(false);
+    renderServerManageChatMessages();
+    updateServerManageChatStatus('Ready to chat with selected SSG agent.', 'info');
 
     if (keyPathInput) {
       keyPathInput.oninput = () => {
@@ -3242,8 +3852,56 @@
     if (archiveSessionBtn) archiveSessionBtn.onclick = () => { applyServerManageSessionAction('archive'); };
     if (deleteSessionBtn) deleteSessionBtn.onclick = () => { applyServerManageSessionAction('delete'); };
     if (loadMemoryBtn) loadMemoryBtn.onclick = () => { loadServerManageMemory(); };
+    if (chatSendBtn) {
+      chatSendBtn.onclick = () => {
+        const text = chatInput && chatInput.value ? chatInput.value.trim() : '';
+        if (!text) return;
+        if (chatInput) chatInput.value = '';
+        sendServerManageChat(text);
+      };
+    }
+    if (chatInput) {
+      chatInput.onkeydown = e => {
+        if (e.key !== 'Enter') return;
+        const text = chatInput.value ? chatInput.value.trim() : '';
+        if (!text) return;
+        chatInput.value = '';
+        sendServerManageChat(text);
+      };
+    }
+    if (chatResetBtn) {
+      chatResetBtn.onclick = () => {
+        serverManageChatSessionID = '';
+        updateServerManageChatStatus('Session reset. Next message starts a new session.', 'info');
+      };
+    }
+    if (chatCancelBtn) {
+      chatCancelBtn.onclick = () => {
+        if (serverManageChatAbortController) {
+          serverManageChatAbortController.abort();
+        } else {
+          updateServerManageChatStatus('No active stream.', 'info');
+        }
+      };
+    }
+    if (chatRetryBtn) {
+      chatRetryBtn.onclick = () => {
+        if (!serverManageChatLastInput) {
+          updateServerManageChatStatus('No previous message to retry.', 'info');
+          return;
+        }
+        sendServerManageChat(serverManageChatLastInput);
+      };
+    }
 
     refreshBtn.onclick = async () => {
+      try {
+        const aliases = await fetchSSHConfigHostAliases();
+        renderSSHConfigHostAliasOptions(aliases, '');
+      } catch (e) {
+        renderSSHConfigHostAliasOptions(sshConfigHostAliasesCache, e && e.message ? e.message : String(e));
+      }
+
       try {
         setMsg('#servers-msg', '', 'info');
         const hosts = await fetchRemoteHosts();
@@ -3679,10 +4337,14 @@
   async function loadRemoteChatTargets() {
     const hostSelect = $('#remote-chat-host');
     const profileSelect = $('#remote-chat-profile');
+    const targetLoadSeq = ++remoteChatTargetsLoadSeq;
+    const previousHostID = String(hostSelect.value || '').trim();
+    const previousProfileID = String(profileSelect.value || '').trim();
     hostSelect.textContent = '';
     profileSelect.textContent = '';
 
     const [hosts, profiles] = await Promise.all([fetchRemoteHosts(), fetchProviderProfiles()]);
+    if (targetLoadSeq !== remoteChatTargetsLoadSeq) return;
     hosts.forEach(host => {
       const opt = document.createElement('option');
       opt.value = host.id;
@@ -3705,19 +4367,41 @@
       none.value = '';
       none.textContent = 'none';
       profileSelect.insertBefore(none, profileSelect.firstChild);
-      profileSelect.value = '';
+      profileSelect.value = previousProfileID || '';
+    }
+
+    if (previousHostID) {
+      for (let i = 0; i < hostSelect.options.length; i++) {
+        if (String(hostSelect.options[i].value || '') === previousHostID) {
+          hostSelect.value = previousHostID;
+          break;
+        }
+      }
+    }
+    if (profileSelect.value !== previousProfileID) {
+      for (let i = 0; i < profileSelect.options.length; i++) {
+        if (String(profileSelect.options[i].value || '') === previousProfileID) {
+          profileSelect.value = previousProfileID;
+          break;
+        }
+      }
     }
   }
 
   async function loadRemoteChatInstances(hostID) {
     const instanceSelect = $('#remote-chat-instance');
+    const instanceLoadSeq = ++remoteChatInstancesLoadSeq;
     instanceSelect.textContent = '';
     if (!hostID) return;
     const payload = await api('GET', '/api/v1/remote/hosts/' + encodeURIComponent(hostID) + '/instances');
+    if (instanceLoadSeq !== remoteChatInstancesLoadSeq) return;
     const instances = payload && Array.isArray(payload.instances) ? payload.instances : [];
+    const seen = new Set();
     instances.forEach(instance => {
       const opt = document.createElement('option');
       const agentID = instance.agentId || instance.agentID || instance.id || 'main';
+      if (seen.has(agentID)) return;
+      seen.add(agentID);
       opt.value = agentID;
       opt.textContent = agentID + ' (' + (instance.runtimeState || 'unknown') + ')';
       instanceSelect.appendChild(opt);
@@ -3948,15 +4632,10 @@
       $('#remote-chat-profile').disabled = !remoteMode;
       remoteChatSessionID = '';
       updateRemoteChatStatus(remoteMode ? 'Remote target selected.' : 'Local target selected.', 'info');
-      if (remoteMode) {
-        refreshTargets();
-        return;
-      }
       refreshTargets();
     };
 
     targetSelect.onchange();
-    refreshTargets();
   }
 
   function toFiniteNumber(value, fallback) {

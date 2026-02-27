@@ -23,8 +23,9 @@ coverage-gate: ## Run multi-module coverage gate
 lint: ## Run linters (go vet)
 	cd daemon && go vet ./...
 
-build: build-webui ## Build daemon binary
-	cd daemon && go build -o ../bin/agentd ./cmd/agentd
+build: build-webui ## Build Carrier binary
+	mkdir -p bin
+	go build -o ./bin/carrier ./cmd/carrier
 
 build-webui: ## Build WebUI TypeScript assets with Bun
 	bash scripts/build-webui.sh

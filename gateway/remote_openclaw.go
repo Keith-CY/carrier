@@ -148,6 +148,46 @@ func remoteInstallOpenClaw(ctx context.Context, host RemoteHost, hostID, agentID
 	return result, nil
 }
 
+func remoteInstallOpenClawStreaming(
+	ctx context.Context,
+	host RemoteHost,
+	hostID, agentID string,
+	onChunk func(remoteStreamChunk),
+) (*remoteInstallResult, error) {
+	if err := validateAgentIdentifier(agentID); err != nil {
+		return nil, err
+	}
+	result := &remoteInstallResult{
+		HostID:      hostID,
+		AgentID:     agentID,
+		Installed:   false,
+		GatewayMode: host.RuntimeMode,
+		Steps:       []remoteExecResult{},
+	}
+
+	installCmd := "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-prompt --no-onboard 2>&1"
+	installRes, err := runRemoteCommandStream(ctx, host, installCmd, onChunk)
+	if err != nil {
+		return result, err
+	}
+	result.Steps = append(result.Steps, installRes)
+	if installRes.ExitCode != 0 {
+		return result, remoteCommandError(installRes, "install openclaw")
+	}
+	if host.RuntimeMode == RemoteRuntimeModeManagedGateway {
+		restartRes, runErr := runRemoteCommandStream(ctx, host, "openclaw gateway restart 2>&1 || openclaw gateway start 2>&1", onChunk)
+		if runErr != nil {
+			return result, runErr
+		}
+		result.Steps = append(result.Steps, restartRes)
+		if restartRes.ExitCode != 0 {
+			return result, remoteCommandError(restartRes, "start managed gateway")
+		}
+	}
+	result.Installed = true
+	return result, nil
+}
+
 func remoteListInstancesForHost(ctx context.Context, host RemoteHost, hostID string) ([]RemoteInstance, []remoteExecResult, error) {
 	steps := []remoteExecResult{}
 	_, _, preflightSteps, err := ensureRemoteHealthyForOperation(ctx, host)
@@ -654,15 +694,40 @@ func newDefaultRemoteInstance(hostID, agentID, runtimeState string) RemoteInstan
 }
 
 func extractChatResponseText(payload map[string]interface{}) string {
-	for _, key := range []string{"message", "response", "text", "content"} {
-		if value := strings.TrimSpace(anyToString(payload[key])); value != "" {
+	for _, key := range []string{"message", "response", "text", "content", "output_text"} {
+		if value := extractChatTextFromAny(payload[key]); value != "" {
 			return value
 		}
 	}
-	if output, ok := payload["output"].(map[string]interface{}); ok {
-		for _, key := range []string{"message", "text", "content"} {
-			if value := strings.TrimSpace(anyToString(output[key])); value != "" {
-				return value
+	for _, key := range []string{"output", "payload", "payloads", "choices", "result", "data"} {
+		if value := extractChatTextFromAny(payload[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func extractChatTextFromAny(value interface{}) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case []interface{}:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if segment := extractChatTextFromAny(item); segment != "" {
+				parts = append(parts, segment)
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	case map[string]interface{}:
+		for _, key := range []string{"message", "response", "text", "content", "output_text"} {
+			if segment := extractChatTextFromAny(typed[key]); segment != "" {
+				return segment
+			}
+		}
+		for _, key := range []string{"delta", "payload", "payloads", "choices", "output", "result", "data"} {
+			if segment := extractChatTextFromAny(typed[key]); segment != "" {
+				return segment
 			}
 		}
 	}

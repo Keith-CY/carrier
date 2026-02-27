@@ -89,9 +89,8 @@ go tool dist list | grep -i riscv
 Build the binary locally to ensure it compiles:
 
 ```bash
-cd daemon
 CGO_ENABLED=0 GOOS=linux GOARCH=riscv64 \
-  go build -trimpath -ldflags="-s -w" -o agentd-riscv64 ./cmd/agentd
+  go build -trimpath -ldflags="-s -w" -o carrier-riscv64 ./cmd/carrier
 ```
 
 **Cross-compilation caveats:**
@@ -202,7 +201,7 @@ Before merging matrix changes:
 ### "Binary not found" errors on target platform
 
 - Check `GOOS`/`GOARCH` match the target system: `go env GOOS GOARCH`
-- Verify binary was built: `file agentd` should show correct architecture
+- Verify binary was built: `file carrier-riscv64` should show correct architecture
 
 ### Cross-compilation fails
 
