@@ -409,7 +409,8 @@ func remoteConfigFileExists(ctx context.Context, host RemoteHost, path string) (
 	if trimmed == "" {
 		return false, nil, nil
 	}
-	cmd := fmt.Sprintf("if [ -f %q ]; then echo 1; else echo 0; fi", trimmed)
+	// Use double quotes (not %q) so shell variables like $HOME expand correctly.
+	cmd := fmt.Sprintf(`if [ -f "%s" ]; then echo 1; else echo 0; fi`, trimmed)
 	res, err := runRemoteCommand(ctx, host, cmd)
 	if err != nil {
 		return false, []remoteExecResult{res}, err
