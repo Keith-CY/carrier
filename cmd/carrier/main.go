@@ -2031,15 +2031,21 @@ func buildJSONRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Config)
 }
 
 func buildZeroClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Config) (map[string]interface{}, error) {
+	syncChannels := dedupeLowerStrings(opts.SyncChannels)
+	syncProviders := dedupeLowerStrings(opts.SyncProviders)
+	if (len(syncChannels) == 0) != (len(syncProviders) == 0) {
+		return nil, errors.New("zeroclaw sync requires both --sync-channel and --sync-provider to avoid overwriting existing remote config")
+	}
+
 	var (
 		defaultProvider = "openai"
 		defaultModel    = "openai/gpt-5.3-codex"
 		defaultAPIKey   = ""
 	)
-	if len(opts.SyncProviders) > 0 {
-		model, ok := resolveLocalModelForProvider(cfg, dedupeLowerStrings(opts.SyncProviders)[0])
+	if len(syncProviders) > 0 {
+		model, ok := resolveLocalModelForProvider(cfg, syncProviders[0])
 		if !ok {
-			return nil, fmt.Errorf("local provider %q is not found in model_list", opts.SyncProviders[0])
+			return nil, fmt.Errorf("local provider %q is not found in model_list", syncProviders[0])
 		}
 		modelID := strings.TrimSpace(model.Model)
 		if modelID == "" {
@@ -2068,7 +2074,7 @@ func buildZeroClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Con
 	}
 
 	channelSections := make([]string, 0)
-	for _, selected := range dedupeLowerStrings(opts.SyncChannels) {
+	for _, selected := range syncChannels {
 		local, ok := findLocalChannel(cfg, selected)
 		if !ok {
 			return nil, fmt.Errorf("local channel %q is not configured", selected)

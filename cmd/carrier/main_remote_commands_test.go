@@ -233,6 +233,58 @@ func TestBuildJSONRemoteConfigPatch(t *testing.T) {
 	}
 }
 
+func TestBuildZeroClawRemoteConfigPatchRejectsProviderOnlySync(t *testing.T) {
+	cfg := &configv2.Config{
+		Channels: []configv2.Channel{
+			{
+				ID:       "telegram",
+				BotToken: "tg-1",
+				Enabled:  true,
+			},
+		},
+		ModelList: []configv2.Model{
+			{
+				ModelName:     "gpt-4.1",
+				Model:         "openai/gpt-4.1",
+				ProviderID:    "openai",
+				CredentialRef: "openai",
+			},
+		},
+	}
+
+	_, err := buildZeroClawRemoteConfigPatch(remoteCommandOptions{
+		SyncProviders: []string{"openai"},
+	}, cfg)
+	if err == nil {
+		t.Fatal("expected provider-only zeroclaw sync to fail")
+	}
+	if !strings.Contains(err.Error(), "requires both --sync-channel and --sync-provider") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildZeroClawRemoteConfigPatchRejectsChannelOnlySync(t *testing.T) {
+	cfg := &configv2.Config{
+		Channels: []configv2.Channel{
+			{
+				ID:       "telegram",
+				BotToken: "tg-1",
+				Enabled:  true,
+			},
+		},
+	}
+
+	_, err := buildZeroClawRemoteConfigPatch(remoteCommandOptions{
+		SyncChannels: []string{"telegram"},
+	}, cfg)
+	if err == nil {
+		t.Fatal("expected channel-only zeroclaw sync to fail")
+	}
+	if !strings.Contains(err.Error(), "requires both --sync-channel and --sync-provider") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func configureGatewayProbeEnvForTest(t *testing.T, serverURL string) {
 	t.Helper()
 	parsed, err := neturl.Parse(serverURL)
