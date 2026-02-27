@@ -1171,6 +1171,10 @@ func normalizeResetTarget(path string) (string, bool) {
 	return cleaned, true
 }
 
+// removeResetTarget removes the file or directory at path. It returns (false, nil) if the
+// target does not exist. The explicit os.Lstat check before os.RemoveAll is intentional:
+// os.RemoveAll silently succeeds on non-existent paths, so the two-step pattern lets us
+// distinguish "nothing to remove" (false) from "removed successfully" (true).
 func removeResetTarget(path string) (bool, error) {
 	if _, err := os.Lstat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
