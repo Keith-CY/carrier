@@ -183,6 +183,184 @@ jobs:
           & $env:CARRIER_BIN list
           & $env:CARRIER_BIN stop
 
+  wsl2-openclaw-add:
+    name: WSL2 OpenClaw Add E2E (Windows)
+    needs: [build-packages, binary-smoke]
+    if: github.event_name != 'pull_request'
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Download Linux package artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: package-linux-x64
+          path: ${{ runner.temp }}/package-linux
+
+      - name: Run WSL2 OpenClaw install flow via `carrier add`
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          function Convert-ToWslPath {
+            param([string]$WindowsPath)
+            $normalized = $WindowsPath -replace '\\', '/'
+            if ($normalized -match '^([A-Za-z]):/(.*)$') {
+              $drive = $Matches[1].ToLowerInvariant()
+              $rest = $Matches[2]
+              return "/mnt/$drive/$rest"
+            }
+            throw "Unsupported Windows path format: $WindowsPath"
+          }
+
+          $pkgDir = Join-Path $env:RUNNER_TEMP "package-linux"
+          $zipName = "carrier-e2e-linux-x64.zip"
+          $shaName = "$zipName.sha256"
+          $zipPath = Join-Path $pkgDir $zipName
+          $shaPath = Join-Path $pkgDir $shaName
+
+          $expected = ((Get-Content -Path $shaPath -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "checksum mismatch: expected=$expected actual=$actual"
+          }
+
+          $extractDir = Join-Path $pkgDir "extracted"
+          Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+          $carrierWin = Join-Path $extractDir "carrier"
+          if (-not (Test-Path -LiteralPath $carrierWin)) {
+            throw "carrier binary not found after extraction: $carrierWin"
+          }
+
+          $wslRootWin = Join-Path $env:RUNNER_TEMP "wsl-openclaw-e2e"
+          $wslLogsWin = Join-Path $wslRootWin "logs"
+          New-Item -ItemType Directory -Path $wslLogsWin -Force | Out-Null
+
+          $distroLines = wsl -l -q
+          $distros = @()
+          foreach ($line in $distroLines) {
+            $clean = $line.Replace([char]0, "").Trim()
+            if ($clean) {
+              $distros += $clean
+            }
+          }
+          if ($distros.Count -eq 0) {
+            throw "No WSL distributions are available on this runner."
+          }
+          $distro = $distros | Where-Object { $_ -like "Ubuntu*" } | Select-Object -First 1
+          if (-not $distro) {
+            throw "Ubuntu distro not found. Available distros: $($distros -join ', ')"
+          }
+
+          wsl --status | Out-File -FilePath (Join-Path $wslLogsWin "wsl-status.txt")
+          wsl -l -v | Out-File -FilePath (Join-Path $wslLogsWin "wsl-list.txt")
+
+          $carrierWslSrc = Convert-ToWslPath $carrierWin
+          $wslRoot = Convert-ToWslPath $wslRootWin
+          $wslLogs = "$wslRoot/logs"
+
+          $prepScript = @'
+          set -euo pipefail
+          run_privileged() {
+            if command -v sudo >/dev/null 2>&1; then
+              sudo "$@"
+            else
+              "$@"
+            fi
+          }
+          export DEBIAN_FRONTEND=noninteractive
+          run_privileged apt-get update
+          run_privileged apt-get install -y --no-install-recommends ca-certificates curl git jq unzip
+          if ! command -v node >/dev/null 2>&1 || [ "$(node -v | sed "s/^v//" | cut -d. -f1)" -lt 22 ]; then
+            if command -v sudo >/dev/null 2>&1; then
+              curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+            else
+              curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+            fi
+            run_privileged apt-get install -y --no-install-recommends nodejs
+          fi
+          '@
+          wsl -d $distro -- bash -lc $prepScript
+
+          $prepareWorkspaceScript = @"
+          set -euo pipefail
+          WSL_ROOT='$wslRoot'
+          CARRIER_SRC='$carrierWslSrc'
+          mkdir -p "\$WSL_ROOT/bin" "\$WSL_ROOT/home" "\$WSL_ROOT/logs"
+          cp "\$CARRIER_SRC" "\$WSL_ROOT/bin/carrier"
+          chmod +x "\$WSL_ROOT/bin/carrier"
+          "@
+          wsl -d $distro -- bash -lc $prepareWorkspaceScript
+
+          $configScript = @"
+          set -euo pipefail
+          HOME_DIR='$wslRoot/home'
+          mkdir -p "\$HOME_DIR/.carrier"
+          cat > "\$HOME_DIR/.carrier/config.v2.json" <<'JSON'
+          {
+            "config_version": 2,
+            "channels": [],
+            "model_list": [
+              {
+                "model_name": "openai-default",
+                "model": "openai/gpt-5.2",
+                "provider_id": "openai",
+                "auth_mode": "api_key",
+                "env_var": "OPENAI_API_KEY"
+              }
+            ],
+            "default_model": "openai-default",
+            "base_agent": {
+              "enabled": false
+            },
+            "configured_at": "2026-02-27T00:00:00Z"
+          }
+          JSON
+          "@
+          wsl -d $distro -- bash -lc $configScript
+
+          $stdinWin = Join-Path $wslRootWin "carrier-add-openclaw.stdin"
+          Set-Content -Path $stdinWin -Value "1234567890:carrier-e2e-telegram-token`n`n"
+          $stdinWsl = Convert-ToWslPath $stdinWin
+
+          $runScript = @"
+          set -euo pipefail
+          export HOME='$wslRoot/home'
+          export CARRIER_CONFIG="\$HOME/.carrier/config.v2.json"
+          export OPENAI_API_KEY='sk-e2e-openai-key'
+          carrier_bin='$wslRoot/bin/carrier'
+          input_file='$stdinWsl'
+          log_dir='$wslLogs'
+
+          "\$carrier_bin" --version >"\$log_dir/carrier-version.log" 2>&1
+          cat "\$input_file" | "\$carrier_bin" add openclaw --cli --quiet >"\$log_dir/carrier-add-openclaw.log" 2>&1
+          "\$carrier_bin" list >"\$log_dir/carrier-list.log" 2>&1
+          "\$carrier_bin" status openclaw >"\$log_dir/carrier-status-openclaw.log" 2>&1 || true
+          "\$carrier_bin" stop >"\$log_dir/carrier-stop.log" 2>&1 || true
+
+          if ! grep -qi 'openclaw' "\$log_dir/carrier-list.log"; then
+            echo "openclaw instance not found in carrier list output" >&2
+            cat "\$log_dir/carrier-list.log" >&2
+            exit 1
+          fi
+          if ! test -d "\$HOME/.openclaw"; then
+            echo "openclaw home directory missing at \$HOME/.openclaw" >&2
+            ls -la "\$HOME" >&2 || true
+            exit 1
+          fi
+          "@
+          wsl -d $distro -- bash -lc $runScript
+
+      - name: Upload WSL2 OpenClaw logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: packaged-binary-e2e-wsl2-openclaw-logs
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/wsl-openclaw-e2e/logs
+
   full-remote-vps:
     name: Full Remote VPS E2E (Linux)
     needs: [build-packages, binary-smoke]
