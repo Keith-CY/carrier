@@ -799,8 +799,8 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 			HostID string `json:"hostId"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid request body: "+err.Error()))
-			return
+            writeInternalGatewayError(w, http.StatusBadRequest, "E_BAD_REQUEST", "invalid request body", "decoding profile-test request", err)
+            return
 		}
 		if strings.TrimSpace(req.HostID) == "" {
 			writeJSON(w, http.StatusOK, map[string]interface{}{
