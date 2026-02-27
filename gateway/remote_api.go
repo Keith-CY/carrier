@@ -288,6 +288,151 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "logs": logs, "steps": steps})
 		return
+	case "sync":
+		if len(parts) >= 5 {
+			subAction := strings.ToLower(strings.TrimSpace(parts[4]))
+			if subAction != "status" {
+				writeJSON(w, http.StatusNotFound, gatewayErrBody("E_USAGE", "unsupported remote sync action"))
+				return
+			}
+			if r.Method != http.MethodGet {
+				writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+				return
+			}
+			status, err := remoteGetInstanceSyncStatus(hostID, agentID)
+			if err != nil {
+				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load sync status", "get sync status", err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "status": status})
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		var req struct {
+			Mode string `json:"mode"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		startedAt := time.Now()
+		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancel()
+		syncResult, steps, err := remoteSyncInstanceConfig(ctx, host, hostID, agentID, req.Mode)
+		recordRemoteOperationMetric(remoteOpInstancesSync, startedAt, err)
+		if err != nil {
+			emitRemoteAuditEvent(requestID, "remote_instance_sync", hostID+":"+agentID, "failure", map[string]interface{}{
+				"mode":  req.Mode,
+				"error": err.Error(),
+			})
+			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_REMOTE_SYNC_FAILED", err.Error()))
+			return
+		}
+		emitRemoteAuditEvent(requestID, "remote_instance_sync", hostID+":"+agentID, "success", map[string]interface{}{
+			"mode":           syncResult.Mode,
+			"driftState":     syncResult.DriftState,
+			"lastRemoteHash": syncResult.LastRemoteHash,
+		})
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"requestId": requestID,
+			"result":    "ok",
+			"sync":      syncResult,
+			"steps":     steps,
+		})
+		return
+	case "diagnose":
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		startedAt := time.Now()
+		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancel()
+		diagnoseResult, steps, err := remoteDiagnoseInstanceConfig(ctx, host, hostID, agentID)
+		recordRemoteOperationMetric(remoteOpInstancesDiagnose, startedAt, err)
+		if err != nil {
+			emitRemoteAuditEvent(requestID, "remote_instance_diagnose", hostID+":"+agentID, "failure", map[string]interface{}{
+				"error": err.Error(),
+			})
+			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_REMOTE_DIAGNOSE_FAILED", err.Error()))
+			return
+		}
+		emitRemoteAuditEvent(requestID, "remote_instance_diagnose", hostID+":"+agentID, "success", map[string]interface{}{
+			"result":     diagnoseResult.Result,
+			"driftState": diagnoseResult.DriftState,
+			"remoteHash": diagnoseResult.LastRemoteHash,
+		})
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"requestId": requestID,
+			"result":    "ok",
+			"diagnose":  diagnoseResult,
+			"steps":     steps,
+		})
+		return
+	case "reconcile":
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		startedAt := time.Now()
+		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancel()
+		reconcileResult, steps, err := remoteReconcileInstanceConfig(ctx, host, hostID, agentID)
+		recordRemoteOperationMetric(remoteOpInstancesReconcile, startedAt, err)
+		if err != nil {
+			emitRemoteAuditEvent(requestID, "remote_instance_reconcile", hostID+":"+agentID, "failure", map[string]interface{}{
+				"error": err.Error(),
+			})
+			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_REMOTE_RECONCILE_FAILED", err.Error()))
+			return
+		}
+		emitRemoteAuditEvent(requestID, "remote_instance_reconcile", hostID+":"+agentID, "success", map[string]interface{}{
+			"driftState": reconcileResult.DriftState,
+			"reconciled": reconcileResult.Reconciled,
+		})
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"requestId": requestID,
+			"result":    "ok",
+			"reconcile": reconcileResult,
+			"steps":     steps,
+		})
+		return
+	case "rollback":
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		var req struct {
+			Commit string `json:"commit"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		startedAt := time.Now()
+		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancel()
+		rollbackResult, steps, err := remoteRollbackInstanceConfig(ctx, host, hostID, agentID, req.Commit)
+		recordRemoteOperationMetric(remoteOpInstancesRollback, startedAt, err)
+		if err != nil {
+			emitRemoteAuditEvent(requestID, "remote_instance_rollback", hostID+":"+agentID, "failure", map[string]interface{}{
+				"commit": req.Commit,
+				"error":  err.Error(),
+			})
+			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_REMOTE_ROLLBACK_FAILED", err.Error()))
+			return
+		}
+		emitRemoteAuditEvent(requestID, "remote_instance_rollback", hostID+":"+agentID, "success", map[string]interface{}{
+			"fromCommit": rollbackResult.FromCommit,
+			"newCommit":  rollbackResult.NewCommit,
+		})
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"requestId": requestID,
+			"result":    "ok",
+			"rollback":  rollbackResult,
+			"steps":     steps,
+		})
+		return
+	case "codeagent":
+		handleRemoteCodeAgent(w, r, requestID, host, hostID, agentID, parts)
+		return
 	default:
 		writeJSON(w, http.StatusNotFound, gatewayErrBody("E_USAGE", "unsupported remote instance action"))
 		return

@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -144,6 +143,35 @@ func runRemoteCommand(ctx context.Context, host RemoteHost, command string) (rem
 	return result, err
 }
 
+func runRemoteCommandWithRetry(ctx context.Context, host RemoteHost, command string, maxRetries int) (remoteExecResult, error) {
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
+	var (
+		lastResult remoteExecResult
+		lastErr    error
+	)
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		result, err := runRemoteCommand(ctx, host, command)
+		lastResult = result
+		lastErr = err
+		if err == nil && result.ExitCode == 0 {
+			return result, nil
+		}
+		if attempt < maxRetries && isTransientRemoteFailure(err, result) {
+			continue
+		}
+		if err != nil {
+			return result, err
+		}
+		return result, nil
+	}
+	if lastErr != nil {
+		return lastResult, lastErr
+	}
+	return lastResult, nil
+}
+
 func runRemoteCommandStream(ctx context.Context, host RemoteHost, command string, onChunk func(remoteStreamChunk)) (remoteExecResult, error) {
 	args, err := buildSSHArgs(host, command)
 	if err != nil {
@@ -175,22 +203,8 @@ func buildSSHArgs(host RemoteHost, remoteCommand string) ([]string, error) {
 		args = append(args, "-p", strconv.Itoa(h.Port))
 	}
 	if h.AuthMode == RemoteAuthModePrivateKey {
-		keyPath := strings.TrimSpace(h.KeyPath)
-		if strings.TrimSpace(h.KeyRef) != "" {
-			resolved, resolveErr := resolveRemoteKeyPath(h.KeyRef)
-			if resolveErr != nil {
-				return nil, resolveErr
-			}
-			if _, statErr := os.Stat(resolved); statErr != nil {
-				return nil, fmt.Errorf("resolve keyRef %q: %w", h.KeyRef, statErr)
-			}
-			keyPath = resolved
-		}
-		if keyPath == "" {
-			return nil, fmt.Errorf("private_key auth mode requires keyPath or keyRef")
-		}
 		args = append(args,
-			"-i", filepath.Clean(keyPath),
+			"-i", filepath.Clean(h.KeyPath),
 			"-o", "IdentitiesOnly=yes",
 		)
 	}
@@ -219,6 +233,30 @@ func shellSingleQuote(input string) string {
 		return "''"
 	}
 	return "'" + strings.ReplaceAll(input, "'", "'\\''") + "'"
+}
+
+func isTransientRemoteFailure(err error, result remoteExecResult) bool {
+	text := strings.ToLower(strings.TrimSpace(result.Stderr + " " + result.Stdout))
+	if err != nil {
+		text += " " + strings.ToLower(strings.TrimSpace(err.Error()))
+	}
+	if text == "" {
+		return false
+	}
+	patterns := []string{
+		"timeout",
+		"temporarily unavailable",
+		"connection reset",
+		"broken pipe",
+		"transport closed",
+		"network is unreachable",
+	}
+	for _, pattern := range patterns {
+		if strings.Contains(text, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func remoteCommandError(result remoteExecResult, action string) error {

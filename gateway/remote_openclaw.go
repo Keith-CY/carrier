@@ -2,11 +2,15 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
+
+	"carrier/profilesync"
 )
 
 type remoteHostCheckResult struct {
@@ -33,6 +37,46 @@ type remoteInstallResult struct {
 	Installed   bool               `json:"installed"`
 	GatewayMode RemoteRuntimeMode  `json:"gatewayMode"`
 	Steps       []remoteExecResult `json:"steps"`
+}
+
+type remoteSyncResult struct {
+	HostID         string `json:"hostId"`
+	AgentID        string `json:"agentId"`
+	Mode           string `json:"mode"`
+	Status         string `json:"status"`
+	DriftState     string `json:"driftState"`
+	LastRemoteHash string `json:"lastRemoteHash,omitempty"`
+	LastSyncAt     string `json:"lastSyncAt,omitempty"`
+}
+
+type remoteDiagnoseResult struct {
+	HostID         string `json:"hostId"`
+	AgentID        string `json:"agentId"`
+	Result         string `json:"result"`
+	DriftState     string `json:"driftState"`
+	LastRemoteHash string `json:"lastRemoteHash,omitempty"`
+	LastDiagnoseAt string `json:"lastDiagnoseAt,omitempty"`
+}
+
+type remoteReconcileResult struct {
+	HostID          string `json:"hostId"`
+	AgentID         string `json:"agentId"`
+	Reconciled      bool   `json:"reconciled"`
+	DriftState      string `json:"driftState"`
+	LastRemoteHash  string `json:"lastRemoteHash,omitempty"`
+	LastReconcileAt string `json:"lastReconcileAt,omitempty"`
+}
+
+type remoteRollbackResult struct {
+	HostID           string `json:"hostId"`
+	AgentID          string `json:"agentId"`
+	RolledBack       bool   `json:"rolledBack"`
+	FromCommit       string `json:"fromCommit,omitempty"`
+	NewCommit        string `json:"newCommit,omitempty"`
+	DriftState       string `json:"driftState"`
+	LastRemoteHash   string `json:"lastRemoteHash,omitempty"`
+	LastRollbackAt   string `json:"lastRollbackAt,omitempty"`
+	RestoredSnapshot bool   `json:"restoredSnapshot"`
 }
 
 func checkRemoteHostAndMaybeRepair(ctx context.Context, host RemoteHost) (remoteHostCheckResult, error) {
@@ -274,6 +318,202 @@ func remoteGetInstanceStatus(ctx context.Context, host RemoteHost, hostID, agent
 	return fallback, steps, nil
 }
 
+func remoteSyncInstanceConfig(ctx context.Context, host RemoteHost, hostID, agentID, mode string) (*remoteSyncResult, []remoteExecResult, error) {
+	if err := validateAgentIdentifier(agentID); err != nil {
+		return nil, nil, err
+	}
+	mode = normalizeProviderBindingSyncMode(mode)
+	if err := validateProviderBindingSyncMode(mode); err != nil {
+		return nil, nil, err
+	}
+	config, _, steps, err := remoteReadConfig(ctx, host)
+	if err != nil {
+		return nil, steps, err
+	}
+	instanceID := remoteInstanceProfileID(hostID, agentID)
+	localCommit, _, err := profilesync.SaveInstanceProfile(instanceID, hostID, agentID, config, "sync-pull")
+	if err != nil {
+		return nil, steps, err
+	}
+	now := nowTimestamp()
+	status := RemoteInstanceSyncStatus{
+		HostID:              hostID,
+		AgentID:             agentID,
+		SyncMode:            mode,
+		DriftState:          "in_sync",
+		LastSyncStatus:      "success",
+		LastSyncAt:          now,
+		LastRemoteHash:      hashRemoteConfig(config),
+		LastCanonicalConfig: config,
+		LastLocalCommit:     localCommit,
+		LastCommonCommit:    localCommit,
+	}
+	if _, err := upsertRemoteInstanceSyncStatus(status); err != nil {
+		return nil, steps, err
+	}
+	return &remoteSyncResult{
+		HostID:         hostID,
+		AgentID:        agentID,
+		Mode:           mode,
+		Status:         "in_sync",
+		DriftState:     "in_sync",
+		LastRemoteHash: status.LastRemoteHash,
+		LastSyncAt:     now,
+	}, steps, nil
+}
+
+func remoteGetInstanceSyncStatus(hostID, agentID string) (*RemoteInstanceSyncStatus, error) {
+	status, ok, err := getRemoteInstanceSyncStatus(hostID, agentID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return &RemoteInstanceSyncStatus{
+			HostID:         hostID,
+			AgentID:        agentID,
+			SyncMode:       providerBindingSyncModeAlwaysPush,
+			DriftState:     "unknown",
+			LastSyncStatus: "not_synced",
+			UpdatedAt:      nowTimestamp(),
+		}, nil
+	}
+	return &status, nil
+}
+
+func remoteDiagnoseInstanceConfig(ctx context.Context, host RemoteHost, hostID, agentID string) (*remoteDiagnoseResult, []remoteExecResult, error) {
+	if err := validateAgentIdentifier(agentID); err != nil {
+		return nil, nil, err
+	}
+	config, _, steps, err := remoteReadConfig(ctx, host)
+	if err != nil {
+		return nil, steps, err
+	}
+	remoteHash := hashRemoteConfig(config)
+	status, err := remoteGetInstanceSyncStatus(hostID, agentID)
+	if err != nil {
+		return nil, steps, err
+	}
+	result := "healthy"
+	driftState := "in_sync"
+	if strings.TrimSpace(status.LastRemoteHash) != "" && !strings.EqualFold(strings.TrimSpace(status.LastRemoteHash), remoteHash) {
+		result = "drift_detected"
+		driftState = "drift"
+	}
+	status.DriftState = driftState
+	status.LastDiagnoseAt = nowTimestamp()
+	status.LastDiagnoseResult = result
+	status.LastRemoteHash = remoteHash
+	if _, err := upsertRemoteInstanceSyncStatus(*status); err != nil {
+		return nil, steps, err
+	}
+	return &remoteDiagnoseResult{
+		HostID:         hostID,
+		AgentID:        agentID,
+		Result:         result,
+		DriftState:     driftState,
+		LastRemoteHash: remoteHash,
+		LastDiagnoseAt: status.LastDiagnoseAt,
+	}, steps, nil
+}
+
+func remoteReconcileInstanceConfig(ctx context.Context, host RemoteHost, hostID, agentID string) (*remoteReconcileResult, []remoteExecResult, error) {
+	if err := validateAgentIdentifier(agentID); err != nil {
+		return nil, nil, err
+	}
+	status, err := remoteGetInstanceSyncStatus(hostID, agentID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(status.LastCanonicalConfig) == 0 {
+		return nil, nil, fmt.Errorf("instance is not synced yet")
+	}
+	updatedConfig, _, steps, err := remotePatchConfig(ctx, host, status.LastCanonicalConfig)
+	if err != nil {
+		return nil, steps, err
+	}
+	instanceID := remoteInstanceProfileID(hostID, agentID)
+	localCommit, _, err := profilesync.SaveInstanceProfile(instanceID, hostID, agentID, status.LastCanonicalConfig, "diagnose-reconcile")
+	if err != nil {
+		return nil, steps, err
+	}
+	now := nowTimestamp()
+	status.DriftState = "in_sync"
+	status.LastSyncStatus = "success"
+	status.LastReconcileAt = now
+	status.LastSyncAt = now
+	status.LastRemoteHash = hashRemoteConfig(updatedConfig)
+	status.LastLocalCommit = localCommit
+	status.LastCommonCommit = localCommit
+	if _, err := upsertRemoteInstanceSyncStatus(*status); err != nil {
+		return nil, steps, err
+	}
+	return &remoteReconcileResult{
+		HostID:          hostID,
+		AgentID:         agentID,
+		Reconciled:      true,
+		DriftState:      "in_sync",
+		LastRemoteHash:  status.LastRemoteHash,
+		LastReconcileAt: now,
+	}, steps, nil
+}
+
+func remoteRollbackInstanceConfig(ctx context.Context, host RemoteHost, hostID, agentID, commit string) (*remoteRollbackResult, []remoteExecResult, error) {
+	if err := validateAgentIdentifier(agentID); err != nil {
+		return nil, nil, err
+	}
+	status, err := remoteGetInstanceSyncStatus(hostID, agentID)
+	if err != nil {
+		return nil, nil, err
+	}
+	targetCommit := strings.TrimSpace(commit)
+	if targetCommit == "" {
+		targetCommit = strings.TrimSpace(status.LastCommonCommit)
+	}
+	if targetCommit == "" {
+		targetCommit = strings.TrimSpace(status.LastLocalCommit)
+	}
+	if targetCommit == "" {
+		return nil, nil, fmt.Errorf("rollback commit is required")
+	}
+
+	instanceID := remoteInstanceProfileID(hostID, agentID)
+	profileAtCommit, err := profilesync.LoadInstanceProfileAtCommit(instanceID, targetCommit)
+	if err != nil {
+		return nil, nil, err
+	}
+	updatedConfig, _, steps, err := remotePatchConfig(ctx, host, profileAtCommit)
+	if err != nil {
+		return nil, steps, err
+	}
+	newCommit, _, err := profilesync.SaveInstanceProfile(instanceID, hostID, agentID, profileAtCommit, "rollback")
+	if err != nil {
+		return nil, steps, err
+	}
+	rollbackAt := nowTimestamp()
+	status.DriftState = "in_sync"
+	status.LastSyncStatus = "success"
+	status.LastRollbackAt = rollbackAt
+	status.LastSyncAt = rollbackAt
+	status.LastRemoteHash = hashRemoteConfig(updatedConfig)
+	status.LastCanonicalConfig = profileAtCommit
+	status.LastLocalCommit = newCommit
+	status.LastCommonCommit = newCommit
+	if _, err := upsertRemoteInstanceSyncStatus(*status); err != nil {
+		return nil, steps, err
+	}
+	return &remoteRollbackResult{
+		HostID:           hostID,
+		AgentID:          agentID,
+		RolledBack:       true,
+		FromCommit:       targetCommit,
+		NewCommit:        newCommit,
+		DriftState:       "in_sync",
+		LastRemoteHash:   status.LastRemoteHash,
+		LastRollbackAt:   rollbackAt,
+		RestoredSnapshot: true,
+	}, steps, nil
+}
+
 func remoteRepairOpenClaw(ctx context.Context, host RemoteHost, hostID, agentID string) (*remoteRepairResult, error) {
 	if err := validateAgentIdentifier(agentID); err != nil {
 		return nil, err
@@ -423,6 +663,30 @@ func deepMergeJSON(base map[string]interface{}, patch map[string]interface{}) ma
 		result[k] = deepMergeJSON(existingMap, patchMap)
 	}
 	return result
+}
+
+func hashRemoteConfig(payload map[string]interface{}) string {
+	if payload == nil {
+		payload = map[string]interface{}{}
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func remoteInstanceProfileID(hostID, agentID string) string {
+	host := strings.TrimSpace(hostID)
+	agent := strings.TrimSpace(agentID)
+	if host == "" {
+		host = "unknown-host"
+	}
+	if agent == "" {
+		agent = "main"
+	}
+	return host + "_" + agent
 }
 
 func remoteListSessions(ctx context.Context, host RemoteHost, agentID string) ([]RemoteSessionEntry, []remoteExecResult, error) {

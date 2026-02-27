@@ -12,6 +12,10 @@ const (
 	remoteOpInstancesInstall     = "instances_install"
 	remoteOpInstancesRepair      = "instances_repair"
 	remoteOpInstancesLogs        = "instances_logs"
+	remoteOpInstancesSync        = "instances_sync"
+	remoteOpInstancesDiagnose    = "instances_diagnose"
+	remoteOpInstancesReconcile   = "instances_reconcile"
+	remoteOpInstancesRollback    = "instances_rollback"
 	remoteOpConfigRead           = "config_read"
 	remoteOpConfigPatch          = "config_patch"
 	remoteOpSessionsList         = "sessions_list"
@@ -21,6 +25,11 @@ const (
 	remoteOpProfileTestRemote    = "provider_profile_test_remote"
 	remoteOpProviderBindingApply = "provider_binding_apply"
 	remoteOpRemoteChatStream     = "remote_chat_stream"
+	remoteOpCodeAgentInstall     = "codeagent_install"
+	remoteOpCodeAgentConfigure   = "codeagent_configure"
+	remoteOpCodeAgentHealth      = "codeagent_health"
+	remoteOpCodeAgentVersion     = "codeagent_version"
+	remoteOpCodeAgentRun         = "codeagent_run"
 )
 
 type remoteOperationStats struct {

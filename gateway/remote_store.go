@@ -13,9 +13,10 @@ import (
 )
 
 type remoteControlState struct {
-	Hosts    []RemoteHost      `json:"hosts"`
-	Profiles []ProviderProfile `json:"providerProfiles"`
-	Bindings []ProviderBinding `json:"providerBindings"`
+	Hosts         []RemoteHost                        `json:"hosts"`
+	Profiles      []ProviderProfile                   `json:"providerProfiles"`
+	Bindings      []ProviderBinding                   `json:"providerBindings"`
+	InstanceSyncs map[string]RemoteInstanceSyncStatus `json:"instanceSyncs,omitempty"`
 }
 
 type providerProfilePatch struct {
@@ -48,7 +49,12 @@ func loadRemoteControlState() (*remoteControlState, string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return &remoteControlState{Hosts: []RemoteHost{}, Profiles: []ProviderProfile{}, Bindings: []ProviderBinding{}}, path, nil
+			return &remoteControlState{
+				Hosts:         []RemoteHost{},
+				Profiles:      []ProviderProfile{},
+				Bindings:      []ProviderBinding{},
+				InstanceSyncs: map[string]RemoteInstanceSyncStatus{},
+			}, path, nil
 		}
 		return nil, "", fmt.Errorf("read remote control store: %w", err)
 	}
@@ -64,6 +70,9 @@ func loadRemoteControlState() (*remoteControlState, string, error) {
 	}
 	if state.Bindings == nil {
 		state.Bindings = []ProviderBinding{}
+	}
+	if state.InstanceSyncs == nil {
+		state.InstanceSyncs = map[string]RemoteInstanceSyncStatus{}
 	}
 	return &state, path, nil
 }
@@ -185,29 +194,8 @@ func patchRemoteHost(hostID string, patch RemoteHost) (RemoteHost, error) {
 		if strings.TrimSpace(string(patch.AuthMode)) != "" {
 			merged.AuthMode = patch.AuthMode
 		}
-		patchKeyPath := strings.TrimSpace(patch.KeyPath)
-		patchKeyRef := strings.TrimSpace(patch.KeyRef)
-		switch {
-		case patchKeyRef != "":
-			// keyRef and keyPath are mutually exclusive; keyRef wins when provided.
-			merged.KeyRef = patchKeyRef
-			merged.KeyPath = ""
-			if strings.TrimSpace(patch.KeyName) != "" {
-				merged.KeyName = patch.KeyName
-			} else {
-				merged.KeyName = ""
-			}
-			if strings.TrimSpace(patch.KeyFingerprint) != "" {
-				merged.KeyFingerprint = patch.KeyFingerprint
-			} else {
-				merged.KeyFingerprint = ""
-			}
-		case patchKeyPath != "":
-			// When users switch back to keyPath, clear previously selected uploaded key metadata.
-			merged.KeyPath = patchKeyPath
-			merged.KeyRef = ""
-			merged.KeyName = ""
-			merged.KeyFingerprint = ""
+		if strings.TrimSpace(patch.KeyPath) != "" {
+			merged.KeyPath = patch.KeyPath
 		}
 		if strings.TrimSpace(patch.SSHConfigHost) != "" {
 			merged.SSHConfigHost = patch.SSHConfigHost
@@ -258,6 +246,11 @@ func deleteRemoteHost(hostID string) (bool, error) {
 		bindings = append(bindings, binding)
 	}
 	state.Bindings = bindings
+	for key, syncStatus := range state.InstanceSyncs {
+		if strings.EqualFold(strings.TrimSpace(syncStatus.HostID), id) {
+			delete(state.InstanceSyncs, key)
+		}
+	}
 	if err := saveRemoteControlState(path, state); err != nil {
 		return false, err
 	}
@@ -513,4 +506,58 @@ func deleteProviderBinding(bindingID string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func remoteInstanceSyncKey(hostID, agentID string) string {
+	return strings.ToLower(strings.TrimSpace(hostID) + ":" + strings.TrimSpace(agentID))
+}
+
+func getRemoteInstanceSyncStatus(hostID, agentID string) (RemoteInstanceSyncStatus, bool, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, _, err := loadRemoteControlState()
+	if err != nil {
+		return RemoteInstanceSyncStatus{}, false, err
+	}
+	key := remoteInstanceSyncKey(hostID, agentID)
+	status, ok := state.InstanceSyncs[key]
+	if !ok {
+		return RemoteInstanceSyncStatus{}, false, nil
+	}
+	return status, true, nil
+}
+
+func upsertRemoteInstanceSyncStatus(status RemoteInstanceSyncStatus) (RemoteInstanceSyncStatus, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, path, err := loadRemoteControlState()
+	if err != nil {
+		return RemoteInstanceSyncStatus{}, err
+	}
+	hostID := strings.TrimSpace(status.HostID)
+	agentID := strings.TrimSpace(status.AgentID)
+	if hostID == "" || agentID == "" {
+		return RemoteInstanceSyncStatus{}, fmt.Errorf("hostId and agentId are required")
+	}
+	status.HostID = hostID
+	status.AgentID = agentID
+	status.SyncMode = normalizeProviderBindingSyncMode(status.SyncMode)
+	if err := validateProviderBindingSyncMode(status.SyncMode); err != nil {
+		return RemoteInstanceSyncStatus{}, err
+	}
+	if strings.TrimSpace(status.DriftState) == "" {
+		status.DriftState = "unknown"
+	}
+	if strings.TrimSpace(status.LastSyncStatus) == "" {
+		status.LastSyncStatus = "unknown"
+	}
+	status.UpdatedAt = nowTimestamp()
+	key := remoteInstanceSyncKey(hostID, agentID)
+	state.InstanceSyncs[key] = status
+	if err := saveRemoteControlState(path, state); err != nil {
+		return RemoteInstanceSyncStatus{}, err
+	}
+	return status, nil
 }
