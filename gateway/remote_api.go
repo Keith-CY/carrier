@@ -314,7 +314,10 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 		var req struct {
 			Mode string `json:"mode"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid request body: "+err.Error()))
+			return
+		}
 		startedAt := time.Now()
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 		defer cancel()
@@ -405,7 +408,10 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 		var req struct {
 			Commit string `json:"commit"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid request body: "+err.Error()))
+			return
+		}
 		startedAt := time.Now()
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 		defer cancel()
@@ -792,7 +798,10 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 		var req struct {
 			HostID string `json:"hostId"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid request body: "+err.Error()))
+			return
+		}
 		if strings.TrimSpace(req.HostID) == "" {
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"requestId": requestID,
