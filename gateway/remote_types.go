@@ -265,6 +265,9 @@ func validateAgentIdentifier(id string) error {
 	if trimmed == "" {
 		return fmt.Errorf("agent id is required")
 	}
+	if len(trimmed) > 128 {
+		return fmt.Errorf("agent id exceeds maximum length of 128 characters")
+	}
 	for _, ch := range trimmed {
 		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.' {
 			continue
@@ -278,6 +281,9 @@ func validateRemoteSessionIdentifier(id string) (string, error) {
 	trimmed := strings.TrimSpace(id)
 	if trimmed == "" {
 		return "", fmt.Errorf("sessionId is required")
+	}
+	if len(trimmed) > 128 {
+		return "", fmt.Errorf("sessionId exceeds maximum length of 128 characters")
 	}
 	for _, ch := range trimmed {
 		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.' {
