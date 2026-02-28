@@ -35,6 +35,8 @@ type managedAgentInstanceFile struct {
 	Instances []managedAgentInstance `json:"instances"`
 }
 
+var managedInstanceRandReader io.Reader = rand.Reader
+
 func managedInstancesPath() (string, error) {
 	if custom := strings.TrimSpace(os.Getenv("CARRIER_INSTANCE_STORE")); custom != "" {
 		return custom, nil
@@ -52,7 +54,7 @@ func generateManagedInstanceID(prefix string) (string, error) {
 		p = "agent"
 	}
 	buf := make([]byte, 4)
-	if _, err := io.ReadFull(rand.Reader, buf); err != nil {
+	if _, err := io.ReadFull(managedInstanceRandReader, buf); err != nil {
 		return "", fmt.Errorf("generate random id: %w", err)
 	}
 	return fmt.Sprintf("%s-%s", p, hex.EncodeToString(buf)), nil

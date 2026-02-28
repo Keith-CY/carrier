@@ -448,6 +448,7 @@ func buildCarrierBinary(t *testing.T) string {
 	}
 	cmd.Env = setEnvEntry(cmd.Env, "GOCACHE", cacheRoot)
 	cmd.Env = setEnvEntry(cmd.Env, "GOMODCACHE", modCacheRoot)
+	cmd.Env = appendGoFlag(cmd.Env, "-modcacherw")
 	cmd.Dir = "."
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
@@ -472,6 +473,11 @@ func runCarrierBinary(t *testing.T, binaryPath, stdin string, args ...string) (s
 	t.Helper()
 	cmd := exec.Command(binaryPath, args...)
 	cmd.Env = os.Environ()
+	cacheRoot := filepath.Join(os.TempDir(), "carrier-test-gocache")
+	modCacheRoot := filepath.Join(os.TempDir(), "carrier-test-gomodcache")
+	cmd.Env = setEnvEntry(cmd.Env, "GOCACHE", cacheRoot)
+	cmd.Env = setEnvEntry(cmd.Env, "GOMODCACHE", modCacheRoot)
+	cmd.Env = appendGoFlag(cmd.Env, "-modcacherw")
 	cmd.Stdin = strings.NewReader(stdin)
 
 	var stdout bytes.Buffer
@@ -480,6 +486,29 @@ func runCarrierBinary(t *testing.T, binaryPath, stdin string, args ...string) (s
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	return stdout.String(), stderr.String(), err
+}
+
+func appendGoFlag(env []string, flag string) []string {
+	flag = strings.TrimSpace(flag)
+	if flag == "" {
+		return env
+	}
+	current := ""
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "GOFLAGS=") {
+			current = strings.TrimSpace(strings.TrimPrefix(entry, "GOFLAGS="))
+			break
+		}
+	}
+	for _, token := range strings.Fields(current) {
+		if token == flag {
+			return env
+		}
+	}
+	if current == "" {
+		return setEnvEntry(env, "GOFLAGS", flag)
+	}
+	return setEnvEntry(env, "GOFLAGS", current+" "+flag)
 }
 
 func setProbeEnvFromURL(t *testing.T, hostKey, portKey, rawURL string) {
