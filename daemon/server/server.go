@@ -222,6 +222,7 @@ func buildHTTPMuxWithBaseAgent(
 	if msgBus == nil {
 		msgBus = messaging.NewMessageBus()
 	}
+	memStore := svc.MemoryStore()
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -238,7 +239,7 @@ func buildHTTPMuxWithBaseAgent(
 
 	register := func(path string, handler http.HandlerFunc) {
 		mux.HandleFunc(path, handler)
-		if strings.HasPrefix(path, "/api/") {
+		if strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, "/api/v2/") {
 			mux.HandleFunc("/api/v1"+strings.TrimPrefix(path, "/api"), handler)
 		}
 	}
@@ -377,6 +378,398 @@ func buildHTTPMuxWithBaseAgent(
 			return
 		}
 		writeJSON(w, http.StatusOK, resp)
+	})
+
+	register("/api/v2/memory/search", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			Subject    string  `json:"subject"`
+			Query      string  `json:"query"`
+			MaxResults int     `json:"maxResults"`
+			MinScore   float64 `json:"minScore"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		results := memStore.Search(memory.SearchOptions{
+			Subject:    body.Subject,
+			Query:      body.Query,
+			MaxResults: body.MaxResults,
+			MinScore:   body.MinScore,
+		})
+		writeJSON(w, http.StatusOK, map[string]interface{}{"results": results})
+	})
+
+	register("/api/v2/memory/get", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			Subject string `json:"subject"`
+			ID      string `json:"id"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		record, err := memStore.GetRecord(body.Subject, body.ID)
+		if err != nil {
+			writeJSONError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"record": record})
+	})
+
+	register("/api/v2/memory/observe", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			Subject       string   `json:"subject"`
+			AgentID       string   `json:"agentId"`
+			AppID         string   `json:"appId"`
+			SessionID     string   `json:"sessionId"`
+			Scope         string   `json:"scope"`
+			ToolName      string   `json:"toolName"`
+			InputsDigest  string   `json:"inputsDigest"`
+			OutputSnippet string   `json:"outputSnippet"`
+			Status        string   `json:"status"`
+			Artifacts     []string `json:"artifacts"`
+			Labels        []string `json:"labels"`
+			AutoCurate    bool     `json:"autoCurate"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		ev, err := memStore.Observe(memory.ObserveInput{
+			Subject:       body.Subject,
+			AgentID:       body.AgentID,
+			AppID:         body.AppID,
+			SessionID:     body.SessionID,
+			Scope:         memory.Scope(body.Scope),
+			ToolName:      body.ToolName,
+			InputsDigest:  body.InputsDigest,
+			OutputSnippet: body.OutputSnippet,
+			Status:        body.Status,
+			Artifacts:     body.Artifacts,
+			Labels:        body.Labels,
+			AutoCurate:    body.AutoCurate,
+		})
+		if err != nil {
+			writeJSONError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"event": ev})
+	})
+
+	register("/api/v2/memory/records/upsert", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			Subject        string   `json:"subject"`
+			ID             string   `json:"id"`
+			Scope          string   `json:"scope"`
+			Type           string   `json:"type"`
+			ContentRaw     string   `json:"contentRaw"`
+			ContentSummary string   `json:"contentSummary"`
+			Tags           []string `json:"tags"`
+			Provenance     string   `json:"provenance"`
+			Confidence     float64  `json:"confidence"`
+			Importance     int      `json:"importance"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		rec, err := memStore.UpsertRecord(memory.UpsertRecordInput{
+			Subject:        body.Subject,
+			ID:             body.ID,
+			Scope:          memory.Scope(body.Scope),
+			Type:           memory.RecordType(body.Type),
+			ContentRaw:     body.ContentRaw,
+			ContentSummary: body.ContentSummary,
+			Tags:           body.Tags,
+			Provenance:     body.Provenance,
+			Confidence:     body.Confidence,
+			Importance:     body.Importance,
+		})
+		if err != nil {
+			writeJSONError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"record": rec})
+	})
+
+	register("/api/v2/memory/records/archive", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			Subject string `json:"subject"`
+			ID      string `json:"id"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := memStore.ArchiveRecord(body.Subject, body.ID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "archived"})
+	})
+
+	register("/api/v2/memory/grants/grant", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			Subject   string `json:"subject"`
+			Scope     string `json:"scope"`
+			GrantedBy string `json:"grantedBy"`
+			Reason    string `json:"reason"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		grant, err := memStore.GrantScope(body.Subject, memory.Scope(body.Scope), body.GrantedBy, body.Reason)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"grant": grant})
+	})
+
+	register("/api/v2/memory/grants/revoke", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			GrantID   string `json:"grantId"`
+			RevokedBy string `json:"revokedBy"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := memStore.RevokeScope(body.GrantID, body.RevokedBy); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "revoked"})
+	})
+
+	register("/api/v2/memory/audit", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"audit": memStore.AuditLogs()})
+	})
+
+	register("/api/v2/memory/instance/attach", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			InstanceID string `json:"instanceId"`
+			Scope      string `json:"scope"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := memStore.AttachScope(body.InstanceID, memory.Scope(body.Scope)); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "attached"})
+	})
+
+	register("/api/v2/memory/instance/detach", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			InstanceID string `json:"instanceId"`
+			Scope      string `json:"scope"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := memStore.DetachScope(body.InstanceID, memory.Scope(body.Scope)); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "detached"})
+	})
+
+	register("/api/v2/memory/instance/import", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			InstanceID  string `json:"instanceId"`
+			Path        string `json:"path"`
+			TargetScope string `json:"targetScope"`
+			Actor       string `json:"actor"`
+			RequestID   string `json:"requestId"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		id, err := memStore.ImportForInstance(body.InstanceID, body.Path, memory.InstanceImportOptions{
+			Actor:       body.Actor,
+			RequestID:   body.RequestID,
+			TargetScope: memory.Scope(body.TargetScope),
+		})
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"id": id})
+	})
+
+	register("/api/v2/memory/instance/export", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			InstanceID string `json:"instanceId"`
+			Format     string `json:"format"`
+			Actor      string `json:"actor"`
+			RequestID  string `json:"requestId"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		ref, err := memStore.ExportForInstance(body.InstanceID, memory.InstanceExportOptions{
+			Actor:     body.Actor,
+			RequestID: body.RequestID,
+			Format:    body.Format,
+		})
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"artifactRef": ref})
+	})
+
+	register("/api/v2/memory/migrate/backup", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			Actor     string `json:"actor"`
+			RequestID string `json:"requestId"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		path, err := memStore.CreateMigrationBackup(body.Actor, body.RequestID)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"backupPath": path})
+	})
+
+	register("/api/v2/memory/migrate/validate", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"validation": memStore.ValidateMigration()})
+	})
+
+	register("/api/v2/memory/migrate/rollback", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			BackupPath string `json:"backupPath"`
+			Actor      string `json:"actor"`
+			RequestID  string `json:"requestId"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := memStore.RollbackFromBackup(body.BackupPath, body.Actor, body.RequestID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "rolled_back"})
 	})
 
 	mux.HandleFunc("/api/v1/agents/", func(w http.ResponseWriter, r *http.Request) {
@@ -560,6 +953,83 @@ func (a *baseAgentMemoryStoreAdapter) ExportMemory(memoryID string, opts baseage
 
 func (a *baseAgentMemoryStoreAdapter) Archive(memoryID string) error {
 	return a.store.Archive(memoryID)
+}
+
+func (a *baseAgentMemoryStoreAdapter) Search(subject, query string, maxResults int, minScore float64) ([]baseagent.MemorySearchHit, error) {
+	hits := a.store.Search(memory.SearchOptions{
+		Subject:    subject,
+		Query:      query,
+		MaxResults: maxResults,
+		MinScore:   minScore,
+	})
+	out := make([]baseagent.MemorySearchHit, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, baseagent.MemorySearchHit{
+			ID:         h.ID,
+			Scope:      string(h.Scope),
+			Score:      h.Score,
+			Snippet:    h.Snippet,
+			Provenance: h.Provenance,
+		})
+	}
+	return out, nil
+}
+
+func (a *baseAgentMemoryStoreAdapter) GetRecord(subject, id string) (baseagent.MemoryRecord, error) {
+	rec, err := a.store.GetRecord(subject, id)
+	if err != nil {
+		return baseagent.MemoryRecord{}, err
+	}
+	return baseagent.MemoryRecord{
+		ID:             rec.ID,
+		Scope:          string(rec.Scope),
+		Type:           string(rec.Type),
+		ContentRaw:     rec.ContentRaw,
+		ContentSummary: rec.ContentSummary,
+		Provenance:     rec.Provenance,
+	}, nil
+}
+
+func (a *baseAgentMemoryStoreAdapter) Observe(subject, toolName, outputSnippet, scope string) (string, error) {
+	ev, err := a.store.Observe(memory.ObserveInput{
+		Subject:       subject,
+		AgentID:       subject,
+		Scope:         memory.Scope(scope),
+		ToolName:      toolName,
+		OutputSnippet: outputSnippet,
+		AutoCurate:    true,
+	})
+	if err != nil {
+		return "", err
+	}
+	return ev.ID, nil
+}
+
+func (a *baseAgentMemoryStoreAdapter) Grant(subject, scope, grantedBy, reason string) (string, error) {
+	grant, err := a.store.GrantScope(subject, memory.Scope(scope), grantedBy, reason)
+	if err != nil {
+		return "", err
+	}
+	return grant.ID, nil
+}
+
+func (a *baseAgentMemoryStoreAdapter) Revoke(grantID, revokedBy string) error {
+	return a.store.RevokeScope(grantID, revokedBy)
+}
+
+func (a *baseAgentMemoryStoreAdapter) ListAudits() []baseagent.MemoryAudit {
+	audits := a.store.AuditLogs()
+	out := make([]baseagent.MemoryAudit, 0, len(audits))
+	for _, item := range audits {
+		out = append(out, baseagent.MemoryAudit{
+			Action:    item.Action,
+			Target:    item.Target,
+			Result:    item.Result,
+			Message:   item.Message,
+			Timestamp: item.Timestamp.UTC().Format(time.RFC3339Nano),
+		})
+	}
+	return out
 }
 
 func newLifecycleAgentServiceAdapter(svc *lifecycle.Service) *lifecycleAgentServiceAdapter {

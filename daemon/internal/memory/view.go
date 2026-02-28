@@ -67,6 +67,8 @@ func (s *Store) attachMemoryLocked(agentID, memoryID string, opts AttachOptions)
 		AttachedAt:  s.now(),
 	}
 	s.attachments[agentID] = append(existing, att)
+	scopes := s.recomputeInstanceScopesLocked(agentID)
+	s.syncInstanceScopesToSQLiteLocked(agentID, scopes)
 	if err := s.persistStateLocked(); err != nil {
 		return Attachment{}, err.Error(), err
 	}
@@ -97,6 +99,8 @@ func (s *Store) DetachMemory(agentID, memoryID string) error {
 			break
 		}
 	}
+	scopes := s.recomputeInstanceScopesLocked(agentID)
+	s.syncInstanceScopesToSQLiteLocked(agentID, scopes)
 	if err := s.persistStateLocked(); err != nil {
 		return err
 	}
@@ -149,6 +153,8 @@ func (s *Store) SetAttachmentsFromLinks(agentID string, memoryIDs []string) erro
 		})
 	}
 	s.attachments[agentID] = attachments
+	scopes := s.recomputeInstanceScopesLocked(agentID)
+	s.syncInstanceScopesToSQLiteLocked(agentID, scopes)
 	if err := s.persistStateLocked(); err != nil {
 		return err
 	}
