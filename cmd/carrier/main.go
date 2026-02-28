@@ -133,6 +133,10 @@ type logsCommandOptions struct {
 	Export  string
 }
 
+type serviceCommandOptions struct {
+	Action string
+}
+
 type keysCommandOptions struct {
 	Action string
 	Name   string
@@ -376,6 +380,8 @@ Usage:
                         Alias for carrier add <agent_id>
   carrier logs <id|name> [--since <rfc3339|unix>] [--level <level>] [--grep <text>] [--export <path>]
                         Query and optionally export agent logs
+  carrier service <install|start|stop|status|uninstall>
+                        Manage Carrier Windows service registration
   carrier doctor [--json]
                         Run local environment and daemon health checks
   carrier keys generate [--name <alias>]
@@ -517,6 +523,18 @@ func main() {
 			}
 			if err := runLogsCommand(os.Stdout, opts); err != nil {
 				fmt.Fprintf(os.Stderr, "logs failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "service":
+			opts, err := parseServiceCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "service failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runServiceCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "service failed: %v\n", err)
 				os.Exit(1)
 			}
 			return
@@ -669,6 +687,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "doctor", args[2:], nil
 	case "logs":
 		return "logs", args[2:], nil
+	case "service":
+		return "service", args[2:], nil
 	case "keys":
 		return "keys", args[2:], nil
 	case "onboard":
@@ -881,6 +901,19 @@ func parseLogsCommandArgs(args []string) (logsCommandOptions, error) {
 	return opts, nil
 }
 
+func parseServiceCommandArgs(args []string) (serviceCommandOptions, error) {
+	if len(args) != 1 {
+		return serviceCommandOptions{}, errors.New("usage: carrier service <install|start|stop|status|uninstall>")
+	}
+	action := strings.ToLower(strings.TrimSpace(args[0]))
+	switch action {
+	case "install", "start", "stop", "status", "uninstall":
+		return serviceCommandOptions{Action: action}, nil
+	default:
+		return serviceCommandOptions{}, fmt.Errorf("unsupported service action: %s", args[0])
+	}
+}
+
 func parseSinceValue(raw string) (time.Time, bool) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -896,6 +929,17 @@ func parseSinceValue(raw string) (time.Time, bool) {
 		return ts, true
 	}
 	return time.Time{}, false
+}
+
+func runServiceCommand(out io.Writer, opts serviceCommandOptions) error {
+	result, err := runPlatformServiceAction(opts.Action)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(result) != "" {
+		_, _ = fmt.Fprintln(out, result)
+	}
+	return nil
 }
 
 func parseKeysCommandArgs(args []string) (keysCommandOptions, error) {
