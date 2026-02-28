@@ -236,20 +236,93 @@ jobs:
           $wslLogsWin = Join-Path $wslRootWin "logs"
           New-Item -ItemType Directory -Path $wslLogsWin -Force | Out-Null
 
-          $distroLines = wsl -l -q
-          $distros = @()
-          foreach ($line in $distroLines) {
-            $clean = $line.Replace([char]0, "").Trim()
-            if ($clean) {
-              $distros += $clean
+          function Get-WslDistros {
+            $distroLines = & wsl -l -q 2>$null
+            if ($LASTEXITCODE -ne 0 -or -not $distroLines) {
+              return @()
             }
+
+            $distros = @()
+            foreach ($line in @($distroLines)) {
+              $clean = ([string]$line).Replace([string][char]0, "").Trim()
+              if ($clean) {
+                $distros += $clean
+              }
+            }
+            return $distros
           }
-          if ($distros.Count -eq 0) {
-            throw "No WSL distributions are available on this runner."
+
+          function Ensure-UbuntuWslDistro {
+            param(
+              [string]$WorkspaceRoot
+            )
+
+            $distros = Get-WslDistros
+            $ubuntu = $distros | Where-Object { $_ -match "^Ubuntu($|-)" } | Select-Object -First 1
+            if ($ubuntu) {
+              return $ubuntu
+            }
+
+            $distroName = "CarrierE2EUbuntu"
+            if ($distros -contains $distroName) {
+              return $distroName
+            }
+
+            Write-Host "No Ubuntu WSL distribution detected. Importing fallback Ubuntu rootfs for E2E."
+
+            $bootstrapDir = Join-Path $WorkspaceRoot "bootstrap-distro"
+            $installDir = Join-Path $bootstrapDir "instance"
+            $rootfsPath = Join-Path $bootstrapDir "noble-wsl-amd64.wsl"
+            New-Item -ItemType Directory -Path $bootstrapDir -Force | Out-Null
+
+            Invoke-WebRequest `
+              -Uri "https://cdimages.ubuntu.com/ubuntu-wsl/noble/daily-live/current/noble-wsl-amd64.wsl" `
+              -OutFile $rootfsPath
+            & wsl --import $distroName $installDir $rootfsPath --version 2
+            if ($LASTEXITCODE -ne 0) {
+              throw "wsl --import failed with exit code $LASTEXITCODE"
+            }
+
+            Start-Sleep -Seconds 5
+            $distros = Get-WslDistros
+            $ubuntu = $distros | Where-Object { $_ -eq $distroName } | Select-Object -First 1
+            if (-not $ubuntu) {
+              throw "Ubuntu distro bootstrap failed. Available distros: $($distros -join ', ')"
+            }
+            return $ubuntu
           }
-          $distro = $distros | Where-Object { $_ -like "Ubuntu*" } | Select-Object -First 1
-          if (-not $distro) {
-            throw "Ubuntu distro not found. Available distros: $($distros -join ', ')"
+
+          $distro = Ensure-UbuntuWslDistro -WorkspaceRoot $wslRootWin
+          $distro = ([string]$distro).Replace([string][char]0, "").Trim()
+          $allDistros = Get-WslDistros
+          if ($allDistros -contains "CarrierE2EUbuntu") {
+            # Use canonical literal to avoid hidden encoding chars from command output.
+            $distro = "CarrierE2EUbuntu"
+          }
+
+          & wsl --set-default $distro
+          if ($LASTEXITCODE -ne 0) {
+            throw "wsl --set-default failed for distro '$distro' (exit code $LASTEXITCODE)"
+          }
+
+          function Invoke-WslScript {
+            param(
+              [string]$Distro,
+              [string]$Script,
+              [string]$Name
+            )
+            $normalized = $Script -replace "`r", ""
+            $scriptsDirWin = Join-Path $wslRootWin "scripts"
+            New-Item -ItemType Directory -Path $scriptsDirWin -Force | Out-Null
+            $scriptWinPath = Join-Path $scriptsDirWin "$Name.sh"
+            $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+            [System.IO.File]::WriteAllText($scriptWinPath, $normalized, $utf8NoBom)
+            Copy-Item -Path $scriptWinPath -Destination (Join-Path $wslLogsWin "$Name.sh") -Force
+            $scriptWslPath = Convert-ToWslPath $scriptWinPath
+            wsl -d $Distro -- bash "$scriptWslPath"
+            if ($LASTEXITCODE -ne 0) {
+              throw "WSL script execution failed for '$Name' on distro '$Distro' (exit code $LASTEXITCODE)"
+            }
           }
 
           wsl --status | Out-File -FilePath (Join-Path $wslLogsWin "wsl-status.txt")
@@ -280,23 +353,25 @@ jobs:
             run_privileged apt-get install -y --no-install-recommends nodejs
           fi
           '@
-          wsl -d $distro -- bash -lc $prepScript
+          Invoke-WslScript -Distro $distro -Script $prepScript -Name "prep"
 
-          $prepareWorkspaceScript = @"
+          $prepareWorkspaceScript = @'
           set -euo pipefail
-          WSL_ROOT='$wslRoot'
-          CARRIER_SRC='$carrierWslSrc'
-          mkdir -p "\$WSL_ROOT/bin" "\$WSL_ROOT/home" "\$WSL_ROOT/logs"
-          cp "\$CARRIER_SRC" "\$WSL_ROOT/bin/carrier"
-          chmod +x "\$WSL_ROOT/bin/carrier"
-          "@
-          wsl -d $distro -- bash -lc $prepareWorkspaceScript
+          WSL_ROOT="__WSL_ROOT__"
+          CARRIER_SRC="__CARRIER_SRC__"
+          mkdir -p "$WSL_ROOT/bin" "$WSL_ROOT/home" "$WSL_ROOT/logs"
+          cp "$CARRIER_SRC" "$WSL_ROOT/bin/carrier"
+          chmod +x "$WSL_ROOT/bin/carrier"
+          '@
+          $prepareWorkspaceScript = $prepareWorkspaceScript -replace "__WSL_ROOT__", $wslRoot
+          $prepareWorkspaceScript = $prepareWorkspaceScript -replace "__CARRIER_SRC__", $carrierWslSrc
+          Invoke-WslScript -Distro $distro -Script $prepareWorkspaceScript -Name "workspace"
 
-          $configScript = @"
+          $configScript = @'
           set -euo pipefail
-          HOME_DIR='$wslRoot/home'
-          mkdir -p "\$HOME_DIR/.carrier"
-          cat > "\$HOME_DIR/.carrier/config.v2.json" <<'JSON'
+          HOME_DIR="__HOME_DIR__"
+          mkdir -p "$HOME_DIR/.carrier"
+          cat > "$HOME_DIR/.carrier/config.v2.json" <<'JSON'
           {
             "config_version": 2,
             "channels": [],
@@ -316,40 +391,45 @@ jobs:
             "configured_at": "2026-02-27T00:00:00Z"
           }
           JSON
-          "@
-          wsl -d $distro -- bash -lc $configScript
+          '@
+          $configScript = $configScript -replace "__HOME_DIR__", "$wslRoot/home"
+          Invoke-WslScript -Distro $distro -Script $configScript -Name "config"
 
           $stdinWin = Join-Path $wslRootWin "carrier-add-openclaw.stdin"
           Set-Content -Path $stdinWin -Value "1234567890:carrier-e2e-telegram-token`n`n"
           $stdinWsl = Convert-ToWslPath $stdinWin
 
-          $runScript = @"
+          $runScript = @'
           set -euo pipefail
-          export HOME='$wslRoot/home'
-          export CARRIER_CONFIG="\$HOME/.carrier/config.v2.json"
+          export HOME="__HOME_DIR__"
+          export CARRIER_CONFIG="$HOME/.carrier/config.v2.json"
           export OPENAI_API_KEY='sk-e2e-openai-key'
-          carrier_bin='$wslRoot/bin/carrier'
-          input_file='$stdinWsl'
-          log_dir='$wslLogs'
+          carrier_bin="__CARRIER_BIN__"
+          input_file="__INPUT_FILE__"
+          log_dir="__LOG_DIR__"
 
-          "\$carrier_bin" --version >"\$log_dir/carrier-version.log" 2>&1
-          cat "\$input_file" | "\$carrier_bin" add openclaw --cli --quiet >"\$log_dir/carrier-add-openclaw.log" 2>&1
-          "\$carrier_bin" list >"\$log_dir/carrier-list.log" 2>&1
-          "\$carrier_bin" status openclaw >"\$log_dir/carrier-status-openclaw.log" 2>&1 || true
-          "\$carrier_bin" stop >"\$log_dir/carrier-stop.log" 2>&1 || true
+          "$carrier_bin" --version >"$log_dir/carrier-version.log" 2>&1
+          cat "$input_file" | "$carrier_bin" add openclaw --cli --quiet >"$log_dir/carrier-add-openclaw.log" 2>&1
+          "$carrier_bin" list >"$log_dir/carrier-list.log" 2>&1
+          "$carrier_bin" status openclaw >"$log_dir/carrier-status-openclaw.log" 2>&1 || true
+          "$carrier_bin" stop >"$log_dir/carrier-stop.log" 2>&1 || true
 
-          if ! grep -qi 'openclaw' "\$log_dir/carrier-list.log"; then
+          if ! grep -qi 'openclaw' "$log_dir/carrier-list.log"; then
             echo "openclaw instance not found in carrier list output" >&2
-            cat "\$log_dir/carrier-list.log" >&2
+            cat "$log_dir/carrier-list.log" >&2
             exit 1
           fi
-          if ! test -d "\$HOME/.openclaw"; then
-            echo "openclaw home directory missing at \$HOME/.openclaw" >&2
-            ls -la "\$HOME" >&2 || true
+          if ! test -d "$HOME/.openclaw"; then
+            echo "openclaw home directory missing at $HOME/.openclaw" >&2
+            ls -la "$HOME" >&2 || true
             exit 1
           fi
-          "@
-          wsl -d $distro -- bash -lc $runScript
+          '@
+          $runScript = $runScript -replace "__HOME_DIR__", "$wslRoot/home"
+          $runScript = $runScript -replace "__CARRIER_BIN__", "$wslRoot/bin/carrier"
+          $runScript = $runScript -replace "__INPUT_FILE__", $stdinWsl
+          $runScript = $runScript -replace "__LOG_DIR__", $wslLogs
+          Invoke-WslScript -Distro $distro -Script $runScript -Name "run"
 
       - name: Upload WSL2 OpenClaw logs
         if: always()
