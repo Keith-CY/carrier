@@ -22,7 +22,23 @@ type Entry struct {
 
 // List returns all catalog entries sorted by ID.
 func List() []Entry {
-	return DefaultEntries()
+	builtins := DefaultEntries()
+	custom, _ := LoadCustomManifests()
+	merged := make(map[string]Entry, len(builtins)+len(custom))
+	for _, entry := range builtins {
+		merged[entry.ID] = entry
+	}
+	for _, entry := range custom {
+		merged[entry.ID] = entry
+	}
+	out := make([]Entry, 0, len(merged))
+	for _, entry := range merged {
+		out = append(out, entry)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ID < out[j].ID
+	})
+	return out
 }
 
 // ActiveEntries returns only entries with StatusActive, suitable for runtime registration.
@@ -33,7 +49,7 @@ func ActiveEntries() []Entry {
 // ListByStatus returns entries filtered by candidate status.
 func ListByStatus(status CandidateStatus) []Entry {
 	var result []Entry
-	for _, e := range DefaultEntries() {
+	for _, e := range List() {
 		if e.Status == status {
 			result = append(result, e)
 		}
@@ -93,7 +109,7 @@ func DefaultEntries() []Entry {
 
 // FindByID looks up a catalog entry by its ID.
 func FindByID(id string) (Entry, bool) {
-	for _, e := range DefaultEntries() {
+	for _, e := range List() {
 		if e.ID == id {
 			return e, true
 		}

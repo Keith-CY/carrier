@@ -137,6 +137,12 @@ type serviceCommandOptions struct {
 	Action string
 }
 
+type catalogCommandOptions struct {
+	Action       string
+	ManifestPath string
+	ID           string
+}
+
 type keysCommandOptions struct {
 	Action string
 	Name   string
@@ -385,6 +391,10 @@ Usage:
                         Query and optionally export agent logs
   carrier service <install|start|stop|status|uninstall>
                         Manage Carrier Windows service registration
+  carrier catalog add --manifest <path>
+  carrier catalog list
+  carrier catalog remove <id>
+                        Manage custom agent catalog manifests
   carrier doctor [--json]
                         Run local environment and daemon health checks
   carrier keys generate [--name <alias>]
@@ -541,6 +551,18 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "catalog":
+			opts, err := parseCatalogCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "catalog failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runCatalogCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "catalog failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "keys":
 			opts, err := parseKeysCommandArgs(commandArgs)
 			if err != nil {
@@ -692,6 +714,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "logs", args[2:], nil
 	case "service":
 		return "service", args[2:], nil
+	case "catalog":
+		return "catalog", args[2:], nil
 	case "keys":
 		return "keys", args[2:], nil
 	case "onboard":
@@ -917,6 +941,43 @@ func parseServiceCommandArgs(args []string) (serviceCommandOptions, error) {
 	}
 }
 
+func parseCatalogCommandArgs(args []string) (catalogCommandOptions, error) {
+	if len(args) == 0 {
+		return catalogCommandOptions{}, errors.New("usage: carrier catalog <add|list|remove>")
+	}
+	action := strings.ToLower(strings.TrimSpace(args[0]))
+	switch action {
+	case "list":
+		return catalogCommandOptions{Action: action}, nil
+	case "remove":
+		if len(args) != 2 {
+			return catalogCommandOptions{}, errors.New("usage: carrier catalog remove <id>")
+		}
+		return catalogCommandOptions{Action: action, ID: strings.TrimSpace(args[1])}, nil
+	case "add":
+		opts := catalogCommandOptions{Action: action}
+		for i := 1; i < len(args); i++ {
+			switch strings.ToLower(strings.TrimSpace(args[i])) {
+			case "--manifest":
+				value, next, err := parseRequiredFlagValue(args, i, "--manifest")
+				if err != nil {
+					return catalogCommandOptions{}, err
+				}
+				opts.ManifestPath = strings.TrimSpace(value)
+				i = next
+			default:
+				return catalogCommandOptions{}, fmt.Errorf("unknown catalog add option: %s", args[i])
+			}
+		}
+		if opts.ManifestPath == "" {
+			return catalogCommandOptions{}, errors.New("--manifest is required")
+		}
+		return opts, nil
+	default:
+		return catalogCommandOptions{}, fmt.Errorf("unsupported catalog action: %s", args[0])
+	}
+}
+
 func parseSinceValue(raw string) (time.Time, bool) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -943,6 +1004,138 @@ func runServiceCommand(out io.Writer, opts serviceCommandOptions) error {
 		_, _ = fmt.Fprintln(out, result)
 	}
 	return nil
+}
+
+func runCatalogCommand(out io.Writer, opts catalogCommandOptions) error {
+	switch opts.Action {
+	case "add":
+		return runCatalogAdd(out, opts.ManifestPath)
+	case "list":
+		return runCatalogList(out)
+	case "remove":
+		return runCatalogRemove(out, opts.ID)
+	default:
+		return fmt.Errorf("unsupported catalog action: %s", opts.Action)
+	}
+}
+
+func runCatalogAdd(out io.Writer, manifestPath string) error {
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return err
+	}
+	id := parseManifestID(raw)
+	if strings.TrimSpace(id) == "" {
+		return errors.New("manifest id is required")
+	}
+	dir, err := carrierCustomCatalogDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	ext := filepath.Ext(manifestPath)
+	if ext == "" {
+		ext = ".toml"
+	}
+	dst := filepath.Join(dir, id+ext)
+	if err := os.WriteFile(dst, raw, 0o600); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "registered custom manifest %s\n", id)
+	return nil
+}
+
+func runCatalogList(out io.Writer) error {
+	builtins := []string{"openclaw", "picoclaw", "zeroclaw"}
+	seen := map[string]bool{}
+	for _, id := range builtins {
+		seen[id] = true
+		_, _ = fmt.Fprintf(out, "%s\tbuiltin\n", id)
+	}
+	dir, err := carrierCustomCatalogDir()
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		raw, readErr := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if readErr != nil {
+			continue
+		}
+		id := strings.TrimSpace(parseManifestID(raw))
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		_, _ = fmt.Fprintf(out, "%s\tcustom\n", id)
+	}
+	return nil
+}
+
+func runCatalogRemove(out io.Writer, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("manifest id is required")
+	}
+	dir, err := carrierCustomCatalogDir()
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == id || strings.HasPrefix(name, id+".") {
+			_ = os.Remove(filepath.Join(dir, name))
+		}
+	}
+	_, _ = fmt.Fprintf(out, "removed custom manifest %s\n", id)
+	return nil
+}
+
+func parseManifestID(raw []byte) string {
+	var asMap map[string]interface{}
+	if json.Unmarshal(raw, &asMap) == nil {
+		return strings.TrimSpace(anyToString(asMap["id"]))
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if strings.TrimSpace(parts[0]) != "id" {
+			continue
+		}
+		return strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+	}
+	return ""
+}
+
+func carrierCustomCatalogDir() (string, error) {
+	if custom := strings.TrimSpace(os.Getenv("CARRIER_CUSTOM_CATALOG_DIR")); custom != "" {
+		return custom, nil
+	}
+	home, err := resolveCarrierHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".carrier", "catalog", "custom"), nil
 }
 
 func parseKeysCommandArgs(args []string) (keysCommandOptions, error) {
