@@ -20,11 +20,17 @@ func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts I
 	if err != nil {
 		return err
 	}
-	useBaseAgentFallback := !opts.Isolation || strings.EqualFold(agentID, "openclaw")
+	useBaseAgentFallback := !opts.Isolation || allowBaseAgentInstallFallback(agentID)
+
+	opCtx, cancel := context.WithTimeout(ctx, s.commandTimeout)
+	defer cancel()
 
 	commandGOOS := isolationRuntimeGOOS
 	var backend isolationBackend
 	if opts.Isolation {
+		if err := s.runDeterministicIsolationHostPipeline(opCtx, agentID); err != nil {
+			return s.finalizeInstallFailure(agentID, err, "E_ISOLATION_UNAVAILABLE")
+		}
 		backend, err = resolveIsolationBackend()
 		if err != nil {
 			return s.finalizeInstallFailure(agentID, err, "E_ISOLATION_UNAVAILABLE")
@@ -44,8 +50,6 @@ func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts I
 		}
 	}
 
-	opCtx, cancel := context.WithTimeout(ctx, s.commandTimeout)
-	defer cancel()
 	if opts.Isolation {
 		if err := s.runDeterministicIsolationPipeline(opCtx, agentID, backend); err != nil {
 			return s.finalizeInstallFailure(agentID, err, "E_ISOLATION_UNAVAILABLE")
@@ -107,6 +111,36 @@ func installFailureCode(err error) string {
 		return "E_ISOLATION_UNAVAILABLE"
 	}
 	return "E_INSTALL_FAILED"
+}
+
+func allowBaseAgentInstallFallback(agentID string) bool {
+	switch strings.ToLower(strings.TrimSpace(agentID)) {
+	case "openclaw", "picoclaw", "zeroclaw":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) runDeterministicIsolationHostPipeline(ctx context.Context, agentID string) error {
+	command, err := buildIsolationHostPrepareCommand()
+	if err != nil {
+		return err
+	}
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" {
+		return nil
+	}
+	result, streamed, runErr := s.runCommandWithAgentLogs(ctx, agentID, "isolation-host-prepare", trimmed)
+	if streamed {
+		s.appendCommandLogSummary(agentID, "isolation-host-prepare", trimmed, result, runErr)
+	} else {
+		s.appendCommandLog(agentID, "isolation-host-prepare", trimmed, result, runErr)
+	}
+	if runErr != nil {
+		return fmt.Errorf("%w: isolation-host-prepare failed: %v", ErrIsolationUnavailable, runErr)
+	}
+	return nil
 }
 
 func (s *Service) runDeterministicIsolationPipeline(ctx context.Context, agentID string, backend isolationBackend) error {

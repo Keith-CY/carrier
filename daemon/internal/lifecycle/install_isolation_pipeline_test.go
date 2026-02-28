@@ -157,7 +157,7 @@ func TestInstallWithIsolationUsesLinuxInstallCommandOnDarwinAndWindows(t *testin
 	}
 }
 
-func TestInstallWithIsolationSkipsBaseAgentFallbackForNonOpenClaw(t *testing.T) {
+func TestInstallWithIsolationFallsBackToBaseAgentForPicoAndZeroClaw(t *testing.T) {
 	origGOOS := isolationRuntimeGOOS
 	origLookup := isolationBackendLookup
 	origEnv := isolationEnvLookup
@@ -214,8 +214,8 @@ func TestInstallWithIsolationSkipsBaseAgentFallbackForNonOpenClaw(t *testing.T) 
 			if err == nil {
 				t.Fatal("expected install failure")
 			}
-			if triager.calls != 0 {
-				t.Fatalf("expected baseagent triage not to be called for non-openclaw isolation install, got %d", triager.calls)
+			if triager.calls == 0 {
+				t.Fatalf("expected baseagent triage to be called for %s isolation install, got %d", tc.id, triager.calls)
 			}
 		})
 	}
