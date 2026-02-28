@@ -116,6 +116,10 @@ type versionCommandOptions struct {
 	JSON bool
 }
 
+type doctorCommandOptions struct {
+	JSON bool
+}
+
 type keysCommandOptions struct {
 	Action string
 	Name   string
@@ -299,6 +303,7 @@ const (
 var runOpenAICodexDeviceCodeFlow = performOpenAICodexDeviceCodeFlow
 var gatewayHealthProbe = checkGatewayHealth
 var daemonHealthProbe = checkDaemonHealth
+var doctorAgentStatusesFetcher = fetchDoctorAgentStatuses
 var daemonBackgroundStarter = startDaemonInBackground
 var gatewayBackgroundStarter = startGatewayInBackground
 var runStopFlow = runStop
@@ -356,6 +361,8 @@ Usage:
                         Add/install an agent (default: terminal flow; use -q for quiet mode)
   carrier install <agent_id> [--isolation] [--tui|--cli|--webui] [-q|--quiet]
                         Alias for carrier add <agent_id>
+  carrier doctor [--json]
+                        Run local environment and daemon health checks
   carrier keys generate [--name <alias>]
                         Generate managed SSH key (default alias: default)
   carrier keys list     List managed SSH keys with fingerprints
@@ -470,6 +477,18 @@ func main() {
 		case "list":
 			if err := runListInstances(os.Stdout); err != nil {
 				fmt.Fprintf(os.Stderr, "list failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "doctor":
+			opts, err := parseDoctorCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "doctor failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runDoctor(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "doctor failed: %v\n", err)
 				os.Exit(1)
 			}
 			return
@@ -618,6 +637,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "uninstall", args[2:], nil
 	case "list":
 		return "list", nil, nil
+	case "doctor":
+		return "doctor", args[2:], nil
 	case "keys":
 		return "keys", args[2:], nil
 	case "onboard":
@@ -734,6 +755,21 @@ func parseVersionCommandArgs(args []string) (versionCommandOptions, error) {
 	return opts, nil
 }
 
+func parseDoctorCommandArgs(args []string) (doctorCommandOptions, error) {
+	opts := doctorCommandOptions{}
+	for _, raw := range args {
+		arg := strings.TrimSpace(raw)
+		switch arg {
+		case "":
+		case "--json":
+			opts.JSON = true
+		default:
+			return doctorCommandOptions{}, fmt.Errorf("unknown doctor option: %s", raw)
+		}
+	}
+	return opts, nil
+}
+
 func parseKeysCommandArgs(args []string) (keysCommandOptions, error) {
 	if len(args) == 0 {
 		return keysCommandOptions{}, errors.New("usage: carrier keys <generate|list|delete>")
@@ -777,6 +813,154 @@ func parseKeysCommandArgs(args []string) (keysCommandOptions, error) {
 	default:
 		return keysCommandOptions{}, fmt.Errorf("unknown keys action: %s", args[0])
 	}
+}
+
+type doctorCheckResult struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Details    string `json:"details,omitempty"`
+	Suggestion string `json:"suggestion,omitempty"`
+}
+
+func runDoctor(out io.Writer, opts doctorCommandOptions) error {
+	results := []doctorCheckResult{
+		doctorCheckDaemonReachable(),
+		doctorCheckConfig(),
+		doctorCheckDiskSpace(),
+		doctorCheckRunningAgents(),
+	}
+	if opts.JSON {
+		raw, err := json.MarshalIndent(map[string]interface{}{
+			"checks": results,
+		}, "", "  ")
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintln(out, string(raw))
+		return nil
+	}
+	for _, check := range results {
+		symbol := "✅"
+		switch strings.ToLower(strings.TrimSpace(check.Status)) {
+		case "warn":
+			symbol = "⚠️"
+		case "fail":
+			symbol = "❌"
+		}
+		_, _ = fmt.Fprintf(out, "%s %s: %s\n", symbol, check.Name, check.Details)
+		if suggestion := strings.TrimSpace(check.Suggestion); suggestion != "" {
+			_, _ = fmt.Fprintf(out, "   suggestion: %s\n", suggestion)
+		}
+	}
+	return nil
+}
+
+func doctorCheckDaemonReachable() doctorCheckResult {
+	base := daemonProbeBaseURL()
+	if daemonHealthProbe(base) {
+		return doctorCheckResult{Name: "Daemon reachable", Status: "ok", Details: "daemon is healthy"}
+	}
+	return doctorCheckResult{
+		Name:       "Daemon reachable",
+		Status:     "fail",
+		Details:    "daemon health check failed",
+		Suggestion: "start daemon with `carrier daemon` or run `carrier` bootstrap",
+	}
+}
+
+func doctorCheckConfig() doctorCheckResult {
+	cfg, path, err := configv2.Load()
+	if err != nil || cfg == nil {
+		return doctorCheckResult{
+			Name:       "Config valid",
+			Status:     "fail",
+			Details:    "config is missing or invalid",
+			Suggestion: "run `carrier onboard` to generate a valid config",
+		}
+	}
+	return doctorCheckResult{Name: "Config valid", Status: "ok", Details: fmt.Sprintf("loaded %s", path)}
+}
+
+func doctorCheckDiskSpace() doctorCheckResult {
+	home, err := resolveCarrierHomeDir()
+	if err != nil {
+		return doctorCheckResult{Name: "Disk space", Status: "warn", Details: "unable to resolve home directory", Suggestion: "set HOME and retry"}
+	}
+	if runtime.GOOS == "windows" {
+		return doctorCheckResult{Name: "Disk space", Status: "warn", Details: "disk check unsupported on Windows", Suggestion: "ensure at least 500MB free manually"}
+	}
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(home, &stat); err != nil {
+		return doctorCheckResult{Name: "Disk space", Status: "warn", Details: "unable to determine free disk space", Suggestion: "check free space manually"}
+	}
+	free := stat.Bavail * uint64(stat.Bsize)
+	const minFreeBytes = 500 * 1024 * 1024
+	if free < minFreeBytes {
+		return doctorCheckResult{Name: "Disk space", Status: "fail", Details: fmt.Sprintf("free disk space is %d bytes", free), Suggestion: "free at least 500MB and retry"}
+	}
+	return doctorCheckResult{Name: "Disk space", Status: "ok", Details: fmt.Sprintf("free disk space is %d bytes", free)}
+}
+
+func doctorCheckRunningAgents() doctorCheckResult {
+	statuses, err := doctorAgentStatusesFetcher()
+	if err != nil {
+		return doctorCheckResult{
+			Name:       "Running agents healthy",
+			Status:     "warn",
+			Details:    "unable to query agent statuses",
+			Suggestion: "ensure daemon is running and authenticated",
+		}
+	}
+	unhealthy := make([]string, 0)
+	for _, st := range statuses {
+		if !strings.EqualFold(strings.TrimSpace(st.Runtime), "running") {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(st.Health), "healthy") {
+			continue
+		}
+		unhealthy = append(unhealthy, strings.TrimSpace(st.ID))
+	}
+	if len(unhealthy) > 0 {
+		return doctorCheckResult{
+			Name:       "Running agents healthy",
+			Status:     "fail",
+			Details:    fmt.Sprintf("unhealthy agents: %s", strings.Join(unhealthy, ", ")),
+			Suggestion: "run `carrier status <id>` and inspect logs",
+		}
+	}
+	return doctorCheckResult{Name: "Running agents healthy", Status: "ok", Details: "all running agents are healthy"}
+}
+
+type doctorAgentStatus struct {
+	ID      string
+	Runtime string
+	Health  string
+}
+
+func fetchDoctorAgentStatuses() ([]doctorAgentStatus, error) {
+	raw, status, err := daemonRequestWithTimeout(http.MethodGet, "/api/v1/agents/status", nil, 3*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if status < 200 || status >= 300 {
+		return nil, fmt.Errorf("status request failed with status %d", status)
+	}
+	var payload struct {
+		Statuses []struct {
+			ID      string `json:"id"`
+			Runtime string `json:"runtimeState"`
+			Health  string `json:"health"`
+		} `json:"statuses"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	out := make([]doctorAgentStatus, 0, len(payload.Statuses))
+	for _, st := range payload.Statuses {
+		out = append(out, doctorAgentStatus{ID: st.ID, Runtime: st.Runtime, Health: st.Health})
+	}
+	return out, nil
 }
 
 func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
