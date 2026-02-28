@@ -255,3 +255,17 @@ carrier reset
 - For newly discovered remote instances, config pull can require explicit confirmation.
 - `--isolation` is explicit opt-in and instance-scoped; if isolation backend is unavailable, command flow fails instead of silently falling back.
 - In `--webui` mode, `carrier add ... --webui --isolation` opens WebUI with isolation preselected; deployment/start runs in WebUI flow.
+
+## Additional Commands
+
+- `carrier catalog add <manifest-url>` — Add an agent from a manifest URL
+- `carrier catalog list` — List registered agent catalogs
+- `carrier catalog remove <agent_id>` — Remove agent from catalog
+- `carrier config set <key> <value>` — Set a configuration value
+- `carrier doctor` — Run diagnostic checks
+- `carrier keys list` — List managed SSH keys
+- `carrier keys generate` — Generate a new SSH keypair
+- `carrier keys delete <key-ref>` — Delete a managed SSH key
+- `carrier logs <agent_id>` — View agent logs
+- `carrier service` — Manage the carrier service
+- `carrier webhooks test <url>` — Test a webhook endpoint
