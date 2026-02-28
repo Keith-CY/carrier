@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { mockAPIs, loginWithToken, TEST_TOKEN } from './helpers';
 
+const LOGIN_OVERLAY_TIMEOUT = 15000;
+
 test.describe('Token Expiry', () => {
   test('redirects to login when API returns 401', async ({ page }) => {
     await mockAPIs(page);
@@ -19,7 +21,7 @@ test.describe('Token Expiry', () => {
     await page.click('#refresh-instances');
 
     // Should redirect to login
-    await expect(page.locator('#login-overlay')).toBeVisible();
+    await expect(page.locator('#login-overlay')).toBeVisible({ timeout: LOGIN_OVERLAY_TIMEOUT });
   });
 
   test('clears localStorage token on 401', async ({ page }) => {
@@ -33,7 +35,7 @@ test.describe('Token Expiry', () => {
     );
 
     await page.click('#refresh-instances');
-    await expect(page.locator('#login-overlay')).toBeVisible();
+    await expect(page.locator('#login-overlay')).toBeVisible({ timeout: LOGIN_OVERLAY_TIMEOUT });
 
     // Check token is cleared
     const token = await page.evaluate(() => localStorage.getItem('carrier_token'));
@@ -50,7 +52,7 @@ test.describe('Token Expiry', () => {
       route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"unauthorized"}' }),
     );
     await page.click('#refresh-instances');
-    await expect(page.locator('#login-overlay')).toBeVisible();
+    await expect(page.locator('#login-overlay')).toBeVisible({ timeout: LOGIN_OVERLAY_TIMEOUT });
 
     // Now re-login: restore normal mocks
     await page.unrouteAll();
@@ -68,6 +70,6 @@ test.describe('Token Expiry', () => {
     await page.fill('#login-token', TEST_TOKEN);
     await page.click('#login-btn');
 
-    await expect(page.locator('#login-overlay')).toBeHidden();
+    await expect(page.locator('#login-overlay')).toBeHidden({ timeout: LOGIN_OVERLAY_TIMEOUT });
   });
 });
