@@ -2,7 +2,7 @@ package memory
 
 import (
 	"archive/zip"
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -45,6 +45,7 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 	if sqliteHits, ok := s.searchSQLiteLocked(allowed, query, maxResults, opts.MinScore); ok {
 		return sqliteHits
 	}
+	// TODO(fusionmem): keep this in-memory linear scan as fallback only; prefer SQLite FTS when available.
 	hits := make([]SearchHit, 0, maxResults)
 	for _, rec := range s.records {
 		if rec.ArchivedAt != nil {
@@ -763,7 +764,7 @@ func (s *Store) writeStableTruthRecordLocked(rec MemoryRecord) error {
 }
 
 func shortDigest(raw string) string {
-	sum := sha1.Sum([]byte(raw))
+	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])[:12]
 }
 

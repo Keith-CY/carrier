@@ -25,6 +25,13 @@ func TestProviderCatalogBasics(t *testing.T) {
 	if IsSupportedProvider("openrouter") {
 		t.Fatal("openrouter should not be supported")
 	}
+	ids := SupportedProviderIDs()
+	if len(ids) != 4 {
+		t.Fatalf("SupportedProviderIDs len = %d, want 4", len(ids))
+	}
+	if ids[0] != "anthropic" || ids[1] != "openai" || ids[2] != "openai-codex" || ids[3] != "openai-compatible" {
+		t.Fatalf("unexpected SupportedProviderIDs order: %#v", ids)
+	}
 }
 
 func TestProvidersByCategory(t *testing.T) {

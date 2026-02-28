@@ -61,21 +61,21 @@ func (s *Service) applyManifestMemoryPermissions(agentID string) {
 		}
 		_ = s.memoryStore.AttachScope(agentID, memory.Scope(trimmed))
 	}
+	existingGrants := s.memoryStore.ListGrants(agentID)
+	activeGrants := make(map[string]struct{}, len(existingGrants))
+	for _, g := range existingGrants {
+		if g.RevokedAt == nil {
+			activeGrants[strings.TrimSpace(string(g.Scope))] = struct{}{}
+		}
+	}
 	for _, scope := range m.Memory.Permissions.WriteScopes {
 		trimmed := strings.TrimSpace(scope)
 		if trimmed == "" {
 			continue
 		}
-		existing := s.memoryStore.ListGrants(agentID)
-		found := false
-		for _, g := range existing {
-			if string(g.Scope) == trimmed && g.RevokedAt == nil {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if _, found := activeGrants[trimmed]; !found {
 			_, _ = s.memoryStore.GrantScope(agentID, memory.Scope(trimmed), "manifest:"+agentID, "manifest write scope")
+			activeGrants[trimmed] = struct{}{}
 		}
 	}
 }
