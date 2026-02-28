@@ -241,7 +241,7 @@ func getZeroClawGatewayCommandForGOOS(goos, gatewayCommand string) string {
 	case "windows":
 		return "zeroclaw " + gatewayCommand
 	default:
-		return fmt.Sprintf(`sh -c 'if [ -x "$HOME/.cargo/bin/zeroclaw" ]; then exec "$HOME/.cargo/bin/zeroclaw" %s; elif command -v zeroclaw >/dev/null 2>&1; then exec "$(command -v zeroclaw)" %s; else echo "zeroclaw executable not found (checked $HOME/.cargo/bin/zeroclaw and PATH)" >&2; exit 127; fi'`, gatewayCommand, gatewayCommand)
+		return fmt.Sprintf(`sh -c 'if [ -x "$HOME/.local/bin/zeroclaw" ]; then exec "$HOME/.local/bin/zeroclaw" %s; elif [ -x "$HOME/.cargo/bin/zeroclaw" ]; then exec "$HOME/.cargo/bin/zeroclaw" %s; elif command -v zeroclaw >/dev/null 2>&1; then exec "$(command -v zeroclaw)" %s; else echo "zeroclaw executable not found (checked $HOME/.local/bin/zeroclaw, $HOME/.cargo/bin/zeroclaw, and PATH)" >&2; exit 127; fi'`, gatewayCommand, gatewayCommand, gatewayCommand)
 	}
 }
 

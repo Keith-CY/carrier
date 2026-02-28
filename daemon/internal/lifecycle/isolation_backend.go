@@ -32,7 +32,7 @@ func buildIsolationHostPrepareCommand() (string, error) {
 		if _, err := isolationBackendLookup("wsl"); err != nil {
 			return "", fmt.Errorf("%w: WSL executable (wsl) not found in PATH; run `wsl --install` and reboot, then retry", ErrIsolationUnavailable)
 		}
-		return "command -v wsl >/dev/null 2>&1", nil
+		return "", nil
 	default:
 		return "", fmt.Errorf("%w: unsupported host OS %s", ErrIsolationUnavailable, isolationRuntimeGOOS)
 	}
