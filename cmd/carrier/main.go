@@ -54,6 +54,7 @@ import (
 	"carrier/daemon/credentialstore"
 	"carrier/daemon/server"
 	gatewayruntime "carrier/gateway"
+	"carrier/shared/openclawcfg"
 )
 
 type choiceOption struct {
@@ -1992,12 +1993,6 @@ func buildRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Config) (ma
 	}
 }
 
-const (
-	openClawCarrierFileSecretProviderAlias = "carrier_file"
-	openClawCarrierFileSecretsPath         = "~/.openclaw/carrier-secrets.json"
-	openClawCarrierSecretFilePatchKey      = "_carrier_openclaw_secret_file"
-)
-
 func buildJSONRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Config) (map[string]interface{}, error) {
 	return buildPicoClawRemoteConfigPatch(opts, cfg)
 }
@@ -2103,7 +2098,7 @@ func buildOpenClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Con
 			entry := map[string]interface{}{
 				"enabled": true,
 			}
-			entry[openClawChannelTokenField(selected)] = token
+			entry[openclawcfg.ChannelTokenField(selected)] = token
 			if secret := strings.TrimSpace(local.WebhookSecret); secret != "" {
 				entry["webhookSecret"] = secret
 			}
@@ -2133,9 +2128,9 @@ func buildOpenClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Con
 		defaultModelName := strings.TrimSpace(cfg.DefaultModel)
 		modelsProviders := map[string]interface{}{}
 		secretProviders := map[string]interface{}{
-			openClawCarrierFileSecretProviderAlias: map[string]interface{}{
+			openclawcfg.CarrierFileSecretProviderAlias: map[string]interface{}{
 				"source": "file",
-				"path":   openClawCarrierFileSecretsPath,
+				"path":   openclawcfg.CarrierFileSecretsPath,
 				"mode":   "json",
 			},
 		}
@@ -2172,7 +2167,7 @@ func buildOpenClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Con
 			patch["secrets"] = map[string]interface{}{
 				"providers": secretProviders,
 				"defaults": map[string]interface{}{
-					"file": openClawCarrierFileSecretProviderAlias,
+					"file": openclawcfg.CarrierFileSecretProviderAlias,
 				},
 			}
 		}
@@ -2186,7 +2181,7 @@ func buildOpenClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Con
 			}
 		}
 		if len(secretsFilePayload) > 0 {
-			patch[openClawCarrierSecretFilePatchKey] = map[string]interface{}{
+			patch[openclawcfg.CarrierSecretFilePatchKey] = map[string]interface{}{
 				"providers": secretsFilePayload,
 			}
 		}
@@ -2236,29 +2231,14 @@ func buildOpenClawProviderEntry(model configv2.Model) (providerKey, modelName, m
 	providerItem = map[string]interface{}{
 		"apiKey": map[string]interface{}{
 			"source":   "file",
-			"provider": openClawCarrierFileSecretProviderAlias,
-			"id":       openClawProviderSecretPointer(providerKey),
+			"provider": openclawcfg.CarrierFileSecretProviderAlias,
+			"id":       openclawcfg.ProviderSecretPointer(providerKey),
 		},
 	}
 	if strings.EqualFold(strings.TrimSpace(model.ProviderID), "openai-codex") {
 		providerItem["auth"] = "oauth"
 	}
 	return providerKey, modelName, modelID, providerItem, secretValue, nil
-}
-
-func openClawProviderSecretPointer(providerKey string) string {
-	escaped := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(providerKey), "~", "~0"), "/", "~1")
-	if escaped == "" {
-		escaped = "openai"
-	}
-	return "/providers/" + escaped + "/apiKey"
-}
-
-func openClawChannelTokenField(channelID string) string {
-	if strings.EqualFold(strings.TrimSpace(channelID), "telegram") {
-		return "botToken"
-	}
-	return "token"
 }
 
 func buildZeroClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Config) (map[string]interface{}, error) {
@@ -4533,58 +4513,16 @@ func buildManagedOpenClawConfigPayload(
 	provider choiceOption,
 	providerKey, providerToken, modelID, workspacePath string,
 ) map[string]interface{} {
-	providerItem := map[string]interface{}{}
-	if strings.TrimSpace(providerToken) != "" {
-		providerItem["apiKey"] = map[string]interface{}{
-			"source":   "file",
-			"provider": openClawCarrierFileSecretProviderAlias,
-			"id":       openClawProviderSecretPointer(providerKey),
-		}
-	}
-	if strings.EqualFold(provider.ID, "openai-codex") {
-		providerItem["auth"] = "oauth"
-	}
-
-	channelConfig := map[string]interface{}{
-		"enabled":                            true,
-		openClawChannelTokenField(channelID): channelToken,
-	}
-	if len(allowFrom) > 0 {
-		channelConfig["allowFrom"] = allowFrom
-	}
-
-	return map[string]interface{}{
-		"agents": map[string]interface{}{
-			"defaults": map[string]interface{}{
-				"workspace":           workspacePath,
-				"model":               map[string]interface{}{"primary": modelID},
-				"maxTokens":           8192,
-				"temperature":         0.7,
-				"maxToolIterations":   20,
-				"restrictToWorkspace": true,
-			},
-		},
-		"models": map[string]interface{}{
-			"providers": map[string]interface{}{
-				providerKey: providerItem,
-			},
-		},
-		"secrets": map[string]interface{}{
-			"providers": map[string]interface{}{
-				openClawCarrierFileSecretProviderAlias: map[string]interface{}{
-					"source": "file",
-					"path":   openClawCarrierFileSecretsPath,
-					"mode":   "json",
-				},
-			},
-			"defaults": map[string]interface{}{
-				"file": openClawCarrierFileSecretProviderAlias,
-			},
-		},
-		"channels": map[string]interface{}{
-			channelID: channelConfig,
-		},
-	}
+	return openclawcfg.BuildManagedConfigPayload(openclawcfg.ManagedPayloadParams{
+		ChannelID:        channelID,
+		ChannelToken:     channelToken,
+		AllowFrom:        allowFrom,
+		ProviderID:       provider.ID,
+		ProviderKey:      providerKey,
+		IncludeAPIKeyRef: strings.TrimSpace(providerToken) != "",
+		ModelID:          modelID,
+		WorkspacePath:    workspacePath,
+	})
 }
 
 func backupIfExists(path string) error {

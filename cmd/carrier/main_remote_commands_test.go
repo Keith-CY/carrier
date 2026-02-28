@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"carrier/configv2"
+	"carrier/shared/openclawcfg"
 )
 
 func TestParseCarrierCommandRoutesRemote(t *testing.T) {
@@ -285,7 +286,7 @@ func TestBuildOpenClawRemoteConfigPatch(t *testing.T) {
 	if strings.TrimSpace(anyToString(apiKeyRef["provider"])) != "carrier_file" {
 		t.Fatalf("expected api key ref provider carrier_file, got %+v", apiKeyRef)
 	}
-	secretsPatch, _ := patch[openClawCarrierSecretFilePatchKey].(map[string]interface{})
+	secretsPatch, _ := patch[openclawcfg.CarrierSecretFilePatchKey].(map[string]interface{})
 	secretProviders, _ := secretsPatch["providers"].(map[string]interface{})
 	secretOpenAI, _ := secretProviders["openai"].(map[string]interface{})
 	if strings.TrimSpace(anyToString(secretOpenAI["apiKey"])) != "sk-openai-1" {

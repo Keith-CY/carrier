@@ -12,14 +12,14 @@ import (
 	"time"
 
 	"carrier/profilesync"
+	"carrier/shared/openclawcfg"
 )
 
 const (
-	remoteOpenClawConfigPath            = "$HOME/.openclaw/openclaw.json"
-	remoteOpenClawCarrierSecretsPath    = "$HOME/.openclaw/carrier-secrets.json"
-	remoteOpenClawCarrierSecretPatchKey = "_carrier_openclaw_secret_file"
-	remotePicoClawConfigPath            = "$HOME/.picoclaw/config.json"
-	remoteZeroClawConfigPath            = "$HOME/.zeroclaw/config.toml"
+	remoteOpenClawConfigPath         = "$HOME/.openclaw/openclaw.json"
+	remoteOpenClawCarrierSecretsPath = "$HOME/.openclaw/carrier-secrets.json"
+	remotePicoClawConfigPath         = "$HOME/.picoclaw/config.json"
+	remoteZeroClawConfigPath         = "$HOME/.zeroclaw/config.toml"
 )
 
 type remoteDiscoveryPullOptions struct {
@@ -1126,7 +1126,7 @@ func sanitizeOpenClawPatchPayload(patch map[string]interface{}) (map[string]inte
 	for key, value := range patch {
 		trimmed := strings.TrimSpace(key)
 		switch trimmed {
-		case remoteOpenClawCarrierSecretPatchKey:
+		case openclawcfg.CarrierSecretFilePatchKey:
 			if typed, ok := value.(map[string]interface{}); ok {
 				secretsPatch = typed
 			}
@@ -1265,11 +1265,12 @@ func remoteWriteOpenClawCarrierSecrets(ctx context.Context, host RemoteHost, pay
 	}
 	delimiter := fmt.Sprintf("CARRIER_SECRETS_%d", time.Now().UnixNano())
 	cmd := fmt.Sprintf(
-		"mkdir -p \"$HOME/.openclaw\"; cat > \"%s\" <<'%s'\n%s\n%s",
+		"mkdir -p \"$HOME/.openclaw\"; cat > \"%s\" <<'%s'\n%s\n%s\nchmod 600 \"%s\"",
 		remoteOpenClawCarrierSecretsPath,
 		delimiter,
 		string(raw),
 		delimiter,
+		remoteOpenClawCarrierSecretsPath,
 	)
 	res, runErr := runRemoteCommand(ctx, host, cmd)
 	if runErr != nil {
