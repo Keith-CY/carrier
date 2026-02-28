@@ -1773,13 +1773,15 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 	default:
 		return remoteCommandOptions{}, fmt.Errorf("unsupported remote action: %s", opts.Action)
 	}
-	switch opts.AgentID {
-	case "openclaw", "picoclaw", "zeroclaw":
-	default:
-		if opts.Action == "status" || opts.Action == "logs" || opts.Action == "rollback" || opts.Action == "uninstall" {
-			// status --all does not require agent ID
-		} else {
-			return remoteCommandOptions{}, fmt.Errorf("unsupported remote agent_id: %s (expected one of openclaw, picoclaw, zeroclaw)", opts.AgentID)
+	if opts.Action != "key-import" && opts.Action != "key-generate" {
+		switch opts.AgentID {
+		case "openclaw", "picoclaw", "zeroclaw":
+		default:
+			if opts.Action == "status" || opts.Action == "logs" || opts.Action == "rollback" || opts.Action == "uninstall" {
+				// status --all does not require agent ID
+			} else {
+				return remoteCommandOptions{}, fmt.Errorf("unsupported remote agent_id: %s (expected one of openclaw, picoclaw, zeroclaw)", opts.AgentID)
+			}
 		}
 	}
 	// OpenClaw runtime install endpoint uses the default agent slot "main".

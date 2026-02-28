@@ -117,12 +117,16 @@ func TestParseRemoteCommandArgsAddDefaultsAndValidation(t *testing.T) {
 		"--host-id", "h2",
 		"--host", "127.0.0.1",
 		"--user", "carrier",
+		"--key-ref", "keyref_abc123",
 	})
 	if err != nil {
-		t.Fatalf("parseRemoteCommandArgs(no key path) error: %v", err)
+		t.Fatalf("parseRemoteCommandArgs(key ref) error: %v", err)
 	}
 	if strings.TrimSpace(noKeyOpts.KeyPath) != "" {
 		t.Fatalf("key_path = %q, want empty (auto-managed default)", noKeyOpts.KeyPath)
+	}
+	if strings.TrimSpace(noKeyOpts.KeyRef) != "keyref_abc123" {
+		t.Fatalf("key_ref = %q, want keyref_abc123", noKeyOpts.KeyRef)
 	}
 
 	if _, err := parseRemoteCommandArgs([]string{"sync", "host-1", "main"}); err == nil {

@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	crand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -98,22 +97,12 @@ func TestGenerateManagedInstanceID_Branches(t *testing.T) {
 	})
 
 	t.Run("rand read error", func(t *testing.T) {
-		orig := crand.Reader
-		crand.Reader = failingReader{}
-		t.Cleanup(func() {
-			crand.Reader = orig
-		})
-
-		if _, err := generateManagedInstanceID("picoclaw"); err == nil {
+		if _, err := generateManagedInstanceIDWithEntropy("picoclaw", func(_ []byte) (int, error) {
+			return 0, errors.New("forced random failure")
+		}); err == nil {
 			t.Fatal("expected random-id generation error")
 		}
 	})
-}
-
-type failingReader struct{}
-
-func (failingReader) Read(_ []byte) (int, error) {
-	return 0, errors.New("forced random failure")
 }
 
 func TestUpsertManagedInstance_Branches(t *testing.T) {

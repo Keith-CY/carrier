@@ -46,12 +46,16 @@ func managedInstancesPath() (string, error) {
 }
 
 func generateManagedInstanceID(prefix string) (string, error) {
+	return generateManagedInstanceIDWithEntropy(prefix, rand.Read)
+}
+
+func generateManagedInstanceIDWithEntropy(prefix string, entropy func([]byte) (int, error)) (string, error) {
 	p := strings.ToLower(strings.TrimSpace(prefix))
 	if p == "" {
 		p = "agent"
 	}
 	buf := make([]byte, 4)
-	if _, err := rand.Read(buf); err != nil {
+	if _, err := entropy(buf); err != nil {
 		return "", fmt.Errorf("generate random id: %w", err)
 	}
 	return fmt.Sprintf("%s-%s", p, hex.EncodeToString(buf)), nil
