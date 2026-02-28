@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -324,7 +325,9 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 		return nil, fmt.Errorf("write carrier record: %w", err)
 	}
 	carrierDir := filepath.Join(home, ".carrier")
-	_ = configversion.InitRepo(carrierDir)
+	if err := configversion.InitRepo(carrierDir); err != nil {
+		log.Printf("[configversion] failed to initialize repo in gateway: %v", err)
+	}
 	configversion.CommitChange(carrierDir, fmt.Sprintf("add agent %s", instanceID))
 
 	return &managedOnboardResult{

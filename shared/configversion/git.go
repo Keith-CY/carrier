@@ -15,14 +15,21 @@ const (
 	initCommitMessage = "carrier: init config versioning"
 )
 
-var gitIgnoreContent = strings.Join([]string{
-	"credentials.json",
-	"carrier-secrets.json",
-	"*.key",
-	"*.pem",
-	"tls/",
-	"",
-}, "\n")
+// Testable hooks
+var (
+	lookPath   = exec.LookPath
+	mkdirAll   = os.MkdirAll
+	writeFile  = os.WriteFile
+	osStat     = os.Stat
+	execRunGit = runGitImpl
+)
+
+const gitIgnoreContent = `credentials.json
+carrier-secrets.json
+*.key
+*.pem
+tls/
+`
 
 // InitRepo ensures ~/.carrier/ is a git repo.
 // If already initialized, this is a no-op.
@@ -37,13 +44,13 @@ func InitRepo(carrierDir string) error {
 	if isGitRepo(carrierDir) {
 		return nil
 	}
-	if err := os.MkdirAll(carrierDir, 0o700); err != nil {
+	if err := mkdirAll(carrierDir, 0o700); err != nil {
 		return fmt.Errorf("create carrier dir: %w", err)
 	}
 	if _, err := runGit("", "init", carrierDir); err != nil {
 		return fmt.Errorf("git init: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(carrierDir, ".gitignore"), []byte(gitIgnoreContent), 0o600); err != nil {
+	if err := writeFile(filepath.Join(carrierDir, ".gitignore"), []byte(gitIgnoreContent), 0o600); err != nil {
 		return fmt.Errorf("write .gitignore: %w", err)
 	}
 	if err := ensureGitIdentity(carrierDir); err != nil {
@@ -91,12 +98,12 @@ func CommitChange(carrierDir string, message string) {
 }
 
 func gitAvailable() bool {
-	_, err := exec.LookPath("git")
+	_, err := lookPath("git")
 	return err == nil
 }
 
 func isGitRepo(carrierDir string) bool {
-	info, err := os.Stat(filepath.Join(carrierDir, ".git"))
+	info, err := osStat(filepath.Join(carrierDir, ".git"))
 	return err == nil && info.IsDir()
 }
 
@@ -117,6 +124,10 @@ func ensureGitIdentity(carrierDir string) error {
 }
 
 func runGit(dir string, args ...string) (string, error) {
+	return execRunGit(dir, args...)
+}
+
+func runGitImpl(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	if strings.TrimSpace(dir) != "" {
 		cmd.Dir = dir

@@ -1302,7 +1302,12 @@ func runConfigCommand(out io.Writer, opts configCommandOptions) error {
 		return nil
 	}
 	if opts.Action == "set-tls" {
-		return runConfigTLSCommand(out, opts)
+		if err := runConfigTLSCommand(out, opts); err != nil {
+			return err
+		}
+		carrierDir := ensureCarrierConfigVersioning(out)
+		configversion.CommitChange(carrierDir, fmt.Sprintf("config set %s", opts.Key))
+		return nil
 	}
 	if opts.Action != "set" {
 		return fmt.Errorf("unsupported config action: %s", opts.Action)
@@ -1313,6 +1318,8 @@ func runConfigCommand(out io.Writer, opts configCommandOptions) error {
 	if err != nil {
 		return err
 	}
+	carrierDir := ensureCarrierConfigVersioning(out)
+	configversion.CommitChange(carrierDir, fmt.Sprintf("config set %s", opts.Key))
 	_, _ = fmt.Fprintf(out, "updated %s %s=%s\n", opts.Agent, opts.Key, opts.Value)
 	return nil
 }
@@ -2983,6 +2990,8 @@ func runUninstallInstance(out io.Writer, instanceID string) error {
 	if err := saveManagedInstances(path, instances); err != nil {
 		return err
 	}
+	carrierDir := ensureCarrierConfigVersioning(out)
+	configversion.CommitChange(carrierDir, fmt.Sprintf("uninstall agent %s", inst.ID))
 	_, _ = fmt.Fprintf(out, "✅ uninstalled instance %s (%s)\n", inst.ID, managedInstanceDisplayName(inst))
 	return nil
 }

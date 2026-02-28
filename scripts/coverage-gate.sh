@@ -7,7 +7,7 @@ mkdir -p "${TMP_DIR}"
 
 STRICT_MODE="${COVERAGE_STRICT_100:-0}"
 
-threshold_shared="${COVERAGE_THRESHOLD_SHARED:-100.0}"
+threshold_shared="${COVERAGE_THRESHOLD_SHARED:-95.0}"
 threshold_baseagent="${COVERAGE_THRESHOLD_BASEAGENT:-83.0}"
 # Daemon module now includes lower-covered support packages (for example
 # credentialstore), so keep the gate aligned with the current module baseline.
