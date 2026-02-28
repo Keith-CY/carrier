@@ -261,6 +261,28 @@ func (pm *ProcessManager) GetExitCode(agentID string) *int {
 	}
 }
 
+// Signal sends an OS signal to the tracked process.
+func (pm *ProcessManager) Signal(agentID string, sig os.Signal) error {
+	pm.mu.RLock()
+	info, exists := pm.processes[agentID]
+	pm.mu.RUnlock()
+	if !exists || info == nil || info.cmd == nil || info.cmd.Process == nil {
+		return fmt.Errorf("agent %s is not running", agentID)
+	}
+	return info.cmd.Process.Signal(sig)
+}
+
+// PID returns the current tracked PID for an agent, or 0 when not running.
+func (pm *ProcessManager) PID(agentID string) int {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	info, exists := pm.processes[agentID]
+	if !exists || info == nil || !pm.isProcessAlive(info) {
+		return 0
+	}
+	return info.pid
+}
+
 // maxLogSize is the size threshold (10 MB) at which a log file is rotated
 // before a new process start.
 const maxLogSize int64 = 10 * 1024 * 1024

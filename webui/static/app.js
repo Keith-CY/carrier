@@ -2,6 +2,8 @@
 (function() {
   const $ = (s, p) => (p || document).querySelector(s);
   const $$ = (s, p) => [...(p || document).querySelectorAll(s)];
+  const THEME_STORAGE_KEY = "carrier_theme";
+  const I18N_STORAGE_KEY = "carrier_lang";
   let token = localStorage.getItem("carrier_token") || "";
   let selectedAgent = "";
   let selectedProvider = null;
@@ -64,6 +66,145 @@
     providerBindingEnabled: false
   };
   let featureFlags = { ...DEFAULT_FEATURE_FLAGS };
+  let i18nLang = "en";
+  let i18nFallback = {};
+  let i18nMessages = {};
+  function detectLanguage() {
+    const saved = (localStorage.getItem(I18N_STORAGE_KEY) || "").trim().toLowerCase();
+    if (saved === "en" || saved === "zh")
+      return saved;
+    const browserLang = ((navigator.language || navigator.userLanguage || "en") + "").toLowerCase();
+    return browserLang.startsWith("zh") ? "zh" : "en";
+  }
+  async function loadI18nMessages(lang) {
+    try {
+      const resp = await fetch("/i18n/" + lang + ".json");
+      if (!resp.ok)
+        return {};
+      return await resp.json();
+    } catch (_e) {
+      return {};
+    }
+  }
+  function t(key) {
+    return i18nMessages[key] || i18nFallback[key] || key;
+  }
+  function applyTranslations() {
+    const navMap = {
+      dashboard: "nav.dashboard",
+      servers: "nav.servers",
+      profiles: "nav.profiles",
+      "remote-chat": "nav.remote_chat",
+      "remote-observability": "nav.observability",
+      logs: "nav.logs",
+      chat: "nav.chat",
+      settings: "nav.settings"
+    };
+    Object.keys(navMap).forEach((route) => {
+      const el = $('.nav-link[data-route="' + route + '"] .nav-text');
+      if (el)
+        el.textContent = t(navMap[route]);
+    });
+    const appTitle = $("header h1");
+    if (appTitle)
+      appTitle.textContent = t("app.title");
+    const loginBtn = $("#login-btn");
+    if (loginBtn)
+      loginBtn.textContent = t("auth.connect");
+    const loginToken = $("#login-token");
+    if (loginToken)
+      loginToken.placeholder = t("auth.token_placeholder");
+    const healthBadge = $("#health-badge");
+    if (healthBadge && healthBadge.classList.contains("badge-unknown"))
+      healthBadge.textContent = t("health.checking");
+    const logoutBtn = $("#logout-btn");
+    if (logoutBtn)
+      logoutBtn.textContent = t("auth.logout");
+    const dashboardTitle = $("#view-dashboard h2");
+    if (dashboardTitle)
+      dashboardTitle.textContent = t("dashboard.title");
+    const addAgentBtn = $("#dashboard-add-agent");
+    if (addAgentBtn)
+      addAgentBtn.textContent = t("dashboard.add_agent");
+    const refreshBtn = $("#refresh-instances");
+    if (refreshBtn)
+      refreshBtn.textContent = t("dashboard.refresh");
+    const logsTitle = $("#view-logs h2");
+    if (logsTitle)
+      logsTitle.textContent = t("logs.title");
+  }
+  function ensureLanguageSwitcher() {
+    const host = $(".header-right");
+    if (!host)
+      return null;
+    let select = $("#language-switch");
+    if (select)
+      return select;
+    const wrapper = document.createElement("label");
+    wrapper.className = "header-lang";
+    const span = document.createElement("span");
+    span.id = "language-label";
+    span.className = "text-dim";
+    span.textContent = t("lang.label");
+    select = document.createElement("select");
+    select.id = "language-switch";
+    select.innerHTML = '<option value="en">EN</option><option value="zh">中文</option>';
+    wrapper.appendChild(span);
+    wrapper.appendChild(select);
+    host.insertBefore(wrapper, $("#health-badge"));
+    return select;
+  }
+  async function initI18n() {
+    i18nFallback = await loadI18nMessages("en");
+    i18nLang = detectLanguage();
+    i18nMessages = i18nLang === "en" ? i18nFallback : await loadI18nMessages(i18nLang);
+    const switcher = ensureLanguageSwitcher();
+    if (switcher) {
+      switcher.value = i18nLang;
+      switcher.onchange = async () => {
+        i18nLang = switcher.value === "zh" ? "zh" : "en";
+        localStorage.setItem(I18N_STORAGE_KEY, i18nLang);
+        i18nMessages = i18nLang === "en" ? i18nFallback : await loadI18nMessages(i18nLang);
+        applyTranslations();
+      };
+    }
+    applyTranslations();
+  }
+  function preferredTheme() {
+    const saved = (localStorage.getItem(THEME_STORAGE_KEY) || "").trim().toLowerCase();
+    if (saved === "light" || saved === "dark")
+      return saved;
+    const media = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
+    return media && media.matches ? "dark" : "light";
+  }
+  function applyTheme(theme) {
+    const next = theme === "dark" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", next);
+    const btn = $("#theme-toggle");
+    if (btn) {
+      btn.textContent = next === "dark" ? "Light" : "Dark";
+      btn.setAttribute("aria-label", "Switch to " + (next === "dark" ? "light" : "dark") + " theme");
+    }
+  }
+  function initThemeToggle() {
+    const host = $(".header-right");
+    if (!host)
+      return;
+    let btn = $("#theme-toggle");
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.id = "theme-toggle";
+      btn.className = "btn-sm btn-secondary";
+      host.insertBefore(btn, $("#logout-btn"));
+    }
+    applyTheme(preferredTheme());
+    btn.onclick = () => {
+      const current = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
+      const next = current === "dark" ? "light" : "dark";
+      localStorage.setItem(THEME_STORAGE_KEY, next);
+      applyTheme(next);
+    };
+  }
   function escapeHtml(s) {
     const d = document.createElement("div");
     d.textContent = s;
@@ -5117,6 +5258,8 @@
     el.textContent = lines.join(" ");
   }
   function init() {
+    initI18n();
+    initThemeToggle();
     initLogin();
     checkHealth();
     setInterval(checkHealth, 30000);
