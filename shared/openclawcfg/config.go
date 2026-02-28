@@ -27,8 +27,8 @@ func BuildManagedConfigPayload(params ManagedPayloadParams) map[string]interface
 	webuiOnly := strings.TrimSpace(params.ChannelID) == "" && !params.ChannelSetupPending
 	channelConfig := map[string]interface{}{}
 	if webuiOnly {
-		channelConfig["enabled"] = false
-		channelConfig["webui_only"] = true
+		// No channel configured — agent accessible via WebUI only.
+		// Return empty channels map below.
 	} else if params.ChannelSetupPending {
 		channelConfig["enabled"] = false
 		channelConfig["setup_pending"] = true
@@ -68,9 +68,14 @@ func BuildManagedConfigPayload(params ManagedPayloadParams) map[string]interface
 				"file": CarrierFileSecretProviderAlias,
 			},
 		},
-		"channels": map[string]interface{}{
-			strings.TrimSpace(params.ChannelID): channelConfig,
-		},
+		"channels": func() map[string]interface{} {
+			if webuiOnly {
+				return map[string]interface{}{}
+			}
+			return map[string]interface{}{
+				strings.TrimSpace(params.ChannelID): channelConfig,
+			}
+		}(),
 	}
 }
 

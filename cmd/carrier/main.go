@@ -32,6 +32,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -2787,7 +2788,11 @@ func downloadFile(url, destPath string, timeout time.Duration) error {
 	}
 	req.Header.Set("User-Agent", "carrier-self-update")
 
-	client := &http.Client{}
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("download %s: %w", url, err)
@@ -2918,9 +2923,9 @@ func replaceExecutableBinary(newBinaryPath, currentBinaryPath string) error {
 		rollback()
 		return fmt.Errorf("set executable permissions: %w", err)
 	}
-	if err := os.Remove(backupPath); err != nil {
-		return fmt.Errorf("remove old binary backup: %w", err)
-	}
+	// Keep .old backup for rollback safety — it will be cleaned up on next
+	// successful update. If the new binary fails to start, users can manually
+	// restore by renaming carrier.old → carrier.
 	return nil
 }
 
@@ -5946,11 +5951,9 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 			return lineErr
 		}
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
+		if trimmed == "" || strings.EqualFold(trimmed, "skip") {
 			channelSkipped = true
 			_, _ = fmt.Fprintln(out, "Skipped chat channel — agent will be accessible via WebUI only.")
-		} else if !strings.EqualFold(trimmed, "telegram") && !strings.EqualFold(trimmed, channel.ID) {
-			return fmt.Errorf("unknown channel %q (expected 'telegram' or press Enter to skip)", trimmed)
 		}
 	} else {
 		channelSkipped = true
@@ -7102,12 +7105,7 @@ func buildManagedPicoClawConfigPayload(
 		},
 		"channels": func() map[string]interface{} {
 			if strings.TrimSpace(channelID) == "" {
-				return map[string]interface{}{
-					"webui": map[string]interface{}{
-						"enabled":    false,
-						"webui_only": true,
-					},
-				}
+				return map[string]interface{}{}
 			}
 			return map[string]interface{}{
 				channelID: map[string]interface{}{

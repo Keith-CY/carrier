@@ -185,7 +185,7 @@ func TestE2ECarrierBinaryAddOpenClawReusesPairedUserAndProviderCredential(t *tes
 	setProbeEnvFromURL(t, "CARRIER_SERVER_HOST", "CARRIER_SERVER_PORT", daemon.URL)
 
 	bin := buildCarrierBinary(t)
-	stdout, stderr, err := runCarrierBinary(t, bin, openclawTelegramToken+"\n", "add", "openclaw")
+	stdout, stderr, err := runCarrierBinary(t, bin, "telegram\n"+openclawTelegramToken+"\n", "add", "openclaw")
 	if err != nil {
 		t.Fatalf("carrier add openclaw failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -346,7 +346,7 @@ func TestE2ECarrierBinaryAddOpenClawIsolationSendsInstallAndStartIsolationPayloa
 	setProbeEnvFromURL(t, "CARRIER_SERVER_HOST", "CARRIER_SERVER_PORT", daemon.URL)
 
 	bin := buildCarrierBinary(t)
-	stdout, stderr, err := runCarrierBinary(t, bin, "tg-openclaw-dedicated\n", "add", "openclaw", "--isolation")
+	stdout, stderr, err := runCarrierBinary(t, bin, "telegram\ntg-openclaw-dedicated\n", "add", "openclaw", "--isolation")
 	if err != nil {
 		t.Fatalf("carrier add openclaw --isolation failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -414,7 +414,7 @@ func TestE2ECarrierBinaryAddManagedAgentsIsolationSendsInstallAndStartIsolationP
 			setProbeEnvFromURL(t, "CARRIER_SERVER_HOST", "CARRIER_SERVER_PORT", daemon.URL)
 
 			bin := buildCarrierBinary(t)
-			stdout, stderr, err := runCarrierBinary(t, bin, "tg-"+agentID+"-dedicated\n", "add", agentID, "--isolation")
+			stdout, stderr, err := runCarrierBinary(t, bin, "telegram\ntg-"+agentID+"-dedicated\n", "add", agentID, "--isolation")
 			if err != nil {
 				t.Fatalf("carrier add %s --isolation failed: %v\nstdout:\n%s\nstderr:\n%s", agentID, err, stdout, stderr)
 			}
