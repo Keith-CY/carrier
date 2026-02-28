@@ -38,7 +38,8 @@ type Store struct {
 	records           map[string]MemoryRecord
 	observations      []ObservationEvent
 	grants            map[string]Grant
-	instanceScopes    map[string][]Scope // keyed by agent instance id
+	instanceScopes    map[string][]Scope // effective scopes (manual + attachment-derived), keyed by agent instance id
+	manualScopes      map[string][]Scope // scopes explicitly attached via AttachScope, keyed by agent instance id
 	retentionDays     int
 	truthRoot         string
 	indexPath         string
@@ -135,6 +136,7 @@ func NewStore(opts ...StoreOption) *Store {
 		observations:           make([]ObservationEvent, 0, 256),
 		grants:                 make(map[string]Grant),
 		instanceScopes:         make(map[string][]Scope),
+		manualScopes:           make(map[string][]Scope),
 		retentionDays:          90,
 	}
 	for _, o := range opts {

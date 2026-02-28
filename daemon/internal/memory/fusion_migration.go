@@ -173,6 +173,7 @@ func (s *Store) RollbackFromBackup(backupPath, actor, requestID string) error {
 	s.observations = nil
 	s.grants = make(map[string]Grant)
 	s.instanceScopes = make(map[string][]Scope)
+	s.manualScopes = make(map[string][]Scope)
 	s.sqliteReady = false
 	s.sqliteFTSEnabled = false
 	if err := s.loadState(); err != nil {

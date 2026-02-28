@@ -364,16 +364,16 @@ func (s *Store) AttachScope(instanceID string, scope Scope) error {
 	if instanceID == "" || scope == "" {
 		return fmt.Errorf("instanceID and scope are required")
 	}
-	existing := s.instanceScopes[instanceID]
-	for _, v := range existing {
-		if v == scope {
-			return nil
+	changed := s.addManualScopeLocked(instanceID, scope)
+	if !changed {
+		existing := s.instanceScopes[instanceID]
+		for _, v := range existing {
+			if v == scope {
+				return nil
+			}
 		}
 	}
-	existing = append(existing, scope)
-	sort.SliceStable(existing, func(i, j int) bool { return existing[i] < existing[j] })
-	s.instanceScopes[instanceID] = existing
-	s.syncInstanceScopesToSQLiteLocked(instanceID, existing)
+	s.rebuildInstanceScopesLocked(instanceID)
 	if err := s.persistStateLocked(); err != nil {
 		return err
 	}
@@ -397,8 +397,16 @@ func (s *Store) DetachScope(instanceID string, scope Scope) error {
 	if idx < 0 {
 		return ErrAttachmentMissing
 	}
-	s.instanceScopes[instanceID] = append(existing[:idx], existing[idx+1:]...)
-	s.syncInstanceScopesToSQLiteLocked(instanceID, s.instanceScopes[instanceID])
+	_ = s.removeManualScopeLocked(instanceID, scope)
+	updated := append(existing[:idx], existing[idx+1:]...)
+	updated = normalizeAndSortScopes(updated)
+	if len(updated) == 0 {
+		delete(s.instanceScopes, instanceID)
+		s.syncInstanceScopesToSQLiteLocked(instanceID, nil)
+	} else {
+		s.instanceScopes[instanceID] = updated
+		s.syncInstanceScopesToSQLiteLocked(instanceID, updated)
+	}
 	if err := s.persistStateLocked(); err != nil {
 		return err
 	}

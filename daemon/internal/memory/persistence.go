@@ -20,6 +20,7 @@ type persistedStoreState struct {
 	Observations    []ObservationEvent         `json:"observations,omitempty"`
 	Grants          map[string]Grant           `json:"grants,omitempty"`
 	InstanceScopes  map[string][]Scope         `json:"instance_scopes,omitempty"`
+	ManualScopes    map[string][]Scope         `json:"manual_scopes,omitempty"`
 	RetentionDays   int                        `json:"retention_days,omitempty"`
 	TruthRoot       string                     `json:"truth_root,omitempty"`
 	IndexPath       string                     `json:"index_path,omitempty"`
@@ -77,6 +78,9 @@ func (s *Store) loadState() error {
 	if state.InstanceScopes != nil {
 		s.instanceScopes = state.InstanceScopes
 	}
+	if state.ManualScopes != nil {
+		s.manualScopes = state.ManualScopes
+	}
 	if state.RetentionDays > 0 {
 		s.retentionDays = state.RetentionDays
 	}
@@ -108,6 +112,7 @@ func (s *Store) persistStateLocked() error {
 		Observations:    append([]ObservationEvent(nil), s.observations...),
 		Grants:          make(map[string]Grant, len(s.grants)),
 		InstanceScopes:  make(map[string][]Scope, len(s.instanceScopes)),
+		ManualScopes:    make(map[string][]Scope, len(s.manualScopes)),
 		RetentionDays:   s.retentionDays,
 		TruthRoot:       s.truthRoot,
 		IndexPath:       s.indexPath,
@@ -140,6 +145,11 @@ func (s *Store) persistStateLocked() error {
 		cloned := make([]Scope, len(v))
 		copy(cloned, v)
 		state.InstanceScopes[k] = cloned
+	}
+	for k, v := range s.manualScopes {
+		cloned := make([]Scope, len(v))
+		copy(cloned, v)
+		state.ManualScopes[k] = cloned
 	}
 
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
