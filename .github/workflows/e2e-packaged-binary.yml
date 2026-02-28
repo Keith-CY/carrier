@@ -500,14 +500,17 @@ jobs:
           }
           trap cleanup EXIT
 
+          echo "Waiting for SSH readiness (up to 60s)..."
           for attempt in $(seq 1 60); do
             if ssh -i "${RUNNER_TEMP}/id_ed25519" -p 2224 -o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 carrier@127.0.0.1 "echo ssh-ready" >/dev/null 2>&1; then
+              echo "SSH ready after ${attempt}s"
               break
             fi
             if [[ "$attempt" -eq 60 ]]; then
               echo "remote VPS SSH endpoint did not become ready in time" >&2
               exit 1
             fi
+            printf "."
             sleep 1
           done
 
