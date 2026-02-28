@@ -100,6 +100,17 @@ header {
   gap: 12px;
 }
 
+.header-lang {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.header-lang select {
+  min-width: 74px;
+  padding: 4px 8px;
+}
+
 header h1 {
   font-family: "Poppins", "Avenir Next", sans-serif;
   font-size: 1.15rem;
