@@ -96,8 +96,23 @@ func (s *Service) StartWithOptions(ctx context.Context, agentID string, opts Sta
 		}
 	}
 
-	// Start the process using ProcessManager
-	pid, runErr := s.processManager.Start(agentID, "sh", []string{"-c", startCommand})
+	// Prepare and auto-mount memory view before process start so runtime env can
+	// be injected in the initial process environment.
+	memoryEnv := s.autoMountMemories(agentID)
+
+	// Start the process using ProcessManager.
+	var (
+		pid    int
+		runErr error
+	)
+	if pmWithEnv, ok := s.processManager.(ProcessControllerWithEnv); ok && len(memoryEnv) > 0 {
+		pid, runErr = pmWithEnv.StartWithEnv(agentID, "sh", []string{"-c", startCommand}, memoryEnv)
+	} else {
+		if len(memoryEnv) > 0 {
+			s.appendLog(agentID, "process manager does not support StartWithEnv; starting without memory env injection")
+		}
+		pid, runErr = s.processManager.Start(agentID, "sh", []string{"-c", startCommand})
+	}
 	if runErr != nil {
 		if isolationEnabled {
 			runErr = fmt.Errorf("%w: %v", ErrIsolationStartFailed, runErr)
@@ -106,6 +121,7 @@ func (s *Service) StartWithOptions(ctx context.Context, agentID string, opts Sta
 		if triageErr == nil {
 			s.appendLog(agentID, fmt.Sprintf("triage summary: %s", triage.Summary))
 		}
+		s.autoUnmountMemories(agentID)
 		s.updateStateOnStartError(agentID, runErr)
 		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_START_FAILED", runErr.Error())
 		return runErr
@@ -119,13 +135,11 @@ func (s *Service) StartWithOptions(ctx context.Context, agentID string, opts Sta
 		if isolationEnabled {
 			err = fmt.Errorf("%w: %v", ErrIsolationStartFailed, err)
 		}
+		s.autoUnmountMemories(agentID)
 		s.updateStateOnStartError(agentID, err)
 		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_START_FAILED", err.Error())
 		return err
 	}
-
-	// Auto-mount memories linked to this agent.
-	s.autoMountMemories(agentID)
 
 	s.mu.Lock()
 	state = s.states[agentID]

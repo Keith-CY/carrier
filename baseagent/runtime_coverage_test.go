@@ -579,3 +579,87 @@ func TestRuntimeChatMemoryFailureAddsSafeModeNote(t *testing.T) {
 		t.Fatalf("expected safe mode note in response: %q", resp.Message)
 	}
 }
+
+func TestResolveConfiguredBaseAgentProviderID(t *testing.T) {
+	writeDefaultModelConfig(t, "openai", "openai/gpt-5.2", "OPENAI_API_KEY")
+	if got := resolveConfiguredBaseAgentProviderID(); got != "openai" {
+		t.Fatalf("resolveConfiguredBaseAgentProviderID() = %q, want %q", got, "openai")
+	}
+
+	writeDefaultModelConfig(t, "unknown-provider", "unknown/model", "UNKNOWN_API_KEY")
+	if got := resolveConfiguredBaseAgentProviderID(); got != "" {
+		t.Fatalf("resolveConfiguredBaseAgentProviderID() = %q, want empty for unsupported provider", got)
+	}
+
+	t.Setenv("CARRIER_CONFIG", filepath.Join(t.TempDir(), "missing-config.v2.json"))
+	if got := resolveConfiguredBaseAgentProviderID(); got != "" {
+		t.Fatalf("resolveConfiguredBaseAgentProviderID() with missing config = %q, want empty", got)
+	}
+}
+
+func TestRuntimeChannelAndProviderWrappers(t *testing.T) {
+	var nilRuntime *Runtime
+	if err := nilRuntime.RegisterExternalChannel("telegram", func(context.Context, OutboundEnvelope) error { return nil }); err == nil {
+		t.Fatal("expected nil runtime channel registration error")
+	}
+	if err := nilRuntime.StartChannels(context.Background()); err == nil {
+		t.Fatal("expected nil runtime start channels error")
+	}
+	if err := nilRuntime.StopChannels(context.Background()); err == nil {
+		t.Fatal("expected nil runtime stop channels error")
+	}
+	if err := nilRuntime.RegisterProvider(providerFake{name: "x", out: "ok"}); err == nil {
+		t.Fatal("expected nil runtime register provider error")
+	}
+	if err := nilRuntime.SetActiveProvider("x"); err == nil {
+		t.Fatal("expected nil runtime set active provider error")
+	}
+
+	rt := NewRuntime(nil, nil)
+	sent := ""
+	if err := rt.RegisterExternalChannel("telegram", func(_ context.Context, msg OutboundEnvelope) error {
+		sent = msg.Content
+		return nil
+	}); err != nil {
+		t.Fatalf("RegisterExternalChannel: %v", err)
+	}
+	if err := rt.StartChannels(context.Background()); err != nil {
+		t.Fatalf("StartChannels: %v", err)
+	}
+	ch, ok := rt.channels.GetChannel("telegram")
+	if !ok {
+		t.Fatal("expected registered telegram channel")
+	}
+	if err := ch.Send(context.Background(), OutboundEnvelope{Channel: "telegram", ChatID: "c1", Content: "ping"}); err != nil {
+		t.Fatalf("channel send failed: %v", err)
+	}
+	if sent != "ping" {
+		t.Fatalf("sent payload = %q, want %q", sent, "ping")
+	}
+	if err := rt.StopChannels(context.Background()); err != nil {
+		t.Fatalf("StopChannels: %v", err)
+	}
+
+	if err := rt.RegisterProvider(providerFake{name: "custom-provider", out: "custom reply"}); err != nil {
+		t.Fatalf("RegisterProvider: %v", err)
+	}
+	if err := rt.SetActiveProvider("custom-provider"); err != nil {
+		t.Fatalf("SetActiveProvider: %v", err)
+	}
+	reply, err := rt.providers.Reply(context.Background(), ProviderRequest{UserMessage: "hello"})
+	if err != nil {
+		t.Fatalf("provider reply failed: %v", err)
+	}
+	if reply != "custom reply" {
+		t.Fatalf("provider reply = %q, want %q", reply, "custom reply")
+	}
+}
+
+func TestMustRegisterProviderPanicsOnNilManager(t *testing.T) {
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("expected panic for nil provider manager")
+		}
+	}()
+	mustRegisterProvider(nil, providerFake{name: "p", out: "ok"})
+}

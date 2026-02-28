@@ -12,6 +12,12 @@ import (
 	"time"
 )
 
+type failingReader struct{}
+
+func (failingReader) Read(_ []byte) (int, error) {
+	return 0, errors.New("forced random failure")
+}
+
 func mustLoadManagedInstancesFile(t *testing.T, path string) []managedAgentInstance {
 	t.Helper()
 	raw, err := os.ReadFile(path)
@@ -97,9 +103,13 @@ func TestGenerateManagedInstanceID_Branches(t *testing.T) {
 	})
 
 	t.Run("rand read error", func(t *testing.T) {
-		if _, err := generateManagedInstanceIDWithEntropy("picoclaw", func(_ []byte) (int, error) {
-			return 0, errors.New("forced random failure")
-		}); err == nil {
+		orig := managedInstanceRandReader
+		managedInstanceRandReader = failingReader{}
+		t.Cleanup(func() {
+			managedInstanceRandReader = orig
+		})
+
+		if _, err := generateManagedInstanceID("picoclaw"); err == nil {
 			t.Fatal("expected random-id generation error")
 		}
 	})

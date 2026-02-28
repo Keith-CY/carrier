@@ -67,8 +67,7 @@ func (s *Store) attachMemoryLocked(agentID, memoryID string, opts AttachOptions)
 		AttachedAt:  s.now(),
 	}
 	s.attachments[agentID] = append(existing, att)
-	scopes := s.recomputeInstanceScopesLocked(agentID)
-	s.syncInstanceScopesToSQLiteLocked(agentID, scopes)
+	s.rebuildInstanceScopesLocked(agentID)
 	if err := s.persistStateLocked(); err != nil {
 		return Attachment{}, err.Error(), err
 	}
@@ -99,8 +98,7 @@ func (s *Store) DetachMemory(agentID, memoryID string) error {
 			break
 		}
 	}
-	scopes := s.recomputeInstanceScopesLocked(agentID)
-	s.syncInstanceScopesToSQLiteLocked(agentID, scopes)
+	s.rebuildInstanceScopesLocked(agentID)
 	if err := s.persistStateLocked(); err != nil {
 		return err
 	}
@@ -153,12 +151,115 @@ func (s *Store) SetAttachmentsFromLinks(agentID string, memoryIDs []string) erro
 		})
 	}
 	s.attachments[agentID] = attachments
-	scopes := s.recomputeInstanceScopesLocked(agentID)
-	s.syncInstanceScopesToSQLiteLocked(agentID, scopes)
+	s.rebuildInstanceScopesLocked(agentID)
 	if err := s.persistStateLocked(); err != nil {
 		return err
 	}
 	return nil
+}
+
+func normalizeAndSortScopes(scopes []Scope) []Scope {
+	if len(scopes) == 0 {
+		return nil
+	}
+	set := make(map[Scope]struct{}, len(scopes))
+	for _, scope := range scopes {
+		scope = normalizeScope(scope)
+		if scope == "" {
+			continue
+		}
+		set[scope] = struct{}{}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]Scope, 0, len(set))
+	for scope := range set {
+		out = append(out, scope)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func (s *Store) addManualScopeLocked(agentID string, scope Scope) bool {
+	scope = normalizeScope(scope)
+	if scope == "" {
+		return false
+	}
+	existing := s.manualScopes[agentID]
+	for _, v := range existing {
+		if v == scope {
+			return false
+		}
+	}
+	existing = append(existing, scope)
+	s.manualScopes[agentID] = normalizeAndSortScopes(existing)
+	return true
+}
+
+func (s *Store) removeManualScopeLocked(agentID string, scope Scope) bool {
+	scope = normalizeScope(scope)
+	if scope == "" {
+		return false
+	}
+	existing := s.manualScopes[agentID]
+	if len(existing) == 0 {
+		return false
+	}
+	updated := make([]Scope, 0, len(existing))
+	removed := false
+	for _, v := range existing {
+		if v == scope {
+			removed = true
+			continue
+		}
+		updated = append(updated, v)
+	}
+	if !removed {
+		return false
+	}
+	updated = normalizeAndSortScopes(updated)
+	if len(updated) == 0 {
+		delete(s.manualScopes, agentID)
+		return true
+	}
+	s.manualScopes[agentID] = updated
+	return true
+}
+
+func (s *Store) rebuildInstanceScopesLocked(agentID string) []Scope {
+	set := make(map[Scope]struct{})
+	for _, scope := range s.manualScopes[agentID] {
+		scope = normalizeScope(scope)
+		if scope == "" {
+			continue
+		}
+		set[scope] = struct{}{}
+	}
+	for _, att := range s.attachments[agentID] {
+		entry, ok := s.entries[att.MemoryID]
+		if !ok {
+			continue
+		}
+		scope := normalizeScope(scopeForEntry(entry))
+		if scope == "" {
+			continue
+		}
+		set[scope] = struct{}{}
+	}
+	scopes := make([]Scope, 0, len(set))
+	for scope := range set {
+		scopes = append(scopes, scope)
+	}
+	sort.SliceStable(scopes, func(i, j int) bool { return scopes[i] < scopes[j] })
+	if len(scopes) == 0 {
+		delete(s.instanceScopes, agentID)
+		s.syncInstanceScopesToSQLiteLocked(agentID, nil)
+		return nil
+	}
+	s.instanceScopes[agentID] = scopes
+	s.syncInstanceScopesToSQLiteLocked(agentID, scopes)
+	return scopes
 }
 
 // PrepareAgentMemory composes an effective memory view with deterministic precedence.

@@ -2,21 +2,24 @@ package lifecycle
 
 import (
 	"fmt"
+	"strings"
 
 	"carrier/daemon/internal/memory"
 )
 
 // autoMountMemories mounts all memory links for an agent on start.
-func (s *Service) autoMountMemories(agentID string) {
+func (s *Service) autoMountMemories(agentID string) map[string]string {
 	if s.memoryStore == nil {
-		return
+		return nil
 	}
 	s.mu.RLock()
 	links := append([]string(nil), s.memoryLinks[agentID]...)
 	s.mu.RUnlock()
 	if len(links) == 0 {
-		return
+		s.applyManifestMemoryPermissions(agentID)
+		return nil
 	}
+	s.applyManifestMemoryPermissions(agentID)
 
 	// Preferred path for issue #1189: deterministic composed effective memory view.
 	if err := s.memoryStore.SetAttachmentsFromLinks(agentID, links); err != nil {
@@ -25,7 +28,7 @@ func (s *Service) autoMountMemories(agentID string) {
 		contract, err := s.memoryStore.PrepareAgentMemory(agentID)
 		if err == nil {
 			s.appendLog(agentID, fmt.Sprintf("memory effective view prepared (digest=%s)", contract.ViewDigest))
-			return
+			return contract.Env
 		}
 		s.appendLog(agentID, fmt.Sprintf("memory view compose failed, falling back to direct mounts: %v", err))
 	}
@@ -36,6 +39,43 @@ func (s *Service) autoMountMemories(agentID string) {
 			s.appendLog(agentID, fmt.Sprintf("memory auto-mount %s failed: %v", memID, err))
 		} else {
 			s.appendLog(agentID, fmt.Sprintf("memory auto-mounted %s", memID))
+		}
+	}
+	return nil
+}
+
+func (s *Service) applyManifestMemoryPermissions(agentID string) {
+	if s.memoryStore == nil {
+		return
+	}
+	s.mu.RLock()
+	m, ok := s.manifests[agentID]
+	s.mu.RUnlock()
+	if !ok {
+		return
+	}
+	for _, scope := range m.Memory.Permissions.ReadScopes {
+		trimmed := strings.TrimSpace(scope)
+		if trimmed == "" {
+			continue
+		}
+		_ = s.memoryStore.AttachScope(agentID, memory.Scope(trimmed))
+	}
+	existingGrants := s.memoryStore.ListGrants(agentID)
+	activeGrants := make(map[string]struct{}, len(existingGrants))
+	for _, g := range existingGrants {
+		if g.RevokedAt == nil {
+			activeGrants[strings.TrimSpace(string(g.Scope))] = struct{}{}
+		}
+	}
+	for _, scope := range m.Memory.Permissions.WriteScopes {
+		trimmed := strings.TrimSpace(scope)
+		if trimmed == "" {
+			continue
+		}
+		if _, found := activeGrants[trimmed]; !found {
+			_, _ = s.memoryStore.GrantScope(agentID, memory.Scope(trimmed), "manifest:"+agentID, "manifest write scope")
+			activeGrants[trimmed] = struct{}{}
 		}
 	}
 }

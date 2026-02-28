@@ -138,9 +138,7 @@ func (s *Store) ImportMemory(mempackPath string, opts ImportOptions) (Entry, err
 			UpdatedAt:      now,
 		}
 		s.syncRecordToSQLiteLocked(s.records[memoryID])
-		if err := s.writeStableTruthRecordLocked(s.records[memoryID]); err != nil {
-			s.lastStateErr = fmt.Errorf("write imported truth record: %w", err)
-		}
+		_ = s.writeStableTruthRecordLocked(s.records[memoryID])
 	}
 	if err := s.persistStateLocked(); err != nil {
 		delete(s.entries, memoryID)

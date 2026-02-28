@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -45,6 +47,15 @@ func NewProcessManager(logDir string) *ProcessManager {
 // Start spawns a new process for the given agent and returns its PID.
 // stdout and stderr are captured to {logDir}/{agentID}.log
 func (pm *ProcessManager) Start(agentID string, command string, args []string) (int, error) {
+	return pm.startInternal(agentID, command, args, nil)
+}
+
+// StartWithEnv spawns a process with additional environment variables.
+func (pm *ProcessManager) StartWithEnv(agentID string, command string, args []string, env map[string]string) (int, error) {
+	return pm.startInternal(agentID, command, args, env)
+}
+
+func (pm *ProcessManager) startInternal(agentID string, command string, args []string, env map[string]string) (int, error) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
@@ -77,6 +88,28 @@ func (pm *ProcessManager) Start(agentID string, command string, args []string) (
 
 	// Create command
 	cmd := exec.Command(command, args...)
+	if len(env) > 0 {
+		baseEnv := os.Environ()
+		merged := make(map[string]string, len(baseEnv)+len(env))
+		for _, item := range baseEnv {
+			parts := strings.SplitN(item, "=", 2)
+			if len(parts) == 2 {
+				merged[parts[0]] = parts[1]
+			}
+		}
+		for k, v := range env {
+			merged[strings.TrimSpace(k)] = v
+		}
+		finalEnv := make([]string, 0, len(merged))
+		for k, v := range merged {
+			if k == "" {
+				continue
+			}
+			finalEnv = append(finalEnv, k+"="+v)
+		}
+		sort.Strings(finalEnv)
+		cmd.Env = finalEnv
+	}
 	cmd.Stdout = io.MultiWriter(logFile, os.Stdout)
 	cmd.Stderr = io.MultiWriter(logFile, os.Stderr)
 	configureProcessGroup(cmd)

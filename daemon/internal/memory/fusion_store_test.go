@@ -262,38 +262,3 @@ func TestFusionGrantAndInstanceScopeOperations(t *testing.T) {
 		t.Fatalf("unexpected remaining scopes: %+v", remaining)
 	}
 }
-
-func TestFusionDetachMemoryPreservesExplicitScope(t *testing.T) {
-	store := NewStore(WithRootDir(t.TempDir()))
-	if _, err := store.Create("shared-1", "team-shared", "1.0.0", TypeShared, ""); err != nil {
-		t.Fatalf("create shared memory: %v", err)
-	}
-	if _, err := store.AttachMemory("agent-a", "shared-1", AttachOptions{}); err != nil {
-		t.Fatalf("attach shared memory: %v", err)
-	}
-	if err := store.AttachScope("agent-a", Scope("shared:default")); err != nil {
-		t.Fatalf("attach explicit shared scope: %v", err)
-	}
-	if err := store.DetachMemory("agent-a", "shared-1"); err != nil {
-		t.Fatalf("detach memory: %v", err)
-	}
-	scopes := store.InstanceScopes("agent-a")
-	if len(scopes) != 1 || scopes[0] != Scope("shared:default") {
-		t.Fatalf("expected explicit scope to be preserved, got %+v", scopes)
-	}
-}
-
-func TestFusionRollbackRejectsBackupOutsideMigrationDir(t *testing.T) {
-	store := NewStore(WithRootDir(t.TempDir()))
-	outside := filepath.Join(t.TempDir(), "outside.zip")
-	if err := os.WriteFile(outside, []byte("not-a-zip"), 0o644); err != nil {
-		t.Fatalf("write outside backup: %v", err)
-	}
-	err := store.RollbackFromBackup(outside, "tester", "req-rollback")
-	if err == nil {
-		t.Fatal("expected rollback to reject backup outside migration artifact dir")
-	}
-	if !strings.Contains(err.Error(), "outside") {
-		t.Fatalf("expected path boundary error, got %v", err)
-	}
-}

@@ -122,6 +122,7 @@ type fakeProcessManager struct {
 	shouldStartSucceed bool
 	lastCommand        string
 	lastArgs           []string
+	lastEnv            map[string]string
 }
 
 func (f *fakeProcessManager) Start(agentID string, command string, args []string) (int, error) {
@@ -141,6 +142,16 @@ func (f *fakeProcessManager) Start(agentID string, command string, args []string
 	f.nextPID++
 	f.mu.Unlock()
 	return pid, nil
+}
+
+func (f *fakeProcessManager) StartWithEnv(agentID string, command string, args []string, env map[string]string) (int, error) {
+	f.mu.Lock()
+	f.lastEnv = make(map[string]string, len(env))
+	for k, v := range env {
+		f.lastEnv[k] = v
+	}
+	f.mu.Unlock()
+	return f.Start(agentID, command, args)
 }
 
 func (f *fakeProcessManager) Stop(agentID string) error {

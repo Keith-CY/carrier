@@ -66,7 +66,7 @@ func TestLatestManagedInstanceProviderUsesLatestInstance(t *testing.T) {
 			ID:        "openclaw-old",
 			Type:      "openclaw",
 			AgentID:   "openclaw",
-			Provider:  "openrouter",
+			Provider:  "anthropic",
 			UpdatedAt: time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
 		},
 		{

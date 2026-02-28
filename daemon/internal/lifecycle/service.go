@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -59,6 +60,11 @@ type ProcessController interface {
 	IsRunning(agentID string) bool
 	Wait(agentID string) error
 	Cleanup()
+}
+
+type ProcessControllerWithEnv interface {
+	ProcessController
+	StartWithEnv(agentID string, command string, args []string, env map[string]string) (int, error)
 }
 
 func WithRunner(r commandexec.Runner) Option {
@@ -278,7 +284,7 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 	svc.evidenceCollector = NewEvidenceCollector(logs, exitCodes, 1000)
 	svc.idGenerator = func(prefix string) string {
 		var buf [16]byte
-		if _, err := rand.Read(buf[:]); err != nil {
+		if _, err := io.ReadFull(rand.Reader, buf[:]); err != nil {
 			panic("crypto/rand failed: " + err.Error())
 		}
 		return fmt.Sprintf("%s-%s", prefix, hex.EncodeToString(buf[:]))

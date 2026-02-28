@@ -2,6 +2,7 @@ package baseagent
 
 import (
 	"bytes"
+	"carrier/shared/catalog"
 	"carrier/shared/config"
 	"context"
 	"encoding/base64"
@@ -19,7 +20,6 @@ import (
 const (
 	defaultOpenAIBaseURL        = "https://api.openai.com/v1"
 	defaultOpenAICodexBaseURL   = "https://chatgpt.com/backend-api"
-	defaultOpenRouterBaseURL    = "https://openrouter.ai/api/v1"
 	defaultBaseAgentLLMTimeout  = 45 * time.Second
 	baseAgentLLMRetryAttempts   = 3
 	baseAgentLLMRetryBackoff    = 200 * time.Millisecond
@@ -124,13 +124,21 @@ func (r *Runtime) replyWithLLM(ctx context.Context, userMessage string) (string,
 }
 
 func requestLLMCompletion(ctx context.Context, systemPrompt, userMessage string) (string, error) {
-	return requestLLMCompletionWithDeps(ctx, systemPrompt, userMessage, llmRequestDeps{})
+	return requestLLMCompletionWithProviderAndDeps(ctx, "", systemPrompt, userMessage, llmRequestDeps{})
+}
+
+func requestLLMCompletionForProvider(ctx context.Context, providerID, systemPrompt, userMessage string) (string, error) {
+	return requestLLMCompletionWithProviderAndDeps(ctx, providerID, systemPrompt, userMessage, llmRequestDeps{})
 }
 
 func requestLLMCompletionWithDeps(ctx context.Context, systemPrompt, userMessage string, deps llmRequestDeps) (string, error) {
+	return requestLLMCompletionWithProviderAndDeps(ctx, "", systemPrompt, userMessage, deps)
+}
+
+func requestLLMCompletionWithProviderAndDeps(ctx context.Context, providerID, systemPrompt, userMessage string, deps llmRequestDeps) (string, error) {
 	deps = normalizeLLMRequestDeps(deps)
 
-	cfg, err := resolveLLMRuntimeConfig()
+	cfg, err := resolveLLMRuntimeConfigForProvider(providerID)
 	if err != nil {
 		return "", err
 	}
@@ -159,10 +167,6 @@ func requestLLMCompletionWithDeps(ctx context.Context, systemPrompt, userMessage
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+cfg.Token)
-	if strings.EqualFold(cfg.ProviderID, "openrouter") {
-		req.Header.Set("HTTP-Referer", "https://carrier.local")
-		req.Header.Set("X-Title", "Carrier Base Agent")
-	}
 	if isOpenAICodexProvider(cfg.ProviderID) {
 		req.Header.Set("OpenAI-Beta", "responses=experimental")
 		req.Header.Set("originator", "carrier")
@@ -427,16 +431,31 @@ func parseModelError(statusCode int, body []byte) error {
 }
 
 func resolveLLMRuntimeConfig() (*llmRuntimeConfig, error) {
-	cfg, err := config.LoadCarrierDefaultModel()
+	return resolveLLMRuntimeConfigForProvider("")
+}
+
+func resolveLLMRuntimeConfigForProvider(providerID string) (*llmRuntimeConfig, error) {
+	var (
+		cfg *config.CarrierDefaultModel
+		err error
+	)
+	if strings.TrimSpace(providerID) == "" {
+		cfg, err = config.LoadCarrierDefaultModel()
+	} else {
+		cfg, err = config.LoadCarrierModelForProvider(providerID)
+	}
 	if err != nil || cfg == nil {
 		return nil, errors.New("default model is not configured")
 	}
-	providerID := strings.TrimSpace(cfg.ProviderID)
+	providerID = strings.ToLower(strings.TrimSpace(cfg.ProviderID))
 	modelID := strings.TrimSpace(cfg.ModelID)
 	envVar := strings.TrimSpace(cfg.EnvVar)
 
 	if providerID == "" || modelID == "" {
 		return nil, errors.New("default model is not configured")
+	}
+	if !catalog.IsSupportedProvider(providerID) {
+		return nil, fmt.Errorf("unsupported provider %s", providerID)
 	}
 	if envVar == "" {
 		envVar = inferProviderEnvVar(providerID)
@@ -452,11 +471,6 @@ func resolveLLMRuntimeConfig() (*llmRuntimeConfig, error) {
 
 	baseURL := defaultOpenAIBaseURL
 	switch {
-	case strings.EqualFold(providerID, "openrouter"):
-		baseURL = strings.TrimSpace(os.Getenv("CARRIER_OPENROUTER_BASE_URL"))
-		if baseURL == "" {
-			baseURL = defaultOpenRouterBaseURL
-		}
 	case isOpenAICodexProvider(providerID):
 		baseURL = strings.TrimSpace(os.Getenv("CARRIER_OPENAI_CODEX_BASE_URL"))
 		if baseURL == "" {
@@ -481,41 +495,16 @@ func resolveLLMRuntimeConfig() (*llmRuntimeConfig, error) {
 }
 
 func inferProviderEnvVar(providerID string) string {
-	switch strings.ToLower(strings.TrimSpace(providerID)) {
-	case "openai-codex":
-		return "OPENAI_CODEX_TOKEN"
-	case "openai":
-		return "OPENAI_API_KEY"
-	case "openrouter":
-		return "OPENROUTER_API_KEY"
-	case "anthropic":
-		return "ANTHROPIC_API_KEY"
-	case "google":
-		return "GEMINI_API_KEY"
-	case "groq":
-		return "GROQ_API_KEY"
-	case "deepseek":
-		return "DEEPSEEK_API_KEY"
-	case "mistral":
-		return "MISTRAL_API_KEY"
-	case "opencode":
-		return "OPENCODE_API_KEY"
-	case "zai":
-		return "ZAI_API_KEY"
-	case "cerebras":
-		return "CEREBRAS_API_KEY"
-	default:
-		return ""
+	if provider := catalog.GetProvider(providerID); provider != nil {
+		return strings.TrimSpace(provider.EnvVar)
 	}
+	return ""
 }
 
 func normalizeModelForProvider(providerID, modelID string) string {
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
 		return ""
-	}
-	if strings.EqualFold(strings.TrimSpace(providerID), "openrouter") {
-		return modelID
 	}
 	if slash := strings.Index(modelID, "/"); slash > 0 && slash < len(modelID)-1 {
 		return strings.TrimSpace(modelID[slash+1:])

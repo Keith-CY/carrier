@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"regexp"
 )
 
@@ -59,7 +60,7 @@ func (s *Service) RegisterInstance(baseAgentID, instanceName string) (string, er
 // generateInstanceName creates a name like "openclaw-a3f2".
 func generateInstanceName(baseID string) string {
 	buf := make([]byte, 2)
-	if _, err := rand.Read(buf); err != nil {
+	if _, err := io.ReadFull(rand.Reader, buf); err != nil {
 		panic("crypto/rand failed: " + err.Error())
 	}
 	return fmt.Sprintf("%s-%s", baseID, hex.EncodeToString(buf))
