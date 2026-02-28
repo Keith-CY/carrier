@@ -108,6 +108,9 @@ func (s *Service) StartWithOptions(ctx context.Context, agentID string, opts Sta
 	if pmWithEnv, ok := s.processManager.(ProcessControllerWithEnv); ok && len(memoryEnv) > 0 {
 		pid, runErr = pmWithEnv.StartWithEnv(agentID, "sh", []string{"-c", startCommand}, memoryEnv)
 	} else {
+		if len(memoryEnv) > 0 {
+			s.appendLog(agentID, "process manager does not support StartWithEnv; starting without memory env injection")
+		}
 		pid, runErr = s.processManager.Start(agentID, "sh", []string{"-c", startCommand})
 	}
 	if runErr != nil {

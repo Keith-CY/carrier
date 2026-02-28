@@ -141,6 +141,15 @@ func IsSupportedProvider(id string) bool {
 	return ok
 }
 
+// SupportedProviderIDs returns canonical provider IDs in catalog order.
+func SupportedProviderIDs() []string {
+	ids := make([]string, 0, len(providerCatalog))
+	for _, provider := range providerCatalog {
+		ids = append(ids, provider.ID)
+	}
+	return ids
+}
+
 // ProvidersByCategory returns providers grouped by category.
 func ProvidersByCategory() map[string][]ProviderSpec {
 	result := map[string][]ProviderSpec{
@@ -178,6 +187,8 @@ func IsSupportedChannel(id string) bool {
 }
 
 // MapToManagedProvider maps canonical provider IDs to managed-agent provider keys.
+// Managed agents currently support a smaller provider key surface and collapse
+// compatible providers onto "openai".
 func MapToManagedProvider(providerID string) string {
 	normalized := strings.ToLower(strings.TrimSpace(providerID))
 	switch normalized {
