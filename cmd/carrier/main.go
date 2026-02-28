@@ -184,6 +184,7 @@ type managedAgentAddResult struct {
 	ChannelID     string
 	ProviderID    string
 	PairedChatID  string
+	Port          int
 }
 
 type managedAgentConfig struct {
@@ -210,6 +211,7 @@ type managedAgentInstance struct {
 	PairCode     string `json:"pair_code,omitempty"`
 	PairedChatID string `json:"paired_chat_id,omitempty"`
 	RuntimeState string `json:"runtime_state,omitempty"`
+	Port         int    `json:"port,omitempty"`
 	CreatedAt    string `json:"created_at"`
 	UpdatedAt    string `json:"updated_at"`
 }
@@ -321,6 +323,7 @@ var runOpenAICodexDeviceCodeFlow = performOpenAICodexDeviceCodeFlow
 var gatewayHealthProbe = checkGatewayHealth
 var daemonHealthProbe = checkDaemonHealth
 var doctorAgentStatusesFetcher = fetchDoctorAgentStatuses
+var portAvailableProbe = isPortAvailable
 var daemonBackgroundStarter = startDaemonInBackground
 var gatewayBackgroundStarter = startGatewayInBackground
 var runStopFlow = runStop
@@ -2249,11 +2252,12 @@ func runListInstances(out io.Writer) error {
 		if runtimeState == "" {
 			runtimeState = "unknown"
 		}
-		_, _ = fmt.Fprintf(out, "- id=%s name=%s type=%s state=%s gateway=%s\n",
+		_, _ = fmt.Fprintf(out, "- id=%s name=%s type=%s state=%s port=%d gateway=%s\n",
 			strings.TrimSpace(inst.ID),
 			managedInstanceDisplayName(inst),
 			strings.TrimSpace(inst.Type),
 			runtimeState,
+			inst.Port,
 			strings.TrimSpace(inst.GatewayURL),
 		)
 	}
@@ -4335,6 +4339,7 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 		Provider:     result.ProviderID,
 		PairRequired: strings.TrimSpace(result.PairedChatID) == "",
 		PairedChatID: result.PairedChatID,
+		Port:         result.Port,
 		RuntimeState: "running",
 		CreatedAt:    createdAt,
 		UpdatedAt:    now,
@@ -5139,6 +5144,32 @@ func gatewayRequestWithTimeout(method, path string, body any, timeout time.Durat
 	return raw, resp.StatusCode, fmt.Errorf("gateway request failed with status %d", resp.StatusCode)
 }
 
+func findAvailablePort(basePort, maxPort int) (int, error) {
+	if basePort <= 0 || maxPort < basePort {
+		return 0, errors.New("invalid port range")
+	}
+	for port := basePort; port <= maxPort; port++ {
+		if portAvailableProbe(port) {
+			return port, nil
+		}
+	}
+	return 0, fmt.Errorf("no available port in range %d-%d", basePort, maxPort)
+}
+
+func isPortAvailable(port int) bool {
+	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		// Some sandboxed CI/runtime environments deny socket bind attempts.
+		// In that case, treat the port as available and keep deterministic allocation.
+		if strings.Contains(strings.ToLower(err.Error()), "operation not permitted") {
+			return true
+		}
+		return false
+	}
+	_ = l.Close()
+	return true
+}
+
 func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToken string, provider choiceOption, envVars map[string]string, pairedChatID string) (*managedAgentAddResult, error) {
 	cfg, ok := managedAgentByID(agentID)
 	if !ok {
@@ -5176,6 +5207,10 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 	configPath := filepath.Join(home, cfg.ConfigDir, configFileName)
 	recordPath := filepath.Join(home, ".carrier", "agents", instanceID+".json")
 	openClawSecretsPath := filepath.Join(home, ".openclaw", "carrier-secrets.json")
+	allocatedPort, err := findAvailablePort(9090, 9190)
+	if err != nil {
+		return nil, fmt.Errorf("allocate port: %w", err)
+	}
 
 	if err := os.MkdirAll(workspacePath, 0o700); err != nil {
 		return nil, fmt.Errorf("create workspace: %w", err)
@@ -5279,6 +5314,7 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 		"agent_id":       cfg.ID,
 		"workspace_path": workspacePath,
 		"config_path":    configPath,
+		"port":           allocatedPort,
 		"channel":        channelID,
 		"provider":       provider.ID,
 		"paired_chat_id": pairedChatID,
@@ -5300,6 +5336,7 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 		ChannelID:     channelID,
 		ProviderID:    provider.ID,
 		PairedChatID:  pairedChatID,
+		Port:          allocatedPort,
 	}, nil
 }
 
