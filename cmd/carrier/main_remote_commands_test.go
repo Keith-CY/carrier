@@ -9,7 +9,10 @@ import (
 	neturl "net/url"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"carrier/configv2"
 	"carrier/shared/openclawcfg"
@@ -255,6 +258,63 @@ func TestBuildJSONRemoteConfigPatch(t *testing.T) {
 	openai := providers["openai"].(map[string]interface{})
 	if strings.TrimSpace(anyToString(openai["api_key"])) != "sk-openai-1" {
 		t.Fatalf("provider api key mismatch: %+v", openai)
+	}
+}
+
+func TestRemoteBatchInstallParallel(t *testing.T) {
+	var (
+		currentConcurrent int32
+		maxConcurrent     int32
+		mu                sync.Mutex
+		seenHosts         = map[string]bool{}
+	)
+	origHealthProbe := gatewayHealthProbe
+	origHostsLister := remoteHostsLister
+	origInstallStreamer := remoteInstallStreamer
+	t.Cleanup(func() {
+		gatewayHealthProbe = origHealthProbe
+		remoteHostsLister = origHostsLister
+		remoteInstallStreamer = origInstallStreamer
+	})
+	gatewayHealthProbe = func(string) bool { return true }
+	remoteHostsLister = func() ([]remoteHostSummary, error) {
+		return []remoteHostSummary{{ID: "h1"}, {ID: "h2"}, {ID: "h3"}}, nil
+	}
+	remoteInstallStreamer = func(_ io.Writer, hostID, _ string, _ bool) error {
+		mu.Lock()
+		seenHosts[hostID] = true
+		mu.Unlock()
+		n := atomic.AddInt32(&currentConcurrent, 1)
+		for {
+			prev := atomic.LoadInt32(&maxConcurrent)
+			if n <= prev || atomic.CompareAndSwapInt32(&maxConcurrent, prev, n) {
+				break
+			}
+		}
+		time.Sleep(40 * time.Millisecond)
+		atomic.AddInt32(&currentConcurrent, -1)
+		return nil
+	}
+
+	var out bytes.Buffer
+	err := runRemoteBatchInstall(&out, remoteCommandOptions{
+		Action:         "install",
+		AgentID:        "openclaw",
+		InstallAgentID: "main",
+		All:            true,
+		Concurrency:    2,
+	})
+	if err != nil {
+		t.Fatalf("runRemoteBatchInstall error: %v", err)
+	}
+	if maxConcurrent > 2 {
+		t.Fatalf("max concurrent installs = %d, want <= 2", maxConcurrent)
+	}
+	if maxConcurrent < 2 {
+		t.Fatalf("expected parallel installs, max concurrent=%d", maxConcurrent)
+	}
+	if len(seenHosts) != 3 {
+		t.Fatalf("seenHosts=%v, want 3 hosts", seenHosts)
 	}
 }
 

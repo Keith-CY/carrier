@@ -156,6 +156,8 @@ type remoteCommandOptions struct {
 	Action             string
 	AgentID            string
 	InstallAgentID     string
+	All                bool
+	Concurrency        int
 	Isolation          bool
 	HostID             string
 	HostName           string
@@ -334,6 +336,9 @@ var gatewayHealthProbe = checkGatewayHealth
 var daemonHealthProbe = checkDaemonHealth
 var doctorAgentStatusesFetcher = fetchDoctorAgentStatuses
 var portAvailableProbe = isPortAvailable
+var remoteHostsLister = listRemoteHosts
+var remoteInstallStreamer = runRemoteInstallStream
+var remoteHostChecker = runRemoteHostCheck
 var daemonBackgroundStarter = startDaemonInBackground
 var gatewayBackgroundStarter = startGatewayInBackground
 var runStopFlow = runStop
@@ -616,7 +621,7 @@ func main() {
 				fmt.Fprint(os.Stderr, usage)
 				os.Exit(1)
 			}
-			if err := runRemoteAddCommand(os.Stdin, os.Stdout, opts); err != nil {
+			if err := runRemoteCommand(os.Stdin, os.Stdout, opts); err != nil {
 				fmt.Fprintf(os.Stderr, "remote failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -1460,13 +1465,12 @@ func fetchDoctorAgentStatuses() ([]doctorAgentStatus, error) {
 }
 
 func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
-	if len(args) < 2 {
-		return remoteCommandOptions{}, errors.New("usage: carrier remote add <agent_id> --host-id <id> --host <ip-or-domain> --port <port> --user <ssh-user> --key-path <private-key-path> [--isolation] [options]")
+	if len(args) < 1 {
+		return remoteCommandOptions{}, errors.New("usage: carrier remote <add|install|status> ...")
 	}
-
+	action := strings.ToLower(strings.TrimSpace(args[0]))
 	opts := remoteCommandOptions{
-		Action:             strings.ToLower(strings.TrimSpace(args[0])),
-		AgentID:            strings.ToLower(strings.TrimSpace(args[1])),
+		Action:             action,
 		Port:               22,
 		RuntimeMode:        "on_demand",
 		CheckRetries:       10,
@@ -1475,14 +1479,33 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 		SyncProviders:      []string{},
 		TelegramAllowFrom:  []string{},
 		DiscordAllowFrom:   []string{},
+		Concurrency:        5,
 	}
-	if opts.Action != "add" {
+	switch action {
+	case "add":
+		if len(args) < 2 {
+			return remoteCommandOptions{}, errors.New("usage: carrier remote add <agent_id> --host-id <id> --host <ip-or-domain> --port <port> --user <ssh-user> [options]")
+		}
+		opts.AgentID = strings.ToLower(strings.TrimSpace(args[1]))
+	case "install":
+		if len(args) < 2 {
+			return remoteCommandOptions{}, errors.New("usage: carrier remote install --all <agent_id> [--concurrency <n>]")
+		}
+		opts.AgentID = strings.ToLower(strings.TrimSpace(args[len(args)-1]))
+		opts.All = true
+	case "status":
+		opts.All = true
+	default:
 		return remoteCommandOptions{}, fmt.Errorf("unsupported remote action: %s", opts.Action)
 	}
 	switch opts.AgentID {
 	case "openclaw", "picoclaw", "zeroclaw":
 	default:
-		return remoteCommandOptions{}, fmt.Errorf("unsupported remote agent_id: %s (expected one of openclaw, picoclaw, zeroclaw)", opts.AgentID)
+		if opts.Action == "status" {
+			// status --all does not require agent ID
+		} else {
+			return remoteCommandOptions{}, fmt.Errorf("unsupported remote agent_id: %s (expected one of openclaw, picoclaw, zeroclaw)", opts.AgentID)
+		}
 	}
 	// OpenClaw runtime install endpoint uses the default agent slot "main".
 	if opts.AgentID == "openclaw" {
@@ -1491,12 +1514,29 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 		opts.InstallAgentID = opts.AgentID
 	}
 
-	for i := 2; i < len(args); i++ {
+	startIndex := 1
+	if opts.Action == "add" {
+		startIndex = 2
+	}
+	for i := startIndex; i < len(args); i++ {
 		raw := strings.TrimSpace(args[i])
 		if raw == "" {
 			continue
 		}
 		switch strings.ToLower(raw) {
+		case "--all":
+			opts.All = true
+		case "--concurrency":
+			value, next, err := parseRequiredFlagValue(args, i, "--concurrency")
+			if err != nil {
+				return remoteCommandOptions{}, err
+			}
+			n, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || n <= 0 {
+				return remoteCommandOptions{}, fmt.Errorf("invalid --concurrency value: %s", value)
+			}
+			opts.Concurrency = n
+			i = next
 		case "--host-id":
 			value, next, err := parseRequiredFlagValue(args, i, "--host-id")
 			if err != nil {
@@ -1605,8 +1645,26 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 		case "--skip-reconnect-check":
 			opts.SkipReconnectCheck = true
 		default:
+			if opts.Action == "install" && strings.EqualFold(raw, opts.AgentID) {
+				continue
+			}
+			if opts.Action == "status" {
+				return remoteCommandOptions{}, fmt.Errorf("unknown remote status option: %s", raw)
+			}
 			return remoteCommandOptions{}, fmt.Errorf("unknown remote option: %s", raw)
 		}
+	}
+	if opts.Action == "install" {
+		if !opts.All {
+			return remoteCommandOptions{}, errors.New("remote install currently requires --all")
+		}
+		return opts, nil
+	}
+	if opts.Action == "status" {
+		if !opts.All {
+			return remoteCommandOptions{}, errors.New("remote status currently requires --all")
+		}
+		return opts, nil
 	}
 
 	if opts.HostID == "" {
@@ -2538,6 +2596,23 @@ type remoteInstanceSummary struct {
 	AgentID string `json:"agentId"`
 }
 
+type remoteHostSummary struct {
+	ID string `json:"id"`
+}
+
+func runRemoteCommand(in io.Reader, out io.Writer, opts remoteCommandOptions) error {
+	switch opts.Action {
+	case "add":
+		return runRemoteAddCommand(in, out, opts)
+	case "install":
+		return runRemoteBatchInstall(out, opts)
+	case "status":
+		return runRemoteBatchStatus(out, opts)
+	default:
+		return fmt.Errorf("unsupported remote action: %s", opts.Action)
+	}
+}
+
 func runRemoteAddCommand(in io.Reader, out io.Writer, opts remoteCommandOptions) error {
 	if opts.Action != "add" {
 		return fmt.Errorf("unsupported remote action: %s", opts.Action)
@@ -2643,6 +2718,112 @@ func runRemoteAddCommand(in io.Reader, out io.Writer, opts remoteCommandOptions)
 
 	_, _ = fmt.Fprintln(out, colorizeForTTY(out, fmt.Sprintf("Completed: %s is installed on host %s and reconnect verification passed.", agentName, opts.HostID), ansiGreenBold))
 	return nil
+}
+
+func runRemoteBatchInstall(out io.Writer, opts remoteCommandOptions) error {
+	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+	hosts, err := remoteHostsLister()
+	if err != nil {
+		return err
+	}
+	if len(hosts) == 0 {
+		_, _ = fmt.Fprintln(out, "no remote hosts registered")
+		return nil
+	}
+	sem := make(chan struct{}, maxInt(1, opts.Concurrency))
+	type result struct {
+		hostID string
+		err    error
+	}
+	results := make(chan result, len(hosts))
+	launched := 0
+	for _, host := range hosts {
+		hostID := strings.TrimSpace(host.ID)
+		if hostID == "" {
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "%s pending\n", hostID)
+		go func(id string) {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			_, _ = fmt.Fprintf(out, "%s installing\n", id)
+			err := remoteInstallStreamer(out, id, opts.InstallAgentID, opts.Isolation)
+			results <- result{hostID: id, err: err}
+		}(hostID)
+		launched++
+	}
+	if launched == 0 {
+		_, _ = fmt.Fprintln(out, "no eligible remote hosts found")
+		return nil
+	}
+	var firstErr error
+	for i := 0; i < launched; i++ {
+		r := <-results
+		if r.err != nil {
+			_, _ = fmt.Fprintf(out, "%s failed: %v\n", r.hostID, r.err)
+			if firstErr == nil {
+				firstErr = r.err
+			}
+		} else {
+			_, _ = fmt.Fprintf(out, "%s done\n", r.hostID)
+		}
+	}
+	return firstErr
+}
+
+func runRemoteBatchStatus(out io.Writer, opts remoteCommandOptions) error {
+	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+	hosts, err := remoteHostsLister()
+	if err != nil {
+		return err
+	}
+	if len(hosts) == 0 {
+		_, _ = fmt.Fprintln(out, "no remote hosts registered")
+		return nil
+	}
+	_, _ = fmt.Fprintln(out, "host\tssh\topenclaw")
+	for _, host := range hosts {
+		check, err := remoteHostChecker(strings.TrimSpace(host.ID), false, nil)
+		if err != nil {
+			_, _ = fmt.Fprintf(out, "%s\tfailed\tfailed\n", host.ID)
+			continue
+		}
+		ssh := "down"
+		if check.Check.SSHOK {
+			ssh = "ok"
+		}
+		runtime := "missing"
+		if check.Check.OpenClawFound {
+			runtime = "detected"
+		}
+		_, _ = fmt.Fprintf(out, "%s\t%s\t%s\n", host.ID, ssh, runtime)
+	}
+	return nil
+}
+
+func listRemoteHosts() ([]remoteHostSummary, error) {
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, "/api/v1/remote/hosts", nil, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		Hosts []remoteHostSummary `json:"hosts"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	return payload.Hosts, nil
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func printRemoteInstances(out io.Writer, hostID, label string) error {
