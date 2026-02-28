@@ -160,7 +160,7 @@ type RandReader interface {
 // CryptoRandReader uses crypto/rand for random bytes.
 type CryptoRandReader struct{}
 
-func (CryptoRandReader) Read(b []byte) (int, error) { return rand.Read(b) }
+func (CryptoRandReader) Read(b []byte) (int, error) { return io.ReadFull(rand.Reader, b) }
 
 // DiagnoseOption configures a diagnose builder.
 type DiagnoseOption func(*diagnoseConfig)

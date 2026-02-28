@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -109,7 +110,7 @@ func randomHex(numBytes int) (string, error) {
 		return "", fmt.Errorf("numBytes must be positive")
 	}
 	raw := make([]byte, numBytes)
-	if _, err := rand.Read(raw); err != nil {
+	if _, err := io.ReadFull(rand.Reader, raw); err != nil {
 		return "", fmt.Errorf("generate random bytes: %w", err)
 	}
 	return hex.EncodeToString(raw), nil

@@ -355,13 +355,10 @@ func picoClawReleaseOSForGOOS(goos string) string {
 		return "Windows"
 	default:
 		normalized := normalizeCatalogGOOS(goos)
-		if len(normalized) == 0 {
-			return runtime.GOOS
+		if normalized == "" {
+			return ""
 		}
-		if len(normalized) == 1 {
-			return strings.ToUpper(normalized)
-		}
-		return strings.ToUpper(normalized[:1]) + normalized[1:]
+		return strings.ToUpper(normalized[:1]) + strings.ToLower(normalized[1:])
 	}
 }
 

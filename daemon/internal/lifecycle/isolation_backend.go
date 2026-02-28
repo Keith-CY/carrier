@@ -202,14 +202,6 @@ func resolveIsolationBackend() (isolationBackend, error) {
 	}
 }
 
-func buildIsolationStartCommand(startCommand string) (string, error) {
-	backend, err := resolveIsolationBackend()
-	if err != nil {
-		return "", err
-	}
-	return backend.WrapStartCommand(startCommand)
-}
-
 func buildBwrapInvocation(bwrapExecutable, startCommand string) (string, error) {
 	trimmedStartCommand := strings.TrimSpace(startCommand)
 	if trimmedStartCommand == "" {

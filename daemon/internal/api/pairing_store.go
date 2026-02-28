@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -148,7 +149,7 @@ func (s *PairingCodeStore) List() []PairingCodeRecord {
 
 func newPairingCodeValue() (string, error) {
 	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
+	if _, err := io.ReadFull(rand.Reader, raw[:]); err != nil {
 		return "", fmt.Errorf("generate pairing code: %w", err)
 	}
 	return "pair-" + hex.EncodeToString(raw[:]), nil

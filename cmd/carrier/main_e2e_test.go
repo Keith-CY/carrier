@@ -20,24 +20,6 @@ import (
 	"carrier/configv2"
 )
 
-// makeTreeWritable recursively adds write permission to all files and dirs
-// under root. This prevents t.TempDir() cleanup failures when Go module cache
-// files are read-only (e.g. after `go build` inside the temp dir).
-func makeTreeWritable(root string) {
-	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: error walking to %q for cleanup: %v\n", path, err)
-			return nil
-		}
-		if info.Mode().Perm()&0o200 == 0 {
-			if chmodErr := os.Chmod(path, info.Mode()|0o200); chmodErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed to make %q writable for cleanup: %v\n", path, chmodErr)
-			}
-		}
-		return nil
-	})
-}
-
 func TestE2ECarrierBinaryOnboardOpenAIAPIKey(t *testing.T) {
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, "home")
@@ -320,7 +302,6 @@ func TestE2ECarrierBinaryAddOpenClawReusesPairedUserAndProviderCredential(t *tes
 
 func TestE2ECarrierBinaryAddOpenClawIsolationSendsInstallAndStartIsolationPayload(t *testing.T) {
 	tmp := t.TempDir()
-	t.Cleanup(func() { makeTreeWritable(tmp) })
 	home := filepath.Join(tmp, "home")
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatalf("mkdir home: %v", err)
@@ -383,7 +364,6 @@ func TestE2ECarrierBinaryAddManagedAgentsIsolationSendsInstallAndStartIsolationP
 	for _, agentID := range agentIDs {
 		t.Run(agentID, func(t *testing.T) {
 			tmp := t.TempDir()
-			t.Cleanup(func() { makeTreeWritable(tmp) })
 			home := filepath.Join(tmp, "home")
 			if err := os.MkdirAll(home, 0o700); err != nil {
 				t.Fatalf("mkdir home: %v", err)
@@ -457,7 +437,17 @@ func buildCarrierBinary(t *testing.T) string {
 	}
 
 	cmd := exec.Command("go", "build", "-o", path, ".")
-	cmd.Env = append(os.Environ(), "GOFLAGS="+appendGoFlagForTest(os.Getenv("GOFLAGS"), "-modcacherw"))
+	cmd.Env = os.Environ()
+	cacheRoot := filepath.Join(os.TempDir(), "carrier-test-gocache")
+	modCacheRoot := filepath.Join(os.TempDir(), "carrier-test-gomodcache")
+	if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
+		t.Fatalf("mkdir gocache root: %v", err)
+	}
+	if err := os.MkdirAll(modCacheRoot, 0o755); err != nil {
+		t.Fatalf("mkdir gomodcache root: %v", err)
+	}
+	cmd.Env = setEnvEntry(cmd.Env, "GOCACHE", cacheRoot)
+	cmd.Env = setEnvEntry(cmd.Env, "GOMODCACHE", modCacheRoot)
 	cmd.Dir = "."
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
@@ -466,19 +456,16 @@ func buildCarrierBinary(t *testing.T) string {
 	return path
 }
 
-func appendGoFlagForTest(existing, required string) string {
-	flags := strings.TrimSpace(existing)
-	need := strings.TrimSpace(required)
-	if need == "" {
-		return flags
+func setEnvEntry(env []string, key, value string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			continue
+		}
+		out = append(out, entry)
 	}
-	if strings.Contains(" "+flags+" ", " "+need+" ") {
-		return flags
-	}
-	if flags == "" {
-		return need
-	}
-	return flags + " " + need
+	return append(out, prefix+value)
 }
 
 func runCarrierBinary(t *testing.T, binaryPath, stdin string, args ...string) (string, string, error) {

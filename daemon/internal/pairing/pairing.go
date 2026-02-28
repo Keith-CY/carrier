@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 )
@@ -77,7 +78,7 @@ func (s *Store) Code() (string, error) {
 
 func (s *Store) regenerate() error {
 	b := make([]byte, CodeLength)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := io.ReadFull(rand.Reader, b); err != nil {
 		return fmt.Errorf("pairing: generate code: %w", err)
 	}
 	s.code = hex.EncodeToString(b)

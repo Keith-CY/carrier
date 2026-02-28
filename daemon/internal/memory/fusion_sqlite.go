@@ -32,7 +32,7 @@ func (s *Store) rebuildSQLiteIndexLocked() {
 		s.lastStateErr = err
 		return
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.Exec(`DELETE FROM observation_events`); err != nil {
 		s.lastStateErr = err
@@ -225,7 +225,7 @@ func (s *Store) syncRecordToSQLiteLocked(rec MemoryRecord) {
 		s.lastStateErr = err
 		return
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if err := syncRecordTx(tx, s.sqliteFTSEnabled, rec); err != nil {
 		s.lastStateErr = err
 		return
@@ -280,7 +280,7 @@ func (s *Store) syncInstanceScopesToSQLiteLocked(instanceID string, scopes []Sco
 		s.lastStateErr = err
 		return
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.Exec(`DELETE FROM instance_mounts WHERE instance_id = ?`, instanceID); err != nil {
 		s.lastStateErr = err
 		return

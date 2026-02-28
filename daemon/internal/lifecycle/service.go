@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -283,7 +284,7 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 	svc.evidenceCollector = NewEvidenceCollector(logs, exitCodes, 1000)
 	svc.idGenerator = func(prefix string) string {
 		var buf [16]byte
-		if _, err := rand.Read(buf[:]); err != nil {
+		if _, err := io.ReadFull(rand.Reader, buf[:]); err != nil {
 			panic("crypto/rand failed: " + err.Error())
 		}
 		return fmt.Sprintf("%s-%s", prefix, hex.EncodeToString(buf[:]))
