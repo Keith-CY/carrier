@@ -272,11 +272,11 @@ jobs:
 
             $bootstrapDir = Join-Path $WorkspaceRoot "bootstrap-distro"
             $installDir = Join-Path $bootstrapDir "instance"
-            $rootfsPath = Join-Path $bootstrapDir "ubuntu-noble-wsl-amd64-rootfs.tar.gz"
+            $rootfsPath = Join-Path $bootstrapDir "noble-wsl-amd64.wsl"
             New-Item -ItemType Directory -Path $bootstrapDir -Force | Out-Null
 
             Invoke-WebRequest `
-              -Uri "https://cloud-images.ubuntu.com/wsl/noble/current/ubuntu-noble-wsl-amd64-rootfs.tar.gz" `
+              -Uri "https://cdimages.ubuntu.com/ubuntu-wsl/noble/daily-live/current/noble-wsl-amd64.wsl" `
               -OutFile $rootfsPath
             & wsl --import $distroName $installDir $rootfsPath --version 2
             if ($LASTEXITCODE -ne 0) {
