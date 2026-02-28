@@ -990,14 +990,14 @@ func (a *baseAgentMemoryStoreAdapter) GetRecord(subject, id string) (baseagent.M
 	}, nil
 }
 
-func (a *baseAgentMemoryStoreAdapter) Observe(subject, toolName, outputSnippet, scope string) (string, error) {
+func (a *baseAgentMemoryStoreAdapter) Observe(subject, toolName, outputSnippet, scope string, autoCurate bool) (string, error) {
 	ev, err := a.store.Observe(memory.ObserveInput{
 		Subject:       subject,
 		AgentID:       subject,
 		Scope:         memory.Scope(scope),
 		ToolName:      toolName,
 		OutputSnippet: outputSnippet,
-		AutoCurate:    true,
+		AutoCurate:    autoCurate,
 	})
 	if err != nil {
 		return "", err

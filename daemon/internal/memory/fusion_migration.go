@@ -101,7 +101,11 @@ func (s *Store) ValidateMigration() MigrationValidation {
 		return v
 	}
 	defer db.Close()
-	_ = db.QueryRow(`SELECT COUNT(1) FROM memory_records WHERE archived_at IS NULL`).Scan(&v.SQLiteRecords)
+	if err := db.QueryRow(`SELECT COUNT(1) FROM memory_records WHERE archived_at IS NULL`).Scan(&v.SQLiteRecords); err != nil {
+		v.Consistent = false
+		v.Message = "failed to query sqlite record count: " + err.Error()
+		return v
+	}
 	v.Consistent = v.SQLiteRecords >= v.Records
 	if v.Consistent {
 		v.Message = "validation passed"
@@ -184,20 +188,7 @@ func (s *Store) RollbackFromBackup(backupPath, actor, requestID string) error {
 		}
 	}
 
-	s.entries = make(map[string]Entry)
-	s.mounts = nil
-	s.manifests = make(map[string]PackageManifest)
-	s.installPath = make(map[string]string)
-	s.attachments = make(map[string][]Attachment)
-	s.views = make(map[string]ViewExplanation)
-	s.viewInputDigest = make(map[string]string)
-	s.records = make(map[string]MemoryRecord)
-	s.observations = nil
-	s.grants = make(map[string]Grant)
-	s.instanceScopes = make(map[string][]Scope)
-	s.explicitScopes = make(map[string]map[Scope]struct{})
-	s.sqliteReady = false
-	s.sqliteFTSEnabled = false
+	s.resetLocked()
 	if err := s.loadState(); err != nil {
 		return err
 	}
@@ -218,4 +209,21 @@ func (s *Store) ensureSQLiteIndexLockedForRead() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ensureSQLiteIndexLocked()
+}
+
+func (s *Store) resetLocked() {
+	s.entries = make(map[string]Entry)
+	s.mounts = nil
+	s.manifests = make(map[string]PackageManifest)
+	s.installPath = make(map[string]string)
+	s.attachments = make(map[string][]Attachment)
+	s.views = make(map[string]ViewExplanation)
+	s.viewInputDigest = make(map[string]string)
+	s.records = make(map[string]MemoryRecord)
+	s.observations = nil
+	s.grants = make(map[string]Grant)
+	s.instanceScopes = make(map[string][]Scope)
+	s.explicitScopes = make(map[string]map[Scope]struct{})
+	s.sqliteReady = false
+	s.sqliteFTSEnabled = false
 }

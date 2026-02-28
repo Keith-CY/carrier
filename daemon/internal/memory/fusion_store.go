@@ -249,7 +249,9 @@ func (s *Store) Observe(input ObserveInput) (ObservationEvent, error) {
 			UpdatedAt:      now,
 		}
 		s.syncRecordToSQLiteLocked(s.records[recID])
-		_ = s.writeStableTruthRecordLocked(s.records[recID])
+		if err := s.writeStableTruthRecordLocked(s.records[recID]); err != nil {
+			s.lastStateErr = fmt.Errorf("write curated truth record: %w", err)
+		}
 	}
 	if err := s.persistStateLocked(); err != nil {
 		return ObservationEvent{}, err
