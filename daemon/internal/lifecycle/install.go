@@ -12,14 +12,35 @@ import (
 )
 
 func (s *Service) Install(ctx context.Context, agentID string) error {
+	return s.InstallWithOptions(ctx, agentID, InstallOptions{})
+}
+
+func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts InstallOptions) error {
 	m, _, err := s.getManifestAndState(agentID)
 	if err != nil {
 		return err
 	}
-	installCommand, err := m.Runtime.Install.ResolveForCurrentOS()
+
+	commandGOOS := isolationRuntimeGOOS
+	var backend isolationBackend
+	if opts.Isolation {
+		backend, err = resolveIsolationBackend()
+		if err != nil {
+			return s.finalizeInstallFailure(agentID, err, "E_ISOLATION_UNAVAILABLE")
+		}
+		commandGOOS = backend.CommandGOOS()
+	}
+
+	installCommand, err := m.Runtime.Install.ResolveForGOOS(commandGOOS)
 	if err != nil {
 		manifestErr := fmt.Errorf("resolve install command for %s: %w", agentID, err)
 		return s.finalizeInstallFailure(agentID, manifestErr, "E_MANIFEST_INVALID")
+	}
+	if opts.Isolation {
+		installCommand, err = backend.WrapCommand(installCommand)
+		if err != nil {
+			return s.finalizeInstallFailure(agentID, err, "E_ISOLATION_UNAVAILABLE")
+		}
 	}
 
 	opCtx, cancel := context.WithTimeout(ctx, s.commandTimeout)
