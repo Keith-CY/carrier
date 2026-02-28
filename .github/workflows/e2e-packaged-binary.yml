@@ -305,6 +305,18 @@ jobs:
             throw "wsl --set-default failed for distro '$distro' (exit code $LASTEXITCODE)"
           }
 
+          function Invoke-WslScript {
+            param(
+              [string]$Distro,
+              [string]$Script
+            )
+            $normalized = $Script -replace "`r", ""
+            $normalized | wsl -d $Distro -- bash -seuo pipefail
+            if ($LASTEXITCODE -ne 0) {
+              throw "WSL script execution failed for distro '$Distro' (exit code $LASTEXITCODE)"
+            }
+          }
+
           wsl --status | Out-File -FilePath (Join-Path $wslLogsWin "wsl-status.txt")
           wsl -l -v | Out-File -FilePath (Join-Path $wslLogsWin "wsl-list.txt")
 
@@ -333,8 +345,7 @@ jobs:
             run_privileged apt-get install -y --no-install-recommends nodejs
           fi
           '@
-          $prepScript = $prepScript -replace "`r", ""
-          wsl -d $distro -- bash -lc "$prepScript"
+          Invoke-WslScript -Distro $distro -Script $prepScript
 
           $prepareWorkspaceScript = @"
           set -euo pipefail
@@ -344,8 +355,7 @@ jobs:
           cp "\$CARRIER_SRC" "\$WSL_ROOT/bin/carrier"
           chmod +x "\$WSL_ROOT/bin/carrier"
           "@
-          $prepareWorkspaceScript = $prepareWorkspaceScript -replace "`r", ""
-          wsl -d $distro -- bash -lc "$prepareWorkspaceScript"
+          Invoke-WslScript -Distro $distro -Script $prepareWorkspaceScript
 
           $configScript = @"
           set -euo pipefail
@@ -372,8 +382,7 @@ jobs:
           }
           JSON
           "@
-          $configScript = $configScript -replace "`r", ""
-          wsl -d $distro -- bash -lc "$configScript"
+          Invoke-WslScript -Distro $distro -Script $configScript
 
           $stdinWin = Join-Path $wslRootWin "carrier-add-openclaw.stdin"
           Set-Content -Path $stdinWin -Value "1234567890:carrier-e2e-telegram-token`n`n"
@@ -405,8 +414,7 @@ jobs:
             exit 1
           fi
           "@
-          $runScript = $runScript -replace "`r", ""
-          wsl -d $distro -- bash -lc "$runScript"
+          Invoke-WslScript -Distro $distro -Script $runScript
 
       - name: Upload WSL2 OpenClaw logs
         if: always()
