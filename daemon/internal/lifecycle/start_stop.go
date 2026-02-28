@@ -3,17 +3,9 @@ package lifecycle
 import (
 	"context"
 	"fmt"
-	"os/exec"
-	"runtime"
-	"strings"
 	"time"
 
 	"carrier/daemon/internal/runtimecheck"
-)
-
-var (
-	isolationRuntimeGOOS   = runtime.GOOS
-	isolationBackendLookup = exec.LookPath
 )
 
 func (s *Service) Start(ctx context.Context, agentID string) error {
@@ -25,19 +17,32 @@ func (s *Service) StartWithOptions(ctx context.Context, agentID string, opts Sta
 	if err != nil {
 		return err
 	}
-	startCommand, err := m.Runtime.Start.ResolveForCurrentOS()
-	if err != nil {
-		return fmt.Errorf("resolve start command for %s: %w", agentID, err)
-	}
 	if state.Install != InstallStateInstalled {
 		return ErrNotInstalled
 	}
 	if state.Runtime == RuntimeStateRunning {
 		return ErrAlreadyRunning
 	}
+
 	isolationEnabled := opts.Isolation
+	commandGOOS := isolationRuntimeGOOS
+	var backend isolationBackend
 	if isolationEnabled {
-		startCommand, err = buildIsolationStartCommand(startCommand)
+		backend, err = resolveIsolationBackend()
+		if err != nil {
+			s.updateStateOnStartError(agentID, err)
+			s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_ISOLATION_UNAVAILABLE", err.Error())
+			return err
+		}
+		commandGOOS = backend.CommandGOOS()
+	}
+
+	startCommand, err := m.Runtime.Start.ResolveForGOOS(commandGOOS)
+	if err != nil {
+		return fmt.Errorf("resolve start command for %s: %w", agentID, err)
+	}
+	if isolationEnabled {
+		startCommand, err = backend.WrapStartCommand(startCommand)
 		if err != nil {
 			s.updateStateOnStartError(agentID, err)
 			s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_ISOLATION_UNAVAILABLE", err.Error())
@@ -159,24 +164,6 @@ func (s *Service) StartWithOptions(ctx context.Context, agentID string, opts Sta
 	s.saveState()
 
 	return nil
-}
-
-func buildIsolationStartCommand(startCommand string) (string, error) {
-	if !strings.EqualFold(isolationRuntimeGOOS, "linux") {
-		return "", fmt.Errorf("%w: unsupported host OS %s", ErrIsolationUnavailable, isolationRuntimeGOOS)
-	}
-	bwrapPath, err := isolationBackendLookup("bwrap")
-	if err != nil || strings.TrimSpace(bwrapPath) == "" {
-		return "", fmt.Errorf("%w: bubblewrap (bwrap) executable not found in PATH", ErrIsolationUnavailable)
-	}
-	safeBwrapPath := shellSingleQuote(strings.TrimSpace(bwrapPath))
-	safeStartCommand := shellSingleQuote(strings.TrimSpace(startCommand))
-	wrapped := fmt.Sprintf(
-		"%s --die-with-parent --new-session --bind / / --proc /proc --dev /dev --tmpfs /tmp --unshare-pid -- sh -lc %s",
-		safeBwrapPath,
-		safeStartCommand,
-	)
-	return wrapped, nil
 }
 
 func (s *Service) Stop(ctx context.Context, agentID string) error {

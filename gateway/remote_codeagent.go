@@ -368,21 +368,97 @@ func runRemoteCodeAgentCommand(ctx context.Context, host RemoteHost, command str
 
 func remoteInstallCodeAgentBinary(ctx context.Context, host RemoteHost, backend string) error {
 	backend = resolveCodeAgentBackend(backend)
-	var installCommand string
-	switch backend {
-	case "codex":
-		installCommand = "command -v codex >/dev/null 2>&1 || npm install -g @openai/codex >/dev/null 2>&1 || bun add -g @openai/codex >/dev/null 2>&1"
-	case "opencode":
-		installCommand = "command -v opencode >/dev/null 2>&1 || npm install -g opencode-ai >/dev/null 2>&1 || bun add -g opencode-ai >/dev/null 2>&1"
-	default:
-		return fmt.Errorf("unsupported backend %q", backend)
+	plan, err := buildRemoteCodeAgentInstallPlan(ctx, host, backend)
+	if err != nil {
+		return err
 	}
-	res, err := runRemoteCommandWithRetry(ctx, host, installCommand, 1)
+	if plan.AlreadyInstalled {
+		return nil
+	}
+	res, err := runRemoteCommandWithRetry(ctx, host, plan.InstallCommand, 1)
 	if err != nil {
 		return err
 	}
 	if res.ExitCode != 0 {
 		return remoteCommandError(res, "install "+backend)
 	}
+	verifyRes, verifyErr := runRemoteCommandWithRetry(ctx, host, "command -v "+plan.BinaryName+" >/dev/null 2>&1", 1)
+	if verifyErr != nil {
+		return verifyErr
+	}
+	if verifyRes.ExitCode != 0 {
+		return fmt.Errorf("%s install completed but binary %q is still missing from PATH", backend, plan.BinaryName)
+	}
 	return nil
+}
+
+type remoteCodeAgentInstallPlan struct {
+	Backend          string
+	BinaryName       string
+	AlreadyInstalled bool
+	Installer        string
+	InstallCommand   string
+}
+
+func buildRemoteCodeAgentInstallPlan(ctx context.Context, host RemoteHost, backend string) (remoteCodeAgentInstallPlan, error) {
+	normalized := resolveCodeAgentBackend(backend)
+	plan := remoteCodeAgentInstallPlan{Backend: normalized}
+	switch normalized {
+	case "codex":
+		plan.BinaryName = "codex"
+	case "opencode":
+		plan.BinaryName = "opencode"
+	default:
+		return remoteCodeAgentInstallPlan{}, fmt.Errorf("unsupported backend %q", backend)
+	}
+
+	hasBinary, err := remoteCommandExists(ctx, host, plan.BinaryName)
+	if err != nil {
+		return remoteCodeAgentInstallPlan{}, err
+	}
+	if hasBinary {
+		plan.AlreadyInstalled = true
+		return plan, nil
+	}
+
+	if ok, checkErr := remoteCommandExists(ctx, host, "bun"); checkErr == nil && ok {
+		plan.Installer = "bun"
+	} else {
+		okNPM, npmErr := remoteCommandExists(ctx, host, "npm")
+		if npmErr != nil {
+			return remoteCodeAgentInstallPlan{}, npmErr
+		}
+		if okNPM {
+			plan.Installer = "npm"
+		}
+	}
+	if plan.Installer == "" {
+		return remoteCodeAgentInstallPlan{}, fmt.Errorf("cannot install %s: neither bun nor npm is available on remote host", normalized)
+	}
+
+	switch normalized {
+	case "codex":
+		if plan.Installer == "bun" {
+			plan.InstallCommand = "bun add -g @openai/codex >/dev/null 2>&1"
+		} else {
+			plan.InstallCommand = "npm install -g @openai/codex >/dev/null 2>&1"
+		}
+	case "opencode":
+		if plan.Installer == "bun" {
+			plan.InstallCommand = "bun add -g opencode-ai >/dev/null 2>&1"
+		} else {
+			plan.InstallCommand = "npm install -g opencode-ai >/dev/null 2>&1"
+		}
+	default:
+		return remoteCodeAgentInstallPlan{}, fmt.Errorf("unsupported backend %q", backend)
+	}
+	return plan, nil
+}
+
+func remoteCommandExists(ctx context.Context, host RemoteHost, command string) (bool, error) {
+	res, err := runRemoteCommandWithRetry(ctx, host, "command -v "+strings.TrimSpace(command)+" >/dev/null 2>&1", 1)
+	if err != nil {
+		return false, err
+	}
+	return res.ExitCode == 0, nil
 }

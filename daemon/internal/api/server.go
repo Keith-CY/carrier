@@ -276,9 +276,14 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 		if !allowMethod(w, r, http.MethodPost) {
 			return
 		}
+		installOpts, err := readInstallOptions(r)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "E_USAGE", err.Error())
+			return
+		}
 		// Detach long-running install execution from client disconnects/timeouts.
 		// The lifecycle layer enforces command timeout independently.
-		if err := s.lifecycle.Install(context.WithoutCancel(r.Context()), agentID); err != nil {
+		if err := s.lifecycle.InstallWithOptions(context.WithoutCancel(r.Context()), agentID, installOpts); err != nil {
 			status, code, message := mapLifecycleError(err)
 			writeError(w, status, code, message)
 			return
@@ -597,6 +602,18 @@ func readStartOptions(r *http.Request) (lifecycle.StartOptions, error) {
 		return lifecycle.StartOptions{}, err
 	}
 	return lifecycle.StartOptions{
+		Isolation: body.Isolation,
+	}, nil
+}
+
+func readInstallOptions(r *http.Request) (lifecycle.InstallOptions, error) {
+	var body struct {
+		Isolation bool `json:"isolation,omitempty"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		return lifecycle.InstallOptions{}, err
+	}
+	return lifecycle.InstallOptions{
 		Isolation: body.Isolation,
 	}, nil
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -46,7 +45,18 @@ const (
 	// PicoClaw release URL pattern
 	picoClawReleaseBaseURL = "https://github.com/sipeed/picoclaw/releases/latest/download"
 	picoClawReleaseAPIURL  = "https://api.github.com/repos/sipeed/picoclaw/releases/latest"
+
+	// ZeroClaw release URL pattern
+	zeroClawReleaseBaseURL = "https://github.com/zeroclaw-labs/zeroclaw/releases/latest/download"
 )
+
+func normalizeCatalogGOOS(goos string) string {
+	normalized := strings.ToLower(strings.TrimSpace(goos))
+	if normalized == "" {
+		return runtime.GOOS
+	}
+	return normalized
+}
 
 // getInstallCommand returns the platform-appropriate install command.
 // - Linux/macOS: download to a tmpfile, then execute with bash
@@ -54,11 +64,15 @@ const (
 // - Windows cmd-only hosts: download to a tmpfile, then execute install.cmd
 // - Dev mode: creates a long-running placeholder script
 func getInstallCommand() string {
+	return getInstallCommandForGOOS(runtime.GOOS)
+}
+
+func getInstallCommandForGOOS(goos string) string {
 	if os.Getenv("CARRIER_DEV_MODE") == "1" {
 		return getDevInstallCommand()
 	}
 
-	switch runtime.GOOS {
+	switch normalizeCatalogGOOS(goos) {
 	case "windows":
 		return resolveWindowsOpenClawInstallCommand(exec.LookPath)
 	default:
@@ -114,7 +128,11 @@ echo "Dev placeholder created at $HOME/.local/bin/openclaw" >&2
 
 // getStartCommand returns the platform-appropriate start command.
 func getStartCommand() string {
-	switch runtime.GOOS {
+	return getStartCommandForGOOS(runtime.GOOS)
+}
+
+func getStartCommandForGOOS(goos string) string {
+	switch normalizeCatalogGOOS(goos) {
 	case "windows":
 		startInWSL := `set -e; export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; if command -v openclaw >/dev/null 2>&1; then exec "$(command -v openclaw)" gateway; fi; echo "openclaw executable not found inside WSL (checked PATH)" >&2; exit 127`
 		return wrapWindowsWSLBashCommand(startInWSL)
@@ -128,7 +146,11 @@ func getStartCommand() string {
 
 // getStopCommand returns the platform-appropriate stop command.
 func getStopCommand() string {
-	switch runtime.GOOS {
+	return getStopCommandForGOOS(runtime.GOOS)
+}
+
+func getStopCommandForGOOS(goos string) string {
+	switch normalizeCatalogGOOS(goos) {
 	case "windows":
 		stopInWSL := `set -e; export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; if command -v openclaw >/dev/null 2>&1; then exec "$(command -v openclaw)" gateway stop; fi; echo "openclaw executable not found inside WSL (checked PATH)" >&2; exit 127`
 		return wrapWindowsWSLBashCommand(stopInWSL)
@@ -150,10 +172,40 @@ func getNetworkSpec() manifest.NetworkSpec {
 // ZeroClaw is installed via cargo (Rust toolchain required).
 // In dev mode, a placeholder script is created instead.
 func getZeroClawInstallCommand() string {
+	return getZeroClawInstallCommandForGOOS(runtime.GOOS)
+}
+
+func getZeroClawInstallCommandForGOOS(goos string) string {
 	if os.Getenv("CARRIER_DEV_MODE") == "1" {
 		return getZeroClawDevInstallCommand()
 	}
-	return "cargo install --git https://github.com/theonlyhennygod/zeroclaw.git --force"
+	switch normalizeCatalogGOOS(goos) {
+	case "linux":
+		return `sh -c '
+set -e
+arch="$(uname -m)"
+case "$arch" in
+  x86_64|amd64) target="x86_64-unknown-linux-gnu" ;;
+  aarch64|arm64) target="aarch64-unknown-linux-gnu" ;;
+  armv7l|armv6l) target="armv7-unknown-linux-gnueabihf" ;;
+  *) echo "unsupported arch: $arch" >&2; exit 2 ;;
+esac
+tmp="$(mktemp -d)"
+cleanup() { rm -rf "$tmp"; }
+trap cleanup EXIT
+asset="zeroclaw-${target}.tar.gz"
+url="` + zeroClawReleaseBaseURL + `/${asset}"
+curl -fsSL "$url" -o "$tmp/zeroclaw.tar.gz"
+tar -xzf "$tmp/zeroclaw.tar.gz" -C "$tmp"
+bin="$(find "$tmp" -type f -name "zeroclaw*" -perm -u+x | head -n 1)"
+[ -n "$bin" ] || { echo "zeroclaw binary not found in release archive" >&2; exit 3; }
+mkdir -p "$HOME/.local/bin" "$HOME/.zeroclaw"
+install -m 0755 "$bin" "$HOME/.local/bin/zeroclaw"
+"$HOME/.local/bin/zeroclaw" --version >/dev/null 2>&1 || true
+'`
+	default:
+		return "cargo install --git https://github.com/theonlyhennygod/zeroclaw.git --force"
+	}
 }
 
 // getZeroClawDevInstallCommand creates a placeholder binary for development testing.
@@ -181,35 +233,51 @@ echo "Dev placeholder created at $HOME/.cargo/bin/zeroclaw" >&2
 
 // getZeroClawStartCommand returns the start command for ZeroClaw.
 func getZeroClawStartCommand() string {
-	switch runtime.GOOS {
+	return getZeroClawStartCommandForGOOS(runtime.GOOS)
+}
+
+func getZeroClawGatewayCommandForGOOS(goos, gatewayCommand string) string {
+	switch normalizeCatalogGOOS(goos) {
 	case "windows":
-		return "zeroclaw gateway start"
+		return "zeroclaw " + gatewayCommand
 	default:
-		home, err := os.UserHomeDir()
-		if err != nil {
-			home = os.Getenv("HOME")
-		}
-		return filepath.Join(home, ".cargo", "bin", "zeroclaw") + " gateway start"
+		return fmt.Sprintf(`sh -c 'if [ -x "$HOME/.local/bin/zeroclaw" ]; then exec "$HOME/.local/bin/zeroclaw" %s; elif [ -x "$HOME/.cargo/bin/zeroclaw" ]; then exec "$HOME/.cargo/bin/zeroclaw" %s; elif command -v zeroclaw >/dev/null 2>&1; then exec "$(command -v zeroclaw)" %s; else echo "zeroclaw executable not found (checked $HOME/.local/bin/zeroclaw, $HOME/.cargo/bin/zeroclaw, and PATH)" >&2; exit 127; fi'`, gatewayCommand, gatewayCommand, gatewayCommand)
 	}
+}
+
+func getZeroClawStartCommandForGOOS(goos string) string {
+	return getZeroClawGatewayCommandForGOOS(goos, "gateway start")
 }
 
 // getZeroClawStopCommand returns the stop command for ZeroClaw.
 func getZeroClawStopCommand() string {
-	switch runtime.GOOS {
-	case "windows":
-		return "zeroclaw gateway stop"
-	default:
-		home, err := os.UserHomeDir()
-		if err != nil {
-			home = os.Getenv("HOME")
-		}
-		return filepath.Join(home, ".cargo", "bin", "zeroclaw") + " gateway stop"
-	}
+	return getZeroClawStopCommandForGOOS(runtime.GOOS)
+}
+
+func getZeroClawStopCommandForGOOS(goos string) string {
+	return getZeroClawGatewayCommandForGOOS(goos, "gateway stop")
 }
 
 // ZeroClawManifest returns the manifest for the ZeroClaw agent.
 func ZeroClawManifest() manifest.Manifest {
 	installCmd := getZeroClawInstallCommand()
+	installByOS := map[string]string{
+		manifest.CommandOSLinux:   getZeroClawInstallCommandForGOOS(manifest.CommandOSLinux),
+		manifest.CommandOSDarwin:  getZeroClawInstallCommandForGOOS(manifest.CommandOSDarwin),
+		manifest.CommandOSWindows: getZeroClawInstallCommandForGOOS(manifest.CommandOSWindows),
+	}
+	startCmd := getZeroClawStartCommand()
+	stopCmd := getZeroClawStopCommand()
+	startByOS := map[string]string{
+		manifest.CommandOSLinux:   getZeroClawStartCommandForGOOS(manifest.CommandOSLinux),
+		manifest.CommandOSDarwin:  getZeroClawStartCommandForGOOS(manifest.CommandOSDarwin),
+		manifest.CommandOSWindows: getZeroClawStartCommandForGOOS(manifest.CommandOSWindows),
+	}
+	stopByOS := map[string]string{
+		manifest.CommandOSLinux:   getZeroClawStopCommandForGOOS(manifest.CommandOSLinux),
+		manifest.CommandOSDarwin:  getZeroClawStopCommandForGOOS(manifest.CommandOSDarwin),
+		manifest.CommandOSWindows: getZeroClawStopCommandForGOOS(manifest.CommandOSWindows),
+	}
 
 	return manifest.Manifest{
 		ID:           "zeroclaw",
@@ -218,11 +286,23 @@ func ZeroClawManifest() manifest.Manifest {
 		Description:  "Rust-based AI assistant with chat and code capabilities",
 		Capabilities: []string{"chat", "code"},
 		Runtime: manifest.RuntimeSpec{
-			Type:    manifest.RuntimeTypeLocalBinary,
-			Install: manifest.CommandSpec{Command: installCmd},
-			Upgrade: manifest.CommandSpec{Command: installCmd},
-			Start:   manifest.CommandSpec{Command: getZeroClawStartCommand()},
-			Stop:    manifest.CommandSpec{Command: getZeroClawStopCommand()},
+			Type: manifest.RuntimeTypeLocalBinary,
+			Install: manifest.CommandSpec{
+				Command:     installCmd,
+				CommandByOS: installByOS,
+			},
+			Upgrade: manifest.CommandSpec{
+				Command:     installCmd,
+				CommandByOS: installByOS,
+			},
+			Start: manifest.CommandSpec{
+				Command:     startCmd,
+				CommandByOS: startByOS,
+			},
+			Stop: manifest.CommandSpec{
+				Command:     stopCmd,
+				CommandByOS: stopByOS,
+			},
 		},
 		Network: manifest.NetworkSpec{
 			Healthcheck: manifest.HealthcheckSpec{
@@ -253,14 +333,22 @@ func ZeroClawManifest() manifest.Manifest {
 
 // picoClawBinaryName returns the installed executable name.
 func picoClawBinaryName() string {
-	if runtime.GOOS == "windows" {
+	return picoClawBinaryNameForGOOS(runtime.GOOS)
+}
+
+func picoClawBinaryNameForGOOS(goos string) string {
+	if normalizeCatalogGOOS(goos) == "windows" {
 		return "picoclaw.exe"
 	}
 	return "picoclaw"
 }
 
 func picoClawReleaseOS() string {
-	switch runtime.GOOS {
+	return picoClawReleaseOSForGOOS(runtime.GOOS)
+}
+
+func picoClawReleaseOSForGOOS(goos string) string {
+	switch normalizeCatalogGOOS(goos) {
 	case "darwin":
 		return "Darwin"
 	case "linux":
@@ -289,29 +377,38 @@ func picoClawReleaseArch() string {
 
 // picoClawReleaseBundleName returns the release archive name in GitHub assets.
 func picoClawReleaseBundleName() string {
+	return picoClawReleaseBundleNameForGOOS(runtime.GOOS)
+}
+
+func picoClawReleaseBundleNameForGOOS(goos string) string {
 	ext := ".tar.gz"
-	if runtime.GOOS == "windows" {
+	if normalizeCatalogGOOS(goos) == "windows" {
 		ext = ".zip"
 	}
-	return fmt.Sprintf("picoclaw_%s_%s%s", picoClawReleaseOS(), picoClawReleaseArch(), ext)
+	return fmt.Sprintf("picoclaw_%s_%s%s", picoClawReleaseOSForGOOS(goos), picoClawReleaseArch(), ext)
 }
 
 // getPicoClawInstallCommand returns the install command for PicoClaw.
 // It downloads the release archive, verifies checksum when available,
 // and installs to ~/.local/bin/picoclaw.
 func getPicoClawInstallCommand() string {
+	return getPicoClawInstallCommandForGOOS(runtime.GOOS)
+}
+
+func getPicoClawInstallCommandForGOOS(goos string) string {
 	if os.Getenv("CARRIER_DEV_MODE") == "1" {
 		return getPicoClawDevInstallCommand()
 	}
 
-	binary := picoClawBinaryName()
-	bundle := picoClawReleaseBundleName()
+	targetGOOS := normalizeCatalogGOOS(goos)
+	binary := picoClawBinaryNameForGOOS(targetGOOS)
+	bundle := picoClawReleaseBundleNameForGOOS(targetGOOS)
 	destName := "picoclaw"
-	if runtime.GOOS == "windows" {
+	if targetGOOS == "windows" {
 		destName = "picoclaw.exe"
 	}
 
-	switch runtime.GOOS {
+	switch targetGOOS {
 	case "windows":
 		return fmt.Sprintf(`powershell -NoProfile -Command "
 $ErrorActionPreference = 'Stop'
@@ -420,15 +517,15 @@ echo "Dev placeholder created at $HOME/.local/bin/picoclaw" >&2
 
 // getPicoClawStartCommand returns the start command for PicoClaw.
 func getPicoClawStartCommand() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = os.Getenv("HOME")
-	}
-	switch runtime.GOOS {
+	return getPicoClawStartCommandForGOOS(runtime.GOOS)
+}
+
+func getPicoClawStartCommandForGOOS(goos string) string {
+	switch normalizeCatalogGOOS(goos) {
 	case "windows":
 		return "picoclaw gateway"
 	default:
-		return filepath.Join(home, ".local", "bin", "picoclaw") + " gateway"
+		return `sh -c 'if [ -x "$HOME/.local/bin/picoclaw" ]; then exec "$HOME/.local/bin/picoclaw" gateway; elif command -v picoclaw >/dev/null 2>&1; then exec "$(command -v picoclaw)" gateway; else echo "picoclaw executable not found (checked $HOME/.local/bin/picoclaw and PATH)" >&2; exit 127; fi'`
 	}
 }
 
@@ -440,6 +537,19 @@ func getPicoClawStopCommand() string {
 
 // PicoClawManifest returns the manifest for the PicoClaw agent.
 func PicoClawManifest() manifest.Manifest {
+	installCmd := getPicoClawInstallCommand()
+	installByOS := map[string]string{
+		manifest.CommandOSLinux:   getPicoClawInstallCommandForGOOS(manifest.CommandOSLinux),
+		manifest.CommandOSDarwin:  getPicoClawInstallCommandForGOOS(manifest.CommandOSDarwin),
+		manifest.CommandOSWindows: getPicoClawInstallCommandForGOOS(manifest.CommandOSWindows),
+	}
+	startCmd := getPicoClawStartCommand()
+	startByOS := map[string]string{
+		manifest.CommandOSLinux:   getPicoClawStartCommandForGOOS(manifest.CommandOSLinux),
+		manifest.CommandOSDarwin:  getPicoClawStartCommandForGOOS(manifest.CommandOSDarwin),
+		manifest.CommandOSWindows: getPicoClawStartCommandForGOOS(manifest.CommandOSWindows),
+	}
+
 	return manifest.Manifest{
 		ID:           "picoclaw",
 		Name:         "PicoClaw",
@@ -447,11 +557,20 @@ func PicoClawManifest() manifest.Manifest {
 		Description:  "Go-based ultra-lightweight AI assistant",
 		Capabilities: []string{"chat", "code"},
 		Runtime: manifest.RuntimeSpec{
-			Type:    manifest.RuntimeTypeLocalBinary,
-			Install: manifest.CommandSpec{Command: getPicoClawInstallCommand()},
-			Upgrade: manifest.CommandSpec{Command: getPicoClawInstallCommand()},
-			Start:   manifest.CommandSpec{Command: getPicoClawStartCommand()},
-			Stop:    manifest.CommandSpec{Command: getPicoClawStopCommand()},
+			Type: manifest.RuntimeTypeLocalBinary,
+			Install: manifest.CommandSpec{
+				Command:     installCmd,
+				CommandByOS: installByOS,
+			},
+			Upgrade: manifest.CommandSpec{
+				Command:     installCmd,
+				CommandByOS: installByOS,
+			},
+			Start: manifest.CommandSpec{
+				Command:     startCmd,
+				CommandByOS: startByOS,
+			},
+			Stop: manifest.CommandSpec{Command: getPicoClawStopCommand()},
 		},
 		Network: manifest.NetworkSpec{
 			Healthcheck: manifest.HealthcheckSpec{
@@ -480,6 +599,23 @@ func PicoClawManifest() manifest.Manifest {
 
 func OpenClawManifest() manifest.Manifest {
 	installCmd := getInstallCommand()
+	installByOS := map[string]string{
+		manifest.CommandOSLinux:   getInstallCommandForGOOS(manifest.CommandOSLinux),
+		manifest.CommandOSDarwin:  getInstallCommandForGOOS(manifest.CommandOSDarwin),
+		manifest.CommandOSWindows: getInstallCommandForGOOS(manifest.CommandOSWindows),
+	}
+	startCmd := getStartCommand()
+	startByOS := map[string]string{
+		manifest.CommandOSLinux:   getStartCommandForGOOS(manifest.CommandOSLinux),
+		manifest.CommandOSDarwin:  getStartCommandForGOOS(manifest.CommandOSDarwin),
+		manifest.CommandOSWindows: getStartCommandForGOOS(manifest.CommandOSWindows),
+	}
+	stopCmd := getStopCommand()
+	stopByOS := map[string]string{
+		manifest.CommandOSLinux:   getStopCommandForGOOS(manifest.CommandOSLinux),
+		manifest.CommandOSDarwin:  getStopCommandForGOOS(manifest.CommandOSDarwin),
+		manifest.CommandOSWindows: getStopCommandForGOOS(manifest.CommandOSWindows),
+	}
 
 	return manifest.Manifest{
 		ID:           "openclaw",
@@ -488,11 +624,23 @@ func OpenClawManifest() manifest.Manifest {
 		Description:  "Full-featured AI assistant with memory support",
 		Capabilities: []string{"chat", "code", "memory"},
 		Runtime: manifest.RuntimeSpec{
-			Type:    manifest.RuntimeTypeLocalBinary,
-			Install: manifest.CommandSpec{Command: installCmd},
-			Upgrade: manifest.CommandSpec{Command: installCmd},
-			Start:   manifest.CommandSpec{Command: getStartCommand()},
-			Stop:    manifest.CommandSpec{Command: getStopCommand()},
+			Type: manifest.RuntimeTypeLocalBinary,
+			Install: manifest.CommandSpec{
+				Command:     installCmd,
+				CommandByOS: installByOS,
+			},
+			Upgrade: manifest.CommandSpec{
+				Command:     installCmd,
+				CommandByOS: installByOS,
+			},
+			Start: manifest.CommandSpec{
+				Command:     startCmd,
+				CommandByOS: startByOS,
+			},
+			Stop: manifest.CommandSpec{
+				Command:     stopCmd,
+				CommandByOS: stopByOS,
+			},
 		},
 		Network: getNetworkSpec(),
 		Env: manifest.EnvSpec{

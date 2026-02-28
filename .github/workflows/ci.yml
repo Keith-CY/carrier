@@ -156,6 +156,29 @@ jobs:
         with:
           go-version-file: daemon/go.mod
 
+  isolation-fixed-flow:
+    name: Isolation Fixed Flow (${{ matrix.os }})
+    needs: classify-scope
+    if: github.event_name != 'pull_request' || needs.classify-scope.outputs.ci_only != 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: daemon/go.mod
+
+      - name: Run deterministic isolation fixed-flow checks
+        shell: bash
+        run: bash scripts/isolation-fixed-flow-check.sh
+
   webui-build:
     name: WebUI Build
     needs: classify-scope

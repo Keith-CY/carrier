@@ -3526,7 +3526,13 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 	if _, err := ensureDaemonRunning(out); err != nil {
 		return err
 	}
-	if err := daemonAgentActionWithProgress(out, cfg.ID, "install", quiet); err != nil {
+	var installPayload map[string]interface{}
+	if isolation {
+		installPayload = map[string]interface{}{
+			"isolation": true,
+		}
+	}
+	if err := daemonAgentActionWithPayloadWithProgress(out, cfg.ID, "install", installPayload, quiet); err != nil {
 		return err
 	}
 	startPayload := map[string]interface{}{}

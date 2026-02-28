@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -295,6 +297,135 @@ func TestE2ECarrierBinaryAddOpenClawReusesPairedUserAndProviderCredential(t *tes
 	}
 	if !strings.Contains(stdout, "Token reuse is disabled for OpenClaw") {
 		t.Fatalf("stdout missing token reuse policy message: %q", stdout)
+	}
+}
+
+func TestE2ECarrierBinaryAddOpenClawIsolationSendsInstallAndStartIsolationPayload(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+
+	t.Setenv("HOME", home)
+	t.Setenv("CARRIER_CONFIG", filepath.Join(tmp, "config.v2.json"))
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	t.Setenv("CARRIER_TELEGRAM_BOT_TOKEN", "")
+
+	if _, err := saveProviderCredential("openai", "sk-openai-reused"); err != nil {
+		t.Fatalf("saveProviderCredential(openai): %v", err)
+	}
+
+	var installBody string
+	var startBody string
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/healthz":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case r.URL.Path == "/api/v1/agents/openclaw/logs" && r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"lines":[]}`))
+		case r.URL.Path == "/api/v1/agents/openclaw/install" && r.Method == http.MethodPost:
+			raw, _ := io.ReadAll(r.Body)
+			installBody = strings.TrimSpace(string(raw))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case r.URL.Path == "/api/v1/agents/openclaw/start" && r.Method == http.MethodPost:
+			raw, _ := io.ReadAll(r.Body)
+			startBody = strings.TrimSpace(string(raw))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer daemon.Close()
+	setProbeEnvFromURL(t, "CARRIER_SERVER_HOST", "CARRIER_SERVER_PORT", daemon.URL)
+
+	bin := buildCarrierBinary(t)
+	stdout, stderr, err := runCarrierBinary(t, bin, "tg-openclaw-dedicated\n", "add", "openclaw", "--isolation")
+	if err != nil {
+		t.Fatalf("carrier add openclaw --isolation failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(installBody, `"isolation":true`) {
+		t.Fatalf("expected install payload to include isolation=true, got %q", installBody)
+	}
+	if !strings.Contains(startBody, `"isolation":true`) {
+		t.Fatalf("expected start payload to include isolation=true, got %q", startBody)
+	}
+}
+
+func TestE2ECarrierBinaryAddManagedAgentsIsolationSendsInstallAndStartIsolationPayload(t *testing.T) {
+	agentIDs := []string{"picoclaw", "zeroclaw"}
+	for _, agentID := range agentIDs {
+		t.Run(agentID, func(t *testing.T) {
+			tmp := t.TempDir()
+			home := filepath.Join(tmp, "home")
+			if err := os.MkdirAll(home, 0o700); err != nil {
+				t.Fatalf("mkdir home: %v", err)
+			}
+
+			t.Setenv("HOME", home)
+			t.Setenv("CARRIER_CONFIG", filepath.Join(tmp, "config.v2.json"))
+			t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+			t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+			t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+			t.Setenv("CARRIER_TELEGRAM_BOT_TOKEN", "")
+
+			if _, err := saveProviderCredential("openai", "sk-openai-reused"); err != nil {
+				t.Fatalf("saveProviderCredential(openai): %v", err)
+			}
+			if _, err := saveProviderCredential("openai-codex", "codex-token-reused"); err != nil {
+				t.Fatalf("saveProviderCredential(openai-codex): %v", err)
+			}
+
+			var installBody string
+			var startBody string
+			logsPath := fmt.Sprintf("/api/v1/agents/%s/logs", agentID)
+			installPath := fmt.Sprintf("/api/v1/agents/%s/install", agentID)
+			startPath := fmt.Sprintf("/api/v1/agents/%s/start", agentID)
+			daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/healthz":
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"status":"ok"}`))
+				case r.URL.Path == logsPath && r.Method == http.MethodGet:
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"lines":[]}`))
+				case r.URL.Path == installPath && r.Method == http.MethodPost:
+					raw, _ := io.ReadAll(r.Body)
+					installBody = strings.TrimSpace(string(raw))
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"ok":true}`))
+				case r.URL.Path == startPath && r.Method == http.MethodPost:
+					raw, _ := io.ReadAll(r.Body)
+					startBody = strings.TrimSpace(string(raw))
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"ok":true}`))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer daemon.Close()
+			setProbeEnvFromURL(t, "CARRIER_SERVER_HOST", "CARRIER_SERVER_PORT", daemon.URL)
+
+			bin := buildCarrierBinary(t)
+			stdout, stderr, err := runCarrierBinary(t, bin, "tg-"+agentID+"-dedicated\n", "add", agentID, "--isolation")
+			if err != nil {
+				t.Fatalf("carrier add %s --isolation failed: %v\nstdout:\n%s\nstderr:\n%s", agentID, err, stdout, stderr)
+			}
+
+			if !strings.Contains(installBody, `"isolation":true`) {
+				t.Fatalf("expected install payload to include isolation=true, got %q", installBody)
+			}
+			if !strings.Contains(startBody, `"isolation":true`) {
+				t.Fatalf("expected start payload to include isolation=true, got %q", startBody)
+			}
+		})
 	}
 }
 
