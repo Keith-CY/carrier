@@ -26,6 +26,7 @@ var (
 
 const gitIgnoreContent = `credentials.json
 carrier-secrets.json
+config.v2.json
 *.key
 *.pem
 tls/
