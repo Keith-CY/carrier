@@ -136,6 +136,32 @@ func TestFusionInstanceImportExport(t *testing.T) {
 	}
 }
 
+func TestFusionSearchUsesSQLiteIndexCache(t *testing.T) {
+	root := t.TempDir()
+	store := NewStore(WithRootDir(root))
+	if _, err := store.UpsertRecord(UpsertRecordInput{
+		Subject:        "agent-a",
+		Scope:          Scope("agent:agent-a"),
+		ContentSummary: "sqlite indexed content",
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	indexPath := filepath.Join(root, "index", "mem_index.sqlite")
+	if _, err := os.Stat(indexPath); err != nil {
+		t.Fatalf("expected sqlite index at %s: %v", indexPath, err)
+	}
+
+	// Force fallback memory map empty to ensure search can still use SQLite cache.
+	store.mu.Lock()
+	store.records = map[string]MemoryRecord{}
+	store.mu.Unlock()
+
+	hits := store.Search(SearchOptions{Subject: "agent-a", Query: "sqlite"})
+	if len(hits) == 0 {
+		t.Fatalf("expected sqlite-backed search hits")
+	}
+}
+
 func TestFusionRecordReadArchiveAndAccessControl(t *testing.T) {
 	store := NewStore(WithRootDir(t.TempDir()))
 

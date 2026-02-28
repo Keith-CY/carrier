@@ -190,4 +190,42 @@ func TestMemoryV2UpsertGetGrantRevokeAndInstanceAttach(t *testing.T) {
 	if exportRR.Code != http.StatusOK {
 		t.Fatalf("instance export status=%d body=%s", exportRR.Code, exportRR.Body.String())
 	}
+
+	// Migration backup/validate/rollback.
+	backupReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/migrate/backup", strings.NewReader(`{
+		"actor":"tester",
+		"requestId":"req-backup"
+	}`))
+	backupRR := httptest.NewRecorder()
+	mux.ServeHTTP(backupRR, backupReq)
+	if backupRR.Code != http.StatusOK {
+		t.Fatalf("backup status=%d body=%s", backupRR.Code, backupRR.Body.String())
+	}
+	var backupResp struct {
+		BackupPath string `json:"backupPath"`
+	}
+	if err := json.Unmarshal(backupRR.Body.Bytes(), &backupResp); err != nil {
+		t.Fatalf("decode backup response: %v", err)
+	}
+	if strings.TrimSpace(backupResp.BackupPath) == "" {
+		t.Fatalf("expected backup path")
+	}
+
+	validateReq := httptest.NewRequest(http.MethodGet, "/api/v2/memory/migrate/validate", nil)
+	validateRR := httptest.NewRecorder()
+	mux.ServeHTTP(validateRR, validateReq)
+	if validateRR.Code != http.StatusOK {
+		t.Fatalf("validate status=%d body=%s", validateRR.Code, validateRR.Body.String())
+	}
+
+	rollbackReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/migrate/rollback", strings.NewReader(`{
+		"backupPath":"`+backupResp.BackupPath+`",
+		"actor":"tester",
+		"requestId":"req-rollback"
+	}`))
+	rollbackRR := httptest.NewRecorder()
+	mux.ServeHTTP(rollbackRR, rollbackReq)
+	if rollbackRR.Code != http.StatusOK {
+		t.Fatalf("rollback status=%d body=%s", rollbackRR.Code, rollbackRR.Body.String())
+	}
 }

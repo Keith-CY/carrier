@@ -191,6 +191,7 @@ func (s *Store) Create(id, name, version string, memType Type, owner string) (En
 			CreatedAt:      now,
 			UpdatedAt:      now,
 		}
+		s.syncRecordToSQLiteLocked(s.records[id])
 	}
 	if err := s.persistStateLocked(); err != nil {
 		return Entry{}, err
@@ -320,6 +321,7 @@ func (s *Store) Archive(memoryID string) error {
 		rec.ArchivedAt = &archived
 		rec.UpdatedAt = archived
 		s.records[memoryID] = rec
+		s.syncRecordToSQLiteLocked(rec)
 	}
 	if err := s.persistStateLocked(); err != nil {
 		return err
