@@ -22,7 +22,21 @@ var (
 	isolationEnvLookup          = os.Getenv
 	isolationLimaPathCandidates = []string{"/opt/homebrew/bin/limactl", "/usr/local/bin/limactl"}
 	isolationPathStat           = os.Stat
+	isolationBackendRun         = runIsolationBackendCommand
 )
+
+func runIsolationBackendCommand(command string, args ...string) error {
+	cmd := exec.Command(command, args...)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	message := strings.TrimSpace(string(output))
+	if message == "" {
+		return err
+	}
+	return fmt.Errorf("%w: %s", err, message)
+}
 
 func buildIsolationHostPrepareCommand() (string, error) {
 	switch strings.ToLower(strings.TrimSpace(isolationRuntimeGOOS)) {
@@ -163,7 +177,14 @@ func resolveIsolationBackend() (isolationBackend, error) {
 	case manifest.CommandOSLinux:
 		bwrapPath, err := isolationBackendLookup("bwrap")
 		if err != nil || strings.TrimSpace(bwrapPath) == "" {
-			return nil, fmt.Errorf("%w: bubblewrap (bwrap) executable not found in PATH", ErrIsolationUnavailable)
+			originalErr := fmt.Errorf("%w: bubblewrap (bwrap) executable not found in PATH", ErrIsolationUnavailable)
+			if installErr := installLocalBubblewrap(); installErr != nil {
+				return nil, fmt.Errorf("%w; automatic install attempt failed: %v", originalErr, installErr)
+			}
+			bwrapPath, err = isolationBackendLookup("bwrap")
+			if err != nil || strings.TrimSpace(bwrapPath) == "" {
+				return nil, fmt.Errorf("%w; automatic install reported success but bwrap is still unavailable in PATH", originalErr)
+			}
 		}
 		return linuxIsolationBackend{bwrapPath: strings.TrimSpace(bwrapPath)}, nil
 	case manifest.CommandOSDarwin:
@@ -200,6 +221,45 @@ func resolveIsolationBackend() (isolationBackend, error) {
 	default:
 		return nil, fmt.Errorf("%w: unsupported host OS %s", ErrIsolationUnavailable, isolationRuntimeGOOS)
 	}
+}
+
+func installLocalBubblewrap() error {
+	type installerSpec struct {
+		name string
+		args []string
+	}
+
+	installers := []installerSpec{
+		{name: "apt-get", args: []string{"install", "-y", "bubblewrap"}},
+		{name: "dnf", args: []string{"install", "-y", "bubblewrap"}},
+		{name: "yum", args: []string{"install", "-y", "bubblewrap"}},
+		{name: "pacman", args: []string{"-Sy", "--noconfirm", "bubblewrap"}},
+		{name: "apk", args: []string{"add", "bubblewrap"}},
+	}
+
+	var selected *installerSpec
+	for i := range installers {
+		path, err := isolationBackendLookup(installers[i].name)
+		if err == nil && strings.TrimSpace(path) != "" {
+			selected = &installers[i]
+			break
+		}
+	}
+	if selected == nil {
+		return fmt.Errorf("no supported package manager found (tried: apt-get, dnf, yum, pacman, apk)")
+	}
+
+	if sudoPath, sudoErr := isolationBackendLookup("sudo"); sudoErr == nil && strings.TrimSpace(sudoPath) != "" {
+		args := append([]string{selected.name}, selected.args...)
+		if err := isolationBackendRun("sudo", args...); err == nil {
+			return nil
+		}
+	}
+
+	if err := isolationBackendRun(selected.name, selected.args...); err != nil {
+		return err
+	}
+	return nil
 }
 
 func buildBwrapInvocation(bwrapExecutable, startCommand string) (string, error) {
