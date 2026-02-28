@@ -103,6 +103,9 @@ func Run() {
 			URL: alertWebhookURL,
 		})))
 	}
+	webhookURL := strings.TrimSpace(os.Getenv("CARRIER_WEBHOOK_URL"))
+	webhookEvents := parseCSVEnv(os.Getenv("CARRIER_WEBHOOK_EVENTS"))
+	opts = append(opts, lifecycle.WithWebhookManager(lifecycle.NewWebhookManager(webhookURL, webhookEvents)))
 
 	svc := lifecycle.NewService(baseagent.NewLLMTriager(baseagent.NoopTriager{}), opts...)
 	var baseMemoryStore baseagent.MemoryStore
@@ -978,6 +981,18 @@ func parseEnabledEnv(raw string) bool {
 	default:
 		return false
 	}
+}
+
+func parseCSVEnv(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

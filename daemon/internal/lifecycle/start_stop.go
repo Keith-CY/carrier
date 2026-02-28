@@ -154,6 +154,7 @@ func (s *Service) StartWithOptions(ctx context.Context, agentID string, opts Sta
 	s.backoffStates[agentID] = backoffState
 	s.mu.Unlock()
 	s.recordAudit("", "system", "start", agentID, AuditResultSuccess, "", fmt.Sprintf("start completed (PID %d)", pid))
+	_ = s.webhookManager.FireEvent(WebhookEvent{Type: WebhookEventAgentStarted, AgentID: agentID})
 
 	// Monitor the process in background
 	go s.monitorProcess(agentID)
@@ -231,6 +232,7 @@ func (s *Service) Stop(ctx context.Context, agentID string) error {
 	s.states[agentID] = state
 	s.mu.Unlock()
 	s.recordAudit("", "system", "stop", agentID, AuditResultSuccess, "", "stop completed")
+	_ = s.webhookManager.FireEvent(WebhookEvent{Type: WebhookEventAgentStopped, AgentID: agentID})
 
 	s.saveState()
 
@@ -320,6 +322,7 @@ func (s *Service) monitorProcess(agentID string) {
 
 	// Trigger failure handling for unexpected exits
 	if shouldTriage {
+		_ = s.webhookManager.FireEvent(WebhookEvent{Type: WebhookEventAgentCrashed, AgentID: agentID, Details: errorMsg})
 		if _, triageErr := s.HandleFailure(context.Background(), agentID, errorMsg); triageErr != nil {
 			s.appendLog(agentID, fmt.Sprintf("triage error: %v", triageErr))
 		}

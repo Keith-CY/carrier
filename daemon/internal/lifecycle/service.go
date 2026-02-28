@@ -191,6 +191,14 @@ func WithAlertManager(manager *AlertManager) Option {
 	}
 }
 
+func WithWebhookManager(manager *WebhookManager) Option {
+	return func(s *Service) {
+		if manager != nil {
+			s.webhookManager = manager
+		}
+	}
+}
+
 type Service struct {
 	mu                 sync.RWMutex
 	states             map[string]AgentState
@@ -225,6 +233,7 @@ type Service struct {
 	evidenceCollector  *EvidenceCollector
 	commandTimeout     time.Duration
 	alertManager       *AlertManager
+	webhookManager     *WebhookManager
 }
 
 func NewService(triager baseagent.Triager, opts ...Option) *Service {
@@ -263,6 +272,7 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		exitCodes:          exitCodes,
 		commandTimeout:     loadCommandTimeoutFromEnv(os.Getenv("CARRIER_COMMAND_TIMEOUT")),
 		alertManager:       NewAlertManager(false, nil),
+		webhookManager:     NewWebhookManager("", nil),
 	}
 	svc.processManager = NewProcessManager(processLogDir)
 	svc.evidenceCollector = NewEvidenceCollector(logs, exitCodes, 1000)

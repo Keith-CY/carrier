@@ -143,6 +143,10 @@ type catalogCommandOptions struct {
 	ID           string
 }
 
+type webhooksCommandOptions struct {
+	Action string
+}
+
 type keysCommandOptions struct {
 	Action string
 	Name   string
@@ -395,6 +399,8 @@ Usage:
   carrier catalog list
   carrier catalog remove <id>
                         Manage custom agent catalog manifests
+  carrier webhooks test
+                        Send a test webhook callback using CARRIER_WEBHOOK_URL
   carrier doctor [--json]
                         Run local environment and daemon health checks
   carrier keys generate [--name <alias>]
@@ -563,6 +569,18 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "webhooks":
+			opts, err := parseWebhooksCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "webhooks failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runWebhooksCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "webhooks failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "keys":
 			opts, err := parseKeysCommandArgs(commandArgs)
 			if err != nil {
@@ -716,6 +734,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "service", args[2:], nil
 	case "catalog":
 		return "catalog", args[2:], nil
+	case "webhooks":
+		return "webhooks", args[2:], nil
 	case "keys":
 		return "keys", args[2:], nil
 	case "onboard":
@@ -978,6 +998,13 @@ func parseCatalogCommandArgs(args []string) (catalogCommandOptions, error) {
 	}
 }
 
+func parseWebhooksCommandArgs(args []string) (webhooksCommandOptions, error) {
+	if len(args) != 1 || strings.ToLower(strings.TrimSpace(args[0])) != "test" {
+		return webhooksCommandOptions{}, errors.New("usage: carrier webhooks test")
+	}
+	return webhooksCommandOptions{Action: "test"}, nil
+}
+
 func parseSinceValue(raw string) (time.Time, bool) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -1017,6 +1044,41 @@ func runCatalogCommand(out io.Writer, opts catalogCommandOptions) error {
 	default:
 		return fmt.Errorf("unsupported catalog action: %s", opts.Action)
 	}
+}
+
+func runWebhooksCommand(out io.Writer, opts webhooksCommandOptions) error {
+	if opts.Action != "test" {
+		return fmt.Errorf("unsupported webhooks action: %s", opts.Action)
+	}
+	webhookURL := strings.TrimSpace(os.Getenv("CARRIER_WEBHOOK_URL"))
+	if webhookURL == "" {
+		return errors.New("CARRIER_WEBHOOK_URL is not set")
+	}
+	payload := map[string]interface{}{
+		"type":      "agent.started",
+		"agentId":   "test-agent",
+		"details":   "carrier webhooks test",
+		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, webhookURL, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("webhook returned status %d", resp.StatusCode)
+	}
+	_, _ = fmt.Fprintln(out, "webhook test sent successfully")
+	return nil
 }
 
 func runCatalogAdd(out io.Writer, manifestPath string) error {

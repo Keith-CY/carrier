@@ -59,6 +59,7 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 	}
 
 	s.markInstallSuccess(agentID)
+	_ = s.webhookManager.FireEvent(WebhookEvent{Type: WebhookEventAgentInstalled, AgentID: agentID})
 	if rollbackSnapshotReady {
 		if cleanupErr := cleanupRollbackSnapshot(agentID); cleanupErr != nil {
 			s.appendLog(agentID, fmt.Sprintf("rollback snapshot cleanup failed: %v", cleanupErr))
