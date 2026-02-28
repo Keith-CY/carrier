@@ -237,9 +237,13 @@ jobs:
           New-Item -ItemType Directory -Path $wslLogsWin -Force | Out-Null
 
           function Get-WslDistros {
-            $distroLines = wsl -l -q
+            $distroLines = & wsl -l -q 2>$null
+            if ($LASTEXITCODE -ne 0 -or -not $distroLines) {
+              return @()
+            }
+
             $distros = @()
-            foreach ($line in $distroLines) {
+            foreach ($line in @($distroLines)) {
               $clean = ([string]$line).Replace([string][char]0, "").Trim()
               if ($clean) {
                 $distros += $clean
@@ -254,54 +258,34 @@ jobs:
             )
 
             $distros = Get-WslDistros
-            $ubuntu = $distros | Where-Object { $_ -like "Ubuntu*" } | Select-Object -First 1
+            $ubuntu = $distros | Where-Object { $_ -match "^Ubuntu($|-)" } | Select-Object -First 1
             if ($ubuntu) {
               return $ubuntu
             }
 
-            Write-Host "No Ubuntu WSL distribution detected. Bootstrapping Ubuntu for E2E."
-
-            $installAttempts = @(
-              @("--install", "--distribution", "Ubuntu", "--no-launch"),
-              @("--install", "-d", "Ubuntu", "--no-launch"),
-              @("--install", "-d", "Ubuntu", "--web-download", "--no-launch")
-            )
-            foreach ($args in $installAttempts) {
-              try {
-                Write-Host "Attempting: wsl $($args -join ' ')"
-                & wsl @args
-                if ($LASTEXITCODE -eq 0) {
-                  break
-                }
-              }
-              catch {
-                Write-Host "WSL install attempt failed: $($_.Exception.Message)"
-              }
+            $distroName = "CarrierE2EUbuntu"
+            if ($distros -contains $distroName) {
+              return $distroName
             }
 
-            Start-Sleep -Seconds 10
-            $distros = Get-WslDistros
-            $ubuntu = $distros | Where-Object { $_ -like "Ubuntu*" } | Select-Object -First 1
-            if ($ubuntu) {
-              return $ubuntu
-            }
+            Write-Host "No Ubuntu WSL distribution detected. Importing fallback Ubuntu rootfs for E2E."
 
             $bootstrapDir = Join-Path $WorkspaceRoot "bootstrap-distro"
-            $distroName = "CarrierE2EUbuntu"
+            $installDir = Join-Path $bootstrapDir "instance"
             $rootfsPath = Join-Path $bootstrapDir "ubuntu-noble-wsl-amd64-rootfs.tar.gz"
             New-Item -ItemType Directory -Path $bootstrapDir -Force | Out-Null
 
-            Write-Host "Installing fallback Ubuntu rootfs via wsl --import."
             Invoke-WebRequest `
               -Uri "https://cloud-images.ubuntu.com/wsl/noble/current/ubuntu-noble-wsl-amd64-rootfs.tar.gz" `
               -OutFile $rootfsPath
-            & wsl --import $distroName $bootstrapDir $rootfsPath --version 2
+            & wsl --import $distroName $installDir $rootfsPath --version 2
             if ($LASTEXITCODE -ne 0) {
               throw "wsl --import failed with exit code $LASTEXITCODE"
             }
 
+            Start-Sleep -Seconds 5
             $distros = Get-WslDistros
-            $ubuntu = $distros | Where-Object { $_ -eq $distroName -or $_ -like "Ubuntu*" } | Select-Object -First 1
+            $ubuntu = $distros | Where-Object { $_ -eq $distroName } | Select-Object -First 1
             if (-not $ubuntu) {
               throw "Ubuntu distro bootstrap failed. Available distros: $($distros -join ', ')"
             }
