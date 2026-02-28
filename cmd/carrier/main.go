@@ -100,6 +100,11 @@ type onboardCommandOptions struct {
 	TUI   bool
 }
 
+type statusCommandOptions struct {
+	Target  string
+	Metrics bool
+}
+
 type updateCommandOptions struct {
 	Check     bool
 	Yes       bool
@@ -442,12 +447,13 @@ func main() {
 			}
 			return
 		case "status":
-			if len(commandArgs) < 1 {
-				fmt.Fprintln(os.Stderr, "status failed: instance id or name is required")
+			opts, err := parseStatusCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "status failed: %v\n\n", err)
 				fmt.Fprint(os.Stderr, usage)
 				os.Exit(1)
 			}
-			if err := runStatusInstance(os.Stdout, commandArgs[0]); err != nil {
+			if err := runStatusInstanceWithOptions(os.Stdout, opts.Target, opts.Metrics); err != nil {
 				fmt.Fprintf(os.Stderr, "status failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -736,6 +742,30 @@ func parseOnboardCommandArgs(args []string) (onboardCommandOptions, error) {
 	}
 	if !opts.WebUI && !terminalModeRequested {
 		opts.TUI = true
+	}
+	return opts, nil
+}
+
+func parseStatusCommandArgs(args []string) (statusCommandOptions, error) {
+	opts := statusCommandOptions{}
+	for _, raw := range args {
+		arg := strings.TrimSpace(raw)
+		switch strings.ToLower(arg) {
+		case "":
+		case "--metrics":
+			opts.Metrics = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return statusCommandOptions{}, fmt.Errorf("unknown status option: %s", raw)
+			}
+			if opts.Target != "" {
+				return statusCommandOptions{}, errors.New("multiple instance targets provided")
+			}
+			opts.Target = arg
+		}
+	}
+	if strings.TrimSpace(opts.Target) == "" {
+		return statusCommandOptions{}, errors.New("instance id or name is required")
 	}
 	return opts, nil
 }
@@ -1911,6 +1941,10 @@ func runUpgradeInstance(out io.Writer, target string) error {
 }
 
 func runStatusInstance(out io.Writer, target string) error {
+	return runStatusInstanceWithOptions(out, target, false)
+}
+
+func runStatusInstanceWithOptions(out io.Writer, target string, includeMetrics bool) error {
 	instances, path, err := loadManagedInstances()
 	if err != nil {
 		return err
@@ -1945,6 +1979,22 @@ func runStatusInstance(out io.Writer, target string) error {
 	_, _ = fmt.Fprintf(out, "  install=%s runtime=%s\n", installState, runtimeState)
 	if lastErr := strings.TrimSpace(status.LastError); lastErr != "" {
 		_, _ = fmt.Fprintf(out, "  lastError=%s\n", lastErr)
+	}
+	if includeMetrics {
+		metrics, metricsErr := daemonFetchAgentMetrics(inst.AgentID)
+		if metricsErr != nil {
+			_, _ = fmt.Fprintf(out, "  metrics_error=%v\n", metricsErr)
+		} else {
+			_, _ = fmt.Fprintf(out, "  metrics cpu=%.2f%% rss=%d uptime=%ds restarts=%d\n",
+				metrics.CPUPercent,
+				metrics.MemoryRSS,
+				metrics.Uptime,
+				metrics.RestartCount,
+			)
+			if strings.TrimSpace(metrics.LastErrorAt) != "" {
+				_, _ = fmt.Fprintf(out, "  metrics lastErrorAt=%s\n", metrics.LastErrorAt)
+			}
+		}
 	}
 	return nil
 }
@@ -4534,6 +4584,14 @@ type daemonAgentStatusSnapshot struct {
 	LastError    string
 }
 
+type daemonAgentMetricsSnapshot struct {
+	CPUPercent   float64 `json:"cpuPercent"`
+	MemoryRSS    int64   `json:"memoryRSS"`
+	Uptime       int64   `json:"uptime"`
+	RestartCount int     `json:"restartCount"`
+	LastErrorAt  string  `json:"lastErrorAt"`
+}
+
 func reconcileDaemonActionOnTransportError(agentID, action string, reqErr error) (bool, error) {
 	if !isDaemonTransportErrorRecoverable(reqErr) {
 		return false, nil
@@ -4624,6 +4682,21 @@ func daemonFetchAgentStatus(agentID string) (daemonAgentStatusSnapshot, error) {
 		RuntimeState: firstNonEmpty(first.RuntimeState, first.Runtime),
 		LastError:    strings.TrimSpace(first.LastError),
 	}, nil
+}
+
+func daemonFetchAgentMetrics(agentID string) (daemonAgentMetricsSnapshot, error) {
+	raw, status, err := daemonRequest(http.MethodGet, fmt.Sprintf("/api/v1/agents/%s/metrics", neturl.PathEscape(strings.TrimSpace(agentID))), nil)
+	if err != nil {
+		return daemonAgentMetricsSnapshot{}, err
+	}
+	if status < 200 || status >= 300 {
+		return daemonAgentMetricsSnapshot{}, fmt.Errorf("daemon metrics request failed with status %d", status)
+	}
+	var metrics daemonAgentMetricsSnapshot
+	if err := json.Unmarshal(raw, &metrics); err != nil {
+		return daemonAgentMetricsSnapshot{}, fmt.Errorf("decode daemon metrics response: %w", err)
+	}
+	return metrics, nil
 }
 
 func firstNonEmpty(values ...string) string {

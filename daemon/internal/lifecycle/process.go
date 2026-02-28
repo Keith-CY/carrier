@@ -261,6 +261,17 @@ func (pm *ProcessManager) GetExitCode(agentID string) *int {
 	}
 }
 
+// PID returns the current tracked PID for an agent, or 0 when not running.
+func (pm *ProcessManager) PID(agentID string) int {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	info, exists := pm.processes[agentID]
+	if !exists || info == nil || !pm.isProcessAlive(info) {
+		return 0
+	}
+	return info.pid
+}
+
 // maxLogSize is the size threshold (10 MB) at which a log file is rotated
 // before a new process start.
 const maxLogSize int64 = 10 * 1024 * 1024

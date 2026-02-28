@@ -394,6 +394,8 @@ func buildHTTPMuxWithBaseAgent(
 			handleStatus(svc, agentID, w, r)
 		case "logs":
 			handleLogs(svc, agentID, w, r)
+		case "metrics":
+			handleMetrics(svc, agentID, w, r)
 		case "upgrade":
 			handleUpgrade(svc, agentID, w, r)
 		case "uninstall":
@@ -713,6 +715,19 @@ func handleUpgrade(svc *lifecycle.Service, agentID string, w http.ResponseWriter
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func handleMetrics(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	metrics, err := svc.Metrics(agentID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, metrics)
 }
 
 func handleDiagnose(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
