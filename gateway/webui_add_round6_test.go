@@ -11,6 +11,12 @@ import (
 	"testing"
 )
 
+type failingRandReader struct{}
+
+func (failingRandReader) Read(_ []byte) (int, error) {
+	return 0, errors.New("random source unavailable")
+}
+
 func callHandleWebUIAdd(t *testing.T, daemon *DaemonClient, body string) (*httptest.ResponseRecorder, map[string]interface{}) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "http://gateway.local/api/v1/add", strings.NewReader(body))

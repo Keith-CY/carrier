@@ -12,6 +12,12 @@ import (
 	"time"
 )
 
+type failingReader struct{}
+
+func (failingReader) Read(_ []byte) (int, error) {
+	return 0, errors.New("forced random failure")
+}
+
 func mustLoadManagedInstancesFile(t *testing.T, path string) []managedAgentInstance {
 	t.Helper()
 	raw, err := os.ReadFile(path)
