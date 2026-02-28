@@ -5,7 +5,7 @@ test.describe('Error Handling', () => {
   test('shows offline badge when daemon is unreachable', async ({ page }) => {
     // Mock healthz to return network error
     await page.route('**/healthz', (route) => route.abort('connectionrefused'));
-    await page.route('**/api/v1/agents', (route) =>
+    await page.route('**/api/v1/instances', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
     );
 
@@ -20,8 +20,8 @@ test.describe('Error Handling', () => {
 
   test('shows error when API returns 500', async ({ page }) => {
     await mockAPIs(page);
-    // Override agents to return 500
-    await page.route('**/api/v1/agents', (route) =>
+    // Override instances to return 500
+    await page.route('**/api/v1/instances', (route) =>
       route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"internal"}' }),
     );
 
@@ -36,8 +36,8 @@ test.describe('Error Handling', () => {
 
   test('shows error when agent install fails', async ({ page }) => {
     await mockAPIs(page);
-    // Override install to return error
-    await page.route('**/api/v1/agents/*/install', (route) =>
+    // Override add/install flow endpoint to return error
+    await page.route('**/api/v1/add', (route) =>
       route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"install failed"}' }),
     );
 
@@ -49,9 +49,11 @@ test.describe('Error Handling', () => {
     await items.first().click();
     await page.click('#agents-next');
 
-    // Provider page → skip
+    // Provider page → choose one provider and continue
     await expect(page.locator('#view-provider')).toBeVisible();
-    await page.click('#provider-skip');
+    await page.locator('.provider-item').first().click();
+    await page.fill('#provider-api-key', 'sk-test-install-fail');
+    await page.click('#provider-next');
 
     // Config page → next
     await expect(page.locator('#view-config')).toBeVisible();

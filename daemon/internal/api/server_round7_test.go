@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -126,15 +125,12 @@ func TestHandleAgentActionAdditionalGuardsAndErrors(t *testing.T) {
 	}
 }
 
-type brokenEntropyReader struct{}
-
-func (brokenEntropyReader) Read(_ []byte) (int, error) {
-	return 0, errors.New("entropy unavailable")
-}
-
 func TestHandleIssuePairCodeDirectPathAndInternalError(t *testing.T) {
 	svc := newServiceForAPITest(t)
-	srv := NewServer(svc)
+	pairing := newPairingCodeStore(nil, func() (string, error) {
+		return "", errors.New("entropy unavailable")
+	})
+	srv := NewServer(svc, WithPairingCodeStore(pairing))
 
 	pathRR := httptest.NewRecorder()
 	pathReq := httptest.NewRequest(http.MethodPost, "/api/v1/pairing/codes/extra", strings.NewReader(`{"ttlSeconds":1}`))
@@ -143,12 +139,6 @@ func TestHandleIssuePairCodeDirectPathAndInternalError(t *testing.T) {
 	if pathRR.Code != http.StatusNotFound {
 		t.Fatalf("path guard status = %d, want 404; body=%s", pathRR.Code, pathRR.Body.String())
 	}
-
-	originalReader := rand.Reader
-	rand.Reader = brokenEntropyReader{}
-	defer func() {
-		rand.Reader = originalReader
-	}()
 
 	rr := doJSONRequest(t, srv.Handler(), http.MethodPost, "/api/v1/pairing/codes", map[string]any{
 		"ttlSeconds": 60,

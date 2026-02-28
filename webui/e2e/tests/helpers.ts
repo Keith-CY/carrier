@@ -110,6 +110,9 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
       contentType: 'application/json',
       body: JSON.stringify({
         by_category: {
+          builtin: [
+            { id: 'openai', name: 'OpenAI', auth_mode: 'api_key', env_var: 'OPENAI_API_KEY', example_model: 'openai/gpt-4o', description: 'OpenAI API' },
+          ],
           'API Key': [
             { id: 'openai', name: 'OpenAI', auth_mode: 'api_key', env_var: 'OPENAI_API_KEY', example_model: 'openai/gpt-4o', description: 'OpenAI API' },
           ],

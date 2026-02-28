@@ -10,8 +10,8 @@ test.describe('SSE and Polling', () => {
     await page.click('#log-connect');
 
     const logOutput = page.locator('#log-output');
-    await expect(logOutput).toContainText('log line 1');
-    await expect(logOutput).toContainText('log line 2');
+    await expect(logOutput).toContainText('agent started');
+    await expect(logOutput).toContainText('worker heartbeat');
   });
 
   test('falls back to polling when SSE fails', async ({ page }) => {

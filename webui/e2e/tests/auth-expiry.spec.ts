@@ -10,13 +10,13 @@ test.describe('Token Expiry', () => {
     await expect(page.locator('#view-dashboard')).toBeVisible();
     await expect(page.locator('#login-overlay')).toBeHidden();
 
-    // Now override agents endpoint to return 401 (simulating token expiry)
-    await page.route('**/api/v1/agents', (route) =>
+    // Now override instances endpoint to return 401 (simulating token expiry)
+    await page.route('**/api/v1/instances', (route) =>
       route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"unauthorized"}' }),
     );
 
     // Trigger a refresh that will hit the 401
-    await page.click('#refresh-agents');
+    await page.click('#refresh-instances');
 
     // Should redirect to login
     await expect(page.locator('#login-overlay')).toBeVisible();
@@ -28,11 +28,11 @@ test.describe('Token Expiry', () => {
     await expect(page.locator('#view-dashboard')).toBeVisible();
 
     // Override to return 401
-    await page.route('**/api/v1/agents', (route) =>
+    await page.route('**/api/v1/instances', (route) =>
       route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"unauthorized"}' }),
     );
 
-    await page.click('#refresh-agents');
+    await page.click('#refresh-instances');
     await expect(page.locator('#login-overlay')).toBeVisible();
 
     // Check token is cleared
@@ -46,10 +46,10 @@ test.describe('Token Expiry', () => {
     await expect(page.locator('#view-dashboard')).toBeVisible();
 
     // Expire the token
-    await page.route('**/api/v1/agents', (route) =>
+    await page.route('**/api/v1/instances', (route) =>
       route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"unauthorized"}' }),
     );
-    await page.click('#refresh-agents');
+    await page.click('#refresh-instances');
     await expect(page.locator('#login-overlay')).toBeVisible();
 
     // Now re-login: restore normal mocks

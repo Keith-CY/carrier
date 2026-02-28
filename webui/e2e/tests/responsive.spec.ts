@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mockAPIs, loginWithToken, MOCK_AGENTS } from './helpers';
+import { mockAPIs, loginWithToken, MOCK_INSTANCES } from './helpers';
 
 const MOBILE = { width: 375, height: 667 };
 const TABLET = { width: 768, height: 1024 };
@@ -25,10 +25,10 @@ for (const [label, viewport] of [['Mobile', MOBILE], ['Tablet', TABLET]] as cons
       await mockAPIs(page);
       await loginWithToken(page, '/#/dashboard');
       const cards = page.locator('.agent-card');
-      await expect(cards).toHaveCount(MOCK_AGENTS.length);
+      await expect(cards).toHaveCount(MOCK_INSTANCES.length);
 
       // Each card should be visible and within viewport width
-      for (let i = 0; i < MOCK_AGENTS.length; i++) {
+      for (let i = 0; i < MOCK_INSTANCES.length; i++) {
         const box = await cards.nth(i).boundingBox();
         expect(box).toBeTruthy();
         expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width + 1);
@@ -77,11 +77,11 @@ test.describe('Responsive — Mobile agent grid layout', () => {
     await loginWithToken(page, '/#/dashboard');
 
     const cards = page.locator('.agent-card');
-    await expect(cards).toHaveCount(MOCK_AGENTS.length);
+    await expect(cards).toHaveCount(MOCK_INSTANCES.length);
 
     // All cards should have similar x position (single column)
     const positions: number[] = [];
-    for (let i = 0; i < MOCK_AGENTS.length; i++) {
+    for (let i = 0; i < MOCK_INSTANCES.length; i++) {
       const box = await cards.nth(i).boundingBox();
       if (box) positions.push(Math.round(box.x));
     }
