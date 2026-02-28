@@ -220,7 +220,7 @@ jobs:
 
       - name: Gateway tests
         working-directory: gateway
-        run: go test -race -count=1 ./...
+        run: go test -race -count=1 -parallel=2 -timeout=5m ./...
 
   coverage-gate:
     name: Coverage Gate

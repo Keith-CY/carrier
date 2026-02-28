@@ -20,6 +20,24 @@ import (
 	"carrier/configv2"
 )
 
+// makeTreeWritable recursively adds write permission to all files and dirs
+// under root. This prevents t.TempDir() cleanup failures when Go module cache
+// files are read-only (e.g. after `go build` inside the temp dir).
+func makeTreeWritable(root string) {
+	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: error walking to %q for cleanup: %v\n", path, err)
+			return nil
+		}
+		if info.Mode().Perm()&0o200 == 0 {
+			if chmodErr := os.Chmod(path, info.Mode()|0o200); chmodErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to make %q writable for cleanup: %v\n", path, chmodErr)
+			}
+		}
+		return nil
+	})
+}
+
 func TestE2ECarrierBinaryOnboardOpenAIAPIKey(t *testing.T) {
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, "home")
@@ -302,6 +320,7 @@ func TestE2ECarrierBinaryAddOpenClawReusesPairedUserAndProviderCredential(t *tes
 
 func TestE2ECarrierBinaryAddOpenClawIsolationSendsInstallAndStartIsolationPayload(t *testing.T) {
 	tmp := t.TempDir()
+	t.Cleanup(func() { makeTreeWritable(tmp) })
 	home := filepath.Join(tmp, "home")
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatalf("mkdir home: %v", err)
@@ -364,6 +383,7 @@ func TestE2ECarrierBinaryAddManagedAgentsIsolationSendsInstallAndStartIsolationP
 	for _, agentID := range agentIDs {
 		t.Run(agentID, func(t *testing.T) {
 			tmp := t.TempDir()
+			t.Cleanup(func() { makeTreeWritable(tmp) })
 			home := filepath.Join(tmp, "home")
 			if err := os.MkdirAll(home, 0o700); err != nil {
 				t.Fatalf("mkdir home: %v", err)
