@@ -418,42 +418,67 @@ jobs:
 
           gate_triggered = product_delta <= -3.0
 
+          compared_modules = 0
+          head_sum = 0.0
+          base_sum = 0.0
+          missing_modules = []
+
+          rows = []
+          for key in visible_modules:
+              row = module_data[key]
+              has_head = row["head"]["exists"]
+              has_base = row["base"]["exists"]
+              status = "✅"
+              if not (has_head and has_base):
+                  status = "⚠️"
+                  missing_modules.append(row["label"])
+              else:
+                  compared_modules += 1
+                  head_sum += row["head_pct"]
+                  base_sum += row["base_pct"]
+
+              rows.append(
+                  f'| {row["label"]} | {row["head_pct"]:.2f}% | {row["delta"]:+.2f}% | {status} |'
+              )
+
+          avg_head = (head_sum / compared_modules) if compared_modules else 0.0
+          avg_base = (base_sum / compared_modules) if compared_modules else 0.0
+          avg_delta = avg_head - avg_base
+
           marker = '<!-- carrier-pr-coverage-report -->'
           lines = [
               marker,
               '### 📊 Coverage Report',
               '',
-              '#### 1) Module Coverage (PR Scope)',
+              '| Module | Line Coverage | Δ vs base | Status |',
+              '|---|---:|---:|:---|',
+              *rows,
               '',
-              '| Module | Line Coverage | Δ vs base |',
-              '|---|---:|---:|',
+              f'**Average line coverage:** {avg_head:.2f}%',
+              f'**Base average line coverage:** {avg_base:.2f}%',
+              f'**Δ vs base:** {avg_delta:+.2f}%',
+              f'**Compared modules:** Modules with head/base coverage: {compared_modules}/{len(visible_modules)}',
+              '',
+              '### Action needed',
           ]
-          for key in visible_modules:
-              row = module_data[key]
-              lines.append(f'| {row["label"]} | {row["head_pct"]:.2f}% | {row["delta"]:+.2f}% |')
 
-          if not changed:
-              lines.extend([
-                  '',
-                  '_Note: No Go module changes detected in this PR; module section shows all Go modules._',
-              ])
+          if gate_triggered:
+              lines.append(
+                  f'- ❌ Full product coverage dropped by {abs(product_delta):.2f}% (threshold: 3.00%). Add tests before merge.'
+              )
+          elif missing_modules:
+              lines.append(
+                  f'- ⚠️ Coverage profiles missing for: {", ".join(missing_modules)}. Please rerun tests for complete stats.'
+              )
+          else:
+              lines.append('- ✅ No action needed.')
 
           lines.extend([
               '',
-              '#### 2) Full Product Coverage',
+              '- To recalc the report after fixes: open this workflow run and rerun **Coverage Comment** job.',
               '',
-              '| Scope | Line Coverage | Δ vs base |',
-              '|---|---:|---:|',
-              f'| Full Product (Go modules) | {product_head_pct:.2f}% | {product_delta:+.2f}% |',
-              '',
-              '**Policy:** request changes when full product coverage drops by 3.00% or more.',
+              '_Status legend: ✅ OK, ⚠️ module missing, ❌ module coverage run failed._',
           ])
-
-          if gate_triggered:
-              lines.extend([
-                  '',
-                  f'**Coverage Gate:** Triggered (full product delta {product_delta:+.2f}%).',
-              ])
 
           pathlib.Path('coverage-comment.md').write_text('\n'.join(lines))
           pathlib.Path('coverage-request-changes.txt').write_text('true' if gate_triggered else 'false')
