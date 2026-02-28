@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -92,10 +93,12 @@ func TestStartWithIsolationFailsWhenDarwinBackendMissing(t *testing.T) {
 	origGOOS := isolationRuntimeGOOS
 	origLookup := isolationBackendLookup
 	origEnv := isolationEnvLookup
+	origStat := isolationFileStat
 	t.Cleanup(func() {
 		isolationRuntimeGOOS = origGOOS
 		isolationBackendLookup = origLookup
 		isolationEnvLookup = origEnv
+		isolationFileStat = origStat
 	})
 
 	isolationRuntimeGOOS = "darwin"
@@ -103,6 +106,7 @@ func TestStartWithIsolationFailsWhenDarwinBackendMissing(t *testing.T) {
 		return "", errors.New("not found")
 	}
 	isolationEnvLookup = func(string) string { return "" }
+	isolationFileStat = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
 
 	pm := &fakeProcessManager{isRunning: make(map[string]bool), pids: make(map[string]int), shouldStartSucceed: true, nextPID: 100}
 	svc := newIsolationTestService(t, pm)
@@ -316,10 +320,12 @@ func TestInstallWithIsolationFailsFastWhenBackendUnavailable(t *testing.T) {
 	origGOOS := isolationRuntimeGOOS
 	origLookup := isolationBackendLookup
 	origEnv := isolationEnvLookup
+	origStat := isolationFileStat
 	t.Cleanup(func() {
 		isolationRuntimeGOOS = origGOOS
 		isolationBackendLookup = origLookup
 		isolationEnvLookup = origEnv
+		isolationFileStat = origStat
 	})
 
 	isolationRuntimeGOOS = "darwin"
@@ -327,6 +333,7 @@ func TestInstallWithIsolationFailsFastWhenBackendUnavailable(t *testing.T) {
 		return "", errors.New("not found")
 	}
 	isolationEnvLookup = func(string) string { return "" }
+	isolationFileStat = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
 
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	runner := &fakeRunner{}

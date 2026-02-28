@@ -1,8 +1,6 @@
 module carrier/gateway
 
-go 1.23
-
-toolchain go1.23.0
+go 1.23.0
 
 require (
 	carrier/baseagent v0.0.0

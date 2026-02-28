@@ -343,10 +343,6 @@ func picoClawBinaryNameForGOOS(goos string) string {
 	return "picoclaw"
 }
 
-func picoClawReleaseOS() string {
-	return picoClawReleaseOSForGOOS(runtime.GOOS)
-}
-
 func picoClawReleaseOSForGOOS(goos string) string {
 	switch normalizeCatalogGOOS(goos) {
 	case "darwin":
@@ -358,7 +354,14 @@ func picoClawReleaseOSForGOOS(goos string) string {
 	case "windows":
 		return "Windows"
 	default:
-		return strings.Title(runtime.GOOS)
+		normalized := normalizeCatalogGOOS(goos)
+		if len(normalized) == 0 {
+			return runtime.GOOS
+		}
+		if len(normalized) == 1 {
+			return strings.ToUpper(normalized)
+		}
+		return strings.ToUpper(normalized[:1]) + normalized[1:]
 	}
 }
 
