@@ -566,15 +566,11 @@ jobs:
             exit 0
           fi
 
-          body=$(cat <<EOF
-$marker
-Coverage gate triggered.
-
-Full product (Go modules) coverage: ${current}% (${delta}% vs base).
-
-Policy: request changes when full product coverage drops by 3.00% or more.
-EOF
-)
+          body="$(printf '%s\n%s\n\n%s\n\n%s' \
+            "$marker" \
+            'Coverage gate triggered.' \
+            "Full product (Go modules) coverage: ${current}% (${delta}% vs base)." \
+            'Policy: request changes when full product coverage drops by 3.00% or more.')"
 
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}/reviews" \
             -f event=REQUEST_CHANGES \
