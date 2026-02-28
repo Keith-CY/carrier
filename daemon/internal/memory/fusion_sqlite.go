@@ -32,7 +32,7 @@ func (s *Store) rebuildSQLiteIndexLocked() {
 		s.lastStateErr = err
 		return
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer tx.Rollback()
 
 	if _, err := tx.Exec(`DELETE FROM observation_events`); err != nil {
 		s.lastStateErr = err
@@ -225,7 +225,7 @@ func (s *Store) syncRecordToSQLiteLocked(rec MemoryRecord) {
 		s.lastStateErr = err
 		return
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer tx.Rollback()
 	if err := syncRecordTx(tx, s.sqliteFTSEnabled, rec); err != nil {
 		s.lastStateErr = err
 		return
@@ -280,7 +280,7 @@ func (s *Store) syncInstanceScopesToSQLiteLocked(instanceID string, scopes []Sco
 		s.lastStateErr = err
 		return
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer tx.Rollback()
 	if _, err := tx.Exec(`DELETE FROM instance_mounts WHERE instance_id = ?`, instanceID); err != nil {
 		s.lastStateErr = err
 		return
@@ -300,16 +300,13 @@ func (s *Store) syncInstanceScopesToSQLiteLocked(instanceID string, scopes []Sco
 	}
 }
 
-func (s *Store) searchSQLite(allowed map[Scope]struct{}, query string, maxResults int, minScore float64) ([]SearchHit, bool) {
-	s.mu.Lock()
-	ready := s.ensureSQLiteIndexLocked()
-	ftsEnabled := s.sqliteFTSEnabled
-	s.mu.Unlock()
-	if !ready || !ftsEnabled {
+func (s *Store) searchSQLiteLocked(allowed map[Scope]struct{}, query string, maxResults int, minScore float64) ([]SearchHit, bool) {
+	if !s.ensureSQLiteIndexLocked() || !s.sqliteFTSEnabled {
 		return nil, false
 	}
 	db, err := s.openSQLiteLocked()
 	if err != nil {
+		s.lastStateErr = err
 		return nil, false
 	}
 	defer db.Close()
@@ -328,6 +325,7 @@ func (s *Store) searchSQLite(allowed map[Scope]struct{}, query string, maxResult
 		LIMIT ?;
 	`, ftsQuery, searchLimit)
 	if err != nil {
+		s.lastStateErr = err
 		return nil, false
 	}
 	defer rows.Close()
@@ -342,6 +340,7 @@ func (s *Store) searchSQLite(allowed map[Scope]struct{}, query string, maxResult
 			rank       float64
 		)
 		if err := rows.Scan(&id, &scopeRaw, &provenance, &summary, &rank); err != nil {
+			s.lastStateErr = err
 			return nil, false
 		}
 		scope := normalizeScope(Scope(scopeRaw))
@@ -364,6 +363,7 @@ func (s *Store) searchSQLite(allowed map[Scope]struct{}, query string, maxResult
 		}
 	}
 	if err := rows.Err(); err != nil {
+		s.lastStateErr = err
 		return nil, false
 	}
 	return out, true

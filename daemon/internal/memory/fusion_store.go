@@ -42,6 +42,9 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 
 	lowerQuery := strings.ToLower(query)
 	allowed := s.allowedScopesForSubjectLocked(subject)
+	if sqliteHits, ok := s.searchSQLiteLocked(allowed, query, maxResults, opts.MinScore); ok {
+		return sqliteHits
+	}
 	hits := make([]SearchHit, 0, maxResults)
 	for _, rec := range s.records {
 		if rec.ArchivedAt != nil {
@@ -156,6 +159,7 @@ func (s *Store) UpsertRecord(input UpsertRecordInput) (MemoryRecord, error) {
 		}
 	}
 	s.records[id] = rec
+	s.syncRecordToSQLiteLocked(rec)
 	if err := s.writeStableTruthRecordLocked(rec); err != nil {
 		return MemoryRecord{}, err
 	}
@@ -182,6 +186,7 @@ func (s *Store) ArchiveRecord(subject, id string) error {
 	rec.ArchivedAt = &now
 	rec.UpdatedAt = now
 	s.records[id] = rec
+	s.syncRecordToSQLiteLocked(rec)
 	if err := s.persistStateLocked(); err != nil {
 		return err
 	}
@@ -224,6 +229,7 @@ func (s *Store) Observe(input ObserveInput) (ObservationEvent, error) {
 	}
 	s.observations = append(s.observations, ev)
 	s.gcObservationsLocked()
+	s.syncObservationToSQLiteLocked(ev)
 	if err := s.appendObservationTruthLocked(ev); err != nil {
 		return ObservationEvent{}, err
 	}
@@ -239,6 +245,7 @@ func (s *Store) Observe(input ObserveInput) (ObservationEvent, error) {
 			CreatedAt:      now,
 			UpdatedAt:      now,
 		}
+		s.syncRecordToSQLiteLocked(s.records[recID])
 		_ = s.writeStableTruthRecordLocked(s.records[recID])
 	}
 	if err := s.persistStateLocked(); err != nil {
@@ -305,6 +312,7 @@ func (s *Store) GrantScope(subject string, scope Scope, grantedBy, reason string
 		Reason:    strings.TrimSpace(reason),
 	}
 	s.grants[id] = g
+	s.syncGrantToSQLiteLocked(g)
 	if err := s.persistStateLocked(); err != nil {
 		return Grant{}, err
 	}
@@ -324,6 +332,7 @@ func (s *Store) RevokeScope(grantID, revokedBy string) error {
 	g.RevokedAt = &now
 	g.RevokedBy = strings.TrimSpace(revokedBy)
 	s.grants[grantID] = g
+	s.syncGrantToSQLiteLocked(g)
 	if err := s.persistStateLocked(); err != nil {
 		return err
 	}
@@ -363,6 +372,7 @@ func (s *Store) AttachScope(instanceID string, scope Scope) error {
 	existing = append(existing, scope)
 	sort.SliceStable(existing, func(i, j int) bool { return existing[i] < existing[j] })
 	s.instanceScopes[instanceID] = existing
+	s.syncInstanceScopesToSQLiteLocked(instanceID, existing)
 	if err := s.persistStateLocked(); err != nil {
 		return err
 	}
@@ -387,6 +397,7 @@ func (s *Store) DetachScope(instanceID string, scope Scope) error {
 		return ErrAttachmentMissing
 	}
 	s.instanceScopes[instanceID] = append(existing[:idx], existing[idx+1:]...)
+	s.syncInstanceScopesToSQLiteLocked(instanceID, s.instanceScopes[instanceID])
 	if err := s.persistStateLocked(); err != nil {
 		return err
 	}

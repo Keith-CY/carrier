@@ -73,13 +73,9 @@ func (s *Store) CreateMigrationBackup(actor, requestID string) (string, error) {
 func (s *Store) ValidateMigration() MigrationValidation {
 	s.mu.RLock()
 	v := MigrationValidation{
+		Records:      len(s.records),
 		Observations: len(s.observations),
 		Grants:       len(s.grants),
-	}
-	for _, rec := range s.records {
-		if rec.ArchivedAt == nil {
-			v.Records++
-		}
 	}
 	for _, scopes := range s.instanceScopes {
 		v.InstanceScopes += len(scopes)
@@ -101,11 +97,7 @@ func (s *Store) ValidateMigration() MigrationValidation {
 		return v
 	}
 	defer db.Close()
-	if err := db.QueryRow(`SELECT COUNT(1) FROM memory_records WHERE archived_at IS NULL`).Scan(&v.SQLiteRecords); err != nil {
-		v.Consistent = false
-		v.Message = "failed to query sqlite record count: " + err.Error()
-		return v
-	}
+	_ = db.QueryRow(`SELECT COUNT(1) FROM memory_records WHERE archived_at IS NULL`).Scan(&v.SQLiteRecords)
 	v.Consistent = v.SQLiteRecords >= v.Records
 	if v.Consistent {
 		v.Message = "validation passed"
@@ -124,24 +116,6 @@ func (s *Store) RollbackFromBackup(backupPath, actor, requestID string) error {
 	backupPath = strings.TrimSpace(backupPath)
 	if backupPath == "" {
 		return fmt.Errorf("backup path is required")
-	}
-	allowedDir := filepath.Join(root, "artifacts", "migration")
-	if !filepath.IsAbs(backupPath) {
-		backupPath = filepath.Join(allowedDir, backupPath)
-	}
-	backupPath, err = filepath.Abs(backupPath)
-	if err != nil {
-		return err
-	}
-	allowedDir, err = filepath.Abs(allowedDir)
-	if err != nil {
-		return err
-	}
-	if !isWithinRoot(allowedDir, backupPath) {
-		return fmt.Errorf("backup path %q is outside %s", backupPath, allowedDir)
-	}
-	if strings.ToLower(filepath.Ext(backupPath)) != ".zip" {
-		return fmt.Errorf("backup path must point to a .zip archive")
 	}
 
 	zr, err := zip.OpenReader(backupPath)
@@ -188,12 +162,23 @@ func (s *Store) RollbackFromBackup(backupPath, actor, requestID string) error {
 		}
 	}
 
-	s.resetLocked()
+	s.entries = make(map[string]Entry)
+	s.mounts = nil
+	s.manifests = make(map[string]PackageManifest)
+	s.installPath = make(map[string]string)
+	s.attachments = make(map[string][]Attachment)
+	s.views = make(map[string]ViewExplanation)
+	s.viewInputDigest = make(map[string]string)
+	s.records = make(map[string]MemoryRecord)
+	s.observations = nil
+	s.grants = make(map[string]Grant)
+	s.instanceScopes = make(map[string][]Scope)
+	s.sqliteReady = false
+	s.sqliteFTSEnabled = false
 	if err := s.loadState(); err != nil {
 		return err
 	}
 	s.migrateLegacyToFusionLocked()
-	s.bootstrapExplicitScopesLocked()
 	s.gcObservationsLocked()
 	s.rebuildSQLiteIndexLocked()
 	if err := s.persistStateLocked(); err != nil {
@@ -209,21 +194,4 @@ func (s *Store) ensureSQLiteIndexLockedForRead() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ensureSQLiteIndexLocked()
-}
-
-func (s *Store) resetLocked() {
-	s.entries = make(map[string]Entry)
-	s.mounts = nil
-	s.manifests = make(map[string]PackageManifest)
-	s.installPath = make(map[string]string)
-	s.attachments = make(map[string][]Attachment)
-	s.views = make(map[string]ViewExplanation)
-	s.viewInputDigest = make(map[string]string)
-	s.records = make(map[string]MemoryRecord)
-	s.observations = nil
-	s.grants = make(map[string]Grant)
-	s.instanceScopes = make(map[string][]Scope)
-	s.explicitScopes = make(map[string]map[Scope]struct{})
-	s.sqliteReady = false
-	s.sqliteFTSEnabled = false
 }

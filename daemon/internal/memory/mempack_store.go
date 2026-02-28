@@ -137,6 +137,7 @@ func (s *Store) ImportMemory(mempackPath string, opts ImportOptions) (Entry, err
 			CreatedAt:      now,
 			UpdatedAt:      now,
 		}
+		s.syncRecordToSQLiteLocked(s.records[memoryID])
 		_ = s.writeStableTruthRecordLocked(s.records[memoryID])
 	}
 	if err := s.persistStateLocked(); err != nil {
