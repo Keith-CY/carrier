@@ -67,6 +67,23 @@ func (s *Store) attachMemoryLocked(agentID, memoryID string, opts AttachOptions)
 		AttachedAt:  s.now(),
 	}
 	s.attachments[agentID] = append(existing, att)
+	scope := scopeForEntry(entry)
+	if scope != "" {
+		scopes := s.instanceScopes[agentID]
+		found := false
+		for _, existingScope := range scopes {
+			if existingScope == scope {
+				found = true
+				break
+			}
+		}
+		if !found {
+			scopes = append(scopes, scope)
+			sort.SliceStable(scopes, func(i, j int) bool { return scopes[i] < scopes[j] })
+			s.instanceScopes[agentID] = scopes
+			s.syncInstanceScopesToSQLiteLocked(agentID, scopes)
+		}
+	}
 	if err := s.persistStateLocked(); err != nil {
 		return Attachment{}, err.Error(), err
 	}
@@ -97,6 +114,26 @@ func (s *Store) DetachMemory(agentID, memoryID string) error {
 			break
 		}
 	}
+	remainingScopes := make([]Scope, 0)
+	seen := map[Scope]struct{}{}
+	for _, att := range s.attachments[agentID] {
+		entry, ok := s.entries[att.MemoryID]
+		if !ok {
+			continue
+		}
+		scope := scopeForEntry(entry)
+		if scope == "" {
+			continue
+		}
+		if _, ok := seen[scope]; ok {
+			continue
+		}
+		seen[scope] = struct{}{}
+		remainingScopes = append(remainingScopes, scope)
+	}
+	sort.SliceStable(remainingScopes, func(i, j int) bool { return remainingScopes[i] < remainingScopes[j] })
+	s.instanceScopes[agentID] = remainingScopes
+	s.syncInstanceScopesToSQLiteLocked(agentID, remainingScopes)
 	if err := s.persistStateLocked(); err != nil {
 		return err
 	}
@@ -166,6 +203,10 @@ func (s *Store) SetAttachmentsFromLinks(agentID string, memoryIDs []string) erro
 	if len(scopes) > 0 {
 		sort.SliceStable(scopes, func(i, j int) bool { return scopes[i] < scopes[j] })
 		s.instanceScopes[agentID] = scopes
+		s.syncInstanceScopesToSQLiteLocked(agentID, scopes)
+	} else {
+		delete(s.instanceScopes, agentID)
+		s.syncInstanceScopesToSQLiteLocked(agentID, nil)
 	}
 	if err := s.persistStateLocked(); err != nil {
 		return err

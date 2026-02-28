@@ -712,6 +712,66 @@ func buildHTTPMuxWithBaseAgent(
 		writeJSON(w, http.StatusOK, map[string]interface{}{"artifactRef": ref})
 	})
 
+	register("/api/v2/memory/migrate/backup", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			Actor     string `json:"actor"`
+			RequestID string `json:"requestId"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		path, err := memStore.CreateMigrationBackup(body.Actor, body.RequestID)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"backupPath": path})
+	})
+
+	register("/api/v2/memory/migrate/validate", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"validation": memStore.ValidateMigration()})
+	})
+
+	register("/api/v2/memory/migrate/rollback", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			BackupPath string `json:"backupPath"`
+			Actor      string `json:"actor"`
+			RequestID  string `json:"requestId"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := memStore.RollbackFromBackup(body.BackupPath, body.Actor, body.RequestID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "rolled_back"})
+	})
+
 	mux.HandleFunc("/api/v1/agents/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/agents/status" {
 			if r.Method != http.MethodGet {
