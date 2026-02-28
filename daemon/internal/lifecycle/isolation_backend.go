@@ -338,6 +338,10 @@ for tool in $required_tools; do
   fi
 done
 
+if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1 && ! command -v openssl >/dev/null 2>&1; then
+  missing_tools="$missing_tools openssl"
+fi
+
 if [ -z "$missing_tools" ]; then
   exit 0
 fi
@@ -380,5 +384,10 @@ for tool in $required_tools; do
     exit 127
   fi
 done
+
+if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1 && ! command -v openssl >/dev/null 2>&1; then
+  echo "required guest checksum tool missing after install (need one of: sha256sum, shasum, openssl)" >&2
+  exit 127
+fi
 `)
 }
