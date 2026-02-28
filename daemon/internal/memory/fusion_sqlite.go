@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ func (s *Store) rebuildSQLiteIndexLocked() {
 	db, err := s.openSQLiteLocked()
 	if err != nil {
 		s.lastStateErr = err
+		slog.Warn("memory: sqlite index rebuild failed to open db", "error", err)
 		return
 	}
 	defer db.Close()
@@ -30,29 +32,35 @@ func (s *Store) rebuildSQLiteIndexLocked() {
 	tx, err := db.Begin()
 	if err != nil {
 		s.lastStateErr = err
+		slog.Warn("memory: sqlite index rebuild failed to begin tx", "error", err)
 		return
 	}
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(`DELETE FROM observation_events`); err != nil {
 		s.lastStateErr = err
+		slog.Warn("memory: sqlite index rebuild failed to clear observation_events", "error", err)
 		return
 	}
 	if _, err := tx.Exec(`DELETE FROM grants`); err != nil {
 		s.lastStateErr = err
+		slog.Warn("memory: sqlite index rebuild failed to clear grants", "error", err)
 		return
 	}
 	if _, err := tx.Exec(`DELETE FROM instance_mounts`); err != nil {
 		s.lastStateErr = err
+		slog.Warn("memory: sqlite index rebuild failed to clear instance_mounts", "error", err)
 		return
 	}
 	if _, err := tx.Exec(`DELETE FROM memory_records`); err != nil {
 		s.lastStateErr = err
+		slog.Warn("memory: sqlite index rebuild failed to clear memory_records", "error", err)
 		return
 	}
 	if s.sqliteFTSEnabled {
 		if _, err := tx.Exec(`DELETE FROM records_fts`); err != nil {
 			s.lastStateErr = err
+			slog.Warn("memory: sqlite index rebuild failed to clear records_fts", "error", err)
 			return
 		}
 	}
@@ -60,18 +68,21 @@ func (s *Store) rebuildSQLiteIndexLocked() {
 	for _, rec := range s.records {
 		if err := syncRecordTx(tx, s.sqliteFTSEnabled, rec); err != nil {
 			s.lastStateErr = err
+			slog.Warn("memory: sqlite index rebuild failed to sync record", "id", rec.ID, "error", err)
 			return
 		}
 	}
 	for _, ev := range s.observations {
 		if err := syncObservationTx(tx, ev); err != nil {
 			s.lastStateErr = err
+			slog.Warn("memory: sqlite index rebuild failed to sync observation", "id", ev.ID, "error", err)
 			return
 		}
 	}
 	for _, g := range s.grants {
 		if err := syncGrantTx(tx, g); err != nil {
 			s.lastStateErr = err
+			slog.Warn("memory: sqlite index rebuild failed to sync grant", "id", g.ID, "error", err)
 			return
 		}
 	}
@@ -83,6 +94,7 @@ func (s *Store) rebuildSQLiteIndexLocked() {
 				instanceID, string(scope), now,
 			); err != nil {
 				s.lastStateErr = err
+				slog.Warn("memory: sqlite index rebuild failed to sync instance mount", "instance", instanceID, "error", err)
 				return
 			}
 		}
@@ -90,6 +102,7 @@ func (s *Store) rebuildSQLiteIndexLocked() {
 
 	if err := tx.Commit(); err != nil {
 		s.lastStateErr = err
+		slog.Warn("memory: sqlite index rebuild failed to commit", "error", err)
 		return
 	}
 }
