@@ -2,6 +2,7 @@
 (function() {
   const $ = (s, p) => (p || document).querySelector(s);
   const $$ = (s, p) => [...(p || document).querySelectorAll(s)];
+  const THEME_STORAGE_KEY = "carrier_theme";
   let token = localStorage.getItem("carrier_token") || "";
   let selectedAgent = "";
   let selectedProvider = null;
@@ -64,6 +65,41 @@
     providerBindingEnabled: false
   };
   let featureFlags = { ...DEFAULT_FEATURE_FLAGS };
+  function preferredTheme() {
+    const saved = (localStorage.getItem(THEME_STORAGE_KEY) || "").trim().toLowerCase();
+    if (saved === "light" || saved === "dark")
+      return saved;
+    const media = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
+    return media && media.matches ? "dark" : "light";
+  }
+  function applyTheme(theme) {
+    const next = theme === "dark" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", next);
+    const btn = $("#theme-toggle");
+    if (btn) {
+      btn.textContent = next === "dark" ? "Light" : "Dark";
+      btn.setAttribute("aria-label", "Switch to " + (next === "dark" ? "light" : "dark") + " theme");
+    }
+  }
+  function initThemeToggle() {
+    const host = $(".header-right");
+    if (!host)
+      return;
+    let btn = $("#theme-toggle");
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.id = "theme-toggle";
+      btn.className = "btn-sm btn-secondary";
+      host.insertBefore(btn, $("#logout-btn"));
+    }
+    applyTheme(preferredTheme());
+    btn.onclick = () => {
+      const current = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
+      const next = current === "dark" ? "light" : "dark";
+      localStorage.setItem(THEME_STORAGE_KEY, next);
+      applyTheme(next);
+    };
+  }
   function escapeHtml(s) {
     const d = document.createElement("div");
     d.textContent = s;
@@ -5117,6 +5153,7 @@
     el.textContent = lines.join(" ");
   }
   function init() {
+    initThemeToggle();
     initLogin();
     checkHealth();
     setInterval(checkHealth, 30000);
