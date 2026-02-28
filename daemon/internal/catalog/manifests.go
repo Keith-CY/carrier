@@ -236,13 +236,17 @@ func getZeroClawStartCommand() string {
 	return getZeroClawStartCommandForGOOS(runtime.GOOS)
 }
 
-func getZeroClawStartCommandForGOOS(goos string) string {
+func getZeroClawGatewayCommandForGOOS(goos, gatewayCommand string) string {
 	switch normalizeCatalogGOOS(goos) {
 	case "windows":
-		return "zeroclaw gateway start"
+		return "zeroclaw " + gatewayCommand
 	default:
-		return `sh -c 'if [ -x "$HOME/.cargo/bin/zeroclaw" ]; then exec "$HOME/.cargo/bin/zeroclaw" gateway start; elif command -v zeroclaw >/dev/null 2>&1; then exec "$(command -v zeroclaw)" gateway start; else echo "zeroclaw executable not found (checked $HOME/.cargo/bin/zeroclaw and PATH)" >&2; exit 127; fi'`
+		return fmt.Sprintf(`sh -c 'if [ -x "$HOME/.cargo/bin/zeroclaw" ]; then exec "$HOME/.cargo/bin/zeroclaw" %s; elif command -v zeroclaw >/dev/null 2>&1; then exec "$(command -v zeroclaw)" %s; else echo "zeroclaw executable not found (checked $HOME/.cargo/bin/zeroclaw and PATH)" >&2; exit 127; fi'`, gatewayCommand, gatewayCommand)
 	}
+}
+
+func getZeroClawStartCommandForGOOS(goos string) string {
+	return getZeroClawGatewayCommandForGOOS(goos, "gateway start")
 }
 
 // getZeroClawStopCommand returns the stop command for ZeroClaw.
@@ -251,12 +255,7 @@ func getZeroClawStopCommand() string {
 }
 
 func getZeroClawStopCommandForGOOS(goos string) string {
-	switch normalizeCatalogGOOS(goos) {
-	case "windows":
-		return "zeroclaw gateway stop"
-	default:
-		return `sh -c 'if [ -x "$HOME/.cargo/bin/zeroclaw" ]; then exec "$HOME/.cargo/bin/zeroclaw" gateway stop; elif command -v zeroclaw >/dev/null 2>&1; then exec "$(command -v zeroclaw)" gateway stop; else echo "zeroclaw executable not found (checked $HOME/.cargo/bin/zeroclaw and PATH)" >&2; exit 127; fi'`
-	}
+	return getZeroClawGatewayCommandForGOOS(goos, "gateway stop")
 }
 
 // ZeroClawManifest returns the manifest for the ZeroClaw agent.
