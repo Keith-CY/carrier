@@ -199,6 +199,59 @@ func TestRemoteHostsCRUDAndCheck(t *testing.T) {
 	}
 }
 
+func TestRemoteHostCheckRejectsUnsupportedPlatform(t *testing.T) {
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "echo carrier-ssh-ok"):
+			return remoteExecResult{ExitCode: 0, Stdout: "carrier-ssh-ok\n"}
+		case strings.Contains(command, "CARRIER_PLATFORM_PROBE"):
+			return remoteExecResult{
+				ExitCode: 0,
+				Stdout:   "CARRIER_PLATFORM_PROBE\nOS=Linux\nDISTRO=alpine\nVERSION=3.19\n",
+			}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	checkRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/check", `{}`)
+	if checkRec.Code != http.StatusBadGateway {
+		t.Fatalf("check host status=%d body=%s", checkRec.Code, checkRec.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(checkRec.Body.String()), "unsupported remote platform") {
+		t.Fatalf("expected unsupported platform error body=%s", checkRec.Body.String())
+	}
+}
+
+func TestRemoteInstanceUninstallEndpoint(t *testing.T) {
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "rm -rf \"$HOME/.openclaw/agents/main\""):
+			return remoteExecResult{ExitCode: 0}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/uninstall", "{}")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("uninstall status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	payload := decodeJSONMap(t, rec)
+	uninstallMap, _ := payload["uninstall"].(map[string]interface{})
+	if uninstallMap == nil {
+		t.Fatalf("missing uninstall payload=%v", payload)
+	}
+	if uninstalled, _ := uninstallMap["uninstalled"].(bool); !uninstalled {
+		t.Fatalf("expected uninstalled=true payload=%v", payload)
+	}
+}
+
 func TestRemoteHostCheckDiscoversAndPullsPicoZeroClawConfigs(t *testing.T) {
 	repoRoot := filepath.Join(t.TempDir(), "profiles-repo")
 	t.Setenv("CARRIER_PROFILESYNC_REPO", repoRoot)

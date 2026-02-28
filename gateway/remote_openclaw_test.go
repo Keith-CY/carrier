@@ -1,6 +1,10 @@
 package gateway
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
 
 func TestExtractChatResponseText(t *testing.T) {
 	t.Parallel()
@@ -65,5 +69,52 @@ func TestExtractChatResponseText(t *testing.T) {
 				t.Fatalf("extractChatResponseText()=%q want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseRemoteHostPlatform(t *testing.T) {
+	t.Parallel()
+
+	got := parseRemoteHostPlatform("CARRIER_PLATFORM_PROBE\nOS=Linux\nDISTRO=ubuntu\nVERSION=22.04\n")
+	if got.OS != "Linux" {
+		t.Fatalf("os=%q, want Linux", got.OS)
+	}
+	if got.Distro != "ubuntu" {
+		t.Fatalf("distro=%q, want ubuntu", got.Distro)
+	}
+	if got.Version != "22.04" {
+		t.Fatalf("version=%q, want 22.04", got.Version)
+	}
+}
+
+func TestDetectRemoteHostPlatformRejectsAlpine(t *testing.T) {
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "CARRIER_PLATFORM_PROBE"):
+			return remoteExecResult{
+				ExitCode: 0,
+				Stdout:   "CARRIER_PLATFORM_PROBE\nOS=Linux\nDISTRO=alpine\nVERSION=3.19\n",
+			}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	platform, _, err := detectRemoteHostPlatform(context.Background(), RemoteHost{
+		ID:      "h1",
+		Name:    "h1",
+		Host:    "127.0.0.1",
+		Port:    22,
+		User:    "carrier",
+		KeyPath: "~/.ssh/id_ed25519",
+	})
+	if err != nil {
+		t.Fatalf("detectRemoteHostPlatform() error: %v", err)
+	}
+	if platform.Supported {
+		t.Fatalf("expected unsupported platform for alpine, got %+v", platform)
+	}
+	if !strings.Contains(strings.ToLower(platform.Reason), "alpine") {
+		t.Fatalf("expected alpine reason, got %q", platform.Reason)
 	}
 }

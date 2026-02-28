@@ -54,6 +54,11 @@ type GatewayConfig struct {
 	RemoteControlPlaneEnabled bool // CARRIER_REMOTE_CONTROL_PLANE_ENABLED
 	RemoteChatEnabled         bool // CARRIER_REMOTE_CHAT_ENABLED
 	ProviderBindingEnabled    bool // CARRIER_PROVIDER_BINDING_ENABLED
+
+	// Remote alerting
+	RemoteAlertWebhookURL string        // CARRIER_REMOTE_ALERT_WEBHOOK_URL
+	RemoteAlertInterval   time.Duration // CARRIER_REMOTE_ALERT_INTERVAL_SEC
+	RemoteAlertCooldown   time.Duration // CARRIER_REMOTE_ALERT_COOLDOWN_SEC
 }
 
 // LoadGatewayConfigFromEnv loads GatewayConfig from environment variables.
@@ -89,6 +94,9 @@ func LoadGatewayConfigFromEnv() *GatewayConfig {
 			"CARRIER_PROVIDER_BINDING_ENABLED",
 			true,
 		),
+		RemoteAlertWebhookURL: strings.TrimSpace(os.Getenv("CARRIER_REMOTE_ALERT_WEBHOOK_URL")),
+		RemoteAlertInterval:   time.Duration(parseEnvInt("CARRIER_REMOTE_ALERT_INTERVAL_SEC", 30)) * time.Second,
+		RemoteAlertCooldown:   time.Duration(parseEnvInt("CARRIER_REMOTE_ALERT_COOLDOWN_SEC", 300)) * time.Second,
 	}
 	normalizeGatewayConfigFeatureFlags(cfg)
 
@@ -175,6 +183,7 @@ func StartGateway(cfg *GatewayConfig) error {
 	if err := startTelegramTransport(transportCtx, cfg, daemon, sessions, downloads, rl, onboard); err != nil {
 		return err
 	}
+	startRemoteAlertWatchdog(transportCtx, cfg)
 
 	log.Printf("[gateway] listening on http://%s", addr)
 	return server.Serve(ln)

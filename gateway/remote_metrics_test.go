@@ -30,6 +30,9 @@ func TestRemoteMetricsCollectorSnapshot(t *testing.T) {
 	if snap.Rollout.State != "healthy" {
 		t.Fatalf("expected rollout state healthy for low-volume sample, got %+v", snap.Rollout)
 	}
+	if snap.Alerts.Active {
+		t.Fatalf("expected no active alerts for healthy rollout, got %+v", snap.Alerts)
+	}
 }
 
 func TestRemoteMetricsCollectorReset(t *testing.T) {

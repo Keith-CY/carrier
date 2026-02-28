@@ -37,6 +37,7 @@ type RemoteHost struct {
 	User          string            `json:"user,omitempty"`
 	AuthMode      RemoteAuthMode    `json:"authMode"`
 	KeyPath       string            `json:"keyPath,omitempty"`
+	KeyRef        string            `json:"keyRef,omitempty"`
 	SSHConfigHost string            `json:"sshConfigHost,omitempty"`
 	RuntimeMode   RemoteRuntimeMode `json:"runtimeMode"`
 	LastHealth    RemoteHealth      `json:"lastHealth,omitempty"`
@@ -132,6 +133,7 @@ func normalizeRemoteHost(input RemoteHost) RemoteHost {
 	h.Host = strings.TrimSpace(h.Host)
 	h.User = strings.TrimSpace(h.User)
 	h.KeyPath = strings.TrimSpace(h.KeyPath)
+	h.KeyRef = strings.TrimSpace(h.KeyRef)
 	h.SSHConfigHost = strings.TrimSpace(h.SSHConfigHost)
 	h.LastError = strings.TrimSpace(h.LastError)
 	if h.AuthMode == "" {
@@ -165,8 +167,8 @@ func validateRemoteHost(h RemoteHost) error {
 		if h.Host == "" {
 			return fmt.Errorf("host is required for private_key auth mode")
 		}
-		if h.KeyPath == "" {
-			return fmt.Errorf("keyPath is required for private_key auth mode")
+		if h.KeyPath == "" && h.KeyRef == "" {
+			return fmt.Errorf("keyPath or keyRef is required for private_key auth mode")
 		}
 	case RemoteAuthModeSSHConfig:
 		if h.SSHConfigHost == "" && h.Host == "" {
