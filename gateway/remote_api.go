@@ -313,6 +313,23 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "install": installResult})
 		return
+	case "uninstall":
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		startedAt := time.Now()
+		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+		defer cancel()
+		uninstallResult, err := remoteUninstallAgent(ctx, host, hostID, agentID)
+		recordRemoteOperationMetric(remoteOpInstancesUninstall, startedAt, err)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_REMOTE_UNINSTALL_FAILED", err.Error()))
+			return
+		}
+		_ = deleteRemoteInstanceSyncStatus(hostID, agentID)
+		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "uninstall": uninstallResult})
+		return
 	case "config":
 		switch r.Method {
 		case http.MethodGet:

@@ -42,8 +42,17 @@ type remoteHostCheckResult struct {
 	OpenClawFound  bool               `json:"openclawFound"`
 	GatewayHealthy bool               `json:"gatewayHealthy"`
 	Repaired       bool               `json:"repaired"`
+	Platform       remoteHostPlatform `json:"platform,omitempty"`
 	Details        []string           `json:"details,omitempty"`
 	Steps          []remoteExecResult `json:"steps,omitempty"`
+}
+
+type remoteHostPlatform struct {
+	OS        string `json:"os,omitempty"`
+	Distro    string `json:"distro,omitempty"`
+	Version   string `json:"version,omitempty"`
+	Supported bool   `json:"supported"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 type remoteRepairResult struct {
@@ -59,6 +68,14 @@ type remoteInstallResult struct {
 	HostID      string             `json:"hostId"`
 	AgentID     string             `json:"agentId"`
 	Installed   bool               `json:"installed"`
+	GatewayMode RemoteRuntimeMode  `json:"gatewayMode"`
+	Steps       []remoteExecResult `json:"steps"`
+}
+
+type remoteUninstallResult struct {
+	HostID      string             `json:"hostId"`
+	AgentID     string             `json:"agentId"`
+	Uninstalled bool               `json:"uninstalled"`
 	GatewayMode RemoteRuntimeMode  `json:"gatewayMode"`
 	Steps       []remoteExecResult `json:"steps"`
 }
@@ -116,6 +133,37 @@ func checkRemoteHostAndMaybeRepair(ctx context.Context, host RemoteHost) (remote
 	}
 	result.SSHOK = true
 
+	platform, platformStep, platformErr := detectRemoteHostPlatform(ctx, host)
+	if platformStep.Command != "" || platformStep.Stdout != "" || platformStep.Stderr != "" || platformStep.ExitCode != 0 {
+		result.Steps = append(result.Steps, platformStep)
+	}
+	if platformErr != nil {
+		result.Details = append(result.Details, "platform detection skipped: "+platformErr.Error())
+	} else {
+		result.Platform = platform
+		label := strings.TrimSpace(platform.OS)
+		if distro := strings.TrimSpace(platform.Distro); distro != "" {
+			if label != "" {
+				label += "/"
+			}
+			label += distro
+		}
+		if version := strings.TrimSpace(platform.Version); version != "" {
+			label += " " + version
+		}
+		if label != "" {
+			result.Details = append(result.Details, "remote platform: "+label)
+		}
+		if !platform.Supported {
+			reason := strings.TrimSpace(platform.Reason)
+			if reason == "" {
+				reason = "unsupported remote platform"
+			}
+			result.Details = append(result.Details, reason)
+			return result, fmt.Errorf("unsupported remote platform: %s", reason)
+		}
+	}
+
 	openClawRes, err := runRemoteCommand(ctx, host, "command -v openclaw >/dev/null 2>&1")
 	if err != nil {
 		return result, err
@@ -136,6 +184,58 @@ func checkRemoteHostAndMaybeRepair(ctx context.Context, host RemoteHost) (remote
 		return result, repairErr
 	}
 	return result, nil
+}
+
+func detectRemoteHostPlatform(ctx context.Context, host RemoteHost) (remoteHostPlatform, remoteExecResult, error) {
+	res, err := runRemoteCommand(
+		ctx,
+		host,
+		"set -e; os_name=\"$(uname -s 2>/dev/null || echo unknown)\"; distro=\"\"; version=\"\"; if [ -f /etc/os-release ]; then . /etc/os-release; distro=\"${ID:-}\"; version=\"${VERSION_ID:-}\"; fi; printf 'CARRIER_PLATFORM_PROBE\\nOS=%s\\nDISTRO=%s\\nVERSION=%s\\n' \"$os_name\" \"$distro\" \"$version\"",
+	)
+	if err != nil {
+		return remoteHostPlatform{}, res, err
+	}
+	if res.ExitCode != 0 {
+		return remoteHostPlatform{}, res, remoteCommandError(res, "platform preflight check")
+	}
+
+	platform := parseRemoteHostPlatform(strings.TrimSpace(res.Stdout))
+	normalizedOS := strings.ToLower(strings.TrimSpace(platform.OS))
+	normalizedDistro := strings.ToLower(strings.TrimSpace(platform.Distro))
+	platform.Supported = true
+
+	switch {
+	case normalizedOS == "":
+		platform.Supported = true
+	case normalizedOS != "linux":
+		platform.Supported = false
+		platform.Reason = fmt.Sprintf("remote OS %q is not supported; expected Linux", strings.TrimSpace(platform.OS))
+	case normalizedDistro == "alpine":
+		platform.Supported = false
+		platform.Reason = "remote distro alpine is not supported for deterministic remote install"
+	}
+
+	return platform, res, nil
+}
+
+func parseRemoteHostPlatform(raw string) remoteHostPlatform {
+	platform := remoteHostPlatform{}
+	lines := strings.Split(raw, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(trimmed, "OS="):
+			platform.OS = strings.TrimSpace(strings.TrimPrefix(trimmed, "OS="))
+		case strings.HasPrefix(trimmed, "DISTRO="):
+			platform.Distro = strings.TrimSpace(strings.TrimPrefix(trimmed, "DISTRO="))
+		case strings.HasPrefix(trimmed, "VERSION="):
+			platform.Version = strings.TrimSpace(strings.TrimPrefix(trimmed, "VERSION="))
+		}
+	}
+	return platform
 }
 
 func ensureRemoteHealthyForOperation(ctx context.Context, host RemoteHost) (healthy bool, repaired bool, steps []remoteExecResult, err error) {
@@ -212,6 +312,49 @@ func remoteInstallAgentStreaming(
 	default:
 		return nil, fmt.Errorf("unsupported remote install agent %q", strings.TrimSpace(agentID))
 	}
+}
+
+func remoteUninstallAgent(ctx context.Context, host RemoteHost, hostID, agentID string) (*remoteUninstallResult, error) {
+	if err := validateAgentIdentifier(agentID); err != nil {
+		return nil, err
+	}
+	result := &remoteUninstallResult{
+		HostID:      hostID,
+		AgentID:     agentID,
+		Uninstalled: false,
+		GatewayMode: host.RuntimeMode,
+		Steps:       []remoteExecResult{},
+	}
+
+	normalized := normalizeRemoteInstallAgentID(agentID)
+	command := ""
+	switch normalized {
+	case "openclaw":
+		quotedAgentID := shellSingleQuote(strings.TrimSpace(agentID))
+		command = fmt.Sprintf(
+			"set -euo pipefail; if command -v openclaw >/dev/null 2>&1; then openclaw agents remove %s --yes >/dev/null 2>&1 || openclaw agents rm %s --yes >/dev/null 2>&1 || true; fi; rm -rf \"$HOME/.openclaw/agents/%s\"",
+			quotedAgentID,
+			quotedAgentID,
+			strings.TrimSpace(agentID),
+		)
+	case "picoclaw":
+		command = "set -euo pipefail; rm -f \"$HOME/.picoclaw/config.json\""
+	case "zeroclaw":
+		command = "set -euo pipefail; rm -f \"$HOME/.zeroclaw/config.toml\""
+	default:
+		return nil, fmt.Errorf("unsupported remote uninstall agent %q", strings.TrimSpace(agentID))
+	}
+
+	uninstallRes, err := runRemoteCommand(ctx, host, command)
+	if err != nil {
+		return result, err
+	}
+	result.Steps = append(result.Steps, uninstallRes)
+	if uninstallRes.ExitCode != 0 {
+		return result, remoteCommandError(uninstallRes, "uninstall "+normalized)
+	}
+	result.Uninstalled = true
+	return result, nil
 }
 
 func normalizeRemoteInstallAgentID(agentID string) string {

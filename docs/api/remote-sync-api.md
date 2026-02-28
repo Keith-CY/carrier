@@ -47,6 +47,7 @@ Fields:
 
 Response fields:
 - `check`: host health/preflight result
+  - includes `platform` (`os`, `distro`, `version`, `supported`, `reason`)
 - `instances`: discovered instances
 - `pendingPullInstances`: newly discovered instances that were not pulled yet
 - `pullConfirmationRequired`: `true` when pending pull confirmation is required
@@ -55,6 +56,7 @@ Behavior:
 - First discovery can return pending instances with `pullConfirmationRequired=true`.
 - Caller confirms by re-calling check with `pullNewInstances=true` (or targeted `pullAgentIds`).
 - Already tracked instances continue to sync without new-instance confirmation.
+- Unsupported platform is rejected during preflight (for deterministic install path: Linux required, Alpine rejected).
 
 ### `GET /api/v1/remote/hosts/:hostId/instances`
 
@@ -130,6 +132,15 @@ Request body:
 `commit` is optional when service can infer target rollback point.
 
 Response includes rollback outcome (`rolledBack`, `fromCommit`, `newCommit`).
+
+### `POST /api/v1/remote/hosts/:hostId/instances/:agentId/uninstall`
+
+Best-effort uninstall/cleanup for target remote instance artifacts.
+
+### `POST /api/v1/remote/keys`
+
+Upload remote SSH private key via multipart form field `file`.  
+Response includes `keyRef` and fingerprint metadata.
 
 ## Notes
 

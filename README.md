@@ -78,6 +78,12 @@ Use `carrier remote add` to run a fixed, repeatable sequence:
 5. list instances
 6. reconnect simulation check (optional)
 
+By default, failures after install trigger automatic rollback:
+- existing instance: rollback config sync state
+- fresh install: uninstall cleanup
+
+Disable this behavior with `--no-auto-rollback`.
+
 #### Prerequisites
 
 - Local gateway reachable at `http://127.0.0.1:8787` (`carrier` bootstrap can start it).
@@ -152,6 +158,7 @@ scripts/remote-vps-agent-suite.sh \
 # services
 carrier
 carrier stop
+carrier reset
 carrier daemon
 carrier gateway
 
@@ -173,6 +180,20 @@ carrier install <agent_id>
 - `carrier remote add` is the canonical deterministic remote install command.
 - Remote install currently supports `openclaw`, `picoclaw`, `zeroclaw`.
 - On first host check, newly discovered remote instances may require explicit confirmation before pulling config to local repo.
+- Remote troubleshooting commands are available:
+  - `carrier remote status <host_id> <agent_id>`
+  - `carrier remote logs <host_id> <agent_id> [--tail <n>]`
+  - `carrier remote rollback <host_id> <agent_id> [--commit <sha>]`
+  - `carrier remote uninstall <host_id> <agent_id>`
+- Remote SSH key management commands are available:
+  - `carrier remote key import --file <pem-path>`
+  - `carrier remote key generate [--type <ed25519|rsa>] [--output <private-key-path>]`
+- Backup/restore commands are available:
+  - `carrier config backup|restore`
+  - `carrier remote-store backup|restore`
+- Optional remote alert webhook watchdog:
+  - set `CARRIER_REMOTE_ALERT_WEBHOOK_URL`
+  - optional tuning: `CARRIER_REMOTE_ALERT_INTERVAL_SEC`, `CARRIER_REMOTE_ALERT_COOLDOWN_SEC`
 - Chat `/install` can perform remote install when boundary policy allows it (default: requires host binding).
 
 ## Troubleshooting
@@ -182,9 +203,12 @@ carrier install <agent_id>
   - verify `http://127.0.0.1:8787/healthz`
 - Remote host check failures:
   - verify SSH key path and remote login
+  - check platform support in check summary (`Linux` required, `alpine` currently rejected for deterministic remote install)
   - retry host check from CLI (`--check-retries`, `--check-retry-delay`)
 - OpenClaw runtime issues:
   - `carrier status openclaw`
+  - `carrier remote logs <host_id> main --tail 200`
+  - `carrier remote rollback <host_id> main`
   - rerun `carrier remote add openclaw ... --skip-reconnect-check`
 
 ## Development

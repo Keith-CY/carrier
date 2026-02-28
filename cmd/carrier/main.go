@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	neturl "net/url"
@@ -115,21 +116,43 @@ type remoteCommandOptions struct {
 	Action             string
 	AgentID            string
 	InstallAgentID     string
+	TargetAgentID      string
 	Isolation          bool
 	HostID             string
 	HostName           string
 	HostAddr           string
 	Port               int
 	User               string
+	AuthMode           string
 	KeyPath            string
+	KeyRef             string
+	SSHConfigHost      string
 	RuntimeMode        string
 	CheckRetries       int
 	CheckRetryDelaySec int
 	SkipReconnectCheck bool
+	AutoRollback       bool
+	Tail               int
+	Commit             string
+	KeyType            string
+	KeyImportPath      string
+	KeyOutputPath      string
 	SyncChannels       []string
 	SyncProviders      []string
 	TelegramAllowFrom  []string
 	DiscordAllowFrom   []string
+}
+
+type configCommandOptions struct {
+	Action     string
+	OutputPath string
+	FromPath   string
+}
+
+type remoteStoreCommandOptions struct {
+	Action     string
+	OutputPath string
+	FromPath   string
 }
 
 type versionInfo struct {
@@ -351,6 +374,9 @@ Usage:
                         agent_id: openclaw | picoclaw | zeroclaw
                         options:
                           [--name <display-name>]
+                          [--auth-mode <private_key|ssh_config>]
+                          [--ssh-config-host <alias>]
+                          [--key-ref <uploaded-key-ref>]
                           [--runtime-mode <on_demand|managed_gateway>]
                           [--isolation]
                           [--sync-channel <telegram|discord|feishu>]...
@@ -358,7 +384,28 @@ Usage:
                           [--telegram-allow-from <id>]...
                           [--discord-allow-from <id>]...
                           [--check-retries <n>] [--check-retry-delay <seconds>]
+                          [--no-auto-rollback]
                           [--skip-reconnect-check]
+  carrier remote status <host_id> <agent_id>
+                        Show remote instance status via gateway API
+  carrier remote logs <host_id> <agent_id> [--tail <n>]
+                        Fetch remote instance logs via gateway API
+  carrier remote rollback <host_id> <agent_id> [--commit <sha>]
+                        Roll back remote instance config sync state
+  carrier remote uninstall <host_id> <agent_id>
+                        Uninstall remote instance artifacts (best-effort)
+  carrier remote key import --file <pem-path>
+                        Upload SSH private key to Carrier key store
+  carrier remote key generate [--type <ed25519|rsa>] [--output <private-key-path>]
+                        Generate SSH keypair locally, then upload private key
+  carrier config backup [--output <path>]
+                        Backup local Carrier config.v2.json
+  carrier config restore --from <path>
+                        Restore local Carrier config.v2.json
+  carrier remote-store backup [--output <path>]
+                        Backup remote-control.json store
+  carrier remote-store restore --from <path>
+                        Restore remote-control.json store
   carrier --help         Show this help message
 
 Notes:
@@ -465,8 +512,51 @@ func main() {
 				fmt.Fprint(os.Stderr, usage)
 				os.Exit(1)
 			}
-			if err := runRemoteAddCommand(os.Stdin, os.Stdout, opts); err != nil {
-				fmt.Fprintf(os.Stderr, "remote failed: %v\n", err)
+			var runErr error
+			switch opts.Action {
+			case "add":
+				runErr = runRemoteAddCommand(os.Stdin, os.Stdout, opts)
+			case "status":
+				runErr = runRemoteStatusCommand(os.Stdout, opts)
+			case "logs":
+				runErr = runRemoteLogsCommand(os.Stdout, opts)
+			case "rollback":
+				runErr = runRemoteRollbackCommand(os.Stdout, opts)
+			case "uninstall":
+				runErr = runRemoteUninstallCommand(os.Stdout, opts)
+			case "key-import":
+				runErr = runRemoteKeyImportCommand(os.Stdout, opts)
+			case "key-generate":
+				runErr = runRemoteKeyGenerateCommand(os.Stdout, opts)
+			default:
+				runErr = fmt.Errorf("unsupported remote action: %s", opts.Action)
+			}
+			if runErr != nil {
+				fmt.Fprintf(os.Stderr, "remote failed: %v\n", runErr)
+				os.Exit(1)
+			}
+			return
+		case "config":
+			opts, err := parseConfigCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "config failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runConfigCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "config failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "remote-store":
+			opts, err := parseRemoteStoreCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "remote-store failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runRemoteStoreCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "remote-store failed: %v\n", err)
 				os.Exit(1)
 			}
 			return
@@ -583,6 +673,10 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "install", args[2:], nil
 	case "remote":
 		return "remote", args[2:], nil
+	case "config":
+		return "config", args[2:], nil
+	case "remote-store":
+		return "remote-store", args[2:], nil
 	case "--help", "-h", "help":
 		return "help", nil, nil
 	case "version", "--version", "-v", "-V":
@@ -690,186 +784,428 @@ func parseVersionCommandArgs(args []string) (versionCommandOptions, error) {
 }
 
 func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
-	if len(args) < 2 {
-		return remoteCommandOptions{}, errors.New("usage: carrier remote add <agent_id> --host-id <id> --host <ip-or-domain> --port <port> --user <ssh-user> --key-path <private-key-path> [--isolation] [options]")
+	if len(args) == 0 {
+		return remoteCommandOptions{}, errors.New("usage: carrier remote <add|status|logs|rollback|uninstall> ...")
 	}
 
 	opts := remoteCommandOptions{
 		Action:             strings.ToLower(strings.TrimSpace(args[0])),
-		AgentID:            strings.ToLower(strings.TrimSpace(args[1])),
 		Port:               22,
+		AuthMode:           "private_key",
 		RuntimeMode:        "on_demand",
 		CheckRetries:       10,
 		CheckRetryDelaySec: 2,
+		AutoRollback:       true,
+		Tail:               200,
 		SyncChannels:       []string{},
 		SyncProviders:      []string{},
 		TelegramAllowFrom:  []string{},
 		DiscordAllowFrom:   []string{},
 	}
-	if opts.Action != "add" {
+
+	switch opts.Action {
+	case "add":
+		if len(args) < 2 {
+			return remoteCommandOptions{}, errors.New("usage: carrier remote add <agent_id> --host-id <id> --host <ip-or-domain> --port <port> --user <ssh-user> --key-path <private-key-path> [options]")
+		}
+		opts.AgentID = strings.ToLower(strings.TrimSpace(args[1]))
+		switch opts.AgentID {
+		case "openclaw", "picoclaw", "zeroclaw":
+		default:
+			return remoteCommandOptions{}, fmt.Errorf("unsupported remote agent_id: %s (expected one of openclaw, picoclaw, zeroclaw)", opts.AgentID)
+		}
+		// OpenClaw runtime install endpoint uses the default agent slot "main".
+		if opts.AgentID == "openclaw" {
+			opts.InstallAgentID = "main"
+		} else {
+			opts.InstallAgentID = opts.AgentID
+		}
+		opts.TargetAgentID = opts.InstallAgentID
+
+		for i := 2; i < len(args); i++ {
+			raw := strings.TrimSpace(args[i])
+			if raw == "" {
+				continue
+			}
+			switch strings.ToLower(raw) {
+			case "--host-id":
+				value, next, err := parseRequiredFlagValue(args, i, "--host-id")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				opts.HostID = strings.TrimSpace(value)
+				i = next
+			case "--name":
+				value, next, err := parseRequiredFlagValue(args, i, "--name")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				opts.HostName = strings.TrimSpace(value)
+				i = next
+			case "--host":
+				value, next, err := parseRequiredFlagValue(args, i, "--host")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				opts.HostAddr = strings.TrimSpace(value)
+				i = next
+			case "--port":
+				value, next, err := parseRequiredFlagValue(args, i, "--port")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				port, convErr := strconv.Atoi(strings.TrimSpace(value))
+				if convErr != nil || port < 1 || port > 65535 {
+					return remoteCommandOptions{}, fmt.Errorf("invalid --port value: %s", value)
+				}
+				opts.Port = port
+				i = next
+			case "--user":
+				value, next, err := parseRequiredFlagValue(args, i, "--user")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				opts.User = strings.TrimSpace(value)
+				i = next
+			case "--auth-mode":
+				value, next, err := parseRequiredFlagValue(args, i, "--auth-mode")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				opts.AuthMode = strings.ToLower(strings.TrimSpace(value))
+				i = next
+			case "--key-path":
+				value, next, err := parseRequiredFlagValue(args, i, "--key-path")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				opts.KeyPath = strings.TrimSpace(value)
+				i = next
+			case "--key-ref":
+				value, next, err := parseRequiredFlagValue(args, i, "--key-ref")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				opts.KeyRef = strings.TrimSpace(value)
+				i = next
+			case "--ssh-config-host":
+				value, next, err := parseRequiredFlagValue(args, i, "--ssh-config-host")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				opts.SSHConfigHost = strings.TrimSpace(value)
+				i = next
+			case "--runtime-mode":
+				value, next, err := parseRequiredFlagValue(args, i, "--runtime-mode")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				opts.RuntimeMode = strings.ToLower(strings.TrimSpace(value))
+				i = next
+			case "--isolation":
+				opts.Isolation = true
+			case "--sync-channel":
+				value, next, err := parseRequiredFlagValue(args, i, "--sync-channel")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				opts.SyncChannels = append(opts.SyncChannels, strings.ToLower(strings.TrimSpace(value)))
+				i = next
+			case "--sync-provider":
+				value, next, err := parseRequiredFlagValue(args, i, "--sync-provider")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				opts.SyncProviders = append(opts.SyncProviders, strings.ToLower(strings.TrimSpace(value)))
+				i = next
+			case "--telegram-allow-from":
+				value, next, err := parseRequiredFlagValue(args, i, "--telegram-allow-from")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				opts.TelegramAllowFrom = append(opts.TelegramAllowFrom, strings.TrimSpace(value))
+				i = next
+			case "--discord-allow-from":
+				value, next, err := parseRequiredFlagValue(args, i, "--discord-allow-from")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				opts.DiscordAllowFrom = append(opts.DiscordAllowFrom, strings.TrimSpace(value))
+				i = next
+			case "--check-retries":
+				value, next, err := parseRequiredFlagValue(args, i, "--check-retries")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				retries, convErr := strconv.Atoi(strings.TrimSpace(value))
+				if convErr != nil || retries < 0 {
+					return remoteCommandOptions{}, fmt.Errorf("invalid --check-retries value: %s", value)
+				}
+				opts.CheckRetries = retries
+				i = next
+			case "--check-retry-delay":
+				value, next, err := parseRequiredFlagValue(args, i, "--check-retry-delay")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				delay, convErr := strconv.Atoi(strings.TrimSpace(value))
+				if convErr != nil || delay < 0 {
+					return remoteCommandOptions{}, fmt.Errorf("invalid --check-retry-delay value: %s", value)
+				}
+				opts.CheckRetryDelaySec = delay
+				i = next
+			case "--skip-reconnect-check":
+				opts.SkipReconnectCheck = true
+			case "--no-auto-rollback":
+				opts.AutoRollback = false
+			default:
+				return remoteCommandOptions{}, fmt.Errorf("unknown remote option: %s", raw)
+			}
+		}
+
+		if opts.HostID == "" {
+			return remoteCommandOptions{}, errors.New("--host-id is required")
+		}
+		if opts.HostName == "" {
+			opts.HostName = opts.HostID
+		}
+		switch opts.AuthMode {
+		case "private_key":
+			if opts.HostAddr == "" {
+				return remoteCommandOptions{}, errors.New("--host is required")
+			}
+			if opts.User == "" {
+				return remoteCommandOptions{}, errors.New("--user is required")
+			}
+			if opts.KeyPath == "" && opts.KeyRef == "" {
+				return remoteCommandOptions{}, errors.New("--key-path or --key-ref is required")
+			}
+		case "ssh_config":
+			if opts.SSHConfigHost == "" && opts.HostAddr == "" {
+				return remoteCommandOptions{}, errors.New("--ssh-config-host or --host is required when --auth-mode ssh_config")
+			}
+		default:
+			return remoteCommandOptions{}, fmt.Errorf("invalid --auth-mode value: %s", opts.AuthMode)
+		}
+		switch opts.RuntimeMode {
+		case "on_demand", "managed_gateway":
+		default:
+			return remoteCommandOptions{}, fmt.Errorf("invalid --runtime-mode value: %s", opts.RuntimeMode)
+		}
+		for _, channel := range opts.SyncChannels {
+			switch channel {
+			case "telegram", "discord", "feishu":
+			default:
+				return remoteCommandOptions{}, fmt.Errorf("invalid --sync-channel value: %s", channel)
+			}
+		}
+		for _, provider := range opts.SyncProviders {
+			if strings.TrimSpace(provider) == "" {
+				return remoteCommandOptions{}, errors.New("--sync-provider cannot be empty")
+			}
+		}
+		return opts, nil
+	case "key":
+		if len(args) < 2 {
+			return remoteCommandOptions{}, errors.New("usage: carrier remote key <import|generate> [options]")
+		}
+		subAction := strings.ToLower(strings.TrimSpace(args[1]))
+		switch subAction {
+		case "import":
+			opts.Action = "key-import"
+			for i := 2; i < len(args); i++ {
+				raw := strings.TrimSpace(args[i])
+				if raw == "" {
+					continue
+				}
+				switch strings.ToLower(raw) {
+				case "--file":
+					value, next, err := parseRequiredFlagValue(args, i, "--file")
+					if err != nil {
+						return remoteCommandOptions{}, err
+					}
+					opts.KeyImportPath = strings.TrimSpace(value)
+					i = next
+				default:
+					return remoteCommandOptions{}, fmt.Errorf("unknown remote key import option: %s", raw)
+				}
+			}
+			if opts.KeyImportPath == "" {
+				return remoteCommandOptions{}, errors.New("--file is required for remote key import")
+			}
+			return opts, nil
+		case "generate":
+			opts.Action = "key-generate"
+			opts.KeyType = "ed25519"
+			for i := 2; i < len(args); i++ {
+				raw := strings.TrimSpace(args[i])
+				if raw == "" {
+					continue
+				}
+				switch strings.ToLower(raw) {
+				case "--type":
+					value, next, err := parseRequiredFlagValue(args, i, "--type")
+					if err != nil {
+						return remoteCommandOptions{}, err
+					}
+					opts.KeyType = strings.ToLower(strings.TrimSpace(value))
+					i = next
+				case "--output":
+					value, next, err := parseRequiredFlagValue(args, i, "--output")
+					if err != nil {
+						return remoteCommandOptions{}, err
+					}
+					opts.KeyOutputPath = strings.TrimSpace(value)
+					i = next
+				default:
+					return remoteCommandOptions{}, fmt.Errorf("unknown remote key generate option: %s", raw)
+				}
+			}
+			switch opts.KeyType {
+			case "ed25519", "rsa":
+			default:
+				return remoteCommandOptions{}, fmt.Errorf("invalid --type value: %s", opts.KeyType)
+			}
+			return opts, nil
+		default:
+			return remoteCommandOptions{}, fmt.Errorf("unsupported remote key action: %s", subAction)
+		}
+	case "status", "logs", "rollback", "uninstall":
+		if len(args) < 3 {
+			return remoteCommandOptions{}, fmt.Errorf("usage: carrier remote %s <host_id> <agent_id>", opts.Action)
+		}
+		opts.HostID = strings.TrimSpace(args[1])
+		opts.TargetAgentID = strings.ToLower(strings.TrimSpace(args[2]))
+		opts.AgentID = opts.TargetAgentID
+		opts.InstallAgentID = opts.TargetAgentID
+		for i := 3; i < len(args); i++ {
+			raw := strings.TrimSpace(args[i])
+			if raw == "" {
+				continue
+			}
+			switch strings.ToLower(raw) {
+			case "--tail":
+				if opts.Action != "logs" {
+					return remoteCommandOptions{}, fmt.Errorf("unknown remote option: %s", raw)
+				}
+				value, next, err := parseRequiredFlagValue(args, i, "--tail")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				tail, convErr := strconv.Atoi(strings.TrimSpace(value))
+				if convErr != nil || tail <= 0 {
+					return remoteCommandOptions{}, fmt.Errorf("invalid --tail value: %s", value)
+				}
+				opts.Tail = tail
+				i = next
+			case "--commit":
+				if opts.Action != "rollback" {
+					return remoteCommandOptions{}, fmt.Errorf("unknown remote option: %s", raw)
+				}
+				value, next, err := parseRequiredFlagValue(args, i, "--commit")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				opts.Commit = strings.TrimSpace(value)
+				i = next
+			default:
+				return remoteCommandOptions{}, fmt.Errorf("unknown remote option: %s", raw)
+			}
+		}
+		if opts.HostID == "" {
+			return remoteCommandOptions{}, errors.New("host_id is required")
+		}
+		if opts.TargetAgentID == "" {
+			return remoteCommandOptions{}, errors.New("agent_id is required")
+		}
+		return opts, nil
+	default:
 		return remoteCommandOptions{}, fmt.Errorf("unsupported remote action: %s", opts.Action)
 	}
-	switch opts.AgentID {
-	case "openclaw", "picoclaw", "zeroclaw":
-	default:
-		return remoteCommandOptions{}, fmt.Errorf("unsupported remote agent_id: %s (expected one of openclaw, picoclaw, zeroclaw)", opts.AgentID)
-	}
-	// OpenClaw runtime install endpoint uses the default agent slot "main".
-	if opts.AgentID == "openclaw" {
-		opts.InstallAgentID = "main"
-	} else {
-		opts.InstallAgentID = opts.AgentID
-	}
+}
 
-	for i := 2; i < len(args); i++ {
-		raw := strings.TrimSpace(args[i])
-		if raw == "" {
-			continue
+func parseConfigCommandArgs(args []string) (configCommandOptions, error) {
+	if len(args) == 0 {
+		return configCommandOptions{}, errors.New("usage: carrier config <backup|restore> [--output <path>] [--from <path>]")
+	}
+	opts := configCommandOptions{Action: strings.ToLower(strings.TrimSpace(args[0]))}
+	switch opts.Action {
+	case "backup":
+		for i := 1; i < len(args); i++ {
+			switch strings.ToLower(strings.TrimSpace(args[i])) {
+			case "--output":
+				value, next, err := parseRequiredFlagValue(args, i, "--output")
+				if err != nil {
+					return configCommandOptions{}, err
+				}
+				opts.OutputPath = strings.TrimSpace(value)
+				i = next
+			default:
+				return configCommandOptions{}, fmt.Errorf("unknown config option: %s", args[i])
+			}
 		}
-		switch strings.ToLower(raw) {
-		case "--host-id":
-			value, next, err := parseRequiredFlagValue(args, i, "--host-id")
-			if err != nil {
-				return remoteCommandOptions{}, err
+	case "restore":
+		for i := 1; i < len(args); i++ {
+			switch strings.ToLower(strings.TrimSpace(args[i])) {
+			case "--from":
+				value, next, err := parseRequiredFlagValue(args, i, "--from")
+				if err != nil {
+					return configCommandOptions{}, err
+				}
+				opts.FromPath = strings.TrimSpace(value)
+				i = next
+			default:
+				return configCommandOptions{}, fmt.Errorf("unknown config option: %s", args[i])
 			}
-			opts.HostID = strings.TrimSpace(value)
-			i = next
-		case "--name":
-			value, next, err := parseRequiredFlagValue(args, i, "--name")
-			if err != nil {
-				return remoteCommandOptions{}, err
-			}
-			opts.HostName = strings.TrimSpace(value)
-			i = next
-		case "--host":
-			value, next, err := parseRequiredFlagValue(args, i, "--host")
-			if err != nil {
-				return remoteCommandOptions{}, err
-			}
-			opts.HostAddr = strings.TrimSpace(value)
-			i = next
-		case "--port":
-			value, next, err := parseRequiredFlagValue(args, i, "--port")
-			if err != nil {
-				return remoteCommandOptions{}, err
-			}
-			port, convErr := strconv.Atoi(strings.TrimSpace(value))
-			if convErr != nil || port < 1 || port > 65535 {
-				return remoteCommandOptions{}, fmt.Errorf("invalid --port value: %s", value)
-			}
-			opts.Port = port
-			i = next
-		case "--user":
-			value, next, err := parseRequiredFlagValue(args, i, "--user")
-			if err != nil {
-				return remoteCommandOptions{}, err
-			}
-			opts.User = strings.TrimSpace(value)
-			i = next
-		case "--key-path":
-			value, next, err := parseRequiredFlagValue(args, i, "--key-path")
-			if err != nil {
-				return remoteCommandOptions{}, err
-			}
-			opts.KeyPath = strings.TrimSpace(value)
-			i = next
-		case "--runtime-mode":
-			value, next, err := parseRequiredFlagValue(args, i, "--runtime-mode")
-			if err != nil {
-				return remoteCommandOptions{}, err
-			}
-			opts.RuntimeMode = strings.ToLower(strings.TrimSpace(value))
-			i = next
-		case "--isolation":
-			opts.Isolation = true
-		case "--sync-channel":
-			value, next, err := parseRequiredFlagValue(args, i, "--sync-channel")
-			if err != nil {
-				return remoteCommandOptions{}, err
-			}
-			opts.SyncChannels = append(opts.SyncChannels, strings.ToLower(strings.TrimSpace(value)))
-			i = next
-		case "--sync-provider":
-			value, next, err := parseRequiredFlagValue(args, i, "--sync-provider")
-			if err != nil {
-				return remoteCommandOptions{}, err
-			}
-			opts.SyncProviders = append(opts.SyncProviders, strings.ToLower(strings.TrimSpace(value)))
-			i = next
-		case "--telegram-allow-from":
-			value, next, err := parseRequiredFlagValue(args, i, "--telegram-allow-from")
-			if err != nil {
-				return remoteCommandOptions{}, err
-			}
-			opts.TelegramAllowFrom = append(opts.TelegramAllowFrom, strings.TrimSpace(value))
-			i = next
-		case "--discord-allow-from":
-			value, next, err := parseRequiredFlagValue(args, i, "--discord-allow-from")
-			if err != nil {
-				return remoteCommandOptions{}, err
-			}
-			opts.DiscordAllowFrom = append(opts.DiscordAllowFrom, strings.TrimSpace(value))
-			i = next
-		case "--check-retries":
-			value, next, err := parseRequiredFlagValue(args, i, "--check-retries")
-			if err != nil {
-				return remoteCommandOptions{}, err
-			}
-			retries, convErr := strconv.Atoi(strings.TrimSpace(value))
-			if convErr != nil || retries < 0 {
-				return remoteCommandOptions{}, fmt.Errorf("invalid --check-retries value: %s", value)
-			}
-			opts.CheckRetries = retries
-			i = next
-		case "--check-retry-delay":
-			value, next, err := parseRequiredFlagValue(args, i, "--check-retry-delay")
-			if err != nil {
-				return remoteCommandOptions{}, err
-			}
-			delay, convErr := strconv.Atoi(strings.TrimSpace(value))
-			if convErr != nil || delay < 0 {
-				return remoteCommandOptions{}, fmt.Errorf("invalid --check-retry-delay value: %s", value)
-			}
-			opts.CheckRetryDelaySec = delay
-			i = next
-		case "--skip-reconnect-check":
-			opts.SkipReconnectCheck = true
-		default:
-			return remoteCommandOptions{}, fmt.Errorf("unknown remote option: %s", raw)
 		}
-	}
-
-	if opts.HostID == "" {
-		return remoteCommandOptions{}, errors.New("--host-id is required")
-	}
-	if opts.HostName == "" {
-		opts.HostName = opts.HostID
-	}
-	if opts.HostAddr == "" {
-		return remoteCommandOptions{}, errors.New("--host is required")
-	}
-	if opts.User == "" {
-		return remoteCommandOptions{}, errors.New("--user is required")
-	}
-	if opts.KeyPath == "" {
-		return remoteCommandOptions{}, errors.New("--key-path is required")
-	}
-	switch opts.RuntimeMode {
-	case "on_demand", "managed_gateway":
+		if opts.FromPath == "" {
+			return configCommandOptions{}, errors.New("--from is required for config restore")
+		}
 	default:
-		return remoteCommandOptions{}, fmt.Errorf("invalid --runtime-mode value: %s", opts.RuntimeMode)
+		return configCommandOptions{}, fmt.Errorf("unsupported config action: %s", opts.Action)
 	}
-	for _, channel := range opts.SyncChannels {
-		switch channel {
-		case "telegram", "discord", "feishu":
-		default:
-			return remoteCommandOptions{}, fmt.Errorf("invalid --sync-channel value: %s", channel)
-		}
+	return opts, nil
+}
+
+func parseRemoteStoreCommandArgs(args []string) (remoteStoreCommandOptions, error) {
+	if len(args) == 0 {
+		return remoteStoreCommandOptions{}, errors.New("usage: carrier remote-store <backup|restore> [--output <path>] [--from <path>]")
 	}
-	for _, provider := range opts.SyncProviders {
-		if strings.TrimSpace(provider) == "" {
-			return remoteCommandOptions{}, errors.New("--sync-provider cannot be empty")
+	opts := remoteStoreCommandOptions{Action: strings.ToLower(strings.TrimSpace(args[0]))}
+	switch opts.Action {
+	case "backup":
+		for i := 1; i < len(args); i++ {
+			switch strings.ToLower(strings.TrimSpace(args[i])) {
+			case "--output":
+				value, next, err := parseRequiredFlagValue(args, i, "--output")
+				if err != nil {
+					return remoteStoreCommandOptions{}, err
+				}
+				opts.OutputPath = strings.TrimSpace(value)
+				i = next
+			default:
+				return remoteStoreCommandOptions{}, fmt.Errorf("unknown remote-store option: %s", args[i])
+			}
 		}
+	case "restore":
+		for i := 1; i < len(args); i++ {
+			switch strings.ToLower(strings.TrimSpace(args[i])) {
+			case "--from":
+				value, next, err := parseRequiredFlagValue(args, i, "--from")
+				if err != nil {
+					return remoteStoreCommandOptions{}, err
+				}
+				opts.FromPath = strings.TrimSpace(value)
+				i = next
+			default:
+				return remoteStoreCommandOptions{}, fmt.Errorf("unknown remote-store option: %s", args[i])
+			}
+		}
+		if opts.FromPath == "" {
+			return remoteStoreCommandOptions{}, errors.New("--from is required for remote-store restore")
+		}
+	default:
+		return remoteStoreCommandOptions{}, fmt.Errorf("unsupported remote-store action: %s", opts.Action)
 	}
 	return opts, nil
 }
@@ -1494,12 +1830,23 @@ func runListInstances(out io.Writer) error {
 
 type remoteHostCheckResponse struct {
 	Check struct {
-		SSHOK         bool `json:"sshOk"`
-		OpenClawFound bool `json:"openclawFound"`
+		SSHOK          bool                    `json:"sshOk"`
+		OpenClawFound  bool                    `json:"openclawFound"`
+		GatewayHealthy bool                    `json:"gatewayHealthy"`
+		Platform       remoteHostPlatformCheck `json:"platform"`
+		Details        []string                `json:"details"`
 	} `json:"check"`
 	Instances                []remoteInstanceSummary `json:"instances"`
 	PendingPullInstances     []remoteInstanceSummary `json:"pendingPullInstances"`
 	PullConfirmationRequired bool                    `json:"pullConfirmationRequired"`
+}
+
+type remoteHostPlatformCheck struct {
+	OS        string `json:"os"`
+	Distro    string `json:"distro"`
+	Version   string `json:"version"`
+	Supported bool   `json:"supported"`
+	Reason    string `json:"reason"`
 }
 
 type remoteInstancesListResponse struct {
@@ -1509,6 +1856,58 @@ type remoteInstancesListResponse struct {
 type remoteInstanceSummary struct {
 	ID      string `json:"id"`
 	AgentID string `json:"agentId"`
+}
+
+type remoteInstanceStatusSnapshot struct {
+	ID           string `json:"id"`
+	HostID       string `json:"hostId"`
+	AgentID      string `json:"agentId"`
+	RuntimeState string `json:"runtimeState"`
+	Health       string `json:"health"`
+	LastError    string `json:"lastError"`
+	UpdatedAt    string `json:"updatedAt"`
+}
+
+type remoteInstanceStatusResponse struct {
+	Instance remoteInstanceStatusSnapshot `json:"instance"`
+}
+
+type remoteInstanceLogsResponse struct {
+	Logs string `json:"logs"`
+}
+
+type remoteInstanceRollbackSummary struct {
+	RolledBack       bool   `json:"rolledBack"`
+	FromCommit       string `json:"fromCommit"`
+	NewCommit        string `json:"newCommit"`
+	DriftState       string `json:"driftState"`
+	LastRollbackAt   string `json:"lastRollbackAt"`
+	RestoredSnapshot bool   `json:"restoredSnapshot"`
+}
+
+type remoteInstanceRollbackResponse struct {
+	Rollback remoteInstanceRollbackSummary `json:"rollback"`
+}
+
+type remoteInstanceUninstallSummary struct {
+	HostID      string `json:"hostId"`
+	AgentID     string `json:"agentId"`
+	Uninstalled bool   `json:"uninstalled"`
+}
+
+type remoteInstanceUninstallResponse struct {
+	Uninstall remoteInstanceUninstallSummary `json:"uninstall"`
+}
+
+type remoteUploadedKeySummary struct {
+	KeyRef      string `json:"keyRef"`
+	Name        string `json:"name"`
+	Fingerprint string `json:"fingerprint"`
+	SizeBytes   int    `json:"sizeBytes"`
+}
+
+type remoteKeyUploadResponse struct {
+	Key remoteUploadedKeySummary `json:"key"`
 }
 
 func runRemoteAddCommand(in io.Reader, out io.Writer, opts remoteCommandOptions) error {
@@ -1527,9 +1926,17 @@ func runRemoteAddCommand(in io.Reader, out io.Writer, opts remoteCommandOptions)
 		"host":        opts.HostAddr,
 		"port":        opts.Port,
 		"user":        opts.User,
-		"authMode":    "private_key",
-		"keyPath":     opts.KeyPath,
+		"authMode":    opts.AuthMode,
 		"runtimeMode": opts.RuntimeMode,
+	}
+	if strings.TrimSpace(opts.KeyPath) != "" {
+		hostPayload["keyPath"] = opts.KeyPath
+	}
+	if strings.TrimSpace(opts.KeyRef) != "" {
+		hostPayload["keyRef"] = opts.KeyRef
+	}
+	if strings.TrimSpace(opts.SSHConfigHost) != "" {
+		hostPayload["sshConfigHost"] = opts.SSHConfigHost
 	}
 	if _, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/remote/hosts", hostPayload, 30*time.Second); err != nil {
 		return err
@@ -1546,17 +1953,29 @@ func runRemoteAddCommand(in io.Reader, out io.Writer, opts remoteCommandOptions)
 	} else {
 		_, _ = fmt.Fprintf(out, "  %s runtime not detected; fresh install will run.\n", agentName)
 	}
+	hadTargetBeforeInstall := remoteInstanceListHasAgent(preCheck.Instances, opts.InstallAgentID)
+	installCompleted := false
+	failWithRollback := func(stage string, cause error) error {
+		if !installCompleted || !opts.AutoRollback {
+			return fmt.Errorf("remote add failed at %s: %w", stage, cause)
+		}
+		if rollbackErr := attemptRemoteAddRollback(out, opts, hadTargetBeforeInstall); rollbackErr != nil {
+			return fmt.Errorf("remote add failed at %s: %w (automatic rollback failed: %v)", stage, cause, rollbackErr)
+		}
+		return fmt.Errorf("remote add failed at %s: %w (automatic rollback succeeded)", stage, cause)
+	}
 
 	printRemoteStep(out, 3, 8, fmt.Sprintf("Install %s on remote host", agentName))
 	if err := runRemoteInstallStream(out, opts.HostID, opts.InstallAgentID, opts.Isolation); err != nil {
-		return err
+		return failWithRollback("install", err)
 	}
+	installCompleted = true
 	_, _ = fmt.Fprintf(out, "  %s installation stream completed successfully.\n", agentName)
 
 	if len(opts.SyncChannels) > 0 || len(opts.SyncProviders) > 0 {
 		printRemoteStep(out, 4, 8, "Sync selected local configuration")
 		if err := runRemoteSelectedConfigSync(opts); err != nil {
-			return err
+			return failWithRollback("config sync", err)
 		}
 		_, _ = fmt.Fprintln(out, "  Local configuration sync completed.")
 	} else {
@@ -1567,17 +1986,17 @@ func runRemoteAddCommand(in io.Reader, out io.Writer, opts remoteCommandOptions)
 	printRemoteStep(out, 5, 8, "Post-install health check")
 	postCheck, err := runRemoteHostCheckWithRetry(opts.HostID, opts.CheckRetries, opts.CheckRetryDelaySec, false, nil)
 	if err != nil {
-		return err
+		return failWithRollback("post-install health check", err)
 	}
 	postCheck, err = maybeConfirmPullForPendingInstances(in, out, opts.HostID, postCheck)
 	if err != nil {
-		return err
+		return failWithRollback("post-install pull confirmation", err)
 	}
 	printRemoteCheckSummary(out, postCheck, "")
 
 	printRemoteStep(out, 6, 8, "List remote instances")
 	if err := printRemoteInstances(out, opts.HostID, "Detected instances"); err != nil {
-		return err
+		return failWithRollback("list remote instances", err)
 	}
 
 	if opts.SkipReconnectCheck {
@@ -1589,28 +2008,345 @@ func runRemoteAddCommand(in io.Reader, out io.Writer, opts remoteCommandOptions)
 
 	printRemoteStep(out, 7, 8, "Reconnect simulation (remove host record and re-register)")
 	if _, _, err := gatewayRequestWithTimeout(http.MethodDelete, "/api/v1/remote/hosts/"+neturl.PathEscape(opts.HostID), nil, 30*time.Second); err != nil {
-		return err
+		return failWithRollback("reconnect simulation delete host", err)
 	}
 	if _, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/remote/hosts", hostPayload, 30*time.Second); err != nil {
-		return err
+		return failWithRollback("reconnect simulation upsert host", err)
 	}
 
 	printRemoteStep(out, 8, 8, "Reconnect verification and instance refresh")
 	reconnectCheck, err := runRemoteHostCheckWithRetry(opts.HostID, opts.CheckRetries, opts.CheckRetryDelaySec, false, nil)
 	if err != nil {
-		return err
+		return failWithRollback("reconnect verification check", err)
 	}
 	reconnectCheck, err = maybeConfirmPullForPendingInstances(in, out, opts.HostID, reconnectCheck)
 	if err != nil {
-		return err
+		return failWithRollback("reconnect pull confirmation", err)
 	}
 	printRemoteCheckSummary(out, reconnectCheck, "Reconnect verification")
 	if err := printRemoteInstances(out, opts.HostID, "Instances after reconnect"); err != nil {
-		return err
+		return failWithRollback("list instances after reconnect", err)
 	}
 
 	_, _ = fmt.Fprintln(out, colorizeForTTY(out, fmt.Sprintf("Completed: %s is installed on host %s and reconnect verification passed.", agentName, opts.HostID), ansiGreenBold))
 	return nil
+}
+
+func remoteInstanceListHasAgent(instances []remoteInstanceSummary, agentID string) bool {
+	target := strings.ToLower(strings.TrimSpace(agentID))
+	if target == "" {
+		return false
+	}
+	for _, inst := range instances {
+		if strings.EqualFold(strings.TrimSpace(inst.AgentID), target) {
+			return true
+		}
+	}
+	return false
+}
+
+func attemptRemoteAddRollback(out io.Writer, opts remoteCommandOptions, hadTargetBeforeInstall bool) error {
+	if hadTargetBeforeInstall {
+		_, _ = fmt.Fprintln(out, "  Auto-rollback: existing instance detected before install, attempting rollback to latest known baseline.")
+		if _, err := runRemoteInstanceRollback(opts.HostID, opts.InstallAgentID, ""); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintln(out, "  Auto-rollback: rollback completed.")
+		return nil
+	}
+	_, _ = fmt.Fprintln(out, "  Auto-rollback: fresh install detected, attempting uninstall cleanup.")
+	if _, err := runRemoteInstanceUninstall(opts.HostID, opts.InstallAgentID); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(out, "  Auto-rollback: uninstall cleanup completed.")
+	return nil
+}
+
+func runRemoteStatusCommand(out io.Writer, opts remoteCommandOptions) error {
+	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+	status, err := runRemoteInstanceStatus(opts.HostID, opts.TargetAgentID)
+	if err != nil {
+		return err
+	}
+	runtimeState := strings.TrimSpace(status.RuntimeState)
+	if runtimeState == "" {
+		runtimeState = "unknown"
+	}
+	health := strings.TrimSpace(status.Health)
+	if health == "" {
+		health = "unknown"
+	}
+	_, _ = fmt.Fprintf(out, "Remote instance %s (%s)\n", strings.TrimSpace(status.ID), strings.TrimSpace(status.AgentID))
+	_, _ = fmt.Fprintf(out, "  runtime=%s health=%s\n", runtimeState, health)
+	if lastErr := strings.TrimSpace(status.LastError); lastErr != "" {
+		_, _ = fmt.Fprintf(out, "  lastError=%s\n", lastErr)
+	}
+	if updatedAt := strings.TrimSpace(status.UpdatedAt); updatedAt != "" {
+		_, _ = fmt.Fprintf(out, "  updatedAt=%s\n", updatedAt)
+	}
+	return nil
+}
+
+func runRemoteLogsCommand(out io.Writer, opts remoteCommandOptions) error {
+	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+	logs, err := runRemoteInstanceLogs(opts.HostID, opts.TargetAgentID, opts.Tail)
+	if err != nil {
+		return err
+	}
+	trimmed := strings.TrimSpace(logs)
+	if trimmed == "" {
+		_, _ = fmt.Fprintln(out, "No remote logs returned.")
+		return nil
+	}
+	_, _ = fmt.Fprintln(out, trimmed)
+	return nil
+}
+
+func runRemoteRollbackCommand(out io.Writer, opts remoteCommandOptions) error {
+	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+	rollback, err := runRemoteInstanceRollback(opts.HostID, opts.TargetAgentID, opts.Commit)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "Rollback completed for %s:%s\n", strings.TrimSpace(opts.HostID), strings.TrimSpace(opts.TargetAgentID))
+	_, _ = fmt.Fprintf(out, "  rolledBack=%t drift=%s\n", rollback.RolledBack, strings.TrimSpace(rollback.DriftState))
+	if fromCommit := strings.TrimSpace(rollback.FromCommit); fromCommit != "" {
+		_, _ = fmt.Fprintf(out, "  fromCommit=%s\n", fromCommit)
+	}
+	if newCommit := strings.TrimSpace(rollback.NewCommit); newCommit != "" {
+		_, _ = fmt.Fprintf(out, "  newCommit=%s\n", newCommit)
+	}
+	return nil
+}
+
+func runRemoteUninstallCommand(out io.Writer, opts remoteCommandOptions) error {
+	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+	uninstall, err := runRemoteInstanceUninstall(opts.HostID, opts.TargetAgentID)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "Remote uninstall completed for %s:%s (uninstalled=%t)\n",
+		strings.TrimSpace(uninstall.HostID),
+		strings.TrimSpace(uninstall.AgentID),
+		uninstall.Uninstalled,
+	)
+	return nil
+}
+
+func runRemoteKeyImportCommand(out io.Writer, opts remoteCommandOptions) error {
+	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+	key, err := runRemoteKeyImportPath(opts.KeyImportPath)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "Remote key uploaded: keyRef=%s fingerprint=%s size=%d\n",
+		strings.TrimSpace(key.KeyRef),
+		strings.TrimSpace(key.Fingerprint),
+		key.SizeBytes,
+	)
+	return nil
+}
+
+func runRemoteKeyGenerateCommand(out io.Writer, opts remoteCommandOptions) error {
+	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+	outputPath := strings.TrimSpace(opts.KeyOutputPath)
+	if outputPath == "" {
+		defaultPath, err := defaultGeneratedKeyOutputPath(opts.KeyType)
+		if err != nil {
+			return err
+		}
+		outputPath = defaultPath
+	}
+	outputPath = filepath.Clean(outputPath)
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o700); err != nil {
+		return fmt.Errorf("create key output directory: %w", err)
+	}
+	if _, err := os.Stat(outputPath); err == nil {
+		return fmt.Errorf("key output path already exists: %s", outputPath)
+	}
+	keygenArgs := []string{
+		"-t", opts.KeyType,
+		"-N", "",
+		"-C", "carrier-generated",
+		"-f", outputPath,
+	}
+	if opts.KeyType == "rsa" {
+		keygenArgs = []string{
+			"-t", "rsa",
+			"-b", "4096",
+			"-N", "",
+			"-C", "carrier-generated",
+			"-f", outputPath,
+		}
+	}
+	cmd := exec.Command("ssh-keygen", keygenArgs...)
+	if raw, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("generate ssh key: %w (%s)", err, strings.TrimSpace(string(raw)))
+	}
+
+	key, err := runRemoteKeyImportPath(outputPath)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "Generated keypair: private=%s public=%s\n", outputPath, outputPath+".pub")
+	_, _ = fmt.Fprintf(out, "Uploaded private key: keyRef=%s fingerprint=%s\n",
+		strings.TrimSpace(key.KeyRef),
+		strings.TrimSpace(key.Fingerprint),
+	)
+	return nil
+}
+
+func defaultGeneratedKeyOutputPath(keyType string) (string, error) {
+	home, err := resolveCarrierHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir for key generation: %w", err)
+	}
+	ext := "id_ed25519"
+	if strings.EqualFold(strings.TrimSpace(keyType), "rsa") {
+		ext = "id_rsa"
+	}
+	dir := filepath.Join(home, ".carrier", "keys", "generated")
+	return filepath.Join(dir, ext), nil
+}
+
+func runRemoteKeyImportPath(path string) (remoteUploadedKeySummary, error) {
+	source := strings.TrimSpace(path)
+	raw, err := os.ReadFile(source)
+	if err != nil {
+		return remoteUploadedKeySummary{}, fmt.Errorf("read key file: %w", err)
+	}
+	if len(raw) == 0 {
+		return remoteUploadedKeySummary{}, errors.New("key file is empty")
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("file", filepath.Base(source))
+	if err != nil {
+		return remoteUploadedKeySummary{}, fmt.Errorf("create multipart key form: %w", err)
+	}
+	if _, err := part.Write(raw); err != nil {
+		return remoteUploadedKeySummary{}, fmt.Errorf("write multipart key payload: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return remoteUploadedKeySummary{}, fmt.Errorf("finalize multipart payload: %w", err)
+	}
+
+	base := strings.TrimRight(strings.TrimSpace(gatewayProbeBaseURL()), "/")
+	if base == "" {
+		return remoteUploadedKeySummary{}, errors.New("gateway base url is empty")
+	}
+	req, err := http.NewRequest(http.MethodPost, base+"/api/v1/remote/keys", body)
+	if err != nil {
+		return remoteUploadedKeySummary{}, fmt.Errorf("build key upload request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	addGatewayAuthHeader(req)
+	client := &http.Client{Timeout: 45 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return remoteUploadedKeySummary{}, fmt.Errorf("key upload request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	respRaw, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if readErr != nil {
+		return remoteUploadedKeySummary{}, fmt.Errorf("read key upload response: %w", readErr)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return remoteUploadedKeySummary{}, fmt.Errorf("key upload failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(respRaw)))
+	}
+	var payload remoteKeyUploadResponse
+	if err := json.Unmarshal(respRaw, &payload); err != nil {
+		return remoteUploadedKeySummary{}, fmt.Errorf("decode key upload response: %w", err)
+	}
+	if strings.TrimSpace(payload.Key.KeyRef) == "" {
+		return remoteUploadedKeySummary{}, errors.New("key upload response missing keyRef")
+	}
+	return payload.Key, nil
+}
+
+func runRemoteInstanceStatus(hostID, agentID string) (remoteInstanceStatusSnapshot, error) {
+	path := fmt.Sprintf("/api/v1/remote/hosts/%s/instances/%s/status",
+		neturl.PathEscape(strings.TrimSpace(hostID)),
+		neturl.PathEscape(strings.TrimSpace(agentID)),
+	)
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return remoteInstanceStatusSnapshot{}, err
+	}
+	var payload remoteInstanceStatusResponse
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return remoteInstanceStatusSnapshot{}, fmt.Errorf("decode remote status response: %w", err)
+	}
+	return payload.Instance, nil
+}
+
+func runRemoteInstanceLogs(hostID, agentID string, tail int) (string, error) {
+	if tail <= 0 {
+		tail = 200
+	}
+	path := fmt.Sprintf("/api/v1/remote/hosts/%s/instances/%s/logs?tail=%d",
+		neturl.PathEscape(strings.TrimSpace(hostID)),
+		neturl.PathEscape(strings.TrimSpace(agentID)),
+		tail,
+	)
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return "", err
+	}
+	var payload remoteInstanceLogsResponse
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", fmt.Errorf("decode remote logs response: %w", err)
+	}
+	return payload.Logs, nil
+}
+
+func runRemoteInstanceRollback(hostID, agentID, commit string) (remoteInstanceRollbackSummary, error) {
+	path := fmt.Sprintf("/api/v1/remote/hosts/%s/instances/%s/rollback",
+		neturl.PathEscape(strings.TrimSpace(hostID)),
+		neturl.PathEscape(strings.TrimSpace(agentID)),
+	)
+	body := map[string]interface{}{}
+	if trimmed := strings.TrimSpace(commit); trimmed != "" {
+		body["commit"] = trimmed
+	}
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, path, body, 60*time.Second)
+	if err != nil {
+		return remoteInstanceRollbackSummary{}, err
+	}
+	var payload remoteInstanceRollbackResponse
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return remoteInstanceRollbackSummary{}, fmt.Errorf("decode remote rollback response: %w", err)
+	}
+	return payload.Rollback, nil
+}
+
+func runRemoteInstanceUninstall(hostID, agentID string) (remoteInstanceUninstallSummary, error) {
+	path := fmt.Sprintf("/api/v1/remote/hosts/%s/instances/%s/uninstall",
+		neturl.PathEscape(strings.TrimSpace(hostID)),
+		neturl.PathEscape(strings.TrimSpace(agentID)),
+	)
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, path, map[string]interface{}{}, 60*time.Second)
+	if err != nil {
+		return remoteInstanceUninstallSummary{}, err
+	}
+	var payload remoteInstanceUninstallResponse
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return remoteInstanceUninstallSummary{}, fmt.Errorf("decode remote uninstall response: %w", err)
+	}
+	return payload.Uninstall, nil
 }
 
 func printRemoteInstances(out io.Writer, hostID, label string) error {
@@ -1927,6 +2663,47 @@ func printRemoteCheckSummary(out io.Writer, check remoteHostCheckResponse, label
 		_, _ = fmt.Fprintln(out, "  OpenClaw runtime: detected.")
 	} else {
 		_, _ = fmt.Fprintln(out, "  OpenClaw runtime: not detected.")
+	}
+	gatewayHealth := "unknown"
+	if check.Check.GatewayHealthy {
+		gatewayHealth = "healthy"
+	} else if check.Check.OpenClawFound {
+		gatewayHealth = "unhealthy"
+	}
+	_, _ = fmt.Fprintf(out, "  Remote gateway health: %s.\n", gatewayHealth)
+
+	platform := check.Check.Platform
+	platformParts := []string{}
+	if osPart := strings.TrimSpace(platform.OS); osPart != "" {
+		platformParts = append(platformParts, osPart)
+	}
+	if distroPart := strings.TrimSpace(platform.Distro); distroPart != "" {
+		platformParts = append(platformParts, distroPart)
+	}
+	platformLabel := strings.Join(platformParts, "/")
+	if version := strings.TrimSpace(platform.Version); version != "" {
+		if platformLabel == "" {
+			platformLabel = version
+		} else {
+			platformLabel += " " + version
+		}
+	}
+	if platformLabel != "" {
+		support := "supported"
+		if !platform.Supported {
+			support = "unsupported"
+		}
+		_, _ = fmt.Fprintf(out, "  Remote platform: %s (%s).\n", platformLabel, support)
+	}
+	if reason := strings.TrimSpace(platform.Reason); reason != "" {
+		_, _ = fmt.Fprintf(out, "  Platform note: %s\n", reason)
+	}
+	for _, detail := range check.Check.Details {
+		trimmed := strings.TrimSpace(detail)
+		if trimmed == "" {
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "  Detail: %s\n", trimmed)
 	}
 }
 
@@ -4581,6 +5358,159 @@ func backupIfExists(path string) error {
 	}
 	backupPath := fmt.Sprintf("%s.bak.%s", path, time.Now().UTC().Format("20060102T150405Z"))
 	return os.Rename(path, backupPath)
+}
+
+func runConfigCommand(out io.Writer, opts configCommandOptions) error {
+	configPath, err := configv2.DefaultPath()
+	if err != nil {
+		return err
+	}
+	switch opts.Action {
+	case "backup":
+		output := strings.TrimSpace(opts.OutputPath)
+		if output == "" {
+			output, err = defaultBackupOutputPath("config.v2")
+			if err != nil {
+				return err
+			}
+		}
+		if err := copyFileSecure(configPath, output, 0o600); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(out, "Config backup saved to %s\n", output)
+		return nil
+	case "restore":
+		raw, err := os.ReadFile(strings.TrimSpace(opts.FromPath))
+		if err != nil {
+			return fmt.Errorf("read backup file: %w", err)
+		}
+		if err := validateConfigBackup(raw); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+			return fmt.Errorf("create config directory: %w", err)
+		}
+		if err := backupIfExists(configPath); err != nil {
+			return fmt.Errorf("backup existing config before restore: %w", err)
+		}
+		if err := os.WriteFile(configPath, raw, 0o600); err != nil {
+			return fmt.Errorf("write restored config: %w", err)
+		}
+		_, _ = fmt.Fprintf(out, "Config restored from %s\n", strings.TrimSpace(opts.FromPath))
+		return nil
+	default:
+		return fmt.Errorf("unsupported config action: %s", opts.Action)
+	}
+}
+
+func runRemoteStoreCommand(out io.Writer, opts remoteStoreCommandOptions) error {
+	storePath, err := resolveRemoteControlStorePath()
+	if err != nil {
+		return err
+	}
+	switch opts.Action {
+	case "backup":
+		output := strings.TrimSpace(opts.OutputPath)
+		if output == "" {
+			output, err = defaultBackupOutputPath("remote-control")
+			if err != nil {
+				return err
+			}
+		}
+		if err := copyFileSecure(storePath, output, 0o600); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(out, "Remote store backup saved to %s\n", output)
+		return nil
+	case "restore":
+		raw, err := os.ReadFile(strings.TrimSpace(opts.FromPath))
+		if err != nil {
+			return fmt.Errorf("read backup file: %w", err)
+		}
+		if err := validateJSONBlob(raw, "remote-store backup payload must be valid JSON"); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(storePath), 0o700); err != nil {
+			return fmt.Errorf("create remote store directory: %w", err)
+		}
+		if err := backupIfExists(storePath); err != nil {
+			return fmt.Errorf("backup existing remote store before restore: %w", err)
+		}
+		if err := os.WriteFile(storePath, raw, 0o600); err != nil {
+			return fmt.Errorf("write restored remote store: %w", err)
+		}
+		_, _ = fmt.Fprintf(out, "Remote store restored from %s\n", strings.TrimSpace(opts.FromPath))
+		return nil
+	default:
+		return fmt.Errorf("unsupported remote-store action: %s", opts.Action)
+	}
+}
+
+func resolveRemoteControlStorePath() (string, error) {
+	if custom := strings.TrimSpace(os.Getenv("CARRIER_REMOTE_CONTROL_STORE")); custom != "" {
+		return custom, nil
+	}
+	home, err := resolveCarrierHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir for remote store: %w", err)
+	}
+	return filepath.Join(home, ".carrier", "remote-control.json"), nil
+}
+
+func defaultBackupOutputPath(prefix string) (string, error) {
+	home, err := resolveCarrierHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir for backup output: %w", err)
+	}
+	dir := filepath.Join(home, ".carrier", "backups")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create backup directory: %w", err)
+	}
+	name := fmt.Sprintf("%s.%s.json", strings.TrimSpace(prefix), time.Now().UTC().Format("20060102T150405Z"))
+	return filepath.Join(dir, name), nil
+}
+
+func copyFileSecure(sourcePath, destinationPath string, mode os.FileMode) error {
+	raw, err := os.ReadFile(strings.TrimSpace(sourcePath))
+	if err != nil {
+		return fmt.Errorf("read source file: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(strings.TrimSpace(destinationPath)), 0o700); err != nil {
+		return fmt.Errorf("create destination directory: %w", err)
+	}
+	if err := os.WriteFile(strings.TrimSpace(destinationPath), raw, mode); err != nil {
+		return fmt.Errorf("write destination file: %w", err)
+	}
+	return nil
+}
+
+func validateConfigBackup(raw []byte) error {
+	if err := validateJSONBlob(raw, "config backup payload must be valid JSON"); err != nil {
+		return err
+	}
+	var cfg configv2.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return fmt.Errorf("decode config backup: %w", err)
+	}
+	if cfg.ConfigVersion != configv2.CurrentVersion {
+		return fmt.Errorf("config backup version mismatch: got %d want %d", cfg.ConfigVersion, configv2.CurrentVersion)
+	}
+	return nil
+}
+
+func validateJSONBlob(raw []byte, message string) error {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return errors.New("backup payload is empty")
+	}
+	var doc interface{}
+	if err := json.Unmarshal(trimmed, &doc); err != nil {
+		if strings.TrimSpace(message) == "" {
+			return fmt.Errorf("invalid JSON payload: %w", err)
+		}
+		return fmt.Errorf("%s: %w", message, err)
+	}
+	return nil
 }
 
 func mapCarrierProviderToManagedProvider(providerID string) string {

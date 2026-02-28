@@ -10,6 +10,7 @@ const (
 	remoteOpInstancesList        = "instances_list"
 	remoteOpInstancesStatus      = "instances_status"
 	remoteOpInstancesInstall     = "instances_install"
+	remoteOpInstancesUninstall   = "instances_uninstall"
 	remoteOpInstancesRepair      = "instances_repair"
 	remoteOpInstancesLogs        = "instances_logs"
 	remoteOpInstancesSync        = "instances_sync"
@@ -69,6 +70,13 @@ type remoteMetricsSnapshot struct {
 	Repair     remoteRepairMetrics             `json:"repair"`
 	ChatStream remoteChatMetrics               `json:"chatStream"`
 	Rollout    remoteRolloutStatus             `json:"rollout"`
+	Alerts     remoteAlertSummary              `json:"alerts"`
+}
+
+type remoteAlertSummary struct {
+	Active bool   `json:"active"`
+	Level  string `json:"level"`
+	Count  int    `json:"count"`
 }
 
 type remoteMetricsCollector struct {
@@ -179,6 +187,14 @@ func (c *remoteMetricsCollector) snapshot() remoteMetricsSnapshot {
 		FailureRate: rate(chatStats.Failure, chatStats.Total),
 	}
 	rollout := evaluateRemoteRolloutStatus(totals, c.repair, chat)
+	alerts := remoteAlertSummary{
+		Active: len(rollout.Reasons) > 0,
+		Level:  rollout.State,
+		Count:  len(rollout.Reasons),
+	}
+	if !alerts.Active {
+		alerts.Level = "none"
+	}
 
 	return remoteMetricsSnapshot{
 		Timestamp:  nowTimestamp(),
@@ -187,6 +203,7 @@ func (c *remoteMetricsCollector) snapshot() remoteMetricsSnapshot {
 		Repair:     c.repair,
 		ChatStream: chat,
 		Rollout:    rollout,
+		Alerts:     alerts,
 	}
 }
 

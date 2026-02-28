@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -235,5 +237,36 @@ func TestRunRemoteCommandWrapsCommandForStableEnv(t *testing.T) {
 	}
 	if !strings.Contains(last, "echo carrier-ssh-ok") {
 		t.Fatalf("expected original command in wrapper, got %q", last)
+	}
+}
+
+func TestBuildSSHArgsUsesKeyRefWhenKeyPathMissing(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("CARRIER_REMOTE_KEY_DIR", tmp)
+	keyRef := "aaaaaaaa"
+	keyPath := filepath.Join(tmp, keyRef+".pem")
+	if err := os.WriteFile(keyPath, []byte("test"), 0o600); err != nil {
+		t.Fatalf("write key file: %v", err)
+	}
+
+	args, err := buildSSHArgs(RemoteHost{
+		Host:     "127.0.0.1",
+		Port:     2222,
+		User:     "carrier",
+		AuthMode: RemoteAuthModePrivateKey,
+		KeyRef:   keyRef,
+	}, "echo carrier-ssh-ok")
+	if err != nil {
+		t.Fatalf("buildSSHArgs returned error: %v", err)
+	}
+	found := false
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "-i" && filepath.Clean(args[i+1]) == filepath.Clean(keyPath) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected -i to use keyRef-resolved path %s, got args=%v", keyPath, args)
 	}
 }

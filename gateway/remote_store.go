@@ -197,6 +197,9 @@ func patchRemoteHost(hostID string, patch RemoteHost) (RemoteHost, error) {
 		if strings.TrimSpace(patch.KeyPath) != "" {
 			merged.KeyPath = patch.KeyPath
 		}
+		if strings.TrimSpace(patch.KeyRef) != "" {
+			merged.KeyRef = patch.KeyRef
+		}
 		if strings.TrimSpace(patch.SSHConfigHost) != "" {
 			merged.SSHConfigHost = patch.SSHConfigHost
 		}
@@ -560,4 +563,16 @@ func upsertRemoteInstanceSyncStatus(status RemoteInstanceSyncStatus) (RemoteInst
 		return RemoteInstanceSyncStatus{}, err
 	}
 	return status, nil
+}
+
+func deleteRemoteInstanceSyncStatus(hostID, agentID string) error {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, path, err := loadRemoteControlState()
+	if err != nil {
+		return err
+	}
+	delete(state.InstanceSyncs, remoteInstanceSyncKey(hostID, agentID))
+	return saveRemoteControlState(path, state)
 }

@@ -17,6 +17,8 @@ All command blocks below assume `carrier` is installed and available in `PATH`.
   - Start gateway API server in foreground.
 - `carrier stop`
   - Stop background daemon and gateway services.
+- `carrier reset`
+  - Stop services and remove Carrier-generated local data.
 - `carrier version` / `carrier --version` / `carrier -v` / `carrier -V`
   - Print version metadata.
 - `carrier update [options]`
@@ -58,6 +60,9 @@ Supported `agent_id` values:
 Options:
 
 - `--name <display-name>`
+- `--auth-mode <private_key|ssh_config>`
+- `--ssh-config-host <alias>`
+- `--key-ref <uploaded-key-ref>`
 - `--runtime-mode <on_demand|managed_gateway>`
 - `--isolation`
 - `--sync-channel <telegram|discord|feishu>` (repeatable)
@@ -66,12 +71,45 @@ Options:
 - `--discord-allow-from <id>` (repeatable)
 - `--check-retries <n>`
 - `--check-retry-delay <seconds>`
+- `--no-auto-rollback`
 - `--skip-reconnect-check`
 
 Behavior:
 
 - Runs a fixed sequence: upsert host -> pre-check -> install(stream) -> optional local config sync -> post-check -> list -> optional reconnect check.
+- From install step onward, failures trigger automatic rollback by default:
+  - existing instance: rollback config sync state
+  - fresh install: uninstall cleanup
+- `--no-auto-rollback` disables automatic rollback.
 - Newly discovered remote instances require explicit confirmation before pulling their configs to local profile store.
+
+Additional remote operations:
+
+- `carrier remote status <host_id> <agent_id>`
+- `carrier remote logs <host_id> <agent_id> [--tail <n>]`
+- `carrier remote rollback <host_id> <agent_id> [--commit <sha>]`
+- `carrier remote uninstall <host_id> <agent_id>`
+- `carrier remote key import --file <pem-path>`
+- `carrier remote key generate [--type <ed25519|rsa>] [--output <private-key-path>]`
+
+Remote preflight notes:
+
+- Host check now includes platform detection.
+- Deterministic remote install currently requires Linux.
+- Alpine is rejected at preflight with an explicit unsupported-platform error.
+
+Config/remote store backup and restore:
+
+- `carrier config backup [--output <path>]`
+- `carrier config restore --from <path>`
+- `carrier remote-store backup [--output <path>]`
+- `carrier remote-store restore --from <path>`
+
+Optional remote alert webhook watchdog:
+
+- `CARRIER_REMOTE_ALERT_WEBHOOK_URL`: enable webhook alert delivery for remote rollout alerts.
+- `CARRIER_REMOTE_ALERT_INTERVAL_SEC`: polling interval for evaluating alert state (default `30`).
+- `CARRIER_REMOTE_ALERT_COOLDOWN_SEC`: resend active alert after cooldown (default `300`).
 
 ## Recommended Workflows
 

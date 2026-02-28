@@ -218,8 +218,16 @@ func buildSSHArgs(host RemoteHost, remoteCommand string) ([]string, error) {
 		args = append(args, "-p", strconv.Itoa(h.Port))
 	}
 	if h.AuthMode == RemoteAuthModePrivateKey {
+		keyPath := strings.TrimSpace(h.KeyPath)
+		if keyPath == "" && strings.TrimSpace(h.KeyRef) != "" {
+			resolvedPath, err := resolveRemoteKeyPath(h.KeyRef)
+			if err != nil {
+				return nil, err
+			}
+			keyPath = resolvedPath
+		}
 		args = append(args,
-			"-i", filepath.Clean(h.KeyPath),
+			"-i", filepath.Clean(keyPath),
 			"-o", "IdentitiesOnly=yes",
 		)
 	}
@@ -244,7 +252,7 @@ func buildSSHArgs(host RemoteHost, remoteCommand string) ([]string, error) {
 }
 
 // shellSingleQuote is the canonical shell-safe quoting function for remote command arguments.
-// It wraps input in single quotes and escapes embedded single quotes using the '\'' idiom.
+// It wraps input in single quotes and escapes embedded single quotes using the '\” idiom.
 // Used in security-sensitive paths (e.g. wrapRemoteCommandForSSH) to prevent shell injection.
 func shellSingleQuote(input string) string {
 	if input == "" {
