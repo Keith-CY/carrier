@@ -38,6 +38,9 @@ func TestPrepareOpenclawManagedOnboard_WritesConfigAndRecord(t *testing.T) {
 	if result.WorkspacePath == "" || result.ConfigPath == "" || result.RecordPath == "" {
 		t.Fatalf("expected non-empty output paths, got %+v", result)
 	}
+	if !strings.HasSuffix(result.ConfigPath, "openclaw.json") {
+		t.Fatalf("expected openclaw config path suffix openclaw.json, got %q", result.ConfigPath)
+	}
 
 	cfgRaw, err := os.ReadFile(result.ConfigPath)
 	if err != nil {
@@ -70,12 +73,38 @@ func TestPrepareOpenclawManagedOnboard_WritesConfigAndRecord(t *testing.T) {
 	if telegram["enabled"] != true {
 		t.Fatalf("expected channels.telegram.enabled=true, got %#v", telegram["enabled"])
 	}
-	token, _ := telegram["token"].(string)
+	token, _ := telegram["botToken"].(string)
 	if got := strings.TrimSpace(token); got != "telegram-token-open" {
-		t.Fatalf("expected channels.telegram.token to be persisted, got %q", got)
+		t.Fatalf("expected channels.telegram.botToken to be persisted, got %q", got)
+	}
+	allowFrom, _ := telegram["allowFrom"].([]interface{})
+	if len(allowFrom) != 1 || strings.TrimSpace(anyToString(allowFrom[0])) != "418258935" {
+		t.Fatalf("expected channels.telegram.allowFrom=[418258935], got %#v", telegram["allowFrom"])
 	}
 	if _, ok := telegram["setup_pending"]; ok {
 		t.Fatalf("did not expect setup_pending for non-pending channel config")
+	}
+	models, _ := cfg["models"].(map[string]interface{})
+	modelProviders, _ := models["providers"].(map[string]interface{})
+	openaiProvider, _ := modelProviders["openai"].(map[string]interface{})
+	apiKeyRef, _ := openaiProvider["apiKey"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(apiKeyRef["provider"])); got != "carrier_file" {
+		t.Fatalf("expected models.providers.openai.apiKey.provider=carrier_file, got %q", got)
+	}
+
+	secretsPath := filepath.Join(tmp, ".openclaw", "carrier-secrets.json")
+	secretsRaw, err := os.ReadFile(secretsPath)
+	if err != nil {
+		t.Fatalf("read openclaw carrier secrets: %v", err)
+	}
+	var secretsPayload map[string]interface{}
+	if err := json.Unmarshal(secretsRaw, &secretsPayload); err != nil {
+		t.Fatalf("parse openclaw carrier secrets: %v", err)
+	}
+	secretProviders, _ := secretsPayload["providers"].(map[string]interface{})
+	secretOpenAI, _ := secretProviders["openai"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(secretOpenAI["apiKey"])); got != "sk-openclaw-123" {
+		t.Fatalf("expected openclaw carrier secret providers.openai.apiKey, got %q", got)
 	}
 
 	recordRaw, err := os.ReadFile(result.RecordPath)
@@ -138,8 +167,8 @@ func TestPrepareOpenclawManagedOnboard_AllowsPendingChannelSetupWithoutToken(t *
 	if telegram["setup_pending"] != true {
 		t.Fatalf("expected channels.telegram.setup_pending=true, got %#v", telegram["setup_pending"])
 	}
-	if _, ok := telegram["token"]; ok {
-		t.Fatalf("did not expect channels.telegram.token when setup is pending")
+	if _, ok := telegram["botToken"]; ok {
+		t.Fatalf("did not expect channels.telegram.botToken when setup is pending")
 	}
 
 	recordRaw, err := os.ReadFile(result.RecordPath)

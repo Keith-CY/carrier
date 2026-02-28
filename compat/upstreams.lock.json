@@ -10,7 +10,7 @@
           "id": "openclaw.json.v1",
           "version_range": ">=0.0.0",
           "config_format": "json",
-          "config_path": "~/.openclaw/config.json"
+          "config_path": "~/.openclaw/openclaw.json"
         }
       ],
       "tracked_files": [

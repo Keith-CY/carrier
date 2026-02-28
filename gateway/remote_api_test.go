@@ -1103,6 +1103,85 @@ func TestRemotePatchConfigCreatesMissingConfigFile(t *testing.T) {
 	}
 }
 
+func TestRemoteReadConfigReturnsCanonicalRawForJSON5(t *testing.T) {
+	const rawJSON5 = `{
+  // openclaw json5
+  agents: { defaults: { model: "openai/gpt-4.1", }, },
+}`
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		if strings.Contains(command, "cat \"$HOME/.openclaw/openclaw.json\"") {
+			return remoteExecResult{ExitCode: 0, Stdout: rawJSON5}
+		}
+		return remoteExecResult{ExitCode: 0}
+	})
+
+	host := RemoteHost{
+		ID:          "host-json5",
+		Host:        "127.0.0.1",
+		Port:        22,
+		User:        "ubuntu",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     "~/.ssh/id_ed25519",
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	}
+	cfg, raw, _, err := remoteReadConfig(context.Background(), host)
+	if err != nil {
+		t.Fatalf("remoteReadConfig(json5) error: %v", err)
+	}
+	if strings.TrimSpace(raw) == "" || !strings.Contains(raw, "openclaw json5") {
+		t.Fatalf("expected raw json5 text, got %q", raw)
+	}
+	if got := strings.TrimSpace(anyToString(cfg["raw_json5"])); got == "" {
+		t.Fatalf("expected canonical raw_json5 in config map, got %+v", cfg)
+	}
+}
+
+func TestRemotePatchConfigUsesConfigSetWhenRemoteConfigIsJSON5(t *testing.T) {
+	const rawJSON5 = `{
+  // openclaw json5
+  agents: { defaults: { model: "openai/gpt-4.1", }, },
+}`
+	usedConfigSet := 0
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "cat \"$HOME/.openclaw/openclaw.json\""):
+			return remoteExecResult{ExitCode: 0, Stdout: rawJSON5}
+		case strings.Contains(command, "openclaw config set"):
+			usedConfigSet++
+			return remoteExecResult{ExitCode: 0}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	host := RemoteHost{
+		ID:          "host-json5",
+		Host:        "127.0.0.1",
+		Port:        22,
+		User:        "ubuntu",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     "~/.ssh/id_ed25519",
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	}
+	_, snapshotPath, _, err := remotePatchConfig(context.Background(), host, map[string]interface{}{
+		"channels": map[string]interface{}{
+			"telegram": map[string]interface{}{
+				"enabled":  true,
+				"botToken": "tg-123",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("remotePatchConfig(json5) error: %v", err)
+	}
+	if usedConfigSet == 0 {
+		t.Fatal("expected openclaw config set to be used for json5 patch path")
+	}
+	if !strings.Contains(snapshotPath, "$HOME/.openclaw/snapshots/openclaw-") {
+		t.Fatalf("unexpected snapshot path: %q", snapshotPath)
+	}
+}
+
 func TestRemoteCodeAgentLifecycleAndAudit(t *testing.T) {
 	auditPath := filepath.Join(t.TempDir(), "gateway-audit.jsonl")
 	t.Setenv("CARRIER_GATEWAY_AUDIT_LOG", auditPath)

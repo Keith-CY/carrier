@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"carrier/shared/openclawcfg"
 )
 
 type managedAgentConfig struct {
@@ -36,7 +38,7 @@ var managedAgents = map[string]managedAgentConfig{
 	"openclaw": {
 		ID:             "openclaw",
 		ConfigDir:      ".openclaw",
-		ConfigFile:     "config.json",
+		ConfigFile:     "openclaw.json",
 		RequiredEnvKey: "OPENAI_API_KEY",
 	},
 	"zeroclaw": {
@@ -277,6 +279,23 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	if err := os.WriteFile(configPath, configRaw, 0o600); err != nil {
 		return nil, fmt.Errorf("write %s config: %w", cfg.ID, err)
 	}
+	if strings.EqualFold(cfg.ID, "openclaw") && strings.TrimSpace(providerToken) != "" {
+		secretsPath := filepath.Join(home, ".openclaw", "carrier-secrets.json")
+		secrets := map[string]interface{}{
+			"providers": map[string]interface{}{
+				providerKey: map[string]interface{}{
+					"apiKey": providerToken,
+				},
+			},
+		}
+		secretsRaw, marshalErr := json.MarshalIndent(secrets, "", "  ")
+		if marshalErr != nil {
+			return nil, fmt.Errorf("marshal openclaw carrier secrets: %w", marshalErr)
+		}
+		if err := os.WriteFile(secretsPath, append(secretsRaw, '\n'), 0o600); err != nil {
+			return nil, fmt.Errorf("write openclaw carrier secrets: %w", err)
+		}
+	}
 
 	record := map[string]interface{}{
 		"instance_id":           instanceID,
@@ -344,7 +363,12 @@ func renderManagedConfigBytes(
 		}
 		return nil, fmt.Errorf("toml renderer is not supported for %s", cfg.ID)
 	case "json":
-		payload := buildManagedJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerToken, modelID, modelName, workspacePath)
+		var payload map[string]interface{}
+		if strings.EqualFold(cfg.ID, "openclaw") {
+			payload = buildManagedOpenClawJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerToken, modelID, workspacePath)
+		} else {
+			payload = buildManagedPicoClawJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerToken, modelID, modelName, workspacePath)
+		}
 		raw, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
 			return nil, err
@@ -355,7 +379,7 @@ func renderManagedConfigBytes(
 	}
 }
 
-func buildManagedJSONConfigPayload(
+func buildManagedPicoClawJSONConfigPayload(
 	channelID, channelToken string,
 	channelSetupPending bool,
 	allowFrom []string,
@@ -408,6 +432,26 @@ func buildManagedJSONConfigPayload(
 		},
 		"channels": channels,
 	}
+}
+
+func buildManagedOpenClawJSONConfigPayload(
+	channelID, channelToken string,
+	channelSetupPending bool,
+	allowFrom []string,
+	provider *LLMProvider,
+	providerKey, providerToken, modelID, workspacePath string,
+) map[string]interface{} {
+	return openclawcfg.BuildManagedConfigPayload(openclawcfg.ManagedPayloadParams{
+		ChannelID:           channelID,
+		ChannelToken:        channelToken,
+		ChannelSetupPending: channelSetupPending,
+		AllowFrom:           allowFrom,
+		ProviderID:          provider.ID,
+		ProviderKey:         providerKey,
+		IncludeAPIKeyRef:    strings.TrimSpace(providerToken) != "",
+		ModelID:             modelID,
+		WorkspacePath:       workspacePath,
+	})
 }
 
 func renderZeroClawConfigTOML(

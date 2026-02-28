@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"carrier/configv2"
+	"carrier/shared/openclawcfg"
 )
 
 func TestParseCarrierCommandRoutesRemote(t *testing.T) {
@@ -230,6 +231,66 @@ func TestBuildJSONRemoteConfigPatch(t *testing.T) {
 	openai := providers["openai"].(map[string]interface{})
 	if strings.TrimSpace(anyToString(openai["api_key"])) != "sk-openai-1" {
 		t.Fatalf("provider api key mismatch: %+v", openai)
+	}
+}
+
+func TestBuildOpenClawRemoteConfigPatch(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	if _, err := saveProviderCredential("openai", "sk-openai-1"); err != nil {
+		t.Fatalf("saveProviderCredential(openai): %v", err)
+	}
+	cfg := &configv2.Config{
+		Channels: []configv2.Channel{
+			{
+				ID:       "telegram",
+				BotToken: "tg-1",
+				AllowFrom: []string{
+					"1001",
+				},
+				Enabled: true,
+			},
+		},
+		DefaultModel: "gpt-5.3-codex",
+		ModelList: []configv2.Model{
+			{
+				ModelName:     "gpt-4.1",
+				Model:         "openai/gpt-4.1",
+				ProviderID:    "openai",
+				CredentialRef: "openai",
+			},
+		},
+	}
+
+	patch, err := buildOpenClawRemoteConfigPatch(remoteCommandOptions{
+		SyncChannels:      []string{"telegram"},
+		SyncProviders:     []string{"openai"},
+		TelegramAllowFrom: []string{"2002"},
+	}, cfg)
+	if err != nil {
+		t.Fatalf("buildOpenClawRemoteConfigPatch error: %v", err)
+	}
+	channels, _ := patch["channels"].(map[string]interface{})
+	telegram, _ := channels["telegram"].(map[string]interface{})
+	if strings.TrimSpace(anyToString(telegram["botToken"])) != "tg-1" {
+		t.Fatalf("telegram botToken mismatch: %+v", telegram)
+	}
+	rawAllowFrom, _ := telegram["allowFrom"].([]string)
+	if len(rawAllowFrom) != 1 || strings.TrimSpace(rawAllowFrom[0]) != "2002" {
+		t.Fatalf("telegram allowFrom mismatch: %+v", telegram["allowFrom"])
+	}
+	models, _ := patch["models"].(map[string]interface{})
+	providers, _ := models["providers"].(map[string]interface{})
+	openai, _ := providers["openai"].(map[string]interface{})
+	apiKeyRef, _ := openai["apiKey"].(map[string]interface{})
+	if strings.TrimSpace(anyToString(apiKeyRef["provider"])) != "carrier_file" {
+		t.Fatalf("expected api key ref provider carrier_file, got %+v", apiKeyRef)
+	}
+	secretsPatch, _ := patch[openclawcfg.CarrierSecretFilePatchKey].(map[string]interface{})
+	secretProviders, _ := secretsPatch["providers"].(map[string]interface{})
+	secretOpenAI, _ := secretProviders["openai"].(map[string]interface{})
+	if strings.TrimSpace(anyToString(secretOpenAI["apiKey"])) != "sk-openai-1" {
+		t.Fatalf("expected secret payload api key sk-openai-1, got %+v", secretOpenAI)
 	}
 }
 

@@ -78,7 +78,7 @@ func defaultUpstreamCompatLock() upstreamCompatLock {
 				Repository:         "openclaw/openclaw",
 				RecommendedVersion: "1.0.0",
 				SupportedRenderers: []upstreamRendererSpec{
-					{ID: "openclaw.json.v1", VersionRange: ">=0.0.0", ConfigFormat: "json", ConfigPath: "~/.openclaw/config.json"},
+					{ID: "openclaw.json.v1", VersionRange: ">=0.0.0", ConfigFormat: "json", ConfigPath: "~/.openclaw/openclaw.json"},
 				},
 			},
 			"picoclaw": {
