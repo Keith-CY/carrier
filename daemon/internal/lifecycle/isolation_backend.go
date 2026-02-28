@@ -126,15 +126,23 @@ provision:
       apt-get update -qq && apt-get install -y -qq bubblewrap git curl
 `) + "\n"
 	} else {
+		// Sanitize workdir: reject paths with characters that could inject YAML
+		workDir := strings.TrimSpace(b.agentWorkDir)
+		for _, dangerous := range []string{`"`, "\n", "\r", "`", "$", "\\", ":", "!"} {
+			workDir = strings.ReplaceAll(workDir, dangerous, "")
+		}
+		if workDir == "" || strings.Contains(workDir, "..") {
+			return "", fmt.Errorf("unsafe agent work directory: %q", b.agentWorkDir)
+		}
 		templateContent = fmt.Sprintf(strings.TrimSpace(`
 mounts:
-  - location: "%s"
+  - location: %q
     writable: true
 provision:
   - mode: system
     script: |
       apt-get update -qq && apt-get install -y -qq bubblewrap git curl
-`)+"\n", strings.TrimSpace(b.agentWorkDir))
+`)+"\n", workDir)
 	}
 
 	if err := os.WriteFile(templatePath, []byte(templateContent), 0o600); err != nil {
@@ -206,7 +214,7 @@ func (b wslIsolationBackend) PrepareCommands() ([]string, error) {
 	return []string{ensureGuestBwrap}, nil
 }
 
-func resolveIsolationBackend(agentWorkDir string) (isolationBackend, error) {
+func resolveIsolationBackend(agentID, agentWorkDir string) (isolationBackend, error) {
 	switch strings.ToLower(strings.TrimSpace(isolationRuntimeGOOS)) {
 	case manifest.CommandOSLinux:
 		bwrapPath, err := isolationBackendLookup("bwrap")
@@ -230,7 +238,13 @@ func resolveIsolationBackend(agentWorkDir string) (isolationBackend, error) {
 		}
 		instance := strings.TrimSpace(isolationEnvLookup(defaultLimaInstanceEnvKey))
 		if instance == "" {
-			instance = defaultLimaInstanceName
+			// Use per-agent instance names for true isolation boundaries
+			sanitizedID := sanitizeInstanceID(agentID)
+			if sanitizedID != "" {
+				instance = "carrier-" + sanitizedID
+			} else {
+				instance = defaultLimaInstanceName
+			}
 		}
 		workDir := strings.TrimSpace(agentWorkDir)
 		if workDir == "" {
@@ -256,6 +270,19 @@ func resolveIsolationBackend(agentWorkDir string) (isolationBackend, error) {
 	default:
 		return nil, fmt.Errorf("%w: unsupported host OS %s", ErrIsolationUnavailable, isolationRuntimeGOOS)
 	}
+}
+
+// sanitizeInstanceID restricts instance/agent IDs to safe characters.
+// Prevents path traversal and YAML injection in Lima template generation.
+func sanitizeInstanceID(id string) string {
+	trimmed := strings.TrimSpace(id)
+	var b strings.Builder
+	for _, r := range trimmed {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func IsolationWorkDir(instance string) string {

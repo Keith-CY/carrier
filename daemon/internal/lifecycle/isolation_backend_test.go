@@ -58,3 +58,30 @@ func TestGenerateLimaTemplateUsesNoMountsWhenAgentWorkDirEmpty(t *testing.T) {
 		t.Fatalf("expected no mount location entries when work dir is empty, got:\n%s", content)
 	}
 }
+
+func TestSanitizeInstanceID(t *testing.T) {
+	cases := map[string]string{
+		"openclaw":         "openclaw",
+		"my-agent_01":      "my-agent_01",
+		"../../../etc":     "etc",
+		"agent\ninjection": "agentinjection",
+		`agent"yaml`:       "agentyaml",
+		"":                 "",
+		"  spaces  ":       "spaces",
+	}
+	for input, want := range cases {
+		got := sanitizeInstanceID(input)
+		if got != want {
+			t.Errorf("sanitizeInstanceID(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestPerAgentLimaInstance(t *testing.T) {
+	// Verify that different agentIDs produce different instance names
+	id1 := sanitizeInstanceID("openclaw")
+	id2 := sanitizeInstanceID("picoclaw")
+	if id1 == id2 {
+		t.Fatalf("expected different instance IDs, got %q and %q", id1, id2)
+	}
+}

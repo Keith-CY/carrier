@@ -45,7 +45,7 @@ func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts I
 		if err := s.runDeterministicIsolationHostPipeline(opCtx, agentID); err != nil {
 			return failWithRollback(err, "E_ISOLATION_UNAVAILABLE")
 		}
-		backend, err = resolveIsolationBackend("")
+		backend, err = resolveIsolationBackend(agentID, "")
 		if err != nil {
 			return failWithRollback(err, "E_ISOLATION_UNAVAILABLE")
 		}

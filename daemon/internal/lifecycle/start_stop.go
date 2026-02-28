@@ -28,7 +28,7 @@ func (s *Service) StartWithOptions(ctx context.Context, agentID string, opts Sta
 	commandGOOS := isolationRuntimeGOOS
 	var backend isolationBackend
 	if isolationEnabled {
-		backend, err = resolveIsolationBackend("")
+		backend, err = resolveIsolationBackend(agentID, "")
 		if err != nil {
 			s.updateStateOnStartError(agentID, err)
 			s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_ISOLATION_UNAVAILABLE", err.Error())
@@ -146,9 +146,7 @@ func (s *Service) StartWithOptions(ctx context.Context, agentID string, opts Sta
 	now := s.now()
 	state.Runtime = RuntimeStateRunning
 	state.Health = HealthStateHealthy
-	if isolationEnabled {
-		state.Isolated = true
-	}
+	state.Isolated = isolationEnabled
 	state.LastError = ""
 	state.LastTriageSummary = ""
 	state.NeedsRemoteDiagnosis = false

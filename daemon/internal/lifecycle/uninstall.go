@@ -113,12 +113,22 @@ func (s *Service) cleanupIsolationVM(agentID string) error {
 }
 
 func cleanupLimaTemplateFile(instance string) error {
+	sanitized := sanitizeInstanceID(instance)
+	if sanitized == "" {
+		return fmt.Errorf("invalid instance ID for template cleanup: %q", instance)
+	}
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("resolve user home directory for Lima template cleanup: %w", err)
 	}
 
-	templatePath := filepath.Join(homeDir, ".carrier", "lima", strings.TrimSpace(instance)+".yaml")
+	templatePath := filepath.Join(homeDir, ".carrier", "lima", sanitized+".yaml")
+	// Verify path is inside expected directory to prevent traversal
+	expectedDir := filepath.Join(homeDir, ".carrier", "lima")
+	if !strings.HasPrefix(filepath.Clean(templatePath), filepath.Clean(expectedDir)) {
+		return fmt.Errorf("template path escapes expected directory: %s", templatePath)
+	}
 	if err := isolationCleanupRemoveFile(templatePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove lima template %s: %w", templatePath, err)
 	}
