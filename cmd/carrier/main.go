@@ -1495,14 +1495,10 @@ func doctorCheckDiskSpace() doctorCheckResult {
 	if err != nil {
 		return doctorCheckResult{Name: "Disk space", Status: "warn", Details: "unable to resolve home directory", Suggestion: "set HOME and retry"}
 	}
-	if runtime.GOOS == "windows" {
-		return doctorCheckResult{Name: "Disk space", Status: "warn", Details: "disk check unsupported on Windows", Suggestion: "ensure at least 500MB free manually"}
-	}
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(home, &stat); err != nil {
+	free, err := statfsFreeBytes(home)
+	if err != nil {
 		return doctorCheckResult{Name: "Disk space", Status: "warn", Details: "unable to determine free disk space", Suggestion: "check free space manually"}
 	}
-	free := stat.Bavail * uint64(stat.Bsize)
 	const minFreeBytes = 500 * 1024 * 1024
 	if free < minFreeBytes {
 		return doctorCheckResult{Name: "Disk space", Status: "fail", Details: fmt.Sprintf("free disk space is %d bytes", free), Suggestion: "free at least 500MB and retry"}
