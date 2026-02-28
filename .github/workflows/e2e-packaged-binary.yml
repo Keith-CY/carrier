@@ -293,6 +293,17 @@ jobs:
           }
 
           $distro = Ensure-UbuntuWslDistro -WorkspaceRoot $wslRootWin
+          $distro = ([string]$distro).Replace([string][char]0, "").Trim()
+          $allDistros = Get-WslDistros
+          if ($allDistros -contains "CarrierE2EUbuntu") {
+            # Use canonical literal to avoid hidden encoding chars from command output.
+            $distro = "CarrierE2EUbuntu"
+          }
+
+          & wsl --set-default $distro
+          if ($LASTEXITCODE -ne 0) {
+            throw "wsl --set-default failed for distro '$distro' (exit code $LASTEXITCODE)"
+          }
 
           wsl --status | Out-File -FilePath (Join-Path $wslLogsWin "wsl-status.txt")
           wsl -l -v | Out-File -FilePath (Join-Path $wslLogsWin "wsl-list.txt")
