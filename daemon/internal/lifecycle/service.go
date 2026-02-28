@@ -681,6 +681,7 @@ func (s *Service) applyPersistedState(id string, pState *PersistedAgentState, st
 	} else {
 		state.Install = InstallStateNotInstalled
 	}
+	state.Isolated = pState.Isolated
 
 	restoredState := RuntimeState(pState.RuntimeState)
 	if restoredState == RuntimeStateRunning {
@@ -714,6 +715,7 @@ func (s *Service) saveState() {
 		p := PersistedAgentState{
 			ID:             state.ID,
 			Installed:      state.Install == InstallStateInstalled,
+			Isolated:       state.Isolated,
 			RuntimeState:   string(state.Runtime),
 			LastTransition: state.UpdatedAt,
 		}

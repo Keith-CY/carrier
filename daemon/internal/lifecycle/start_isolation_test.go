@@ -178,6 +178,13 @@ func TestStartWithIsolationWrapsStartCommandWithBwrap(t *testing.T) {
 	if err := svc.StartWithOptions(context.Background(), "openclaw", StartOptions{Isolation: true}); err != nil {
 		t.Fatalf("StartWithOptions: %v", err)
 	}
+	status, err := svc.Status("openclaw")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !status.Isolated {
+		t.Fatal("expected Isolated=true after isolated start")
+	}
 	if pm.lastCommand != "sh" {
 		t.Fatalf("process command = %q, want sh", pm.lastCommand)
 	}

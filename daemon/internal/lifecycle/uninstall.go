@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,8 +25,10 @@ func (s *Service) Uninstall(ctx context.Context, agentID string) error {
 			return fmt.Errorf("failed to stop agent before uninstall: %w", stopErr)
 		}
 	}
-	if cleanupErr := s.cleanupIsolationVM(agentID); cleanupErr != nil {
-		s.appendLog(agentID, fmt.Sprintf("isolation cleanup failed (best-effort): %v", cleanupErr))
+	if state.Isolated {
+		if cleanupErr := s.cleanupIsolationVM(agentID); cleanupErr != nil {
+			s.appendLog(agentID, fmt.Sprintf("isolation cleanup failed (best-effort): %v", cleanupErr))
+		}
 	}
 
 	s.mu.Lock()
@@ -36,6 +39,7 @@ func (s *Service) Uninstall(ctx context.Context, agentID string) error {
 	state.LastError = ""
 	state.LastTriageSummary = ""
 	state.NeedsRemoteDiagnosis = false
+	state.Isolated = false
 	state.Ports = []int{}
 	state.RestartCount = 0
 	state.StartedAt = nil
@@ -103,7 +107,7 @@ func (s *Service) cleanupIsolationVM(agentID string) error {
 	}
 
 	if len(errorsSeen) > 0 {
-		return fmt.Errorf(strings.Join(errorsSeen, "; "))
+		return errors.New(strings.Join(errorsSeen, "; "))
 	}
 	return nil
 }

@@ -146,6 +146,9 @@ func (s *Service) StartWithOptions(ctx context.Context, agentID string, opts Sta
 	now := s.now()
 	state.Runtime = RuntimeStateRunning
 	state.Health = HealthStateHealthy
+	if isolationEnabled {
+		state.Isolated = true
+	}
 	state.LastError = ""
 	state.LastTriageSummary = ""
 	state.NeedsRemoteDiagnosis = false

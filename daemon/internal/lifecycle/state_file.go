@@ -17,6 +17,7 @@ type StateFile struct {
 type PersistedAgentState struct {
 	ID             string      `json:"id"`
 	Installed      bool        `json:"installed"`
+	Isolated       bool        `json:"isolated,omitempty"`
 	RuntimeState   string      `json:"runtime_state"`
 	LastTransition time.Time   `json:"last_transition"`
 	Restarts       []time.Time `json:"restarts,omitempty"`
@@ -43,6 +44,7 @@ func (sf *StateFile) Save(agents map[string]*AgentState) error {
 		persisted[id] = PersistedAgentState{
 			ID:             state.ID,
 			Installed:      state.Install == InstallStateInstalled,
+			Isolated:       state.Isolated,
 			RuntimeState:   string(state.Runtime),
 			LastTransition: state.UpdatedAt,
 		}

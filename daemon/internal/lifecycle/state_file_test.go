@@ -20,6 +20,7 @@ func TestStateFile_SaveAndLoad_RoundTrip(t *testing.T) {
 		"agent1": {
 			ID:        "agent1",
 			Install:   InstallStateInstalled,
+			Isolated:  true,
 			Runtime:   RuntimeStateRunning,
 			UpdatedAt: now,
 		},
@@ -71,6 +72,9 @@ func TestStateFile_SaveAndLoad_RoundTrip(t *testing.T) {
 
 		if persisted.RuntimeState != string(original.Runtime) {
 			t.Errorf("agent %s: RuntimeState mismatch: got %s, want %s", id, persisted.RuntimeState, string(original.Runtime))
+		}
+		if persisted.Isolated != original.Isolated {
+			t.Errorf("agent %s: Isolated mismatch: got %v, want %v", id, persisted.Isolated, original.Isolated)
 		}
 
 		if !persisted.LastTransition.Equal(original.UpdatedAt) {

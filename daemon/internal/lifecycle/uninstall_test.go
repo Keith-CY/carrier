@@ -44,6 +44,11 @@ func TestUninstallAttemptsDarwinIsolationCleanup(t *testing.T) {
 	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
+	svc.mu.Lock()
+	state := svc.states["openclaw"]
+	state.Isolated = true
+	svc.states["openclaw"] = state
+	svc.mu.Unlock()
 
 	if err := svc.Uninstall(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("Uninstall: %v", err)
@@ -86,6 +91,11 @@ func TestUninstallCleanupErrorsDoNotBlock(t *testing.T) {
 	if err := svc.Install(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
+	svc.mu.Lock()
+	state := svc.states["openclaw"]
+	state.Isolated = true
+	svc.states["openclaw"] = state
+	svc.mu.Unlock()
 
 	if err := svc.Uninstall(context.Background(), "openclaw"); err != nil {
 		t.Fatalf("Uninstall should succeed despite cleanup errors, got: %v", err)
@@ -97,5 +107,35 @@ func TestUninstallCleanupErrorsDoNotBlock(t *testing.T) {
 	}
 	if state.Install != InstallStateNotInstalled {
 		t.Fatalf("expected not installed after uninstall, got %q", state.Install)
+	}
+}
+
+func TestUninstallSkipsCleanupWhenNotIsolated(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	origGOOS := isolationRuntimeGOOS
+	origRun := isolationCleanupRunCommand
+	t.Cleanup(func() {
+		isolationRuntimeGOOS = origGOOS
+		isolationCleanupRunCommand = origRun
+	})
+
+	isolationRuntimeGOOS = "darwin"
+	cleanupCalls := 0
+	isolationCleanupRunCommand = func(_ string, _ ...string) error {
+		cleanupCalls++
+		return nil
+	}
+
+	svc := newServiceForTest(t, &fakeRunner{}, &fakeChecker{})
+	if err := svc.Install(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	if err := svc.Uninstall(context.Background(), "openclaw"); err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	if cleanupCalls != 0 {
+		t.Fatalf("expected no cleanup calls for non-isolated agent, got %d", cleanupCalls)
 	}
 }

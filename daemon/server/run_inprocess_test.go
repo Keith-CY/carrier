@@ -1,12 +1,15 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -15,6 +18,9 @@ func reserveLoopbackPort(t *testing.T) int {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
+		if errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.EPERM) || strings.Contains(strings.ToLower(err.Error()), "operation not permitted") {
+			t.Skipf("loopback listen not permitted in this environment: %v", err)
+		}
 		t.Fatalf("reserve port listen: %v", err)
 	}
 	defer ln.Close()
