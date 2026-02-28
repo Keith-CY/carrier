@@ -52,11 +52,13 @@ func (s *Service) StartWithOptions(ctx context.Context, agentID string, opts Sta
 	s.mu.Unlock()
 
 	if !shouldRetry {
+		_ = s.alertManager.Fire(ctx, AlertConditionCrashLoop, agentID, backoffMsg)
 		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_BACKOFF_COOLDOWN", backoffMsg)
 		return fmt.Errorf("%w: %s", ErrCrashLoop, backoffMsg)
 	}
 
 	if err := s.blockIfCrashLoopCoolingDown(agentID, state); err != nil {
+		_ = s.alertManager.Fire(ctx, AlertConditionCrashLoop, agentID, err.Error())
 		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_CRASH_LOOP", err.Error())
 		return err
 	}

@@ -95,6 +95,13 @@ func Run() {
 		log.Fatalf("resolve lifecycle state path: %v", err)
 	}
 	opts = append(opts, lifecycle.WithStateFile(statePath))
+	alertsEnabled := parseEnabledEnv(os.Getenv("CARRIER_ALERTS_ENABLED"))
+	alertWebhookURL := strings.TrimSpace(os.Getenv("CARRIER_ALERT_WEBHOOK_URL"))
+	if alertsEnabled {
+		opts = append(opts, lifecycle.WithAlertManager(lifecycle.NewAlertManager(true, lifecycle.WebhookAlertSink{
+			URL: alertWebhookURL,
+		})))
+	}
 
 	svc := lifecycle.NewService(baseagent.NewLLMTriager(baseagent.NoopTriager{}), opts...)
 	var baseMemoryStore baseagent.MemoryStore
@@ -869,6 +876,15 @@ func parseLogsTail(raw string) int {
 		return maxLogsTail
 	}
 	return n
+}
+
+func parseEnabledEnv(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
