@@ -317,6 +317,7 @@ jobs:
             $scriptWinPath = Join-Path $scriptsDirWin "$Name.sh"
             $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
             [System.IO.File]::WriteAllText($scriptWinPath, $normalized, $utf8NoBom)
+            Copy-Item -Path $scriptWinPath -Destination (Join-Path $wslLogsWin "$Name.sh") -Force
             $scriptWslPath = Convert-ToWslPath $scriptWinPath
             wsl -d $Distro -- bash "$scriptWslPath"
             if ($LASTEXITCODE -ne 0) {
