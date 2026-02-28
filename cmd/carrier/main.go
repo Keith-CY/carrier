@@ -25,11 +25,13 @@
 package main
 
 import (
+	"archive/zip"
 	"bufio"
 	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -364,6 +366,7 @@ const (
 	daemonBootPollInterval        = 250 * time.Millisecond
 	defaultPairCodeTTLSeconds     = 300
 	defaultUpdateTimeout          = 120 * time.Second
+	githubLatestReleaseAPIURL     = "https://api.github.com/repos/Keith-CY/carrier/releases/latest"
 )
 
 var runOpenAICodexDeviceCodeFlow = performOpenAICodexDeviceCodeFlow
@@ -397,6 +400,12 @@ var execGitCommand = func(ctx context.Context, workingDir string, args ...string
 	}
 	return strings.TrimSpace(string(raw)), nil
 }
+var carrierRuntimeGOOS = runtime.GOOS
+var carrierRuntimeGOARCH = runtime.GOARCH
+var carrierExecutablePath = os.Executable
+var fetchLatestReleaseFunc = fetchLatestRelease
+var downloadFileFunc = downloadFile
+var verifyChecksumFunc = verifyChecksum
 var procFSRoot = "/proc"
 var daemonActionLogPollInterval = 2 * time.Second
 var daemonActionHeartbeatInterval = 15 * time.Second
@@ -2478,9 +2487,9 @@ func runUpdate(in io.Reader, out io.Writer, opts updateCommandOptions) error {
 		opts.Check = true
 	}
 
-	repoRoot, err := resolveRepoRootForUpdate(opts.Timeout)
-	if err != nil {
-		return err
+	repoRoot, gitErr := resolveRepoRootForUpdate(opts.Timeout)
+	if gitErr != nil {
+		return runBinaryUpdate(in, out, opts)
 	}
 
 	if err := fetchGitRefs(opts.Timeout, repoRoot); err != nil {
@@ -2581,8 +2590,366 @@ func runUpdate(in io.Reader, out io.Writer, opts updateCommandOptions) error {
 	return nil
 }
 
+type releaseAsset struct {
+	Name string `json:"name"`
+	URL  string `json:"browser_download_url"`
+}
+
+type latestReleaseResponse struct {
+	TagName string         `json:"tag_name"`
+	Assets  []releaseAsset `json:"assets"`
+}
+
+func runBinaryUpdate(in io.Reader, out io.Writer, opts updateCommandOptions) error {
+	current := strings.TrimSpace(carrierCommit)
+	tagName, assets, err := fetchLatestReleaseFunc(opts.Timeout)
+	if err != nil {
+		return err
+	}
+	latestCommit := strings.TrimSpace(strings.TrimPrefix(tagName, "main-"))
+	if latestCommit == tagName || latestCommit == "" {
+		return fmt.Errorf("unexpected latest release tag format: %q", tagName)
+	}
+	targetSource := "github release latest"
+
+	if opts.JSON {
+		type payload struct {
+			Current        string `json:"current"`
+			Target         string `json:"target"`
+			Source         string `json:"source"`
+			Timeout        int    `json:"timeoutSeconds"`
+			Channel        string `json:"channel"`
+			Tag            string `json:"tag"`
+			Check          bool   `json:"check"`
+			DryRun         bool   `json:"dryRun"`
+			Force          bool   `json:"force"`
+			JSON           bool   `json:"json"`
+			NoRestart      bool   `json:"noRestart"`
+			WouldApply     bool   `json:"wouldApply"`
+			AlreadyCurrent bool   `json:"alreadyCurrent"`
+		}
+		raw, err := json.MarshalIndent(payload{
+			Current:        current,
+			Target:         tagName,
+			Source:         targetSource,
+			Timeout:        int(opts.Timeout.Seconds()),
+			Channel:        opts.Channel,
+			Tag:            opts.Tag,
+			Check:          opts.Check,
+			DryRun:         opts.DryRun,
+			Force:          opts.Force,
+			JSON:           opts.JSON,
+			NoRestart:      opts.NoRestart,
+			WouldApply:     !opts.Check && (current != latestCommit || opts.Force),
+			AlreadyCurrent: current == latestCommit,
+		}, "", "  ")
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintln(out, string(raw))
+	}
+
+	if current == latestCommit && !opts.Force {
+		if !opts.JSON {
+			_, _ = fmt.Fprintf(out, "Current: %s\n", current)
+			_, _ = fmt.Fprintf(out, "Target: %s (%s)\n", tagName, targetSource)
+			_, _ = fmt.Fprintln(out, "already up to date")
+		}
+		return nil
+	}
+
+	if opts.Check {
+		if !opts.JSON {
+			_, _ = fmt.Fprintf(out, "Current: %s\n", current)
+			_, _ = fmt.Fprintf(out, "Target: %s (%s)\n", tagName, targetSource)
+			_, _ = fmt.Fprintln(out, "check mode: no changes applied")
+		}
+		return nil
+	}
+
+	if opts.JSON && !opts.Yes {
+		return errors.New("--json in apply mode requires --yes to avoid interactive prompts in machine output")
+	}
+	if !opts.Yes {
+		ok, err := promptYesNo(bufio.NewReader(in), out, fmt.Sprintf("Apply update from %s to %s?", current, tagName), false)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			_, _ = fmt.Fprintln(out, "Update canceled.")
+			return nil
+		}
+	}
+
+	suffix := platformAssetSuffix()
+	if suffix == "" {
+		return fmt.Errorf("unsupported platform for binary update: %s/%s", carrierRuntimeGOOS, carrierRuntimeGOARCH)
+	}
+	assetName := fmt.Sprintf("carrier-%s-%s.zip", tagName, suffix)
+	checksumName := assetName + ".sha256"
+
+	zipURL := ""
+	checksumURL := ""
+	for _, asset := range assets {
+		switch strings.TrimSpace(asset.Name) {
+		case assetName:
+			zipURL = strings.TrimSpace(asset.URL)
+		case checksumName:
+			checksumURL = strings.TrimSpace(asset.URL)
+		}
+	}
+	if zipURL == "" {
+		return fmt.Errorf("release asset not found: %s", assetName)
+	}
+	if checksumURL == "" {
+		return fmt.Errorf("release checksum asset not found: %s", checksumName)
+	}
+
+	tmpDir, err := os.MkdirTemp("", "carrier-update-*")
+	if err != nil {
+		return fmt.Errorf("create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	zipPath := filepath.Join(tmpDir, assetName)
+	checksumPath := filepath.Join(tmpDir, checksumName)
+	if err := downloadFileFunc(zipURL, zipPath, opts.Timeout); err != nil {
+		return fmt.Errorf("download release asset: %w", err)
+	}
+	if err := downloadFileFunc(checksumURL, checksumPath, opts.Timeout); err != nil {
+		return fmt.Errorf("download checksum asset: %w", err)
+	}
+	if err := verifyChecksumFunc(zipPath, checksumPath); err != nil {
+		return err
+	}
+
+	newBinaryPath, err := extractCarrierBinary(zipPath, tmpDir)
+	if err != nil {
+		return err
+	}
+	exePath, err := carrierExecutablePath()
+	if err != nil {
+		return fmt.Errorf("resolve current executable: %w", err)
+	}
+	if err := replaceExecutableBinary(newBinaryPath, exePath); err != nil {
+		return err
+	}
+
+	if !opts.JSON {
+		_, _ = fmt.Fprintf(out, "Updated binary from %s to %s.\n", current, tagName)
+	}
+	return nil
+}
+
 func resolveRepoRootForUpdate(timeout time.Duration) (string, error) {
 	return runGitCommand(timeout, "", "rev-parse", "--show-toplevel")
+}
+
+func fetchLatestRelease(timeout time.Duration) (string, []releaseAsset, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubLatestReleaseAPIURL, nil)
+	if err != nil {
+		return "", nil, fmt.Errorf("build release request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "carrier-self-update")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", nil, fmt.Errorf("fetch latest release: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
+		return "", nil, fmt.Errorf("fetch latest release: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var payload latestReleaseResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", nil, fmt.Errorf("decode latest release response: %w", err)
+	}
+	if strings.TrimSpace(payload.TagName) == "" {
+		return "", nil, errors.New("latest release response missing tag_name")
+	}
+	return strings.TrimSpace(payload.TagName), payload.Assets, nil
+}
+
+func downloadFile(url, destPath string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSpace(url), nil)
+	if err != nil {
+		return fmt.Errorf("build download request: %w", err)
+	}
+	req.Header.Set("User-Agent", "carrier-self-update")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("download %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
+		return fmt.Errorf("download %s: status %d: %s", url, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	file, err := os.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", destPath, err)
+	}
+	defer file.Close()
+	if _, err := io.Copy(file, resp.Body); err != nil {
+		return fmt.Errorf("write %s: %w", destPath, err)
+	}
+	return nil
+}
+
+func verifyChecksum(zipPath, checksumPath string) error {
+	rawChecksum, err := os.ReadFile(checksumPath)
+	if err != nil {
+		return fmt.Errorf("read checksum file: %w", err)
+	}
+	fields := strings.Fields(string(rawChecksum))
+	if len(fields) == 0 {
+		return fmt.Errorf("invalid checksum file format: %s", checksumPath)
+	}
+	expected := strings.TrimSpace(fields[0])
+	if expected == "" {
+		return fmt.Errorf("invalid checksum file format: %s", checksumPath)
+	}
+
+	zipRaw, err := os.ReadFile(zipPath)
+	if err != nil {
+		return fmt.Errorf("read archive for checksum: %w", err)
+	}
+	actual := fmt.Sprintf("%x", sha256.Sum256(zipRaw))
+	if !strings.EqualFold(actual, expected) {
+		return fmt.Errorf("checksum mismatch for %s", filepath.Base(zipPath))
+	}
+	return nil
+}
+
+func platformAssetSuffix() string {
+	osPart := strings.ToLower(strings.TrimSpace(carrierRuntimeGOOS))
+	archPart := strings.ToLower(strings.TrimSpace(carrierRuntimeGOARCH))
+
+	switch osPart {
+	case "linux", "darwin", "windows":
+	default:
+		return ""
+	}
+
+	switch archPart {
+	case "amd64":
+		archPart = "x64"
+	case "arm64":
+		archPart = "arm64"
+	default:
+		return ""
+	}
+	return osPart + "-" + archPart
+}
+
+func extractCarrierBinary(zipPath, destinationDir string) (string, error) {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return "", fmt.Errorf("open update archive: %w", err)
+	}
+	defer reader.Close()
+
+	binaryName := "carrier"
+	if carrierRuntimeGOOS == "windows" {
+		binaryName = "carrier.exe"
+	}
+	for _, file := range reader.File {
+		if strings.EqualFold(filepath.Base(file.Name), binaryName) {
+			rc, err := file.Open()
+			if err != nil {
+				return "", fmt.Errorf("open binary in archive: %w", err)
+			}
+			defer rc.Close()
+
+			extractedPath := filepath.Join(destinationDir, binaryName+".new")
+			outFile, err := os.OpenFile(extractedPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+			if err != nil {
+				return "", fmt.Errorf("create extracted binary: %w", err)
+			}
+			if _, err := io.Copy(outFile, rc); err != nil {
+				_ = outFile.Close()
+				return "", fmt.Errorf("extract binary: %w", err)
+			}
+			if err := outFile.Close(); err != nil {
+				return "", fmt.Errorf("finalize extracted binary: %w", err)
+			}
+			return extractedPath, nil
+		}
+	}
+	return "", fmt.Errorf("binary %q not found in archive", binaryName)
+}
+
+func replaceExecutableBinary(newBinaryPath, currentBinaryPath string) error {
+	backupPath := currentBinaryPath + ".old"
+	_ = os.Remove(backupPath)
+
+	if err := os.Rename(currentBinaryPath, backupPath); err != nil {
+		return fmt.Errorf("backup current binary: %w", err)
+	}
+
+	rolledBack := false
+	rollback := func() {
+		if rolledBack {
+			return
+		}
+		_ = os.Remove(currentBinaryPath)
+		_ = os.Rename(backupPath, currentBinaryPath)
+		rolledBack = true
+	}
+
+	if err := moveFile(newBinaryPath, currentBinaryPath); err != nil {
+		rollback()
+		return fmt.Errorf("install new binary: %w", err)
+	}
+	if err := os.Chmod(currentBinaryPath, 0o755); err != nil && carrierRuntimeGOOS != "windows" {
+		rollback()
+		return fmt.Errorf("set executable permissions: %w", err)
+	}
+	if err := os.Remove(backupPath); err != nil {
+		return fmt.Errorf("remove old binary backup: %w", err)
+	}
+	return nil
+}
+
+func moveFile(src, dest string) error {
+	if err := os.Rename(src, dest); err == nil {
+		return nil
+	}
+
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	if err := os.Remove(src); err != nil {
+		return err
+	}
+	return nil
 }
 
 func resolveCurrentRef(timeout time.Duration, repoRoot string) (string, error) {
@@ -5565,32 +5932,54 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 	_, _ = fmt.Fprintf(out, "Instance: %s\n", instanceID)
 	_, _ = fmt.Fprintf(out, "Name: %s\n", instanceName)
 	_, _ = fmt.Fprintln(out, "Step 1/4: Configure chat channel")
-	channel, ok := resolveManagedAgentChannel(cfg.ID)
-	if !ok {
-		return fmt.Errorf("%s channel is unavailable", cfg.ID)
-	}
-	_, _ = fmt.Fprintf(out, "Using channel: %s (default)\n", channel.Name)
-	reuseChannelToken := managedAddReusesChannelToken(cfg.ID, channel.ID)
+	channel, hasChannel := resolveManagedAgentChannel(cfg.ID)
+	channelSkipped := false
 	token := ""
 	tokenSource := ""
-	if reuseChannelToken {
-		token, tokenSource = resolveManagedChannelToken(channel.ID)
-		if tokenSource != "" {
-			_, _ = fmt.Fprintf(out, "Reused %s token from %s.\n", channel.Name, tokenSource)
+	pairedChatID := ""
+	if hasChannel {
+		_, _ = fmt.Fprintf(out, "Available channel: %s\n", channel.Name)
+		_, _ = fmt.Fprintln(out, "Press Enter to skip chat channel (WebUI-only), or type 'telegram' to configure:")
+		_, _ = fmt.Fprint(out, "Channel [skip/telegram]: ")
+		line, lineErr := reader.ReadString('\n')
+		if lineErr != nil && !errors.Is(lineErr, io.EOF) {
+			return lineErr
 		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			channelSkipped = true
+			_, _ = fmt.Fprintln(out, "Skipped chat channel — agent will be accessible via WebUI only.")
+		} else if !strings.EqualFold(trimmed, "telegram") && !strings.EqualFold(trimmed, channel.ID) {
+			return fmt.Errorf("unknown channel %q (expected 'telegram' or press Enter to skip)", trimmed)
+		}
+	} else {
+		channelSkipped = true
+		_, _ = fmt.Fprintln(out, "No chat channel available — agent will be accessible via WebUI only.")
 	}
-	if tokenSource == "" {
-		if !reuseChannelToken {
-			_, _ = fmt.Fprintf(out, "Token reuse is disabled for %s to avoid shared bot conflicts.\n", cfg.Name)
+
+	if !channelSkipped {
+		_, _ = fmt.Fprintf(out, "Using channel: %s\n", channel.Name)
+		reuseChannelToken := managedAddReusesChannelToken(cfg.ID, channel.ID)
+		if reuseChannelToken {
+			token, tokenSource = resolveManagedChannelToken(channel.ID)
+			if tokenSource != "" {
+				_, _ = fmt.Fprintf(out, "Reused %s token from %s.\n", channel.Name, tokenSource)
+			}
 		}
-		token, err = promptInput(reader, out, channel.TokenLabel, true)
-		if err != nil {
-			return err
+		if tokenSource == "" {
+			if !reuseChannelToken {
+				_, _ = fmt.Fprintf(out, "Token reuse is disabled for %s to avoid shared bot conflicts.\n", cfg.Name)
+			}
+			token, err = promptInput(reader, out, channel.TokenLabel, true)
+			if err != nil {
+				return err
+			}
 		}
-	}
-	pairedChatID, pairedChatIDSource := latestManagedPairedChatID(cfg.ID, channel.ID)
-	if pairedChatIDSource != "" {
-		_, _ = fmt.Fprintf(out, "Reused paired %s user id from %s: %s\n", channel.Name, pairedChatIDSource, pairedChatID)
+		pairedChatIDVal, pairedChatIDSource := latestManagedPairedChatID(cfg.ID, channel.ID)
+		if pairedChatIDSource != "" {
+			_, _ = fmt.Fprintf(out, "Reused paired %s user id from %s: %s\n", channel.Name, pairedChatIDSource, pairedChatIDVal)
+		}
+		pairedChatID = pairedChatIDVal
 	}
 
 	_, _ = fmt.Fprintln(out, "")
@@ -5617,7 +6006,11 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintf(out, "Step 3/4: Prepare %s configuration\n", cfg.Name)
-	result, err := prepareManagedAgentAddArtifacts(cfg.ID, instanceID, channel.ID, token, provider, envVars, pairedChatID)
+	channelID := ""
+	if !channelSkipped {
+		channelID = channel.ID
+	}
+	result, err := prepareManagedAgentAddArtifacts(cfg.ID, instanceID, channelID, token, provider, envVars, pairedChatID)
 	if err != nil {
 		return err
 	}
@@ -6515,11 +6908,9 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 	channelID = strings.TrimSpace(channelID)
 	channelToken = strings.TrimSpace(channelToken)
 	pairedChatID = strings.TrimSpace(pairedChatID)
-	if channelID == "" {
-		return nil, fmt.Errorf("%s channel is required", cfg.ID)
-	}
-	if channelToken == "" {
-		return nil, fmt.Errorf("%s channel token is required", cfg.ID)
+	webuiOnly := channelID == ""
+	if !webuiOnly && channelToken == "" {
+		return nil, fmt.Errorf("%s channel token is required when channel is configured", cfg.ID)
 	}
 	if strings.TrimSpace(provider.ID) == "" {
 		return nil, fmt.Errorf("%s provider is required", cfg.ID)
@@ -6709,13 +7100,23 @@ func buildManagedPicoClawConfigPayload(
 		"providers": map[string]interface{}{
 			providerKey: providerItem,
 		},
-		"channels": map[string]interface{}{
-			channelID: map[string]interface{}{
-				"enabled":    true,
-				"token":      channelToken,
-				"allow_from": allowFrom,
-			},
-		},
+		"channels": func() map[string]interface{} {
+			if strings.TrimSpace(channelID) == "" {
+				return map[string]interface{}{
+					"webui": map[string]interface{}{
+						"enabled":    false,
+						"webui_only": true,
+					},
+				}
+			}
+			return map[string]interface{}{
+				channelID: map[string]interface{}{
+					"enabled":    true,
+					"token":      channelToken,
+					"allow_from": allowFrom,
+				},
+			}
+		}(),
 	}
 }
 

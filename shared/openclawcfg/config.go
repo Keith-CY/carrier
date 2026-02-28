@@ -23,13 +23,17 @@ type ManagedPayloadParams struct {
 func BuildManagedConfigPayload(params ManagedPayloadParams) map[string]interface{} {
 	providerItem := BuildProviderEntry(params.ProviderID, params.ProviderKey, params.IncludeAPIKeyRef)
 
-	channelConfig := map[string]interface{}{
-		"enabled": true,
-	}
-	if params.ChannelSetupPending {
+	// WebUI-only mode: no channel configured
+	webuiOnly := strings.TrimSpace(params.ChannelID) == "" && !params.ChannelSetupPending
+	channelConfig := map[string]interface{}{}
+	if webuiOnly {
+		channelConfig["enabled"] = false
+		channelConfig["webui_only"] = true
+	} else if params.ChannelSetupPending {
 		channelConfig["enabled"] = false
 		channelConfig["setup_pending"] = true
 	} else {
+		channelConfig["enabled"] = true
 		channelConfig[ChannelTokenField(params.ChannelID)] = params.ChannelToken
 	}
 	if len(params.AllowFrom) > 0 {

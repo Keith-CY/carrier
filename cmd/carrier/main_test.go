@@ -826,3 +826,105 @@ func TestRunUpdateJSONWithYesProducesOnlyJSON(t *testing.T) {
 		t.Fatalf("output is not valid JSON: %v\noutput: %q", err, output)
 	}
 }
+
+func TestRunBinaryUpdateCheckMode(t *testing.T) {
+	origFetch := fetchLatestReleaseFunc
+	origDownload := downloadFileFunc
+	origCommit := carrierCommit
+	t.Cleanup(func() {
+		fetchLatestReleaseFunc = origFetch
+		downloadFileFunc = origDownload
+		carrierCommit = origCommit
+	})
+
+	carrierCommit = "1111111111111111111111111111111111111111"
+	fetchLatestReleaseFunc = func(timeout time.Duration) (string, []releaseAsset, error) {
+		if timeout <= 0 {
+			t.Fatalf("expected timeout to be set, got %s", timeout)
+		}
+		return "main-2222222222222222222222222222222222222222", nil, nil
+	}
+	downloadFileFunc = func(_, _ string, _ time.Duration) error {
+		t.Fatal("downloadFile should not be called in check mode")
+		return nil
+	}
+
+	var out bytes.Buffer
+	err := runBinaryUpdate(strings.NewReader(""), &out, updateCommandOptions{
+		Check:   true,
+		Timeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("runBinaryUpdate error: %v", err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "Current: 1111111111111111111111111111111111111111") {
+		t.Fatalf("missing current version output, got: %q", text)
+	}
+	if !strings.Contains(text, "Target: main-2222222222222222222222222222222222222222") {
+		t.Fatalf("missing target output, got: %q", text)
+	}
+	if !strings.Contains(text, "check mode: no changes applied") {
+		t.Fatalf("missing check mode output, got: %q", text)
+	}
+}
+
+func TestPlatformAssetSuffix(t *testing.T) {
+	origGOOS := carrierRuntimeGOOS
+	origGOARCH := carrierRuntimeGOARCH
+	t.Cleanup(func() {
+		carrierRuntimeGOOS = origGOOS
+		carrierRuntimeGOARCH = origGOARCH
+	})
+
+	cases := []struct {
+		goos   string
+		goarch string
+		want   string
+	}{
+		{goos: "linux", goarch: "amd64", want: "linux-x64"},
+		{goos: "darwin", goarch: "arm64", want: "darwin-arm64"},
+		{goos: "windows", goarch: "amd64", want: "windows-x64"},
+		{goos: "linux", goarch: "386", want: ""},
+		{goos: "freebsd", goarch: "amd64", want: ""},
+	}
+	for _, tc := range cases {
+		carrierRuntimeGOOS = tc.goos
+		carrierRuntimeGOARCH = tc.goarch
+		if got := platformAssetSuffix(); got != tc.want {
+			t.Fatalf("platformAssetSuffix(%s/%s) = %q, want %q", tc.goos, tc.goarch, got, tc.want)
+		}
+	}
+}
+
+func TestRunBinaryUpdateAlreadyUpToDate(t *testing.T) {
+	origFetch := fetchLatestReleaseFunc
+	origDownload := downloadFileFunc
+	origCommit := carrierCommit
+	t.Cleanup(func() {
+		fetchLatestReleaseFunc = origFetch
+		downloadFileFunc = origDownload
+		carrierCommit = origCommit
+	})
+
+	const sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	carrierCommit = sha
+	fetchLatestReleaseFunc = func(_ time.Duration) (string, []releaseAsset, error) {
+		return "main-" + sha, nil, nil
+	}
+	downloadFileFunc = func(_, _ string, _ time.Duration) error {
+		t.Fatal("downloadFile should not be called when already up to date")
+		return nil
+	}
+
+	var out bytes.Buffer
+	err := runBinaryUpdate(strings.NewReader(""), &out, updateCommandOptions{
+		Timeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("runBinaryUpdate error: %v", err)
+	}
+	if !strings.Contains(out.String(), "already up to date") {
+		t.Fatalf("expected already up to date message, got: %q", out.String())
+	}
+}
