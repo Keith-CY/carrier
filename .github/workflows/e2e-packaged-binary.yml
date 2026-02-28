@@ -315,7 +315,8 @@ jobs:
             $scriptsDirWin = Join-Path $wslRootWin "scripts"
             New-Item -ItemType Directory -Path $scriptsDirWin -Force | Out-Null
             $scriptWinPath = Join-Path $scriptsDirWin "$Name.sh"
-            Set-Content -Path $scriptWinPath -Value $normalized -Encoding utf8NoBOM
+            $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+            [System.IO.File]::WriteAllText($scriptWinPath, $normalized, $utf8NoBom)
             $scriptWslPath = Convert-ToWslPath $scriptWinPath
             wsl -d $Distro -- bash "$scriptWslPath"
             if ($LASTEXITCODE -ne 0) {
