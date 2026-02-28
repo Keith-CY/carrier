@@ -349,7 +349,11 @@ func TestInstallWithIsolationFailsFastWhenBackendUnavailable(t *testing.T) {
 	if !errors.Is(err, ErrIsolationUnavailable) {
 		t.Fatalf("expected ErrIsolationUnavailable, got %v", err)
 	}
-	if len(runner.calls) != 0 {
+	joined := strings.Join(runner.calls, "\n")
+	if strings.Contains(joined, "install-openclaw") {
 		t.Fatalf("expected install command not to run when backend is unavailable, got calls=%v", runner.calls)
+	}
+	if !strings.Contains(joined, "limactl") {
+		t.Fatalf("expected host isolation preflight command to run before backend resolution, got calls=%v", runner.calls)
 	}
 }
