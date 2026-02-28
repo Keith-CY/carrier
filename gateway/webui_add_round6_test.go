@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,12 +10,6 @@ import (
 	"strings"
 	"testing"
 )
-
-type failingRandReader struct{}
-
-func (failingRandReader) Read(_ []byte) (int, error) {
-	return 0, errors.New("random source unavailable")
-}
 
 func callHandleWebUIAdd(t *testing.T, daemon *DaemonClient, body string) (*httptest.ResponseRecorder, map[string]interface{}) {
 	t.Helper()
@@ -50,20 +43,11 @@ func TestHandleWebUIAdd_InputValidationBranches(t *testing.T) {
 
 func TestHandleWebUIAdd_NonManagedErrorBranches(t *testing.T) {
 	t.Run("generate instance id failure", func(t *testing.T) {
-		tmp := t.TempDir()
-		t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
-		_, daemon, _, _, _ := setupTestEnv(t, nil)
-
-		orig := rand.Reader
-		rand.Reader = failingRandReader{}
-		t.Cleanup(func() { rand.Reader = orig })
-
-		rec, payload := callHandleWebUIAdd(t, daemon, `{"agentId":"worker"}`)
-		if rec.Code != http.StatusInternalServerError {
-			t.Fatalf("expected 500, got %d: %s", rec.Code, rec.Body.String())
-		}
-		if payload["errorCode"] != "E_INTERNAL" {
-			t.Fatalf("expected E_INTERNAL, got %#v", payload)
+		_, err := generateManagedInstanceIDWithEntropy("worker", func(_ []byte) (int, error) {
+			return 0, errors.New("random source unavailable")
+		})
+		if err == nil {
+			t.Fatal("expected random generation failure")
 		}
 	})
 

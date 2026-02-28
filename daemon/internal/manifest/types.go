@@ -153,8 +153,18 @@ type EnvVar struct {
 }
 
 type MemorySpec struct {
-	Supports  []MemoryType `json:"supports"`
-	MountPath string       `json:"mount_path"`
+	Supports    []MemoryType      `json:"supports"`
+	MountPath   string            `json:"mount_path"`
+	Permissions MemoryPermissions `json:"permissions,omitempty"`
+}
+
+type MemoryPermissions struct {
+	ReadScopes            []string `json:"read_scopes,omitempty"`
+	WriteScopes           []string `json:"write_scopes,omitempty"`
+	RequestedSharedScopes []string `json:"requested_shared_scopes,omitempty"`
+	Retention             string   `json:"retention,omitempty"`
+	Capture               []string `json:"capture,omitempty"`
+	Redaction             []string `json:"redaction,omitempty"`
 }
 
 type UpgradeSpec struct {
@@ -312,7 +322,37 @@ func validateMemory(m MemorySpec) error {
 		}
 		seen[t] = struct{}{}
 	}
+	if err := validateMemoryPermissions(m.Permissions); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+func validateMemoryPermissions(p MemoryPermissions) error {
+	validateScopes := func(field string, values []string) error {
+		seen := map[string]struct{}{}
+		for _, v := range values {
+			scope := strings.TrimSpace(v)
+			if scope == "" {
+				return fmt.Errorf("%s contains empty scope", field)
+			}
+			if _, ok := seen[scope]; ok {
+				return fmt.Errorf("%s contains duplicate scope: %q", field, scope)
+			}
+			seen[scope] = struct{}{}
+		}
+		return nil
+	}
+	if err := validateScopes("memory.permissions.read_scopes", p.ReadScopes); err != nil {
+		return err
+	}
+	if err := validateScopes("memory.permissions.write_scopes", p.WriteScopes); err != nil {
+		return err
+	}
+	if err := validateScopes("memory.permissions.requested_shared_scopes", p.RequestedSharedScopes); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -26,18 +26,27 @@ type PairingCodeRecord struct {
 
 // PairingCodeStore keeps pairing codes with TTL semantics.
 type PairingCodeStore struct {
-	mu    sync.Mutex
-	now   func() time.Time
-	codes map[string]time.Time
+	mu           sync.Mutex
+	now          func() time.Time
+	generateCode func() (string, error)
+	codes        map[string]time.Time
 }
 
 func NewPairingCodeStore(now func() time.Time) *PairingCodeStore {
+	return newPairingCodeStore(now, nil)
+}
+
+func newPairingCodeStore(now func() time.Time, generateCode func() (string, error)) *PairingCodeStore {
 	if now == nil {
 		now = time.Now
 	}
+	if generateCode == nil {
+		generateCode = newPairingCodeValue
+	}
 	return &PairingCodeStore{
-		now:   now,
-		codes: make(map[string]time.Time),
+		now:          now,
+		generateCode: generateCode,
+		codes:        make(map[string]time.Time),
 	}
 }
 
@@ -45,7 +54,7 @@ func (s *PairingCodeStore) Issue(ttl time.Duration) (PairingCodeRecord, error) {
 	// Opportunistic cleanup to prevent unbounded memory growth.
 	s.CleanupExpired()
 
-	code, err := newPairingCodeValue()
+	code, err := s.generateCode()
 	if err != nil {
 		return PairingCodeRecord{}, err
 	}

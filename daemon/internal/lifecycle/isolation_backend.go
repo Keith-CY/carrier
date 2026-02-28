@@ -20,6 +20,7 @@ var (
 	isolationRuntimeGOOS   = runtime.GOOS
 	isolationBackendLookup = exec.LookPath
 	isolationEnvLookup     = os.Getenv
+	isolationFileStat      = os.Stat
 )
 
 func buildIsolationHostPrepareCommand() (string, error) {
@@ -168,7 +169,7 @@ func resolveIsolationBackend() (isolationBackend, error) {
 		limactlPath, err := isolationBackendLookup("limactl")
 		if err != nil || strings.TrimSpace(limactlPath) == "" {
 			for _, candidate := range []string{"/opt/homebrew/bin/limactl", "/usr/local/bin/limactl"} {
-				info, statErr := os.Stat(candidate)
+				info, statErr := isolationFileStat(candidate)
 				if statErr == nil && !info.IsDir() {
 					limactlPath = candidate
 					break
@@ -198,14 +199,6 @@ func resolveIsolationBackend() (isolationBackend, error) {
 	default:
 		return nil, fmt.Errorf("%w: unsupported host OS %s", ErrIsolationUnavailable, isolationRuntimeGOOS)
 	}
-}
-
-func buildIsolationStartCommand(startCommand string) (string, error) {
-	backend, err := resolveIsolationBackend()
-	if err != nil {
-		return "", err
-	}
-	return backend.WrapStartCommand(startCommand)
 }
 
 func buildBwrapInvocation(bwrapExecutable, startCommand string) (string, error) {

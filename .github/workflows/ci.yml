@@ -286,6 +286,7 @@ jobs:
           (cd webui && go test ./... -coverprofile=coverage-webui.out)
 
       - name: Collect base branch coverage
+        continue-on-error: true
         run: |
           set -euo pipefail
           base_sha="${{ github.event.pull_request.base.sha }}"

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mockAPIs, loginWithToken, MOCK_AGENTS } from './helpers';
+import { mockAPIs, loginWithToken, MOCK_INSTANCES } from './helpers';
 
 test.describe('Dashboard', () => {
   test.beforeEach(async ({ page }) => {
@@ -9,11 +9,11 @@ test.describe('Dashboard', () => {
 
   test('displays agent cards', async ({ page }) => {
     const cards = page.locator('.agent-card');
-    await expect(cards).toHaveCount(MOCK_AGENTS.length);
+    await expect(cards).toHaveCount(MOCK_INSTANCES.length);
 
-    // Verify agent names
-    for (const agent of MOCK_AGENTS) {
-      await expect(page.locator('.agent-card h4', { hasText: agent.id })).toBeVisible();
+    // Verify instance names
+    for (const instance of MOCK_INSTANCES) {
+      await expect(page.locator('.agent-card h4', { hasText: instance.id })).toBeVisible();
     }
   });
 
@@ -40,19 +40,19 @@ test.describe('Dashboard', () => {
 
   test('refresh button reloads agents', async ({ page }) => {
     let fetchCount = 0;
-    await page.route('**/api/v1/agents', (route) => {
+    await page.route('**/api/v1/instances', (route) => {
       fetchCount++;
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify(MOCK_AGENTS),
+        body: JSON.stringify(MOCK_INSTANCES),
       });
     });
 
     // Initial load already fetched once, click refresh
-    await page.click('#refresh-agents');
+    await page.click('#refresh-instances');
     // Wait for cards to re-render
-    await expect(page.locator('.agent-card')).toHaveCount(MOCK_AGENTS.length);
+    await expect(page.locator('.agent-card')).toHaveCount(MOCK_INSTANCES.length);
     expect(fetchCount).toBeGreaterThanOrEqual(1);
   });
 });

@@ -437,13 +437,28 @@ func buildCarrierBinary(t *testing.T) string {
 	}
 
 	cmd := exec.Command("go", "build", "-o", path, ".")
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), "GOFLAGS="+appendGoFlagForTest(os.Getenv("GOFLAGS"), "-modcacherw"))
 	cmd.Dir = "."
 	raw, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go build carrier binary: %v\n%s", err, string(raw))
 	}
 	return path
+}
+
+func appendGoFlagForTest(existing, required string) string {
+	flags := strings.TrimSpace(existing)
+	need := strings.TrimSpace(required)
+	if need == "" {
+		return flags
+	}
+	if strings.Contains(" "+flags+" ", " "+need+" ") {
+		return flags
+	}
+	if flags == "" {
+		return need
+	}
+	return flags + " " + need
 }
 
 func runCarrierBinary(t *testing.T, binaryPath, stdin string, args ...string) (string, string, error) {
