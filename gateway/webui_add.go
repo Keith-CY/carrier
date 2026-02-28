@@ -14,6 +14,7 @@ import (
 type webUIAddRequest struct {
 	AgentID         string            `json:"agentId"`
 	InstanceID      string            `json:"instanceId,omitempty"`
+	Isolation       bool              `json:"isolation,omitempty"`
 	Channel         string            `json:"channel"`
 	ChannelToken    string            `json:"channelToken"`
 	ChannelChatID   string            `json:"channelChatId,omitempty"`
@@ -46,11 +47,12 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 			}
 			instanceID = generatedID
 		}
-		if err := daemon.InstallAgent(r.Context(), agentID, actor, requestID); err != nil {
+		daemonOpts := InstallAgentOptions{Isolation: req.Isolation}
+		if err := daemon.InstallAgentWithOptions(r.Context(), agentID, daemonOpts, actor, requestID); err != nil {
 			writeDaemonAPIError(w, err)
 			return
 		}
-		if err := daemon.StartAgent(r.Context(), agentID, actor, requestID); err != nil {
+		if err := daemon.StartAgentWithOptions(r.Context(), agentID, StartAgentOptions{Isolation: req.Isolation}, actor, requestID); err != nil {
 			writeDaemonAPIError(w, err)
 			return
 		}
@@ -59,6 +61,7 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 			ID:           instanceID,
 			Type:         agentID,
 			AgentID:      agentID,
+			Isolation:    req.Isolation,
 			GatewayURL:   gatewayURLFromRequest(r),
 			RuntimeState: "running",
 			CreatedAt:    now,
@@ -74,6 +77,7 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 			"message":    fmt.Sprintf("%s installed and started", agentID),
 			"agentId":    agentID,
 			"instanceId": instanceID,
+			"isolation":  req.Isolation,
 		}
 		writeJSON(w, http.StatusOK, payload)
 		return
@@ -210,11 +214,11 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		writeInternalGatewayError(w, http.StatusBadRequest, "E_ENV", "failed to apply environment variables", "apply onboarding environment", err)
 		return
 	}
-	if err := daemon.InstallAgent(r.Context(), agentID, actor, requestID); err != nil {
+	if err := daemon.InstallAgentWithOptions(r.Context(), agentID, InstallAgentOptions{Isolation: req.Isolation}, actor, requestID); err != nil {
 		writeDaemonAPIError(w, err)
 		return
 	}
-	if err := daemon.StartAgent(r.Context(), agentID, actor, requestID); err != nil {
+	if err := daemon.StartAgentWithOptions(r.Context(), agentID, StartAgentOptions{Isolation: req.Isolation}, actor, requestID); err != nil {
 		writeDaemonAPIError(w, err)
 		return
 	}
@@ -249,6 +253,7 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		ID:           instanceID,
 		Type:         agentID,
 		AgentID:      agentID,
+		Isolation:    req.Isolation,
 		GatewayURL:   gatewayURLFromRequest(r),
 		Workspace:    workspacePath,
 		ConfigPath:   configPath,
@@ -272,6 +277,7 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		"message":       fmt.Sprintf("%s configured, installed, and started", agentID),
 		"agentId":       agentID,
 		"instanceId":    instanceID,
+		"isolation":     req.Isolation,
 		"pairCode":      pairCode,
 		"pairRequired":  pairRequired,
 		"pairedChatId":  pairedChatID,

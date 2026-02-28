@@ -4,6 +4,7 @@ This guide reflects the current runtime model:
 - one `carrier` binary
 - daemon service (`carrier daemon`)
 - gateway service (`carrier gateway`)
+- optional Phase 2 instance isolation runtime (opt-in)
 
 Related runbooks:
 - [`docs/runbooks/go-live-rollback.md`](./runbooks/go-live-rollback.md)
@@ -16,6 +17,12 @@ Related runbooks:
 - systemd
 - dedicated non-root user (example: `carrier`)
 - TLS/ingress policy if exposing gateway outside loopback
+
+Isolation prerequisites (Phase 2 opt-in):
+- Linux capability layer with bubblewrap support for isolated start/stop paths
+- For macOS: lightweight Linux VM layer (for example Lima)
+- For Windows: WSL2 Linux layer
+- User namespace and quota prerequisites configured for your host policy
 
 ## 2) Install Binary
 
@@ -219,6 +226,7 @@ carrier remote add openclaw \
 - Keep `ProtectSystem=strict` and `NoNewPrivileges=true` in systemd units.
 - Rotate secrets in `/etc/carrier/carrier.env` regularly.
 - If daemon/gateway bind to non-loopback, enforce API tokens.
+- For explicit isolation deployments, treat unavailable isolation backend as a hard failure (do not silently downgrade runtime isolation guarantees).
 
 ### SSH Host Key Verification
 

@@ -35,6 +35,10 @@ func mapDaemonErrorToExternal(code string) (status int, normalizedCode, message 
 		return http.StatusBadRequest, normalizedCode, "agent upgrade strategy is unsupported"
 	case "E_REMOTE_DIAG_NOT_NEEDED":
 		return http.StatusBadRequest, normalizedCode, "remote diagnosis is not needed"
+	case "E_ISOLATION_UNAVAILABLE":
+		return http.StatusUnprocessableEntity, normalizedCode, "isolation backend is unavailable"
+	case "E_ISOLATION_START_FAILED":
+		return http.StatusBadGateway, normalizedCode, "isolation runtime start failed"
 	default:
 		return http.StatusBadGateway, normalizedCode, "daemon command failed"
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -39,6 +40,7 @@ func TestParseRemoteCommandArgsAddDefaultsAndValidation(t *testing.T) {
 		"--sync-provider", "openai-codex",
 		"--check-retries", "3",
 		"--check-retry-delay", "1",
+		"--isolation",
 		"--skip-reconnect-check",
 	})
 	if err != nil {
@@ -46,6 +48,9 @@ func TestParseRemoteCommandArgsAddDefaultsAndValidation(t *testing.T) {
 	}
 	if opts.Action != "add" {
 		t.Fatalf("action = %q, want add", opts.Action)
+	}
+	if !opts.Isolation {
+		t.Fatalf("isolation = %v, want true", opts.Isolation)
 	}
 	if opts.AgentID != "openclaw" {
 		t.Fatalf("agent_id = %q, want openclaw", opts.AgentID)
@@ -101,6 +106,7 @@ func TestRunRemoteAddCommandWorkflowWithoutSync(t *testing.T) {
 		checkCalls   int
 		installCalls int
 		listCalls    int
+		installBody  string
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -129,6 +135,8 @@ func TestRunRemoteAddCommandWorkflowWithoutSync(t *testing.T) {
 				return
 			}
 			installCalls++
+			bodyRaw, _ := io.ReadAll(r.Body)
+			installBody = strings.TrimSpace(string(bodyRaw))
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = w.Write([]byte("data: {\"type\":\"start\"}\n\n"))
 			_, _ = w.Write([]byte("data: {\"type\":\"log\",\"stream\":\"stdout\",\"line\":\"installing\"}\n\n"))
@@ -161,6 +169,7 @@ func TestRunRemoteAddCommandWorkflowWithoutSync(t *testing.T) {
 		User:               "carrier",
 		KeyPath:            "/tmp/id_ed25519",
 		RuntimeMode:        "on_demand",
+		Isolation:          true,
 		CheckRetries:       1,
 		CheckRetryDelaySec: 0,
 		SkipReconnectCheck: true,
@@ -170,6 +179,9 @@ func TestRunRemoteAddCommandWorkflowWithoutSync(t *testing.T) {
 	}
 	if upsertCalls != 1 || installCalls != 1 || checkCalls != 2 || listCalls != 1 {
 		t.Fatalf("unexpected call counts: upsert=%d check=%d install=%d list=%d", upsertCalls, checkCalls, installCalls, listCalls)
+	}
+	if !strings.Contains(installBody, `"isolation":true`) {
+		t.Fatalf("expected install stream request to include isolation=true, got %s", installBody)
 	}
 	if !strings.Contains(out.String(), "Completed: OpenClaw remote install finished for host host-1.") {
 		t.Fatalf("output missing success message: %s", out.String())

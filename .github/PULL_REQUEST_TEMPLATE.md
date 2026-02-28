@@ -12,7 +12,7 @@
 - [ ] This PR stays within the selected milestone scope.
 - [ ] If marked `Phase 1`, this work is limited to OpenClaw full lifecycle delivery.
 - [ ] Candidate agent work is not introduced before Phase 1 exit criteria pass.
-- [ ] Does this PR change runtime model assumptions? If yes, update `docs/phase1-runtime-adr.md` and linked docs in the same PR.
+- [ ] Does this PR change runtime model assumptions? If yes, update the relevant ADR (`docs/phase1-runtime-adr.md` and/or `docs/phase2-isolation-adr.md`) and linked docs in the same PR.
 
 ## Audit Traceability
 

@@ -3,12 +3,24 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"runtime"
+	"strings"
 	"time"
 
 	"carrier/daemon/internal/runtimecheck"
 )
 
+var (
+	isolationRuntimeGOOS   = runtime.GOOS
+	isolationBackendLookup = exec.LookPath
+)
+
 func (s *Service) Start(ctx context.Context, agentID string) error {
+	return s.StartWithOptions(ctx, agentID, StartOptions{})
+}
+
+func (s *Service) StartWithOptions(ctx context.Context, agentID string, opts StartOptions) error {
 	m, state, err := s.getManifestAndState(agentID)
 	if err != nil {
 		return err
@@ -22,6 +34,15 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 	}
 	if state.Runtime == RuntimeStateRunning {
 		return ErrAlreadyRunning
+	}
+	isolationEnabled := opts.Isolation
+	if isolationEnabled {
+		startCommand, err = buildIsolationStartCommand(startCommand)
+		if err != nil {
+			s.updateStateOnStartError(agentID, err)
+			s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_ISOLATION_UNAVAILABLE", err.Error())
+			return err
+		}
 	}
 
 	// Check exponential backoff policy
@@ -71,6 +92,9 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 	// Start the process using ProcessManager
 	pid, runErr := s.processManager.Start(agentID, "sh", []string{"-c", startCommand})
 	if runErr != nil {
+		if isolationEnabled {
+			runErr = fmt.Errorf("%w: %v", ErrIsolationStartFailed, runErr)
+		}
 		triage, triageErr := s.HandleFailure(ctx, agentID, runErr.Error())
 		if triageErr == nil {
 			s.appendLog(agentID, fmt.Sprintf("triage summary: %s", triage.Summary))
@@ -85,6 +109,9 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 	// Detect immediate process exit (e.g., command not found) by probing
 	// multiple times instead of relying on a fixed sleep duration.
 	if err := s.waitForStableStart(agentID); err != nil {
+		if isolationEnabled {
+			err = fmt.Errorf("%w: %v", ErrIsolationStartFailed, err)
+		}
 		s.updateStateOnStartError(agentID, err)
 		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_START_FAILED", err.Error())
 		return err
@@ -132,6 +159,24 @@ func (s *Service) Start(ctx context.Context, agentID string) error {
 	s.saveState()
 
 	return nil
+}
+
+func buildIsolationStartCommand(startCommand string) (string, error) {
+	if !strings.EqualFold(isolationRuntimeGOOS, "linux") {
+		return "", fmt.Errorf("%w: unsupported host OS %s", ErrIsolationUnavailable, isolationRuntimeGOOS)
+	}
+	bwrapPath, err := isolationBackendLookup("bwrap")
+	if err != nil || strings.TrimSpace(bwrapPath) == "" {
+		return "", fmt.Errorf("%w: bubblewrap (bwrap) executable not found in PATH", ErrIsolationUnavailable)
+	}
+	safeBwrapPath := shellSingleQuote(strings.TrimSpace(bwrapPath))
+	safeStartCommand := shellSingleQuote(strings.TrimSpace(startCommand))
+	wrapped := fmt.Sprintf(
+		"%s --die-with-parent --new-session --bind / / --proc /proc --dev /dev --tmpfs /tmp --unshare-pid -- sh -lc %s",
+		safeBwrapPath,
+		safeStartCommand,
+	)
+	return wrapped, nil
 }
 
 func (s *Service) Stop(ctx context.Context, agentID string) error {

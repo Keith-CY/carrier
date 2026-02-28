@@ -288,7 +288,12 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 		if !allowMethod(w, r, http.MethodPost) {
 			return
 		}
-		if err := s.lifecycle.Start(r.Context(), agentID); err != nil {
+		startOpts, err := readStartOptions(r)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "E_USAGE", err.Error())
+			return
+		}
+		if err := s.lifecycle.StartWithOptions(r.Context(), agentID, startOpts); err != nil {
 			status, code, message := mapLifecycleError(err)
 			writeError(w, status, code, message)
 			return
@@ -582,6 +587,18 @@ func readJSON(r *http.Request, dst any) error {
 	}
 
 	return nil
+}
+
+func readStartOptions(r *http.Request) (lifecycle.StartOptions, error) {
+	var body struct {
+		Isolation bool `json:"isolation,omitempty"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		return lifecycle.StartOptions{}, err
+	}
+	return lifecycle.StartOptions{
+		Isolation: body.Isolation,
+	}, nil
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {

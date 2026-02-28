@@ -553,8 +553,10 @@ func TestRemoteChatStreamSSE(t *testing.T) {
 }
 
 func TestRemoteInstallStreamSSE(t *testing.T) {
+	var installCommand string
 	configureSSHStreamRunner(t, func(command string, onChunk func(remoteStreamChunk)) remoteExecResult {
 		if strings.Contains(command, "install.sh") {
+			installCommand = command
 			if onChunk != nil {
 				onChunk(remoteStreamChunk{Stream: "stdout", Text: "download complete"})
 				onChunk(remoteStreamChunk{Stream: "stdout", Text: "install complete"})
@@ -567,7 +569,7 @@ func TestRemoteInstallStreamSSE(t *testing.T) {
 	mux := buildRemoteFeatureMux(t)
 	hostID := createRemoteHostForTests(t, mux)
 
-	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/install/stream", `{}`)
+	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/install/stream", `{"isolation":true}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("install stream status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -586,6 +588,9 @@ func TestRemoteInstallStreamSSE(t *testing.T) {
 	}
 	if !strings.Contains(body, `"type":"finish"`) {
 		t.Fatalf("expected finish event in stream body: %s", body)
+	}
+	if !strings.Contains(installCommand, "--isolation") {
+		t.Fatalf("expected install command to include --isolation, got %q", installCommand)
 	}
 }
 

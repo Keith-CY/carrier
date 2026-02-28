@@ -89,6 +89,11 @@ type GatewayResponse = {
 | `E_NOT_FOUND`                    | Route not found                                       |
 | `E_COMMAND_UNSUPPORTED`          | Command exists in parser but has no handler           |
 | `E_COMMAND_FAILED`               | Unexpected daemon/runtime error                       |
+| `E_ISOLATION_UNAVAILABLE`        | Isolation backend is unavailable for explicit request |
+| `E_ISOLATION_POLICY_INVALID`     | Isolation policy validation failed                    |
+| `E_ISOLATION_START_FAILED`       | Isolation runtime start failed                        |
+| `E_ISOLATION_NETWORK_DENIED`     | Isolation network policy denied required access       |
+| `E_ISOLATION_QUOTA_EXCEEDED`     | Isolation resource quota was exceeded                 |
 
 ## Commands
 

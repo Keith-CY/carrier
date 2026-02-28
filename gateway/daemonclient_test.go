@@ -109,6 +109,50 @@ func TestDaemonClient_StartAgent(t *testing.T) {
 	}
 }
 
+func TestDaemonClient_InstallAgentWithOptionsIsolation(t *testing.T) {
+	var got map[string]interface{}
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents/myagent/install" || r.Method != http.MethodPost {
+			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode install body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	if err := dc.InstallAgentWithOptions(context.Background(), "myagent", InstallAgentOptions{Isolation: true}, "actor", "req"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got["isolation"] != true {
+		t.Fatalf("expected isolation=true payload, got %#v", got)
+	}
+}
+
+func TestDaemonClient_StartAgentWithOptionsIsolation(t *testing.T) {
+	var got map[string]interface{}
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents/a1/start" || r.Method != http.MethodPost {
+			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode start body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	if err := dc.StartAgentWithOptions(context.Background(), "a1", StartAgentOptions{Isolation: true}, "actor", "req"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got["isolation"] != true {
+		t.Fatalf("expected isolation=true payload, got %#v", got)
+	}
+}
+
 func TestDaemonClient_StopAgent(t *testing.T) {
 	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

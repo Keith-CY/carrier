@@ -30,6 +30,8 @@ func TestMapLifecycleErrorAllBranches(t *testing.T) {
 		{"ErrRuntimePrerequisites", lifecycle.ErrRuntimePrerequisites, 422, "E_RUNTIME_PREREQUISITES"},
 		{"ErrMissingRequiredEnv", lifecycle.ErrMissingRequiredEnv, 422, "E_MISSING_REQUIRED_ENV"},
 		{"ErrPortConflict", lifecycle.ErrPortConflict, 422, "E_PORT_CONFLICT"},
+		{"ErrIsolationUnavailable", lifecycle.ErrIsolationUnavailable, 422, "E_ISOLATION_UNAVAILABLE"},
+		{"ErrIsolationStartFailed", lifecycle.ErrIsolationStartFailed, 502, "E_ISOLATION_START_FAILED"},
 		{"ErrUpgradeFailed", lifecycle.ErrUpgradeFailed, 500, "E_UPGRADE_FAILED"},
 		{"ErrUpgradeStrategyUnsupported", lifecycle.ErrUpgradeStrategyUnsupported, 400, "E_UPGRADE_STRATEGY_UNSUPPORTED"},
 		{"ErrRemoteDiagnosisNotNeeded", lifecycle.ErrRemoteDiagnosisNotNeeded, 409, "E_REMOTE_DIAG_NOT_NEEDED"},

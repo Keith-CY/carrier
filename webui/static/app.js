@@ -7,6 +7,7 @@
   let selectedProvider = null;
   let providerApiKey = "";
   let addTargetAgent = "";
+  let addIsolation = false;
   let addChannel = "";
   let addChannelToken = "";
   let addChannelChatId = "";
@@ -178,6 +179,7 @@
   }
   function resetAddMode() {
     addTargetAgent = "";
+    addIsolation = false;
     addChannel = "";
     addChannelToken = "";
     addChannelChatId = "";
@@ -314,13 +316,19 @@
   function navigate(hash) {
     if (!hash || hash === "#" || hash === "#/")
       hash = "#/welcome";
-    const route = hash.replace("#/", "");
+    const routeWithQuery = hash.replace("#/", "");
+    const queryIndex = routeWithQuery.indexOf("?");
+    const route = queryIndex >= 0 ? routeWithQuery.slice(0, queryIndex) : routeWithQuery;
+    const query = queryIndex >= 0 ? routeWithQuery.slice(queryIndex + 1) : "";
     if (route.startsWith("add/")) {
       const agent = decodeURIComponent(route.slice(4)).trim().toLowerCase();
       if (!agent) {
         location.hash = "#/welcome";
         return;
       }
+      const params = new URLSearchParams(query);
+      const isolationParam = String(params.get("isolation") || "").trim().toLowerCase();
+      addIsolation = isolationParam === "1" || isolationParam === "true" || isolationParam === "yes" || isolationParam === "on";
       addTargetAgent = agent;
       selectedAgent = agent;
       lastAddResult = null;
@@ -1130,9 +1138,26 @@
     let summary = "Agent: " + selectedAgent;
     if (isAddMode())
       summary += "\nChannel: " + addChannel;
+    if (isAddMode())
+      summary += "\nIsolation: " + (addIsolation ? "enabled" : "disabled");
     if (selectedProvider)
       summary += "\nProvider: " + selectedProvider.name;
     $("#install-summary").textContent = summary;
+    const isolationWrap = $("#install-isolation-wrap");
+    const isolationInput = $("#install-isolation");
+    if (isolationWrap && isolationInput) {
+      if (isAddMode()) {
+        isolationWrap.classList.remove("hidden");
+        isolationInput.checked = !!addIsolation;
+        isolationInput.onchange = () => {
+          addIsolation = !!isolationInput.checked;
+        };
+      } else {
+        isolationWrap.classList.add("hidden");
+        isolationInput.checked = false;
+        isolationInput.onchange = null;
+      }
+    }
     $("#install-back").onclick = () => {
       location.hash = isAddMode() ? "#/provider" : "#/config";
     };
@@ -1149,6 +1174,7 @@
           }
           const resp = await api("POST", "/api/v1/add", {
             agentId: selectedAgent,
+            isolation: addIsolation,
             channel: addChannel,
             channelToken: addChannelToken,
             channelChatId: addChannelChatId,
@@ -1168,6 +1194,7 @@
           }
           const resp = await api("POST", "/api/v1/add", {
             agentId: selectedAgent,
+            isolation: addIsolation,
             channel: addChannel,
             channelToken: addChannelToken,
             channelChatId: addChannelChatId,

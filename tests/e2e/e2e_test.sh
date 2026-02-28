@@ -119,13 +119,16 @@ fi
 log "Daemon ready (pid=$DAEMON_PID)"
 
 ###############################################################################
-# 1. Health endpoints (no auth needed)
+# 1. Health endpoints
 ###############################################################################
 
 log "=== Health endpoints ==="
 
 api_noauth GET "/healthz"
-assert_status "GET /healthz → 200" "200" "$(get_status)"
+assert_status "GET /healthz (no auth) → 401" "401" "$(get_status)"
+
+api GET "/healthz"
+assert_status "GET /healthz (auth) → 200" "200" "$(get_status)"
 
 api_noauth GET "/readyz"
 assert_status "GET /readyz → 200" "200" "$(get_status)"
@@ -172,6 +175,29 @@ api GET "/api/v1/agents/$AGENT_ID/status"
 assert_status "Status after install → 200" "200" "$(get_status)"
 assert_contains "installState=installed" "$(get_body)" '"installed"'
 assert_contains "runtimeState=stopped" "$(get_body)" '"stopped"'
+
+# Start with explicit isolation option (Phase 2 opt-in path)
+api POST "/api/v1/agents/$AGENT_ID/start" -d '{"isolation":true}'
+ISO_START_STATUS="$(get_status)"
+if [ "$ISO_START_STATUS" = "200" ]; then
+  pass "Start with isolation → 200"
+  # keep the main flow deterministic: stop before normal start sequence below
+  api POST "/api/v1/agents/$AGENT_ID/stop"
+  S_STOP_ISO="$(get_status)"
+  if [ "$S_STOP_ISO" = "200" ] || [ "$S_STOP_ISO" = "409" ]; then
+    pass "Post-isolation cleanup stop → $S_STOP_ISO"
+  else
+    fail "Post-isolation cleanup stop unexpected → $S_STOP_ISO"
+  fi
+elif [ "$ISO_START_STATUS" = "422" ] || [ "$ISO_START_STATUS" = "502" ]; then
+  if grep -qi 'E_ISOLATION\|isolation' "$TMPDIR/body.txt"; then
+    pass "Start with isolation unavailable/failed path → $ISO_START_STATUS"
+  else
+    fail "Isolation start error code missing (status=$ISO_START_STATUS body=$(get_body))"
+  fi
+else
+  fail "Start with isolation unexpected status → $ISO_START_STATUS"
+fi
 
 # Start
 api POST "/api/v1/agents/$AGENT_ID/start"

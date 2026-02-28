@@ -5,6 +5,8 @@
 - Scope: Phase 1 runtime model and terminology baseline
 - Source issues: #74 #796
 
+> For Phase 2 opt-in isolation runtime decisions, see `docs/phase2-isolation-adr.md`.
+
 > Historical context: [`docs/plans/adr-runtime-model.md`](plans/adr-runtime-model.md)
 
 ## Context

@@ -81,9 +81,17 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 		actor := "webui:agents:" + action
 		switch action {
 		case "install":
-			err = daemon.InstallAgent(r.Context(), agentID, actor, requestID)
+			installOpts := InstallAgentOptions{}
+			if inst, ok := latestManagedInstanceForAgent(agentID); ok {
+				installOpts.Isolation = inst.Isolation
+			}
+			err = daemon.InstallAgentWithOptions(r.Context(), agentID, installOpts, actor, requestID)
 		case "start":
-			err = daemon.StartAgent(r.Context(), agentID, actor, requestID)
+			startOpts := StartAgentOptions{}
+			if inst, ok := latestManagedInstanceForAgent(agentID); ok {
+				startOpts.Isolation = inst.Isolation
+			}
+			err = daemon.StartAgentWithOptions(r.Context(), agentID, startOpts, actor, requestID)
 		case "stop":
 			err = daemon.StopAgent(r.Context(), agentID, actor, requestID)
 		case "uninstall":

@@ -31,6 +31,8 @@ var (
 	ErrMissingRequiredEnv         = errors.New("missing required environment variables")
 	ErrPortConflict               = errors.New("port conflict detected")
 	ErrRuntimePrerequisites       = errors.New("runtime prerequisites failed")
+	ErrIsolationUnavailable       = errors.New("isolation backend is unavailable")
+	ErrIsolationStartFailed       = errors.New("isolation runtime start failed")
 	ErrRemoteDiagnosisNotNeeded   = errors.New("remote diagnosis is not required for this agent")
 	ErrUpgradeFailed              = errors.New("agent upgrade failed")
 	ErrUpgradeStrategyUnsupported = errors.New("upgrade strategy is not supported")

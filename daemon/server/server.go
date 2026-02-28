@@ -640,7 +640,16 @@ func handleStart(svc *lifecycle.Service, agentID string, w http.ResponseWriter, 
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if err := svc.Start(r.Context(), agentID); err != nil {
+	opts := lifecycle.StartOptions{}
+	if strings.HasPrefix(strings.TrimSpace(r.URL.Path), "/api/v1/agents/") {
+		parsed, parseErr := parseStartOptionsFromRequest(r)
+		if parseErr != nil {
+			writeJSONError(w, http.StatusBadRequest, parseErr.Error())
+			return
+		}
+		opts = parsed
+	}
+	if err := svc.StartWithOptions(r.Context(), agentID, opts); err != nil {
 		writeServiceError(w, err)
 		return
 	}
@@ -750,6 +759,31 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v interface{}) bool {
 		return false
 	}
 	return true
+}
+
+func parseStartOptionsFromRequest(r *http.Request) (lifecycle.StartOptions, error) {
+	if r == nil || r.Body == nil {
+		return lifecycle.StartOptions{}, nil
+	}
+	limited := io.LimitReader(r.Body, maxBodySize+1)
+	defer r.Body.Close()
+	raw, err := io.ReadAll(limited)
+	if err != nil {
+		return lifecycle.StartOptions{}, fmt.Errorf("invalid request body: %w", err)
+	}
+	if len(raw) > maxBodySize {
+		return lifecycle.StartOptions{}, fmt.Errorf("request body too large: max %d bytes", maxBodySize)
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return lifecycle.StartOptions{}, nil
+	}
+	var payload struct {
+		Isolation bool `json:"isolation,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return lifecycle.StartOptions{}, fmt.Errorf("invalid request body: %w", err)
+	}
+	return lifecycle.StartOptions{Isolation: payload.Isolation}, nil
 }
 
 func validateAgentID(id string) error {
@@ -863,6 +897,10 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, lifecycle.ErrUpgradeNotSupported):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, lifecycle.ErrIsolationUnavailable):
+		writeJSONError(w, http.StatusUnprocessableEntity, err.Error())
+	case errors.Is(err, lifecycle.ErrIsolationStartFailed):
+		writeJSONError(w, http.StatusBadGateway, err.Error())
 	default:
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 	}

@@ -276,6 +276,15 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "instance": status, "steps": steps})
 		return
 	case "install":
+		isolation := false
+		if r.Method == http.MethodPost {
+			parsedIsolation, parseErr := parseRemoteInstallIsolation(r)
+			if parseErr != nil {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
+				return
+			}
+			isolation = parsedIsolation
+		}
 		if len(parts) >= 5 {
 			subAction := strings.ToLower(strings.TrimSpace(parts[4]))
 			if subAction != "stream" {
@@ -286,7 +295,7 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 				writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 				return
 			}
-			streamRemoteInstallResponse(w, r, requestID, hostID, host, agentID)
+			streamRemoteInstallResponse(w, r, requestID, hostID, host, agentID, isolation)
 			return
 		}
 		if r.Method != http.MethodPost {
@@ -296,7 +305,7 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 		startedAt := time.Now()
 		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Minute)
 		defer cancel()
-		installResult, err := remoteInstallAgent(ctx, host, hostID, agentID)
+		installResult, err := remoteInstallAgent(ctx, host, hostID, agentID, isolation)
 		recordRemoteOperationMetric(remoteOpInstancesInstall, startedAt, err)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_REMOTE_INSTALL_FAILED", err.Error()))
@@ -563,7 +572,7 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 	}
 }
 
-func streamRemoteInstallResponse(w http.ResponseWriter, r *http.Request, requestID, hostID string, host RemoteHost, agentID string) {
+func streamRemoteInstallResponse(w http.ResponseWriter, r *http.Request, requestID, hostID string, host RemoteHost, agentID string, isolation bool) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeJSON(w, http.StatusInternalServerError, gatewayErrBody("E_INTERNAL", "streaming not supported"))
@@ -593,6 +602,7 @@ func streamRemoteInstallResponse(w http.ResponseWriter, r *http.Request, request
 		"requestId": requestID,
 		"hostId":    hostID,
 		"agentId":   agentID,
+		"isolation": isolation,
 	}) {
 		return
 	}
@@ -601,7 +611,7 @@ func streamRemoteInstallResponse(w http.ResponseWriter, r *http.Request, request
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Minute)
 	defer cancel()
 
-	installResult, installErr := remoteInstallAgentStreaming(ctx, host, hostID, agentID, func(chunk remoteStreamChunk) {
+	installResult, installErr := remoteInstallAgentStreaming(ctx, host, hostID, agentID, isolation, func(chunk remoteStreamChunk) {
 		line := strings.TrimSpace(RedactErrorMessage(chunk.Text))
 		if line == "" {
 			return
@@ -639,6 +649,19 @@ func streamRemoteInstallResponse(w http.ResponseWriter, r *http.Request, request
 		"type":         "finish",
 		"finishReason": "stop",
 	})
+}
+
+func parseRemoteInstallIsolation(r *http.Request) (bool, error) {
+	if r == nil || r.Body == nil {
+		return false, nil
+	}
+	var req struct {
+		Isolation bool `json:"isolation,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	return req.Isolation, nil
 }
 
 func handleRemoteHostConfig(w http.ResponseWriter, r *http.Request, requestID string, host RemoteHost) {

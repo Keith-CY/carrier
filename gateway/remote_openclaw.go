@@ -182,14 +182,14 @@ func ensureRemoteHealthyForOperation(ctx context.Context, host RemoteHost) (heal
 	return true, true, steps, nil
 }
 
-func remoteInstallAgent(ctx context.Context, host RemoteHost, hostID, agentID string) (*remoteInstallResult, error) {
+func remoteInstallAgent(ctx context.Context, host RemoteHost, hostID, agentID string, isolation bool) (*remoteInstallResult, error) {
 	switch normalizeRemoteInstallAgentID(agentID) {
 	case "openclaw":
-		return remoteInstallOpenClaw(ctx, host, hostID, agentID)
+		return remoteInstallOpenClaw(ctx, host, hostID, agentID, isolation)
 	case "picoclaw":
-		return remoteInstallPicoClaw(ctx, host, hostID, agentID)
+		return remoteInstallPicoClaw(ctx, host, hostID, agentID, isolation)
 	case "zeroclaw":
-		return remoteInstallZeroClaw(ctx, host, hostID, agentID)
+		return remoteInstallZeroClaw(ctx, host, hostID, agentID, isolation)
 	default:
 		return nil, fmt.Errorf("unsupported remote install agent %q", strings.TrimSpace(agentID))
 	}
@@ -199,15 +199,16 @@ func remoteInstallAgentStreaming(
 	ctx context.Context,
 	host RemoteHost,
 	hostID, agentID string,
+	isolation bool,
 	onChunk func(remoteStreamChunk),
 ) (*remoteInstallResult, error) {
 	switch normalizeRemoteInstallAgentID(agentID) {
 	case "openclaw":
-		return remoteInstallOpenClawStreaming(ctx, host, hostID, agentID, onChunk)
+		return remoteInstallOpenClawStreaming(ctx, host, hostID, agentID, isolation, onChunk)
 	case "picoclaw":
-		return remoteInstallPicoClawStreaming(ctx, host, hostID, agentID, onChunk)
+		return remoteInstallPicoClawStreaming(ctx, host, hostID, agentID, isolation, onChunk)
 	case "zeroclaw":
-		return remoteInstallZeroClawStreaming(ctx, host, hostID, agentID, onChunk)
+		return remoteInstallZeroClawStreaming(ctx, host, hostID, agentID, isolation, onChunk)
 	default:
 		return nil, fmt.Errorf("unsupported remote install agent %q", strings.TrimSpace(agentID))
 	}
@@ -223,19 +224,19 @@ func normalizeRemoteInstallAgentID(agentID string) string {
 	}
 }
 
-func remoteInstallPicoClaw(ctx context.Context, host RemoteHost, hostID, agentID string) (*remoteInstallResult, error) {
+func remoteInstallPicoClaw(ctx context.Context, host RemoteHost, hostID, agentID string, isolation bool) (*remoteInstallResult, error) {
 	return remoteInstallBinaryRelease(ctx, host, hostID, agentID, "picoclaw", remotePicoClawInstallCommand(), nil)
 }
 
-func remoteInstallPicoClawStreaming(ctx context.Context, host RemoteHost, hostID, agentID string, onChunk func(remoteStreamChunk)) (*remoteInstallResult, error) {
+func remoteInstallPicoClawStreaming(ctx context.Context, host RemoteHost, hostID, agentID string, isolation bool, onChunk func(remoteStreamChunk)) (*remoteInstallResult, error) {
 	return remoteInstallBinaryRelease(ctx, host, hostID, agentID, "picoclaw", remotePicoClawInstallCommand(), onChunk)
 }
 
-func remoteInstallZeroClaw(ctx context.Context, host RemoteHost, hostID, agentID string) (*remoteInstallResult, error) {
+func remoteInstallZeroClaw(ctx context.Context, host RemoteHost, hostID, agentID string, isolation bool) (*remoteInstallResult, error) {
 	return remoteInstallBinaryRelease(ctx, host, hostID, agentID, "zeroclaw", remoteZeroClawInstallCommand(), nil)
 }
 
-func remoteInstallZeroClawStreaming(ctx context.Context, host RemoteHost, hostID, agentID string, onChunk func(remoteStreamChunk)) (*remoteInstallResult, error) {
+func remoteInstallZeroClawStreaming(ctx context.Context, host RemoteHost, hostID, agentID string, isolation bool, onChunk func(remoteStreamChunk)) (*remoteInstallResult, error) {
 	return remoteInstallBinaryRelease(ctx, host, hostID, agentID, "zeroclaw", remoteZeroClawInstallCommand(), onChunk)
 }
 
@@ -309,7 +310,7 @@ func remoteInstallReleaseTag(agentID, fallback string) string {
 	return "v" + version
 }
 
-func remoteInstallOpenClaw(ctx context.Context, host RemoteHost, hostID, agentID string) (*remoteInstallResult, error) {
+func remoteInstallOpenClaw(ctx context.Context, host RemoteHost, hostID, agentID string, isolation bool) (*remoteInstallResult, error) {
 	if err := validateAgentIdentifier(agentID); err != nil {
 		return nil, err
 	}
@@ -320,7 +321,11 @@ func remoteInstallOpenClaw(ctx context.Context, host RemoteHost, hostID, agentID
 		GatewayMode: host.RuntimeMode,
 		Steps:       []remoteExecResult{},
 	}
-	installCmd := "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-prompt --no-onboard 2>&1"
+	installArgs := "--no-prompt --no-onboard"
+	if isolation {
+		installArgs += " --isolation"
+	}
+	installCmd := "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- " + installArgs + " 2>&1"
 	installRes, err := runRemoteCommand(ctx, host, installCmd)
 	if err != nil {
 		return result, err
@@ -347,6 +352,7 @@ func remoteInstallOpenClawStreaming(
 	ctx context.Context,
 	host RemoteHost,
 	hostID, agentID string,
+	isolation bool,
 	onChunk func(remoteStreamChunk),
 ) (*remoteInstallResult, error) {
 	if err := validateAgentIdentifier(agentID); err != nil {
@@ -360,7 +366,11 @@ func remoteInstallOpenClawStreaming(
 		Steps:       []remoteExecResult{},
 	}
 
-	installCmd := "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-prompt --no-onboard 2>&1"
+	installArgs := "--no-prompt --no-onboard"
+	if isolation {
+		installArgs += " --isolation"
+	}
+	installCmd := "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- " + installArgs + " 2>&1"
 	installRes, err := runRemoteCommandStream(ctx, host, installCmd, onChunk)
 	if err != nil {
 		return result, err

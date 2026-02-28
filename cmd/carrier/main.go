@@ -15,11 +15,11 @@
 //	carrier onboard [--tui|--cli]
 //	                       Interactive terminal onboarding (channel/provider -> keep gateway running in background)
 //	carrier onboard --webui Launch WebUI onboarding (start/reuse daemon+gateway)
-//	carrier add <agent_id> [--tui|--cli]
+//	carrier add <agent_id> [--isolation] [--tui|--cli]
 //	                       Add/install an agent via terminal flow
-//	carrier add <agent_id> --webui
+//	carrier add <agent_id> [--isolation] --webui
 //	                       Add/install an agent via WebUI flow
-//	carrier install <agent_id> [--tui|--cli|--webui]
+//	carrier install <agent_id> [--isolation] [--tui|--cli|--webui]
 //	                       Alias for `carrier add <agent_id>`
 //	carrier --help          Show usage
 package main
@@ -81,11 +81,12 @@ const (
 )
 
 type addCommandOptions struct {
-	AgentID string
-	WebUI   bool
-	CLI     bool
-	TUI     bool
-	Quiet   bool
+	AgentID   string
+	Isolation bool
+	WebUI     bool
+	CLI       bool
+	TUI       bool
+	Quiet     bool
 }
 
 type onboardCommandOptions struct {
@@ -114,6 +115,7 @@ type remoteCommandOptions struct {
 	Action             string
 	AgentID            string
 	InstallAgentID     string
+	Isolation          bool
 	HostID             string
 	HostName           string
 	HostAddr           string
@@ -166,6 +168,7 @@ type managedAgentInstance struct {
 	Name         string `json:"name,omitempty"`
 	Type         string `json:"type"`
 	AgentID      string `json:"agent_id"`
+	Isolation    bool   `json:"isolation,omitempty"`
 	GatewayURL   string `json:"gateway_url"`
 	Workspace    string `json:"workspace_path,omitempty"`
 	ConfigPath   string `json:"config_path,omitempty"`
@@ -339,9 +342,9 @@ Usage:
                         Interactive terminal onboarding (channel/provider -> keep gateway running in background)
   carrier onboard --webui
                         Launch WebUI onboarding (start/reuse daemon+gateway)
-  carrier add <agent_id> [--tui|--cli|--webui] [-q|--quiet]
+  carrier add <agent_id> [--isolation] [--tui|--cli|--webui] [-q|--quiet]
                         Add/install an agent (default: terminal flow; use -q for quiet mode)
-  carrier install <agent_id> [--tui|--cli|--webui] [-q|--quiet]
+  carrier install <agent_id> [--isolation] [--tui|--cli|--webui] [-q|--quiet]
                         Alias for carrier add <agent_id>
   carrier remote add <agent_id> --host-id <id> --host <ip-or-domain> --port <port> --user <ssh-user> --key-path <private-key-path> [options]
                         Deterministic remote install workflow via gateway API
@@ -349,6 +352,7 @@ Usage:
                         options:
                           [--name <display-name>]
                           [--runtime-mode <on_demand|managed_gateway>]
+                          [--isolation]
                           [--sync-channel <telegram|discord|feishu>]...
                           [--sync-provider <provider-id>]...
                           [--telegram-allow-from <id>]...
@@ -493,13 +497,13 @@ func main() {
 				os.Exit(1)
 			}
 			if opts.WebUI {
-				if err := runAddWebUI(os.Stdout, opts.AgentID); err != nil {
+				if err := runAddWebUI(os.Stdout, opts.AgentID, opts.Isolation); err != nil {
 					fmt.Fprintf(os.Stderr, "%s failed: %v\n", command, err)
 					os.Exit(1)
 				}
 				return
 			}
-			if err := runAddTUI(os.Stdin, os.Stdout, opts.AgentID, opts.Quiet); err != nil {
+			if err := runAddTUI(os.Stdin, os.Stdout, opts.AgentID, opts.Quiet, opts.Isolation); err != nil {
 				fmt.Fprintf(os.Stderr, "%s failed: %v\n", command, err)
 				os.Exit(1)
 			}
@@ -592,7 +596,7 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 
 func parseAddCommandArgs(args []string) (addCommandOptions, error) {
 	if len(args) == 0 {
-		return addCommandOptions{}, errors.New("usage: carrier add <agent_id> [--tui|--cli|--webui] [-q|--quiet] (alias: carrier install <agent_id>)")
+		return addCommandOptions{}, errors.New("usage: carrier add <agent_id> [--isolation] [--tui|--cli|--webui] [-q|--quiet] (alias: carrier install <agent_id>)")
 	}
 
 	opts := addCommandOptions{}
@@ -601,6 +605,8 @@ func parseAddCommandArgs(args []string) (addCommandOptions, error) {
 		switch arg {
 		case "--webui", "--web", "webui":
 			opts.WebUI = true
+		case "--isolation":
+			opts.Isolation = true
 		case "--cli", "cli":
 			opts.CLI = true
 		case "--tui", "tui":
@@ -685,7 +691,7 @@ func parseVersionCommandArgs(args []string) (versionCommandOptions, error) {
 
 func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 	if len(args) < 2 {
-		return remoteCommandOptions{}, errors.New("usage: carrier remote add <agent_id> --host-id <id> --host <ip-or-domain> --port <port> --user <ssh-user> --key-path <private-key-path> [options]")
+		return remoteCommandOptions{}, errors.New("usage: carrier remote add <agent_id> --host-id <id> --host <ip-or-domain> --port <port> --user <ssh-user> --key-path <private-key-path> [--isolation] [options]")
 	}
 
 	opts := remoteCommandOptions{
@@ -774,6 +780,8 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 			}
 			opts.RuntimeMode = strings.ToLower(strings.TrimSpace(value))
 			i = next
+		case "--isolation":
+			opts.Isolation = true
 		case "--sync-channel":
 			value, next, err := parseRequiredFlagValue(args, i, "--sync-channel")
 			if err != nil {
@@ -1327,7 +1335,11 @@ func runStartInstance(out io.Writer, target string) error {
 	if _, err := ensureDaemonRunning(out); err != nil {
 		return err
 	}
-	if err := daemonAgentActionWithProgress(out, inst.AgentID, "start", false); err != nil {
+	startPayload := map[string]interface{}{}
+	if inst.Isolation {
+		startPayload["isolation"] = true
+	}
+	if err := daemonAgentActionWithPayloadWithProgress(out, inst.AgentID, "start", startPayload, false); err != nil {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -1536,7 +1548,7 @@ func runRemoteAddCommand(in io.Reader, out io.Writer, opts remoteCommandOptions)
 	}
 
 	printRemoteStep(out, 3, 8, fmt.Sprintf("Install %s on remote host", agentName))
-	if err := runRemoteInstallStream(out, opts.HostID, opts.InstallAgentID); err != nil {
+	if err := runRemoteInstallStream(out, opts.HostID, opts.InstallAgentID, opts.Isolation); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(out, "  %s installation stream completed successfully.\n", agentName)
@@ -1753,13 +1765,19 @@ func ensureWindowsWSLPrereqForOpenClaw(agentID string) error {
 	return nil
 }
 
-func runRemoteInstallStream(out io.Writer, hostID, agentID string) error {
+func runRemoteInstallStream(out io.Writer, hostID, agentID string, isolation bool) error {
 	base := strings.TrimRight(strings.TrimSpace(gatewayProbeBaseURL()), "/")
 	if base == "" {
 		return errors.New("gateway base url is empty")
 	}
 	path := fmt.Sprintf("%s/api/v1/remote/hosts/%s/instances/%s/install/stream", base, neturl.PathEscape(strings.TrimSpace(hostID)), neturl.PathEscape(strings.TrimSpace(agentID)))
-	req, err := http.NewRequest(http.MethodPost, path, bytes.NewBufferString("{}"))
+	rawPayload, marshalErr := json.Marshal(map[string]bool{
+		"isolation": isolation,
+	})
+	if marshalErr != nil {
+		return fmt.Errorf("marshal install stream payload: %w", marshalErr)
+	}
+	req, err := http.NewRequest(http.MethodPost, path, bytes.NewBuffer(rawPayload))
 	if err != nil {
 		return fmt.Errorf("build install stream request: %w", err)
 	}
@@ -3327,7 +3345,7 @@ func runOnboardWebUI(out io.Writer) error {
 	return nil
 }
 
-func runAddWebUI(out io.Writer, agentID string) error {
+func runAddWebUI(out io.Writer, agentID string, isolation bool) error {
 	agentID = strings.ToLower(strings.TrimSpace(agentID))
 	if agentID == "" {
 		return errors.New("agent_id is required")
@@ -3341,6 +3359,9 @@ func runAddWebUI(out io.Writer, agentID string) error {
 		return err
 	}
 	target := fmt.Sprintf("%s/#/add/%s", strings.TrimRight(gatewayURL, "/"), neturl.PathEscape(agentID))
+	if isolation {
+		target = target + "?isolation=1"
+	}
 	_, _ = fmt.Fprintf(out, "\nOpening browser: %s\n", target)
 	if err := openBrowserFunc(target); err != nil {
 		_, _ = fmt.Fprintf(out, "Warning: failed to open browser automatically: %v\n", err)
@@ -3376,12 +3397,15 @@ func ensureWebUIServices(out io.Writer) (string, error) {
 	return gatewayURL, nil
 }
 
-func runAddTUI(in io.Reader, out io.Writer, agentID string, quiet bool) error {
+func runAddTUI(in io.Reader, out io.Writer, agentID string, quiet bool, isolation bool) error {
 	agentID = strings.ToLower(strings.TrimSpace(agentID))
 	if agentID == "" {
 		return errors.New("agent_id is required")
 	}
 	if !isManagedAgent(agentID) {
+		if isolation {
+			return fmt.Errorf("isolation is not supported for unmanaged agent %s", agentID)
+		}
 		_, _ = fmt.Fprintf(out, "Adding %s via direct install/start...\n", agentID)
 		if _, err := ensureDaemonRunning(out); err != nil {
 			return err
@@ -3395,10 +3419,10 @@ func runAddTUI(in io.Reader, out io.Writer, agentID string, quiet bool) error {
 		_, _ = fmt.Fprintf(out, "✅ %s installed and started.\n", agentID)
 		return nil
 	}
-	return runAddManagedAgentTUI(in, out, agentID, quiet)
+	return runAddManagedAgentTUI(in, out, agentID, quiet, isolation)
 }
 
-func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bool) error {
+func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bool, isolation bool) error {
 	cfg, ok := managedAgentByID(agentID)
 	if !ok {
 		return fmt.Errorf("managed agent %q is not supported", agentID)
@@ -3410,6 +3434,11 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 	_, _ = fmt.Fprintln(out, "Carrier Add (TUI)")
 	_, _ = fmt.Fprintln(out, "-----------------")
 	_, _ = fmt.Fprintf(out, "Agent: %s\n", cfg.Name)
+	if isolation {
+		_, _ = fmt.Fprintln(out, "Isolation runtime: enabled")
+	} else {
+		_, _ = fmt.Fprintln(out, "Isolation runtime: disabled")
+	}
 	_, _ = fmt.Fprintf(out, "Tip: for browser flow, run `carrier add %s --webui`.\n", cfg.ID)
 	instanceName := cfg.ID
 	instanceID := ""
@@ -3500,7 +3529,11 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 	if err := daemonAgentActionWithProgress(out, cfg.ID, "install", quiet); err != nil {
 		return err
 	}
-	if err := daemonAgentActionWithProgress(out, cfg.ID, "start", quiet); err != nil {
+	startPayload := map[string]interface{}{}
+	if isolation {
+		startPayload["isolation"] = true
+	}
+	if err := daemonAgentActionWithPayloadWithProgress(out, cfg.ID, "start", startPayload, quiet); err != nil {
 		return err
 	}
 	if strings.EqualFold(cfg.ID, "picoclaw") {
@@ -3520,6 +3553,7 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 		Name:         instanceName,
 		Type:         cfg.ID,
 		AgentID:      cfg.ID,
+		Isolation:    isolation,
 		GatewayURL:   gatewayProbeBaseURL(),
 		Workspace:    result.WorkspacePath,
 		ConfigPath:   result.ConfigPath,
@@ -3860,8 +3894,12 @@ func ensureGatewayRunning(out io.Writer, startGateway func() error) (string, err
 }
 
 func daemonAgentActionWithProgress(out io.Writer, agentID, action string, quiet bool) error {
+	return daemonAgentActionWithPayloadWithProgress(out, agentID, action, nil, quiet)
+}
+
+func daemonAgentActionWithPayloadWithProgress(out io.Writer, agentID, action string, body any, quiet bool) error {
 	if quiet {
-		return daemonAgentAction(agentID, action)
+		return daemonAgentActionWithPayload(agentID, action, body)
 	}
 
 	previousLogs, _ := daemonFetchAgentLogs(agentID, 1000)
@@ -3870,7 +3908,7 @@ func daemonAgentActionWithProgress(out io.Writer, agentID, action string, quiet 
 
 	done := make(chan error, 1)
 	go func() {
-		done <- daemonAgentAction(agentID, action)
+		done <- daemonAgentActionWithPayload(agentID, action, body)
 	}()
 
 	ticker := time.NewTicker(daemonActionLogPollInterval)
@@ -3944,13 +3982,21 @@ func logSliceEqual(a, b []string) bool {
 }
 
 func daemonAgentAction(agentID, action string) error {
+	return daemonAgentActionWithPayload(agentID, action, nil)
+}
+
+func daemonAgentActionWithPayload(agentID, action string, body any) error {
 	agentID = strings.TrimSpace(agentID)
 	action = strings.TrimSpace(action)
 	if agentID == "" || action == "" {
 		return errors.New("agentID and action are required")
 	}
+	payload := body
+	if payload == nil {
+		payload = map[string]string{}
+	}
 	path := fmt.Sprintf("/api/v1/agents/%s/%s", neturl.PathEscape(agentID), neturl.PathEscape(action))
-	_, status, err := daemonRequestWithTimeout(http.MethodPost, path, map[string]string{}, daemonActionTimeout(action))
+	_, status, err := daemonRequestWithTimeout(http.MethodPost, path, payload, daemonActionTimeout(action))
 	if err != nil {
 		reconciled, reconcileErr := reconcileDaemonActionOnTransportError(agentID, action, err)
 		if reconciled {

@@ -2,6 +2,7 @@
 
 > Scope/priority source-of-truth: `docs/Agent_Installation_Platform_PRD.md`.
 > Runtime baseline source-of-truth: `docs/phase1-runtime-adr.md`.
+> Phase 2 isolation source-of-truth: `docs/phase2-isolation-adr.md`.
 > This document defines execution sequencing only; if conflicts exist, follow PRD + ADR.
 
 ## 1. Plan Goal
@@ -129,3 +130,13 @@ Start Pi Mono/NanoClaw/Pico Claw onboarding only when:
 - OpenClaw P0 acceptance passes consistently
 - no unresolved P0 reliability/security defects
 - triage and diagnose flow meets operational expectations
+
+## 9. Phase 2 Isolation Execution Track (Opt-in)
+
+Execution plan:
+- `docs/plans/phase2-agent-instance-isolation-execution.md`
+
+Scope notes:
+- Phase 1 runtime baseline remains unchanged for non-isolated instances.
+- Isolation is explicit opt-in (`--isolation` / WebUI checkbox), instance-scoped, and fail-fast on unavailable backend.
+- Local add/install and remote add are both in scope for the Phase 2 isolation track.

@@ -64,6 +64,8 @@ Same pattern as install, using the official installer script via tmpfile executi
 
 - All commands are executed via `/bin/sh -lc` (or `wsl.exe bash -lc` on Windows).
 - Commands must not be empty or contain null bytes.
-- Manifest commands are considered trusted; no additional sandboxing is applied.
+- Install commands are executed through host-side lifecycle execution.
+- Start/stop commands may execute in an isolation runtime when instance isolation is enabled.
+- Manifest commands are treated as trusted input, but isolation-enabled runtime execution is still constrained by resolved filesystem/network/quota policy.
 
 See also: [Security: Fallback Trust Model](./security-fallback-trust-model.md) for checksum verification details.

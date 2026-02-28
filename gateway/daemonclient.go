@@ -107,6 +107,14 @@ type DaemonClient struct {
 	httpClient *http.Client
 }
 
+type InstallAgentOptions struct {
+	Isolation bool `json:"isolation,omitempty"`
+}
+
+type StartAgentOptions struct {
+	Isolation bool `json:"isolation,omitempty"`
+}
+
 // NewDaemonClient creates a new client.
 func NewDaemonClient(baseURL, token string, timeout time.Duration) *DaemonClient {
 	if baseURL == "" {
@@ -155,13 +163,31 @@ func (c *DaemonClient) ListAgents(ctx context.Context, actor, requestID string) 
 
 // InstallAgent installs an agent.
 func (c *DaemonClient) InstallAgent(ctx context.Context, agentID, actor, requestID string) error {
-	_, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/install", nil, actor, requestID)
+	return c.InstallAgentWithOptions(ctx, agentID, InstallAgentOptions{}, actor, requestID)
+}
+
+// InstallAgentWithOptions installs an agent with optional runtime options.
+func (c *DaemonClient) InstallAgentWithOptions(ctx context.Context, agentID string, opts InstallAgentOptions, actor, requestID string) error {
+	var body interface{}
+	if opts.Isolation {
+		body = opts
+	}
+	_, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/install", body, actor, requestID)
 	return err
 }
 
 // StartAgent starts an agent.
 func (c *DaemonClient) StartAgent(ctx context.Context, agentID, actor, requestID string) error {
-	_, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/start", nil, actor, requestID)
+	return c.StartAgentWithOptions(ctx, agentID, StartAgentOptions{}, actor, requestID)
+}
+
+// StartAgentWithOptions starts an agent with optional runtime options.
+func (c *DaemonClient) StartAgentWithOptions(ctx context.Context, agentID string, opts StartAgentOptions, actor, requestID string) error {
+	var body interface{}
+	if opts.Isolation {
+		body = opts
+	}
+	_, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/start", body, actor, requestID)
 	return err
 }
 

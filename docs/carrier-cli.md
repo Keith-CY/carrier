@@ -33,8 +33,8 @@ Onboarding writes config to `${CARRIER_CONFIG:-~/.carrier/config.v2.json}`.
 
 ### Managed local instance lifecycle
 
-- `carrier add <agent_id> [--tui|--cli|--webui] [-q|--quiet]`
-- `carrier install <agent_id> [--tui|--cli|--webui] [-q|--quiet]`
+- `carrier add <agent_id> [--isolation] [--tui|--cli|--webui] [-q|--quiet]`
+- `carrier install <agent_id> [--isolation] [--tui|--cli|--webui] [-q|--quiet]`
   - Alias of `carrier add`.
 - `carrier list`
 - `carrier start <id|name>`
@@ -59,6 +59,7 @@ Options:
 
 - `--name <display-name>`
 - `--runtime-mode <on_demand|managed_gateway>`
+- `--isolation`
 - `--sync-channel <telegram|discord|feishu>` (repeatable)
 - `--sync-provider <provider-id>` (repeatable)
 - `--telegram-allow-from <id>` (repeatable)
@@ -90,10 +91,20 @@ carrier onboard --webui
 carrier add openclaw --webui
 ```
 
+WebUI variant with isolation preselected:
+
+```bash
+carrier add openclaw --webui --isolation
+```
+
 ### Install local managed agents
 
 ```bash
 carrier add openclaw
+```
+
+```bash
+carrier add openclaw --isolation
 ```
 
 ```bash
@@ -112,7 +123,8 @@ carrier remote add openclaw \
   --host 203.0.113.10 \
   --port 22 \
   --user ubuntu \
-  --key-path ~/.ssh/id_ed25519
+  --key-path ~/.ssh/id_ed25519 \
+  --isolation
 ```
 
 With selected local config sync:
@@ -203,3 +215,5 @@ carrier reset
 - Chat `/onboard` is intentionally blocked for credential safety.
 - Chat `/install` is policy-gated; default policy requires explicit host binding (`/install <agent_id> <host_id>`).
 - For newly discovered remote instances, config pull can require explicit confirmation.
+- `--isolation` is explicit opt-in and instance-scoped; if isolation backend is unavailable, command flow fails instead of silently falling back.
+- In `--webui` mode, `carrier add ... --webui --isolation` opens WebUI with isolation preselected; deployment/start runs in WebUI flow.

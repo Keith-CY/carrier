@@ -6,7 +6,9 @@ Use this before reading historical planning notes.
 ## Current Source of Truth
 
 - Product scope: [`docs/Agent_Installation_Platform_PRD.md`](./Agent_Installation_Platform_PRD.md)
-- Runtime decision: [`docs/phase1-runtime-adr.md`](./phase1-runtime-adr.md)
+- Runtime decision:
+  - Phase 1 baseline: [`docs/phase1-runtime-adr.md`](./phase1-runtime-adr.md)
+  - Phase 2 opt-in isolation: [`docs/phase2-isolation-adr.md`](./phase2-isolation-adr.md)
 - System design overview: [`ARCHITECTURE.md`](../ARCHITECTURE.md)
 - Module boundaries: `webui -> gateway -> daemon -> shared` and `webui -> gateway -> baseagent -> shared`
 - Shared/base modules: [`shared/`](../shared/), [`baseagent/`](../baseagent/), [`gateway/`](../gateway/), [`daemon/`](../daemon/), [`webui/`](../webui/)
@@ -23,6 +25,7 @@ Use this before reading historical planning notes.
 - CI troubleshooting: [`docs/ci/first-response-playbook.md`](./ci/first-response-playbook.md)
 - Rollback and go-live checks: [`docs/runbooks/go-live-rollback.md`](./runbooks/go-live-rollback.md)
 - Phase-2 roadmap rollup execution: [`docs/plans/phase2-rollup-1406-execution.md`](./plans/phase2-rollup-1406-execution.md)
+- Phase-2 agent isolation execution: [`docs/plans/phase2-agent-instance-isolation-execution.md`](./plans/phase2-agent-instance-isolation-execution.md)
 
 ## Historical Plan Documents
 

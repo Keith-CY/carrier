@@ -37,6 +37,10 @@ func mapLifecycleError(err error) (status int, code, message string) {
 		return http.StatusUnprocessableEntity, "E_MISSING_REQUIRED_ENV", redact.RedactText(err.Error())
 	case errors.Is(err, lifecycle.ErrPortConflict):
 		return http.StatusUnprocessableEntity, "E_PORT_CONFLICT", redact.RedactText(err.Error())
+	case errors.Is(err, lifecycle.ErrIsolationUnavailable):
+		return http.StatusUnprocessableEntity, "E_ISOLATION_UNAVAILABLE", redact.RedactText(err.Error())
+	case errors.Is(err, lifecycle.ErrIsolationStartFailed):
+		return http.StatusBadGateway, "E_ISOLATION_START_FAILED", redact.RedactText(err.Error())
 	case errors.Is(err, lifecycle.ErrUpgradeFailed):
 		return http.StatusInternalServerError, "E_UPGRADE_FAILED", redact.RedactText(err.Error())
 	case errors.Is(err, lifecycle.ErrUpgradeStrategyUnsupported):

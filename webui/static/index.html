@@ -169,6 +169,12 @@
       <div class="card center-card">
         <h3>Step 5 — Confirm Installation</h3>
         <p id="install-summary"></p>
+        <div id="install-isolation-wrap" class="hidden" style="margin:8px 0 12px;">
+          <label style="display:flex; align-items:center; gap:8px;">
+            <input id="install-isolation" type="checkbox">
+            <span>Enable isolation runtime (containerized sandbox)</span>
+          </label>
+        </div>
         <div class="btn-row">
           <button class="btn-secondary" id="install-back">← Back</button>
           <button id="install-confirm">Install & Start →</button>

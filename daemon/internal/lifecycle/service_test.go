@@ -120,6 +120,8 @@ type fakeProcessManager struct {
 	waitChs            map[string]chan struct{}
 	nextPID            int
 	shouldStartSucceed bool
+	lastCommand        string
+	lastArgs           []string
 }
 
 func (f *fakeProcessManager) Start(agentID string, command string, args []string) (int, error) {
@@ -127,6 +129,8 @@ func (f *fakeProcessManager) Start(agentID string, command string, args []string
 		return 0, errors.New("start failed")
 	}
 	f.mu.Lock()
+	f.lastCommand = command
+	f.lastArgs = append([]string(nil), args...)
 	pid := f.nextPID
 	f.pids[agentID] = pid
 	f.isRunning[agentID] = true

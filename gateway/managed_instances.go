@@ -15,6 +15,7 @@ type managedAgentInstance struct {
 	ID           string `json:"id"`
 	Type         string `json:"type"`
 	AgentID      string `json:"agent_id"`
+	Isolation    bool   `json:"isolation,omitempty"`
 	GatewayURL   string `json:"gateway_url"`
 	Workspace    string `json:"workspace_path,omitempty"`
 	ConfigPath   string `json:"config_path,omitempty"`

@@ -273,6 +273,23 @@ func TestAgentCompatibilityEndpointsInstallStartStatusLogsDiagnose(t *testing.T)
 	}
 }
 
+func TestStartEndpointRejectsInvalidJSONBody(t *testing.T) {
+	svc := newServiceForAPITest(t)
+	handler := NewServer(svc).Handler()
+
+	rr := doRawJSONRequest(t, handler, http.MethodPost, "/api/v1/agents/openclaw/start", []byte(`{invalid`))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("start status = %d, want 400; body=%s", rr.Code, rr.Body.String())
+	}
+	var env errorEnvelope
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	if env.Error.Code != "E_USAGE" {
+		t.Fatalf("unexpected error code: %q", env.Error.Code)
+	}
+}
+
 func TestParseAgentActionPathRejectsEncodedTraversal(t *testing.T) {
 	if _, _, ok := parseAgentActionPath("/api/v1/agents/%2E%2E/start"); ok {
 		t.Fatal("expected encoded traversal path to be rejected")

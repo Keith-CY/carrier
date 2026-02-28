@@ -93,20 +93,20 @@ func commandExistsOnHost(lookPath func(string) (string, error), name string) boo
 // getDevInstallCommand creates a placeholder binary for development testing.
 // The placeholder handles "gateway start" (long-running), "gateway stop", and version echo.
 func getDevInstallCommand() string {
-	// Base64-encoded placeholder script to avoid quoting issues inside sh -c:
-	// #!/bin/sh
-	// if [ "$1" = "gateway" ] && [ "$2" = "start" ]; then
-	//   echo "OpenClaw dev placeholder running (pid $$)"
-	//   trap "exit 0" TERM INT
-	//   while true; do sleep 1; done
-	// elif [ "$1" = "gateway" ] && [ "$2" = "stop" ]; then
-	//   echo "OpenClaw dev stop"
-	// else
-	//   echo "OpenClaw dev placeholder"
-	// fi
 	return `sh -c '
 mkdir -p "$HOME/.local/bin"
-echo "IyEvYmluL3NoCmlmIFsgIiQxIiA9ICJnYXRld2F5IiBdICYmIFsgIiQyIiA9ICJzdGFydCIgXTsgdGhlbgogIGVjaG8gIk9wZW5DbGF3IGRldiBwbGFjZWhvbGRlciBydW5uaW5nIChwaWQgJCQpIgogIHRyYXAgImV4aXQgMCIgVEVSTSBJTlQKICB3aGlsZSB0cnVlOyBkbyBzbGVlcCAxOyBkb25lCmVsaWYgWyAiJDEiID0gImdhdGV3YXkiIF0gJiYgWyAiJDIiID0gInN0b3AiIF07IHRoZW4KICBlY2hvICJPcGVuQ2xhdyBkZXYgc3RvcCIKZWxzZQogIGVjaG8gIk9wZW5DbGF3IGRldiBwbGFjZWhvbGRlciIKZmkK" | base64 -d > "$HOME/.local/bin/openclaw"
+cat > "$HOME/.local/bin/openclaw" << '"'"'OCDEV'"'"'
+#!/bin/sh
+if [ "$1" = "gateway" ] && { [ $# -eq 1 ] || [ "$2" = "start" ]; }; then
+  echo "OpenClaw dev placeholder running (pid $$)"
+  trap "exit 0" TERM INT
+  while true; do sleep 1; done
+elif [ "$1" = "gateway" ] && [ "$2" = "stop" ]; then
+  echo "OpenClaw dev stop"
+else
+  echo "OpenClaw dev placeholder"
+fi
+OCDEV
 chmod +x "$HOME/.local/bin/openclaw"
 echo "Dev placeholder created at $HOME/.local/bin/openclaw" >&2
 '`

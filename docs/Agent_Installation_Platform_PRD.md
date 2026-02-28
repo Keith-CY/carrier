@@ -1,20 +1,22 @@
-# Agent Installation and Distribution Platform — PRD (Phase 1 / Demo)
+# Agent Installation and Distribution Platform — PRD (Phase 1 baseline + Phase 2 extensions)
 
 > Product form factor: desktop Daemon (Go), no mandatory GUI, controlled through Telegram/Discord/Feishu via Gateway (Go). Runtime is local-first (macOS/Linux host processes, Windows via WSL2). Memory model is Per-Agent, Shared, and Public.
 > Runtime baseline authority: `docs/phase1-runtime-adr.md`.
+> Phase 2 opt-in isolation authority: `docs/phase2-isolation-adr.md`.
 
 ---
 
 ## 0. Document Metadata
 - Product codename: Agent Runtime Manager (Local)
-- Version: PRD v0.2
+- Version: PRD v0.3
 - Owner modules: Daemon (Go), Gateway (Go), Memory Platform, Catalog
 - This PRD is the **single source of truth** for product scope/priority. If another document conflicts, PRD wins.
-- Runtime model changes must update this PRD and `docs/phase1-runtime-adr.md` in the same PR.
+- Runtime model changes must update this PRD and the relevant ADR (`docs/phase1-runtime-adr.md` and/or `docs/phase2-isolation-adr.md`) in the same PR.
 
 ### 0.1 Terminology baseline
 
 - Runtime = host (macOS/Linux) or WSL2 (Windows), no Docker path in Phase 1.
+- Isolation (Phase 2) = explicit opt-in instance runtime (`--isolation` / WebUI checkbox), not default-on.
 - Diagnose = sanitized artifact generation + optional remote diagnosis consent.
 - Memory classes = Per-Agent / Shared / Public.
 - Priority semantics = P0 (must-have), P1 (important next), P2 (later).
@@ -78,6 +80,14 @@
 - Cross-device memory sync
 - Multi-role permission system
 - Direct integration with remote diagnosis backend (consent + handoff placeholder only)
+
+### 3.3 Phase 2 opt-in extension scope
+
+- Agent instance isolation for local and remote add flows via explicit user request.
+- Local add/install supports `--isolation`; WebUI add supports isolation checkbox and prefill.
+- Local CLI/TUI add remains install + auto-start; when isolation is enabled, start executes in isolated runtime.
+- Isolation mode is persisted per instance and reused on subsequent starts.
+- Explicit isolation requests fail fast when isolation backend is unavailable; no silent fallback to non-isolated runtime.
 
 ---
 
@@ -202,6 +212,24 @@ If Base Agent cannot resolve:
 2. prompt user: consent to remote diagnosis handoff
 3. if consented: create handoff placeholder record (backend integration deferred)
 4. if declined: return local artifact and next-step guidance
+
+#### FR-D-015 Phase 2 opt-in isolation runtime (P1)
+
+Input surfaces:
+- `carrier add <agent_id> --isolation`
+- `carrier install <agent_id> --isolation` (alias behavior)
+- `carrier remote add <agent_id> ... --isolation`
+- WebUI add isolation checkbox (including CLI `--webui --isolation` prefill)
+
+Behavior:
+1. `install` remains host-side for compatibility.
+2. `start/stop` use isolation runtime when instance isolation is enabled.
+3. isolation mode persists per instance and is reused by `start`.
+4. explicit isolation request does not fallback if backend is unavailable.
+
+Output/contract:
+- additive isolation metadata in status/list APIs
+- structured isolation error codes for command/API mapping
 
 ### 4.3 Memory Platform
 

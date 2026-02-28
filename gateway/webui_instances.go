@@ -261,7 +261,7 @@ func handleWebUIInstance(w http.ResponseWriter, r *http.Request, requestID strin
 	warning := ""
 	switch action {
 	case "start":
-		if err := daemon.StartAgent(r.Context(), inst.AgentID, actor, requestID); err != nil {
+		if err := daemon.StartAgentWithOptions(r.Context(), inst.AgentID, StartAgentOptions{Isolation: inst.Isolation}, actor, requestID); err != nil {
 			writeDaemonAPIError(w, err)
 			return
 		}

@@ -60,6 +60,12 @@ List agents (`GET /api/v1/agents`):
       "version": "1.0.0",
       "installState": "installed",
       "runtimeState": "running",
+      "isolation": {
+        "mode": "sandboxed",
+        "backend": "bwrap",
+        "state": "running",
+        "policyVersion": "phase2-v1"
+      },
       "health": "healthy",
       "ports": [
         9090
@@ -83,6 +89,12 @@ Fleet status (`GET /api/v1/agents/status`):
       "version": "1.0.0",
       "installState": "installed",
       "runtimeState": "running",
+      "isolation": {
+        "mode": "sandboxed",
+        "backend": "bwrap",
+        "state": "running",
+        "policyVersion": "phase2-v1"
+      },
       "health": "healthy",
       "ports": [
         9090
@@ -157,6 +169,25 @@ Required fields:
 
 Optional fields:
 - `ports`, `startedAt`, `lastError`, `lastTriageSummary`, `lastDiagnoseFile`
+- `isolation` (Phase 2 opt-in runtime metadata)
+
+## Isolation Field Expectations (Phase 2, Optional)
+
+When isolation is enabled for an instance, daemon responses may include:
+
+```json
+{
+  "isolation": {
+    "mode": "none|sandboxed",
+    "backend": "bwrap",
+    "state": "provisioning|starting|running|stopping|failed",
+    "policyVersion": "string",
+    "lastError": "string"
+  }
+}
+```
+
+If isolation is not enabled, `isolation` may be omitted.
 
 ## Versioning Rule
 

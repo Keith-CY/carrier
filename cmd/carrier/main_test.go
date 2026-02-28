@@ -461,6 +461,19 @@ func TestParseAddCommandArgsSupportsTerminalModeFlags(t *testing.T) {
 	}
 }
 
+func TestParseAddCommandArgsSupportsIsolationFlag(t *testing.T) {
+	opts, err := parseAddCommandArgs([]string{"openclaw", "--isolation"})
+	if err != nil {
+		t.Fatalf("parseAddCommandArgs error: %v", err)
+	}
+	if !opts.Isolation {
+		t.Fatalf("expected isolation=true, got %+v", opts)
+	}
+	if !opts.TUI {
+		t.Fatalf("expected default tui mode, got %+v", opts)
+	}
+}
+
 func TestParseOnboardCommandArgsSupportsTerminalModeFlags(t *testing.T) {
 	cases := []struct {
 		name string

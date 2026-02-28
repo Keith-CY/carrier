@@ -456,6 +456,7 @@ func TestHandleWebUIInstance_Branches(t *testing.T) {
 		ID:           "inst-1",
 		Type:         "picoclaw",
 		AgentID:      "picoclaw",
+		Isolation:    true,
 		RuntimeState: "running",
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -463,6 +464,7 @@ func TestHandleWebUIInstance_Branches(t *testing.T) {
 		t.Fatalf("saveManagedInstances: %v", err)
 	}
 
+	var startIsolation any
 	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
 		"GET /api/v1/agents/picoclaw/logs": func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -471,6 +473,10 @@ func TestHandleWebUIInstance_Branches(t *testing.T) {
 			})
 		},
 		"POST /api/v1/agents/picoclaw/start": func(w http.ResponseWriter, r *http.Request) {
+			var payload map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err == nil {
+				startIsolation = payload["isolation"]
+			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{}`))
 		},
@@ -522,6 +528,9 @@ func TestHandleWebUIInstance_Branches(t *testing.T) {
 		handleWebUIInstance(rec, req, "req-start", daemon)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if startIsolation != true {
+			t.Fatalf("expected isolation=true in start payload, got %#v", startIsolation)
 		}
 	})
 

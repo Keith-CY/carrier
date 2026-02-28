@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -87,6 +88,7 @@ func TestManagedInstanceLifecycleCommandsSupportIDOrName(t *testing.T) {
 			Name:         "openclaw",
 			Type:         "openclaw",
 			AgentID:      "openclaw",
+			Isolation:    true,
 			GatewayURL:   "http://127.0.0.1:8787",
 			RuntimeState: "stopped",
 			CreatedAt:    "2026-02-23T00:00:00Z",
@@ -97,6 +99,7 @@ func TestManagedInstanceLifecycleCommandsSupportIDOrName(t *testing.T) {
 		t.Fatalf("saveManagedInstances: %v", err)
 	}
 
+	var startBody string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/healthz":
@@ -106,6 +109,8 @@ func TestManagedInstanceLifecycleCommandsSupportIDOrName(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"lines":[]}`))
 		case r.URL.Path == "/api/v1/agents/openclaw/start" && r.Method == http.MethodPost:
+			bodyRaw, _ := io.ReadAll(r.Body)
+			startBody = strings.TrimSpace(string(bodyRaw))
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"started":true}`))
 		case r.URL.Path == "/api/v1/agents/openclaw/stop" && r.Method == http.MethodPost:
@@ -127,6 +132,9 @@ func TestManagedInstanceLifecycleCommandsSupportIDOrName(t *testing.T) {
 	var out bytes.Buffer
 	if err := runStartInstance(&out, "openclaw"); err != nil {
 		t.Fatalf("runStartInstance by name: %v", err)
+	}
+	if !strings.Contains(startBody, `"isolation":true`) {
+		t.Fatalf("expected start body to include isolation=true, got %s", startBody)
 	}
 	out.Reset()
 

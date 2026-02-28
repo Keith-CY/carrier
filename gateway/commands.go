@@ -463,7 +463,7 @@ func runRemoteInstallWorkflow(ctx context.Context, host RemoteHost, hostID, agen
 		return out, fmt.Errorf("remote preflight failed for host %s: ssh check did not pass", hostID)
 	}
 
-	firstInstall, firstErr := remoteInstallAgent(ctx, host, hostID, agentID)
+	firstInstall, firstErr := remoteInstallAgent(ctx, host, hostID, agentID, false)
 	out.Attempts = 1
 	if firstErr == nil {
 		out.Install = firstInstall
@@ -483,7 +483,7 @@ func runRemoteInstallWorkflow(ctx context.Context, host RemoteHost, hostID, agen
 		return out, fmt.Errorf("install failed on host %s (%v); repair step failed: %w", hostID, firstErr, repairErr)
 	}
 
-	secondInstall, secondErr := remoteInstallAgent(ctx, host, hostID, agentID)
+	secondInstall, secondErr := remoteInstallAgent(ctx, host, hostID, agentID, false)
 	out.Attempts = 2
 	if secondErr != nil {
 		return out, fmt.Errorf("install failed after repair retry on host %s: %w", hostID, secondErr)

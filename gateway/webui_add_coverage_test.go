@@ -13,19 +13,29 @@ import (
 func TestHandleWebUIAdd_NonManagedAgentSuccess(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+	var installIsolation any
+	var startIsolation any
 
 	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
 		"POST /api/v1/agents/worker/install": func(w http.ResponseWriter, r *http.Request) {
+			var payload map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err == nil {
+				installIsolation = payload["isolation"]
+			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{}`))
 		},
 		"POST /api/v1/agents/worker/start": func(w http.ResponseWriter, r *http.Request) {
+			var payload map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err == nil {
+				startIsolation = payload["isolation"]
+			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{}`))
 		},
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "http://gateway.local/api/v1/add", strings.NewReader(`{"agentId":"worker"}`))
+	req := httptest.NewRequest(http.MethodPost, "http://gateway.local/api/v1/add", strings.NewReader(`{"agentId":"worker","isolation":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -47,6 +57,12 @@ func TestHandleWebUIAdd_NonManagedAgentSuccess(t *testing.T) {
 	if strings.TrimSpace(resp["instanceId"].(string)) == "" {
 		t.Fatalf("expected non-empty instanceId, got %#v", resp["instanceId"])
 	}
+	if resp["isolation"] != true {
+		t.Fatalf("expected isolation=true in response, got %#v", resp["isolation"])
+	}
+	if installIsolation != true || startIsolation != true {
+		t.Fatalf("expected daemon install/start isolation=true payloads, got install=%#v start=%#v", installIsolation, startIsolation)
+	}
 
 	instances, _, err := loadManagedInstances()
 	if err != nil {
@@ -60,6 +76,9 @@ func TestHandleWebUIAdd_NonManagedAgentSuccess(t *testing.T) {
 	}
 	if instances[0].RuntimeState != "running" {
 		t.Fatalf("expected runtime_state running, got %+v", instances[0])
+	}
+	if !instances[0].Isolation {
+		t.Fatalf("expected persisted isolation=true, got %+v", instances[0])
 	}
 }
 

@@ -393,6 +393,44 @@ func TestHandleWebUIAgent_Branches(t *testing.T) {
 			t.Fatalf("unexpected managed instances after install: %+v", instances)
 		}
 	})
+
+	t.Run("start forwards stored isolation option", func(t *testing.T) {
+		tmp := t.TempDir()
+		storePath := filepath.Join(tmp, "instances.json")
+		t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		if err := saveManagedInstances(storePath, []managedAgentInstance{{
+			ID:           "picoclaw-default",
+			AgentID:      "picoclaw",
+			Isolation:    true,
+			RuntimeState: "stopped",
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}}); err != nil {
+			t.Fatalf("saveManagedInstances: %v", err)
+		}
+
+		var startIsolation any
+		_, daemonStartOK, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+			"POST /api/v1/agents/picoclaw/start": func(w http.ResponseWriter, r *http.Request) {
+				var payload map[string]interface{}
+				if err := json.NewDecoder(r.Body).Decode(&payload); err == nil {
+					startIsolation = payload["isolation"]
+				}
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+			},
+		})
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "http://gateway.local/api/v1/agents/picoclaw/start", nil)
+		handleWebUIAgent(rec, req, "req-start-isolation", daemonStartOK)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if startIsolation != true {
+			t.Fatalf("expected start payload isolation=true, got %#v", startIsolation)
+		}
+	})
 }
 
 func TestSyncManagedInstanceByAgentAction_Branches(t *testing.T) {

@@ -821,6 +821,8 @@ func TestWriteServiceError(t *testing.T) {
 		{lifecycle.ErrCrashLoop, http.StatusConflict},
 		{lifecycle.ErrAgentRunning, http.StatusConflict},
 		{lifecycle.ErrUpgradeNotSupported, http.StatusBadRequest},
+		{lifecycle.ErrIsolationUnavailable, http.StatusUnprocessableEntity},
+		{lifecycle.ErrIsolationStartFailed, http.StatusBadGateway},
 	}
 	for _, tc := range tests {
 		w := httptest.NewRecorder()

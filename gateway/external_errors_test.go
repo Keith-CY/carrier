@@ -24,6 +24,8 @@ func TestMapDaemonErrorToExternal(t *testing.T) {
 		{"upgrade_not_supported", "E_UPGRADE_NOT_SUPPORTED", http.StatusBadRequest, "E_UPGRADE_NOT_SUPPORTED", "agent upgrade is not supported"},
 		{"upgrade_strategy_unsupported", "E_UPGRADE_STRATEGY_UNSUPPORTED", http.StatusBadRequest, "E_UPGRADE_STRATEGY_UNSUPPORTED", "agent upgrade strategy is unsupported"},
 		{"remote_diag_not_needed", "E_REMOTE_DIAG_NOT_NEEDED", http.StatusBadRequest, "E_REMOTE_DIAG_NOT_NEEDED", "remote diagnosis is not needed"},
+		{"isolation_unavailable", "E_ISOLATION_UNAVAILABLE", http.StatusUnprocessableEntity, "E_ISOLATION_UNAVAILABLE", "isolation backend is unavailable"},
+		{"isolation_start_failed", "E_ISOLATION_START_FAILED", http.StatusBadGateway, "E_ISOLATION_START_FAILED", "isolation runtime start failed"},
 		{"unknown", "E_ANYTHING", http.StatusBadGateway, "E_ANYTHING", "daemon command failed"},
 	}
 

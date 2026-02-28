@@ -4,7 +4,9 @@ This guide documents the current lifecycle runtime behavior implemented in `daem
 
 ## Start/Stop runtime semantics
 
-- `Install`/`Start`/`Stop`/`Upgrade` execute manifest commands via the lifecycle runner.
+- `Install`/`Start`/`Stop`/`Upgrade` execute manifest commands via lifecycle execution paths.
+- `Install` remains host-side in current Phase 2 isolation rollout.
+- For isolation-enabled instances, `Start`/`Stop` execute through the isolation runtime backend (VM + bubblewrap model).
 - `Start` requires:
   - agent is installed,
   - required environment variables are present,
@@ -13,6 +15,13 @@ This guide documents the current lifecycle runtime behavior implemented in `daem
 - `Stop` executes the manifest stop command and marks runtime as `stopped` on success.
 - Graceful-stop timeout / force-kill fallback are delegated to the runtime command implementation (or external supervisor such as systemd); lifecycle service itself does not apply an extra kill timeout layer.
 - If a start command fails, runtime transitions to `crashing` and health to `unhealthy`.
+
+## Isolation opt-in semantics (Phase 2)
+
+- Isolation is explicit opt-in (for example `carrier add <agent_id> --isolation`).
+- Isolation mode is persisted per instance and reused by subsequent `start` calls.
+- Explicit isolation requests fail fast when isolation backend/policy cannot be resolved.
+- No silent fallback to non-isolated runtime when isolation was explicitly requested.
 
 ## Crash-loop detection and cooldown
 
