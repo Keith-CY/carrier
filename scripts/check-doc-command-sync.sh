@@ -113,7 +113,7 @@ extract_usage_commands() {
 }
 
 extract_doc_commands() {
-  grep -hoE '`carrier[^`]*`' "$README" "$CLI_DOC" | tr -d '`'
+  grep -hoE "\`carrier[^\`]*\`" "$README" "$CLI_DOC" | tr -d '`'
 }
 
 build_doc_prefixes() {
