@@ -354,21 +354,23 @@ jobs:
           '@
           Invoke-WslScript -Distro $distro -Script $prepScript -Name "prep"
 
-          $prepareWorkspaceScript = @"
+          $prepareWorkspaceScript = @'
           set -euo pipefail
-          WSL_ROOT='$wslRoot'
-          CARRIER_SRC='$carrierWslSrc'
-          mkdir -p "\$WSL_ROOT/bin" "\$WSL_ROOT/home" "\$WSL_ROOT/logs"
-          cp "\$CARRIER_SRC" "\$WSL_ROOT/bin/carrier"
-          chmod +x "\$WSL_ROOT/bin/carrier"
-          "@
+          WSL_ROOT="__WSL_ROOT__"
+          CARRIER_SRC="__CARRIER_SRC__"
+          mkdir -p "$WSL_ROOT/bin" "$WSL_ROOT/home" "$WSL_ROOT/logs"
+          cp "$CARRIER_SRC" "$WSL_ROOT/bin/carrier"
+          chmod +x "$WSL_ROOT/bin/carrier"
+          '@
+          $prepareWorkspaceScript = $prepareWorkspaceScript -replace "__WSL_ROOT__", $wslRoot
+          $prepareWorkspaceScript = $prepareWorkspaceScript -replace "__CARRIER_SRC__", $carrierWslSrc
           Invoke-WslScript -Distro $distro -Script $prepareWorkspaceScript -Name "workspace"
 
-          $configScript = @"
+          $configScript = @'
           set -euo pipefail
-          HOME_DIR='$wslRoot/home'
-          mkdir -p "\$HOME_DIR/.carrier"
-          cat > "\$HOME_DIR/.carrier/config.v2.json" <<'JSON'
+          HOME_DIR="__HOME_DIR__"
+          mkdir -p "$HOME_DIR/.carrier"
+          cat > "$HOME_DIR/.carrier/config.v2.json" <<'JSON'
           {
             "config_version": 2,
             "channels": [],
@@ -388,39 +390,44 @@ jobs:
             "configured_at": "2026-02-27T00:00:00Z"
           }
           JSON
-          "@
+          '@
+          $configScript = $configScript -replace "__HOME_DIR__", "$wslRoot/home"
           Invoke-WslScript -Distro $distro -Script $configScript -Name "config"
 
           $stdinWin = Join-Path $wslRootWin "carrier-add-openclaw.stdin"
           Set-Content -Path $stdinWin -Value "1234567890:carrier-e2e-telegram-token`n`n"
           $stdinWsl = Convert-ToWslPath $stdinWin
 
-          $runScript = @"
+          $runScript = @'
           set -euo pipefail
-          export HOME='$wslRoot/home'
-          export CARRIER_CONFIG="\$HOME/.carrier/config.v2.json"
+          export HOME="__HOME_DIR__"
+          export CARRIER_CONFIG="$HOME/.carrier/config.v2.json"
           export OPENAI_API_KEY='sk-e2e-openai-key'
-          carrier_bin='$wslRoot/bin/carrier'
-          input_file='$stdinWsl'
-          log_dir='$wslLogs'
+          carrier_bin="__CARRIER_BIN__"
+          input_file="__INPUT_FILE__"
+          log_dir="__LOG_DIR__"
 
-          "\$carrier_bin" --version >"\$log_dir/carrier-version.log" 2>&1
-          cat "\$input_file" | "\$carrier_bin" add openclaw --cli --quiet >"\$log_dir/carrier-add-openclaw.log" 2>&1
-          "\$carrier_bin" list >"\$log_dir/carrier-list.log" 2>&1
-          "\$carrier_bin" status openclaw >"\$log_dir/carrier-status-openclaw.log" 2>&1 || true
-          "\$carrier_bin" stop >"\$log_dir/carrier-stop.log" 2>&1 || true
+          "$carrier_bin" --version >"$log_dir/carrier-version.log" 2>&1
+          cat "$input_file" | "$carrier_bin" add openclaw --cli --quiet >"$log_dir/carrier-add-openclaw.log" 2>&1
+          "$carrier_bin" list >"$log_dir/carrier-list.log" 2>&1
+          "$carrier_bin" status openclaw >"$log_dir/carrier-status-openclaw.log" 2>&1 || true
+          "$carrier_bin" stop >"$log_dir/carrier-stop.log" 2>&1 || true
 
-          if ! grep -qi 'openclaw' "\$log_dir/carrier-list.log"; then
+          if ! grep -qi 'openclaw' "$log_dir/carrier-list.log"; then
             echo "openclaw instance not found in carrier list output" >&2
-            cat "\$log_dir/carrier-list.log" >&2
+            cat "$log_dir/carrier-list.log" >&2
             exit 1
           fi
-          if ! test -d "\$HOME/.openclaw"; then
-            echo "openclaw home directory missing at \$HOME/.openclaw" >&2
-            ls -la "\$HOME" >&2 || true
+          if ! test -d "$HOME/.openclaw"; then
+            echo "openclaw home directory missing at $HOME/.openclaw" >&2
+            ls -la "$HOME" >&2 || true
             exit 1
           fi
-          "@
+          '@
+          $runScript = $runScript -replace "__HOME_DIR__", "$wslRoot/home"
+          $runScript = $runScript -replace "__CARRIER_BIN__", "$wslRoot/bin/carrier"
+          $runScript = $runScript -replace "__INPUT_FILE__", $stdinWsl
+          $runScript = $runScript -replace "__LOG_DIR__", $wslLogs
           Invoke-WslScript -Distro $distro -Script $runScript -Name "run"
 
       - name: Upload WSL2 OpenClaw logs
