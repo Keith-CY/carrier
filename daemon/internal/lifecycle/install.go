@@ -20,6 +20,7 @@ func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts I
 	if err != nil {
 		return err
 	}
+	useBaseAgentFallback := !opts.Isolation || strings.EqualFold(agentID, "openclaw")
 
 	commandGOOS := isolationRuntimeGOOS
 	var backend isolationBackend
@@ -45,8 +46,16 @@ func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts I
 
 	opCtx, cancel := context.WithTimeout(ctx, s.commandTimeout)
 	defer cancel()
+	if opts.Isolation {
+		if err := s.runDeterministicIsolationPipeline(opCtx, agentID, backend); err != nil {
+			return s.finalizeInstallFailure(agentID, err, "E_ISOLATION_UNAVAILABLE")
+		}
+	}
 
 	if err := s.checkRuntimePrerequisites(m); err != nil {
+		if !useBaseAgentFallback {
+			return s.finalizeInstallFailure(agentID, err, "E_RUNTIME_PREREQUISITES")
+		}
 		if prereqErr := s.repairRuntimePrerequisitesLoop(ctx, opCtx, agentID, m, err); prereqErr != nil {
 			return s.finalizeInstallFailure(agentID, prereqErr, "E_RUNTIME_PREREQUISITES")
 		}
@@ -59,17 +68,71 @@ func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts I
 		s.appendCommandLog(agentID, "install", installCommand, result, runErr)
 	}
 	if runErr != nil {
+		if opts.Isolation {
+			if err := s.runDeterministicIsolationPipeline(opCtx, agentID, backend); err != nil {
+				runErr = fmt.Errorf("%w: %v", ErrIsolationUnavailable, err)
+			} else {
+				retryResult, retryStreamed, retryErr := s.runCommandWithAgentLogs(opCtx, agentID, "install-retry-deterministic", installCommand)
+				if retryStreamed {
+					s.appendCommandLogSummary(agentID, "install-retry-deterministic", installCommand, retryResult, retryErr)
+				} else {
+					s.appendCommandLog(agentID, "install-retry-deterministic", installCommand, retryResult, retryErr)
+				}
+				runErr = retryErr
+			}
+		}
+		if runErr == nil {
+			goto installSuccess
+		}
+		if !useBaseAgentFallback {
+			return s.finalizeInstallFailure(agentID, runErr, installFailureCode(runErr))
+		}
 		loopErr := s.repairAndRetryInstallLoop(ctx, opCtx, agentID, installCommand, runErr)
 		if loopErr != nil {
-			return s.finalizeInstallFailure(agentID, loopErr, "E_INSTALL_FAILED")
+			return s.finalizeInstallFailure(agentID, loopErr, installFailureCode(loopErr))
 		}
 	}
 
+installSuccess:
 	s.markInstallSuccess(agentID)
 	s.recordAudit("", "system", "install", agentID, AuditResultSuccess, "", "install completed")
 
 	s.saveState()
 
+	return nil
+}
+
+func installFailureCode(err error) string {
+	if errors.Is(err, ErrIsolationUnavailable) {
+		return "E_ISOLATION_UNAVAILABLE"
+	}
+	return "E_INSTALL_FAILED"
+}
+
+func (s *Service) runDeterministicIsolationPipeline(ctx context.Context, agentID string, backend isolationBackend) error {
+	if backend == nil {
+		return fmt.Errorf("%w: isolation backend is nil", ErrIsolationUnavailable)
+	}
+	commands, err := backend.PrepareCommands()
+	if err != nil {
+		return fmt.Errorf("%w: resolve deterministic isolation pipeline: %v", ErrIsolationUnavailable, err)
+	}
+	for idx, command := range commands {
+		stepCommand := strings.TrimSpace(command)
+		if stepCommand == "" {
+			continue
+		}
+		action := fmt.Sprintf("isolation-prepare-%d", idx+1)
+		result, streamed, runErr := s.runCommandWithAgentLogs(ctx, agentID, action, stepCommand)
+		if streamed {
+			s.appendCommandLogSummary(agentID, action, stepCommand, result, runErr)
+		} else {
+			s.appendCommandLog(agentID, action, stepCommand, result, runErr)
+		}
+		if runErr != nil {
+			return fmt.Errorf("%w: %s failed: %v", ErrIsolationUnavailable, action, runErr)
+		}
+	}
 	return nil
 }
 

@@ -26,6 +26,7 @@ type isolationBackend interface {
 	CommandGOOS() string
 	WrapCommand(command string) (string, error)
 	WrapStartCommand(startCommand string) (string, error)
+	PrepareCommands() ([]string, error)
 }
 
 type linuxIsolationBackend struct {
@@ -46,6 +47,12 @@ func (b linuxIsolationBackend) WrapCommand(command string) (string, error) {
 
 func (b linuxIsolationBackend) WrapStartCommand(startCommand string) (string, error) {
 	return buildBwrapInvocation(b.bwrapPath, startCommand)
+}
+
+func (b linuxIsolationBackend) PrepareCommands() ([]string, error) {
+	return []string{
+		fmt.Sprintf("command -v %s >/dev/null 2>&1", shellSingleQuote(strings.TrimSpace(b.bwrapPath))),
+	}, nil
 }
 
 type limaIsolationBackend struct {
@@ -74,6 +81,24 @@ func (b limaIsolationBackend) WrapStartCommand(startCommand string) (string, err
 		return "", err
 	}
 	return b.WrapCommand(guestCommand)
+}
+
+func (b limaIsolationBackend) PrepareCommands() ([]string, error) {
+	safeLimaPath := shellSingleQuote(strings.TrimSpace(b.limactlPath))
+	safeInstance := shellSingleQuote(strings.TrimSpace(b.instance))
+	ensureInstance := fmt.Sprintf(
+		"%s list 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -Fxq %s || %s create -y --name %s",
+		safeLimaPath,
+		safeInstance,
+		safeLimaPath,
+		safeInstance,
+	)
+	startInstance := fmt.Sprintf("%s start %s", safeLimaPath, safeInstance)
+	ensureGuestBwrap, err := b.WrapCommand(buildGuestEnsureBwrapCommand())
+	if err != nil {
+		return nil, err
+	}
+	return []string{ensureInstance, startInstance, ensureGuestBwrap}, nil
 }
 
 type wslIsolationBackend struct {
@@ -105,6 +130,14 @@ func (b wslIsolationBackend) WrapStartCommand(startCommand string) (string, erro
 		return "", err
 	}
 	return b.WrapCommand(guestCommand)
+}
+
+func (b wslIsolationBackend) PrepareCommands() ([]string, error) {
+	ensureGuestBwrap, err := b.WrapCommand(buildGuestEnsureBwrapCommand())
+	if err != nil {
+		return nil, err
+	}
+	return []string{ensureGuestBwrap}, nil
 }
 
 func resolveIsolationBackend() (isolationBackend, error) {
@@ -177,4 +210,34 @@ func buildGuestBwrapCommand(startCommand string) (string, error) {
 		"set -e; if ! command -v bwrap >/dev/null 2>&1; then echo 'bubblewrap (bwrap) executable not found in guest PATH' >&2; exit 127; fi; exec %s",
 		bwrapInvocation,
 	), nil
+}
+
+func buildGuestEnsureBwrapCommand() string {
+	return strings.TrimSpace(`
+set -e
+if command -v bwrap >/dev/null 2>&1; then
+  exit 0
+fi
+
+if command -v apt-get >/dev/null 2>&1; then
+  sudo -n apt-get update
+  sudo -n apt-get install -y bubblewrap
+elif command -v dnf >/dev/null 2>&1; then
+  sudo -n dnf install -y bubblewrap
+elif command -v yum >/dev/null 2>&1; then
+  sudo -n yum install -y bubblewrap
+elif command -v pacman >/dev/null 2>&1; then
+  sudo -n pacman -Sy --noconfirm bubblewrap
+elif command -v zypper >/dev/null 2>&1; then
+  sudo -n zypper --non-interactive install bubblewrap
+else
+  echo "no supported package manager found to install bubblewrap" >&2
+  exit 127
+fi
+
+if ! command -v bwrap >/dev/null 2>&1; then
+  echo "bubblewrap (bwrap) installation did not produce executable in PATH" >&2
+  exit 127
+fi
+`)
 }

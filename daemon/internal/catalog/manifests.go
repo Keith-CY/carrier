@@ -45,6 +45,9 @@ const (
 	// PicoClaw release URL pattern
 	picoClawReleaseBaseURL = "https://github.com/sipeed/picoclaw/releases/latest/download"
 	picoClawReleaseAPIURL  = "https://api.github.com/repos/sipeed/picoclaw/releases/latest"
+
+	// ZeroClaw release URL pattern
+	zeroClawReleaseBaseURL = "https://github.com/zeroclaw-labs/zeroclaw/releases/latest/download"
 )
 
 func normalizeCatalogGOOS(goos string) string {
@@ -169,10 +172,40 @@ func getNetworkSpec() manifest.NetworkSpec {
 // ZeroClaw is installed via cargo (Rust toolchain required).
 // In dev mode, a placeholder script is created instead.
 func getZeroClawInstallCommand() string {
+	return getZeroClawInstallCommandForGOOS(runtime.GOOS)
+}
+
+func getZeroClawInstallCommandForGOOS(goos string) string {
 	if os.Getenv("CARRIER_DEV_MODE") == "1" {
 		return getZeroClawDevInstallCommand()
 	}
-	return "cargo install --git https://github.com/theonlyhennygod/zeroclaw.git --force"
+	switch normalizeCatalogGOOS(goos) {
+	case "linux":
+		return `sh -c '
+set -e
+arch="$(uname -m)"
+case "$arch" in
+  x86_64|amd64) target="x86_64-unknown-linux-gnu" ;;
+  aarch64|arm64) target="aarch64-unknown-linux-gnu" ;;
+  armv7l|armv6l) target="armv7-unknown-linux-gnueabihf" ;;
+  *) echo "unsupported arch: $arch" >&2; exit 2 ;;
+esac
+tmp="$(mktemp -d)"
+cleanup() { rm -rf "$tmp"; }
+trap cleanup EXIT
+asset="zeroclaw-${target}.tar.gz"
+url="` + zeroClawReleaseBaseURL + `/${asset}"
+curl -fsSL "$url" -o "$tmp/zeroclaw.tar.gz"
+tar -xzf "$tmp/zeroclaw.tar.gz" -C "$tmp"
+bin="$(find "$tmp" -type f -name "zeroclaw*" -perm -u+x | head -n 1)"
+[ -n "$bin" ] || { echo "zeroclaw binary not found in release archive" >&2; exit 3; }
+mkdir -p "$HOME/.local/bin" "$HOME/.zeroclaw"
+install -m 0755 "$bin" "$HOME/.local/bin/zeroclaw"
+"$HOME/.local/bin/zeroclaw" --version >/dev/null 2>&1 || true
+'`
+	default:
+		return "cargo install --git https://github.com/theonlyhennygod/zeroclaw.git --force"
+	}
 }
 
 // getZeroClawDevInstallCommand creates a placeholder binary for development testing.
@@ -229,6 +262,11 @@ func getZeroClawStopCommandForGOOS(goos string) string {
 // ZeroClawManifest returns the manifest for the ZeroClaw agent.
 func ZeroClawManifest() manifest.Manifest {
 	installCmd := getZeroClawInstallCommand()
+	installByOS := map[string]string{
+		manifest.CommandOSLinux:   getZeroClawInstallCommandForGOOS(manifest.CommandOSLinux),
+		manifest.CommandOSDarwin:  getZeroClawInstallCommandForGOOS(manifest.CommandOSDarwin),
+		manifest.CommandOSWindows: getZeroClawInstallCommandForGOOS(manifest.CommandOSWindows),
+	}
 	startCmd := getZeroClawStartCommand()
 	stopCmd := getZeroClawStopCommand()
 	startByOS := map[string]string{
@@ -249,9 +287,15 @@ func ZeroClawManifest() manifest.Manifest {
 		Description:  "Rust-based AI assistant with chat and code capabilities",
 		Capabilities: []string{"chat", "code"},
 		Runtime: manifest.RuntimeSpec{
-			Type:    manifest.RuntimeTypeLocalBinary,
-			Install: manifest.CommandSpec{Command: installCmd},
-			Upgrade: manifest.CommandSpec{Command: installCmd},
+			Type: manifest.RuntimeTypeLocalBinary,
+			Install: manifest.CommandSpec{
+				Command:     installCmd,
+				CommandByOS: installByOS,
+			},
+			Upgrade: manifest.CommandSpec{
+				Command:     installCmd,
+				CommandByOS: installByOS,
+			},
 			Start: manifest.CommandSpec{
 				Command:     startCmd,
 				CommandByOS: startByOS,
