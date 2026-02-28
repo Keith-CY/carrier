@@ -240,7 +240,7 @@ jobs:
             $distroLines = wsl -l -q
             $distros = @()
             foreach ($line in $distroLines) {
-              $clean = $line.Replace([char]0, "").Trim()
+              $clean = ([string]$line).Replace([string][char]0, "").Trim()
               if ($clean) {
                 $distros += $clean
               }
