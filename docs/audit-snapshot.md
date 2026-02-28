@@ -20,6 +20,7 @@
 - [Phase-1 Runtime ADR](./phase1-runtime-adr.md)
 - [Phase-2 Isolation ADR](./phase2-isolation-adr.md)
 - [Phase-2 Isolation Execution Plan](./plans/phase2-agent-instance-isolation-execution.md)
+- [Phase-2 Acceptance Gate Evidence](./plans/phase2-acceptance-gate-1482.md)
 - [Current Architecture](./current-architecture.md)
 
 ## Open Improvement Tracks

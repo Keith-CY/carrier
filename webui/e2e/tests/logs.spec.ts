@@ -26,7 +26,7 @@ test.describe('Logs', () => {
     const rows = page.locator('#log-output .log-row-data');
     await expect(rows.first()).toBeVisible();
     await expect(page.locator('#log-output .log-row-data .log-cell-time').first()).toContainText('2026-02-22');
-    await expect(page.locator('#log-output .log-row-data[data-level="INFO"] .log-cell-message')).toContainText('agent started');
+    await expect(page.locator('#log-output .log-row-data[data-level="INFO"] .log-cell-message').first()).toContainText('agent started');
   });
 
   test('level filter hides unchecked levels', async ({ page }) => {

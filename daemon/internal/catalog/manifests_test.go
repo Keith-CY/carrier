@@ -247,7 +247,7 @@ func TestGetInstallCommand_DevMode(t *testing.T) {
 	for _, want := range []string{
 		"mkdir -p",
 		".local/bin",
-		"base64 -d",
+		"cat > \"$HOME/.local/bin/openclaw\"",
 		"chmod +x",
 		"openclaw",
 	} {
