@@ -152,6 +152,7 @@ type configCommandOptions struct {
 	Agent  string
 	Key    string
 	Value  string
+	Domain string
 }
 
 type keysCommandOptions struct {
@@ -1034,7 +1035,28 @@ func parseWebhooksCommandArgs(args []string) (webhooksCommandOptions, error) {
 }
 
 func parseConfigCommandArgs(args []string) (configCommandOptions, error) {
-	if len(args) != 3 || !strings.EqualFold(strings.TrimSpace(args[0]), "set") {
+	if len(args) < 3 || !strings.EqualFold(strings.TrimSpace(args[0]), "set") {
+		return configCommandOptions{}, errors.New("usage: carrier config set <agent_id> key=value OR carrier config set tls.enabled true --domain <example.com>")
+	}
+	if strings.EqualFold(strings.TrimSpace(args[1]), "tls.enabled") {
+		opts := configCommandOptions{Action: "set-tls", Key: "tls.enabled", Value: strings.TrimSpace(args[2])}
+		for i := 3; i < len(args); i++ {
+			flag := strings.ToLower(strings.TrimSpace(args[i]))
+			switch flag {
+			case "--domain":
+				value, next, err := parseRequiredFlagValue(args, i, "--domain")
+				if err != nil {
+					return configCommandOptions{}, err
+				}
+				opts.Domain = strings.TrimSpace(value)
+				i = next
+			default:
+				return configCommandOptions{}, fmt.Errorf("unknown config option: %s", args[i])
+			}
+		}
+		return opts, nil
+	}
+	if len(args) != 3 {
 		return configCommandOptions{}, errors.New("usage: carrier config set <agent_id> key=value")
 	}
 	agent := strings.TrimSpace(args[1])
@@ -1128,6 +1150,9 @@ func runWebhooksCommand(out io.Writer, opts webhooksCommandOptions) error {
 }
 
 func runConfigCommand(out io.Writer, opts configCommandOptions) error {
+	if opts.Action == "set-tls" {
+		return runConfigTLSCommand(out, opts)
+	}
 	if opts.Action != "set" {
 		return fmt.Errorf("unsupported config action: %s", opts.Action)
 	}
@@ -1138,6 +1163,34 @@ func runConfigCommand(out io.Writer, opts configCommandOptions) error {
 		return err
 	}
 	_, _ = fmt.Fprintf(out, "updated %s %s=%s\n", opts.Agent, opts.Key, opts.Value)
+	return nil
+}
+
+func runConfigTLSCommand(out io.Writer, opts configCommandOptions) error {
+	enabled := strings.EqualFold(strings.TrimSpace(opts.Value), "true") || strings.TrimSpace(opts.Value) == "1"
+	home, err := resolveCarrierHomeDir()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(home, ".carrier", "tls")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	cfgPath := filepath.Join(dir, "config.json")
+	payload := map[string]interface{}{
+		"enabled":  enabled,
+		"domain":   strings.TrimSpace(opts.Domain),
+		"autocert": enabled,
+		"cert_dir": dir,
+	}
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(cfgPath, append(raw, '\n'), 0o600); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "updated gateway TLS config: enabled=%t domain=%s cert_dir=%s\n", enabled, strings.TrimSpace(opts.Domain), dir)
 	return nil
 }
 
