@@ -270,7 +270,7 @@ func TestBuildProviderListResponse(t *testing.T) {
 		"`openai-codex`",
 		"[OAuth device code]",
 		"`openai-compatible`",
-		"[no auth]",
+		"[API key]",
 	}
 	for _, needle := range expectContains {
 		if !strings.Contains(resp.Message, needle) {

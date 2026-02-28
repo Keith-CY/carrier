@@ -666,8 +666,8 @@ func TestProvidersEndpoint_ContainsAnthropicAndOpenAICompatible(t *testing.T) {
 	if !strings.Contains(body, "api_key") {
 		t.Errorf("expected 'api_key' auth mode in response body")
 	}
-	if !strings.Contains(body, "none") {
-		t.Errorf("expected 'none' auth mode in response body")
+	if !strings.Contains(body, "openrouter") {
+		t.Errorf("expected 'openrouter' in response body")
 	}
 }
 

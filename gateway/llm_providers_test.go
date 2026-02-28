@@ -35,7 +35,7 @@ func TestGetLLMProvider_KnownProviders(t *testing.T) {
 		{"anthropic", AuthModeAPIKey, "ANTHROPIC_API_KEY", "builtin"},
 		{"openai", AuthModeAPIKey, "OPENAI_API_KEY", "builtin"},
 		{"openai-codex", AuthModeOAuthDeviceCode, "OPENAI_CODEX_TOKEN", "custom"},
-		{"openai-compatible", AuthModeNone, "OPENAI_COMPATIBLE_API_KEY", "generic"},
+		{"openai-compatible", AuthModeAPIKey, "OPENAI_COMPATIBLE_API_KEY", "generic"},
 	}
 
 	for _, tc := range cases {

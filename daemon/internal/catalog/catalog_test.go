@@ -64,19 +64,21 @@ func TestZeroClawIsActive(t *testing.T) {
 
 func TestCodexAndOpenCodeAreActiveCodeAgents(t *testing.T) {
 	for _, agentID := range []string{"codex", "opencode"} {
-		entry, ok := FindByID(agentID)
-		if !ok {
-			t.Fatalf("expected %s in catalog", agentID)
-		}
-		if entry.Status != StatusActive {
-			t.Fatalf("expected %s status active, got %s", agentID, entry.Status)
-		}
-		if !entry.HasCapability("code") {
-			t.Fatalf("expected %s to have code capability", agentID)
-		}
-		if !entry.IsRunnable() {
-			t.Fatalf("expected %s to be runnable", agentID)
-		}
+		t.Run(agentID, func(t *testing.T) {
+			entry, ok := FindByID(agentID)
+			if !ok {
+				t.Fatalf("expected %s in catalog", agentID)
+			}
+			if entry.Status != StatusActive {
+				t.Errorf("expected %s status active, got %s", agentID, entry.Status)
+			}
+			if !entry.HasCapability("code") {
+				t.Errorf("expected %s to have code capability", agentID)
+			}
+			if !entry.IsRunnable() {
+				t.Errorf("expected %s to be runnable", agentID)
+			}
+		})
 	}
 }
 

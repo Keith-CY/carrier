@@ -4,10 +4,10 @@ import "testing"
 
 func TestProviderCatalogBasics(t *testing.T) {
 	providers := ListProviders()
-	if len(providers) != 4 {
-		t.Fatalf("provider count = %d, want 4", len(providers))
+	if len(providers) != 5 {
+		t.Fatalf("provider count = %d, want 5", len(providers))
 	}
-	for _, id := range []string{"anthropic", "openai", "openai-codex", "openai-compatible"} {
+	for _, id := range []string{"anthropic", "openai", "openai-codex", "openrouter", "openai-compatible"} {
 		p := GetProvider(id)
 		if p == nil {
 			t.Fatalf("expected provider %q", id)
@@ -22,22 +22,22 @@ func TestProviderCatalogBasics(t *testing.T) {
 	if !IsSupportedProvider("openai") {
 		t.Fatal("openai should be supported")
 	}
-	if IsSupportedProvider("openrouter") {
-		t.Fatal("openrouter should not be supported")
+	if !IsSupportedProvider("openrouter") {
+		t.Fatal("openrouter should be supported")
 	}
 	ids := SupportedProviderIDs()
-	if len(ids) != 4 {
-		t.Fatalf("SupportedProviderIDs len = %d, want 4", len(ids))
+	if len(ids) != 5 {
+		t.Fatalf("SupportedProviderIDs len = %d, want 5", len(ids))
 	}
-	if ids[0] != "anthropic" || ids[1] != "openai" || ids[2] != "openai-codex" || ids[3] != "openai-compatible" {
+	if ids[0] != "anthropic" || ids[1] != "openai" || ids[2] != "openai-codex" || ids[3] != "openrouter" || ids[4] != "openai-compatible" {
 		t.Fatalf("unexpected SupportedProviderIDs order: %#v", ids)
 	}
 }
 
 func TestProvidersByCategory(t *testing.T) {
 	byCategory := ProvidersByCategory()
-	if len(byCategory["builtin"]) != 2 {
-		t.Fatalf("builtin len = %d, want 2", len(byCategory["builtin"]))
+	if len(byCategory["builtin"]) != 3 {
+		t.Fatalf("builtin len = %d, want 3", len(byCategory["builtin"]))
 	}
 	if len(byCategory["custom"]) != 1 {
 		t.Fatalf("custom len = %d, want 1", len(byCategory["custom"]))
@@ -75,6 +75,7 @@ func TestMapToManagedProvider(t *testing.T) {
 		"openai-compatible": "openai",
 		"openai":            "openai",
 		"anthropic":         "anthropic",
+		"openrouter":        "openrouter",
 		"  custom  ":        "custom",
 	}
 	for input, want := range cases {

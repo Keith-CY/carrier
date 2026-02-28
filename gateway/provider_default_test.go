@@ -26,14 +26,16 @@ func TestBuildCarrierDefaultProviderInfo_ConfiguredButUnknownProvider(t *testing
 	}
 }
 
-func TestBuildCarrierDefaultProviderInfo_AuthModeNoneIsReusable(t *testing.T) {
+func TestBuildCarrierDefaultProviderInfo_OpenAICompatibleWithoutSavedCredentialNotReusable(t *testing.T) {
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	t.Setenv("CARRIER_CREDENTIAL_STORE", t.TempDir()+"/credentials.json")
 	writeGatewayDefaultProviderConfig(t, "openai-compatible", "openai-compatible/demo", "OPENAI_COMPATIBLE_API_KEY")
 
 	info := buildCarrierDefaultProviderInfo()
-	if info["configured"] != true || info["available"] != true || info["reusable"] != true {
+	if info["configured"] != true || info["available"] != true || info["reusable"] != false {
 		t.Fatalf("unexpected info: %+v", info)
 	}
-	if info["has_saved_credential"] != true || info["credential_backend"] != "none" {
+	if info["has_saved_credential"] != false {
 		t.Fatalf("unexpected credential metadata: %+v", info)
 	}
 

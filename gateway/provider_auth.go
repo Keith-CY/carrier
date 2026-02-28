@@ -22,6 +22,16 @@ type ProviderAuthResult struct {
 func BuildProviderAuthPrompt(p *LLMProvider) string {
 	switch p.AuthMode {
 	case AuthModeAPIKey:
+		if strings.EqualFold(strings.TrimSpace(p.ID), "openai-compatible") {
+			return fmt.Sprintf(
+				"Please paste your API key / bearer token for **%s** (env: `%s`).\n\n"+
+					"After this step, set these in env vars:\n"+
+					"- `OPENAI_API_BASE` (for example: `https://ollama-test.owlia.ai`)\n"+
+					"- `OPENAI_MODEL` (for example: `llama3.1:8b`)\n\n"+
+					"Tip: reply `/onboard reuse` to reuse a credential saved by Carrier.",
+				p.Name, p.EnvVar,
+			)
+		}
 		return fmt.Sprintf(
 			"Please paste your API key for **%s** (env: `%s`).\n\n"+
 				"Tip: reply `/onboard reuse` to reuse a credential saved by Carrier.",
@@ -157,6 +167,9 @@ func ProviderEnvVarsToSet(p *LLMProvider, value string) map[string]string {
 	// some downstream runtimes (including older PicoClaw flows) still
 	// resolve OpenAI-compatible credentials from OPENAI_API_KEY.
 	if strings.EqualFold(strings.TrimSpace(p.ID), "openai-codex") {
+		out["OPENAI_API_KEY"] = trimmed
+	}
+	if strings.EqualFold(strings.TrimSpace(p.ID), "openai-compatible") {
 		out["OPENAI_API_KEY"] = trimmed
 	}
 	return out

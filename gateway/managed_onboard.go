@@ -43,7 +43,6 @@ var managedAgents = map[string]managedAgentConfig{
 		ConfigDir:      ".openclaw",
 		ConfigFile:     "openclaw.json",
 		RequiredEnvKey: "OPENAI_API_KEY",
-		ChannelOptional: true,
 	},
 	"zeroclaw": {
 		ID:         "zeroclaw",
@@ -262,6 +261,15 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	if modelID == "" {
 		modelID = provider.ID + "/default"
 	}
+	if strings.EqualFold(provider.ID, "openai-compatible") {
+		if override := strings.TrimSpace(sess.EnvVars["OPENAI_MODEL"]); override != "" {
+			if strings.Contains(override, "/") {
+				modelID = override
+			} else {
+				modelID = "openai/" + override
+			}
+		}
+	}
 	if strings.EqualFold(provider.ID, "openai-codex") {
 		if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
 			modelID = "openai/" + strings.TrimSpace(name)
@@ -279,6 +287,7 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	}
 	providerKey = mapCarrierProviderToManagedProvider(providerKey)
 	providerToken := pickProviderToken(provider, sess.EnvVars)
+	providerBaseURL := strings.TrimSpace(sess.EnvVars["OPENAI_API_BASE"])
 	if strings.EqualFold(provider.ID, "openai-codex") && strings.EqualFold(cfg.ID, "picoclaw") {
 		accountID := extractOpenAIAccountID(providerToken)
 		if err := savePicoclawAuthCredential(home, "openai", providerToken, accountID); err != nil {
@@ -303,6 +312,7 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 			provider,
 			providerKey,
 			providerToken,
+			providerBaseURL,
 			modelID,
 			modelName,
 			workspacePath,
@@ -389,7 +399,7 @@ func renderManagedConfigBytes(
 	channelSetupPending bool,
 	allowFrom []string,
 	provider *LLMProvider,
-	providerKey, providerToken, modelID, modelName, workspacePath string,
+	providerKey, providerToken, providerBaseURL, modelID, modelName, workspacePath string,
 ) ([]byte, error) {
 	switch strings.ToLower(strings.TrimSpace(renderer.ConfigFormat)) {
 	case "toml":
@@ -400,9 +410,9 @@ func renderManagedConfigBytes(
 	case "json":
 		var payload map[string]interface{}
 		if strings.EqualFold(cfg.ID, "openclaw") {
-			payload = buildManagedOpenClawJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerToken, modelID, workspacePath)
+			payload = buildManagedOpenClawJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerToken, providerBaseURL, modelID, workspacePath)
 		} else {
-			payload = buildManagedPicoClawJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerToken, modelID, modelName, workspacePath)
+			payload = buildManagedPicoClawJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerToken, providerBaseURL, modelID, modelName, workspacePath)
 		}
 		raw, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
@@ -419,7 +429,7 @@ func buildManagedPicoClawJSONConfigPayload(
 	channelSetupPending bool,
 	allowFrom []string,
 	provider *LLMProvider,
-	providerKey, providerToken, modelID, modelName, workspacePath string,
+	providerKey, providerToken, providerBaseURL, modelID, modelName, workspacePath string,
 ) map[string]interface{} {
 	modelItem := map[string]interface{}{
 		"model_name": modelName,
@@ -433,6 +443,9 @@ func buildManagedPicoClawJSONConfigPayload(
 		providerItem["auth_method"] = "oauth"
 	} else if providerToken != "" {
 		providerItem["api_key"] = providerToken
+	}
+	if strings.TrimSpace(providerBaseURL) != "" {
+		providerItem["base_url"] = strings.TrimSpace(providerBaseURL)
 	}
 
 	channels := map[string]interface{}{}
@@ -475,7 +488,7 @@ func buildManagedOpenClawJSONConfigPayload(
 	channelSetupPending bool,
 	allowFrom []string,
 	provider *LLMProvider,
-	providerKey, providerToken, modelID, workspacePath string,
+	providerKey, providerToken, providerBaseURL, modelID, workspacePath string,
 ) map[string]interface{} {
 	payload := openclawcfg.BuildManagedConfigPayload(openclawcfg.ManagedPayloadParams{
 		ChannelID:           channelID,
@@ -490,6 +503,14 @@ func buildManagedOpenClawJSONConfigPayload(
 	})
 	if strings.TrimSpace(channelID) == "" {
 		payload["channels"] = map[string]interface{}{}
+	}
+	if strings.TrimSpace(providerBaseURL) != "" {
+		models, _ := payload["models"].(map[string]interface{})
+		modelProviders, _ := models["providers"].(map[string]interface{})
+		providerItem, _ := modelProviders[strings.TrimSpace(providerKey)].(map[string]interface{})
+		if providerItem != nil {
+			providerItem["baseUrl"] = strings.TrimSpace(providerBaseURL)
+		}
 	}
 	return payload
 }

@@ -221,24 +221,43 @@ func TestPrepareOpenclawManagedOnboard_RequiresOpenAIKey(t *testing.T) {
 	}
 }
 
-func TestPrepareOpenclawManagedOnboard_AllowsNoChannelWhenOptional(t *testing.T) {
+func TestPrepareCodexManagedOnboard_AllowsNoChannelWhenOptional(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	sess := &OnboardSession{
+		SelectedAgent:    "codex",
+		SelectedProvider: "openai",
+		EnvVars: map[string]string{
+			"OPENAI_API_KEY": "sk-codex-no-channel",
+		},
+	}
+
+	_, err := prepareManagedOnboard("codex", sess, "webui:add")
+	if err != nil {
+		t.Fatalf("prepareManagedOnboard: %v", err)
+	}
+}
+
+func TestPrepareOpenclawManagedOnboard_OpenAICompatibleBaseURLAndModelOverride(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
 	sess := &OnboardSession{
 		SelectedAgent:    "openclaw",
-		SelectedProvider: "openai",
+		SelectedChannel:  "telegram",
+		ChannelToken:     "telegram-token-compat",
+		SelectedProvider: "openai-compatible",
 		EnvVars: map[string]string{
-			"OPENAI_API_KEY": "sk-openclaw-no-channel",
+			"OPENAI_COMPATIBLE_API_KEY": "sk-openai-compatible",
+			"OPENAI_API_BASE":           "https://ollama-test.owlia.ai",
+			"OPENAI_MODEL":              "llama3.1:8b",
 		},
 	}
 
-	result, err := prepareManagedOnboard("openclaw", sess, "webui:add")
+	result, err := prepareManagedOnboard("openclaw", sess, "telegram:418258935")
 	if err != nil {
 		t.Fatalf("prepareManagedOnboard: %v", err)
-	}
-	if result.ConfigPath == "" {
-		t.Fatal("expected openclaw config path to be set")
 	}
 
 	cfgRaw, err := os.ReadFile(result.ConfigPath)
@@ -249,11 +268,18 @@ func TestPrepareOpenclawManagedOnboard_AllowsNoChannelWhenOptional(t *testing.T)
 	if err := json.Unmarshal(cfgRaw, &cfg); err != nil {
 		t.Fatalf("parse config json: %v", err)
 	}
-	channels, ok := cfg["channels"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected channels object, got %#v", cfg["channels"])
+
+	agents, _ := cfg["agents"].(map[string]interface{})
+	defaults, _ := agents["defaults"].(map[string]interface{})
+	model, _ := defaults["model"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(model["primary"])); got != "openai/llama3.1:8b" {
+		t.Fatalf("expected model override openai/llama3.1:8b, got %q", got)
 	}
-	if len(channels) != 0 {
-		t.Fatalf("expected empty channels for no-channel onboarding, got %#v", channels)
+
+	models, _ := cfg["models"].(map[string]interface{})
+	modelProviders, _ := models["providers"].(map[string]interface{})
+	openaiProvider, _ := modelProviders["openai"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(openaiProvider["baseUrl"])); got != "https://ollama-test.owlia.ai" {
+		t.Fatalf("expected baseUrl override, got %q", got)
 	}
 }

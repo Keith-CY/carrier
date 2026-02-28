@@ -282,7 +282,7 @@ func TestLoadRejectsUnsupportedProvider(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{
   "config_version": 2,
   "default_model": "x",
-  "model_list": [{"model_name":"x","model":"openrouter/auto","provider_id":"openrouter"}]
+  "model_list": [{"model_name":"x","model":"vllm/auto","provider_id":"vllm"}]
 }`), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

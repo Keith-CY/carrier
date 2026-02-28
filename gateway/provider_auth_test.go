@@ -63,20 +63,22 @@ func TestHandleProviderAuthInput_APIKey_Whitespace(t *testing.T) {
 	}
 }
 
-func TestHandleProviderAuthInput_None_AutoComplete(t *testing.T) {
+func TestHandleProviderAuthInput_OpenAICompatible_RequiresToken(t *testing.T) {
+	prepareCredentialStore(t)
+
 	p := GetLLMProvider("openai-compatible")
 	if p == nil {
 		t.Fatal("openai-compatible provider not found")
 	}
-	result, err := HandleProviderAuthInput(p, "anything")
+	result, err := HandleProviderAuthInput(p, "compatible-token")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !result.Done {
-		t.Error("none auth mode should auto-complete")
+		t.Error("api key auth should complete when token is provided")
 	}
-	if result.EnvVar != "" {
-		t.Errorf("none auth should not set env var, got %q", result.EnvVar)
+	if result.EnvVar != "OPENAI_COMPATIBLE_API_KEY" {
+		t.Errorf("expected OPENAI_COMPATIBLE_API_KEY, got %q", result.EnvVar)
 	}
 }
 
@@ -200,6 +202,16 @@ func TestBuildProviderAuthPrompt_APIKey(t *testing.T) {
 	}
 }
 
+func TestBuildProviderAuthPrompt_OpenAICompatibleIncludesBaseURLAndModelHints(t *testing.T) {
+	p := GetLLMProvider("openai-compatible")
+	prompt := BuildProviderAuthPrompt(p)
+	for _, want := range []string{"OPENAI_COMPATIBLE_API_KEY", "OPENAI_API_BASE", "OPENAI_MODEL"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected prompt to include %s, got: %q", want, prompt)
+		}
+	}
+}
+
 func TestBuildProviderAuthPrompt_OAuthDeviceCode(t *testing.T) {
 	p := GetLLMProvider("openai-codex")
 	prompt := BuildProviderAuthPrompt(p)
@@ -242,7 +254,11 @@ func TestBuildProviderAuthPrompt_GcloudADC(t *testing.T) {
 }
 
 func TestBuildProviderAuthPrompt_None(t *testing.T) {
-	p := GetLLMProvider("openai-compatible")
+	p := &LLMProvider{
+		ID:       "no-auth-provider",
+		Name:     "No Auth",
+		AuthMode: AuthModeNone,
+	}
 	prompt := BuildProviderAuthPrompt(p)
 	if !strings.Contains(strings.ToLower(prompt), "no auth") {
 		t.Errorf("expected 'no auth' in prompt, got: %q", prompt)
@@ -268,8 +284,19 @@ func TestProviderEnvVarsToSet_OAuthDeviceCode(t *testing.T) {
 	}
 }
 
-func TestProviderEnvVarsToSet_None(t *testing.T) {
+func TestProviderEnvVarsToSet_OpenAICompatibleAddsOpenAIAlias(t *testing.T) {
 	p := GetLLMProvider("openai-compatible")
+	m := ProviderEnvVarsToSet(p, "compat-token")
+	if m["OPENAI_COMPATIBLE_API_KEY"] != "compat-token" {
+		t.Errorf("expected OPENAI_COMPATIBLE_API_KEY=compat-token, got %v", m)
+	}
+	if m["OPENAI_API_KEY"] != "compat-token" {
+		t.Errorf("expected OPENAI_API_KEY compatibility alias, got %v", m)
+	}
+}
+
+func TestProviderEnvVarsToSet_None(t *testing.T) {
+	p := &LLMProvider{ID: "none-provider", AuthMode: AuthModeNone, EnvVar: ""}
 	m := ProviderEnvVarsToSet(p, "")
 	if len(m) != 0 {
 		t.Errorf("expected empty map for none auth, got %v", m)

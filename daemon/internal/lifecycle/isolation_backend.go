@@ -249,14 +249,19 @@ func installLocalBubblewrap() error {
 		return fmt.Errorf("no supported package manager found (tried: apt-get, dnf, yum, pacman, apk)")
 	}
 
-	if sudoPath, sudoErr := isolationBackendLookup("sudo"); sudoErr == nil && strings.TrimSpace(sudoPath) != "" {
+	var sudoErr error
+	if sudoPath, lookErr := isolationBackendLookup("sudo"); lookErr == nil && strings.TrimSpace(sudoPath) != "" {
 		args := append([]string{selected.name}, selected.args...)
-		if err := isolationBackendRun("sudo", args...); err == nil {
+		sudoErr = isolationBackendRun("sudo", args...)
+		if sudoErr == nil {
 			return nil
 		}
 	}
 
 	if err := isolationBackendRun(selected.name, selected.args...); err != nil {
+		if sudoErr != nil {
+			return fmt.Errorf("install with sudo failed: %v; install without sudo also failed: %w", sudoErr, err)
+		}
 		return err
 	}
 	return nil

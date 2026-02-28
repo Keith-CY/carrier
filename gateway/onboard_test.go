@@ -177,7 +177,7 @@ func TestOnboardSelectProvider_ValidProvider(t *testing.T) {
 	}
 }
 
-func TestOnboardSelectProvider_OpenAICompatible_AutoAdvance(t *testing.T) {
+func TestOnboardSelectProvider_OpenAICompatible_RequiresAuthInput(t *testing.T) {
 	s := NewOnboardStore()
 	key := "telegram:3"
 	s.start(key)
@@ -191,11 +191,11 @@ func TestOnboardSelectProvider_OpenAICompatible_AutoAdvance(t *testing.T) {
 		t.Errorf("expected ok, got: %+v", resp)
 	}
 	sess := s.get(key)
-	if sess.Step != OnboardAuthConfigured {
-		t.Errorf("openai-compatible should auto-advance to auth_configured, got %q", sess.Step)
+	if sess.Step != OnboardProviderSelected {
+		t.Errorf("openai-compatible should remain in provider_selected for auth input, got %q", sess.Step)
 	}
-	if !strings.Contains(strings.ToLower(resp.Message), "no auth") {
-		t.Errorf("expected 'no auth' message, got: %q", resp.Message)
+	if !strings.Contains(strings.ToLower(resp.Message), "api key") {
+		t.Errorf("expected API key prompt, got: %q", resp.Message)
 	}
 }
 

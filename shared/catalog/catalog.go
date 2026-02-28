@@ -19,6 +19,7 @@ type ProviderSpec struct {
 	Name         string   `json:"name"`
 	AuthMode     AuthMode `json:"auth_mode"`
 	EnvVar       string   `json:"env_var,omitempty"`
+	BaseURL      string   `json:"base_url,omitempty"`
 	ExampleModel string   `json:"example_model,omitempty"`
 	Category     string   `json:"category"`
 	Description  string   `json:"description,omitempty"`
@@ -67,9 +68,20 @@ var providerCatalog = []ProviderSpec{
 		Setup:        "OAuth device-code login",
 	},
 	{
+		ID:           "openrouter",
+		Name:         "OpenRouter",
+		AuthMode:     AuthModeAPIKey,
+		EnvVar:       "OPENROUTER_API_KEY",
+		BaseURL:      "https://openrouter.ai/api/v1",
+		ExampleModel: "openrouter/openai/gpt-4o",
+		Category:     "builtin",
+		Description:  "OpenRouter multi-provider gateway",
+		Setup:        "OpenRouter API key",
+	},
+	{
 		ID:           "openai-compatible",
 		Name:         "OpenAI-Compatible (v1)",
-		AuthMode:     AuthModeNone,
+		AuthMode:     AuthModeAPIKey,
 		EnvVar:       "OPENAI_COMPATIBLE_API_KEY",
 		ExampleModel: "openai-compatible/your-model-id",
 		Category:     "generic",

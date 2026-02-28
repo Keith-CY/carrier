@@ -519,6 +519,12 @@ func onboardEnvVarsPromptLines(sess *OnboardSession) []string {
 		"When done, reply with `/onboard done`.",
 		"To skip env vars, reply `/onboard done` now.",
 	}
+	if sess != nil && strings.EqualFold(strings.TrimSpace(sess.SelectedProvider), "openai-compatible") {
+		lines = append(lines, "")
+		lines = append(lines, "For OpenAI-compatible providers, set:")
+		lines = append(lines, "OPENAI_API_BASE=https://your-openai-v1-endpoint")
+		lines = append(lines, "OPENAI_MODEL=your-model-id")
+	}
 	if len(sess.EnvVars) > 0 {
 		keys := make([]string, 0, len(sess.EnvVars))
 		for k := range sess.EnvVars {
