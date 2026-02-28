@@ -147,6 +147,13 @@ type webhooksCommandOptions struct {
 	Action string
 }
 
+type configCommandOptions struct {
+	Action string
+	Agent  string
+	Key    string
+	Value  string
+}
+
 type keysCommandOptions struct {
 	Action string
 	Name   string
@@ -406,6 +413,8 @@ Usage:
                         Manage custom agent catalog manifests
   carrier webhooks test
                         Send a test webhook callback using CARRIER_WEBHOOK_URL
+  carrier config set <agent_id> key=value
+                        Update agent config and apply hot-reload/restart
   carrier doctor [--json]
                         Run local environment and daemon health checks
   carrier keys generate [--name <alias>]
@@ -586,6 +595,18 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "config":
+			opts, err := parseConfigCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "config failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runConfigCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "config failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "keys":
 			opts, err := parseKeysCommandArgs(commandArgs)
 			if err != nil {
@@ -741,6 +762,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "catalog", args[2:], nil
 	case "webhooks":
 		return "webhooks", args[2:], nil
+	case "config":
+		return "config", args[2:], nil
 	case "keys":
 		return "keys", args[2:], nil
 	case "onboard":
@@ -1010,6 +1033,24 @@ func parseWebhooksCommandArgs(args []string) (webhooksCommandOptions, error) {
 	return webhooksCommandOptions{Action: "test"}, nil
 }
 
+func parseConfigCommandArgs(args []string) (configCommandOptions, error) {
+	if len(args) != 3 || !strings.EqualFold(strings.TrimSpace(args[0]), "set") {
+		return configCommandOptions{}, errors.New("usage: carrier config set <agent_id> key=value")
+	}
+	agent := strings.TrimSpace(args[1])
+	kv := strings.TrimSpace(args[2])
+	parts := strings.SplitN(kv, "=", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+		return configCommandOptions{}, errors.New("key=value is required")
+	}
+	return configCommandOptions{
+		Action: "set",
+		Agent:  agent,
+		Key:    strings.TrimSpace(parts[0]),
+		Value:  strings.TrimSpace(parts[1]),
+	}, nil
+}
+
 func parseSinceValue(raw string) (time.Time, bool) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -1083,6 +1124,20 @@ func runWebhooksCommand(out io.Writer, opts webhooksCommandOptions) error {
 		return fmt.Errorf("webhook returned status %d", resp.StatusCode)
 	}
 	_, _ = fmt.Fprintln(out, "webhook test sent successfully")
+	return nil
+}
+
+func runConfigCommand(out io.Writer, opts configCommandOptions) error {
+	if opts.Action != "set" {
+		return fmt.Errorf("unsupported config action: %s", opts.Action)
+	}
+	changes := map[string]string{opts.Key: opts.Value}
+	path := fmt.Sprintf("/api/v1/agents/%s/config", neturl.PathEscape(strings.TrimSpace(opts.Agent)))
+	_, _, err := daemonRequestWithTimeout(http.MethodPost, path, map[string]interface{}{"changes": changes}, 30*time.Second)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "updated %s %s=%s\n", opts.Agent, opts.Key, opts.Value)
 	return nil
 }
 

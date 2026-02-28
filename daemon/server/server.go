@@ -420,6 +420,8 @@ func buildHTTPMuxWithBaseAgent(
 			handleLogs(svc, agentID, w, r)
 		case "metrics":
 			handleMetrics(svc, agentID, w, r)
+		case "config":
+			handleConfigSet(svc, agentID, w, r)
 		case "upgrade":
 			handleUpgrade(svc, agentID, w, r)
 		case "uninstall":
@@ -782,6 +784,24 @@ func handleMetrics(svc *lifecycle.Service, agentID string, w http.ResponseWriter
 		return
 	}
 	writeJSON(w, http.StatusOK, metrics)
+}
+
+func handleConfigSet(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		Changes map[string]string `json:"changes"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if err := svc.HotReloadConfig(agentID, body.Changes); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
 }
 
 func handleDiagnose(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
