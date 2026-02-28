@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"carrier/shared/catalog"
+	"carrier/shared/configversion"
 	"carrier/shared/openclawcfg"
 )
 
@@ -322,6 +323,9 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	if err := os.WriteFile(recordPath, append(recordRaw, '\n'), 0o600); err != nil {
 		return nil, fmt.Errorf("write carrier record: %w", err)
 	}
+	carrierDir := filepath.Join(home, ".carrier")
+	_ = configversion.InitRepo(carrierDir)
+	configversion.CommitChange(carrierDir, fmt.Sprintf("add agent %s", instanceID))
 
 	return &managedOnboardResult{
 		WorkspacePath: workspacePath,

@@ -60,6 +60,7 @@ import (
 
 	gatewayruntime "carrier/gateway"
 	"carrier/shared/catalog"
+	"carrier/shared/configversion"
 	"carrier/shared/openclawcfg"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -5303,6 +5304,19 @@ func applyConfigV2Env(out io.Writer) {
 	}
 }
 
+func ensureCarrierConfigVersioning(out io.Writer) string {
+	home, err := resolveCarrierHomeDir()
+	if err != nil {
+		_, _ = fmt.Fprintf(out, "warning: failed to resolve carrier home dir for config versioning: %v\n", err)
+		return ""
+	}
+	carrierDir := filepath.Join(home, ".carrier")
+	if err := configversion.InitRepo(carrierDir); err != nil {
+		_, _ = fmt.Fprintf(out, "warning: failed to initialize config versioning: %v\n", err)
+	}
+	return carrierDir
+}
+
 func runOnboard(in io.Reader, out io.Writer, startGateway func() error) error {
 	reader := bufio.NewReader(in)
 
@@ -5384,6 +5398,8 @@ func runOnboard(in io.Reader, out io.Writer, startGateway func() error) error {
 	if err != nil {
 		return err
 	}
+	carrierDir := ensureCarrierConfigVersioning(out)
+	configversion.CommitChange(carrierDir, fmt.Sprintf("configure provider %s", provider.ID))
 
 	if err := configv2.ApplyGatewayEnvironment(cfg); err != nil {
 		return err
@@ -5520,6 +5536,8 @@ func runAddTUI(in io.Reader, out io.Writer, agentID string, quiet bool, isolatio
 		if err := daemonAgentActionWithProgress(out, agentID, "start", quiet); err != nil {
 			return err
 		}
+		carrierDir := ensureCarrierConfigVersioning(out)
+		configversion.CommitChange(carrierDir, fmt.Sprintf("add agent %s", agentID))
 		_, _ = fmt.Fprintf(out, "✅ %s installed and started.\n", agentID)
 		return nil
 	}
@@ -5680,6 +5698,8 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 	if err := upsertManagedInstance(inst); err != nil {
 		return err
 	}
+	carrierDir := ensureCarrierConfigVersioning(out)
+	configversion.CommitChange(carrierDir, fmt.Sprintf("add agent %s", inst.ID))
 	_, _ = fmt.Fprintf(out, "✅ %s installed and started.\n", cfg.Name)
 	return nil
 }
