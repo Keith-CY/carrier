@@ -52,10 +52,10 @@ func TestNormalizeModelForProvider(t *testing.T) {
 			want:     "gpt-5.3-codex",
 		},
 		{
-			name:     "openrouter keeps full model id",
-			provider: "openrouter",
-			model:    "openai/gpt-5.3",
-			want:     "openai/gpt-5.3",
+			name:     "openai-compatible strips provider prefix",
+			provider: "openai-compatible",
+			model:    "openai-compatible/your-model-id",
+			want:     "your-model-id",
 		},
 		{
 			name:     "already plain model id",

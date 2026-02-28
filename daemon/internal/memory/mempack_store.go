@@ -127,10 +127,23 @@ func (s *Store) ImportMemory(mempackPath string, opts ImportOptions) (Entry, err
 	s.entries[memoryID] = entry
 	s.manifests[memoryID] = manifest
 	s.installPath[memoryID] = installPath
+	if scope := scopeForEntry(entry); scope != "" {
+		s.records[memoryID] = MemoryRecord{
+			ID:             memoryID,
+			Scope:          scope,
+			Type:           RecordTypeNote,
+			ContentSummary: strings.TrimSpace(manifest.Name),
+			Provenance:     "import:" + mempackPath,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		}
+		_ = s.writeStableTruthRecordLocked(s.records[memoryID])
+	}
 	if err := s.persistStateLocked(); err != nil {
 		delete(s.entries, memoryID)
 		delete(s.manifests, memoryID)
 		delete(s.installPath, memoryID)
+		delete(s.records, memoryID)
 		s.mu.Unlock()
 		s.recordAudit(opts.RequestID, opts.Actor, "import", memoryID, auditResultFailure, err.Error())
 		return Entry{}, err

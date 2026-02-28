@@ -1,6 +1,8 @@
 package baseagent
 
 import (
+	"carrier/shared/catalog"
+	"carrier/shared/config"
 	"context"
 	"fmt"
 	"sort"
@@ -82,9 +84,6 @@ type Runtime struct {
 }
 
 func NewRuntime(svc AgentService, memStore MemoryStore) *Runtime {
-	llmProvider := NewLLMProviderAdapter("llm", 8)
-	localFallback := NewStaticProvider("local-fallback", "I'm currently running in local fallback mode. Try `list agents`, `status <agent>`, `logs <agent>`, or `help`.")
-
 	r := &Runtime{
 		svc:      svc,
 		memory:   memStore,
@@ -92,14 +91,30 @@ func NewRuntime(svc AgentService, memStore MemoryStore) *Runtime {
 	}
 	r.bus = NewMessageBus(0, 0, 0)
 	r.sessions = NewSessionManager(0)
-	r.providers = NewProviderManager(llmProvider)
-	mustRegisterProvider(r.providers, localFallback)
-	mustRegisterProvider(r.providers, NewChainProvider("llm-with-fallback", llmProvider, localFallback))
+	r.providers = NewProviderManager(nil)
+	for _, provider := range catalog.ListProviders() {
+		mustRegisterProvider(r.providers, NewLLMProviderAdapter(provider.ID, 8))
+	}
+	if configuredProvider := resolveConfiguredBaseAgentProviderID(); configuredProvider != "" {
+		_ = r.providers.SetActiveProvider(configuredProvider)
+	}
 	r.tools = newBuiltinToolRegistry(r, r.providers, r.sessions)
 	r.channels = NewChannelManager(r.bus)
 	r.loop = NewAgentLoop(r.svc, r.tools, r.providers, r.sessions, r.bus)
 	r.loop.SetChannelManager(r.channels)
 	return r
+}
+
+func resolveConfiguredBaseAgentProviderID() string {
+	cfg, err := config.LoadCarrierDefaultModel()
+	if err != nil || cfg == nil {
+		return ""
+	}
+	providerID := strings.ToLower(strings.TrimSpace(cfg.ProviderID))
+	if !catalog.IsSupportedProvider(providerID) {
+		return ""
+	}
+	return providerID
 }
 
 // RegisterExternalChannel registers a concrete channel transport (e.g. telegram, discord, feishu).

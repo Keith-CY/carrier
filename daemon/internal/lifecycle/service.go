@@ -61,6 +61,11 @@ type ProcessController interface {
 	Cleanup()
 }
 
+type ProcessControllerWithEnv interface {
+	ProcessController
+	StartWithEnv(agentID string, command string, args []string, env map[string]string) (int, error)
+}
+
 func WithRunner(r commandexec.Runner) Option {
 	return func(s *Service) { s.runner = r }
 }

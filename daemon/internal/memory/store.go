@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -33,6 +34,17 @@ type Store struct {
 	lastStateErr           error
 	prepareLocksMu         sync.Mutex
 	prepareLocks           map[string]*prepareLockEntry // keyed by agent ID
+
+	records           map[string]MemoryRecord
+	observations      []ObservationEvent
+	grants            map[string]Grant
+	instanceScopes    map[string][]Scope // keyed by agent instance id
+	retentionDays     int
+	truthRoot         string
+	indexPath         string
+	lastObservationGC time.Time
+	sqliteReady       bool
+	sqliteFTSEnabled  bool
 }
 
 type prepareLockEntry struct {
@@ -119,6 +131,11 @@ func NewStore(opts ...StoreOption) *Store {
 		exportMaxBytes:         512 * 1024 * 1024,
 		exportSlots:            make(chan struct{}, 3),
 		prepareLocks:           make(map[string]*prepareLockEntry),
+		records:                make(map[string]MemoryRecord),
+		observations:           make([]ObservationEvent, 0, 256),
+		grants:                 make(map[string]Grant),
+		instanceScopes:         make(map[string][]Scope),
+		retentionDays:          90,
 	}
 	for _, o := range opts {
 		o(s)
@@ -126,9 +143,19 @@ func NewStore(opts ...StoreOption) *Store {
 	if s.statePath == "" && s.rootDir != "" {
 		s.statePath = filepath.Join(s.rootDir, "state", "memory-store.json")
 	}
+	if s.rootDir != "" {
+		s.truthRoot = filepath.Join(s.rootDir, "truth")
+		s.indexPath = filepath.Join(s.rootDir, "index", "mem_index.sqlite")
+	}
 	if err := s.loadState(); err != nil {
 		s.lastStateErr = err
 	}
+	s.mu.Lock()
+	s.migrateLegacyToFusionLocked()
+	s.gcObservationsLocked()
+	s.rebuildSQLiteIndexLocked()
+	_ = s.persistStateLocked()
+	s.mu.Unlock()
 	return s
 }
 
@@ -153,6 +180,18 @@ func (s *Store) Create(id, name, version string, memType Type, owner string) (En
 		UpdatedAt: now,
 	}
 	s.entries[id] = e
+	scope := scopeForEntry(e)
+	if scope != "" {
+		s.records[id] = MemoryRecord{
+			ID:             id,
+			Scope:          scope,
+			Type:           RecordTypeNote,
+			ContentSummary: strings.TrimSpace(name),
+			Provenance:     "create:" + id,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		}
+	}
 	if err := s.persistStateLocked(); err != nil {
 		return Entry{}, err
 	}
@@ -276,6 +315,12 @@ func (s *Store) Archive(memoryID string) error {
 	entry.State = StateArchived
 	entry.UpdatedAt = s.now()
 	s.entries[memoryID] = entry
+	if rec, ok := s.records[memoryID]; ok {
+		archived := entry.UpdatedAt
+		rec.ArchivedAt = &archived
+		rec.UpdatedAt = archived
+		s.records[memoryID] = rec
+	}
 	if err := s.persistStateLocked(); err != nil {
 		return err
 	}

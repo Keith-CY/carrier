@@ -17,9 +17,11 @@ const (
 )
 
 var (
-	isolationRuntimeGOOS   = runtime.GOOS
-	isolationBackendLookup = exec.LookPath
-	isolationEnvLookup     = os.Getenv
+	isolationRuntimeGOOS        = runtime.GOOS
+	isolationBackendLookup      = exec.LookPath
+	isolationEnvLookup          = os.Getenv
+	isolationLimaPathCandidates = []string{"/opt/homebrew/bin/limactl", "/usr/local/bin/limactl"}
+	isolationPathStat           = os.Stat
 )
 
 func buildIsolationHostPrepareCommand() (string, error) {
@@ -167,8 +169,8 @@ func resolveIsolationBackend() (isolationBackend, error) {
 	case manifest.CommandOSDarwin:
 		limactlPath, err := isolationBackendLookup("limactl")
 		if err != nil || strings.TrimSpace(limactlPath) == "" {
-			for _, candidate := range []string{"/opt/homebrew/bin/limactl", "/usr/local/bin/limactl"} {
-				info, statErr := os.Stat(candidate)
+			for _, candidate := range isolationLimaPathCandidates {
+				info, statErr := isolationPathStat(candidate)
 				if statErr == nil && !info.IsDir() {
 					limactlPath = candidate
 					break

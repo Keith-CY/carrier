@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"carrier/shared/catalog"
 	"carrier/shared/openclawcfg"
 )
 
@@ -464,7 +465,7 @@ func renderZeroClawConfigTOML(
 		channelID = "telegram"
 	}
 	if strings.TrimSpace(providerKey) == "" {
-		providerKey = "openrouter"
+		providerKey = "openai"
 	}
 	if strings.TrimSpace(modelID) == "" {
 		modelID = "anthropic/claude-sonnet-4-6"
@@ -515,12 +516,5 @@ func renderZeroClawConfigTOML(
 }
 
 func mapCarrierProviderToManagedProvider(providerID string) string {
-	switch strings.ToLower(strings.TrimSpace(providerID)) {
-	case "openai-codex":
-		return "openai"
-	case "openai-compatible", "vllm", "openai-v1":
-		return "openai"
-	default:
-		return strings.TrimSpace(providerID)
-	}
+	return catalog.MapToManagedProvider(providerID)
 }

@@ -46,6 +46,7 @@ type ExportOptions struct {
 	Collections []string
 	Actor       string
 	RequestID   string
+	Format      string `json:"format,omitempty"`
 }
 
 type AttachOptions struct {

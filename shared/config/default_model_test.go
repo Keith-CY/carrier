@@ -2,8 +2,10 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -61,10 +63,10 @@ func TestLoadCarrierDefaultModelUsesNamedDefault(t *testing.T) {
 func TestLoadCarrierDefaultModelFallsBackToFirstEntry(t *testing.T) {
 	writeCarrierDefaultModelFixture(t, "missing-default", []map[string]string{
 		{
-			"model_name":  "openrouter-default",
-			"model":       "openrouter/auto",
-			"provider_id": "openrouter",
-			"env_var":     "OPENROUTER_API_KEY",
+			"model_name":  "openai-compatible-default",
+			"model":       "openai-compatible/auto",
+			"provider_id": "openai-compatible",
+			"env_var":     "OPENAI_COMPATIBLE_API_KEY",
 		},
 		{
 			"model_name":  "openai-default",
@@ -78,11 +80,11 @@ func TestLoadCarrierDefaultModelFallsBackToFirstEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCarrierDefaultModel error: %v", err)
 	}
-	if got.ProviderID != "openrouter" {
-		t.Fatalf("ProviderID = %q, want %q", got.ProviderID, "openrouter")
+	if got.ProviderID != "openai-compatible" {
+		t.Fatalf("ProviderID = %q, want %q", got.ProviderID, "openai-compatible")
 	}
-	if got.ModelID != "openrouter/auto" {
-		t.Fatalf("ModelID = %q, want %q", got.ModelID, "openrouter/auto")
+	if got.ModelID != "openai-compatible/auto" {
+		t.Fatalf("ModelID = %q, want %q", got.ModelID, "openai-compatible/auto")
 	}
 }
 
@@ -92,5 +94,83 @@ func TestLoadCarrierDefaultModelRejectsEmptyModelList(t *testing.T) {
 	_, err := LoadCarrierDefaultModel()
 	if err == nil {
 		t.Fatal("expected error for empty model_list")
+	}
+}
+
+func TestLoadCarrierModelForProvider(t *testing.T) {
+	writeCarrierDefaultModelFixture(t, "openai-default", []map[string]string{
+		{
+			"model_name":  "openai-default",
+			"model":       "openai/gpt-5.1-codex",
+			"provider_id": "openai",
+			"env_var":     "OPENAI_API_KEY",
+		},
+		{
+			"model_name":  "openai-codex-default",
+			"model":       "openai-codex/gpt-5.3-codex",
+			"provider_id": "openai-codex",
+			"env_var":     "OPENAI_CODEX_TOKEN",
+		},
+	})
+
+	got, err := LoadCarrierModelForProvider("openai-codex")
+	if err != nil {
+		t.Fatalf("LoadCarrierModelForProvider error: %v", err)
+	}
+	if got.ProviderID != "openai-codex" {
+		t.Fatalf("ProviderID = %q, want %q", got.ProviderID, "openai-codex")
+	}
+	if got.ModelID != "openai-codex/gpt-5.3-codex" {
+		t.Fatalf("ModelID = %q, want %q", got.ModelID, "openai-codex/gpt-5.3-codex")
+	}
+
+	if _, err := LoadCarrierModelForProvider("anthropic"); err == nil {
+		t.Fatal("expected missing provider error")
+	}
+}
+
+func TestLoadCarrierModelForProviderRequiresProviderID(t *testing.T) {
+	writeCarrierDefaultModelFixture(t, "openai-default", []map[string]string{
+		{
+			"model_name":  "openai-default",
+			"model":       "openai/gpt-5.2",
+			"provider_id": "openai",
+			"env_var":     "OPENAI_API_KEY",
+		},
+	})
+
+	_, err := LoadCarrierModelForProvider("   ")
+	if err == nil {
+		t.Fatal("expected provider_id required error")
+	}
+	if !strings.Contains(err.Error(), "provider_id is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadCarrierModelForProviderResolvePathError(t *testing.T) {
+	t.Setenv("CARRIER_CONFIG", "")
+
+	origUserHomeDirFn := userHomeDirFn
+	t.Cleanup(func() {
+		userHomeDirFn = origUserHomeDirFn
+	})
+	userHomeDirFn = func() (string, error) {
+		return "", errors.New("home resolution failed")
+	}
+
+	_, err := LoadCarrierModelForProvider("openai")
+	if err == nil {
+		t.Fatal("expected resolve path error")
+	}
+	if !strings.Contains(err.Error(), "home resolution failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadCarrierModelForProviderFromPathLoadError(t *testing.T) {
+	_, err := loadCarrierModelForProviderFromPath(filepath.Join(t.TempDir(), "missing-config.v2.json"), "openai")
+	if err == nil {
+		t.Fatal("expected load error for missing config path")
 	}
 }

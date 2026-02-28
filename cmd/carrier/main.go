@@ -59,6 +59,7 @@ import (
 	"carrier/daemon/server"
 
 	gatewayruntime "carrier/gateway"
+	"carrier/shared/catalog"
 	"carrier/shared/openclawcfg"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -78,12 +79,12 @@ type choiceOption struct {
 	SecretEnv    string
 }
 
-type providerAuthMode string
+type providerAuthMode = catalog.AuthMode
 
 const (
-	authModeAPIKey          providerAuthMode = "api_key"
-	authModeOAuthDeviceCode providerAuthMode = "oauth_device_code"
-	authModeNone            providerAuthMode = "none"
+	authModeAPIKey          providerAuthMode = catalog.AuthModeAPIKey
+	authModeOAuthDeviceCode providerAuthMode = catalog.AuthModeOAuthDeviceCode
+	authModeNone            providerAuthMode = catalog.AuthModeNone
 )
 
 type addCommandOptions struct {
@@ -314,35 +315,42 @@ var managedAgents = map[string]managedAgentConfig{
 	},
 }
 
-var channelOptions = []choiceOption{
-	{
-		ID: "telegram", Name: "Telegram", Setup: "Easy (bot token)",
-		TokenEnv: "CARRIER_TELEGRAM_BOT_TOKEN", RequireToken: true,
-		SecretEnv: "CARRIER_TELEGRAM_WEBHOOK_SECRET",
-	},
-	{
-		ID: "discord", Name: "Discord", Setup: "Easy (bot token + intents)",
-		TokenEnv:  "CARRIER_DISCORD_BOT_TOKEN",
-		SecretEnv: "CARRIER_DISCORD_PUBLIC_KEY",
-	},
-	{
-		ID: "feishu", Name: "Feishu", Setup: "Medium (app credentials + webhook)",
-		TokenEnv:  "CARRIER_FEISHU_APP_TOKEN",
-		SecretEnv: "CARRIER_FEISHU_VERIFICATION_TOKEN",
-	},
-	{ID: "qq", Name: "QQ", Setup: "Easy (AppID + AppSecret)", TokenEnv: "CARRIER_QQ_BOT_TOKEN"},
-	{ID: "dingtalk", Name: "DingTalk", Setup: "Medium (app credentials)", TokenEnv: "CARRIER_DINGTALK_BOT_TOKEN"},
-	{ID: "line", Name: "LINE", Setup: "Medium (credentials + webhook URL)", TokenEnv: "CARRIER_LINE_BOT_TOKEN"},
-	{ID: "wecom", Name: "WeCom", Setup: "Medium (CorpID + webhook setup)", TokenEnv: "CARRIER_WECOM_BOT_TOKEN"},
-}
+var channelOptions = buildChannelOptionsFromCatalog()
 
 var onboardChannelOptions = channelOptions
 
-var providerOptions = []choiceOption{
-	{ID: "anthropic", Name: "Anthropic", Setup: "Claude direct API key", AuthMode: authModeAPIKey, ProviderEnv: "ANTHROPIC_API_KEY", ExampleModel: "anthropic/claude-sonnet-4.6"},
-	{ID: "openai", Name: "OpenAI", Setup: "GPT direct API key", AuthMode: authModeAPIKey, ProviderEnv: "OPENAI_API_KEY", ExampleModel: "openai/gpt-5.2"},
-	{ID: "openai-codex", Name: "OpenAI Codex", Setup: "OAuth device-code login", AuthMode: authModeOAuthDeviceCode, ProviderEnv: "OPENAI_CODEX_TOKEN", ExampleModel: "openai-codex/gpt-5.3-codex"},
-	{ID: "openai-compatible", Name: "OpenAI-Compatible (v1)", Setup: "OpenAI v1-compatible endpoint", AuthMode: authModeNone, ExampleModel: "openai-compatible/auto", Aliases: []string{"vllm", "openai-v1"}},
+var providerOptions = buildProviderOptionsFromCatalog()
+
+func buildChannelOptionsFromCatalog() []choiceOption {
+	specs := catalog.ListChannels()
+	out := make([]choiceOption, 0, len(specs))
+	for _, spec := range specs {
+		out = append(out, choiceOption{
+			ID:           spec.ID,
+			Name:         spec.Name,
+			Setup:        spec.Setup,
+			TokenEnv:     spec.TokenEnv,
+			RequireToken: spec.RequireToken,
+			SecretEnv:    spec.SecretEnv,
+		})
+	}
+	return out
+}
+
+func buildProviderOptionsFromCatalog() []choiceOption {
+	specs := catalog.ListProviders()
+	out := make([]choiceOption, 0, len(specs))
+	for _, spec := range specs {
+		out = append(out, choiceOption{
+			ID:           spec.ID,
+			Name:         spec.Name,
+			Setup:        spec.Setup,
+			AuthMode:     spec.AuthMode,
+			ProviderEnv:  spec.EnvVar,
+			ExampleModel: spec.ExampleModel,
+		})
+	}
+	return out
 }
 
 const (
@@ -1776,7 +1784,12 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 	switch opts.AgentID {
 	case "openclaw", "picoclaw", "zeroclaw":
 	default:
-		if opts.Action == "status" || opts.Action == "logs" || opts.Action == "rollback" || opts.Action == "uninstall" {
+		if opts.Action == "status" ||
+			opts.Action == "logs" ||
+			opts.Action == "rollback" ||
+			opts.Action == "uninstall" ||
+			opts.Action == "key-import" ||
+			opts.Action == "key-generate" {
 			// status --all does not require agent ID
 		} else {
 			return remoteCommandOptions{}, fmt.Errorf("unsupported remote agent_id: %s (expected one of openclaw, picoclaw, zeroclaw)", opts.AgentID)
@@ -2083,15 +2096,17 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 		return remoteCommandOptions{}, fmt.Errorf("invalid --runtime-mode value: %s", opts.RuntimeMode)
 	}
 	for _, channel := range opts.SyncChannels {
-		switch channel {
-		case "telegram", "discord", "feishu":
-		default:
+		if !catalog.IsSupportedChannel(channel) {
 			return remoteCommandOptions{}, fmt.Errorf("invalid --sync-channel value: %s", channel)
 		}
 	}
 	for _, provider := range opts.SyncProviders {
-		if strings.TrimSpace(provider) == "" {
+		trimmed := strings.TrimSpace(provider)
+		if trimmed == "" {
 			return remoteCommandOptions{}, errors.New("--sync-provider cannot be empty")
+		}
+		if !catalog.IsSupportedProvider(trimmed) {
+			return remoteCommandOptions{}, fmt.Errorf("invalid --sync-provider value: %s", trimmed)
 		}
 	}
 	return opts, nil
@@ -6845,14 +6860,7 @@ func validateJSONBlob(raw []byte, message string) error {
 }
 
 func mapCarrierProviderToManagedProvider(providerID string) string {
-	switch strings.ToLower(strings.TrimSpace(providerID)) {
-	case "openai-codex":
-		return "openai"
-	case "openai-compatible", "vllm", "openai-v1":
-		return "openai"
-	default:
-		return strings.TrimSpace(providerID)
-	}
+	return catalog.MapToManagedProvider(providerID)
 }
 
 func pickProviderTokenForManaged(provider choiceOption, envVars map[string]string) string {

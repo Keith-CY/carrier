@@ -16,6 +16,13 @@ type persistedStoreState struct {
 	Attachments     map[string][]Attachment    `json:"attachments"`
 	Views           map[string]ViewExplanation `json:"views"`
 	ViewInputDigest map[string]string          `json:"view_input_digest"`
+	Records         map[string]MemoryRecord    `json:"records,omitempty"`
+	Observations    []ObservationEvent         `json:"observations,omitempty"`
+	Grants          map[string]Grant           `json:"grants,omitempty"`
+	InstanceScopes  map[string][]Scope         `json:"instance_scopes,omitempty"`
+	RetentionDays   int                        `json:"retention_days,omitempty"`
+	TruthRoot       string                     `json:"truth_root,omitempty"`
+	IndexPath       string                     `json:"index_path,omitempty"`
 }
 
 func (s *Store) loadState() error {
@@ -58,6 +65,27 @@ func (s *Store) loadState() error {
 	if state.ViewInputDigest != nil {
 		s.viewInputDigest = state.ViewInputDigest
 	}
+	if state.Records != nil {
+		s.records = state.Records
+	}
+	if state.Observations != nil {
+		s.observations = state.Observations
+	}
+	if state.Grants != nil {
+		s.grants = state.Grants
+	}
+	if state.InstanceScopes != nil {
+		s.instanceScopes = state.InstanceScopes
+	}
+	if state.RetentionDays > 0 {
+		s.retentionDays = state.RetentionDays
+	}
+	if strings.TrimSpace(state.TruthRoot) != "" {
+		s.truthRoot = state.TruthRoot
+	}
+	if strings.TrimSpace(state.IndexPath) != "" {
+		s.indexPath = state.IndexPath
+	}
 
 	return nil
 }
@@ -76,6 +104,13 @@ func (s *Store) persistStateLocked() error {
 		Attachments:     make(map[string][]Attachment, len(s.attachments)),
 		Views:           make(map[string]ViewExplanation, len(s.views)),
 		ViewInputDigest: make(map[string]string, len(s.viewInputDigest)),
+		Records:         make(map[string]MemoryRecord, len(s.records)),
+		Observations:    append([]ObservationEvent(nil), s.observations...),
+		Grants:          make(map[string]Grant, len(s.grants)),
+		InstanceScopes:  make(map[string][]Scope, len(s.instanceScopes)),
+		RetentionDays:   s.retentionDays,
+		TruthRoot:       s.truthRoot,
+		IndexPath:       s.indexPath,
 	}
 	for k, v := range s.entries {
 		state.Entries[k] = v
@@ -94,6 +129,17 @@ func (s *Store) persistStateLocked() error {
 	}
 	for k, v := range s.viewInputDigest {
 		state.ViewInputDigest[k] = v
+	}
+	for k, v := range s.records {
+		state.Records[k] = v
+	}
+	for k, v := range s.grants {
+		state.Grants[k] = v
+	}
+	for k, v := range s.instanceScopes {
+		cloned := make([]Scope, len(v))
+		copy(cloned, v)
+		state.InstanceScopes[k] = cloned
 	}
 
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
