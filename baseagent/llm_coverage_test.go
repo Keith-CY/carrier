@@ -75,15 +75,8 @@ func TestInferProviderEnvVar(t *testing.T) {
 	}{
 		{provider: "openai-codex", want: "OPENAI_CODEX_TOKEN"},
 		{provider: "openai", want: "OPENAI_API_KEY"},
-		{provider: "openrouter", want: "OPENROUTER_API_KEY"},
 		{provider: "anthropic", want: "ANTHROPIC_API_KEY"},
-		{provider: "google", want: "GEMINI_API_KEY"},
-		{provider: "groq", want: "GROQ_API_KEY"},
-		{provider: "deepseek", want: "DEEPSEEK_API_KEY"},
-		{provider: "mistral", want: "MISTRAL_API_KEY"},
-		{provider: "opencode", want: "OPENCODE_API_KEY"},
-		{provider: "zai", want: "ZAI_API_KEY"},
-		{provider: "cerebras", want: "CEREBRAS_API_KEY"},
+		{provider: "openai-compatible", want: "OPENAI_COMPATIBLE_API_KEY"},
 		{provider: "unknown", want: ""},
 	}
 	for _, tc := range tests {
@@ -207,7 +200,7 @@ func TestRequestLLMCompletionErrorScenarios(t *testing.T) {
 	})
 }
 
-func TestRequestLLMCompletionOpenRouterHeaders(t *testing.T) {
+func TestRequestLLMCompletionOpenAICompatibleDoesNotSetOpenRouterHeaders(t *testing.T) {
 	var gotReferer string
 	var gotTitle string
 
@@ -219,9 +212,9 @@ func TestRequestLLMCompletionOpenRouterHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	writeDefaultModelConfig(t, "openrouter", "openai/gpt-5.3", "OPENROUTER_API_KEY")
-	t.Setenv("OPENROUTER_API_KEY", "or-test")
-	t.Setenv("CARRIER_OPENROUTER_BASE_URL", server.URL)
+	writeDefaultModelConfig(t, "openai-compatible", "openai-compatible/demo-model", "OPENAI_COMPATIBLE_API_KEY")
+	t.Setenv("OPENAI_COMPATIBLE_API_KEY", "ok-test")
+	t.Setenv("CARRIER_OPENAI_BASE_URL", server.URL)
 
 	got, err := requestLLMCompletion(context.Background(), "sys", "hello")
 	if err != nil {
@@ -230,10 +223,10 @@ func TestRequestLLMCompletionOpenRouterHeaders(t *testing.T) {
 	if got != "ok" {
 		t.Fatalf("unexpected response: %q", got)
 	}
-	if gotReferer != "https://carrier.local" {
+	if gotReferer != "" {
 		t.Fatalf("unexpected HTTP-Referer header: %q", gotReferer)
 	}
-	if gotTitle != "Carrier Base Agent" {
+	if gotTitle != "" {
 		t.Fatalf("unexpected X-Title header: %q", gotTitle)
 	}
 }
@@ -421,8 +414,8 @@ func TestResolveLLMRuntimeConfigAdditionalBranches(t *testing.T) {
 
 	t.Run("unknown provider env mapping", func(t *testing.T) {
 		writeDefaultModelConfig(t, "unknown-provider", "m1", "")
-		if _, err := resolveLLMRuntimeConfig(); err == nil || !strings.Contains(err.Error(), "no env var mapping") {
-			t.Fatalf("expected env mapping error, got %v", err)
+		if _, err := resolveLLMRuntimeConfig(); err == nil || !strings.Contains(err.Error(), "unsupported provider") {
+			t.Fatalf("expected unsupported provider error, got %v", err)
 		}
 	})
 
@@ -434,16 +427,16 @@ func TestResolveLLMRuntimeConfigAdditionalBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("openrouter default base url", func(t *testing.T) {
-		writeDefaultModelConfig(t, "openrouter", "openai/gpt-5.3", "OPENROUTER_API_KEY")
-		t.Setenv("OPENROUTER_API_KEY", "or-token")
-		t.Setenv("CARRIER_OPENROUTER_BASE_URL", "")
+	t.Run("openai-compatible default base url", func(t *testing.T) {
+		writeDefaultModelConfig(t, "openai-compatible", "openai-compatible/demo-model", "OPENAI_COMPATIBLE_API_KEY")
+		t.Setenv("OPENAI_COMPATIBLE_API_KEY", "ok-token")
+		t.Setenv("CARRIER_OPENAI_BASE_URL", "")
 		cfg, err := resolveLLMRuntimeConfig()
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if cfg.BaseURL != defaultOpenRouterBaseURL {
-			t.Fatalf("expected openrouter default base url, got %q", cfg.BaseURL)
+		if cfg.BaseURL != defaultOpenAIBaseURL {
+			t.Fatalf("expected openai default base url, got %q", cfg.BaseURL)
 		}
 	})
 

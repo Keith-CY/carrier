@@ -39,7 +39,6 @@ type Store struct {
 	observations      []ObservationEvent
 	grants            map[string]Grant
 	instanceScopes    map[string][]Scope // keyed by agent instance id
-	explicitScopes    map[string]map[Scope]struct{}
 	retentionDays     int
 	truthRoot         string
 	indexPath         string
@@ -136,7 +135,6 @@ func NewStore(opts ...StoreOption) *Store {
 		observations:           make([]ObservationEvent, 0, 256),
 		grants:                 make(map[string]Grant),
 		instanceScopes:         make(map[string][]Scope),
-		explicitScopes:         make(map[string]map[Scope]struct{}),
 		retentionDays:          90,
 	}
 	for _, o := range opts {
@@ -154,7 +152,6 @@ func NewStore(opts ...StoreOption) *Store {
 	}
 	s.mu.Lock()
 	s.migrateLegacyToFusionLocked()
-	s.bootstrapExplicitScopesLocked()
 	s.gcObservationsLocked()
 	s.rebuildSQLiteIndexLocked()
 	_ = s.persistStateLocked()
@@ -194,7 +191,6 @@ func (s *Store) Create(id, name, version string, memType Type, owner string) (En
 			CreatedAt:      now,
 			UpdatedAt:      now,
 		}
-		s.syncRecordToSQLiteLocked(s.records[id])
 	}
 	if err := s.persistStateLocked(); err != nil {
 		return Entry{}, err
@@ -324,7 +320,6 @@ func (s *Store) Archive(memoryID string) error {
 		rec.ArchivedAt = &archived
 		rec.UpdatedAt = archived
 		s.records[memoryID] = rec
-		s.syncRecordToSQLiteLocked(rec)
 	}
 	if err := s.persistStateLocked(); err != nil {
 		return err

@@ -18,6 +18,18 @@ type CarrierDefaultModel struct {
 	EnvVar     string
 }
 
+type carrierModelEntry struct {
+	ModelName  string `json:"model_name"`
+	Model      string `json:"model"`
+	ProviderID string `json:"provider_id"`
+	EnvVar     string `json:"env_var"`
+}
+
+type carrierModelConfig struct {
+	DefaultModel string              `json:"default_model"`
+	ModelList    []carrierModelEntry `json:"model_list"`
+}
+
 // LoadCarrierDefaultModel resolves and loads carrier config.v2, then returns
 // the selected default model entry.
 func LoadCarrierDefaultModel() (*CarrierDefaultModel, error) {
@@ -28,46 +40,71 @@ func LoadCarrierDefaultModel() (*CarrierDefaultModel, error) {
 	return loadCarrierDefaultModelFromPath(path)
 }
 
+// LoadCarrierModelForProvider resolves and loads carrier config.v2, then returns
+// the first model entry matching the requested provider ID.
+func LoadCarrierModelForProvider(providerID string) (*CarrierDefaultModel, error) {
+	path, err := resolveCarrierConfigV2Path()
+	if err != nil {
+		return nil, err
+	}
+	return loadCarrierModelForProviderFromPath(path, providerID)
+}
+
 func loadCarrierDefaultModelFromPath(path string) (*CarrierDefaultModel, error) {
+	cfg, err := loadCarrierModelConfigFromPath(path)
+	if err != nil {
+		return nil, err
+	}
+	defaultName := strings.TrimSpace(cfg.DefaultModel)
+	if defaultName != "" {
+		for _, m := range cfg.ModelList {
+			if strings.EqualFold(strings.TrimSpace(m.ModelName), defaultName) {
+				return convertCarrierModel(m), nil
+			}
+		}
+	}
+	return convertCarrierModel(cfg.ModelList[0]), nil
+}
+
+func loadCarrierModelForProviderFromPath(path string, providerID string) (*CarrierDefaultModel, error) {
+	cfg, err := loadCarrierModelConfigFromPath(path)
+	if err != nil {
+		return nil, err
+	}
+	target := strings.ToLower(strings.TrimSpace(providerID))
+	if target == "" {
+		return nil, errors.New("provider_id is required")
+	}
+	for _, m := range cfg.ModelList {
+		if strings.EqualFold(strings.TrimSpace(m.ProviderID), target) {
+			return convertCarrierModel(m), nil
+		}
+	}
+	return nil, errors.New("provider_id is not found in model_list")
+}
+
+func loadCarrierModelConfigFromPath(path string) (*carrierModelConfig, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var cfg struct {
-		DefaultModel string `json:"default_model"`
-		ModelList    []struct {
-			ModelName  string `json:"model_name"`
-			Model      string `json:"model"`
-			ProviderID string `json:"provider_id"`
-			EnvVar     string `json:"env_var"`
-		} `json:"model_list"`
-	}
+	var cfg carrierModelConfig
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return nil, err
 	}
 	if len(cfg.ModelList) == 0 {
 		return nil, errors.New("empty model_list")
 	}
-	defaultName := strings.TrimSpace(cfg.DefaultModel)
-	if defaultName != "" {
-		for _, m := range cfg.ModelList {
-			if strings.EqualFold(strings.TrimSpace(m.ModelName), defaultName) {
-				return &CarrierDefaultModel{
-					ProviderID: strings.TrimSpace(m.ProviderID),
-					ModelID:    strings.TrimSpace(m.Model),
-					ModelName:  strings.TrimSpace(m.ModelName),
-					EnvVar:     strings.TrimSpace(m.EnvVar),
-				}, nil
-			}
-		}
-	}
-	m := cfg.ModelList[0]
+	return &cfg, nil
+}
+
+func convertCarrierModel(m carrierModelEntry) *CarrierDefaultModel {
 	return &CarrierDefaultModel{
 		ProviderID: strings.TrimSpace(m.ProviderID),
 		ModelID:    strings.TrimSpace(m.Model),
 		ModelName:  strings.TrimSpace(m.ModelName),
 		EnvVar:     strings.TrimSpace(m.EnvVar),
-	}, nil
+	}
 }
 
 func resolveCarrierConfigV2Path() (string, error) {

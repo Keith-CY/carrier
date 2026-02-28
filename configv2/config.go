@@ -2,6 +2,7 @@ package configv2
 
 import (
 	"carrier/daemon/credentialstore"
+	"carrier/shared/catalog"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -79,12 +80,18 @@ func Load() (*Config, string, error) {
 	if cfg.ConfigVersion != CurrentVersion {
 		return nil, "", fmt.Errorf("unsupported config_version=%d (expected %d). Please run `carrier onboard` again", cfg.ConfigVersion, CurrentVersion)
 	}
+	if err := validateConfig(&cfg); err != nil {
+		return nil, "", err
+	}
 	return &cfg, path, nil
 }
 
 func Save(cfg *Config) (string, error) {
 	if cfg == nil {
 		return "", errors.New("nil config")
+	}
+	if err := validateConfig(cfg); err != nil {
+		return "", err
 	}
 	cfg.ConfigVersion = CurrentVersion
 	path, err := DefaultPath()
@@ -102,6 +109,31 @@ func Save(cfg *Config) (string, error) {
 		return "", fmt.Errorf("write config: %w", err)
 	}
 	return path, nil
+}
+
+func validateConfig(cfg *Config) error {
+	if cfg == nil {
+		return errors.New("nil config")
+	}
+	for _, ch := range cfg.Channels {
+		channelID := strings.ToLower(strings.TrimSpace(ch.ID))
+		if channelID == "" {
+			continue
+		}
+		if !catalog.IsSupportedChannel(channelID) {
+			return fmt.Errorf("unsupported channel id %q", ch.ID)
+		}
+	}
+	for _, model := range cfg.ModelList {
+		providerID := strings.ToLower(strings.TrimSpace(model.ProviderID))
+		if providerID == "" {
+			continue
+		}
+		if !catalog.IsSupportedProvider(providerID) {
+			return fmt.Errorf("unsupported provider id %q", model.ProviderID)
+		}
+	}
+	return nil
 }
 
 // ResolveDefaultModel returns the selected default model entry in model_list.

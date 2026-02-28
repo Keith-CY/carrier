@@ -65,7 +65,7 @@ type ExtendedMemoryStore interface {
 	MemoryStore
 	Search(subject, query string, maxResults int, minScore float64) ([]MemorySearchHit, error)
 	GetRecord(subject, id string) (MemoryRecord, error)
-	Observe(subject, toolName, outputSnippet, scope string, autoCurate bool) (string, error)
+	Observe(subject, toolName, outputSnippet, scope string) (string, error)
 	Grant(subject, scope, grantedBy, reason string) (string, error)
 	Revoke(grantID, revokedBy string) error
 	ListAudits() []MemoryAudit

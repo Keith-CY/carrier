@@ -96,8 +96,6 @@ func TestManagedProviderMappingAndDisplayName(t *testing.T) {
 	cases := map[string]string{
 		"openai-codex":      "openai",
 		"openai-compatible": "openai",
-		"vllm":              "openai",
-		"openai-v1":         "openai",
 		"anthropic":         "anthropic",
 		"  custom  ":        "custom",
 	}

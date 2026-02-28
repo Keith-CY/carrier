@@ -243,9 +243,9 @@ func TestResolveDefaultModelFallsBackToFirstEntry(t *testing.T) {
 		DefaultModel: "missing-default",
 		ModelList: []Model{
 			{
-				ModelName:  "openrouter-default",
-				Model:      "openrouter/auto",
-				ProviderID: "openrouter",
+				ModelName:  "openai-compatible-default",
+				Model:      "openai-compatible/auto",
+				ProviderID: "openai-compatible",
 			},
 			{
 				ModelName:  "openai-default",
@@ -259,11 +259,11 @@ func TestResolveDefaultModelFallsBackToFirstEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveDefaultModel returned error: %v", err)
 	}
-	if got.ProviderID != "openrouter" {
-		t.Fatalf("ProviderID = %q, want %q", got.ProviderID, "openrouter")
+	if got.ProviderID != "openai-compatible" {
+		t.Fatalf("ProviderID = %q, want %q", got.ProviderID, "openai-compatible")
 	}
-	if got.Model != "openrouter/auto" {
-		t.Fatalf("Model = %q, want %q", got.Model, "openrouter/auto")
+	if got.Model != "openai-compatible/auto" {
+		t.Fatalf("Model = %q, want %q", got.Model, "openai-compatible/auto")
 	}
 }
 
@@ -273,6 +273,38 @@ func TestResolveDefaultModelRejectsInvalidInput(t *testing.T) {
 	}
 	if _, err := ResolveDefaultModel(&Config{}); err == nil {
 		t.Fatal("expected error for empty model_list")
+	}
+}
+
+func TestLoadRejectsUnsupportedProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.v2.json")
+	t.Setenv("CARRIER_CONFIG", path)
+	if err := os.WriteFile(path, []byte(`{
+  "config_version": 2,
+  "default_model": "x",
+  "model_list": [{"model_name":"x","model":"openrouter/auto","provider_id":"openrouter"}]
+}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, _, err := Load(); err == nil {
+		t.Fatal("expected unsupported provider error")
+	}
+}
+
+func TestLoadRejectsUnsupportedChannel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.v2.json")
+	t.Setenv("CARRIER_CONFIG", path)
+	if err := os.WriteFile(path, []byte(`{
+  "config_version": 2,
+  "channels": [{"id":"qq","enabled":true}],
+  "model_list": [{"model_name":"openai-default","model":"openai/gpt-5.1-codex","provider_id":"openai"}]
+}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, _, err := Load(); err == nil {
+		t.Fatal("expected unsupported channel error")
 	}
 }
 

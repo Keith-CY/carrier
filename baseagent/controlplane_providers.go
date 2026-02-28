@@ -246,7 +246,7 @@ func (p *LLMProviderAdapter) Reply(ctx context.Context, req ProviderRequest) (st
 		}
 	}
 
-	return requestLLMCompletion(ctx, req.SystemPrompt, prompt)
+	return requestLLMCompletionForProvider(ctx, p.name, req.SystemPrompt, prompt)
 }
 
 func renderProviderHistory(history []ConversationMessage, window int) string {

@@ -24,6 +24,9 @@ var errRecordNotFound = errors.New("memory record not found")
 
 // Search performs a compact record recall with permission-first filtering.
 func (s *Store) Search(opts SearchOptions) []SearchHit {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	subject := strings.TrimSpace(opts.Subject)
 	query := strings.TrimSpace(opts.Query)
 	if query == "" {
@@ -37,17 +40,8 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 		maxResults = maxSearchResults
 	}
 
-	s.mu.RLock()
-	allowed := s.allowedScopesForSubjectLocked(subject)
-	s.mu.RUnlock()
-
-	if sqliteHits, ok := s.searchSQLite(allowed, query, maxResults, opts.MinScore); ok {
-		return sqliteHits
-	}
-
 	lowerQuery := strings.ToLower(query)
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	allowed := s.allowedScopesForSubjectLocked(subject)
 	hits := make([]SearchHit, 0, maxResults)
 	for _, rec := range s.records {
 		if rec.ArchivedAt != nil {
@@ -162,7 +156,6 @@ func (s *Store) UpsertRecord(input UpsertRecordInput) (MemoryRecord, error) {
 		}
 	}
 	s.records[id] = rec
-	s.syncRecordToSQLiteLocked(rec)
 	if err := s.writeStableTruthRecordLocked(rec); err != nil {
 		return MemoryRecord{}, err
 	}
@@ -189,7 +182,6 @@ func (s *Store) ArchiveRecord(subject, id string) error {
 	rec.ArchivedAt = &now
 	rec.UpdatedAt = now
 	s.records[id] = rec
-	s.syncRecordToSQLiteLocked(rec)
 	if err := s.persistStateLocked(); err != nil {
 		return err
 	}
@@ -232,7 +224,6 @@ func (s *Store) Observe(input ObserveInput) (ObservationEvent, error) {
 	}
 	s.observations = append(s.observations, ev)
 	s.gcObservationsLocked()
-	s.syncObservationToSQLiteLocked(ev)
 	if err := s.appendObservationTruthLocked(ev); err != nil {
 		return ObservationEvent{}, err
 	}
@@ -248,10 +239,7 @@ func (s *Store) Observe(input ObserveInput) (ObservationEvent, error) {
 			CreatedAt:      now,
 			UpdatedAt:      now,
 		}
-		s.syncRecordToSQLiteLocked(s.records[recID])
-		if err := s.writeStableTruthRecordLocked(s.records[recID]); err != nil {
-			s.lastStateErr = fmt.Errorf("write curated truth record: %w", err)
-		}
+		_ = s.writeStableTruthRecordLocked(s.records[recID])
 	}
 	if err := s.persistStateLocked(); err != nil {
 		return ObservationEvent{}, err
@@ -317,7 +305,6 @@ func (s *Store) GrantScope(subject string, scope Scope, grantedBy, reason string
 		Reason:    strings.TrimSpace(reason),
 	}
 	s.grants[id] = g
-	s.syncGrantToSQLiteLocked(g)
 	if err := s.persistStateLocked(); err != nil {
 		return Grant{}, err
 	}
@@ -337,7 +324,6 @@ func (s *Store) RevokeScope(grantID, revokedBy string) error {
 	g.RevokedAt = &now
 	g.RevokedBy = strings.TrimSpace(revokedBy)
 	s.grants[grantID] = g
-	s.syncGrantToSQLiteLocked(g)
 	if err := s.persistStateLocked(); err != nil {
 		return err
 	}
@@ -368,17 +354,15 @@ func (s *Store) AttachScope(instanceID string, scope Scope) error {
 	if instanceID == "" || scope == "" {
 		return fmt.Errorf("instanceID and scope are required")
 	}
-	if s.explicitScopes == nil {
-		s.explicitScopes = make(map[string]map[Scope]struct{})
+	existing := s.instanceScopes[instanceID]
+	for _, v := range existing {
+		if v == scope {
+			return nil
+		}
 	}
-	explicit := s.explicitScopes[instanceID]
-	if explicit == nil {
-		explicit = make(map[Scope]struct{})
-	}
-	explicit[scope] = struct{}{}
-	s.explicitScopes[instanceID] = explicit
-	scopes := s.recomputeInstanceScopesLocked(instanceID)
-	s.syncInstanceScopesToSQLiteLocked(instanceID, scopes)
+	existing = append(existing, scope)
+	sort.SliceStable(existing, func(i, j int) bool { return existing[i] < existing[j] })
+	s.instanceScopes[instanceID] = existing
 	if err := s.persistStateLocked(); err != nil {
 		return err
 	}
@@ -402,19 +386,7 @@ func (s *Store) DetachScope(instanceID string, scope Scope) error {
 	if idx < 0 {
 		return ErrAttachmentMissing
 	}
-	updated := append(existing[:idx], existing[idx+1:]...)
-	if len(updated) == 0 {
-		delete(s.instanceScopes, instanceID)
-	} else {
-		s.instanceScopes[instanceID] = updated
-	}
-	if explicit := s.explicitScopes[instanceID]; explicit != nil {
-		delete(explicit, scope)
-		if len(explicit) == 0 {
-			delete(s.explicitScopes, instanceID)
-		}
-	}
-	s.syncInstanceScopesToSQLiteLocked(instanceID, updated)
+	s.instanceScopes[instanceID] = append(existing[:idx], existing[idx+1:]...)
 	if err := s.persistStateLocked(); err != nil {
 		return err
 	}
@@ -576,99 +548,6 @@ func (s *Store) migrateLegacyToFusionLocked() {
 		sort.SliceStable(existing, func(i, j int) bool { return existing[i] < existing[j] })
 		s.instanceScopes[instanceID] = existing
 	}
-}
-
-func (s *Store) bootstrapExplicitScopesLocked() {
-	if s.explicitScopes == nil {
-		s.explicitScopes = make(map[string]map[Scope]struct{})
-	}
-	if len(s.explicitScopes) == 0 {
-		for instanceID, scopes := range s.instanceScopes {
-			derived := s.derivedAttachmentScopesLocked(instanceID)
-			explicit := make(map[Scope]struct{})
-			for _, scope := range scopes {
-				normalized := normalizeScope(scope)
-				if normalized == "" {
-					continue
-				}
-				if _, ok := derived[normalized]; ok {
-					continue
-				}
-				explicit[normalized] = struct{}{}
-			}
-			if len(explicit) > 0 {
-				s.explicitScopes[instanceID] = explicit
-			}
-		}
-	} else {
-		for instanceID, scopeSet := range s.explicitScopes {
-			normalizedSet := make(map[Scope]struct{}, len(scopeSet))
-			for scope := range scopeSet {
-				normalized := normalizeScope(scope)
-				if normalized != "" {
-					normalizedSet[normalized] = struct{}{}
-				}
-			}
-			if len(normalizedSet) == 0 {
-				delete(s.explicitScopes, instanceID)
-				continue
-			}
-			s.explicitScopes[instanceID] = normalizedSet
-		}
-	}
-
-	instanceIDs := make(map[string]struct{}, len(s.instanceScopes)+len(s.attachments)+len(s.explicitScopes))
-	for instanceID := range s.instanceScopes {
-		instanceIDs[instanceID] = struct{}{}
-	}
-	for instanceID := range s.attachments {
-		instanceIDs[instanceID] = struct{}{}
-	}
-	for instanceID := range s.explicitScopes {
-		instanceIDs[instanceID] = struct{}{}
-	}
-	for instanceID := range instanceIDs {
-		s.recomputeInstanceScopesLocked(instanceID)
-	}
-}
-
-func (s *Store) derivedAttachmentScopesLocked(instanceID string) map[Scope]struct{} {
-	set := make(map[Scope]struct{})
-	for _, att := range s.attachments[instanceID] {
-		entry, ok := s.entries[att.MemoryID]
-		if !ok {
-			continue
-		}
-		scope := normalizeScope(scopeForEntry(entry))
-		if scope == "" {
-			continue
-		}
-		set[scope] = struct{}{}
-	}
-	return set
-}
-
-func (s *Store) recomputeInstanceScopesLocked(instanceID string) []Scope {
-	merged := s.derivedAttachmentScopesLocked(instanceID)
-	if explicit := s.explicitScopes[instanceID]; explicit != nil {
-		for scope := range explicit {
-			normalized := normalizeScope(scope)
-			if normalized != "" {
-				merged[normalized] = struct{}{}
-			}
-		}
-	}
-	if len(merged) == 0 {
-		delete(s.instanceScopes, instanceID)
-		return nil
-	}
-	scopes := make([]Scope, 0, len(merged))
-	for scope := range merged {
-		scopes = append(scopes, scope)
-	}
-	sort.SliceStable(scopes, func(i, j int) bool { return scopes[i] < scopes[j] })
-	s.instanceScopes[instanceID] = scopes
-	return scopes
 }
 
 func (s *Store) gcObservationsLocked() {

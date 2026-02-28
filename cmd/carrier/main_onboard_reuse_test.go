@@ -49,7 +49,7 @@ func TestPromptProviderAuthMinimalReusesSavedOAuthCredential(t *testing.T) {
 	if got := strings.TrimSpace(credEnv["OPENAI_CODEX_TOKEN"]); got != savedToken {
 		t.Fatalf("OPENAI_CODEX_TOKEN = %q, want %q", got, savedToken)
 	}
-	if !strings.Contains(out.String(), "Reuse saved OpenAI Codex credential") {
+	if !strings.Contains(out.String(), "Reuse saved "+provider.Name+" credential") {
 		t.Fatalf("stdout missing reuse prompt: %q", out.String())
 	}
 }

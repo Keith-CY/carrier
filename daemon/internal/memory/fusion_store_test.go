@@ -136,32 +136,6 @@ func TestFusionInstanceImportExport(t *testing.T) {
 	}
 }
 
-func TestFusionSearchUsesSQLiteIndexCache(t *testing.T) {
-	root := t.TempDir()
-	store := NewStore(WithRootDir(root))
-	if _, err := store.UpsertRecord(UpsertRecordInput{
-		Subject:        "agent-a",
-		Scope:          Scope("agent:agent-a"),
-		ContentSummary: "sqlite indexed content",
-	}); err != nil {
-		t.Fatalf("upsert: %v", err)
-	}
-	indexPath := filepath.Join(root, "index", "mem_index.sqlite")
-	if _, err := os.Stat(indexPath); err != nil {
-		t.Fatalf("expected sqlite index at %s: %v", indexPath, err)
-	}
-
-	// Force fallback memory map empty to ensure search can still use SQLite cache.
-	store.mu.Lock()
-	store.records = map[string]MemoryRecord{}
-	store.mu.Unlock()
-
-	hits := store.Search(SearchOptions{Subject: "agent-a", Query: "sqlite"})
-	if len(hits) == 0 {
-		t.Fatalf("expected sqlite-backed search hits")
-	}
-}
-
 func TestFusionRecordReadArchiveAndAccessControl(t *testing.T) {
 	store := NewStore(WithRootDir(t.TempDir()))
 
@@ -260,40 +234,5 @@ func TestFusionGrantAndInstanceScopeOperations(t *testing.T) {
 	remaining := store.InstanceScopes("inst-1")
 	if len(remaining) != 1 || remaining[0] != Scope("shared:zeta") {
 		t.Fatalf("unexpected remaining scopes: %+v", remaining)
-	}
-}
-
-func TestFusionDetachMemoryPreservesExplicitScope(t *testing.T) {
-	store := NewStore(WithRootDir(t.TempDir()))
-	if _, err := store.Create("shared-1", "team-shared", "1.0.0", TypeShared, ""); err != nil {
-		t.Fatalf("create shared memory: %v", err)
-	}
-	if _, err := store.AttachMemory("agent-a", "shared-1", AttachOptions{}); err != nil {
-		t.Fatalf("attach shared memory: %v", err)
-	}
-	if err := store.AttachScope("agent-a", Scope("shared:default")); err != nil {
-		t.Fatalf("attach explicit shared scope: %v", err)
-	}
-	if err := store.DetachMemory("agent-a", "shared-1"); err != nil {
-		t.Fatalf("detach memory: %v", err)
-	}
-	scopes := store.InstanceScopes("agent-a")
-	if len(scopes) != 1 || scopes[0] != Scope("shared:default") {
-		t.Fatalf("expected explicit scope to be preserved, got %+v", scopes)
-	}
-}
-
-func TestFusionRollbackRejectsBackupOutsideMigrationDir(t *testing.T) {
-	store := NewStore(WithRootDir(t.TempDir()))
-	outside := filepath.Join(t.TempDir(), "outside.zip")
-	if err := os.WriteFile(outside, []byte("not-a-zip"), 0o644); err != nil {
-		t.Fatalf("write outside backup: %v", err)
-	}
-	err := store.RollbackFromBackup(outside, "tester", "req-rollback")
-	if err == nil {
-		t.Fatal("expected rollback to reject backup outside migration artifact dir")
-	}
-	if !strings.Contains(err.Error(), "outside") {
-		t.Fatalf("expected path boundary error, got %v", err)
 	}
 }
