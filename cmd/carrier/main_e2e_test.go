@@ -218,34 +218,51 @@ func TestE2ECarrierBinaryAddOpenClawReusesPairedUserAndProviderCredential(t *tes
 		t.Fatal("record path should not be empty")
 	}
 
-	var cfgPayload struct {
-		Providers map[string]struct {
-			APIKey string `json:"api_key"`
-		} `json:"providers"`
-		Channels map[string]struct {
-			Token     string   `json:"token"`
-			AllowFrom []string `json:"allow_from"`
-		} `json:"channels"`
-	}
 	rawConfig, err := os.ReadFile(updated.ConfigPath)
 	if err != nil {
 		t.Fatalf("read openclaw config: %v", err)
 	}
+	var cfgPayload map[string]interface{}
 	if err := json.Unmarshal(rawConfig, &cfgPayload); err != nil {
 		t.Fatalf("parse openclaw config: %v", err)
 	}
-	if got := cfgPayload.Providers["openai"].APIKey; got != openaiToken {
-		t.Fatalf("providers.openai.api_key = %q, want %q", got, openaiToken)
+	models, _ := cfgPayload["models"].(map[string]interface{})
+	providers, _ := models["providers"].(map[string]interface{})
+	openaiProvider, _ := providers["openai"].(map[string]interface{})
+	apiKeyRef, _ := openaiProvider["apiKey"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(apiKeyRef["provider"])); got != "carrier_file" {
+		t.Fatalf("models.providers.openai.apiKey.provider = %q, want carrier_file", got)
 	}
-	if got := cfgPayload.Channels["telegram"].Token; got != openclawTelegramToken {
-		t.Fatalf("channels.telegram.token = %q, want %q", got, openclawTelegramToken)
+	channels, _ := cfgPayload["channels"].(map[string]interface{})
+	telegram, _ := channels["telegram"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(telegram["botToken"])); got != openclawTelegramToken {
+		t.Fatalf("channels.telegram.botToken = %q, want %q", got, openclawTelegramToken)
 	}
-	if cfgPayload.Channels["telegram"].Token == carrierTelegramToken {
-		t.Fatalf("channels.telegram.token should not reuse carrier token %q", carrierTelegramToken)
+	if strings.TrimSpace(anyToString(telegram["botToken"])) == carrierTelegramToken {
+		t.Fatalf("channels.telegram.botToken should not reuse carrier token %q", carrierTelegramToken)
 	}
-	allowFrom := cfgPayload.Channels["telegram"].AllowFrom
+	rawAllowFrom, _ := telegram["allowFrom"].([]interface{})
+	allowFrom := make([]string, 0, len(rawAllowFrom))
+	for _, item := range rawAllowFrom {
+		allowFrom = append(allowFrom, strings.TrimSpace(anyToString(item)))
+	}
 	if len(allowFrom) != 1 || allowFrom[0] != pairedChatID {
-		t.Fatalf("channels.telegram.allow_from = %v, want [%s]", allowFrom, pairedChatID)
+		t.Fatalf("channels.telegram.allowFrom = %v, want [%s]", allowFrom, pairedChatID)
+	}
+
+	secretsPath := filepath.Join(home, ".openclaw", "carrier-secrets.json")
+	secretsRaw, err := os.ReadFile(secretsPath)
+	if err != nil {
+		t.Fatalf("read openclaw carrier secrets: %v", err)
+	}
+	var secretsPayload map[string]interface{}
+	if err := json.Unmarshal(secretsRaw, &secretsPayload); err != nil {
+		t.Fatalf("parse openclaw carrier secrets: %v", err)
+	}
+	secretProviders, _ := secretsPayload["providers"].(map[string]interface{})
+	secretOpenAI, _ := secretProviders["openai"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(secretOpenAI["apiKey"])); got != openaiToken {
+		t.Fatalf("carrier secrets providers.openai.apiKey = %q, want %q", got, openaiToken)
 	}
 
 	var recordPayload struct {

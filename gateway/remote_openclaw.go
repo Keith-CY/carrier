@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,9 +15,11 @@ import (
 )
 
 const (
-	remoteOpenClawConfigPath = "$HOME/.openclaw/openclaw.json"
-	remotePicoClawConfigPath = "$HOME/.picoclaw/config.json"
-	remoteZeroClawConfigPath = "$HOME/.zeroclaw/config.toml"
+	remoteOpenClawConfigPath            = "$HOME/.openclaw/openclaw.json"
+	remoteOpenClawCarrierSecretsPath    = "$HOME/.openclaw/carrier-secrets.json"
+	remoteOpenClawCarrierSecretPatchKey = "_carrier_openclaw_secret_file"
+	remotePicoClawConfigPath            = "$HOME/.picoclaw/config.json"
+	remoteZeroClawConfigPath            = "$HOME/.zeroclaw/config.toml"
 )
 
 type remoteDiscoveryPullOptions struct {
@@ -970,7 +973,7 @@ func remoteReadConfig(ctx context.Context, host RemoteHost) (map[string]interfac
 	}
 	var out map[string]interface{}
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
-		return nil, text, steps, fmt.Errorf("parse remote config json: %w", err)
+		return openClawCanonicalConfig(text), text, steps, nil
 	}
 	return out, text, steps, nil
 }
@@ -1021,6 +1024,28 @@ func zeroClawCanonicalConfig(raw string) map[string]interface{} {
 	}
 }
 
+func openClawCanonicalConfig(raw string) map[string]interface{} {
+	return map[string]interface{}{
+		"_carrier_meta": map[string]interface{}{
+			"runtime":    "openclaw",
+			"format":     "json5",
+			"configPath": remoteOpenClawConfigPath,
+		},
+		"raw_json5": strings.TrimSpace(raw),
+	}
+}
+
+func openClawRawFromCanonical(payload map[string]interface{}) string {
+	if payload == nil {
+		return ""
+	}
+	return strings.TrimSpace(anyToString(payload["raw_json5"]))
+}
+
+func isOpenClawCanonical(payload map[string]interface{}) bool {
+	return strings.TrimSpace(openClawRawFromCanonical(payload)) != ""
+}
+
 func zeroClawRawFromCanonical(payload map[string]interface{}) string {
 	if payload == nil {
 		return ""
@@ -1029,15 +1054,193 @@ func zeroClawRawFromCanonical(payload map[string]interface{}) string {
 }
 
 func remotePatchConfig(ctx context.Context, host RemoteHost, patch map[string]interface{}) (map[string]interface{}, string, []remoteExecResult, error) {
-	current, currentRaw, steps, err := remoteReadConfig(ctx, host)
+	rawPatch := openClawRawFromCanonical(patch)
+	sanitizedPatch, secretsPatch := sanitizeOpenClawPatchPayload(patch)
+	steps := []remoteExecResult{}
+
+	if len(secretsPatch) > 0 {
+		secretWriteRes, secretErr := remoteWriteOpenClawCarrierSecrets(ctx, host, secretsPatch)
+		steps = append(steps, secretWriteRes)
+		if secretErr != nil {
+			return nil, "", steps, secretErr
+		}
+		if secretWriteRes.ExitCode != 0 {
+			return nil, "", steps, remoteCommandError(secretWriteRes, "write openclaw carrier secrets")
+		}
+	}
+
+	if strings.TrimSpace(rawPatch) != "" {
+		snapshotPath, writeRes, writeErr := remoteWriteOpenClawRawConfig(ctx, host, rawPatch)
+		steps = append(steps, writeRes)
+		if writeErr != nil {
+			return nil, snapshotPath, steps, writeErr
+		}
+		if writeRes.ExitCode != 0 {
+			return nil, snapshotPath, steps, remoteCommandError(writeRes, "write remote config")
+		}
+		return openClawCanonicalConfig(rawPatch), snapshotPath, steps, nil
+	}
+
+	current, _, readSteps, err := remoteReadConfig(ctx, host)
+	steps = append(steps, readSteps...)
 	if err != nil {
 		return nil, "", steps, err
 	}
-	merged := deepMergeJSON(current, patch)
+	if len(sanitizedPatch) == 0 {
+		return current, "", steps, nil
+	}
+	if isOpenClawCanonical(current) {
+		updated, snapshotPath, setSteps, setErr := remotePatchOpenClawViaConfigSet(ctx, host, sanitizedPatch)
+		steps = append(steps, setSteps...)
+		if setErr != nil {
+			return nil, snapshotPath, steps, setErr
+		}
+		return updated, snapshotPath, steps, nil
+	}
+
+	merged := deepMergeJSON(current, sanitizedPatch)
 	raw, err := json.MarshalIndent(merged, "", "  ")
 	if err != nil {
 		return nil, "", steps, fmt.Errorf("marshal merged remote config: %w", err)
 	}
+	snapshotPath, writeRes, runErr := remoteWriteOpenClawRawConfig(ctx, host, string(raw))
+	steps = append(steps, writeRes)
+	if runErr != nil {
+		return nil, snapshotPath, steps, runErr
+	}
+	if writeRes.ExitCode != 0 {
+		return nil, snapshotPath, steps, remoteCommandError(writeRes, "write remote config")
+	}
+	return merged, snapshotPath, steps, nil
+}
+
+type openClawConfigMutation struct {
+	Path    string
+	Value   string
+	IsUnset bool
+}
+
+func sanitizeOpenClawPatchPayload(patch map[string]interface{}) (map[string]interface{}, map[string]interface{}) {
+	clean := map[string]interface{}{}
+	var secretsPatch map[string]interface{}
+	for key, value := range patch {
+		trimmed := strings.TrimSpace(key)
+		switch trimmed {
+		case remoteOpenClawCarrierSecretPatchKey:
+			if typed, ok := value.(map[string]interface{}); ok {
+				secretsPatch = typed
+			}
+		case "_carrier_meta", "raw_json5":
+			// internal canonical metadata, never write as config keys
+			continue
+		default:
+			clean[key] = value
+		}
+	}
+	return clean, secretsPatch
+}
+
+func remotePatchOpenClawViaConfigSet(ctx context.Context, host RemoteHost, patch map[string]interface{}) (map[string]interface{}, string, []remoteExecResult, error) {
+	ops := make([]openClawConfigMutation, 0)
+	flattenOpenClawConfigMutations("", patch, &ops)
+	if len(ops) == 0 {
+		cfg, _, steps, err := remoteReadConfig(ctx, host)
+		return cfg, "", steps, err
+	}
+	sort.SliceStable(ops, func(i, j int) bool {
+		if ops[i].Path == ops[j].Path {
+			return !ops[i].IsUnset && ops[j].IsUnset
+		}
+		return ops[i].Path < ops[j].Path
+	})
+
+	snapshotUnix := time.Now().Unix()
+	snapshotPath := fmt.Sprintf("$HOME/.openclaw/snapshots/openclaw-%d.json", snapshotUnix)
+	cmd := buildRemoteOpenClawConfigSetCommand(snapshotUnix, ops)
+	writeRes, runErr := runRemoteCommand(ctx, host, cmd)
+	steps := []remoteExecResult{writeRes}
+	if runErr != nil {
+		return nil, snapshotPath, steps, runErr
+	}
+	if writeRes.ExitCode != 0 {
+		return nil, snapshotPath, steps, remoteCommandError(writeRes, "apply openclaw config patch via config set")
+	}
+	updated, _, readSteps, readErr := remoteReadConfig(ctx, host)
+	steps = append(steps, readSteps...)
+	if readErr != nil {
+		return nil, snapshotPath, steps, readErr
+	}
+	return updated, snapshotPath, steps, nil
+}
+
+func flattenOpenClawConfigMutations(prefix string, value interface{}, out *[]openClawConfigMutation) {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		if prefix != "" && len(typed) == 0 {
+			*out = append(*out, openClawConfigMutation{
+				Path:  prefix,
+				Value: "{}",
+			})
+			return
+		}
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			trimmed := strings.TrimSpace(key)
+			if trimmed == "" {
+				continue
+			}
+			next := trimmed
+			if prefix != "" {
+				next = prefix + "." + trimmed
+			}
+			flattenOpenClawConfigMutations(next, typed[key], out)
+		}
+	case nil:
+		if prefix == "" {
+			return
+		}
+		*out = append(*out, openClawConfigMutation{
+			Path:    prefix,
+			IsUnset: true,
+		})
+	default:
+		if prefix == "" {
+			return
+		}
+		raw, err := json.Marshal(typed)
+		if err != nil {
+			return
+		}
+		*out = append(*out, openClawConfigMutation{
+			Path:  prefix,
+			Value: string(raw),
+		})
+	}
+}
+
+func buildRemoteOpenClawConfigSetCommand(snapshotUnix int64, ops []openClawConfigMutation) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "set -e\nmkdir -p \"$HOME/.openclaw\" \"$HOME/.openclaw/snapshots\"\nsnapshot_path=\"$HOME/.openclaw/snapshots/openclaw-%d.json\"\ncp \"$HOME/.openclaw/openclaw.json\" \"$snapshot_path\" 2>/dev/null || true\n", snapshotUnix)
+	seed := time.Now().UnixNano()
+	for idx, op := range ops {
+		if strings.TrimSpace(op.Path) == "" {
+			continue
+		}
+		if op.IsUnset {
+			fmt.Fprintf(&b, "openclaw config unset %s >/dev/null\n", shellSingleQuote(op.Path))
+			continue
+		}
+		delimiter := fmt.Sprintf("CARRIER_CFG_%d_%d", seed, idx)
+		fmt.Fprintf(&b, "openclaw config set %s \"$(cat <<'%s'\n%s\n%s\n)\" --strict-json >/dev/null\n", shellSingleQuote(op.Path), delimiter, op.Value, delimiter)
+	}
+	return b.String()
+}
+
+func remoteWriteOpenClawRawConfig(ctx context.Context, host RemoteHost, raw string) (string, remoteExecResult, error) {
 	delimiter := fmt.Sprintf("CARRIER_EOF_%d", time.Now().UnixNano())
 	snapshotUnix := time.Now().Unix()
 	snapshotPath := fmt.Sprintf("$HOME/.openclaw/snapshots/openclaw-%d.json", snapshotUnix)
@@ -1045,19 +1248,34 @@ func remotePatchConfig(ctx context.Context, host RemoteHost, patch map[string]in
 		"mkdir -p \"$HOME/.openclaw\" \"$HOME/.openclaw/snapshots\"; snapshot_path=\"$HOME/.openclaw/snapshots/openclaw-%d.json\"; cp \"$HOME/.openclaw/openclaw.json\" \"$snapshot_path\" 2>/dev/null || true; cat > \"$HOME/.openclaw/openclaw.json\" <<'%s'\n%s\n%s",
 		snapshotUnix,
 		delimiter,
-		string(raw),
+		raw,
 		delimiter,
 	)
 	writeRes, runErr := runRemoteCommand(ctx, host, writeCmd)
-	steps = append(steps, writeRes)
 	if runErr != nil {
-		return nil, snapshotPath, steps, runErr
+		return snapshotPath, writeRes, runErr
 	}
-	if writeRes.ExitCode != 0 {
-		_ = currentRaw
-		return nil, snapshotPath, steps, remoteCommandError(writeRes, "write remote config")
+	return snapshotPath, writeRes, nil
+}
+
+func remoteWriteOpenClawCarrierSecrets(ctx context.Context, host RemoteHost, payload map[string]interface{}) (remoteExecResult, error) {
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return remoteExecResult{}, fmt.Errorf("marshal openclaw carrier secrets: %w", err)
 	}
-	return merged, snapshotPath, steps, nil
+	delimiter := fmt.Sprintf("CARRIER_SECRETS_%d", time.Now().UnixNano())
+	cmd := fmt.Sprintf(
+		"mkdir -p \"$HOME/.openclaw\"; cat > \"%s\" <<'%s'\n%s\n%s",
+		remoteOpenClawCarrierSecretsPath,
+		delimiter,
+		string(raw),
+		delimiter,
+	)
+	res, runErr := runRemoteCommand(ctx, host, cmd)
+	if runErr != nil {
+		return res, runErr
+	}
+	return res, nil
 }
 
 func remotePatchPicoClawConfig(ctx context.Context, host RemoteHost, patch map[string]interface{}) (map[string]interface{}, string, []remoteExecResult, error) {
@@ -1327,20 +1545,18 @@ func remoteChatViaOpenClaw(ctx context.Context, host RemoteHost, agentID, messag
 func applyProviderProfileToRemote(ctx context.Context, host RemoteHost, profile ProviderProfile, agentID string) (map[string]interface{}, string, []remoteExecResult, error) {
 	providerKey := mapCarrierProviderToManagedProvider(profile.Provider)
 	patch := map[string]interface{}{}
-	if providerKey != "" {
-		setNestedMapValue(patch, []string{"agents", "defaults", "provider"}, providerKey)
+	model := strings.TrimSpace(profile.Model)
+	if model != "" {
+		setNestedMapValue(patch, []string{"agents", "defaults", "model", "primary"}, model)
+		if trimmedAgentID := strings.TrimSpace(agentID); trimmedAgentID != "" && !strings.EqualFold(trimmedAgentID, "main") {
+			setNestedMapValue(patch, []string{"agents", "overrides", trimmedAgentID, "model", "primary"}, model)
+		}
 	}
-	if strings.TrimSpace(profile.Model) != "" {
-		setNestedMapValue(patch, []string{"agents", "defaults", "model"}, strings.TrimSpace(profile.Model))
+	if providerKey != "" && strings.TrimSpace(profile.BaseURL) != "" {
+		setNestedMapValue(patch, []string{"models", "providers", providerKey, "baseUrl"}, strings.TrimSpace(profile.BaseURL))
 	}
-	if strings.TrimSpace(agentID) != "" {
-		setNestedMapValue(patch, []string{"agents", "overrides", strings.TrimSpace(agentID), "model"}, strings.TrimSpace(profile.Model))
-	}
-	if strings.TrimSpace(profile.BaseURL) != "" {
-		setNestedMapValue(patch, []string{"providers", providerKey, "base_url"}, strings.TrimSpace(profile.BaseURL))
-	}
-	if strings.TrimSpace(profile.AuthRef) != "" {
-		setNestedMapValue(patch, []string{"providers", providerKey, "credential_ref"}, strings.TrimSpace(profile.AuthRef))
+	if providerKey != "" && strings.TrimSpace(profile.AuthRef) != "" {
+		setNestedMapValue(patch, []string{"models", "providers", providerKey, "apiKey"}, strings.TrimSpace(profile.AuthRef))
 	}
 	return remotePatchConfig(ctx, host, patch)
 }

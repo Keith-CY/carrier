@@ -36,7 +36,7 @@ var managedAgents = map[string]managedAgentConfig{
 	"openclaw": {
 		ID:             "openclaw",
 		ConfigDir:      ".openclaw",
-		ConfigFile:     "config.json",
+		ConfigFile:     "openclaw.json",
 		RequiredEnvKey: "OPENAI_API_KEY",
 	},
 	"zeroclaw": {
@@ -45,6 +45,11 @@ var managedAgents = map[string]managedAgentConfig{
 		ConfigFile: "config.toml",
 	},
 }
+
+const (
+	openClawCarrierFileSecretProviderAlias = "carrier_file"
+	openClawCarrierFileSecretsPath         = "~/.openclaw/carrier-secrets.json"
+)
 
 var openclawChannels = []picoclawChannel{
 	{
@@ -277,6 +282,23 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	if err := os.WriteFile(configPath, configRaw, 0o600); err != nil {
 		return nil, fmt.Errorf("write %s config: %w", cfg.ID, err)
 	}
+	if strings.EqualFold(cfg.ID, "openclaw") && strings.TrimSpace(providerToken) != "" {
+		secretsPath := filepath.Join(home, ".openclaw", "carrier-secrets.json")
+		secrets := map[string]interface{}{
+			"providers": map[string]interface{}{
+				providerKey: map[string]interface{}{
+					"apiKey": providerToken,
+				},
+			},
+		}
+		secretsRaw, marshalErr := json.MarshalIndent(secrets, "", "  ")
+		if marshalErr != nil {
+			return nil, fmt.Errorf("marshal openclaw carrier secrets: %w", marshalErr)
+		}
+		if err := os.WriteFile(secretsPath, append(secretsRaw, '\n'), 0o600); err != nil {
+			return nil, fmt.Errorf("write openclaw carrier secrets: %w", err)
+		}
+	}
 
 	record := map[string]interface{}{
 		"instance_id":           instanceID,
@@ -344,7 +366,12 @@ func renderManagedConfigBytes(
 		}
 		return nil, fmt.Errorf("toml renderer is not supported for %s", cfg.ID)
 	case "json":
-		payload := buildManagedJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerToken, modelID, modelName, workspacePath)
+		var payload map[string]interface{}
+		if strings.EqualFold(cfg.ID, "openclaw") {
+			payload = buildManagedOpenClawJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerToken, modelID, workspacePath)
+		} else {
+			payload = buildManagedPicoClawJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerToken, modelID, modelName, workspacePath)
+		}
 		raw, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
 			return nil, err
@@ -355,7 +382,7 @@ func renderManagedConfigBytes(
 	}
 }
 
-func buildManagedJSONConfigPayload(
+func buildManagedPicoClawJSONConfigPayload(
 	channelID, channelToken string,
 	channelSetupPending bool,
 	allowFrom []string,
@@ -408,6 +435,87 @@ func buildManagedJSONConfigPayload(
 		},
 		"channels": channels,
 	}
+}
+
+func buildManagedOpenClawJSONConfigPayload(
+	channelID, channelToken string,
+	channelSetupPending bool,
+	allowFrom []string,
+	provider *LLMProvider,
+	providerKey, providerToken, modelID, workspacePath string,
+) map[string]interface{} {
+	providerItem := map[string]interface{}{}
+	if strings.TrimSpace(providerToken) != "" {
+		providerItem["apiKey"] = map[string]interface{}{
+			"source":   "file",
+			"provider": openClawCarrierFileSecretProviderAlias,
+			"id":       openClawProviderSecretPointer(providerKey),
+		}
+	}
+	if strings.EqualFold(provider.ID, "openai-codex") {
+		providerItem["auth"] = "oauth"
+	}
+
+	channelConfig := map[string]interface{}{
+		"enabled": true,
+	}
+	if channelSetupPending {
+		channelConfig["enabled"] = false
+		channelConfig["setup_pending"] = true
+	} else {
+		channelConfig[openClawChannelTokenField(channelID)] = channelToken
+	}
+	if len(allowFrom) > 0 {
+		channelConfig["allowFrom"] = allowFrom
+	}
+
+	return map[string]interface{}{
+		"agents": map[string]interface{}{
+			"defaults": map[string]interface{}{
+				"workspace":           workspacePath,
+				"model":               map[string]interface{}{"primary": modelID},
+				"maxTokens":           8192,
+				"temperature":         0.7,
+				"maxToolIterations":   20,
+				"restrictToWorkspace": true,
+			},
+		},
+		"models": map[string]interface{}{
+			"providers": map[string]interface{}{
+				providerKey: providerItem,
+			},
+		},
+		"secrets": map[string]interface{}{
+			"providers": map[string]interface{}{
+				openClawCarrierFileSecretProviderAlias: map[string]interface{}{
+					"source": "file",
+					"path":   openClawCarrierFileSecretsPath,
+					"mode":   "json",
+				},
+			},
+			"defaults": map[string]interface{}{
+				"file": openClawCarrierFileSecretProviderAlias,
+			},
+		},
+		"channels": map[string]interface{}{
+			channelID: channelConfig,
+		},
+	}
+}
+
+func openClawProviderSecretPointer(providerKey string) string {
+	escaped := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(providerKey), "~", "~0"), "/", "~1")
+	if escaped == "" {
+		escaped = "openai"
+	}
+	return "/providers/" + escaped + "/apiKey"
+}
+
+func openClawChannelTokenField(channelID string) string {
+	if strings.EqualFold(strings.TrimSpace(channelID), "telegram") {
+		return "botToken"
+	}
+	return "token"
 }
 
 func renderZeroClawConfigTOML(
