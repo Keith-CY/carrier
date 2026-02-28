@@ -173,6 +173,27 @@ carrier uninstall <id|name>
 # install aliases
 carrier add <agent_id>
 carrier install <agent_id>
+
+# catalog management
+carrier catalog add <manifest-url>
+carrier catalog list
+carrier catalog remove <agent_id>
+
+# configuration & diagnostics
+carrier config set <key> <value>
+carrier doctor
+
+# key management
+carrier keys list
+carrier keys generate [--type <ed25519|rsa>]
+carrier keys delete <key-ref>
+
+# logs & monitoring
+carrier logs <agent_id> [--tail <n>]
+carrier service <start|stop|status>
+
+# webhooks
+carrier webhooks test <url>
 ```
 
 ## Remote Control Notes

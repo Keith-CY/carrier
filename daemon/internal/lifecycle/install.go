@@ -21,6 +21,20 @@ func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts I
 		return err
 	}
 	useBaseAgentFallback := !opts.Isolation || allowBaseAgentInstallFallback(agentID)
+	rollbackSnapshotReady := false
+	if snapshotErr := snapshotAgentState(agentID); snapshotErr == nil {
+		rollbackSnapshotReady = true
+	} else {
+		s.appendLog(agentID, fmt.Sprintf("rollback snapshot skipped: %v", snapshotErr))
+	}
+	failWithRollback := func(runErr error, code string) error {
+		if rollbackSnapshotReady {
+			if restoreErr := restoreAgentState(agentID); restoreErr != nil {
+				s.appendLog(agentID, fmt.Sprintf("rollback restore failed: %v", restoreErr))
+			}
+		}
+		return s.finalizeInstallFailure(agentID, runErr, code)
+	}
 
 	opCtx, cancel := context.WithTimeout(ctx, s.commandTimeout)
 	defer cancel()
@@ -29,11 +43,11 @@ func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts I
 	var backend isolationBackend
 	if opts.Isolation {
 		if err := s.runDeterministicIsolationHostPipeline(opCtx, agentID); err != nil {
-			return s.finalizeInstallFailure(agentID, err, "E_ISOLATION_UNAVAILABLE")
+			return failWithRollback(err, "E_ISOLATION_UNAVAILABLE")
 		}
 		backend, err = resolveIsolationBackend()
 		if err != nil {
-			return s.finalizeInstallFailure(agentID, err, "E_ISOLATION_UNAVAILABLE")
+			return failWithRollback(err, "E_ISOLATION_UNAVAILABLE")
 		}
 		commandGOOS = backend.CommandGOOS()
 	}
@@ -41,27 +55,27 @@ func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts I
 	installCommand, err := m.Runtime.Install.ResolveForGOOS(commandGOOS)
 	if err != nil {
 		manifestErr := fmt.Errorf("resolve install command for %s: %w", agentID, err)
-		return s.finalizeInstallFailure(agentID, manifestErr, "E_MANIFEST_INVALID")
+		return failWithRollback(manifestErr, "E_MANIFEST_INVALID")
 	}
 	if opts.Isolation {
 		installCommand, err = backend.WrapCommand(installCommand)
 		if err != nil {
-			return s.finalizeInstallFailure(agentID, err, "E_ISOLATION_UNAVAILABLE")
+			return failWithRollback(err, "E_ISOLATION_UNAVAILABLE")
 		}
 	}
 
 	if opts.Isolation {
 		if err := s.runDeterministicIsolationPipeline(opCtx, agentID, backend); err != nil {
-			return s.finalizeInstallFailure(agentID, err, "E_ISOLATION_UNAVAILABLE")
+			return failWithRollback(err, "E_ISOLATION_UNAVAILABLE")
 		}
 	}
 
 	if err := s.checkRuntimePrerequisites(m); err != nil {
 		if !useBaseAgentFallback {
-			return s.finalizeInstallFailure(agentID, err, "E_RUNTIME_PREREQUISITES")
+			return failWithRollback(err, "E_RUNTIME_PREREQUISITES")
 		}
 		if prereqErr := s.repairRuntimePrerequisitesLoop(ctx, opCtx, agentID, m, err); prereqErr != nil {
-			return s.finalizeInstallFailure(agentID, prereqErr, "E_RUNTIME_PREREQUISITES")
+			return failWithRollback(prereqErr, "E_RUNTIME_PREREQUISITES")
 		}
 	}
 
@@ -89,16 +103,22 @@ func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts I
 			goto installSuccess
 		}
 		if !useBaseAgentFallback {
-			return s.finalizeInstallFailure(agentID, runErr, installFailureCode(runErr))
+			return failWithRollback(runErr, installFailureCode(runErr))
 		}
 		loopErr := s.repairAndRetryInstallLoop(ctx, opCtx, agentID, installCommand, runErr)
 		if loopErr != nil {
-			return s.finalizeInstallFailure(agentID, loopErr, installFailureCode(loopErr))
+			return failWithRollback(loopErr, installFailureCode(loopErr))
 		}
 	}
 
 installSuccess:
 	s.markInstallSuccess(agentID)
+	_ = s.webhookManager.FireEvent(WebhookEvent{Type: WebhookEventAgentInstalled, AgentID: agentID})
+	if rollbackSnapshotReady {
+		if cleanupErr := cleanupRollbackSnapshot(agentID); cleanupErr != nil {
+			s.appendLog(agentID, fmt.Sprintf("rollback snapshot cleanup failed: %v", cleanupErr))
+		}
+	}
 	s.recordAudit("", "system", "install", agentID, AuditResultSuccess, "", "install completed")
 
 	s.saveState()

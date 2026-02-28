@@ -35,6 +35,7 @@ import (
 	"carrier/daemon/internal/lifecycle"
 	"carrier/daemon/internal/logging"
 	"carrier/daemon/internal/memory"
+	"carrier/daemon/internal/messaging"
 	"carrier/daemon/internal/ratelimit"
 	"carrier/shared/config"
 )
@@ -95,6 +96,16 @@ func Run() {
 		log.Fatalf("resolve lifecycle state path: %v", err)
 	}
 	opts = append(opts, lifecycle.WithStateFile(statePath))
+	alertsEnabled := parseEnabledEnv(os.Getenv("CARRIER_ALERTS_ENABLED"))
+	alertWebhookURL := strings.TrimSpace(os.Getenv("CARRIER_ALERT_WEBHOOK_URL"))
+	if alertsEnabled {
+		opts = append(opts, lifecycle.WithAlertManager(lifecycle.NewAlertManager(true, lifecycle.WebhookAlertSink{
+			URL: alertWebhookURL,
+		})))
+	}
+	webhookURL := strings.TrimSpace(os.Getenv("CARRIER_WEBHOOK_URL"))
+	webhookEvents := parseCSVEnv(os.Getenv("CARRIER_WEBHOOK_EVENTS"))
+	opts = append(opts, lifecycle.WithWebhookManager(lifecycle.NewWebhookManager(webhookURL, webhookEvents)))
 
 	svc := lifecycle.NewService(baseagent.NewLLMTriager(baseagent.NoopTriager{}), opts...)
 	var baseMemoryStore baseagent.MemoryStore
@@ -140,7 +151,8 @@ func Run() {
 	ready := &atomic.Bool{}
 	ready.Store(false)
 	pairLimiter := ratelimit.New(ratelimit.WithMax(5), ratelimit.WithWindow(1*time.Minute))
-	mux := buildHTTPMuxWithBaseAgent(svc, baseRuntime, ready, pairStore, pairLimiter)
+	msgBus := messaging.NewMessageBus()
+	mux := buildHTTPMuxWithBaseAgent(svc, baseRuntime, ready, pairStore, pairLimiter, msgBus)
 	var handler http.Handler = mux
 	if cfg.Server.APIToken != "" {
 		handler = bearerAuthMiddleware(cfg.Server.APIToken, mux)
@@ -200,8 +212,16 @@ func buildHTTPMuxWithBaseAgent(
 	ready *atomic.Bool,
 	pairStore *api.PairingCodeStore,
 	pairLimiter *ratelimit.Limiter,
+	messageBuses ...*messaging.MessageBus,
 ) *http.ServeMux {
 	mux := http.NewServeMux()
+	var msgBus *messaging.MessageBus
+	if len(messageBuses) > 0 {
+		msgBus = messageBuses[0]
+	}
+	if msgBus == nil {
+		msgBus = messaging.NewMessageBus()
+	}
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -369,6 +389,17 @@ func buildHTTPMuxWithBaseAgent(
 			writeJSON(w, http.StatusOK, map[string]interface{}{"statuses": agents})
 			return
 		}
+		if agentID, action, ok := parseAgentMessagingPath(r.URL.Path); ok {
+			switch action {
+			case "send":
+				handleMessageSend(msgBus, agentID, w, r)
+			case "inbox":
+				handleMessageInbox(msgBus, agentID, w, r)
+			default:
+				http.NotFound(w, r)
+			}
+			return
+		}
 
 		agentID, action, ok := parseAgentActionPath(r.URL.Path)
 		if !ok {
@@ -387,6 +418,10 @@ func buildHTTPMuxWithBaseAgent(
 			handleStatus(svc, agentID, w, r)
 		case "logs":
 			handleLogs(svc, agentID, w, r)
+		case "metrics":
+			handleMetrics(svc, agentID, w, r)
+		case "config":
+			handleConfigSet(svc, agentID, w, r)
 		case "upgrade":
 			handleUpgrade(svc, agentID, w, r)
 		case "uninstall":
@@ -438,6 +473,36 @@ func buildHTTPMuxWithBaseAgent(
 	mux.Handle("/", webUIHandler())
 
 	return mux
+}
+
+func handleMessageSend(bus *messaging.MessageBus, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body messaging.Message
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	body.To = agentID
+	if err := bus.Send(body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+}
+
+func handleMessageInbox(bus *messaging.MessageBus, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	msg, err := bus.Receive(agentID, 100*time.Millisecond)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"messages": []messaging.Message{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"messages": []messaging.Message{msg}})
 }
 
 type lifecycleAgentServiceAdapter struct {
@@ -708,6 +773,37 @@ func handleUpgrade(svc *lifecycle.Service, agentID string, w http.ResponseWriter
 	writeJSON(w, http.StatusOK, result)
 }
 
+func handleMetrics(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	metrics, err := svc.Metrics(agentID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, metrics)
+}
+
+func handleConfigSet(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		Changes map[string]string `json:"changes"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if err := svc.HotReloadConfig(agentID, body.Changes); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})
+}
+
 func handleDiagnose(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -857,6 +953,33 @@ func parseAgentActionPath(path string) (agentID string, action string, ok bool) 
 	return decoded, action, true
 }
 
+func parseAgentMessagingPath(path string) (agentID string, action string, ok bool) {
+	const prefix = "/api/v1/agents/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(path, prefix)
+	parts := strings.Split(rest, "/")
+	if len(parts) != 3 {
+		return "", "", false
+	}
+	if parts[1] != "messages" {
+		return "", "", false
+	}
+	decoded, err := url.PathUnescape(strings.TrimSpace(parts[0]))
+	if err != nil {
+		return "", "", false
+	}
+	if err := validateAgentID(decoded); err != nil {
+		return "", "", false
+	}
+	act := strings.TrimSpace(parts[2])
+	if act != "send" && act != "inbox" {
+		return "", "", false
+	}
+	return decoded, act, true
+}
+
 func parseLogsTail(raw string) int {
 	if raw == "" {
 		return defaultLogsTail
@@ -869,6 +992,27 @@ func parseLogsTail(raw string) int {
 		return maxLogsTail
 	}
 	return n
+}
+
+func parseEnabledEnv(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseCSVEnv(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

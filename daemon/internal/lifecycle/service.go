@@ -183,6 +183,22 @@ func WithCommandTimeout(timeout time.Duration) Option {
 	}
 }
 
+func WithAlertManager(manager *AlertManager) Option {
+	return func(s *Service) {
+		if manager != nil {
+			s.alertManager = manager
+		}
+	}
+}
+
+func WithWebhookManager(manager *WebhookManager) Option {
+	return func(s *Service) {
+		if manager != nil {
+			s.webhookManager = manager
+		}
+	}
+}
+
 type Service struct {
 	mu                 sync.RWMutex
 	states             map[string]AgentState
@@ -216,6 +232,8 @@ type Service struct {
 	exitCodes          map[string]*int
 	evidenceCollector  *EvidenceCollector
 	commandTimeout     time.Duration
+	alertManager       *AlertManager
+	webhookManager     *WebhookManager
 }
 
 func NewService(triager baseagent.Triager, opts ...Option) *Service {
@@ -253,6 +271,8 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 		backoffStates:      make(map[string]BackoffState),
 		exitCodes:          exitCodes,
 		commandTimeout:     loadCommandTimeoutFromEnv(os.Getenv("CARRIER_COMMAND_TIMEOUT")),
+		alertManager:       NewAlertManager(false, nil),
+		webhookManager:     NewWebhookManager("", nil),
 	}
 	svc.processManager = NewProcessManager(processLogDir)
 	svc.evidenceCollector = NewEvidenceCollector(logs, exitCodes, 1000)
@@ -266,6 +286,7 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 	for _, opt := range opts {
 		opt(svc)
 	}
+	_ = cleanupExpiredRollbackSnapshots()
 
 	// Load persisted state if configured
 	if svc.stateFile != nil {
