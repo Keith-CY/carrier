@@ -16,10 +16,24 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 	if err != nil {
 		return err
 	}
+	rollbackSnapshotReady := false
+	if snapshotErr := snapshotAgentState(agentID); snapshotErr == nil {
+		rollbackSnapshotReady = true
+	} else {
+		s.appendLog(agentID, fmt.Sprintf("rollback snapshot skipped: %v", snapshotErr))
+	}
+	failWithRollback := func(runErr error, code string) error {
+		if rollbackSnapshotReady {
+			if restoreErr := restoreAgentState(agentID); restoreErr != nil {
+				s.appendLog(agentID, fmt.Sprintf("rollback restore failed: %v", restoreErr))
+			}
+		}
+		return s.finalizeInstallFailure(agentID, runErr, code)
+	}
 	installCommand, err := m.Runtime.Install.ResolveForCurrentOS()
 	if err != nil {
 		manifestErr := fmt.Errorf("resolve install command for %s: %w", agentID, err)
-		return s.finalizeInstallFailure(agentID, manifestErr, "E_MANIFEST_INVALID")
+		return failWithRollback(manifestErr, "E_MANIFEST_INVALID")
 	}
 
 	opCtx, cancel := context.WithTimeout(ctx, s.commandTimeout)
@@ -27,7 +41,7 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 
 	if err := s.checkRuntimePrerequisites(m); err != nil {
 		if prereqErr := s.repairRuntimePrerequisitesLoop(ctx, opCtx, agentID, m, err); prereqErr != nil {
-			return s.finalizeInstallFailure(agentID, prereqErr, "E_RUNTIME_PREREQUISITES")
+			return failWithRollback(prereqErr, "E_RUNTIME_PREREQUISITES")
 		}
 	}
 
@@ -40,11 +54,16 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 	if runErr != nil {
 		loopErr := s.repairAndRetryInstallLoop(ctx, opCtx, agentID, installCommand, runErr)
 		if loopErr != nil {
-			return s.finalizeInstallFailure(agentID, loopErr, "E_INSTALL_FAILED")
+			return failWithRollback(loopErr, "E_INSTALL_FAILED")
 		}
 	}
 
 	s.markInstallSuccess(agentID)
+	if rollbackSnapshotReady {
+		if cleanupErr := cleanupRollbackSnapshot(agentID); cleanupErr != nil {
+			s.appendLog(agentID, fmt.Sprintf("rollback snapshot cleanup failed: %v", cleanupErr))
+		}
+	}
 	s.recordAudit("", "system", "install", agentID, AuditResultSuccess, "", "install completed")
 
 	s.saveState()

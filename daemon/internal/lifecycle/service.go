@@ -276,6 +276,7 @@ func NewService(triager baseagent.Triager, opts ...Option) *Service {
 	for _, opt := range opts {
 		opt(svc)
 	}
+	_ = cleanupExpiredRollbackSnapshots()
 
 	// Load persisted state if configured
 	if svc.stateFile != nil {
