@@ -21,6 +21,7 @@ func (c *countingTriager) Analyze(_ context.Context, _ baseagent.Evidence) (base
 }
 
 func TestInstallWithIsolationRunsDeterministicPreparePipelineForDarwin(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	origGOOS := isolationRuntimeGOOS
 	origLookup := isolationBackendLookup
 	origEnv := isolationEnvLookup
@@ -106,6 +107,7 @@ func TestInstallWithIsolationUsesLinuxInstallCommandOnDarwinAndWindows(t *testin
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
 			isolationRuntimeGOOS = tc.hostGOOS
 			isolationBackendLookup = func(name string) (string, error) {
 				if name != tc.lookupName {

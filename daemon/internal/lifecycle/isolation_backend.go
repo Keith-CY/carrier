@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 const (
 	defaultLimaInstanceEnvKey = "CARRIER_ISOLATION_LIMA_INSTANCE"
 	defaultLimaInstanceName   = "default"
+	isolationWorkDirEnvKey    = "CARRIER_ISOLATION_WORKDIR"
 	defaultWSLDistroEnvKey    = "CARRIER_ISOLATION_WSL_DISTRO"
 )
 
@@ -74,8 +76,9 @@ func (b linuxIsolationBackend) PrepareCommands() ([]string, error) {
 }
 
 type limaIsolationBackend struct {
-	limactlPath string
-	instance    string
+	limactlPath  string
+	instance     string
+	agentWorkDir string
 }
 
 func (b limaIsolationBackend) CommandGOOS() string {
@@ -101,15 +104,60 @@ func (b limaIsolationBackend) WrapStartCommand(startCommand string) (string, err
 	return b.WrapCommand(guestCommand)
 }
 
+func (b limaIsolationBackend) generateLimaTemplate(instanceName string) (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user home directory: %w", err)
+	}
+
+	templateDir := filepath.Join(homeDir, ".carrier", "lima")
+	if err := os.MkdirAll(templateDir, 0o755); err != nil {
+		return "", fmt.Errorf("create lima template directory: %w", err)
+	}
+
+	templatePath := filepath.Join(templateDir, instanceName+".yaml")
+	var templateContent string
+	if strings.TrimSpace(b.agentWorkDir) == "" {
+		templateContent = strings.TrimSpace(`
+mounts: []
+provision:
+  - mode: system
+    script: |
+      apt-get update -qq && apt-get install -y -qq bubblewrap git curl
+`) + "\n"
+	} else {
+		templateContent = fmt.Sprintf(strings.TrimSpace(`
+mounts:
+  - location: "%s"
+    writable: true
+provision:
+  - mode: system
+    script: |
+      apt-get update -qq && apt-get install -y -qq bubblewrap git curl
+`)+"\n", strings.TrimSpace(b.agentWorkDir))
+	}
+
+	if err := os.WriteFile(templatePath, []byte(templateContent), 0o600); err != nil {
+		return "", fmt.Errorf("write lima template: %w", err)
+	}
+	return templatePath, nil
+}
+
 func (b limaIsolationBackend) PrepareCommands() ([]string, error) {
 	safeLimaPath := shellSingleQuote(strings.TrimSpace(b.limactlPath))
 	safeInstance := shellSingleQuote(strings.TrimSpace(b.instance))
+	templatePath, err := b.generateLimaTemplate(strings.TrimSpace(b.instance))
+	if err != nil {
+		return nil, err
+	}
+	safeTemplatePath := shellSingleQuote(strings.TrimSpace(templatePath))
 	ensureInstance := fmt.Sprintf(
-		"%s list 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -Fxq %s || %s create -y --name %s",
+		"%s list 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -Fxq %s || %s create -y --name %s %s",
 		safeLimaPath,
 		safeInstance,
 		safeLimaPath,
 		safeInstance,
+		safeTemplatePath,
 	)
 	startInstance := fmt.Sprintf("%s start %s", safeLimaPath, safeInstance)
 	ensureGuestBwrap, err := b.WrapCommand(buildGuestEnsureBwrapCommand())
@@ -158,7 +206,7 @@ func (b wslIsolationBackend) PrepareCommands() ([]string, error) {
 	return []string{ensureGuestBwrap}, nil
 }
 
-func resolveIsolationBackend() (isolationBackend, error) {
+func resolveIsolationBackend(agentWorkDir string) (isolationBackend, error) {
 	switch strings.ToLower(strings.TrimSpace(isolationRuntimeGOOS)) {
 	case manifest.CommandOSLinux:
 		bwrapPath, err := isolationBackendLookup("bwrap")
@@ -184,9 +232,17 @@ func resolveIsolationBackend() (isolationBackend, error) {
 		if instance == "" {
 			instance = defaultLimaInstanceName
 		}
+		workDir := strings.TrimSpace(agentWorkDir)
+		if workDir == "" {
+			workDir = strings.TrimSpace(isolationEnvLookup(isolationWorkDirEnvKey))
+		}
+		if workDir == "" {
+			workDir = IsolationWorkDir(instance)
+		}
 		return limaIsolationBackend{
-			limactlPath: strings.TrimSpace(limactlPath),
-			instance:    instance,
+			limactlPath:  strings.TrimSpace(limactlPath),
+			instance:     instance,
+			agentWorkDir: workDir,
 		}, nil
 	case manifest.CommandOSWindows:
 		wslPath, err := isolationBackendLookup("wsl")
@@ -200,6 +256,18 @@ func resolveIsolationBackend() (isolationBackend, error) {
 	default:
 		return nil, fmt.Errorf("%w: unsupported host OS %s", ErrIsolationUnavailable, isolationRuntimeGOOS)
 	}
+}
+
+func IsolationWorkDir(instance string) string {
+	trimmed := strings.TrimSpace(instance)
+	if trimmed == "" {
+		trimmed = defaultLimaInstanceName
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".carrier", "instances", trimmed)
+	}
+	return filepath.Join(homeDir, ".carrier", "instances", trimmed)
 }
 
 func buildBwrapInvocation(bwrapExecutable, startCommand string) (string, error) {
