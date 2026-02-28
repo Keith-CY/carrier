@@ -125,6 +125,14 @@ type doctorCommandOptions struct {
 	JSON bool
 }
 
+type logsCommandOptions struct {
+	AgentID string
+	Since   time.Time
+	Level   string
+	Grep    string
+	Export  string
+}
+
 type keysCommandOptions struct {
 	Action string
 	Name   string
@@ -366,6 +374,8 @@ Usage:
                         Add/install an agent (default: terminal flow; use -q for quiet mode)
   carrier install <agent_id> [--isolation] [--tui|--cli|--webui] [-q|--quiet]
                         Alias for carrier add <agent_id>
+  carrier logs <id|name> [--since <rfc3339|unix>] [--level <level>] [--grep <text>] [--export <path>]
+                        Query and optionally export agent logs
   carrier doctor [--json]
                         Run local environment and daemon health checks
   carrier keys generate [--name <alias>]
@@ -495,6 +505,18 @@ func main() {
 			}
 			if err := runDoctor(os.Stdout, opts); err != nil {
 				fmt.Fprintf(os.Stderr, "doctor failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "logs":
+			opts, err := parseLogsCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "logs failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runLogsCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "logs failed: %v\n", err)
 				os.Exit(1)
 			}
 			return
@@ -645,6 +667,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "list", nil, nil
 	case "doctor":
 		return "doctor", args[2:], nil
+	case "logs":
+		return "logs", args[2:], nil
 	case "keys":
 		return "keys", args[2:], nil
 	case "onboard":
@@ -800,6 +824,80 @@ func parseDoctorCommandArgs(args []string) (doctorCommandOptions, error) {
 	return opts, nil
 }
 
+func parseLogsCommandArgs(args []string) (logsCommandOptions, error) {
+	if len(args) == 0 {
+		return logsCommandOptions{}, errors.New("usage: carrier logs <id|name> [--since <rfc3339|unix>] [--level <level>] [--grep <text>] [--export <path>]")
+	}
+	opts := logsCommandOptions{}
+	for i := 0; i < len(args); i++ {
+		raw := strings.TrimSpace(args[i])
+		switch strings.ToLower(raw) {
+		case "":
+		case "--since":
+			value, next, err := parseRequiredFlagValue(args, i, "--since")
+			if err != nil {
+				return logsCommandOptions{}, err
+			}
+			if since, ok := parseSinceValue(value); ok {
+				opts.Since = since
+			} else {
+				return logsCommandOptions{}, fmt.Errorf("invalid --since value: %s", value)
+			}
+			i = next
+		case "--level":
+			value, next, err := parseRequiredFlagValue(args, i, "--level")
+			if err != nil {
+				return logsCommandOptions{}, err
+			}
+			opts.Level = strings.ToUpper(strings.TrimSpace(value))
+			i = next
+		case "--grep":
+			value, next, err := parseRequiredFlagValue(args, i, "--grep")
+			if err != nil {
+				return logsCommandOptions{}, err
+			}
+			opts.Grep = strings.TrimSpace(value)
+			i = next
+		case "--export":
+			value, next, err := parseRequiredFlagValue(args, i, "--export")
+			if err != nil {
+				return logsCommandOptions{}, err
+			}
+			opts.Export = strings.TrimSpace(value)
+			i = next
+		default:
+			if strings.HasPrefix(raw, "-") {
+				return logsCommandOptions{}, fmt.Errorf("unknown logs option: %s", raw)
+			}
+			if opts.AgentID != "" {
+				return logsCommandOptions{}, errors.New("multiple log targets provided")
+			}
+			opts.AgentID = raw
+		}
+	}
+	if strings.TrimSpace(opts.AgentID) == "" {
+		return logsCommandOptions{}, errors.New("agent id or instance name is required")
+	}
+	return opts, nil
+}
+
+func parseSinceValue(raw string) (time.Time, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return time.Time{}, false
+	}
+	if sec, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+		return time.Unix(sec, 0).UTC(), true
+	}
+	if ts, err := time.Parse(time.RFC3339Nano, trimmed); err == nil {
+		return ts, true
+	}
+	if ts, err := time.Parse(time.RFC3339, trimmed); err == nil {
+		return ts, true
+	}
+	return time.Time{}, false
+}
+
 func parseKeysCommandArgs(args []string) (keysCommandOptions, error) {
 	if len(args) == 0 {
 		return keysCommandOptions{}, errors.New("usage: carrier keys <generate|list|delete>")
@@ -843,6 +941,72 @@ func parseKeysCommandArgs(args []string) (keysCommandOptions, error) {
 	default:
 		return keysCommandOptions{}, fmt.Errorf("unknown keys action: %s", args[0])
 	}
+}
+
+func runLogsCommand(out io.Writer, opts logsCommandOptions) error {
+	instances, _, err := loadManagedInstances()
+	if err != nil {
+		return err
+	}
+	inst, _, err := resolveManagedInstanceTarget(instances, opts.AgentID)
+	if err != nil {
+		return err
+	}
+	lines, err := daemonFetchAgentLogs(inst.AgentID, 1000)
+	if err != nil {
+		return err
+	}
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if !opts.Since.IsZero() {
+			ts, ok := extractLogTimestamp(line)
+			if ok && ts.Before(opts.Since) {
+				continue
+			}
+		}
+		if lvl := strings.TrimSpace(opts.Level); lvl != "" {
+			if !strings.Contains(strings.ToUpper(line), strings.ToUpper("["+lvl+"]")) && !strings.Contains(strings.ToUpper(line), " "+lvl+" ") {
+				continue
+			}
+		}
+		if grep := strings.TrimSpace(opts.Grep); grep != "" {
+			if !strings.Contains(strings.ToLower(line), strings.ToLower(grep)) {
+				continue
+			}
+		}
+		filtered = append(filtered, line)
+	}
+	output := strings.Join(filtered, "\n")
+	if output != "" && !strings.HasSuffix(output, "\n") {
+		output += "\n"
+	}
+	if export := strings.TrimSpace(opts.Export); export != "" {
+		if err := os.WriteFile(export, []byte(output), 0o600); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(out, "exported %d log lines to %s\n", len(filtered), export)
+		return nil
+	}
+	_, _ = io.WriteString(out, output)
+	return nil
+}
+
+func extractLogTimestamp(line string) (time.Time, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return time.Time{}, false
+	}
+	parts := strings.Fields(line)
+	if len(parts) == 0 {
+		return time.Time{}, false
+	}
+	if ts, err := time.Parse(time.RFC3339Nano, parts[0]); err == nil {
+		return ts, true
+	}
+	if ts, err := time.Parse(time.RFC3339, parts[0]); err == nil {
+		return ts, true
+	}
+	return time.Time{}, false
 }
 
 type doctorCheckResult struct {
