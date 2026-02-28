@@ -30,10 +30,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -58,6 +56,8 @@ import (
 	"carrier/configv2"
 	"carrier/daemon/credentialstore"
 	"carrier/daemon/server"
+
+	gossh "golang.org/x/crypto/ssh"
 	gatewayruntime "carrier/gateway"
 	"carrier/shared/openclawcfg"
 )
@@ -1958,14 +1958,14 @@ func ensureCarrierManagedKey(alias string) (privatePath string, pubPath string, 
 	if writeErr := os.WriteFile(privatePath, privPEM, 0o600); writeErr != nil {
 		return "", "", "", false, fmt.Errorf("write private key: %w", writeErr)
 	}
-	pubRaw, blob, pubErr := marshalAuthorizedEd25519(privateKey.Public().(ed25519.PublicKey))
+	pubRaw, sshPub, pubErr := marshalAuthorizedEd25519(privateKey.Public().(ed25519.PublicKey))
 	if pubErr != nil {
 		return "", "", "", false, fmt.Errorf("build public key: %w", pubErr)
 	}
 	if writeErr := os.WriteFile(pubPath, pubRaw, 0o644); writeErr != nil {
 		return "", "", "", false, fmt.Errorf("write public key: %w", writeErr)
 	}
-	return privatePath, pubPath, sshSHA256Fingerprint(blob), true, nil
+	return privatePath, pubPath, sshFingerprint(sshPub), true, nil
 }
 
 func carrierKeyFingerprintByAlias(alias string) (string, error) {
@@ -1977,52 +1977,32 @@ func carrierKeyFingerprintByAlias(alias string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read public key: %w", err)
 	}
-	blob, err := parseAuthorizedKeyBlob(pubRaw)
+	sshPub, err := parseAuthorizedKeyToSSH(pubRaw)
 	if err != nil {
 		return "", fmt.Errorf("parse public key: %w", err)
 	}
-	return sshSHA256Fingerprint(blob), nil
+	return sshFingerprint(sshPub), nil
 }
 
-func marshalAuthorizedEd25519(pub ed25519.PublicKey) ([]byte, []byte, error) {
-	if len(pub) != ed25519.PublicKeySize {
-		return nil, nil, fmt.Errorf("invalid ed25519 public key length: %d", len(pub))
-	}
-	keyType := []byte("ssh-ed25519")
-	blob := make([]byte, 4+len(keyType)+4+len(pub))
-	offset := 0
-	binary.BigEndian.PutUint32(blob[offset:offset+4], uint32(len(keyType)))
-	offset += 4
-	copy(blob[offset:offset+len(keyType)], keyType)
-	offset += len(keyType)
-	binary.BigEndian.PutUint32(blob[offset:offset+4], uint32(len(pub)))
-	offset += 4
-	copy(blob[offset:offset+len(pub)], pub)
-
-	encoded := base64.StdEncoding.EncodeToString(blob)
-	line := "ssh-ed25519 " + encoded + "\n"
-	return []byte(line), blob, nil
-}
-
-func parseAuthorizedKeyBlob(raw []byte) ([]byte, error) {
-	fields := strings.Fields(strings.TrimSpace(string(raw)))
-	if len(fields) < 2 {
-		return nil, errors.New("invalid public key format")
-	}
-	if fields[0] != "ssh-ed25519" {
-		return nil, fmt.Errorf("unsupported key type: %s", fields[0])
-	}
-	blob, err := base64.StdEncoding.DecodeString(fields[1])
+func marshalAuthorizedEd25519(pub ed25519.PublicKey) ([]byte, gossh.PublicKey, error) {
+	sshPub, err := gossh.NewPublicKey(pub)
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("create SSH public key: %w", err)
 	}
-	return blob, nil
+	line := gossh.MarshalAuthorizedKey(sshPub)
+	return line, sshPub, nil
 }
 
-func sshSHA256Fingerprint(blob []byte) string {
-	sum := sha256.Sum256(blob)
-	enc := base64.StdEncoding.WithPadding(base64.NoPadding).EncodeToString(sum[:])
-	return "SHA256:" + enc
+func parseAuthorizedKeyToSSH(raw []byte) (gossh.PublicKey, error) {
+	pubKey, _, _, _, err := gossh.ParseAuthorizedKey(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse authorized key: %w", err)
+	}
+	return pubKey, nil
+}
+
+func sshFingerprint(pub gossh.PublicKey) string {
+	return gossh.FingerprintSHA256(pub)
 }
 
 func resolveRemoteKeyPath(out io.Writer, explicit string) (string, error) {
