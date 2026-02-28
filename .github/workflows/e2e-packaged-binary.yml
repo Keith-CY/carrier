@@ -333,7 +333,8 @@ jobs:
             run_privileged apt-get install -y --no-install-recommends nodejs
           fi
           '@
-          wsl -d $distro -- bash -lc $prepScript
+          $prepScript = $prepScript -replace "`r", ""
+          wsl -d $distro -- bash -lc "$prepScript"
 
           $prepareWorkspaceScript = @"
           set -euo pipefail
@@ -343,7 +344,8 @@ jobs:
           cp "\$CARRIER_SRC" "\$WSL_ROOT/bin/carrier"
           chmod +x "\$WSL_ROOT/bin/carrier"
           "@
-          wsl -d $distro -- bash -lc $prepareWorkspaceScript
+          $prepareWorkspaceScript = $prepareWorkspaceScript -replace "`r", ""
+          wsl -d $distro -- bash -lc "$prepareWorkspaceScript"
 
           $configScript = @"
           set -euo pipefail
@@ -370,7 +372,8 @@ jobs:
           }
           JSON
           "@
-          wsl -d $distro -- bash -lc $configScript
+          $configScript = $configScript -replace "`r", ""
+          wsl -d $distro -- bash -lc "$configScript"
 
           $stdinWin = Join-Path $wslRootWin "carrier-add-openclaw.stdin"
           Set-Content -Path $stdinWin -Value "1234567890:carrier-e2e-telegram-token`n`n"
@@ -402,7 +405,8 @@ jobs:
             exit 1
           fi
           "@
-          wsl -d $distro -- bash -lc $runScript
+          $runScript = $runScript -replace "`r", ""
+          wsl -d $distro -- bash -lc "$runScript"
 
       - name: Upload WSL2 OpenClaw logs
         if: always()
