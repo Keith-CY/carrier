@@ -61,12 +61,28 @@ func ListByStatus(status CandidateStatus) []Entry {
 func DefaultEntries() []Entry {
 	entries := []Entry{
 		{
+			ID:           "codex",
+			Name:         "Codex CLI",
+			Version:      "0.1.0",
+			Status:       StatusActive,
+			Capabilities: []string{"code"},
+			Description:  "OpenAI Codex CLI coding agent",
+		},
+		{
 			ID:           "openclaw",
 			Name:         "OpenClaw",
 			Version:      "1.0.0",
 			Status:       StatusActive,
 			Capabilities: []string{"chat", "code", "memory"},
 			Description:  "Full-featured AI assistant with memory support",
+		},
+		{
+			ID:           "opencode",
+			Name:         "OpenCode",
+			Version:      "0.1.0",
+			Status:       StatusActive,
+			Capabilities: []string{"code"},
+			Description:  "OpenCode CLI coding agent",
 		},
 		{
 			ID:           "pi-mono",

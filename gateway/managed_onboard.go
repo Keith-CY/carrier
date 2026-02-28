@@ -18,6 +18,8 @@ type managedAgentConfig struct {
 	ConfigDir      string
 	ConfigFile     string
 	RequiredEnvKey string
+	ChannelOptional bool
+	SkipConfig      bool
 }
 
 type managedOnboardResult struct {
@@ -41,11 +43,26 @@ var managedAgents = map[string]managedAgentConfig{
 		ConfigDir:      ".openclaw",
 		ConfigFile:     "openclaw.json",
 		RequiredEnvKey: "OPENAI_API_KEY",
+		ChannelOptional: true,
 	},
 	"zeroclaw": {
 		ID:         "zeroclaw",
 		ConfigDir:  ".zeroclaw",
 		ConfigFile: "config.toml",
+	},
+	"codex": {
+		ID:              "codex",
+		ConfigDir:       ".codex",
+		ConfigFile:      "config.json",
+		ChannelOptional: true,
+		SkipConfig:      true,
+	},
+	"opencode": {
+		ID:              "opencode",
+		ConfigDir:       ".opencode",
+		ConfigFile:      "config.json",
+		ChannelOptional: true,
+		SkipConfig:      true,
 	},
 }
 
@@ -83,6 +100,10 @@ func managedAgentDisplayName(agentID string) string {
 		return "OpenClaw"
 	case "zeroclaw":
 		return "ZeroClaw"
+	case "codex":
+		return "Codex CLI"
+	case "opencode":
+		return "OpenCode"
 	default:
 		return strings.TrimSpace(agentID)
 	}
@@ -150,7 +171,7 @@ func managedAgentChannels(agentID string) ([]picoclawChannel, bool) {
 func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (*managedOnboardResult, error) {
 	cfg, ok := managedAgentByID(agentID)
 	if !ok {
-		return nil, fmt.Errorf("managed onboarding is only supported for picoclaw/openclaw/zeroclaw")
+		return nil, fmt.Errorf("managed onboarding is only supported for picoclaw/openclaw/zeroclaw/codex/opencode")
 	}
 	if sess == nil {
 		return nil, fmt.Errorf("nil onboarding session")
@@ -158,12 +179,13 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	if !strings.EqualFold(strings.TrimSpace(sess.SelectedAgent), cfg.ID) {
 		return nil, fmt.Errorf("managed onboarding is only supported for %s", cfg.ID)
 	}
-	if strings.TrimSpace(sess.SelectedChannel) == "" {
+	selectedChannel := strings.TrimSpace(sess.SelectedChannel)
+	if selectedChannel == "" && !cfg.ChannelOptional {
 		return nil, fmt.Errorf("%s channel is required", cfg.ID)
 	}
 	channelToken := strings.TrimSpace(sess.ChannelToken)
 	channelSetupPending := sess.ChannelSetupPending
-	if !channelSetupPending && channelToken == "" {
+	if selectedChannel != "" && !channelSetupPending && channelToken == "" {
 		return nil, fmt.Errorf("%s channel token is required", cfg.ID)
 	}
 	if strings.TrimSpace(sess.SelectedProvider) == "" {
@@ -196,9 +218,12 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 		return nil, fmt.Errorf("resolve home dir: %w", err)
 	}
 
-	renderer, err := resolveManagedRenderer(cfg.ID)
-	if err != nil {
-		return nil, fmt.Errorf("select %s config renderer: %w", cfg.ID, err)
+	renderer := managedRendererSelection{}
+	if !cfg.SkipConfig {
+		renderer, err = resolveManagedRenderer(cfg.ID)
+		if err != nil {
+			return nil, fmt.Errorf("select %s config renderer: %w", cfg.ID, err)
+		}
 	}
 
 	instanceID := strings.TrimSpace(sess.InstanceID)
@@ -209,21 +234,28 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	if workspacePath == "" {
 		workspacePath = filepath.Join(home, cfg.ConfigDir, "instances", instanceID, "workspace")
 	}
-	configPath := resolveManagedConfigPath(home, cfg, renderer)
+	configPath := ""
+	if !cfg.SkipConfig {
+		configPath = resolveManagedConfigPath(home, cfg, renderer)
+	}
 	recordPath := filepath.Join(home, ".carrier", "agents", instanceID+".json")
 
 	if err := os.MkdirAll(workspacePath, 0o700); err != nil {
 		return nil, fmt.Errorf("create workspace: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
-		return nil, fmt.Errorf("create config dir: %w", err)
+	if configPath != "" {
+		if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+			return nil, fmt.Errorf("create config dir: %w", err)
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(recordPath), 0o700); err != nil {
 		return nil, fmt.Errorf("create record dir: %w", err)
 	}
 
-	if err := backupIfExists(configPath); err != nil {
-		return nil, fmt.Errorf("backup existing %s config: %w", cfg.ID, err)
+	if configPath != "" {
+		if err := backupIfExists(configPath); err != nil {
+			return nil, fmt.Errorf("backup existing %s config: %w", cfg.ID, err)
+		}
 	}
 
 	modelID := strings.TrimSpace(provider.ExampleModel)
@@ -260,25 +292,27 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 		allowFrom = append(allowFrom, chatID)
 	}
 
-	configRaw, err := renderManagedConfigBytes(
-		renderer,
-		cfg,
-		sess.SelectedChannel,
-		channelToken,
-		channelSetupPending,
-		allowFrom,
-		provider,
-		providerKey,
-		providerToken,
-		modelID,
-		modelName,
-		workspacePath,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("render %s config (%s): %w", cfg.ID, renderer.RendererID, err)
-	}
-	if err := os.WriteFile(configPath, configRaw, 0o600); err != nil {
-		return nil, fmt.Errorf("write %s config: %w", cfg.ID, err)
+	if configPath != "" {
+		configRaw, err := renderManagedConfigBytes(
+			renderer,
+			cfg,
+			selectedChannel,
+			channelToken,
+			channelSetupPending,
+			allowFrom,
+			provider,
+			providerKey,
+			providerToken,
+			modelID,
+			modelName,
+			workspacePath,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("render %s config (%s): %w", cfg.ID, renderer.RendererID, err)
+		}
+		if err := os.WriteFile(configPath, configRaw, 0o600); err != nil {
+			return nil, fmt.Errorf("write %s config: %w", cfg.ID, err)
+		}
 	}
 	if strings.EqualFold(cfg.ID, "openclaw") && strings.TrimSpace(providerToken) != "" {
 		secretsPath := filepath.Join(home, ".openclaw", "carrier-secrets.json")
@@ -303,7 +337,7 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 		"agent_id":              cfg.ID,
 		"workspace_path":        workspacePath,
 		"config_path":           configPath,
-		"channel":               sess.SelectedChannel,
+		"channel":               selectedChannel,
 		"channel_setup_pending": channelSetupPending,
 		"provider":              provider.ID,
 		"renderer_id":           renderer.RendererID,
@@ -401,18 +435,19 @@ func buildManagedPicoClawJSONConfigPayload(
 		providerItem["api_key"] = providerToken
 	}
 
-	channelConfig := map[string]interface{}{
-		"enabled":    true,
-		"allow_from": allowFrom,
-	}
-	if channelSetupPending {
-		channelConfig["enabled"] = false
-		channelConfig["setup_pending"] = true
-	} else {
-		channelConfig["token"] = channelToken
-	}
-	channels := map[string]interface{}{
-		channelID: channelConfig,
+	channels := map[string]interface{}{}
+	if strings.TrimSpace(channelID) != "" {
+		channelConfig := map[string]interface{}{
+			"enabled":    true,
+			"allow_from": allowFrom,
+		}
+		if channelSetupPending {
+			channelConfig["enabled"] = false
+			channelConfig["setup_pending"] = true
+		} else {
+			channelConfig["token"] = channelToken
+		}
+		channels[channelID] = channelConfig
 	}
 
 	return map[string]interface{}{
@@ -442,7 +477,7 @@ func buildManagedOpenClawJSONConfigPayload(
 	provider *LLMProvider,
 	providerKey, providerToken, modelID, workspacePath string,
 ) map[string]interface{} {
-	return openclawcfg.BuildManagedConfigPayload(openclawcfg.ManagedPayloadParams{
+	payload := openclawcfg.BuildManagedConfigPayload(openclawcfg.ManagedPayloadParams{
 		ChannelID:           channelID,
 		ChannelToken:        channelToken,
 		ChannelSetupPending: channelSetupPending,
@@ -453,6 +488,10 @@ func buildManagedOpenClawJSONConfigPayload(
 		ModelID:             modelID,
 		WorkspacePath:       workspacePath,
 	})
+	if strings.TrimSpace(channelID) == "" {
+		payload["channels"] = map[string]interface{}{}
+	}
+	return payload
 }
 
 func renderZeroClawConfigTOML(

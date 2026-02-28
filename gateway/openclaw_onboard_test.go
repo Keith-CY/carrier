@@ -220,3 +220,40 @@ func TestPrepareOpenclawManagedOnboard_RequiresOpenAIKey(t *testing.T) {
 		t.Fatal("expected error when OPENAI_API_KEY cannot be resolved")
 	}
 }
+
+func TestPrepareOpenclawManagedOnboard_AllowsNoChannelWhenOptional(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	sess := &OnboardSession{
+		SelectedAgent:    "openclaw",
+		SelectedProvider: "openai",
+		EnvVars: map[string]string{
+			"OPENAI_API_KEY": "sk-openclaw-no-channel",
+		},
+	}
+
+	result, err := prepareManagedOnboard("openclaw", sess, "webui:add")
+	if err != nil {
+		t.Fatalf("prepareManagedOnboard: %v", err)
+	}
+	if result.ConfigPath == "" {
+		t.Fatal("expected openclaw config path to be set")
+	}
+
+	cfgRaw, err := os.ReadFile(result.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(cfgRaw, &cfg); err != nil {
+		t.Fatalf("parse config json: %v", err)
+	}
+	channels, ok := cfg["channels"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected channels object, got %#v", cfg["channels"])
+	}
+	if len(channels) != 0 {
+		t.Fatalf("expected empty channels for no-channel onboarding, got %#v", channels)
+	}
+}

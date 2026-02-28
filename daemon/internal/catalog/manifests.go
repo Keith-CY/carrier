@@ -597,6 +597,118 @@ func PicoClawManifest() manifest.Manifest {
 	}
 }
 
+func getCodexInstallCommand() string {
+	return `sh -c 'if command -v codex >/dev/null 2>&1; then exit 0; fi; if command -v npm >/dev/null 2>&1; then npm install -g @openai/codex; elif command -v bun >/dev/null 2>&1; then bun add -g @openai/codex; else echo "npm or bun is required to install codex" >&2; exit 127; fi'`
+}
+
+func getCodexStartCommand() string {
+	return `sh -c 'if command -v codex >/dev/null 2>&1; then exec "$(command -v codex)"; else echo "codex executable not found in PATH" >&2; exit 127; fi'`
+}
+
+func CodexManifest() manifest.Manifest {
+	installCmd := getCodexInstallCommand()
+	return manifest.Manifest{
+		ID:           "codex",
+		Name:         "Codex CLI",
+		Version:      "latest",
+		Description:  "OpenAI Codex CLI coding agent",
+		Capabilities: []string{"code"},
+		Runtime: manifest.RuntimeSpec{
+			Type: manifest.RuntimeTypeLocalBinary,
+			Install: manifest.CommandSpec{
+				Command: installCmd,
+			},
+			Upgrade: manifest.CommandSpec{
+				Command: installCmd,
+			},
+			Start: manifest.CommandSpec{
+				Command: getCodexStartCommand(),
+			},
+			Stop: manifest.CommandSpec{
+				Command: "signal:term",
+			},
+		},
+		Network: manifest.NetworkSpec{
+			Healthcheck: manifest.HealthcheckSpec{
+				Type: "process",
+			},
+		},
+		Env: manifest.EnvSpec{
+			Required: []manifest.EnvVar{},
+			Optional: []manifest.EnvVar{},
+		},
+		Memory: manifest.MemorySpec{
+			Supports:  []manifest.MemoryType{manifest.MemoryTypePerAgent},
+			MountPath: "./memory",
+		},
+		Upgrade: manifest.UpgradeSpec{Channel: "stable", Strategy: "in_place_or_reinstall"},
+		Health: manifest.HealthSpec{
+			IntervalSeconds:   30,
+			TimeoutSeconds:    5,
+			Retries:           3,
+			RestartLoopWindow: 300,
+			RestartLoopMax:    5,
+		},
+		Diagnostics: manifest.Diagnostics{Include: []string{"runtime_logs", "process_state"}},
+	}
+}
+
+func getOpenCodeInstallCommand() string {
+	return `sh -c 'if command -v opencode >/dev/null 2>&1; then exit 0; fi; if command -v npm >/dev/null 2>&1; then npm install -g opencode-ai; elif command -v bun >/dev/null 2>&1; then bun add -g opencode-ai; else echo "npm or bun is required to install opencode" >&2; exit 127; fi'`
+}
+
+func getOpenCodeStartCommand() string {
+	return `sh -c 'if command -v opencode >/dev/null 2>&1; then exec "$(command -v opencode)"; else echo "opencode executable not found in PATH" >&2; exit 127; fi'`
+}
+
+func OpenCodeManifest() manifest.Manifest {
+	installCmd := getOpenCodeInstallCommand()
+	return manifest.Manifest{
+		ID:           "opencode",
+		Name:         "OpenCode",
+		Version:      "latest",
+		Description:  "OpenCode CLI coding agent",
+		Capabilities: []string{"code"},
+		Runtime: manifest.RuntimeSpec{
+			Type: manifest.RuntimeTypeLocalBinary,
+			Install: manifest.CommandSpec{
+				Command: installCmd,
+			},
+			Upgrade: manifest.CommandSpec{
+				Command: installCmd,
+			},
+			Start: manifest.CommandSpec{
+				Command: getOpenCodeStartCommand(),
+			},
+			Stop: manifest.CommandSpec{
+				Command: "signal:term",
+			},
+		},
+		Network: manifest.NetworkSpec{
+			Healthcheck: manifest.HealthcheckSpec{
+				Type: "process",
+			},
+		},
+		Env: manifest.EnvSpec{
+			Required: []manifest.EnvVar{},
+			Optional: []manifest.EnvVar{},
+		},
+		Memory: manifest.MemorySpec{
+			Supports:  []manifest.MemoryType{manifest.MemoryTypePerAgent},
+			MountPath: "./memory",
+		},
+		Upgrade: manifest.UpgradeSpec{Channel: "stable", Strategy: "in_place_or_reinstall"},
+		Health: manifest.HealthSpec{
+			IntervalSeconds:   30,
+			TimeoutSeconds:    5,
+			Retries:           3,
+			RestartLoopWindow: 300,
+			RestartLoopMax:    5,
+		},
+		Diagnostics: manifest.Diagnostics{Include: []string{"runtime_logs", "process_state"}},
+	}
+}
+
 func OpenClawManifest() manifest.Manifest {
 	installCmd := getInstallCommand()
 	installByOS := map[string]string{

@@ -72,6 +72,40 @@ func TestPicoClawManifestValid(t *testing.T) {
 	}
 }
 
+func TestCodexManifestBasic(t *testing.T) {
+	m := CodexManifest()
+
+	if m.ID != "codex" {
+		t.Fatalf("expected id codex, got %s", m.ID)
+	}
+	if m.Network.Healthcheck.Type != "process" {
+		t.Fatalf("expected process healthcheck, got %s", m.Network.Healthcheck.Type)
+	}
+	if !strings.Contains(m.Runtime.Install.Command, "@openai/codex") {
+		t.Fatalf("expected codex npm install command, got %q", m.Runtime.Install.Command)
+	}
+	if m.Runtime.Start.Command == "" {
+		t.Fatal("expected start command to be set")
+	}
+}
+
+func TestOpenCodeManifestBasic(t *testing.T) {
+	m := OpenCodeManifest()
+
+	if m.ID != "opencode" {
+		t.Fatalf("expected id opencode, got %s", m.ID)
+	}
+	if m.Network.Healthcheck.Type != "process" {
+		t.Fatalf("expected process healthcheck, got %s", m.Network.Healthcheck.Type)
+	}
+	if !strings.Contains(m.Runtime.Install.Command, "opencode-ai") {
+		t.Fatalf("expected opencode npm install command, got %q", m.Runtime.Install.Command)
+	}
+	if m.Runtime.Start.Command == "" {
+		t.Fatal("expected start command to be set")
+	}
+}
+
 func TestPicoClawBinaryName(t *testing.T) {
 	name := picoClawBinaryName()
 	if name == "" {
