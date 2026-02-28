@@ -28,10 +28,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -109,6 +114,11 @@ type updateCommandOptions struct {
 
 type versionCommandOptions struct {
 	JSON bool
+}
+
+type keysCommandOptions struct {
+	Action string
+	Name   string
 }
 
 type remoteCommandOptions struct {
@@ -346,6 +356,11 @@ Usage:
                         Add/install an agent (default: terminal flow; use -q for quiet mode)
   carrier install <agent_id> [--isolation] [--tui|--cli|--webui] [-q|--quiet]
                         Alias for carrier add <agent_id>
+  carrier keys generate [--name <alias>]
+                        Generate managed SSH key (default alias: default)
+  carrier keys list     List managed SSH keys with fingerprints
+  carrier keys delete <alias>
+                        Delete a managed SSH key
   carrier remote add <agent_id> --host-id <id> --host <ip-or-domain> --port <port> --user <ssh-user> --key-path <private-key-path> [options]
                         Deterministic remote install workflow via gateway API
                         agent_id: openclaw | picoclaw | zeroclaw
@@ -455,6 +470,34 @@ func main() {
 		case "list":
 			if err := runListInstances(os.Stdout); err != nil {
 				fmt.Fprintf(os.Stderr, "list failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "keys":
+			opts, err := parseKeysCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "keys failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			switch opts.Action {
+			case "generate":
+				if err := runKeysGenerate(os.Stdout, opts.Name); err != nil {
+					fmt.Fprintf(os.Stderr, "keys generate failed: %v\n", err)
+					os.Exit(1)
+				}
+			case "list":
+				if err := runKeysList(os.Stdout); err != nil {
+					fmt.Fprintf(os.Stderr, "keys list failed: %v\n", err)
+					os.Exit(1)
+				}
+			case "delete":
+				if err := runKeysDelete(os.Stdout, opts.Name); err != nil {
+					fmt.Fprintf(os.Stderr, "keys delete failed: %v\n", err)
+					os.Exit(1)
+				}
+			default:
+				fmt.Fprintf(os.Stderr, "keys failed: unsupported action %q\n", opts.Action)
 				os.Exit(1)
 			}
 			return
@@ -575,6 +618,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "uninstall", args[2:], nil
 	case "list":
 		return "list", nil, nil
+	case "keys":
+		return "keys", args[2:], nil
 	case "onboard":
 		return "onboard", args[2:], nil
 	case "add":
@@ -687,6 +732,51 @@ func parseVersionCommandArgs(args []string) (versionCommandOptions, error) {
 		}
 	}
 	return opts, nil
+}
+
+func parseKeysCommandArgs(args []string) (keysCommandOptions, error) {
+	if len(args) == 0 {
+		return keysCommandOptions{}, errors.New("usage: carrier keys <generate|list|delete>")
+	}
+	action := strings.ToLower(strings.TrimSpace(args[0]))
+	switch action {
+	case "generate":
+		opts := keysCommandOptions{Action: action, Name: "default"}
+		for i := 1; i < len(args); i++ {
+			flag := strings.ToLower(strings.TrimSpace(args[i]))
+			switch flag {
+			case "--name":
+				value, next, err := parseRequiredFlagValue(args, i, "--name")
+				if err != nil {
+					return keysCommandOptions{}, err
+				}
+				opts.Name = strings.TrimSpace(value)
+				i = next
+			default:
+				return keysCommandOptions{}, fmt.Errorf("unknown keys generate option: %s", args[i])
+			}
+		}
+		if err := validateCarrierKeyAlias(opts.Name); err != nil {
+			return keysCommandOptions{}, err
+		}
+		return opts, nil
+	case "list":
+		if len(args) > 1 {
+			return keysCommandOptions{}, fmt.Errorf("usage: carrier keys list")
+		}
+		return keysCommandOptions{Action: action}, nil
+	case "delete":
+		if len(args) != 2 {
+			return keysCommandOptions{}, errors.New("usage: carrier keys delete <alias>")
+		}
+		name := strings.TrimSpace(args[1])
+		if err := validateCarrierKeyAlias(name); err != nil {
+			return keysCommandOptions{}, err
+		}
+		return keysCommandOptions{Action: action, Name: name}, nil
+	default:
+		return keysCommandOptions{}, fmt.Errorf("unknown keys action: %s", args[0])
+	}
 }
 
 func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
@@ -851,9 +941,6 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 	if opts.User == "" {
 		return remoteCommandOptions{}, errors.New("--user is required")
 	}
-	if opts.KeyPath == "" {
-		return remoteCommandOptions{}, errors.New("--key-path is required")
-	}
 	switch opts.RuntimeMode {
 	case "on_demand", "managed_gateway":
 	default:
@@ -872,6 +959,245 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 		}
 	}
 	return opts, nil
+}
+
+func runKeysGenerate(out io.Writer, alias string) error {
+	alias = strings.TrimSpace(alias)
+	if alias == "" {
+		alias = "default"
+	}
+	privatePath, pubPath, fingerprint, created, err := ensureCarrierManagedKey(alias)
+	if err != nil {
+		return err
+	}
+	if created {
+		_, _ = fmt.Fprintf(out, "generated key %s\n", alias)
+	} else {
+		_, _ = fmt.Fprintf(out, "key %s already exists\n", alias)
+	}
+	_, _ = fmt.Fprintf(out, "private: %s\n", privatePath)
+	_, _ = fmt.Fprintf(out, "public: %s\n", pubPath)
+	_, _ = fmt.Fprintf(out, "fingerprint: %s\n", fingerprint)
+	return nil
+}
+
+func runKeysList(out io.Writer) error {
+	keysDir, err := carrierKeysDir()
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(keysDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			_, _ = fmt.Fprintln(out, "no managed keys found")
+			return nil
+		}
+		return fmt.Errorf("read keys dir: %w", err)
+	}
+	type keyEntry struct {
+		alias       string
+		privatePath string
+		fingerprint string
+	}
+	keys := make([]keyEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		if name == "" || strings.HasSuffix(name, ".pub") {
+			continue
+		}
+		privatePath := filepath.Join(keysDir, name)
+		if _, err := os.Stat(privatePath + ".pub"); err != nil {
+			continue
+		}
+		fp, err := carrierKeyFingerprintByAlias(name)
+		if err != nil {
+			continue
+		}
+		keys = append(keys, keyEntry{alias: name, privatePath: privatePath, fingerprint: fp})
+	}
+	if len(keys) == 0 {
+		_, _ = fmt.Fprintln(out, "no managed keys found")
+		return nil
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].alias < keys[j].alias })
+	for _, item := range keys {
+		_, _ = fmt.Fprintf(out, "%s %s %s\n", item.alias, item.fingerprint, item.privatePath)
+	}
+	return nil
+}
+
+func runKeysDelete(out io.Writer, alias string) error {
+	if err := validateCarrierKeyAlias(alias); err != nil {
+		return err
+	}
+	privatePath, err := carrierManagedKeyPrivatePath(alias)
+	if err != nil {
+		return err
+	}
+	pubPath := privatePath + ".pub"
+	_ = os.Remove(pubPath)
+	if err := os.Remove(privatePath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("managed key %q does not exist", alias)
+		}
+		return fmt.Errorf("delete key %q: %w", alias, err)
+	}
+	_, _ = fmt.Fprintf(out, "deleted key %s\n", alias)
+	return nil
+}
+
+func carrierKeysDir() (string, error) {
+	home, err := resolveCarrierHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir for keys: %w", err)
+	}
+	return filepath.Join(home, ".carrier", "keys"), nil
+}
+
+func validateCarrierKeyAlias(alias string) error {
+	trimmed := strings.TrimSpace(alias)
+	if trimmed == "" {
+		return errors.New("key alias is required")
+	}
+	for _, r := range trimmed {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return fmt.Errorf("invalid key alias %q: use letters, numbers, '-' or '_'", alias)
+	}
+	return nil
+}
+
+func carrierManagedKeyPrivatePath(alias string) (string, error) {
+	if err := validateCarrierKeyAlias(alias); err != nil {
+		return "", err
+	}
+	dir, err := carrierKeysDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, strings.TrimSpace(alias)), nil
+}
+
+func ensureCarrierManagedKey(alias string) (privatePath string, pubPath string, fingerprint string, created bool, err error) {
+	privatePath, err = carrierManagedKeyPrivatePath(alias)
+	if err != nil {
+		return "", "", "", false, err
+	}
+	pubPath = privatePath + ".pub"
+	if _, err = os.Stat(privatePath); err == nil {
+		fp, fpErr := carrierKeyFingerprintByAlias(alias)
+		if fpErr != nil {
+			return "", "", "", false, fpErr
+		}
+		return privatePath, pubPath, fp, false, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", "", "", false, fmt.Errorf("stat key: %w", err)
+	}
+	keysDir, err := carrierKeysDir()
+	if err != nil {
+		return "", "", "", false, err
+	}
+	if err := os.MkdirAll(keysDir, 0o700); err != nil {
+		return "", "", "", false, fmt.Errorf("create keys dir: %w", err)
+	}
+	_, privateKey, genErr := ed25519.GenerateKey(rand.Reader)
+	if genErr != nil {
+		return "", "", "", false, fmt.Errorf("generate ed25519 key: %w", genErr)
+	}
+	privDER, marshalErr := x509.MarshalPKCS8PrivateKey(privateKey)
+	if marshalErr != nil {
+		return "", "", "", false, fmt.Errorf("marshal private key: %w", marshalErr)
+	}
+	privPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privDER})
+	if writeErr := os.WriteFile(privatePath, privPEM, 0o600); writeErr != nil {
+		return "", "", "", false, fmt.Errorf("write private key: %w", writeErr)
+	}
+	pubRaw, blob, pubErr := marshalAuthorizedEd25519(privateKey.Public().(ed25519.PublicKey))
+	if pubErr != nil {
+		return "", "", "", false, fmt.Errorf("build public key: %w", pubErr)
+	}
+	if writeErr := os.WriteFile(pubPath, pubRaw, 0o644); writeErr != nil {
+		return "", "", "", false, fmt.Errorf("write public key: %w", writeErr)
+	}
+	return privatePath, pubPath, sshSHA256Fingerprint(blob), true, nil
+}
+
+func carrierKeyFingerprintByAlias(alias string) (string, error) {
+	privatePath, err := carrierManagedKeyPrivatePath(alias)
+	if err != nil {
+		return "", err
+	}
+	pubRaw, err := os.ReadFile(privatePath + ".pub")
+	if err != nil {
+		return "", fmt.Errorf("read public key: %w", err)
+	}
+	blob, err := parseAuthorizedKeyBlob(pubRaw)
+	if err != nil {
+		return "", fmt.Errorf("parse public key: %w", err)
+	}
+	return sshSHA256Fingerprint(blob), nil
+}
+
+func marshalAuthorizedEd25519(pub ed25519.PublicKey) ([]byte, []byte, error) {
+	if len(pub) != ed25519.PublicKeySize {
+		return nil, nil, fmt.Errorf("invalid ed25519 public key length: %d", len(pub))
+	}
+	keyType := []byte("ssh-ed25519")
+	blob := make([]byte, 4+len(keyType)+4+len(pub))
+	offset := 0
+	binary.BigEndian.PutUint32(blob[offset:offset+4], uint32(len(keyType)))
+	offset += 4
+	copy(blob[offset:offset+len(keyType)], keyType)
+	offset += len(keyType)
+	binary.BigEndian.PutUint32(blob[offset:offset+4], uint32(len(pub)))
+	offset += 4
+	copy(blob[offset:offset+len(pub)], pub)
+
+	encoded := base64.StdEncoding.EncodeToString(blob)
+	line := "ssh-ed25519 " + encoded + "\n"
+	return []byte(line), blob, nil
+}
+
+func parseAuthorizedKeyBlob(raw []byte) ([]byte, error) {
+	fields := strings.Fields(strings.TrimSpace(string(raw)))
+	if len(fields) < 2 {
+		return nil, errors.New("invalid public key format")
+	}
+	if fields[0] != "ssh-ed25519" {
+		return nil, fmt.Errorf("unsupported key type: %s", fields[0])
+	}
+	blob, err := base64.StdEncoding.DecodeString(fields[1])
+	if err != nil {
+		return nil, err
+	}
+	return blob, nil
+}
+
+func sshSHA256Fingerprint(blob []byte) string {
+	sum := sha256.Sum256(blob)
+	enc := base64.StdEncoding.WithPadding(base64.NoPadding).EncodeToString(sum[:])
+	return "SHA256:" + enc
+}
+
+func resolveRemoteKeyPath(out io.Writer, explicit string) (string, error) {
+	explicit = strings.TrimSpace(explicit)
+	if explicit != "" {
+		return explicit, nil
+	}
+	privatePath, _, fingerprint, created, err := ensureCarrierManagedKey("default")
+	if err != nil {
+		return "", err
+	}
+	if created {
+		_, _ = fmt.Fprintf(out, "Generated default managed SSH key: %s (%s)\n", privatePath, fingerprint)
+	} else {
+		_, _ = fmt.Fprintf(out, "Using default managed SSH key: %s (%s)\n", privatePath, fingerprint)
+	}
+	return privatePath, nil
 }
 
 func parseRequiredFlagValue(args []string, index int, flag string) (string, int, error) {
@@ -1516,6 +1842,11 @@ func runRemoteAddCommand(in io.Reader, out io.Writer, opts remoteCommandOptions)
 		return fmt.Errorf("unsupported remote action: %s", opts.Action)
 	}
 	agentName := remoteAgentDisplayName(opts.AgentID)
+	resolvedKeyPath, err := resolveRemoteKeyPath(out, opts.KeyPath)
+	if err != nil {
+		return err
+	}
+	opts.KeyPath = resolvedKeyPath
 	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
 		return err
 	}
@@ -1528,7 +1859,7 @@ func runRemoteAddCommand(in io.Reader, out io.Writer, opts remoteCommandOptions)
 		"port":        opts.Port,
 		"user":        opts.User,
 		"authMode":    "private_key",
-		"keyPath":     opts.KeyPath,
+		"keyPath":     resolvedKeyPath,
 		"runtimeMode": opts.RuntimeMode,
 	}
 	if _, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/remote/hosts", hostPayload, 30*time.Second); err != nil {
