@@ -7,7 +7,7 @@
     "beforeDevCommand": "",
     "beforeBuildCommand": "",
     "frontendDist": "../webui/static",
-    "devUrl": "../webui/static/index.html"
+    "devUrl": "http://127.0.0.1:1420"
   },
   "app": {
     "windows": [
@@ -22,8 +22,7 @@
     }
   },
   "bundle": {
-    "active": true,
-    "targets": ["all"]
+    "active": true
   },
   "plugins": {}
 }
