@@ -1,4 +1,5 @@
-use std::io::{Read, Write};
+use std::cmp::min;
+use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
@@ -92,13 +93,23 @@ fn is_tcp_ready(raw_addr: &str, timeout: Duration) -> bool {
     socket_addr(raw_addr)
         .and_then(|addr| {
             let deadline = Instant::now() + timeout;
-            while Instant::now() < deadline {
-                if TcpStream::connect_timeout(&addr, Duration::from_millis(150)).is_ok() {
+            while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+                if remaining.is_zero() {
+                    break;
+                }
+
+                let conn_timeout = min(remaining, Duration::from_millis(150));
+                if TcpStream::connect_timeout(&addr, conn_timeout).is_ok() {
                     return Ok(());
                 }
-                sleep(Duration::from_millis(150));
+
+                let sleep_for = min(remaining, Duration::from_millis(150));
+                if sleep_for.is_zero() {
+                    break;
+                }
+                sleep(sleep_for);
             }
-            Err("timeout".to_string())
+            Err("timeout")
         })
         .is_ok()
 }
@@ -142,13 +153,18 @@ fn is_http_ready(url: &str) -> bool {
         return false;
     }
 
-    let mut buffer = [0_u8; 1024];
-    let read_len = stream.read(&mut buffer).unwrap_or(0);
+    if stream.set_read_timeout(Some(Duration::from_millis(150))).is_err() {
+        return false;
+    }
+
+    let mut response_reader = BufReader::new(stream);
+    let mut status_line = String::new();
+    let read_len = response_reader.read_line(&mut status_line).unwrap_or(0);
     if read_len == 0 {
         return false;
     }
-    let text = String::from_utf8_lossy(&buffer[..read_len]);
-    let mut lines = text.split_whitespace();
+
+    let mut lines = status_line.split_whitespace();
     let _http_version = lines.next();
     let status = lines.next().and_then(|status| status.parse::<u16>().ok());
     matches!(status, Some(code) if (200..400).contains(&code))
