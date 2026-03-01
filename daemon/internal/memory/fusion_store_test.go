@@ -2,11 +2,13 @@ package memory
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFusionSearchHonorsScopePermissions(t *testing.T) {
@@ -380,5 +382,58 @@ func TestFusionGrantAndInstanceScopeOperations(t *testing.T) {
 	remaining := store.InstanceScopes("inst-1")
 	if len(remaining) != 1 || remaining[0] != Scope("shared:zeta") {
 		t.Fatalf("unexpected remaining scopes: %+v", remaining)
+	}
+}
+
+func TestFusionInstanceDistillDryRunAndApply(t *testing.T) {
+	root := t.TempDir()
+	fixed := time.Date(2026, 3, 2, 12, 0, 0, 0, time.UTC)
+	store := NewStore(
+		WithRootDir(root),
+		WithNow(func() time.Time { return fixed }),
+	)
+
+	if _, err := store.UpsertRecord(UpsertRecordInput{
+		Subject:        "agent-a",
+		Scope:          Scope("agent:agent-a"),
+		ContentSummary: "deployment region is tokyo",
+	}); err != nil {
+		t.Fatalf("upsert first record: %v", err)
+	}
+	if _, err := store.UpsertRecord(UpsertRecordInput{
+		Subject:        "agent-a",
+		Scope:          Scope("agent:agent-a"),
+		ContentSummary: "deployment region is tokyo",
+	}); err != nil {
+		t.Fatalf("upsert duplicate record: %v", err)
+	}
+
+	dryRun, err := store.DistillForInstance(context.Background(), InstanceDistillOptions{
+		InstanceID: "agent-a",
+		DryRun:     true,
+		Force:      true,
+	})
+	if err != nil {
+		t.Fatalf("dry-run distill: %v", err)
+	}
+	if strings.TrimSpace(dryRun.RunID) == "" {
+		t.Fatal("expected dry-run distill run id")
+	}
+	if dryRun.Status != "planned" {
+		t.Fatalf("expected planned status, got %s", dryRun.Status)
+	}
+
+	run, err := store.DistillForInstance(context.Background(), InstanceDistillOptions{
+		InstanceID: "agent-a",
+		Force:      true,
+	})
+	if err != nil {
+		t.Fatalf("apply distill: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("expected completed status, got %s", run.Status)
+	}
+	if run.Removed < 1 {
+		t.Fatalf("expected at least one removed source record, got %d", run.Removed)
 	}
 }

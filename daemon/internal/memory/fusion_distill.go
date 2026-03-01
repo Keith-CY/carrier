@@ -304,11 +304,13 @@ func (s *Store) collectDistillCandidates(opts InstanceDistillOptions) ([]distill
 		if lastUpdated.IsZero() {
 			lastUpdated = rec.CreatedAt
 		}
-		if !lastUpdated.IsZero() && lastUpdated.After(cutoff) {
-			continue
-		}
-		if opts.MinSourceAgeDays > 0 && !lastUpdated.IsZero() && lastUpdated.After(minAgeCutoff) {
-			continue
+		if !opts.Force {
+			if !lastUpdated.IsZero() && lastUpdated.After(cutoff) {
+				continue
+			}
+			if opts.MinSourceAgeDays > 0 && !lastUpdated.IsZero() && lastUpdated.After(minAgeCutoff) {
+				continue
+			}
 		}
 		text := distillRecordText(rec)
 		if text == "" {

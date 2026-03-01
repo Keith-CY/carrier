@@ -405,6 +405,8 @@ func buildHTTPMuxWithBaseAgent(
 			Rerank              *bool    `json:"rerank"`
 			LexicalWeight       *float64 `json:"lexicalWeight"`
 			SemanticWeight      *float64 `json:"semanticWeight"`
+			IncludeDistilled    *bool    `json:"includeDistilled"`
+			IncludeRaw          *bool    `json:"includeRaw"`
 		}
 		if !decodeBody(w, r, &body) {
 			return
@@ -419,6 +421,8 @@ func buildHTTPMuxWithBaseAgent(
 			Rerank:              body.Rerank,
 			LexicalWeight:       body.LexicalWeight,
 			SemanticWeight:      body.SemanticWeight,
+			IncludeDistilled:    body.IncludeDistilled,
+			IncludeRaw:          body.IncludeRaw,
 		})
 		writeJSON(w, http.StatusOK, map[string]interface{}{"results": results})
 	})
@@ -726,6 +730,59 @@ func buildHTTPMuxWithBaseAgent(
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"artifactRef": ref})
+	})
+
+	register("/api/v2/memory/instance/distill", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			InstanceID                 string                      `json:"instanceId"`
+			Scope                      string                      `json:"scope"`
+			DryRun                     bool                        `json:"dryRun"`
+			Force                      bool                        `json:"force"`
+			Actor                      string                      `json:"actor"`
+			RequestID                  string                      `json:"requestId"`
+			Reason                     string                      `json:"reason"`
+			BackendHint                string                      `json:"backendHint"`
+			MinSourceAgeDays           int                         `json:"minSourceAgeDays"`
+			MaxSourceRecords           int                         `json:"maxSourceRecords"`
+			MaxSummaryTokens           int                         `json:"maxSummaryTokens"`
+			ClusterSimilarityThreshold float64                     `json:"clusterSimilarityThreshold"`
+			SkipRecentHours            int                         `json:"skipRecentHours"`
+			DistillScoreThreshold      float64                     `json:"distillScoreThreshold"`
+			ScoreWeights               *memory.DistillScoreWeights `json:"scoreWeights"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		result, err := memStore.DistillForInstance(r.Context(), memory.InstanceDistillOptions{
+			Actor:                       body.Actor,
+			RequestID:                   body.RequestID,
+			InstanceID:                  body.InstanceID,
+			Scope:                       memory.Scope(body.Scope),
+			DryRun:                      body.DryRun,
+			Force:                       body.Force,
+			Reason:                      body.Reason,
+			BackendHint:                 body.BackendHint,
+			MinSourceAgeDays:            body.MinSourceAgeDays,
+			MaxSourceRecords:            body.MaxSourceRecords,
+			MaxSummaryTokens:            body.MaxSummaryTokens,
+			ClusterSimilarityThreshold:  body.ClusterSimilarityThreshold,
+			SkipRecentHours:             body.SkipRecentHours,
+			DistillScoreThreshold:       body.DistillScoreThreshold,
+			DistillScoreWeightsOverride: body.ScoreWeights,
+		})
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"result": result})
 	})
 
 	register("/api/v2/memory/migrate/backup", func(w http.ResponseWriter, r *http.Request) {
