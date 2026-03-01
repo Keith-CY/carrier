@@ -46,11 +46,13 @@ const (
 	defaultReadTimeout       = 30 * time.Second
 	// Long-running install/start requests can take several minutes on cold machines.
 	// Keep write timeout above those command windows so clients do not get EOF mid-flight.
-	defaultWriteTimeout = 30 * time.Minute
-	defaultIdleTimeout  = 120 * time.Second
-	defaultLogsTail     = 200
-	maxLogsTail         = 1000
-	maxBodySize         = 1 << 20
+	defaultWriteTimeout             = 30 * time.Minute
+	defaultIdleTimeout              = 120 * time.Second
+	defaultLogsTail                 = 200
+	maxLogsTail                     = 1000
+	maxBodySize                     = 1 << 20
+	defaultBaseAgentDistillInterval = 24 * time.Hour
+	minBaseAgentDistillInterval     = 1 * time.Hour
 )
 
 var agentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
@@ -88,7 +90,10 @@ func Run() {
 	if err != nil {
 		log.Fatalf("resolve memory root: %v", err)
 	}
-	memStore := memory.NewStore(memory.WithRootDir(memRoot))
+	memStore := memory.NewStore(
+		memory.WithRootDir(memRoot),
+		memory.WithDistillSummarizer(baseAgentDistillSummarizer()),
+	)
 	opts = append(opts, lifecycle.WithMemoryStore(memStore))
 
 	statePath, err := defaultLifecycleStatePath()
@@ -113,6 +118,10 @@ func Run() {
 		baseMemoryStore = newBaseAgentMemoryStoreAdapter(memStore)
 	}
 	baseRuntime := baseagent.NewRuntime(newLifecycleAgentServiceAdapter(svc), baseMemoryStore)
+	stopBaseAgentDistill := startBaseAgentDistillScheduler(memStore)
+	if stopBaseAgentDistill != nil {
+		defer stopBaseAgentDistill()
+	}
 
 	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
 		log.Fatalf("register openclaw manifest: %v", err)
@@ -1556,6 +1565,115 @@ func parseCSVEnv(raw string) []string {
 		}
 	}
 	return out
+}
+
+func parseDurationEnv(raw string, fallback time.Duration) time.Duration {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(trimmed)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func startBaseAgentDistillScheduler(memStore *memory.Store) func() {
+	if memStore == nil {
+		return nil
+	}
+	enabledRaw := strings.TrimSpace(os.Getenv("CARRIER_MEMORY_BASE_AGENT_DISTILL_ENABLED"))
+	enabled := true
+	if enabledRaw != "" {
+		enabled = parseEnabledEnv(enabledRaw)
+	}
+	if !enabled {
+		return nil
+	}
+	interval := parseDurationEnv(os.Getenv("CARRIER_MEMORY_BASE_AGENT_DISTILL_INTERVAL"), defaultBaseAgentDistillInterval)
+	if interval < minBaseAgentDistillInterval {
+		interval = minBaseAgentDistillInterval
+	}
+	instanceID := strings.TrimSpace(os.Getenv("CARRIER_MEMORY_BASE_AGENT_INSTANCE_ID"))
+	if instanceID == "" {
+		instanceID = "carrier.base.internal"
+	}
+	stopCh := make(chan struct{})
+	ticker := time.NewTicker(interval)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+				_, err := memStore.DistillForInstance(ctx, memory.InstanceDistillOptions{
+					InstanceID: instanceID,
+					Actor:      "system",
+					RequestID:  fmt.Sprintf("base-distill-%d", time.Now().UTC().UnixNano()),
+					Reason:     "scheduled_base_agent_distill",
+				})
+				cancel()
+				if err != nil && !errors.Is(err, memory.ErrDistillBusy) {
+					log.Printf("WARN: base-agent distill failed: %v", err)
+				}
+			case <-stopCh:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+	return func() {
+		select {
+		case <-stopCh:
+		default:
+			close(stopCh)
+		}
+	}
+}
+
+func baseAgentDistillSummarizer() memory.DistillSummarizerFunc {
+	return func(ctx context.Context, cluster []memory.MemoryRecord, maxSummaryTokens int) (string, error) {
+		if len(cluster) == 0 {
+			return "", nil
+		}
+		if maxSummaryTokens <= 0 {
+			maxSummaryTokens = 220
+		}
+		limit := len(cluster)
+		if limit > 12 {
+			limit = 12
+		}
+		lines := make([]string, 0, limit)
+		for i := 0; i < limit; i++ {
+			text := strings.TrimSpace(cluster[i].ContentSummary)
+			if text == "" {
+				text = strings.TrimSpace(cluster[i].ContentRaw)
+			}
+			text = trimPromptText(text, 420)
+			if text == "" {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("%d) %s", i+1, text))
+		}
+		if len(lines) == 0 {
+			return "", nil
+		}
+		systemPrompt := "You distill clustered memory entries into one concise factual summary. Preserve key decisions, constraints, and uncertainty. Return plain text only."
+		userPrompt := fmt.Sprintf(
+			"Create one distilled memory summary in <= %d words from these records:\n%s",
+			maxSummaryTokens,
+			strings.Join(lines, "\n"),
+		)
+		return baseagent.RequestCompletion(ctx, systemPrompt, userPrompt)
+	}
+}
+
+func trimPromptText(text string, maxLen int) string {
+	clean := strings.TrimSpace(strings.ReplaceAll(text, "\n", " "))
+	if maxLen <= 0 || len(clean) <= maxLen {
+		return clean
+	}
+	return clean[:maxLen] + "..."
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
