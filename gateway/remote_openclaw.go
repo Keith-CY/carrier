@@ -1482,7 +1482,9 @@ func remoteWriteOpenClawCarrierSecrets(ctx context.Context, host RemoteHost, pay
 		return remoteExecResult{}, fmt.Errorf("create temp secrets file: %w", err)
 	}
 	tmpPath := tmpFile.Name()
-	_ = tmpFile.Close()
+	if closeErr := tmpFile.Close(); closeErr != nil {
+		return remoteExecResult{}, fmt.Errorf("close temp secrets file: %w", closeErr)
+	}
 	defer os.Remove(tmpPath)
 	if err := os.WriteFile(tmpPath, append(raw, '\n'), 0o600); err != nil {
 		return remoteExecResult{}, fmt.Errorf("write temp secrets file: %w", err)
@@ -1539,6 +1541,9 @@ func runRemoteRsync(ctx context.Context, host RemoteHost, localPath, remotePath 
 	// Use $(dirname ...) on the remote side to properly expand $HOME before computing parent dir.
 	// shellSingleQuote prevents injection while allowing shell expansion outside the quotes.
 	rsyncPath := fmt.Sprintf("mkdir -p \"$(dirname %s)\" && rsync", shellSingleQuote(remotePath))
+	// Note: remotePath is NOT quoted because it may contain $HOME which needs
+	// shell expansion on the remote side. The path comes from our constant
+	// (remoteOpenClawCarrierSecretsPath), not user input, so injection is not a concern.
 	args := []string{
 		"-az",
 		"--chmod=F600,D700",
