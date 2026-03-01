@@ -456,61 +456,59 @@ PR #1510 introduced `SyncInstanceMemoryContract()` for syncing per-instance memo
 
 ---
 
-## 10. Open Questions & Future Work
+## 10. Design Decisions
 
-### Q1: Should rsync be built-in or external tool?
+### D1: Built-in Rsync Implementation
 
-**Option A: Shell out to rsync**
-```go
-exec.Command("rsync", "-avz", "-e", "ssh", src, dst)
-```
-✅ Simple, uses well-tested tool  
-❌ Requires rsync installed (not default on Windows)
+**Decision:** Rsync functionality will be **built into Carrier**, handled during installation.
 
-**Option B: Implement in Go**
-```go
-import "github.com/studio-b12/gowebdav" // or similar
-```
-✅ Cross-platform  
-❌ More complexity, less battle-tested
+**Rationale:**
+- Eliminates dependency on external rsync binary
+- Ensures cross-platform support (Windows, macOS, Linux)
+- Carrier installation process will handle rsync setup automatically
 
-**Decision:** Start with option A (shell out), add option B if Windows users complain.
+**Implementation:**
+- Use Go SSH library for file transfer
+- Implement rsync-like delta transfer protocol in Go, or
+- Bundle platform-specific rsync binaries with Carrier installer
 
-### Q2: Credential encryption at rest?
+**Benefits:**
+- No "rsync not found" errors for users
+- Consistent behavior across platforms
+- Simpler user experience (zero external dependencies)
 
-Currently `carrier-secrets.json` is plaintext (but `0600` permissions). Should we encrypt it?
+### D2: No Encryption at Rest
 
-**Option A: No encryption (current)**
-- Relies on filesystem permissions
-- Simpler implementation
-- Risk: root user or disk theft
+**Decision:** `carrier-secrets.json` will be stored in **plaintext** with `0600` filesystem permissions.
 
-**Option B: Encrypt with user passphrase**
-```bash
-$ carrier onboard --provider anthropic
-Enter API key: xxx
-Enter encryption passphrase: [hidden]
-✓ Encrypted carrier-secrets.json with passphrase
-```
-- More secure
-- Requires passphrase on every Carrier start (annoying)
+**Rationale:**
+- Filesystem permissions provide adequate protection for typical use cases
+- Simpler implementation and user experience
+- Avoids passphrase management complexity
 
-**Decision:** Start with option A, add B as opt-in feature (`carrier secure enable`)
+**Security measures:**
+- File permissions: `0600` (owner read/write only)
+- Directory permissions: `~/.carrier/` is `0700`
+- Secrets never in git history (multiple layers of .gitignore + pre-commit hooks)
 
-### Q3: Git-crypt support?
+**Risk acceptance:**
+- Accepts risk of root user access or physical disk theft
+- For higher security needs, users should use OS-level disk encryption (FileVault, BitLocker, LUKS)
 
-Should we support git-crypt as an alternative to rsync?
+### D3: No Git-crypt Support
 
-**Pros:**
-- Transparent encryption in git
-- Works with standard git workflows
+**Decision:** Carrier will **not support git-crypt** for secret encryption in git.
 
-**Cons:**
-- Windows support poor
-- GPG key management complexity
-- If key lost, secrets unrecoverable
+**Rationale:**
+- Git-crypt adds significant complexity (GPG key management)
+- Poor Windows support
+- Rsync-based secret transfer is simpler and more reliable
+- Secrets should never touch git (structural design principle)
 
-**Decision:** Document as "advanced option" but don't recommend. Prefer rsync.
+**Alternative approach:**
+- All secrets transferred via SSH rsync (encrypted in transit)
+- Git only carries structure/config (no secrets)
+- Clear separation is easier to audit and maintain
 
 ---
 
