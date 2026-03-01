@@ -283,7 +283,7 @@ func (s *Store) collectDistillCandidates(opts InstanceDistillOptions) ([]distill
 
 	allowed := s.allowedScopesForSubjectLocked(opts.InstanceID)
 	if opts.Scope != "" {
-		if !scopeAllowed(allowed, opts.Scope) && !opts.Force {
+		if !scopeAllowed(allowed, opts.Scope) {
 			return nil, nil, ErrMountDenied
 		}
 		allowed = map[Scope]struct{}{opts.Scope: {}}
@@ -541,7 +541,10 @@ func (s *Store) applyDistillMutation(
 		if err := os.MkdirAll(filepath.Dir(refPath), 0o755); err != nil {
 			return "", "", err
 		}
-		raw, _ := json.MarshalIndent(manifest, "", "  ")
+		raw, err := json.MarshalIndent(manifest, "", "  ")
+		if err != nil {
+			return "", "", fmt.Errorf("marshal distill manifest: %w", err)
+		}
 		if err := os.WriteFile(refPath, raw, 0o644); err != nil {
 			return "", "", err
 		}
@@ -834,7 +837,7 @@ func ensureGitWorkingTreeClean(gitRoot string) error {
 	cmd := exec.Command("git", "-C", gitRoot, "status", "--porcelain")
 	raw, err := cmd.Output()
 	if err != nil {
-		return nil
+		return fmt.Errorf("failed to check git status: %w", err)
 	}
 	if strings.TrimSpace(string(raw)) != "" {
 		return ErrDistillDirtyTree

@@ -439,3 +439,24 @@ func TestFusionInstanceDistillDryRunAndApply(t *testing.T) {
 		t.Fatalf("expected at least one removed source record, got %d", run.Removed)
 	}
 }
+
+func TestFusionInstanceDistillForceStillEnforcesScopeAccess(t *testing.T) {
+	store := NewStore(WithRootDir(t.TempDir()))
+
+	if _, err := store.UpsertRecord(UpsertRecordInput{
+		Subject:        "agent-b",
+		Scope:          Scope("agent:agent-b"),
+		ContentSummary: "private b memory",
+	}); err != nil {
+		t.Fatalf("upsert agent-b record: %v", err)
+	}
+
+	_, err := store.DistillForInstance(context.Background(), InstanceDistillOptions{
+		InstanceID: "agent-a",
+		Scope:      Scope("agent:agent-b"),
+		Force:      true,
+	})
+	if err != ErrMountDenied {
+		t.Fatalf("expected ErrMountDenied when distilling unauthorized scope with force, got %v", err)
+	}
+}
