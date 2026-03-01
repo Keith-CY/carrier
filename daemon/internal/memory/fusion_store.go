@@ -24,7 +24,7 @@ const (
 	maxCandidateLimit       = 300
 	minCandidateLimit       = 20
 	defaultLexicalWeight    = 0.65
-	defaultSemanticWeight   = 0.35
+	defaultOverlapWeight    = 0.35
 )
 
 type searchCandidate struct {
@@ -70,23 +70,23 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 	}
 
 	lexicalWeight := optionFloat(opts.LexicalWeight, defaultLexicalWeight)
-	semanticWeight := optionFloat(opts.SemanticWeight, defaultSemanticWeight)
+	overlapWeight := optionFloat(opts.OverlapWeight, defaultOverlapWeight)
 	enableRerank := optionBool(opts.Rerank, true)
 	enableAdaptiveRecall := optionBool(opts.AdaptiveRecall, true)
 	if lexicalWeight < 0 {
 		lexicalWeight = 0
 	}
-	if semanticWeight < 0 {
-		semanticWeight = 0
+	if overlapWeight < 0 {
+		overlapWeight = 0
 	}
-	weightSum := lexicalWeight + semanticWeight
+	weightSum := lexicalWeight + overlapWeight
 	if weightSum == 0 {
 		lexicalWeight = defaultLexicalWeight
-		semanticWeight = defaultSemanticWeight
-		weightSum = lexicalWeight + semanticWeight
+		overlapWeight = defaultOverlapWeight
+		weightSum = lexicalWeight + overlapWeight
 	}
 	lexicalWeight /= weightSum
-	semanticWeight /= weightSum
+	overlapWeight /= weightSum
 
 	candidates := make(map[string]searchCandidate, maxResults)
 	usedSQLite := false
@@ -127,10 +127,10 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 				contentText = strings.TrimSpace(rec.ContentRaw)
 			}
 		}
-		semanticScore := scoreText(contentText, lowerQuery)
-		candidate.semantic = semanticScore
+		overlapScore := scoreText(contentText, lowerQuery)
+		candidate.semantic = overlapScore
 		if enableRerank {
-			candidate.hit.Score = blendScore(candidate.lexical, candidate.semantic, lexicalWeight, semanticWeight)
+			candidate.hit.Score = blendScore(candidate.lexical, candidate.semantic, lexicalWeight, overlapWeight)
 		} else {
 			candidate.hit.Score = candidate.lexical
 		}
@@ -791,12 +791,12 @@ func scoreText(text, lowerQuery string) float64 {
 	return ratio
 }
 
-func blendScore(lexicalScore, semanticScore, lexicalWeight, semanticWeight float64) float64 {
-	if lexicalWeight+semanticWeight == 0 {
+func blendScore(lexicalScore, overlapScore, lexicalWeight, overlapWeight float64) float64 {
+	if lexicalWeight+overlapWeight == 0 {
 		return lexicalScore
 	}
-	sum := lexicalWeight + semanticWeight
-	return (lexicalScore*lexicalWeight + semanticScore*semanticWeight) / sum
+	sum := lexicalWeight + overlapWeight
+	return (lexicalScore*lexicalWeight + overlapScore*overlapWeight) / sum
 }
 
 func optionBool(v *bool, fallback bool) bool {
