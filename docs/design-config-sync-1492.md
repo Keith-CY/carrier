@@ -87,6 +87,22 @@ On load during `pull`, the reverse merge happens: `profile.json` fields are over
 └────────────────────────────────────────────────────────┘
 ```
 
+### 2.3.1 Relation to Memory Contract Sync
+
+**Note:** This design (user-global config sync) is **orthogonal** to the instance-level memory contract sync introduced in PR #1510.
+
+| Feature | Scope | Location | Git Repo | Managed By |
+|---------|-------|----------|----------|------------|
+| **Config Sync** (#1492) | User-global settings (model list, channels, agent defaults) | `~/.carrier/sync/profile.json` | `~/.carrier/sync/.git/` | `configsync` package |
+| **Memory Contract Sync** (PR #1510) | Per-instance memory contracts | `~/.carrier/profiles-repo/instances/<agentID>/memory-contract.json` | `~/.carrier/profiles-repo/.git/` | `profilesync.SyncInstanceMemoryContract()` |
+
+Both sync systems coexist and use separate git repos. Config sync operates at the **user settings** layer, while memory contract sync operates at the **instance runtime state** layer. They do not conflict.
+
+When a user syncs config across devices:
+- The **channel structure, model list, and defaults** are pulled from the config sync repo
+- The **channel secrets** remain device-local (re-onboard or restore from backup)
+- The **instance memory contracts** are synced separately (if remote execution with memory git sync is enabled)
+
 ### 2.4 Sync Backend Interface
 
 ```go
