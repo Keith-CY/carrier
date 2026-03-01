@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -166,5 +167,30 @@ func TestSyncInstanceMemoryContractWithRemotePush(t *testing.T) {
 	}
 	if commit2 != commit {
 		t.Fatalf("expected commit to stay stable on no-op sync, commit1=%q commit2=%q", commit, commit2)
+	}
+}
+
+func TestEnsureGitRepoWritesSecretsGitIgnore(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	repoRoot := t.TempDir()
+	if err := ensureGitRepo(repoRoot); err != nil {
+		t.Fatalf("ensureGitRepo failed: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(repoRoot, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	text := string(raw)
+	for _, expected := range []string{
+		"instances/*/carrier-secrets.json",
+		"*secret*.json",
+		"*credential*.json",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("expected .gitignore to contain %q, got:\n%s", expected, text)
+		}
 	}
 }

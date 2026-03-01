@@ -198,13 +198,22 @@ func runRemoteCommandStream(ctx context.Context, host RemoteHost, command string
 }
 
 func buildSSHArgs(host RemoteHost, remoteCommand string) ([]string, error) {
-	h := normalizeRemoteHost(host)
-	if err := validateRemoteHost(h); err != nil {
+	args, target, err := buildSSHConnectionArgs(host)
+	if err != nil {
 		return nil, err
 	}
 	command := strings.TrimSpace(remoteCommand)
 	if command == "" {
 		return nil, fmt.Errorf("remote command is empty")
+	}
+	args = append(args, target, command)
+	return args, nil
+}
+
+func buildSSHConnectionArgs(host RemoteHost) ([]string, string, error) {
+	h := normalizeRemoteHost(host)
+	if err := validateRemoteHost(h); err != nil {
+		return nil, "", err
 	}
 
 	args := []string{
@@ -222,7 +231,7 @@ func buildSSHArgs(host RemoteHost, remoteCommand string) ([]string, error) {
 		if keyPath == "" && strings.TrimSpace(h.KeyRef) != "" {
 			resolvedPath, err := resolveRemoteKeyPath(h.KeyRef)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			keyPath = resolvedPath
 		}
@@ -240,15 +249,13 @@ func buildSSHArgs(host RemoteHost, remoteCommand string) ([]string, error) {
 		}
 	}
 	if targetHost == "" {
-		return nil, fmt.Errorf("target host is empty")
+		return nil, "", fmt.Errorf("target host is empty")
 	}
 	target := targetHost
 	if strings.TrimSpace(h.User) != "" {
 		target = strings.TrimSpace(h.User) + "@" + targetHost
 	}
-
-	args = append(args, target, command)
-	return args, nil
+	return args, target, nil
 }
 
 // shellSingleQuote is the canonical shell-safe quoting function for remote command arguments.
