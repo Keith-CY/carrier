@@ -52,7 +52,9 @@ func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts I
 				cleanupBackend, cleanupErr := resolveIsolationBackend(isolationBackendOptions{
 					InstanceName: state.LimaInstanceName,
 				})
-				if cleanupErr == nil {
+				if cleanupErr != nil {
+					s.appendLog(agentID, fmt.Sprintf("previous lima backend resolution failed (continuing): %v", cleanupErr))
+				} else {
 					if cleanupRunErr := cleanupBackend.Cleanup(); cleanupRunErr != nil {
 						s.appendLog(agentID, fmt.Sprintf("previous lima cleanup failed: %v", cleanupRunErr))
 					}
