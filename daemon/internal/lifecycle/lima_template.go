@@ -83,18 +83,30 @@ func generateLimaInstanceName(agentID string) (string, error) {
 }
 
 func resolveAllowedWorkspacePrefix() (string, error) {
+	var prefix string
 	if custom := strings.TrimSpace(isolationEnvLookup(instanceStoreEnvKey)); custom != "" {
 		storePath, err := filepath.Abs(custom)
 		if err != nil {
 			return "", fmt.Errorf("%w: resolve instance store path %q: %v", ErrIsolationUnavailable, custom, err)
 		}
-		return filepath.Clean(filepath.Dir(storePath)), nil
+		prefix = filepath.Clean(filepath.Dir(storePath))
+	} else {
+		home, err := isolationUserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("%w: resolve user home dir: %v", ErrIsolationUnavailable, err)
+		}
+		prefix = filepath.Join(home, ".carrier", "instances")
 	}
-	home, err := isolationUserHomeDir()
+	// Resolve symlinks to handle macOS /var -> /private/var case.
+	resolved, err := isolationEvalSymlinks(prefix)
 	if err != nil {
-		return "", fmt.Errorf("%w: resolve user home dir: %v", ErrIsolationUnavailable, err)
+		// If the prefix doesn't exist yet, return the cleaned path.
+		if os.IsNotExist(err) {
+			return prefix, nil
+		}
+		return "", fmt.Errorf("%w: resolve prefix path %q: %v", ErrIsolationUnavailable, prefix, err)
 	}
-	return filepath.Join(home, ".carrier", "instances"), nil
+	return resolved, nil
 }
 
 func resolveWorkspacePathForAgent(agentID string) (string, error) {
