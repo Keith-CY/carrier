@@ -1500,11 +1500,16 @@ func defaultRemoteRsyncRunner(ctx context.Context, args []string) (remoteExecRes
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+
+	start := time.Now()
 	err := cmd.Run()
+	duration := time.Since(start)
+
 	result := remoteExecResult{
-		Command: "rsync " + strings.Join(args, " "),
-		Stdout:  stdout.String(),
-		Stderr:  stderr.String(),
+		Command:    "rsync " + strings.Join(args, " "),
+		Stdout:     stdout.String(),
+		Stderr:     stderr.String(),
+		DurationMs: duration.Milliseconds(),
 	}
 	if err == nil {
 		result.ExitCode = 0
