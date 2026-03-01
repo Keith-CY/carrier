@@ -283,7 +283,7 @@ func ProviderEnvVarsToSet(p *LLMProvider, value, baseURL string) map[string]stri
 	// Compatibility alias:
 	// some downstream runtimes (including older PicoClaw flows) still
 	// resolve OpenAI-compatible credentials from OPENAI_API_KEY.
-	if strings.EqualFold(strings.TrimSpace(p.ID), "openai-codex") {
+	if strings.EqualFold(strings.TrimSpace(p.ID), "openai-codex") && trimmed != "" {
 		out["OPENAI_API_KEY"] = trimmed
 	}
 	if len(out) == 0 {
