@@ -311,7 +311,7 @@ func (s *Store) searchSQLiteLocked(allowed map[Scope]struct{}, query string, max
 	}
 	defer db.Close()
 
-	searchLimit := maxResults * 5
+	searchLimit := maxResults
 	if searchLimit < 20 {
 		searchLimit = 20
 	}

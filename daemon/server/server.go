@@ -396,19 +396,29 @@ func buildHTTPMuxWithBaseAgent(
 			return
 		}
 		var body struct {
-			Subject    string  `json:"subject"`
-			Query      string  `json:"query"`
-			MaxResults int     `json:"maxResults"`
-			MinScore   float64 `json:"minScore"`
+			Subject             string   `json:"subject"`
+			Query               string   `json:"query"`
+			MaxResults          int      `json:"maxResults"`
+			MinScore            float64  `json:"minScore"`
+			CandidateMultiplier int      `json:"candidateMultiplier"`
+			AdaptiveRecall      *bool    `json:"adaptiveRecall"`
+			Rerank              *bool    `json:"rerank"`
+			LexicalWeight       *float64 `json:"lexicalWeight"`
+			OverlapWeight       *float64 `json:"overlapWeight"`
 		}
 		if !decodeBody(w, r, &body) {
 			return
 		}
 		results := memStore.Search(memory.SearchOptions{
-			Subject:    body.Subject,
-			Query:      body.Query,
-			MaxResults: body.MaxResults,
-			MinScore:   body.MinScore,
+			Subject:             body.Subject,
+			Query:               body.Query,
+			MaxResults:          body.MaxResults,
+			MinScore:            body.MinScore,
+			CandidateMultiplier: body.CandidateMultiplier,
+			AdaptiveRecall:      body.AdaptiveRecall,
+			Rerank:              body.Rerank,
+			LexicalWeight:       body.LexicalWeight,
+			OverlapWeight:       body.OverlapWeight,
 		})
 		writeJSON(w, http.StatusOK, map[string]interface{}{"results": results})
 	})

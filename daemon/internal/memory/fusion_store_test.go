@@ -2,6 +2,7 @@ package memory
 
 import (
 	"archive/zip"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -159,6 +160,126 @@ func TestFusionSearchUsesSQLiteIndexCache(t *testing.T) {
 	hits := store.Search(SearchOptions{Subject: "agent-a", Query: "sqlite"})
 	if len(hits) == 0 {
 		t.Fatalf("expected sqlite-backed search hits")
+	}
+}
+
+func TestFusionSearchReranksWithHybridWeights(t *testing.T) {
+	store := NewStore()
+	phrase, err := store.UpsertRecord(UpsertRecordInput{
+		Subject:        "agent-a",
+		Scope:          Scope("agent:agent-a"),
+		ContentSummary: "alpha rollout checklist includes integration smoke tests",
+	})
+	if err != nil {
+		t.Fatalf("upsert phrase record: %v", err)
+	}
+	_, err = store.UpsertRecord(UpsertRecordInput{
+		Subject:        "agent-a",
+		Scope:          Scope("agent:agent-a"),
+		ContentSummary: "alpha rollout",
+	})
+	if err != nil {
+		t.Fatalf("upsert topic record: %v", err)
+	}
+
+	rerank := true
+	adaptive := true
+	lex := 0.2
+	overlap := 0.8
+	hits := store.Search(SearchOptions{
+		Subject:        "agent-a",
+		Query:          "alpha rollout checklist",
+		AdaptiveRecall: &adaptive,
+		Rerank:         &rerank,
+		LexicalWeight:  &lex,
+		OverlapWeight:  &overlap,
+	})
+	if len(hits) == 0 {
+		t.Fatal("expected hybrid rerank hits")
+	}
+	if hits[0].ID != phrase.ID {
+		t.Fatalf("expected best hit %s, got %s", phrase.ID, hits[0].ID)
+	}
+}
+
+func TestFusionSearchEmptyResultsWithRerank(t *testing.T) {
+	store := NewStore()
+	_, err := store.UpsertRecord(UpsertRecordInput{
+		Subject:        "agent-a",
+		Scope:          Scope("agent:agent-a"),
+		ContentSummary: "unrelated content about databases",
+	})
+	if err != nil {
+		t.Fatalf("upsert record: %v", err)
+	}
+
+	rerank := true
+	minScore := 0.9 // High threshold should filter everything
+	hits := store.Search(SearchOptions{
+		Subject:  "agent-a",
+		Query:    "quantum physics research",
+		Rerank:   &rerank,
+		MinScore: minScore,
+	})
+	if len(hits) != 0 {
+		t.Fatalf("expected empty results with high minScore, got %d hits", len(hits))
+	}
+}
+
+func TestFusionSearchZeroWeightsFallbackToDefaults(t *testing.T) {
+	store := NewStore()
+	_, err := store.UpsertRecord(UpsertRecordInput{
+		Subject:        "agent-a",
+		Scope:          Scope("agent:agent-a"),
+		ContentSummary: "deployment checklist for production",
+	})
+	if err != nil {
+		t.Fatalf("upsert record: %v", err)
+	}
+
+	rerank := true
+	zeroLex := 0.0
+	zeroOverlap := 0.0
+	hits := store.Search(SearchOptions{
+		Subject:       "agent-a",
+		Query:         "deployment",
+		Rerank:        &rerank,
+		LexicalWeight: &zeroLex,
+		OverlapWeight: &zeroOverlap,
+	})
+	// Should fallback to defaults and still return results
+	if len(hits) == 0 {
+		t.Fatal("expected results with zero weights (should fallback to defaults)")
+	}
+}
+
+func TestFusionSearchLargeCandidateMultiplier(t *testing.T) {
+	store := NewStore()
+	// Create multiple records
+	for i := 0; i < 20; i++ {
+		_, err := store.UpsertRecord(UpsertRecordInput{
+			Subject:        "agent-a",
+			Scope:          Scope("agent:agent-a"),
+			ContentSummary: fmt.Sprintf("test document number %d about search functionality", i),
+		})
+		if err != nil {
+			t.Fatalf("upsert record %d: %v", i, err)
+		}
+	}
+
+	rerank := true
+	hits := store.Search(SearchOptions{
+		Subject:             "agent-a",
+		Query:               "search functionality",
+		Rerank:              &rerank,
+		CandidateMultiplier: 20, // Max multiplier
+		MaxResults:          5,
+	})
+	if len(hits) == 0 {
+		t.Fatal("expected results with large candidate multiplier")
+	}
+	if len(hits) > 5 {
+		t.Fatalf("expected max 5 results, got %d", len(hits))
 	}
 }
 
