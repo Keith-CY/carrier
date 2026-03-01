@@ -117,7 +117,7 @@ func (b *perAgentLimaIsolationBackend) ensureTemplatePath() (string, error) {
 	if err := validateLimaInstanceName(b.instanceName); err != nil {
 		return "", err
 	}
-	if err := validateWorkspacePath(b.workspacePath); err != nil {
+	if _, err := validateWorkspacePath(b.workspacePath); err != nil {
 		return "", err
 	}
 	path, err := writeLimaTemplate(b.instanceName, b.workspacePath)

@@ -115,7 +115,7 @@ func TestValidateWorkspacePathRejectsOutsidePrefix(t *testing.T) {
 	if err := os.MkdirAll(outside, 0o700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := validateWorkspacePath(outside); err == nil {
+	if _, err := validateWorkspacePath(outside); err == nil {
 		t.Fatalf("validateWorkspacePath(%q) should fail for outside prefix", outside)
 	}
 }
@@ -141,7 +141,7 @@ func TestSymlinkEscapeInWorkspaceRejected(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlink unsupported: %v", err)
 	}
-	if err := validateWorkspacePath(link); err == nil {
+	if _, err := validateWorkspacePath(link); err == nil {
 		t.Fatal("expected symlink escape to be rejected")
 	}
 }

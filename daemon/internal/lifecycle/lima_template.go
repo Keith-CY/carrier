@@ -149,33 +149,35 @@ func resolveWorkspacePathForAgent(agentID string) (string, error) {
 	return path, nil
 }
 
-func validateWorkspacePath(workspacePath string) error {
+// validateWorkspacePath validates and resolves the workspace path, returning
+// the resolved path on success. This avoids duplicate symlink resolution.
+func validateWorkspacePath(workspacePath string) (string, error) {
 	cleaned := filepath.Clean(strings.TrimSpace(workspacePath))
 	if cleaned == "" || cleaned == "." {
-		return fmt.Errorf("%w: workspace path is empty", ErrIsolationUnavailable)
+		return "", fmt.Errorf("%w: workspace path is empty", ErrIsolationUnavailable)
 	}
 	if !filepath.IsAbs(cleaned) {
-		return fmt.Errorf("%w: workspace path must be absolute: %q", ErrIsolationUnavailable, workspacePath)
+		return "", fmt.Errorf("%w: workspace path must be absolute: %q", ErrIsolationUnavailable, workspacePath)
 	}
 	resolved, err := isolationEvalSymlinks(cleaned)
 	if err != nil {
-		return fmt.Errorf("%w: resolve workspace path %q: %v", ErrIsolationUnavailable, cleaned, err)
+		return "", fmt.Errorf("%w: resolve workspace path %q: %v", ErrIsolationUnavailable, cleaned, err)
 	}
 	prefix, err := resolveAllowedWorkspacePrefix()
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !isPathWithinBase(prefix, resolved) {
-		return fmt.Errorf("%w: workspace path %q is outside allowed prefix %q", ErrIsolationUnavailable, resolved, prefix)
+		return "", fmt.Errorf("%w: workspace path %q is outside allowed prefix %q", ErrIsolationUnavailable, resolved, prefix)
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return fmt.Errorf("%w: stat workspace path %q: %v", ErrIsolationUnavailable, resolved, err)
+		return "", fmt.Errorf("%w: stat workspace path %q: %v", ErrIsolationUnavailable, resolved, err)
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("%w: workspace path is not a directory: %q", ErrIsolationUnavailable, resolved)
+		return "", fmt.Errorf("%w: workspace path is not a directory: %q", ErrIsolationUnavailable, resolved)
 	}
-	return nil
+	return resolved, nil
 }
 
 func limaTemplateDir() (string, error) {
@@ -216,12 +218,9 @@ func generateLimaTemplate(instanceName, workspacePath string) ([]byte, error) {
 	if err := validateLimaInstanceName(instanceName); err != nil {
 		return nil, err
 	}
-	if err := validateWorkspacePath(workspacePath); err != nil {
-		return nil, err
-	}
-	resolvedPath, err := isolationEvalSymlinks(filepath.Clean(workspacePath))
+	resolvedPath, err := validateWorkspacePath(workspacePath)
 	if err != nil {
-		return nil, fmt.Errorf("%w: resolve workspace path for template: %v", ErrIsolationUnavailable, err)
+		return nil, err
 	}
 	template := limaTemplate{
 		Images: []limaImage{
