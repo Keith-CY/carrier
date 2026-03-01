@@ -96,7 +96,13 @@ Request body:
 
 ```json
 {
-  "mode": "always_push"
+  "mode": "always_push",
+  "memoryGit": {
+    "enabled": true,
+    "repoUrl": "/path/to/remote.git",
+    "branch": "main",
+    "authMode": "system"
+  }
 }
 ```
 
@@ -105,11 +111,44 @@ Request body:
 - `pull_validate_push`
 - `manual`
 
-Response includes sync result envelope (`status`, `driftState`, `lastRemoteHash`).
+`memoryGit`:
+- `enabled`: enable memory contract sync via git
+- `repoUrl`: git remote URL/path
+- `branch`: target branch (default `main`)
+- `authMode`: currently `system`
+
+Response includes sync result envelope (`status`, `driftState`, `lastRemoteHash`) and `memory` contract metadata.
 
 ### `GET /api/v1/remote/hosts/:hostId/instances/:agentId/sync/status`
 
 Returns persisted sync status for the instance.
+
+Memory-related fields:
+- `memoryLastSyncStatus`
+- `memoryLastSyncAt`
+- `memoryLastSyncError`
+- `memoryContractDigest`
+- `memoryGit`
+
+### `POST /api/v1/remote/hosts/:hostId/instances/:agentId/run`
+
+Runs a non-stream prompt on the remote instance.
+
+Request body:
+
+```json
+{
+  "message": "hello",
+  "sessionId": "sess-123",
+  "timeoutMs": 60000
+}
+```
+
+Response includes:
+- `sessionId`
+- `output`
+- `latencyMs`
+- `memory` (`contractId`, `contractDigest`, `syncState`, `syncError`, `syncedAt`)
 
 ### `POST /api/v1/remote/hosts/:hostId/instances/:agentId/diagnose`
 

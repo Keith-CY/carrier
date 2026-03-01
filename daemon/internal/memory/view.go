@@ -349,7 +349,11 @@ func (s *Store) PrepareAgentMemory(agentID string) (RuntimeMemoryContract, error
 		return RuntimeMemoryContract{}, fmt.Errorf("create private write dir: %w", err)
 	}
 
-	pathOwner := map[string]string{}
+	type fileOwner struct {
+		MemoryID string
+		Digest   string
+	}
+	pathOwners := map[string]fileOwner{}
 	conflicts := make([]ViewConflict, 0)
 	sources := make([]ViewSource, 0, len(sorted))
 
@@ -383,18 +387,30 @@ func (s *Store) PrepareAgentMemory(agentID string) (RuntimeMemoryContract, error
 			if !matchesCollectionSelection(rel, selectedCollections) {
 				continue
 			}
+			fileDigest, err := computeFileDigest(abs)
+			if err != nil {
+				return RuntimeMemoryContract{}, err
+			}
 			target := filepath.Join(effectiveDir, filepath.FromSlash(rel))
-			if prev, exists := pathOwner[rel]; exists && prev != att.MemoryID {
+			if prev, exists := pathOwners[rel]; exists && prev.MemoryID != att.MemoryID {
+				if prev.Digest == fileDigest {
+					// Same path and same digest: deterministic dedupe without conflict.
+					continue
+				}
 				conflicts = append(conflicts, ViewConflict{
 					Path:             rel,
-					PreviousMemoryID: prev,
+					PreviousMemoryID: prev.MemoryID,
+					PreviousDigest:   prev.Digest,
 					CurrentMemoryID:  att.MemoryID,
+					CurrentDigest:    fileDigest,
+					WinnerMemoryID:   att.MemoryID,
+					Resolution:       "current_wins_by_precedence",
 				})
 			}
 			if err := copyFile(abs, target); err != nil {
 				return RuntimeMemoryContract{}, err
 			}
-			pathOwner[rel] = att.MemoryID
+			pathOwners[rel] = fileOwner{MemoryID: att.MemoryID, Digest: fileDigest}
 		}
 
 		sources = append(sources, ViewSource{
@@ -526,6 +542,15 @@ func copyFile(src, dst string) error {
 		return fmt.Errorf("close target file %s: %w", dst, closeErr)
 	}
 	return nil
+}
+
+func computeFileDigest(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read digest file %s: %w", path, err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func computeDirDigest(root string) (string, error) {

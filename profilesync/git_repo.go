@@ -436,3 +436,121 @@ func normalizeCommitReason(reason string) string {
 	}
 	return trimmed
 }
+
+func SyncInstanceMemoryContract(instanceID string, contract map[string]interface{}, repoURL, branch, reason string) (string, bool, error) {
+	repoRoot, err := profilesyncRepoRoot()
+	if err != nil {
+		return "", false, err
+	}
+	if err := ensureGitRepo(repoRoot); err != nil {
+		return "", false, err
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		branch = "main"
+	}
+	repoURL = strings.TrimSpace(repoURL)
+	if repoURL != "" {
+		if err := ensureGitRemote(repoRoot, "origin", repoURL); err != nil {
+			return "", false, err
+		}
+		if err := checkoutBranch(repoRoot, branch); err != nil {
+			return "", false, err
+		}
+		if err := pullRemoteBranch(repoRoot, "origin", branch); err != nil {
+			return "", false, err
+		}
+	}
+
+	normalized := deepCopyMap(contract)
+	memoryPath := filepath.Join(repoRoot, "instances", sanitizeInstanceID(instanceID), "memory-contract.json")
+	if err := os.MkdirAll(filepath.Dir(memoryPath), 0o700); err != nil {
+		return "", false, fmt.Errorf("create memory contract dir: %w", err)
+	}
+	raw, err := json.MarshalIndent(normalized, "", "  ")
+	if err != nil {
+		return "", false, fmt.Errorf("marshal memory contract: %w", err)
+	}
+	if err := os.WriteFile(memoryPath, append(raw, '\n'), 0o600); err != nil {
+		return "", false, fmt.Errorf("write memory contract file: %w", err)
+	}
+
+	relativePath := filepath.ToSlash(filepath.Join("instances", sanitizeInstanceID(instanceID), "memory-contract.json"))
+	if _, err := runGit(repoRoot, "add", "--", relativePath); err != nil {
+		return "", false, err
+	}
+	changed, err := gitHasStagedChanges(repoRoot)
+	if err != nil {
+		return "", false, err
+	}
+	if !changed {
+		head, err := gitHead(repoRoot)
+		return head, false, err
+	}
+
+	message := fmt.Sprintf("memory(%s): %s", normalizeCommitReason(reason), strings.TrimSpace(instanceID))
+	if _, err := runGit(repoRoot, "commit", "-m", message); err != nil {
+		return "", false, err
+	}
+	head, err := gitHead(repoRoot)
+	if err != nil {
+		return "", false, err
+	}
+	if repoURL != "" {
+		if err := checkoutBranch(repoRoot, branch); err != nil {
+			return "", false, err
+		}
+		if _, err := runGit(repoRoot, "push", "origin", branch); err != nil {
+			return "", false, err
+		}
+	}
+	return head, true, nil
+}
+
+func ensureGitRemote(repoRoot, remoteName, remoteURL string) error {
+	remoteName = strings.TrimSpace(remoteName)
+	remoteURL = strings.TrimSpace(remoteURL)
+	if remoteName == "" || remoteURL == "" {
+		return errors.New("remote name and remote url are required")
+	}
+	if _, err := runGit(repoRoot, "remote", "get-url", remoteName); err != nil {
+		if _, addErr := runGit(repoRoot, "remote", "add", remoteName, remoteURL); addErr != nil {
+			return addErr
+		}
+		return nil
+	}
+	_, err := runGit(repoRoot, "remote", "set-url", remoteName, remoteURL)
+	return err
+}
+
+func checkoutBranch(repoRoot, branch string) error {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return errors.New("branch is required")
+	}
+	_, err := runGit(repoRoot, "checkout", "-B", branch)
+	return err
+}
+
+func pullRemoteBranch(repoRoot, remoteName, branch string) error {
+	remoteName = strings.TrimSpace(remoteName)
+	branch = strings.TrimSpace(branch)
+	if remoteName == "" || branch == "" {
+		return errors.New("remote and branch are required")
+	}
+	if _, err := runGit(repoRoot, "fetch", remoteName, branch); err != nil {
+		// Brand-new remotes may not have the target branch yet.
+		errText := strings.ToLower(err.Error())
+		if strings.Contains(errText, "couldn't find remote ref") || strings.Contains(errText, "remote ref does not exist") {
+			return nil
+		}
+		return err
+	}
+	if _, err := runGit(repoRoot, "merge", "--ff-only", "FETCH_HEAD"); err != nil {
+		errText := strings.ToLower(err.Error())
+		if strings.Contains(errText, "not possible to fast-forward") || strings.Contains(errText, "unrelated histories") {
+			return err
+		}
+	}
+	return nil
+}

@@ -59,21 +59,30 @@ func (s *Server) Handler() *http.ServeMux {
 }
 
 type daemonAgent struct {
-	ID                   string `json:"id"`
-	Name                 string `json:"name"`
-	Version              string `json:"version"`
-	InstallState         string `json:"installState"`
-	Installed            bool   `json:"installed"`
-	RuntimeState         string `json:"runtimeState"`
-	Health               string `json:"health"`
-	Ports                []int  `json:"ports,omitempty"`
-	StartedAt            string `json:"startedAt,omitempty"`
-	RestartCount         int    `json:"restartCount"`
-	NeedsRemoteDiagnosis bool   `json:"needsRemoteDiagnosis"`
-	LastError            string `json:"lastError,omitempty"`
-	LastTriageSummary    string `json:"lastTriageSummary,omitempty"`
-	LastDiagnoseFile     string `json:"lastDiagnoseFile,omitempty"`
-	UpdatedAt            string `json:"updatedAt"`
+	ID                   string             `json:"id"`
+	Name                 string             `json:"name"`
+	Version              string             `json:"version"`
+	InstallState         string             `json:"installState"`
+	Installed            bool               `json:"installed"`
+	RuntimeState         string             `json:"runtimeState"`
+	Health               string             `json:"health"`
+	Ports                []int              `json:"ports,omitempty"`
+	StartedAt            string             `json:"startedAt,omitempty"`
+	RestartCount         int                `json:"restartCount"`
+	NeedsRemoteDiagnosis bool               `json:"needsRemoteDiagnosis"`
+	LastError            string             `json:"lastError,omitempty"`
+	LastTriageSummary    string             `json:"lastTriageSummary,omitempty"`
+	LastDiagnoseFile     string             `json:"lastDiagnoseFile,omitempty"`
+	Memory               *daemonAgentMemory `json:"memory,omitempty"`
+	UpdatedAt            string             `json:"updatedAt"`
+}
+
+type daemonAgentMemory struct {
+	ContractID     string `json:"contractId,omitempty"`
+	ContractDigest string `json:"contractDigest,omitempty"`
+	SyncState      string `json:"syncState,omitempty"`
+	SyncError      string `json:"syncError,omitempty"`
+	SyncedAt       string `json:"syncedAt,omitempty"`
 }
 
 type listAgentsResponse struct {
@@ -84,6 +93,20 @@ func (s *Server) agentFromState(state lifecycle.AgentState) daemonAgent {
 	startedAt := ""
 	if state.StartedAt != nil {
 		startedAt = state.StartedAt.UTC().Format(time.RFC3339Nano)
+	}
+	var memoryState *daemonAgentMemory
+	if state.Memory != nil {
+		syncedAt := ""
+		if state.Memory.SyncedAt != nil {
+			syncedAt = state.Memory.SyncedAt.UTC().Format(time.RFC3339Nano)
+		}
+		memoryState = &daemonAgentMemory{
+			ContractID:     state.Memory.ContractID,
+			ContractDigest: state.Memory.ContractDigest,
+			SyncState:      state.Memory.SyncState,
+			SyncError:      redact.RedactText(state.Memory.SyncError),
+			SyncedAt:       syncedAt,
+		}
 	}
 	return daemonAgent{
 		ID:                   state.ID,
@@ -100,6 +123,7 @@ func (s *Server) agentFromState(state lifecycle.AgentState) daemonAgent {
 		LastError:            redact.RedactText(state.LastError),
 		LastTriageSummary:    redact.RedactText(state.LastTriageSummary),
 		LastDiagnoseFile:     state.LastDiagnoseFile,
+		Memory:               memoryState,
 		UpdatedAt:            state.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
 }

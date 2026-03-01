@@ -77,7 +77,11 @@ type ViewSource struct {
 type ViewConflict struct {
 	Path             string `json:"path"`
 	PreviousMemoryID string `json:"previous_memory_id"`
+	PreviousDigest   string `json:"previous_digest,omitempty"`
 	CurrentMemoryID  string `json:"current_memory_id"`
+	CurrentDigest    string `json:"current_digest,omitempty"`
+	WinnerMemoryID   string `json:"winner_memory_id,omitempty"`
+	Resolution       string `json:"resolution,omitempty"`
 }
 
 type ViewExplanation struct {

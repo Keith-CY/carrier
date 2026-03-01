@@ -1,7 +1,9 @@
 package profilesync
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
@@ -111,5 +113,58 @@ func TestSaveInstanceProfileNoChangeDoesNotCommit(t *testing.T) {
 	}
 	if commit2 != commit1 {
 		t.Fatalf("expected second save to keep same commit, commit1=%q commit2=%q", commit1, commit2)
+	}
+}
+
+func TestSyncInstanceMemoryContractWithRemotePush(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	repoRoot := t.TempDir()
+	t.Setenv("CARRIER_PROFILESYNC_REPO", repoRoot)
+	instanceID := "host-c_main"
+	hostID := "host-c"
+	agentID := "main"
+
+	if _, _, err := SaveInstanceProfile(instanceID, hostID, agentID, map[string]interface{}{"agents": map[string]interface{}{}}, "seed"); err != nil {
+		t.Fatalf("seed profile failed: %v", err)
+	}
+
+	remoteBare := filepath.Join(t.TempDir(), "remote.git")
+	if err := os.MkdirAll(remoteBare, 0o755); err != nil {
+		t.Fatalf("mkdir remote bare: %v", err)
+	}
+	if out, err := exec.Command("git", "init", "--bare", remoteBare).CombinedOutput(); err != nil {
+		t.Fatalf("init bare remote: %v, out=%s", err, string(out))
+	}
+
+	contract := map[string]interface{}{
+		"agentId":  agentID,
+		"hostId":   hostID,
+		"mounts":   []interface{}{},
+		"attached": []interface{}{},
+	}
+	commit, changed, err := SyncInstanceMemoryContract(instanceID, contract, remoteBare, "main", "sync")
+	if err != nil {
+		t.Fatalf("sync memory contract failed: %v", err)
+	}
+	if !changed || commit == "" {
+		t.Fatalf("expected contract sync commit, changed=%v commit=%q", changed, commit)
+	}
+
+	if out, err := exec.Command("git", "--git-dir", remoteBare, "rev-parse", "refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("expected pushed main branch, err=%v out=%s", err, string(out))
+	}
+
+	commit2, changed, err := SyncInstanceMemoryContract(instanceID, contract, remoteBare, "main", "sync")
+	if err != nil {
+		t.Fatalf("second sync failed: %v", err)
+	}
+	if changed {
+		t.Fatalf("expected no-op sync on identical contract")
+	}
+	if commit2 != commit {
+		t.Fatalf("expected commit to stay stable on no-op sync, commit1=%q commit2=%q", commit, commit2)
 	}
 }

@@ -81,13 +81,30 @@ type remoteUninstallResult struct {
 }
 
 type remoteSyncResult struct {
-	HostID         string `json:"hostId"`
-	AgentID        string `json:"agentId"`
-	Mode           string `json:"mode"`
-	Status         string `json:"status"`
-	DriftState     string `json:"driftState"`
-	LastRemoteHash string `json:"lastRemoteHash,omitempty"`
-	LastSyncAt     string `json:"lastSyncAt,omitempty"`
+	HostID         string                     `json:"hostId"`
+	AgentID        string                     `json:"agentId"`
+	Mode           string                     `json:"mode"`
+	Status         string                     `json:"status"`
+	DriftState     string                     `json:"driftState"`
+	LastRemoteHash string                     `json:"lastRemoteHash,omitempty"`
+	LastSyncAt     string                     `json:"lastSyncAt,omitempty"`
+	Memory         RemoteMemoryContractStatus `json:"memory,omitempty"`
+}
+
+type remoteRunResult struct {
+	HostID     string                     `json:"hostId"`
+	AgentID    string                     `json:"agentId"`
+	SessionID  string                     `json:"sessionId,omitempty"`
+	Output     string                     `json:"output,omitempty"`
+	LatencyMs  int64                      `json:"latencyMs"`
+	Memory     RemoteMemoryContractStatus `json:"memory,omitempty"`
+	RawPayload map[string]interface{}     `json:"rawPayload,omitempty"`
+}
+
+type remoteMemoryRuntimeContract struct {
+	ContractID     string
+	ContractDigest string
+	MemoryPath     string
 }
 
 type remoteDiagnoseResult struct {
@@ -713,17 +730,21 @@ func remoteSaveDiscoveredProfile(hostID, agentID string, config map[string]inter
 		return err
 	}
 	now := nowTimestamp()
+	memoryContract := buildRemoteMemoryRuntimeContract(agentID)
 	status := RemoteInstanceSyncStatus{
-		HostID:              hostID,
-		AgentID:             agentID,
-		SyncMode:            providerBindingSyncModePullValidatePush,
-		DriftState:          "in_sync",
-		LastSyncStatus:      "success",
-		LastSyncAt:          now,
-		LastRemoteHash:      hashRemoteConfig(config),
-		LastCanonicalConfig: config,
-		LastLocalCommit:     localCommit,
-		LastCommonCommit:    localCommit,
+		HostID:               hostID,
+		AgentID:              agentID,
+		SyncMode:             providerBindingSyncModePullValidatePush,
+		DriftState:           "in_sync",
+		LastSyncStatus:       "success",
+		LastSyncAt:           now,
+		LastRemoteHash:       hashRemoteConfig(config),
+		LastCanonicalConfig:  config,
+		LastLocalCommit:      localCommit,
+		LastCommonCommit:     localCommit,
+		MemoryContractDigest: memoryContract.ContractDigest,
+		MemoryLastSyncStatus: "success",
+		MemoryLastSyncAt:     now,
 	}
 	_, err = upsertRemoteInstanceSyncStatus(status)
 	return err
@@ -795,8 +816,8 @@ func parseOpenClawInstances(hostID, stdout string) []RemoteInstance {
 			RuntimeState: runtimeState,
 			Health:       health,
 			ConfigPath:   remoteOpenClawConfigPath,
-			MemoryPath:   fmt.Sprintf("$HOME/.openclaw/agents/%s/memory", agentID),
-			SessionPath:  fmt.Sprintf("$HOME/.openclaw/agents/%s/sessions", agentID),
+			MemoryPath:   remoteMemoryPathForAgent(agentID),
+			SessionPath:  remoteSessionPathForAgent(agentID),
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		})
@@ -843,7 +864,7 @@ func remoteGetInstanceStatus(ctx context.Context, host RemoteHost, hostID, agent
 	return fallback, steps, nil
 }
 
-func remoteSyncInstanceConfig(ctx context.Context, host RemoteHost, hostID, agentID, mode string) (*remoteSyncResult, []remoteExecResult, error) {
+func remoteSyncInstanceConfig(ctx context.Context, host RemoteHost, hostID, agentID, mode string, memoryGit RemoteMemoryGitConfig) (*remoteSyncResult, []remoteExecResult, error) {
 	if err := validateAgentIdentifier(agentID); err != nil {
 		return nil, nil, err
 	}
@@ -855,6 +876,14 @@ func remoteSyncInstanceConfig(ctx context.Context, host RemoteHost, hostID, agen
 	if err != nil {
 		return nil, steps, err
 	}
+	memoryGit = normalizeRemoteMemoryGitConfig(memoryGit)
+	memoryContract := buildRemoteMemoryRuntimeContract(agentID)
+	memoryStatus := RemoteMemoryContractStatus{
+		ContractID:     memoryContract.ContractID,
+		ContractDigest: memoryContract.ContractDigest,
+		SyncState:      "ready",
+		SyncedAt:       nowTimestamp(),
+	}
 	instanceID := remoteInstanceProfileID(hostID, agentID)
 	localCommit, _, err := profilesync.SaveInstanceProfile(instanceID, hostID, agentID, config, "sync-pull")
 	if err != nil {
@@ -862,16 +891,40 @@ func remoteSyncInstanceConfig(ctx context.Context, host RemoteHost, hostID, agen
 	}
 	now := nowTimestamp()
 	status := RemoteInstanceSyncStatus{
-		HostID:              hostID,
-		AgentID:             agentID,
-		SyncMode:            mode,
-		DriftState:          "in_sync",
-		LastSyncStatus:      "success",
-		LastSyncAt:          now,
-		LastRemoteHash:      hashRemoteConfig(config),
-		LastCanonicalConfig: config,
-		LastLocalCommit:     localCommit,
-		LastCommonCommit:    localCommit,
+		HostID:               hostID,
+		AgentID:              agentID,
+		SyncMode:             mode,
+		DriftState:           "in_sync",
+		LastSyncStatus:       "success",
+		LastSyncAt:           now,
+		LastRemoteHash:       hashRemoteConfig(config),
+		LastCanonicalConfig:  config,
+		LastLocalCommit:      localCommit,
+		LastCommonCommit:     localCommit,
+		MemoryContractDigest: memoryContract.ContractDigest,
+		MemoryLastSyncStatus: "skipped",
+		MemoryGit:            memoryGit,
+	}
+	if memoryGit.Enabled {
+		memoryContractPayload := map[string]interface{}{
+			"hostId":         hostID,
+			"agentId":        agentID,
+			"contractId":     memoryContract.ContractID,
+			"contractDigest": memoryContract.ContractDigest,
+			"memoryPath":     memoryContract.MemoryPath,
+			"mounts":         []interface{}{},
+			"attachments":    []interface{}{},
+		}
+		if _, _, err := profilesync.SyncInstanceMemoryContract(instanceID, memoryContractPayload, memoryGit.RepoURL, memoryGit.Branch, "sync"); err != nil {
+			status.MemoryLastSyncStatus = "failure"
+			status.MemoryLastSyncError = err.Error()
+			status.MemoryLastSyncAt = nowTimestamp()
+			_, _ = upsertRemoteInstanceSyncStatus(status)
+			return nil, steps, err
+		}
+		status.MemoryLastSyncStatus = "success"
+		status.MemoryLastSyncAt = nowTimestamp()
+		status.MemoryLastSyncError = ""
 	}
 	if _, err := upsertRemoteInstanceSyncStatus(status); err != nil {
 		return nil, steps, err
@@ -884,6 +937,7 @@ func remoteSyncInstanceConfig(ctx context.Context, host RemoteHost, hostID, agen
 		DriftState:     "in_sync",
 		LastRemoteHash: status.LastRemoteHash,
 		LastSyncAt:     now,
+		Memory:         memoryStatus,
 	}, steps, nil
 }
 
@@ -894,12 +948,13 @@ func remoteGetInstanceSyncStatus(hostID, agentID string) (*RemoteInstanceSyncSta
 	}
 	if !ok {
 		return &RemoteInstanceSyncStatus{
-			HostID:         hostID,
-			AgentID:        agentID,
-			SyncMode:       providerBindingSyncModeAlwaysPush,
-			DriftState:     "unknown",
-			LastSyncStatus: "not_synced",
-			UpdatedAt:      nowTimestamp(),
+			HostID:               hostID,
+			AgentID:              agentID,
+			SyncMode:             providerBindingSyncModeAlwaysPush,
+			DriftState:           "unknown",
+			LastSyncStatus:       "not_synced",
+			MemoryLastSyncStatus: "not_synced",
+			UpdatedAt:            nowTimestamp(),
 		}, nil
 	}
 	return &status, nil
@@ -1611,6 +1666,53 @@ func remoteArchiveSession(ctx context.Context, host RemoteHost, agentID, session
 	return steps, nil
 }
 
+func remoteMemoryPathForAgent(agentID string) string {
+	switch normalizeRemoteInstallAgentID(agentID) {
+	case "picoclaw":
+		return "$HOME/.picoclaw/memory"
+	case "zeroclaw":
+		return "$HOME/.zeroclaw/memory"
+	default:
+		return fmt.Sprintf("$HOME/.openclaw/agents/%s/memory", strings.TrimSpace(agentID))
+	}
+}
+
+func remoteSessionPathForAgent(agentID string) string {
+	switch normalizeRemoteInstallAgentID(agentID) {
+	case "picoclaw":
+		return "$HOME/.picoclaw/sessions"
+	case "zeroclaw":
+		return "$HOME/.zeroclaw/sessions"
+	default:
+		return fmt.Sprintf("$HOME/.openclaw/agents/%s/sessions", strings.TrimSpace(agentID))
+	}
+}
+
+func buildRemoteMemoryRuntimeContract(agentID string) remoteMemoryRuntimeContract {
+	memoryPath := remoteMemoryPathForAgent(agentID)
+	sum := sha256.Sum256([]byte(strings.TrimSpace(agentID) + "|" + memoryPath + "|v1"))
+	digest := hex.EncodeToString(sum[:])
+	contractID := "remote-memory-" + digest[:12]
+	return remoteMemoryRuntimeContract{
+		ContractID:     contractID,
+		ContractDigest: digest,
+		MemoryPath:     memoryPath,
+	}
+}
+
+func wrapRemoteCommandWithMemoryContract(command string, contract remoteMemoryRuntimeContract) string {
+	return strings.Join([]string{
+		"set -e",
+		fmt.Sprintf("mem_path=\"%s\"", strings.TrimSpace(contract.MemoryPath)),
+		"mkdir -p \"$mem_path\"",
+		fmt.Sprintf("export AGENTD_MEMORY_CONTRACT_ID=%s", shellSingleQuote(contract.ContractID)),
+		"export AGENTD_MEMORY_PATH=\"$mem_path\"",
+		"export AGENTD_MEMORY_WRITE_PATH=\"$mem_path\"",
+		fmt.Sprintf("export AGENTD_MEMORY_VIEW_DIGEST=%s", shellSingleQuote(contract.ContractDigest)),
+		strings.TrimSpace(command),
+	}, "; ")
+}
+
 func remoteDeleteSession(ctx context.Context, host RemoteHost, agentID, sessionID string) ([]remoteExecResult, error) {
 	if err := validateAgentIdentifier(agentID); err != nil {
 		return nil, err
@@ -1635,7 +1737,7 @@ func remoteListMemory(ctx context.Context, host RemoteHost, agentID string) ([]R
 	if err := validateAgentIdentifier(agentID); err != nil {
 		return nil, nil, err
 	}
-	cmd := fmt.Sprintf("set -e; base=\"$HOME/.openclaw/agents/%s/memory\"; [ -d \"$base\" ] || exit 0; find \"$base\" -type f | head -n 200 | while read -r f; do rel=\"${f#$base/}\"; sz=$(wc -c < \"$f\" | tr -d ' '); mt=$(stat -c %%Y \"$f\" 2>/dev/null || stat -f %%m \"$f\" 2>/dev/null || echo 0); printf '%%s\t%%s\t%%s\\n' \"$rel\" \"$sz\" \"$mt\"; done", agentID)
+	cmd := fmt.Sprintf("set -e; base=\"%s\"; [ -d \"$base\" ] || exit 0; find \"$base\" -type f | head -n 200 | while read -r f; do rel=\"${f#$base/}\"; sz=$(wc -c < \"$f\" | tr -d ' '); mt=$(stat -c %%Y \"$f\" 2>/dev/null || stat -f %%m \"$f\" 2>/dev/null || echo 0); printf '%%s\t%%s\t%%s\\n' \"$rel\" \"$sz\" \"$mt\"; done", remoteMemoryPathForAgent(agentID))
 	res, err := runRemoteCommand(ctx, host, cmd)
 	if err != nil {
 		return nil, []remoteExecResult{res}, err
@@ -1673,10 +1775,12 @@ func remoteChatViaOpenClaw(ctx context.Context, host RemoteHost, agentID, messag
 	if strings.TrimSpace(message) == "" {
 		return nil, nil, fmt.Errorf("message is required")
 	}
+	contract := buildRemoteMemoryRuntimeContract(agentID)
 	cmd := fmt.Sprintf("openclaw agent --local --agent %s --message %s --json --no-color", shellSingleQuote(agentID), shellSingleQuote(strings.TrimSpace(message)))
 	if strings.TrimSpace(sessionID) != "" {
 		cmd += " --session-id " + shellSingleQuote(strings.TrimSpace(sessionID))
 	}
+	cmd = wrapRemoteCommandWithMemoryContract(cmd, contract)
 	res, err := runRemoteCommand(ctx, host, cmd)
 	if err != nil {
 		return nil, []remoteExecResult{res}, err
@@ -1687,13 +1791,81 @@ func remoteChatViaOpenClaw(ctx context.Context, host RemoteHost, agentID, messag
 	}
 	payload := strings.TrimSpace(extractJSONObjectOrArray(res.Stdout))
 	if payload == "" {
-		return map[string]interface{}{"message": strings.TrimSpace(res.Stdout)}, steps, nil
+		return map[string]interface{}{
+			"message": strings.TrimSpace(res.Stdout),
+			"memory": map[string]interface{}{
+				"contractId":     contract.ContractID,
+				"contractDigest": contract.ContractDigest,
+				"syncState":      "ready",
+				"syncedAt":       nowTimestamp(),
+			},
+		}, steps, nil
 	}
 	var out map[string]interface{}
 	if err := json.Unmarshal([]byte(payload), &out); err != nil {
-		return map[string]interface{}{"message": strings.TrimSpace(res.Stdout)}, steps, nil
+		return map[string]interface{}{
+			"message": strings.TrimSpace(res.Stdout),
+			"memory": map[string]interface{}{
+				"contractId":     contract.ContractID,
+				"contractDigest": contract.ContractDigest,
+				"syncState":      "ready",
+				"syncedAt":       nowTimestamp(),
+			},
+		}, steps, nil
+	}
+	if _, ok := out["memory"]; !ok {
+		out["memory"] = map[string]interface{}{
+			"contractId":     contract.ContractID,
+			"contractDigest": contract.ContractDigest,
+			"syncState":      "ready",
+			"syncedAt":       nowTimestamp(),
+		}
 	}
 	return out, steps, nil
+}
+
+func remoteRunViaOpenClaw(ctx context.Context, host RemoteHost, hostID, agentID, message, sessionID string) (*remoteRunResult, []remoteExecResult, error) {
+	startedAt := time.Now()
+	payload, steps, err := remoteChatViaOpenClaw(ctx, host, agentID, message, sessionID)
+	if err != nil {
+		return nil, steps, err
+	}
+	memoryStatus := parseRemoteMemoryStatus(payload)
+	return &remoteRunResult{
+		HostID:     strings.TrimSpace(hostID),
+		AgentID:    strings.TrimSpace(agentID),
+		SessionID:  strings.TrimSpace(anyToString(payload["sessionId"])),
+		Output:     extractChatResponseText(payload),
+		LatencyMs:  time.Since(startedAt).Milliseconds(),
+		Memory:     memoryStatus,
+		RawPayload: payload,
+	}, steps, nil
+}
+
+func parseRemoteMemoryStatus(payload map[string]interface{}) RemoteMemoryContractStatus {
+	status := RemoteMemoryContractStatus{
+		SyncState: "ready",
+		SyncedAt:  nowTimestamp(),
+	}
+	if payload == nil {
+		return status
+	}
+	raw, ok := payload["memory"].(map[string]interface{})
+	if !ok {
+		return status
+	}
+	status.ContractID = strings.TrimSpace(anyToString(raw["contractId"]))
+	status.ContractDigest = strings.TrimSpace(anyToString(raw["contractDigest"]))
+	if state := strings.TrimSpace(anyToString(raw["syncState"])); state != "" {
+		status.SyncState = state
+	}
+	if syncErr := strings.TrimSpace(anyToString(raw["syncError"])); syncErr != "" {
+		status.SyncError = syncErr
+	}
+	if syncedAt := strings.TrimSpace(anyToString(raw["syncedAt"])); syncedAt != "" {
+		status.SyncedAt = syncedAt
+	}
+	return status
 }
 
 func applyProviderProfileToRemote(ctx context.Context, host RemoteHost, profile ProviderProfile, agentID string) (map[string]interface{}, string, []remoteExecResult, error) {
@@ -1810,8 +1982,8 @@ func newDefaultRemoteInstance(hostID, agentID, runtimeState string) RemoteInstan
 		RuntimeState: runtimeState,
 		Health:       "unknown",
 		ConfigPath:   remoteOpenClawConfigPath,
-		MemoryPath:   fmt.Sprintf("$HOME/.openclaw/agents/%s/memory", agentID),
-		SessionPath:  fmt.Sprintf("$HOME/.openclaw/agents/%s/sessions", agentID),
+		MemoryPath:   remoteMemoryPathForAgent(agentID),
+		SessionPath:  remoteSessionPathForAgent(agentID),
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}

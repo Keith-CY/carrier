@@ -7,41 +7,26 @@ import (
 	"carrier/daemon/internal/memory"
 )
 
-// autoMountMemories mounts all memory links for an agent on start.
-func (s *Service) autoMountMemories(agentID string) map[string]string {
+// autoMountMemories prepares and mounts the memory contract for runtime start.
+func (s *Service) autoMountMemories(agentID string) (memory.RuntimeMemoryContract, error) {
 	if s.memoryStore == nil {
-		return nil
+		return memory.RuntimeMemoryContract{}, nil
 	}
 	s.mu.RLock()
 	links := append([]string(nil), s.memoryLinks[agentID]...)
 	s.mu.RUnlock()
-	if len(links) == 0 {
-		s.applyManifestMemoryPermissions(agentID)
-		return nil
-	}
 	s.applyManifestMemoryPermissions(agentID)
 
-	// Preferred path for issue #1189: deterministic composed effective memory view.
 	if err := s.memoryStore.SetAttachmentsFromLinks(agentID, links); err != nil {
-		s.appendLog(agentID, fmt.Sprintf("memory attachment setup failed: %v", err))
-	} else {
-		contract, err := s.memoryStore.PrepareAgentMemory(agentID)
-		if err == nil {
-			s.appendLog(agentID, fmt.Sprintf("memory effective view prepared (digest=%s)", contract.ViewDigest))
-			return contract.Env
-		}
-		s.appendLog(agentID, fmt.Sprintf("memory view compose failed, falling back to direct mounts: %v", err))
+		return memory.RuntimeMemoryContract{}, fmt.Errorf("memory attachment setup failed: %w", err)
 	}
-
-	// Backwards-compatible path when view composition cannot run (for example, no root dir configured).
-	for _, memID := range links {
-		if _, err := s.memoryStore.Mount(memID, agentID, memory.AccessReadOnly); err != nil {
-			s.appendLog(agentID, fmt.Sprintf("memory auto-mount %s failed: %v", memID, err))
-		} else {
-			s.appendLog(agentID, fmt.Sprintf("memory auto-mounted %s", memID))
-		}
+	contract, err := s.memoryStore.PrepareAgentMemory(agentID)
+	if err != nil {
+		return memory.RuntimeMemoryContract{}, fmt.Errorf("memory view compose failed: %w", err)
 	}
-	return nil
+	s.appendLog(agentID, fmt.Sprintf("memory effective view prepared (digest=%s)", contract.ViewDigest))
+	s.setMemoryContractState(agentID, contract.ViewDigest, "")
+	return contract, nil
 }
 
 func (s *Service) applyManifestMemoryPermissions(agentID string) {
@@ -112,4 +97,38 @@ func (s *Service) setMemoryAttachments(agentID string, attachments []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.memoryLinks[agentID] = append([]string(nil), attachments...)
+}
+
+func buildMemoryContractID(agentID, digest string) string {
+	short := strings.TrimSpace(digest)
+	if len(short) > 12 {
+		short = short[:12]
+	}
+	if short == "" {
+		short = "empty"
+	}
+	return fmt.Sprintf("%s-%s", strings.TrimSpace(agentID), short)
+}
+
+func (s *Service) setMemoryContractState(agentID, digest, syncError string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.states[agentID]
+	if !ok {
+		return
+	}
+	now := s.now()
+	memoryState := &MemoryState{
+		ContractID:     buildMemoryContractID(agentID, digest),
+		ContractDigest: strings.TrimSpace(digest),
+		SyncError:      strings.TrimSpace(syncError),
+		SyncedAt:       &now,
+	}
+	if strings.TrimSpace(syncError) != "" {
+		memoryState.SyncState = "error"
+	} else {
+		memoryState.SyncState = "ready"
+	}
+	state.Memory = memoryState
+	s.states[agentID] = state
 }

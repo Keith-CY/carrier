@@ -295,6 +295,46 @@ func TestPrepareAgentMemoryReusesExistingViewWhenInputUnchanged(t *testing.T) {
 	}
 }
 
+func TestPrepareAgentMemoryDedupeSameDigestPathWithoutConflict(t *testing.T) {
+	store, _ := newMemoryStoreWithRoot(t)
+	tmp := t.TempDir()
+
+	sharedPackA := filepath.Join(tmp, "shared-a.mempack.zip")
+	writeMempack(t, sharedPackA, strings.ReplaceAll(baseManifest("shared"), "id: team-style", "id: shared-a"), map[string]string{
+		"content/prompts/system.md": "same-content",
+	})
+	sharedPackB := filepath.Join(tmp, "shared-b.mempack.zip")
+	writeMempack(t, sharedPackB, strings.ReplaceAll(baseManifest("shared"), "id: team-style", "id: shared-b"), map[string]string{
+		"content/prompts/system.md": "same-content",
+	})
+
+	a, err := store.ImportMemory(sharedPackA, ImportOptions{TargetRegion: TypeShared})
+	if err != nil {
+		t.Fatalf("import memory A: %v", err)
+	}
+	b, err := store.ImportMemory(sharedPackB, ImportOptions{TargetRegion: TypeShared})
+	if err != nil {
+		t.Fatalf("import memory B: %v", err)
+	}
+	if _, err := store.AttachMemory("agent-1", a.ID, AttachOptions{Priority: 10}); err != nil {
+		t.Fatalf("attach A: %v", err)
+	}
+	if _, err := store.AttachMemory("agent-1", b.ID, AttachOptions{Priority: 20}); err != nil {
+		t.Fatalf("attach B: %v", err)
+	}
+	if _, err := store.PrepareAgentMemory("agent-1"); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+
+	explain, err := store.ExplainView("agent-1")
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	if len(explain.Conflicts) != 0 {
+		t.Fatalf("expected no conflicts for identical digests, got=%v", explain.Conflicts)
+	}
+}
+
 func TestStorePersistsStateAcrossRestart(t *testing.T) {
 	root := t.TempDir()
 	statePath := filepath.Join(root, "state", "memory-store.json")

@@ -98,19 +98,29 @@ func (s *Service) StartWithOptions(ctx context.Context, agentID string, opts Sta
 
 	// Prepare and auto-mount memory view before process start so runtime env can
 	// be injected in the initial process environment.
-	memoryEnv := s.autoMountMemories(agentID)
+	contract, err := s.autoMountMemories(agentID)
+	if err != nil {
+		s.appendLog(agentID, err.Error())
+		s.updateStateOnStartError(agentID, err)
+		s.setMemoryContractState(agentID, "", err.Error())
+		s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_MEMORY_CONTRACT", err.Error())
+		return err
+	}
+	memoryEnv := contract.Env
 
 	// Start the process using ProcessManager.
 	var (
 		pid    int
 		runErr error
 	)
-	if pmWithEnv, ok := s.processManager.(ProcessControllerWithEnv); ok && len(memoryEnv) > 0 {
-		pid, runErr = pmWithEnv.StartWithEnv(agentID, "sh", []string{"-c", startCommand}, memoryEnv)
-	} else {
-		if len(memoryEnv) > 0 {
-			s.appendLog(agentID, "process manager does not support StartWithEnv; starting without memory env injection")
+	if len(memoryEnv) > 0 {
+		pmWithEnv, ok := s.processManager.(ProcessControllerWithEnv)
+		if !ok {
+			runErr = fmt.Errorf("process manager does not support StartWithEnv")
+		} else {
+			pid, runErr = pmWithEnv.StartWithEnv(agentID, "sh", []string{"-c", startCommand}, memoryEnv)
 		}
+	} else {
 		pid, runErr = s.processManager.Start(agentID, "sh", []string{"-c", startCommand})
 	}
 	if runErr != nil {

@@ -37,6 +37,7 @@ type AgentState struct {
 	Install              InstallState `json:"installState"`
 	Runtime              RuntimeState `json:"runtimeState"`
 	Health               HealthState  `json:"health"`
+	Memory               *MemoryState `json:"memory,omitempty"`
 	Ports                []int        `json:"ports"`
 	StartedAt            *time.Time   `json:"startedAt,omitempty"`
 	RestartCount         int          `json:"restartCount"`
@@ -45,6 +46,14 @@ type AgentState struct {
 	NeedsRemoteDiagnosis bool         `json:"needsRemoteDiagnosis"`
 	LastDiagnoseFile     string       `json:"lastDiagnoseFile,omitempty"`
 	UpdatedAt            time.Time    `json:"updatedAt"`
+}
+
+type MemoryState struct {
+	ContractID     string     `json:"contractId,omitempty"`
+	ContractDigest string     `json:"contractDigest,omitempty"`
+	SyncState      string     `json:"syncState,omitempty"`
+	SyncError      string     `json:"syncError,omitempty"`
+	SyncedAt       *time.Time `json:"syncedAt,omitempty"`
 }
 
 type UpgradeResult struct {

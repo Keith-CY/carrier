@@ -556,6 +556,10 @@ func upsertRemoteInstanceSyncStatus(status RemoteInstanceSyncStatus) (RemoteInst
 	if strings.TrimSpace(status.LastSyncStatus) == "" {
 		status.LastSyncStatus = "unknown"
 	}
+	if strings.TrimSpace(status.MemoryLastSyncStatus) == "" {
+		status.MemoryLastSyncStatus = "unknown"
+	}
+	status.MemoryGit = normalizeRemoteMemoryGitConfig(status.MemoryGit)
 	status.UpdatedAt = nowTimestamp()
 	key := remoteInstanceSyncKey(hostID, agentID)
 	state.InstanceSyncs[key] = status

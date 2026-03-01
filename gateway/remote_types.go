@@ -97,23 +97,44 @@ type RemoteMemoryEntry struct {
 	ModifiedAt int64  `json:"modifiedAt"`
 }
 
+type RemoteMemoryContractStatus struct {
+	ContractID     string `json:"contractId,omitempty"`
+	ContractDigest string `json:"contractDigest,omitempty"`
+	SyncState      string `json:"syncState,omitempty"`
+	SyncError      string `json:"syncError,omitempty"`
+	SyncedAt       string `json:"syncedAt,omitempty"`
+}
+
+type RemoteMemoryGitConfig struct {
+	Enabled  bool   `json:"enabled"`
+	RepoURL  string `json:"repoUrl,omitempty"`
+	Branch   string `json:"branch,omitempty"`
+	BaseDir  string `json:"baseDir,omitempty"`
+	AuthMode string `json:"authMode,omitempty"`
+}
+
 type RemoteInstanceSyncStatus struct {
-	HostID              string                 `json:"hostId"`
-	AgentID             string                 `json:"agentId"`
-	SyncMode            string                 `json:"syncMode"`
-	DriftState          string                 `json:"driftState"`
-	LastSyncStatus      string                 `json:"lastSyncStatus"`
-	LastSyncAt          string                 `json:"lastSyncAt,omitempty"`
-	LastDiagnoseAt      string                 `json:"lastDiagnoseAt,omitempty"`
-	LastDiagnoseResult  string                 `json:"lastDiagnoseResult,omitempty"`
-	LastReconcileAt     string                 `json:"lastReconcileAt,omitempty"`
-	LastRollbackAt      string                 `json:"lastRollbackAt,omitempty"`
-	LastRemoteHash      string                 `json:"lastRemoteHash,omitempty"`
-	LastCommonCommit    string                 `json:"lastCommonCommit,omitempty"`
-	LastLocalCommit     string                 `json:"lastLocalCommit,omitempty"`
-	LastRemoteCommit    string                 `json:"lastRemoteCommit,omitempty"`
-	LastCanonicalConfig map[string]interface{} `json:"lastCanonicalConfig,omitempty"`
-	UpdatedAt           string                 `json:"updatedAt"`
+	HostID               string                 `json:"hostId"`
+	AgentID              string                 `json:"agentId"`
+	SyncMode             string                 `json:"syncMode"`
+	DriftState           string                 `json:"driftState"`
+	LastSyncStatus       string                 `json:"lastSyncStatus"`
+	LastSyncAt           string                 `json:"lastSyncAt,omitempty"`
+	LastDiagnoseAt       string                 `json:"lastDiagnoseAt,omitempty"`
+	LastDiagnoseResult   string                 `json:"lastDiagnoseResult,omitempty"`
+	LastReconcileAt      string                 `json:"lastReconcileAt,omitempty"`
+	LastRollbackAt       string                 `json:"lastRollbackAt,omitempty"`
+	LastRemoteHash       string                 `json:"lastRemoteHash,omitempty"`
+	LastCommonCommit     string                 `json:"lastCommonCommit,omitempty"`
+	LastLocalCommit      string                 `json:"lastLocalCommit,omitempty"`
+	LastRemoteCommit     string                 `json:"lastRemoteCommit,omitempty"`
+	LastCanonicalConfig  map[string]interface{} `json:"lastCanonicalConfig,omitempty"`
+	MemoryLastSyncStatus string                 `json:"memoryLastSyncStatus,omitempty"`
+	MemoryLastSyncAt     string                 `json:"memoryLastSyncAt,omitempty"`
+	MemoryLastSyncError  string                 `json:"memoryLastSyncError,omitempty"`
+	MemoryContractDigest string                 `json:"memoryContractDigest,omitempty"`
+	MemoryGit            RemoteMemoryGitConfig  `json:"memoryGit,omitempty"`
+	UpdatedAt            string                 `json:"updatedAt"`
 }
 
 const (
@@ -260,6 +281,21 @@ func validateProviderBindingSyncMode(mode string) error {
 	default:
 		return fmt.Errorf("syncMode must be one of always_push, pull_validate_push, manual")
 	}
+}
+
+func normalizeRemoteMemoryGitConfig(in RemoteMemoryGitConfig) RemoteMemoryGitConfig {
+	out := in
+	out.RepoURL = strings.TrimSpace(out.RepoURL)
+	out.Branch = strings.TrimSpace(out.Branch)
+	out.BaseDir = strings.TrimSpace(out.BaseDir)
+	out.AuthMode = strings.ToLower(strings.TrimSpace(out.AuthMode))
+	if out.AuthMode == "" {
+		out.AuthMode = "system"
+	}
+	if out.Branch == "" {
+		out.Branch = "main"
+	}
+	return out
 }
 
 func validateAgentIdentifier(id string) error {

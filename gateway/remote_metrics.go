@@ -13,6 +13,7 @@ const (
 	remoteOpInstancesUninstall   = "instances_uninstall"
 	remoteOpInstancesRepair      = "instances_repair"
 	remoteOpInstancesLogs        = "instances_logs"
+	remoteOpInstancesRun         = "instances_run"
 	remoteOpInstancesSync        = "instances_sync"
 	remoteOpInstancesDiagnose    = "instances_diagnose"
 	remoteOpInstancesReconcile   = "instances_reconcile"
