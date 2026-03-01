@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"carrier/daemon/internal/runtimecheck"
@@ -28,7 +29,18 @@ func (s *Service) StartWithOptions(ctx context.Context, agentID string, opts Sta
 	commandGOOS := isolationRuntimeGOOS
 	var backend isolationBackend
 	if isolationEnabled {
-		backend, err = resolveIsolationBackend()
+		resolveOpts := isolationBackendOptions{}
+		if strings.EqualFold(strings.TrimSpace(isolationRuntimeGOOS), "darwin") {
+			instanceName := strings.TrimSpace(state.LimaInstanceName)
+			if instanceName == "" {
+				err = fmt.Errorf("%w: missing lima instance name for isolated start", ErrIsolationUnavailable)
+				s.updateStateOnStartError(agentID, err)
+				s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_ISOLATION_UNAVAILABLE", err.Error())
+				return err
+			}
+			resolveOpts.InstanceName = instanceName
+		}
+		backend, err = resolveIsolationBackend(resolveOpts)
 		if err != nil {
 			s.updateStateOnStartError(agentID, err)
 			s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_ISOLATION_UNAVAILABLE", err.Error())

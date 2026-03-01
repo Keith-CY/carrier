@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -115,6 +116,11 @@ func TestStartWithIsolationFailsWhenDarwinBackendMissing(t *testing.T) {
 
 	pm := &fakeProcessManager{isRunning: make(map[string]bool), pids: make(map[string]int), shouldStartSucceed: true, nextPID: 100}
 	svc := newIsolationTestService(t, pm)
+	svc.mu.Lock()
+	state := svc.states["openclaw"]
+	state.LimaInstanceName = "carrier-openclaw-a3f2"
+	svc.states["openclaw"] = state
+	svc.mu.Unlock()
 
 	err := svc.StartWithOptions(context.Background(), "openclaw", StartOptions{Isolation: true})
 	if err == nil {
@@ -210,15 +216,15 @@ func TestStartWithIsolationWrapsStartCommandWithLimaBwrap(t *testing.T) {
 		}
 		return "/opt/homebrew/bin/limactl", nil
 	}
-	isolationEnvLookup = func(key string) string {
-		if key == defaultLimaInstanceEnvKey {
-			return "carrier-dev"
-		}
-		return ""
-	}
+	isolationEnvLookup = func(string) string { return "" }
 
 	pm := &fakeProcessManager{isRunning: make(map[string]bool), pids: make(map[string]int), shouldStartSucceed: true, nextPID: 220}
 	svc := newIsolationTestService(t, pm)
+	svc.mu.Lock()
+	state := svc.states["openclaw"]
+	state.LimaInstanceName = "carrier-dev-a3f2"
+	svc.states["openclaw"] = state
+	svc.mu.Unlock()
 
 	if err := svc.StartWithOptions(context.Background(), "openclaw", StartOptions{Isolation: true}); err != nil {
 		t.Fatalf("StartWithOptions: %v", err)
@@ -229,7 +235,7 @@ func TestStartWithIsolationWrapsStartCommandWithLimaBwrap(t *testing.T) {
 	wrapped := pm.lastArgs[1]
 	for _, want := range []string{
 		"/opt/homebrew/bin/limactl",
-		"shell 'carrier-dev'",
+		"shell 'carrier-dev-a3f2'",
 		"bwrap",
 		"--tmpfs /tmp",
 		"tail -f /dev/null",
@@ -327,12 +333,14 @@ func TestInstallWithIsolationFailsFastWhenBackendUnavailable(t *testing.T) {
 	origEnv := isolationEnvLookup
 	origCandidates := isolationLimaPathCandidates
 	origPathStat := isolationPathStat
+	origHome := isolationUserHomeDir
 	t.Cleanup(func() {
 		isolationRuntimeGOOS = origGOOS
 		isolationBackendLookup = origLookup
 		isolationEnvLookup = origEnv
 		isolationLimaPathCandidates = origCandidates
 		isolationPathStat = origPathStat
+		isolationUserHomeDir = origHome
 	})
 
 	isolationRuntimeGOOS = "darwin"
@@ -344,6 +352,9 @@ func TestInstallWithIsolationFailsFastWhenBackendUnavailable(t *testing.T) {
 	isolationPathStat = func(string) (os.FileInfo, error) {
 		return nil, errors.New("not found")
 	}
+	home := t.TempDir()
+	isolationUserHomeDir = func() (string, error) { return home, nil }
+	t.Setenv(instanceStoreEnvKey, filepath.Join(home, "instances.json"))
 
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	runner := &fakeRunner{}

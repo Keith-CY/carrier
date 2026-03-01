@@ -6,4 +6,3 @@ type StartOptions struct {
 	// When true and isolation backend is unavailable, start must fail fast.
 	Isolation bool `json:"isolation,omitempty"`
 }
-

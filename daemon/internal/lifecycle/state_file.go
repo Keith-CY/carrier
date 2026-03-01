@@ -27,13 +27,15 @@ func cloneMemoryState(src *MemoryState) *MemoryState {
 
 // PersistedAgentState represents the minimal state needed to restore agent lifecycle.
 type PersistedAgentState struct {
-	ID             string       `json:"id"`
-	Installed      bool         `json:"installed"`
-	RuntimeState   string       `json:"runtime_state"`
-	Memory         *MemoryState `json:"memory,omitempty"`
-	LastTransition time.Time    `json:"last_transition"`
-	Restarts       []time.Time  `json:"restarts,omitempty"`
-	CooldownUntil  time.Time    `json:"cooldown_until,omitempty"`
+	ID               string       `json:"id"`
+	Installed        bool         `json:"installed"`
+	RuntimeState     string       `json:"runtime_state"`
+	Isolated         bool         `json:"isolated,omitempty"`
+	LimaInstanceName string       `json:"lima_instance_name,omitempty"`
+	Memory           *MemoryState `json:"memory,omitempty"`
+	LastTransition   time.Time    `json:"last_transition"`
+	Restarts         []time.Time  `json:"restarts,omitempty"`
+	CooldownUntil    time.Time    `json:"cooldown_until,omitempty"`
 }
 
 // NewStateFile creates a StateFile with the given path.
@@ -54,11 +56,13 @@ func (sf *StateFile) Save(agents map[string]*AgentState) error {
 			continue
 		}
 		persisted[id] = PersistedAgentState{
-			ID:             state.ID,
-			Installed:      state.Install == InstallStateInstalled,
-			RuntimeState:   string(state.Runtime),
-			Memory:         cloneMemoryState(state.Memory),
-			LastTransition: state.UpdatedAt,
+			ID:               state.ID,
+			Installed:        state.Install == InstallStateInstalled,
+			RuntimeState:     string(state.Runtime),
+			Isolated:         state.Isolated,
+			LimaInstanceName: state.LimaInstanceName,
+			Memory:           cloneMemoryState(state.Memory),
+			LastTransition:   state.UpdatedAt,
 		}
 	}
 	return sf.SavePersisted(persisted)

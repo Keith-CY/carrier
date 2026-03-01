@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -24,13 +25,18 @@ func TestInstallWithIsolationRunsDeterministicPreparePipelineForDarwin(t *testin
 	origGOOS := isolationRuntimeGOOS
 	origLookup := isolationBackendLookup
 	origEnv := isolationEnvLookup
+	origHome := isolationUserHomeDir
 	t.Cleanup(func() {
 		isolationRuntimeGOOS = origGOOS
 		isolationBackendLookup = origLookup
 		isolationEnvLookup = origEnv
+		isolationUserHomeDir = origHome
 	})
 
 	isolationRuntimeGOOS = "darwin"
+	home := t.TempDir()
+	isolationUserHomeDir = func() (string, error) { return home, nil }
+	t.Setenv(instanceStoreEnvKey, filepath.Join(home, "instances.json"))
 	isolationBackendLookup = func(name string) (string, error) {
 		if name != "limactl" {
 			t.Fatalf("lookup name = %q, want limactl", name)
@@ -76,10 +82,12 @@ func TestInstallWithIsolationUsesLinuxInstallCommandOnDarwinAndWindows(t *testin
 	origGOOS := isolationRuntimeGOOS
 	origLookup := isolationBackendLookup
 	origEnv := isolationEnvLookup
+	origHome := isolationUserHomeDir
 	t.Cleanup(func() {
 		isolationRuntimeGOOS = origGOOS
 		isolationBackendLookup = origLookup
 		isolationEnvLookup = origEnv
+		isolationUserHomeDir = origHome
 	})
 
 	cases := []struct {
@@ -107,6 +115,11 @@ func TestInstallWithIsolationUsesLinuxInstallCommandOnDarwinAndWindows(t *testin
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			isolationRuntimeGOOS = tc.hostGOOS
+			if tc.hostGOOS == "darwin" {
+				home := t.TempDir()
+				isolationUserHomeDir = func() (string, error) { return home, nil }
+				t.Setenv(instanceStoreEnvKey, filepath.Join(home, "instances.json"))
+			}
 			isolationBackendLookup = func(name string) (string, error) {
 				if name != tc.lookupName {
 					t.Fatalf("lookup name = %q, want %q", name, tc.lookupName)
@@ -267,5 +280,53 @@ func TestInstallWithIsolationFallsBackToBaseAgentForOpenClawAfterDeterministicFa
 	}
 	if triager.calls == 0 {
 		t.Fatal("expected baseagent triage fallback to be invoked for openclaw")
+	}
+}
+
+func TestInstallWithIsolationStoresPerAgentLimaState(t *testing.T) {
+	origGOOS := isolationRuntimeGOOS
+	origLookup := isolationBackendLookup
+	origEnv := isolationEnvLookup
+	origHome := isolationUserHomeDir
+	t.Cleanup(func() {
+		isolationRuntimeGOOS = origGOOS
+		isolationBackendLookup = origLookup
+		isolationEnvLookup = origEnv
+		isolationUserHomeDir = origHome
+	})
+
+	isolationRuntimeGOOS = "darwin"
+	home := t.TempDir()
+	isolationUserHomeDir = func() (string, error) { return home, nil }
+	t.Setenv(instanceStoreEnvKey, filepath.Join(home, "instances.json"))
+	isolationBackendLookup = func(_ string) (string, error) { return "/opt/homebrew/bin/limactl", nil }
+	isolationEnvLookup = func(string) string { return "" }
+
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	clock := &fakeClock{current: time.Date(2026, 2, 28, 6, 25, 0, 0, time.UTC)}
+	svc := NewService(nil,
+		WithRunner(runner),
+		WithRuntimeChecker(checker),
+		WithNow(clock.Now),
+		WithDiagnoseDir(t.TempDir()),
+	)
+
+	m := sampleManifest()
+	if err := svc.RegisterManifest(m); err != nil {
+		t.Fatalf("RegisterManifest: %v", err)
+	}
+	if err := svc.InstallWithOptions(context.Background(), m.ID, InstallOptions{Isolation: true}); err != nil {
+		t.Fatalf("InstallWithOptions: %v", err)
+	}
+	_, state, err := svc.getManifestAndState(m.ID)
+	if err != nil {
+		t.Fatalf("getManifestAndState: %v", err)
+	}
+	if !state.Isolated {
+		t.Fatal("expected Isolated=true after isolated install")
+	}
+	if !validLimaInstanceName.MatchString(state.LimaInstanceName) {
+		t.Fatalf("unexpected LimaInstanceName %q", state.LimaInstanceName)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -689,6 +690,8 @@ func (s *Service) applyPersistedState(id string, pState *PersistedAgentState, st
 		}
 	}
 	state.Runtime = restoredState
+	state.Isolated = pState.Isolated
+	state.LimaInstanceName = strings.TrimSpace(pState.LimaInstanceName)
 	state.Memory = cloneMemoryState(pState.Memory)
 	state.UpdatedAt = pState.LastTransition
 
@@ -713,11 +716,13 @@ func (s *Service) saveState() {
 	persisted := make(map[string]PersistedAgentState, len(s.states))
 	for id, state := range s.states {
 		p := PersistedAgentState{
-			ID:             state.ID,
-			Installed:      state.Install == InstallStateInstalled,
-			RuntimeState:   string(state.Runtime),
-			Memory:         cloneMemoryState(state.Memory),
-			LastTransition: state.UpdatedAt,
+			ID:               state.ID,
+			Installed:        state.Install == InstallStateInstalled,
+			RuntimeState:     string(state.Runtime),
+			Isolated:         state.Isolated,
+			LimaInstanceName: strings.TrimSpace(state.LimaInstanceName),
+			Memory:           cloneMemoryState(state.Memory),
+			LastTransition:   state.UpdatedAt,
 		}
 		if restarts, ok := s.restarts[id]; ok && len(restarts) > 0 {
 			p.Restarts = make([]time.Time, len(restarts))

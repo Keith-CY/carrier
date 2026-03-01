@@ -45,6 +45,8 @@ type AgentState struct {
 	LastTriageSummary    string       `json:"lastTriageSummary,omitempty"`
 	NeedsRemoteDiagnosis bool         `json:"needsRemoteDiagnosis"`
 	LastDiagnoseFile     string       `json:"lastDiagnoseFile,omitempty"`
+	Isolated             bool         `json:"isolated"`
+	LimaInstanceName     string       `json:"limaInstanceName,omitempty"`
 	UpdatedAt            time.Time    `json:"updatedAt"`
 }
 
