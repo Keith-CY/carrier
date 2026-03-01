@@ -64,19 +64,19 @@ func TestHandleProviderAuthInput_APIKey_Whitespace(t *testing.T) {
 }
 
 func TestHandleProviderAuthInput_None_AutoComplete(t *testing.T) {
-	p := GetLLMProvider("openai-compatible")
+	p := GetLLMProvider("ollama")
 	if p == nil {
-		t.Fatal("openai-compatible provider not found")
+		t.Fatal("ollama provider not found")
 	}
-	result, err := HandleProviderAuthInput(p, "anything")
+	result, err := HandleProviderAuthInput(p, "confirm")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !result.Done {
 		t.Error("none auth mode should auto-complete")
 	}
-	if result.EnvVar != "" {
-		t.Errorf("none auth should not set env var, got %q", result.EnvVar)
+	if result.BaseURL != "" {
+		t.Errorf("none auth confirm should not force base URL override, got %q", result.BaseURL)
 	}
 }
 
@@ -242,16 +242,16 @@ func TestBuildProviderAuthPrompt_GcloudADC(t *testing.T) {
 }
 
 func TestBuildProviderAuthPrompt_None(t *testing.T) {
-	p := GetLLMProvider("openai-compatible")
+	p := GetLLMProvider("ollama")
 	prompt := BuildProviderAuthPrompt(p)
-	if !strings.Contains(strings.ToLower(prompt), "no auth") {
-		t.Errorf("expected 'no auth' in prompt, got: %q", prompt)
+	if !strings.Contains(strings.ToLower(prompt), "requires no api key") {
+		t.Errorf("expected no-api-key prompt, got: %q", prompt)
 	}
 }
 
 func TestProviderEnvVarsToSet_APIKey(t *testing.T) {
 	p := GetLLMProvider("anthropic")
-	m := ProviderEnvVarsToSet(p, "my-key")
+	m := ProviderEnvVarsToSet(p, "my-key", "")
 	if m["ANTHROPIC_API_KEY"] != "my-key" {
 		t.Errorf("expected ANTHROPIC_API_KEY=my-key, got %v", m)
 	}
@@ -259,7 +259,7 @@ func TestProviderEnvVarsToSet_APIKey(t *testing.T) {
 
 func TestProviderEnvVarsToSet_OAuthDeviceCode(t *testing.T) {
 	p := GetLLMProvider("openai-codex")
-	m := ProviderEnvVarsToSet(p, "codex-token")
+	m := ProviderEnvVarsToSet(p, "codex-token", "")
 	if m["OPENAI_CODEX_TOKEN"] != "codex-token" {
 		t.Errorf("expected OPENAI_CODEX_TOKEN=codex-token, got %v", m)
 	}
@@ -269,17 +269,38 @@ func TestProviderEnvVarsToSet_OAuthDeviceCode(t *testing.T) {
 }
 
 func TestProviderEnvVarsToSet_None(t *testing.T) {
-	p := GetLLMProvider("openai-compatible")
-	m := ProviderEnvVarsToSet(p, "")
-	if len(m) != 0 {
-		t.Errorf("expected empty map for none auth, got %v", m)
+	p := GetLLMProvider("ollama")
+	m := ProviderEnvVarsToSet(p, "", "")
+	if m["OLLAMA_BASE_URL"] == "" {
+		t.Errorf("expected default ollama base url, got %v", m)
 	}
 }
 
 func TestProviderEnvVarsToSet_EmptyValue(t *testing.T) {
 	p := GetLLMProvider("openai")
-	m := ProviderEnvVarsToSet(p, "")
+	m := ProviderEnvVarsToSet(p, "", "")
 	if len(m) != 0 {
 		t.Errorf("expected empty map when value is empty, got %v", m)
+	}
+}
+
+func TestHandleProviderAuthInput_APIKeyWithURLOverride(t *testing.T) {
+	prepareCredentialStore(t)
+	p := GetLLMProvider("openrouter")
+	if p == nil {
+		t.Fatal("openrouter provider not found")
+	}
+	result, err := HandleProviderAuthInput(p, "KEY=test-key URL=https://proxy.example.com/v1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Done {
+		t.Fatal("expected done=true")
+	}
+	if result.Value != "test-key" {
+		t.Fatalf("Value = %q, want test-key", result.Value)
+	}
+	if result.BaseURL != "https://proxy.example.com/v1" {
+		t.Fatalf("BaseURL = %q", result.BaseURL)
 	}
 }

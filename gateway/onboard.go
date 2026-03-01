@@ -297,7 +297,8 @@ func buildProviderListResponse(requestID string, agent *AgentState) GatewayRespo
 	categoryOrder := []struct{ key, label string }{
 		{"builtin", "☁️  Built-in (API key)"},
 		{"custom", "🔐 Custom / OAuth"},
-		{"generic", "🖥️  Generic / Compatible"},
+		{"compatible", "🔌 OpenAI-Compatible"},
+		{"generic", "🖥️  Generic"},
 	}
 
 	for _, cat := range categoryOrder {
@@ -359,7 +360,7 @@ func onboardSelectProvider(requestID, sessionKey, input string, store *OnboardSt
 		}
 		if ok && p.EnvVar != "" && strings.TrimSpace(value) != "" {
 			store.update(sessionKey, func(s *OnboardSession) {
-				for k, v := range ProviderEnvVarsToSet(p, value) {
+				for k, v := range ProviderEnvVarsToSet(p, value, "") {
 					s.EnvVars[k] = v
 				}
 				s.Step = OnboardAuthConfigured
@@ -374,6 +375,9 @@ func onboardSelectProvider(requestID, sessionKey, input string, store *OnboardSt
 		}
 		if p.AuthMode == AuthModeNone {
 			store.update(sessionKey, func(s *OnboardSession) {
+				for k, v := range ProviderEnvVarsToSet(p, "", "") {
+					s.EnvVars[k] = v
+				}
 				s.Step = OnboardAuthConfigured
 			})
 			return onboardPromptEnvVars(requestID, store.get(sessionKey))
@@ -408,6 +412,9 @@ func onboardSelectProvider(requestID, sessionKey, input string, store *OnboardSt
 	// For auth-mode none, auto-advance
 	if p.AuthMode == AuthModeNone {
 		store.update(sessionKey, func(s *OnboardSession) {
+			for k, v := range ProviderEnvVarsToSet(p, "", "") {
+				s.EnvVars[k] = v
+			}
 			s.Step = OnboardAuthConfigured
 		})
 		lines := []string{
@@ -480,14 +487,12 @@ func onboardHandleAuth(requestID, sessionKey, input string, store *OnboardStore)
 	}
 
 	if result.Done {
-		// Merge any env vars from auth result into session
-		if result.EnvVar != "" && result.Value != "" {
-			store.update(sessionKey, func(s *OnboardSession) {
-				for k, v := range ProviderEnvVarsToSet(p, result.Value) {
-					s.EnvVars[k] = v
-				}
-			})
-		}
+		// Merge any provider-derived env vars from auth result into session.
+		store.update(sessionKey, func(s *OnboardSession) {
+			for k, v := range ProviderEnvVarsToSet(p, result.Value, result.BaseURL) {
+				s.EnvVars[k] = v
+			}
+		})
 		store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardAuthConfigured })
 		sess = store.get(sessionKey)
 

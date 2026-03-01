@@ -4,10 +4,10 @@ import "testing"
 
 func TestProviderCatalogBasics(t *testing.T) {
 	providers := ListProviders()
-	if len(providers) != 4 {
-		t.Fatalf("provider count = %d, want 4", len(providers))
+	if len(providers) != 6 {
+		t.Fatalf("provider count = %d, want 6", len(providers))
 	}
-	for _, id := range []string{"anthropic", "openai", "openai-codex", "openai-compatible"} {
+	for _, id := range []string{"anthropic", "openai", "openai-codex", "openrouter", "ollama", "openai-compatible"} {
 		p := GetProvider(id)
 		if p == nil {
 			t.Fatalf("expected provider %q", id)
@@ -22,14 +22,14 @@ func TestProviderCatalogBasics(t *testing.T) {
 	if !IsSupportedProvider("openai") {
 		t.Fatal("openai should be supported")
 	}
-	if IsSupportedProvider("openrouter") {
-		t.Fatal("openrouter should not be supported")
+	if !IsSupportedProvider("openrouter") {
+		t.Fatal("openrouter should be supported")
 	}
 	ids := SupportedProviderIDs()
-	if len(ids) != 4 {
-		t.Fatalf("SupportedProviderIDs len = %d, want 4", len(ids))
+	if len(ids) != 6 {
+		t.Fatalf("SupportedProviderIDs len = %d, want 6", len(ids))
 	}
-	if ids[0] != "anthropic" || ids[1] != "openai" || ids[2] != "openai-codex" || ids[3] != "openai-compatible" {
+	if ids[0] != "anthropic" || ids[1] != "openai" || ids[2] != "openai-codex" || ids[3] != "openrouter" || ids[4] != "ollama" || ids[5] != "openai-compatible" {
 		t.Fatalf("unexpected SupportedProviderIDs order: %#v", ids)
 	}
 }
@@ -42,8 +42,8 @@ func TestProvidersByCategory(t *testing.T) {
 	if len(byCategory["custom"]) != 1 {
 		t.Fatalf("custom len = %d, want 1", len(byCategory["custom"]))
 	}
-	if len(byCategory["generic"]) != 1 {
-		t.Fatalf("generic len = %d, want 1", len(byCategory["generic"]))
+	if len(byCategory["compatible"]) != 3 {
+		t.Fatalf("compatible len = %d, want 3", len(byCategory["compatible"]))
 	}
 }
 
@@ -73,6 +73,8 @@ func TestMapToManagedProvider(t *testing.T) {
 	cases := map[string]string{
 		"openai-codex":      "openai",
 		"openai-compatible": "openai",
+		"openrouter":        "openrouter",
+		"ollama":            "ollama",
 		"openai":            "openai",
 		"anthropic":         "anthropic",
 		"  custom  ":        "custom",

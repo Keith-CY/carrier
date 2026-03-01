@@ -17,7 +17,7 @@ const (
 
 type Config struct {
 	ConfigVersion int           `json:"config_version"`
-	Channels      []Channel     `json:"channels"`
+	Channels      []Channel     `json:"channels,omitempty"`
 	ModelList     []Model       `json:"model_list"`
 	DefaultModel  string        `json:"default_model"`
 	BaseAgent     BaseAgentSpec `json:"base_agent"`
@@ -48,6 +48,7 @@ type Model struct {
 	AuthMode      string `json:"auth_mode,omitempty"`
 	EnvVar        string `json:"env_var,omitempty"`
 	CredentialRef string `json:"credential_ref,omitempty"` // provider credential key
+	BaseURL       string `json:"base_url,omitempty"`
 }
 
 func DefaultPath() (string, error) {
@@ -132,6 +133,11 @@ func validateConfig(cfg *Config) error {
 		if !catalog.IsSupportedProvider(providerID) {
 			return fmt.Errorf("unsupported provider id %q", model.ProviderID)
 		}
+		if baseURL := strings.TrimSpace(model.BaseURL); baseURL != "" {
+			if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+				return fmt.Errorf("model %q base_url must start with http:// or https://", model.ModelName)
+			}
+		}
 	}
 	return nil
 }
@@ -167,7 +173,7 @@ func setEnvIfUnset(key, value string) error {
 	if key == "" || value == "" {
 		return nil
 	}
-	if _, exists := os.LookupEnv(key); exists {
+	if existing, exists := os.LookupEnv(key); exists && strings.TrimSpace(existing) != "" {
 		return nil
 	}
 	return os.Setenv(key, value)
@@ -217,15 +223,21 @@ func ApplyGatewayEnvironment(cfg *Config) error {
 
 	// Provider credentials (by credential reference).
 	for _, m := range cfg.ModelList {
-		if strings.TrimSpace(m.EnvVar) == "" || strings.TrimSpace(m.CredentialRef) == "" {
-			continue
+		if strings.TrimSpace(m.EnvVar) != "" && strings.TrimSpace(m.CredentialRef) != "" {
+			value, _, ok, err := credentialstore.LoadProviderCredential(m.CredentialRef)
+			if err == nil && ok && strings.TrimSpace(value) != "" {
+				if err := setEnvIfUnset(m.EnvVar, value); err != nil {
+					return err
+				}
+			}
 		}
-		value, _, ok, err := credentialstore.LoadProviderCredential(m.CredentialRef)
-		if err != nil || !ok || strings.TrimSpace(value) == "" {
-			continue
-		}
-		if err := setEnvIfUnset(m.EnvVar, value); err != nil {
-			return err
+		if strings.TrimSpace(m.BaseURL) != "" {
+			provider := catalog.GetProvider(m.ProviderID)
+			if provider != nil && strings.TrimSpace(provider.BaseURLEnv) != "" {
+				if err := setEnvIfUnset(provider.BaseURLEnv, m.BaseURL); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil

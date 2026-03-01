@@ -115,11 +115,11 @@ func TestHandleProviderAuthInput_SaveFailureStillReturnsDone(t *testing.T) {
 }
 
 func TestProviderEnvVarsToSet_NilProviderAndNoEnvVar(t *testing.T) {
-	if got := ProviderEnvVarsToSet(nil, "v"); got != nil {
+	if got := ProviderEnvVarsToSet(nil, "v", ""); got != nil {
 		t.Fatalf("expected nil for nil provider, got %#v", got)
 	}
 	p := &LLMProvider{ID: "no-env", Name: "No Env", EnvVar: ""}
-	if got := ProviderEnvVarsToSet(p, "value"); got != nil {
+	if got := ProviderEnvVarsToSet(p, "value", ""); got != nil {
 		t.Fatalf("expected nil for empty provider env var, got %#v", got)
 	}
 }

@@ -2,5 +2,8 @@
   { "id": "openclaw", "name": "OpenClaw", "status": "active" },
   { "id": "pi-mono", "name": "Pi Mono", "status": "candidate" },
   { "id": "nanoclaw", "name": "NanoClaw", "status": "candidate" },
-  { "id": "picoclaw", "name": "Pico Claw", "status": "candidate" }
+  { "id": "picoclaw", "name": "PicoClaw", "status": "active" },
+  { "id": "zeroclaw", "name": "ZeroClaw", "status": "active" },
+  { "id": "codex", "name": "Codex CLI", "status": "active" },
+  { "id": "opencode", "name": "OpenCode", "status": "active" }
 ]

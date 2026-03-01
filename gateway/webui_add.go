@@ -135,9 +135,9 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_AUTH_INPUT", fmt.Sprintf("provider %s requires credential", provider.ID)))
 			return
 		}
-		for k, v := range ProviderEnvVarsToSet(provider, token) {
-			envVars[k] = v
-		}
+	}
+	for k, v := range ProviderEnvVarsToSet(provider, token, "") {
+		envVars[k] = v
 	}
 	if cfg, managed := managedAgentByID(agentID); managed {
 		if cfg.RequiredEnvKey != "" && strings.TrimSpace(envVars[cfg.RequiredEnvKey]) == "" {

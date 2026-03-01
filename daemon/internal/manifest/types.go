@@ -126,8 +126,9 @@ type PortSpec struct {
 }
 
 type HealthcheckSpec struct {
-	Type string `json:"type"`
-	URL  string `json:"url"`
+	Type    string `json:"type"`
+	URL     string `json:"url,omitempty"`
+	Command string `json:"command,omitempty"`
 }
 
 // HealthSpec defines the top-level health configuration for the agent,

@@ -123,6 +123,12 @@ func Run() {
 	if err := svc.RegisterManifest(catalog.PicoClawManifest()); err != nil {
 		log.Printf("WARN: register picoclaw manifest: %v (skipping)", err)
 	}
+	if err := svc.RegisterManifest(catalog.CodexManifest()); err != nil {
+		log.Printf("WARN: register codex manifest: %v (skipping)", err)
+	}
+	if err := svc.RegisterManifest(catalog.OpenCodeManifest()); err != nil {
+		log.Printf("WARN: register opencode manifest: %v (skipping)", err)
+	}
 
 	logger.Info("carrier daemon booted")
 	fmt.Printf("carrier daemon booted (listen=%s:%d log=%s/%s)\n",
