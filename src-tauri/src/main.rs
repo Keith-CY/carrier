@@ -98,7 +98,7 @@ fn is_tcp_ready(raw_addr: &str, timeout: Duration) -> bool {
                 }
                 sleep(Duration::from_millis(150));
             }
-            Err("timeout")
+            Err("timeout".to_string())
         })
         .is_ok()
 }
