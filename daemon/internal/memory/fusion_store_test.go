@@ -2,11 +2,13 @@ package memory
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFusionSearchHonorsScopePermissions(t *testing.T) {
@@ -185,14 +187,14 @@ func TestFusionSearchReranksWithHybridWeights(t *testing.T) {
 	rerank := true
 	adaptive := true
 	lex := 0.2
-	overlap := 0.8
+	sem := 0.8
 	hits := store.Search(SearchOptions{
 		Subject:        "agent-a",
 		Query:          "alpha rollout checklist",
 		AdaptiveRecall: &adaptive,
 		Rerank:         &rerank,
 		LexicalWeight:  &lex,
-		OverlapWeight:  &overlap,
+		SemanticWeight: &sem,
 	})
 	if len(hits) == 0 {
 		t.Fatal("expected hybrid rerank hits")
@@ -239,13 +241,13 @@ func TestFusionSearchZeroWeightsFallbackToDefaults(t *testing.T) {
 
 	rerank := true
 	zeroLex := 0.0
-	zeroOverlap := 0.0
+	zeroSem := 0.0
 	hits := store.Search(SearchOptions{
-		Subject:       "agent-a",
-		Query:         "deployment",
-		Rerank:        &rerank,
-		LexicalWeight: &zeroLex,
-		OverlapWeight: &zeroOverlap,
+		Subject:        "agent-a",
+		Query:          "deployment",
+		Rerank:         &rerank,
+		LexicalWeight:  &zeroLex,
+		SemanticWeight: &zeroSem,
 	})
 	// Should fallback to defaults and still return results
 	if len(hits) == 0 {
@@ -282,7 +284,6 @@ func TestFusionSearchLargeCandidateMultiplier(t *testing.T) {
 		t.Fatalf("expected max 5 results, got %d", len(hits))
 	}
 }
-
 func TestFusionRecordReadArchiveAndAccessControl(t *testing.T) {
 	store := NewStore(WithRootDir(t.TempDir()))
 
@@ -381,5 +382,81 @@ func TestFusionGrantAndInstanceScopeOperations(t *testing.T) {
 	remaining := store.InstanceScopes("inst-1")
 	if len(remaining) != 1 || remaining[0] != Scope("shared:zeta") {
 		t.Fatalf("unexpected remaining scopes: %+v", remaining)
+	}
+}
+
+func TestFusionInstanceDistillDryRunAndApply(t *testing.T) {
+	root := t.TempDir()
+	fixed := time.Date(2026, 3, 2, 12, 0, 0, 0, time.UTC)
+	store := NewStore(
+		WithRootDir(root),
+		WithNow(func() time.Time { return fixed }),
+	)
+
+	if _, err := store.UpsertRecord(UpsertRecordInput{
+		ID:             "dup-1",
+		Subject:        "agent-a",
+		Scope:          Scope("agent:agent-a"),
+		ContentSummary: "deployment region is tokyo",
+	}); err != nil {
+		t.Fatalf("upsert first record: %v", err)
+	}
+	if _, err := store.UpsertRecord(UpsertRecordInput{
+		ID:             "dup-2",
+		Subject:        "agent-a",
+		Scope:          Scope("agent:agent-a"),
+		ContentSummary: "deployment region is tokyo",
+	}); err != nil {
+		t.Fatalf("upsert duplicate record: %v", err)
+	}
+
+	dryRun, err := store.DistillForInstance(context.Background(), InstanceDistillOptions{
+		InstanceID: "agent-a",
+		DryRun:     true,
+		Force:      true,
+	})
+	if err != nil {
+		t.Fatalf("dry-run distill: %v", err)
+	}
+	if strings.TrimSpace(dryRun.RunID) == "" {
+		t.Fatal("expected dry-run distill run id")
+	}
+	if dryRun.Status != "planned" {
+		t.Fatalf("expected planned status, got %s", dryRun.Status)
+	}
+
+	run, err := store.DistillForInstance(context.Background(), InstanceDistillOptions{
+		InstanceID: "agent-a",
+		Force:      true,
+	})
+	if err != nil {
+		t.Fatalf("apply distill: %v", err)
+	}
+	if run.Status != "completed" {
+		t.Fatalf("expected completed status, got %s", run.Status)
+	}
+	if run.Removed < 1 {
+		t.Fatalf("expected at least one removed source record, got %d", run.Removed)
+	}
+}
+
+func TestFusionInstanceDistillForceStillEnforcesScopeAccess(t *testing.T) {
+	store := NewStore(WithRootDir(t.TempDir()))
+
+	if _, err := store.UpsertRecord(UpsertRecordInput{
+		Subject:        "agent-b",
+		Scope:          Scope("agent:agent-b"),
+		ContentSummary: "private b memory",
+	}); err != nil {
+		t.Fatalf("upsert agent-b record: %v", err)
+	}
+
+	_, err := store.DistillForInstance(context.Background(), InstanceDistillOptions{
+		InstanceID: "agent-a",
+		Scope:      Scope("agent:agent-b"),
+		Force:      true,
+	})
+	if err != ErrMountDenied {
+		t.Fatalf("expected ErrMountDenied when distilling unauthorized scope with force, got %v", err)
 	}
 }

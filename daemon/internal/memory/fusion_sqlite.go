@@ -163,6 +163,14 @@ func (s *Store) ensureSQLiteIndexLocked() bool {
 			attached_at TEXT NOT NULL,
 			PRIMARY KEY(instance_id, scope)
 		);`,
+		`CREATE TABLE IF NOT EXISTS memory_distill_manifests (
+			run_id TEXT PRIMARY KEY,
+			scope TEXT NOT NULL,
+			instance_id TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			source_batch_json TEXT NOT NULL,
+			checksum TEXT NOT NULL
+		);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -296,6 +304,66 @@ func (s *Store) syncInstanceScopesToSQLiteLocked(instanceID string, scopes []Sco
 		}
 	}
 	if err := tx.Commit(); err != nil {
+		s.lastStateErr = err
+	}
+}
+
+func (s *Store) deleteRecordFromSQLiteLocked(recordID string) {
+	if !s.ensureSQLiteIndexLocked() {
+		return
+	}
+	db, err := s.openSQLiteLocked()
+	if err != nil {
+		s.lastStateErr = err
+		return
+	}
+	defer db.Close()
+	tx, err := db.Begin()
+	if err != nil {
+		s.lastStateErr = err
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM records_fts WHERE id = ?`, recordID); err != nil {
+		s.lastStateErr = err
+		return
+	}
+	if _, err := tx.Exec(`DELETE FROM memory_records WHERE id = ?`, recordID); err != nil {
+		s.lastStateErr = err
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		s.lastStateErr = err
+	}
+}
+
+func (s *Store) syncDistillManifestToSQLiteLocked(m DistillSourceManifest) {
+	if !s.ensureSQLiteIndexLocked() {
+		return
+	}
+	db, err := s.openSQLiteLocked()
+	if err != nil {
+		s.lastStateErr = err
+		return
+	}
+	defer db.Close()
+
+	raw, err := json.Marshal(m)
+	if err != nil {
+		s.lastStateErr = err
+		return
+	}
+	checksum := shortDigest(string(raw))
+	if _, err := db.Exec(`
+		INSERT INTO memory_distill_manifests(run_id, scope, instance_id, created_at, source_batch_json, checksum)
+		VALUES(?,?,?,?,?,?)
+		ON CONFLICT(run_id) DO UPDATE SET
+			scope=excluded.scope,
+			instance_id=excluded.instance_id,
+			created_at=excluded.created_at,
+			source_batch_json=excluded.source_batch_json,
+			checksum=excluded.checksum
+	`, m.RunID, string(m.Scope), m.InstanceID, m.CreatedAt.UTC().Format(time.RFC3339Nano), string(raw), checksum); err != nil {
 		s.lastStateErr = err
 	}
 }

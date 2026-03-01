@@ -191,6 +191,28 @@ func TestMemoryV2UpsertGetGrantRevokeAndInstanceAttach(t *testing.T) {
 		t.Fatalf("instance export status=%d body=%s", exportRR.Code, exportRR.Body.String())
 	}
 
+	distillReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/instance/distill", strings.NewReader(`{
+		"instanceId":"agent-a",
+		"dryRun":true,
+		"force":true,
+		"actor":"tester",
+		"requestId":"req-distill"
+	}`))
+	distillRR := httptest.NewRecorder()
+	mux.ServeHTTP(distillRR, distillReq)
+	if distillRR.Code != http.StatusOK {
+		t.Fatalf("instance distill status=%d body=%s", distillRR.Code, distillRR.Body.String())
+	}
+	var distillResp struct {
+		Result memory.DistillRunResult `json:"result"`
+	}
+	if err := json.Unmarshal(distillRR.Body.Bytes(), &distillResp); err != nil {
+		t.Fatalf("decode distill response: %v", err)
+	}
+	if strings.TrimSpace(distillResp.Result.RunID) == "" {
+		t.Fatalf("expected distill run id")
+	}
+
 	// Migration backup/validate/rollback.
 	backupReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/migrate/backup", strings.NewReader(`{
 		"actor":"tester",

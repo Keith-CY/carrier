@@ -24,7 +24,7 @@ const (
 	maxCandidateLimit       = 300
 	minCandidateLimit       = 20
 	defaultLexicalWeight    = 0.65
-	defaultOverlapWeight    = 0.35
+	defaultSemanticWeight   = 0.35
 )
 
 type searchCandidate struct {
@@ -38,11 +38,11 @@ var errRecordNotFound = errors.New("memory record not found")
 // Search performs a compact record recall with permission-first filtering.
 func (s *Store) Search(opts SearchOptions) []SearchHit {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 
 	subject := strings.TrimSpace(opts.Subject)
 	query := strings.TrimSpace(opts.Query)
 	if query == "" {
+		s.mu.RUnlock()
 		return nil
 	}
 	maxResults := opts.MaxResults
@@ -53,6 +53,8 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 		maxResults = maxSearchResults
 	}
 	allowed := s.allowedScopesForSubjectLocked(subject)
+	includeDistilled := optionBool(opts.IncludeDistilled, true)
+	includeRaw := optionBool(opts.IncludeRaw, true)
 
 	candidateMultiplier := opts.CandidateMultiplier
 	if candidateMultiplier <= 0 {
@@ -70,23 +72,23 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 	}
 
 	lexicalWeight := optionFloat(opts.LexicalWeight, defaultLexicalWeight)
-	overlapWeight := optionFloat(opts.OverlapWeight, defaultOverlapWeight)
+	semanticWeight := optionFloat(opts.SemanticWeight, defaultSemanticWeight)
 	enableRerank := optionBool(opts.Rerank, true)
 	enableAdaptiveRecall := optionBool(opts.AdaptiveRecall, true)
 	if lexicalWeight < 0 {
 		lexicalWeight = 0
 	}
-	if overlapWeight < 0 {
-		overlapWeight = 0
+	if semanticWeight < 0 {
+		semanticWeight = 0
 	}
-	weightSum := lexicalWeight + overlapWeight
+	weightSum := lexicalWeight + semanticWeight
 	if weightSum == 0 {
 		lexicalWeight = defaultLexicalWeight
-		overlapWeight = defaultOverlapWeight
-		weightSum = lexicalWeight + overlapWeight
+		semanticWeight = defaultSemanticWeight
+		weightSum = lexicalWeight + semanticWeight
 	}
 	lexicalWeight /= weightSum
-	overlapWeight /= weightSum
+	semanticWeight /= weightSum
 
 	candidates := make(map[string]searchCandidate, maxResults)
 	usedSQLite := false
@@ -121,19 +123,30 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 	results := make([]SearchHit, 0, len(candidates))
 	for _, candidate := range candidates {
 		contentText := candidate.hit.Snippet
+		isDistilled := false
 		if rec, ok := s.records[candidate.hit.ID]; ok {
+			isDistilled = isDistilledRecord(rec)
+			if isDistilled && !includeDistilled {
+				continue
+			}
+			if !isDistilled && !includeRaw {
+				continue
+			}
 			contentText = strings.TrimSpace(rec.ContentSummary)
 			if contentText == "" {
 				contentText = strings.TrimSpace(rec.ContentRaw)
 			}
+		} else if !includeRaw {
+			continue
 		}
-		overlapScore := scoreText(contentText, lowerQuery)
-		candidate.semantic = overlapScore
+		semanticScore := scoreText(contentText, lowerQuery)
+		candidate.semantic = semanticScore
 		if enableRerank {
-			candidate.hit.Score = blendScore(candidate.lexical, candidate.semantic, lexicalWeight, overlapWeight)
+			candidate.hit.Score = blendScore(candidate.lexical, candidate.semantic, lexicalWeight, semanticWeight)
 		} else {
 			candidate.hit.Score = candidate.lexical
 		}
+		candidate.hit.Score *= distilledScoreMultiplier(query, isDistilled)
 		if opts.MinScore > 0 && candidate.hit.Score < opts.MinScore {
 			continue
 		}
@@ -149,6 +162,12 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 	if len(results) > maxResults {
 		results = results[:maxResults]
 	}
+	resultIDs := make([]string, 0, len(results))
+	for _, hit := range results {
+		resultIDs = append(resultIDs, hit.ID)
+	}
+	s.mu.RUnlock()
+	s.recordSearchHits(resultIDs)
 	return results
 }
 
@@ -791,12 +810,12 @@ func scoreText(text, lowerQuery string) float64 {
 	return ratio
 }
 
-func blendScore(lexicalScore, overlapScore, lexicalWeight, overlapWeight float64) float64 {
-	if lexicalWeight+overlapWeight == 0 {
+func blendScore(lexicalScore, semanticScore, lexicalWeight, semanticWeight float64) float64 {
+	if lexicalWeight+semanticWeight == 0 {
 		return lexicalScore
 	}
-	sum := lexicalWeight + overlapWeight
-	return (lexicalScore*lexicalWeight + overlapScore*overlapWeight) / sum
+	sum := lexicalWeight + semanticWeight
+	return (lexicalScore*lexicalWeight + semanticScore*semanticWeight) / sum
 }
 
 func optionBool(v *bool, fallback bool) bool {

@@ -127,6 +127,12 @@ func requestLLMCompletion(ctx context.Context, systemPrompt, userMessage string)
 	return requestLLMCompletionWithProviderAndDeps(ctx, "", systemPrompt, userMessage, llmRequestDeps{})
 }
 
+// RequestCompletion is an exported wrapper for callers that need baseagent's
+// provider/config aware text generation with the same retry and timeout policy.
+func RequestCompletion(ctx context.Context, systemPrompt, userMessage string) (string, error) {
+	return requestLLMCompletion(ctx, systemPrompt, userMessage)
+}
+
 func requestLLMCompletionForProvider(ctx context.Context, providerID, systemPrompt, userMessage string) (string, error) {
 	return requestLLMCompletionWithProviderAndDeps(ctx, providerID, systemPrompt, userMessage, llmRequestDeps{})
 }
