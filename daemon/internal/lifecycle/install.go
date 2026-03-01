@@ -112,6 +112,13 @@ func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts I
 	}
 
 installSuccess:
+	contract, memoryErr := s.autoMountMemories(agentID)
+	if memoryErr != nil {
+		return failWithRollback(memoryErr, "E_MEMORY_CONTRACT")
+	}
+	if len(contract.Env) > 0 {
+		s.autoUnmountMemories(agentID)
+	}
 	s.markInstallSuccess(agentID)
 	_ = s.webhookManager.FireEvent(WebhookEvent{Type: WebhookEventAgentInstalled, AgentID: agentID})
 	if rollbackSnapshotReady {

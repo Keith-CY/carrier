@@ -12,6 +12,13 @@
   "installState":         "string",           // installation state (see below)
   "runtimeState":         "string",           // runtime state (see below)
   "health":               "string",           // health state (see below)
+  "memory": {                                 // memory contract state (optional)
+    "contractId":       "string | omitted",
+    "contractDigest":   "string | omitted",
+    "syncState":        "string | omitted",   // ready | error
+    "syncError":        "string | omitted",
+    "syncedAt":         "string | omitted"
+  },
   "lastError":            "string | omitted", // last error message (omitted when empty)
   "lastTriageSummary":    "string | omitted", // last triage summary (omitted when empty)
   "needsRemoteDiagnosis": "boolean",          // whether remote diagnosis is requested
@@ -48,6 +55,18 @@
 | `healthy`   | Agent is healthy          |
 | `degraded`  | Agent is partially degraded |
 | `unhealthy` | Agent is unhealthy        |
+
+### `memory`
+
+Optional runtime memory contract metadata returned when memory contract preparation is active.
+
+| Field            | Description |
+| ---------------- | ----------- |
+| `contractId`     | Deterministic contract identifier for current view |
+| `contractDigest` | Effective memory view digest |
+| `syncState`      | `ready` or `error` |
+| `syncError`      | Error detail when `syncState=error` |
+| `syncedAt`       | Last contract preparation timestamp (UTC) |
 
 ## Deprecated Fields
 

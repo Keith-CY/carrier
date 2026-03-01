@@ -418,6 +418,55 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "logs": logs, "steps": steps})
 		return
+	case "run":
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		var req struct {
+			Message   string `json:"message"`
+			SessionID string `json:"sessionId,omitempty"`
+			TimeoutMs int    `json:"timeoutMs,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
+			return
+		}
+		req.Message = strings.TrimSpace(req.Message)
+		req.SessionID = strings.TrimSpace(req.SessionID)
+		if req.Message == "" {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "message is required"))
+			return
+		}
+		const defaultRunTimeout = 60 * time.Second
+		const maxRunTimeout = 5 * time.Minute
+		timeout := defaultRunTimeout
+		if req.TimeoutMs > 0 {
+			timeout = time.Duration(req.TimeoutMs) * time.Millisecond
+			if timeout > maxRunTimeout {
+				timeout = maxRunTimeout
+			}
+		}
+		startedAt := time.Now()
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+		runResult, steps, err := remoteRunViaOpenClaw(ctx, host, hostID, agentID, req.Message, req.SessionID)
+		recordRemoteOperationMetric(remoteOpInstancesRun, startedAt, err)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_REMOTE_RUN_FAILED", err.Error()))
+			return
+		}
+		emitRemoteAuditEvent(requestID, "remote_instance_run", hostID+":"+agentID, "success", map[string]interface{}{
+			"sessionId": runResult.SessionID,
+			"latencyMs": runResult.LatencyMs,
+		})
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"requestId": requestID,
+			"result":    "ok",
+			"run":       runResult,
+			"steps":     steps,
+		})
+		return
 	case "sync":
 		if len(parts) >= 5 {
 			subAction := strings.ToLower(strings.TrimSpace(parts[4]))
@@ -442,7 +491,8 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 			return
 		}
 		var req struct {
-			Mode string `json:"mode"`
+			Mode      string                `json:"mode"`
+			MemoryGit RemoteMemoryGitConfig `json:"memoryGit"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeInternalGatewayError(
@@ -458,7 +508,7 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 		startedAt := time.Now()
 		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 		defer cancel()
-		syncResult, steps, err := remoteSyncInstanceConfig(ctx, host, hostID, agentID, req.Mode)
+		syncResult, steps, err := remoteSyncInstanceConfig(ctx, host, hostID, agentID, req.Mode, req.MemoryGit)
 		recordRemoteOperationMetric(remoteOpInstancesSync, startedAt, err)
 		if err != nil {
 			emitRemoteAuditEvent(requestID, "remote_instance_sync", hostID+":"+agentID, "failure", map[string]interface{}{

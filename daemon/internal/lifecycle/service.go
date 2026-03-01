@@ -689,6 +689,7 @@ func (s *Service) applyPersistedState(id string, pState *PersistedAgentState, st
 		}
 	}
 	state.Runtime = restoredState
+	state.Memory = cloneMemoryState(pState.Memory)
 	state.UpdatedAt = pState.LastTransition
 
 	// Restore crash-loop cooldown state
@@ -715,6 +716,7 @@ func (s *Service) saveState() {
 			ID:             state.ID,
 			Installed:      state.Install == InstallStateInstalled,
 			RuntimeState:   string(state.Runtime),
+			Memory:         cloneMemoryState(state.Memory),
 			LastTransition: state.UpdatedAt,
 		}
 		if restarts, ok := s.restarts[id]; ok && len(restarts) > 0 {

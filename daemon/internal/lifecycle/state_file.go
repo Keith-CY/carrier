@@ -13,14 +13,27 @@ type StateFile struct {
 	path string
 }
 
+func cloneMemoryState(src *MemoryState) *MemoryState {
+	if src == nil {
+		return nil
+	}
+	cloned := *src
+	if src.SyncedAt != nil {
+		at := *src.SyncedAt
+		cloned.SyncedAt = &at
+	}
+	return &cloned
+}
+
 // PersistedAgentState represents the minimal state needed to restore agent lifecycle.
 type PersistedAgentState struct {
-	ID             string      `json:"id"`
-	Installed      bool        `json:"installed"`
-	RuntimeState   string      `json:"runtime_state"`
-	LastTransition time.Time   `json:"last_transition"`
-	Restarts       []time.Time `json:"restarts,omitempty"`
-	CooldownUntil  time.Time   `json:"cooldown_until,omitempty"`
+	ID             string       `json:"id"`
+	Installed      bool         `json:"installed"`
+	RuntimeState   string       `json:"runtime_state"`
+	Memory         *MemoryState `json:"memory,omitempty"`
+	LastTransition time.Time    `json:"last_transition"`
+	Restarts       []time.Time  `json:"restarts,omitempty"`
+	CooldownUntil  time.Time    `json:"cooldown_until,omitempty"`
 }
 
 // NewStateFile creates a StateFile with the given path.
@@ -44,6 +57,7 @@ func (sf *StateFile) Save(agents map[string]*AgentState) error {
 			ID:             state.ID,
 			Installed:      state.Install == InstallStateInstalled,
 			RuntimeState:   string(state.Runtime),
+			Memory:         cloneMemoryState(state.Memory),
 			LastTransition: state.UpdatedAt,
 		}
 	}

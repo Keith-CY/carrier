@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -605,6 +606,50 @@ func TestRemoteChatStreamSSE(t *testing.T) {
 	}
 }
 
+func TestRemoteInstanceRunInjectsMemoryContract(t *testing.T) {
+	seenMemoryEnv := false
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "openclaw agent --local"):
+			if strings.Contains(command, "AGENTD_MEMORY_PATH") && strings.Contains(command, "AGENTD_MEMORY_VIEW_DIGEST") {
+				seenMemoryEnv = true
+			}
+			return remoteExecResult{ExitCode: 0, Stdout: `{"message":"hello from run","sessionId":"sess-run-1"}`}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/run", `{
+		"message":"run now",
+		"sessionId":"sess-run-1"
+	}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	payload := decodeJSONMap(t, rec)
+	runMap, _ := payload["run"].(map[string]interface{})
+	if runMap == nil {
+		t.Fatalf("missing run payload: %v", payload)
+	}
+	if got, _ := runMap["sessionId"].(string); got != "sess-run-1" {
+		t.Fatalf("expected sessionId sess-run-1, got=%q payload=%v", got, payload)
+	}
+	memoryMap, _ := runMap["memory"].(map[string]interface{})
+	if memoryMap == nil {
+		t.Fatalf("missing memory payload: %v", payload)
+	}
+	if strings.TrimSpace(anyToString(memoryMap["contractDigest"])) == "" {
+		t.Fatalf("expected contractDigest in run payload: %v", payload)
+	}
+	if !seenMemoryEnv {
+		t.Fatalf("expected AGENTD_MEMORY_* env injection in remote run command")
+	}
+}
+
 func TestRemoteInstallStreamSSE(t *testing.T) {
 	var installCommand string
 	configureSSHStreamRunner(t, func(command string, onChunk func(remoteStreamChunk)) remoteExecResult {
@@ -1028,6 +1073,66 @@ func TestRemoteInstanceSyncDiagnoseAndReconcile(t *testing.T) {
 	}
 	if configPatchWrites < 1 {
 		t.Fatalf("expected at least one config patch write during reconcile, writes=%d", configPatchWrites)
+	}
+}
+
+func TestRemoteInstanceSyncPersistsMemoryGitStatus(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	remoteBare := filepath.Join(t.TempDir(), "memory-remote.git")
+	if out, err := exec.Command("git", "init", "--bare", remoteBare).CombinedOutput(); err != nil {
+		t.Fatalf("init bare remote failed: %v out=%s", err, string(out))
+	}
+	t.Setenv("CARRIER_PROFILESYNC_REPO", t.TempDir())
+
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "cat \"$HOME/.openclaw/openclaw.json\""):
+			return remoteExecResult{ExitCode: 0, Stdout: `{"agents":{"defaults":{"provider":"openai","model":"gpt-4.1"}}}`}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	syncRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/sync", `{
+		"mode":"pull_validate_push",
+		"memoryGit":{
+			"enabled":true,
+			"repoUrl":"`+remoteBare+`",
+			"branch":"main",
+			"authMode":"system"
+		}
+	}`)
+	if syncRec.Code != http.StatusOK {
+		t.Fatalf("sync status=%d body=%s", syncRec.Code, syncRec.Body.String())
+	}
+
+	statusRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/remote/hosts/"+hostID+"/instances/main/sync/status", "")
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("sync status api status=%d body=%s", statusRec.Code, statusRec.Body.String())
+	}
+	statusPayload := decodeJSONMap(t, statusRec)
+	statusMap, _ := statusPayload["status"].(map[string]interface{})
+	if statusMap == nil {
+		t.Fatalf("missing status payload: %v", statusPayload)
+	}
+	if got, _ := statusMap["memoryLastSyncStatus"].(string); got != "success" {
+		t.Fatalf("expected memoryLastSyncStatus=success got=%q payload=%v", got, statusPayload)
+	}
+	if strings.TrimSpace(anyToString(statusMap["memoryContractDigest"])) == "" {
+		t.Fatalf("expected memoryContractDigest in status payload=%v", statusPayload)
+	}
+	memoryGitMap, _ := statusMap["memoryGit"].(map[string]interface{})
+	if memoryGitMap == nil {
+		t.Fatalf("expected memoryGit config in status payload=%v", statusPayload)
+	}
+	if got, _ := memoryGitMap["enabled"].(bool); !got {
+		t.Fatalf("expected memoryGit.enabled=true payload=%v", statusPayload)
 	}
 }
 
