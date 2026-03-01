@@ -50,7 +50,8 @@ type isolationBackend interface {
 }
 
 type linuxIsolationBackend struct {
-	bwrapPath string
+	bwrapPath    string
+	agentWorkDir string
 }
 
 func (b linuxIsolationBackend) CommandGOOS() string {
@@ -66,7 +67,7 @@ func (b linuxIsolationBackend) WrapCommand(command string) (string, error) {
 }
 
 func (b linuxIsolationBackend) WrapStartCommand(startCommand string) (string, error) {
-	return buildBwrapInvocation(b.bwrapPath, startCommand)
+	return buildBwrapInvocation(b.bwrapPath, startCommand, b.agentWorkDir)
 }
 
 func (b linuxIsolationBackend) PrepareCommands() ([]string, error) {
@@ -221,7 +222,14 @@ func resolveIsolationBackend(agentID, agentWorkDir string) (isolationBackend, er
 		if err != nil || strings.TrimSpace(bwrapPath) == "" {
 			return nil, fmt.Errorf("%w: bubblewrap (bwrap) executable not found in PATH", ErrIsolationUnavailable)
 		}
-		return linuxIsolationBackend{bwrapPath: strings.TrimSpace(bwrapPath)}, nil
+		workDir := strings.TrimSpace(agentWorkDir)
+		if workDir == "" {
+			workDir = strings.TrimSpace(isolationEnvLookup(isolationWorkDirEnvKey))
+		}
+		return linuxIsolationBackend{
+			bwrapPath:    strings.TrimSpace(bwrapPath),
+			agentWorkDir: workDir,
+		}, nil
 	case manifest.CommandOSDarwin:
 		limactlPath, err := isolationBackendLookup("limactl")
 		if err != nil || strings.TrimSpace(limactlPath) == "" {
@@ -297,7 +305,7 @@ func IsolationWorkDir(instance string) string {
 	return filepath.Join(homeDir, ".carrier", "instances", trimmed)
 }
 
-func buildBwrapInvocation(bwrapExecutable, startCommand string) (string, error) {
+func buildBwrapInvocation(bwrapExecutable, startCommand, agentWorkDir string) (string, error) {
 	trimmedStartCommand := strings.TrimSpace(startCommand)
 	if trimmedStartCommand == "" {
 		return "", fmt.Errorf("%w: runtime start command is empty", ErrIsolationUnavailable)
@@ -308,6 +316,19 @@ func buildBwrapInvocation(bwrapExecutable, startCommand string) (string, error) 
 	}
 	safeBwrapPath := shellSingleQuote(trimmedBwrapExecutable)
 	safeStartCommand := shellSingleQuote(trimmedStartCommand)
+
+	workDir := strings.TrimSpace(agentWorkDir)
+	if workDir != "" {
+		// Per-agent isolation: read-only root with writable workspace only
+		safeWorkDir := shellSingleQuote(workDir)
+		return fmt.Sprintf(
+			"%s --die-with-parent --new-session --ro-bind / / --proc /proc --dev /dev --tmpfs /tmp --bind %s %s --unshare-pid -- sh -lc %s",
+			safeBwrapPath,
+			safeWorkDir, safeWorkDir,
+			safeStartCommand,
+		), nil
+	}
+	// Fallback: full root mount (no workspace specified)
 	return fmt.Sprintf(
 		"%s --die-with-parent --new-session --bind / / --proc /proc --dev /dev --tmpfs /tmp --unshare-pid -- sh -lc %s",
 		safeBwrapPath,
@@ -316,7 +337,8 @@ func buildBwrapInvocation(bwrapExecutable, startCommand string) (string, error) 
 }
 
 func buildGuestBwrapCommand(startCommand string) (string, error) {
-	bwrapInvocation, err := buildBwrapInvocation("bwrap", startCommand)
+	// Guest (Lima/WSL) already has per-instance isolation; bwrap inside is defense-in-depth
+	bwrapInvocation, err := buildBwrapInvocation("bwrap", startCommand, "")
 	if err != nil {
 		return "", err
 	}
