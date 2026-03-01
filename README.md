@@ -35,7 +35,31 @@ carrier --version
 
 Notes:
 - Installer resolves `main` HEAD SHA, downloads `carrier-main-<full_sha>-<platform>.zip`, verifies `.sha256`, then installs `carrier`.
+- GitHub Releases also publish App artifacts named `carrier-app-<tag>-<platform>.zip` for the Tauri app distribution.
 - Default install path is `/usr/local/bin/carrier` (falls back to `~/.local/bin/carrier` when needed).
+
+### App (Tauri Desktop)
+
+The App distribution is a desktop shell that opens the same Carrier WebUI (`webui`) at:
+
+- `http://127.0.0.1:8787/`
+
+When you launch the App, it tries to auto-start:
+
+- `carrier daemon`
+- `carrier gateway`
+
+After startup, you can use the full WebUI in the desktop window, including:
+
+- onboarding and configuration
+- remote host/agent lifecycle operations
+- logs, diagnostics, and provider/profile management
+- remote chat controls and remote instance controls
+
+The App artifact naming is:
+
+- CLI: `carrier-<tag>-<platform>.zip`
+- App: `carrier-app-<tag>-<platform>.zip`
 
 ### 2) Onboard Carrier
 

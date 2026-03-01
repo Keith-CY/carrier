@@ -4,7 +4,7 @@ This document describes the build target matrix for Carrier, including currently
 
 ## Current Build Matrix
 
-The release workflow (`.github/workflows/release.yml`) currently builds for the following platforms:
+The release workflow (`.github/workflows/release.yml`) currently builds both CLI and App variants for the following platforms:
 
 ### Core Targets (Always Built)
 
@@ -18,6 +18,11 @@ The release workflow (`.github/workflows/release.yml`) currently builds for the 
 | Windows | arm64        | windows-arm64   | `.exe`           | ARM64 Windows (Surface)  |
 
 These targets are **always built** on every release. They cover the vast majority of deployment scenarios.
+
+For each target, release artifacts are now published as:
+
+- CLI: `carrier-<tag>-<label>.zip`
+- App: `carrier-app-<tag>-<label>.zip`
 
 ## Optional/Experimental Targets
 

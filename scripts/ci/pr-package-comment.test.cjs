@@ -98,16 +98,28 @@ test("buildPrPackagesComment renders markdown body with artifact links", () => {
     runId: "22252074017",
     commitSha: "38695c9610c2592d729cc566fa2b3619e0841905",
     packages: [
-      { label: "darwin-arm64", packageFile: "carrier-darwin-arm64.zip", artifactId: "5600022400" },
-      { label: "linux-x64", packageFile: "carrier-linux-x64.zip", artifactId: "5600022428" },
+      {
+        label: "darwin-arm64",
+        variant: "app",
+        packageFile: "carrier-app-darwin-arm64.zip",
+        artifactId: "5600022400",
+      },
+      {
+        label: "linux-x64",
+        variant: "cli",
+        packageFile: "carrier-linux-x64.zip",
+        artifactId: "5600022428",
+      },
     ],
   });
 
   assert.match(body, new RegExp(COMMENT_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(body, /- Commit: `38695c9610c2592d729cc566fa2b3619e0841905`/);
   assert.match(body, /- Workflow run: \[22252074017\]\(https:\/\/github\.com\/Keith-CY\/carrier\/actions\/runs\/22252074017\)/);
-  assert.match(body, /carrier-darwin-arm64\.zip/);
+  assert.match(body, /app\/darwin-arm64/);
+  assert.match(body, /carrier-app-darwin-arm64\.zip/);
   assert.match(body, /actions\/runs\/22252074017\/artifacts\/5600022400/);
+  assert.match(body, /cli\/linux-x64/);
   assert.match(body, /carrier-linux-x64\.zip/);
   assert.match(body, /actions\/runs\/22252074017\/artifacts\/5600022428/);
 });

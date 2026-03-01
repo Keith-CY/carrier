@@ -31,6 +31,7 @@ function listMetadataFiles(metadataDir) {
 function parseMetadataFile(filePath) {
   const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
   const label = String(raw.label || "").trim();
+  const variant = String(raw.variant || "").trim();
   const packageFile = String(raw.package_file || "").trim();
   const artifactId = String(raw.artifact_id || "").trim();
 
@@ -50,6 +51,7 @@ function parseMetadataFile(filePath) {
 
   return {
     label,
+    variant,
     packageFile,
     artifactId,
   };
@@ -87,7 +89,8 @@ function buildPrPackagesComment({ repository, runId, commitSha, packages }) {
   ];
 
   for (const item of packages) {
-    lines.push(`- ${item.label}: [\`${item.packageFile}\`](${runUrl}/artifacts/${item.artifactId})`);
+    const label = item.variant ? `${item.variant}/${item.label}` : item.label;
+    lines.push(`- ${label}: [\`${item.packageFile}\`](${runUrl}/artifacts/${item.artifactId})`);
   }
 
   return `${lines.join("\n")}\n`;
