@@ -21,7 +21,7 @@ import (
 
 const (
 	remoteOpenClawConfigPath         = "$HOME/.openclaw/openclaw.json"
-	remoteOpenClawCarrierSecretsPath = "$HOME/.openclaw/carrier-secrets.json"
+	remoteOpenClawCarrierSecretsPath = "$HOME/.openclaw/workspace/carrier-secrets.json"
 	remotePicoClawConfigPath         = "$HOME/.picoclaw/config.json"
 	remoteZeroClawConfigPath         = "$HOME/.zeroclaw/config.toml"
 )
@@ -1536,7 +1536,9 @@ func runRemoteRsync(ctx context.Context, host RemoteHost, localPath, remotePath 
 
 	localPath = filepath.Clean(strings.TrimSpace(localPath))
 	remotePath = strings.TrimSpace(remotePath)
-	rsyncPath := fmt.Sprintf("mkdir -p %s && rsync", shellSingleQuote(filepath.Dir(remotePath)))
+	// Use $(dirname ...) on the remote side to properly expand $HOME before computing parent dir.
+	// shellSingleQuote prevents injection while allowing shell expansion outside the quotes.
+	rsyncPath := fmt.Sprintf("mkdir -p \"$(dirname %s)\" && rsync", shellSingleQuote(remotePath))
 	args := []string{
 		"-az",
 		"--chmod=F600,D700",
