@@ -38,11 +38,11 @@ var errRecordNotFound = errors.New("memory record not found")
 // Search performs a compact record recall with permission-first filtering.
 func (s *Store) Search(opts SearchOptions) []SearchHit {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 
 	subject := strings.TrimSpace(opts.Subject)
 	query := strings.TrimSpace(opts.Query)
 	if query == "" {
+		s.mu.RUnlock()
 		return nil
 	}
 	maxResults := opts.MaxResults
@@ -53,6 +53,8 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 		maxResults = maxSearchResults
 	}
 	allowed := s.allowedScopesForSubjectLocked(subject)
+	includeDistilled := optionBool(opts.IncludeDistilled, true)
+	includeRaw := optionBool(opts.IncludeRaw, true)
 
 	candidateMultiplier := opts.CandidateMultiplier
 	if candidateMultiplier <= 0 {
@@ -121,11 +123,21 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 	results := make([]SearchHit, 0, len(candidates))
 	for _, candidate := range candidates {
 		contentText := candidate.hit.Snippet
+		isDistilled := false
 		if rec, ok := s.records[candidate.hit.ID]; ok {
+			isDistilled = isDistilledRecord(rec)
+			if isDistilled && !includeDistilled {
+				continue
+			}
+			if !isDistilled && !includeRaw {
+				continue
+			}
 			contentText = strings.TrimSpace(rec.ContentSummary)
 			if contentText == "" {
 				contentText = strings.TrimSpace(rec.ContentRaw)
 			}
+		} else if !includeRaw {
+			continue
 		}
 		semanticScore := scoreText(contentText, lowerQuery)
 		candidate.semantic = semanticScore
@@ -134,6 +146,7 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 		} else {
 			candidate.hit.Score = candidate.lexical
 		}
+		candidate.hit.Score *= distilledScoreMultiplier(query, isDistilled)
 		if opts.MinScore > 0 && candidate.hit.Score < opts.MinScore {
 			continue
 		}
@@ -149,6 +162,12 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 	if len(results) > maxResults {
 		results = results[:maxResults]
 	}
+	resultIDs := make([]string, 0, len(results))
+	for _, hit := range results {
+		resultIDs = append(resultIDs, hit.ID)
+	}
+	s.mu.RUnlock()
+	s.recordSearchHits(resultIDs)
 	return results
 }
 

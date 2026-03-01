@@ -9,21 +9,23 @@ import (
 )
 
 type persistedStoreState struct {
-	Entries         map[string]Entry           `json:"entries"`
-	Mounts          []MountRecord              `json:"mounts"`
-	Manifests       map[string]PackageManifest `json:"manifests"`
-	InstallPath     map[string]string          `json:"install_path"`
-	Attachments     map[string][]Attachment    `json:"attachments"`
-	Views           map[string]ViewExplanation `json:"views"`
-	ViewInputDigest map[string]string          `json:"view_input_digest"`
-	Records         map[string]MemoryRecord    `json:"records,omitempty"`
-	Observations    []ObservationEvent         `json:"observations,omitempty"`
-	Grants          map[string]Grant           `json:"grants,omitempty"`
-	InstanceScopes  map[string][]Scope         `json:"instance_scopes,omitempty"`
-	ManualScopes    map[string][]Scope         `json:"manual_scopes,omitempty"`
-	RetentionDays   int                        `json:"retention_days,omitempty"`
-	TruthRoot       string                     `json:"truth_root,omitempty"`
-	IndexPath       string                     `json:"index_path,omitempty"`
+	Entries          map[string]Entry                 `json:"entries"`
+	Mounts           []MountRecord                    `json:"mounts"`
+	Manifests        map[string]PackageManifest       `json:"manifests"`
+	InstallPath      map[string]string                `json:"install_path"`
+	Attachments      map[string][]Attachment          `json:"attachments"`
+	Views            map[string]ViewExplanation       `json:"views"`
+	ViewInputDigest  map[string]string                `json:"view_input_digest"`
+	Records          map[string]MemoryRecord          `json:"records,omitempty"`
+	Observations     []ObservationEvent               `json:"observations,omitempty"`
+	Grants           map[string]Grant                 `json:"grants,omitempty"`
+	InstanceScopes   map[string][]Scope               `json:"instance_scopes,omitempty"`
+	ManualScopes     map[string][]Scope               `json:"manual_scopes,omitempty"`
+	RetentionDays    int                              `json:"retention_days,omitempty"`
+	TruthRoot        string                           `json:"truth_root,omitempty"`
+	IndexPath        string                           `json:"index_path,omitempty"`
+	DistillRuns      map[string]DistillRunResult      `json:"distill_runs,omitempty"`
+	DistillManifests map[string]DistillSourceManifest `json:"distill_manifests,omitempty"`
 }
 
 func (s *Store) loadState() error {
@@ -90,6 +92,12 @@ func (s *Store) loadState() error {
 	if strings.TrimSpace(state.IndexPath) != "" {
 		s.indexPath = state.IndexPath
 	}
+	if state.DistillRuns != nil {
+		s.distillRuns = state.DistillRuns
+	}
+	if state.DistillManifests != nil {
+		s.distillManifests = state.DistillManifests
+	}
 
 	return nil
 }
@@ -101,21 +109,23 @@ func (s *Store) persistStateLocked() error {
 	}
 
 	state := persistedStoreState{
-		Entries:         make(map[string]Entry, len(s.entries)),
-		Mounts:          append([]MountRecord(nil), s.mounts...),
-		Manifests:       make(map[string]PackageManifest, len(s.manifests)),
-		InstallPath:     make(map[string]string, len(s.installPath)),
-		Attachments:     make(map[string][]Attachment, len(s.attachments)),
-		Views:           make(map[string]ViewExplanation, len(s.views)),
-		ViewInputDigest: make(map[string]string, len(s.viewInputDigest)),
-		Records:         make(map[string]MemoryRecord, len(s.records)),
-		Observations:    append([]ObservationEvent(nil), s.observations...),
-		Grants:          make(map[string]Grant, len(s.grants)),
-		InstanceScopes:  make(map[string][]Scope, len(s.instanceScopes)),
-		ManualScopes:    make(map[string][]Scope, len(s.manualScopes)),
-		RetentionDays:   s.retentionDays,
-		TruthRoot:       s.truthRoot,
-		IndexPath:       s.indexPath,
+		Entries:          make(map[string]Entry, len(s.entries)),
+		Mounts:           append([]MountRecord(nil), s.mounts...),
+		Manifests:        make(map[string]PackageManifest, len(s.manifests)),
+		InstallPath:      make(map[string]string, len(s.installPath)),
+		Attachments:      make(map[string][]Attachment, len(s.attachments)),
+		Views:            make(map[string]ViewExplanation, len(s.views)),
+		ViewInputDigest:  make(map[string]string, len(s.viewInputDigest)),
+		Records:          make(map[string]MemoryRecord, len(s.records)),
+		Observations:     append([]ObservationEvent(nil), s.observations...),
+		Grants:           make(map[string]Grant, len(s.grants)),
+		InstanceScopes:   make(map[string][]Scope, len(s.instanceScopes)),
+		ManualScopes:     make(map[string][]Scope, len(s.manualScopes)),
+		RetentionDays:    s.retentionDays,
+		TruthRoot:        s.truthRoot,
+		IndexPath:        s.indexPath,
+		DistillRuns:      make(map[string]DistillRunResult, len(s.distillRuns)),
+		DistillManifests: make(map[string]DistillSourceManifest, len(s.distillManifests)),
 	}
 	for k, v := range s.entries {
 		state.Entries[k] = v
@@ -150,6 +160,12 @@ func (s *Store) persistStateLocked() error {
 		cloned := make([]Scope, len(v))
 		copy(cloned, v)
 		state.ManualScopes[k] = cloned
+	}
+	for k, v := range s.distillRuns {
+		state.DistillRuns[k] = v
+	}
+	for k, v := range s.distillManifests {
+		state.DistillManifests[k] = v
 	}
 
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {

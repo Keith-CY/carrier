@@ -82,6 +82,10 @@ type SearchOptions struct {
 	LexicalWeight *float64
 	// SemanticWeight controls the fusion weight for semantic overlap score.
 	SemanticWeight *float64
+	// IncludeDistilled controls whether distilled records are eligible in search.
+	IncludeDistilled *bool
+	// IncludeRaw controls whether non-distilled records are eligible in search.
+	IncludeRaw *bool
 }
 
 // SearchHit is the compact result from progressive search.
@@ -135,4 +139,70 @@ type InstanceExportOptions struct {
 	Actor     string
 	RequestID string
 	Format    string // truth-only | truth+index
+}
+
+// DistillScoreWeights controls distill score component weighting.
+type DistillScoreWeights struct {
+	Age        float64 `json:"age"`
+	Redundancy float64 `json:"redundancy"`
+	Density    float64 `json:"density"`
+	Conflict   float64 `json:"conflict"`
+	SearchFreq float64 `json:"search_freq"`
+}
+
+// InstanceDistillOptions controls manual and scheduled instance distill execution.
+type InstanceDistillOptions struct {
+	Actor       string
+	RequestID   string
+	InstanceID  string
+	Scope       Scope
+	DryRun      bool
+	Force       bool
+	Reason      string
+	BackendHint string
+
+	MinSourceAgeDays            int
+	MaxSourceRecords            int
+	MaxSummaryTokens            int
+	ClusterSimilarityThreshold  float64
+	SkipRecentHours             int
+	DistillScoreThreshold       float64
+	DistillScoreWeightsOverride *DistillScoreWeights
+}
+
+// DistillSourceManifest captures raw source lineage for one run.
+type DistillSourceManifest struct {
+	RunID        string              `json:"run_id"`
+	InstanceID   string              `json:"instance_id"`
+	Scope        Scope               `json:"scope,omitempty"`
+	CreatedAt    time.Time           `json:"created_at"`
+	SourceIDs    []string            `json:"source_ids"`
+	ClusterMap   map[string][]string `json:"cluster_map,omitempty"`
+	SourceDigest string              `json:"source_digest"`
+}
+
+// DistillRunResult is the run-level output for distillation APIs and audit.
+type DistillRunResult struct {
+	RunID         string              `json:"runId"`
+	InstanceID    string              `json:"instanceId"`
+	Scope         Scope               `json:"scope,omitempty"`
+	Status        string              `json:"status"`
+	Reason        string              `json:"reason,omitempty"`
+	DryRun        bool                `json:"dryRun"`
+	StartedAt     time.Time           `json:"startedAt"`
+	CompletedAt   time.Time           `json:"completedAt"`
+	DurationMs    int64               `json:"durationMs"`
+	Planned       int                 `json:"planned"`
+	Created       int                 `json:"created"`
+	Removed       int                 `json:"removed"`
+	Unchanged     int                 `json:"unchanged"`
+	Clustered     int                 `json:"clustered"`
+	SampleSource  []string            `json:"sampleSourceIds,omitempty"`
+	SampleOutput  []string            `json:"sampleDistilledIds,omitempty"`
+	Warnings      []string            `json:"warnings,omitempty"`
+	Errors        []string            `json:"errors,omitempty"`
+	ManifestRef   string              `json:"manifestRef,omitempty"`
+	ManifestStore string              `json:"manifestStore,omitempty"`
+	CommitRefs    []string            `json:"commitRefs,omitempty"`
+	ScoreWeights  DistillScoreWeights `json:"scoreWeights"`
 }

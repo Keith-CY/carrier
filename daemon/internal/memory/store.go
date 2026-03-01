@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -46,12 +47,24 @@ type Store struct {
 	lastObservationGC time.Time
 	sqliteReady       bool
 	sqliteFTSEnabled  bool
+	distillRuns       map[string]DistillRunResult
+	distillManifests  map[string]DistillSourceManifest
+	activeDistillRuns map[string]string
+	searchHits        map[string][]time.Time
+	distillSummarizer DistillSummarizerFunc
+	distillEmbedder   DistillEmbedderFunc
 }
 
 type prepareLockEntry struct {
 	mu   sync.Mutex
 	refs int
 }
+
+// DistillSummarizerFunc condenses a cluster into a distilled summary.
+type DistillSummarizerFunc func(ctx context.Context, cluster []MemoryRecord, maxSummaryTokens int) (string, error)
+
+// DistillEmbedderFunc computes a semantic vector for a given text.
+type DistillEmbedderFunc func(ctx context.Context, text string) ([]float64, error)
 
 // StoreOption configures a Store.
 type StoreOption func(*Store)
@@ -105,6 +118,24 @@ func WithExportGuard(maxBytes int64, maxConcurrent int) StoreOption {
 	}
 }
 
+// WithDistillSummarizer configures optional LLM-backed distill summarization.
+func WithDistillSummarizer(fn DistillSummarizerFunc) StoreOption {
+	return func(s *Store) {
+		if fn != nil {
+			s.distillSummarizer = fn
+		}
+	}
+}
+
+// WithDistillEmbedder configures optional embedding generation for semantic clustering.
+func WithDistillEmbedder(fn DistillEmbedderFunc) StoreOption {
+	return func(s *Store) {
+		if fn != nil {
+			s.distillEmbedder = fn
+		}
+	}
+}
+
 func defaultRuntimeMountTargets() (string, string) {
 	userConfigDir, err := os.UserConfigDir()
 	if err != nil || userConfigDir == "" {
@@ -138,6 +169,10 @@ func NewStore(opts ...StoreOption) *Store {
 		instanceScopes:         make(map[string][]Scope),
 		manualScopes:           make(map[string][]Scope),
 		retentionDays:          90,
+		distillRuns:            make(map[string]DistillRunResult),
+		distillManifests:       make(map[string]DistillSourceManifest),
+		activeDistillRuns:      make(map[string]string),
+		searchHits:             make(map[string][]time.Time),
 	}
 	for _, o := range opts {
 		o(s)
