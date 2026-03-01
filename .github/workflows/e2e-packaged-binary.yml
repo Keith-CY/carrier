@@ -86,7 +86,7 @@ jobs:
 
       - name: Setup Rust toolchain for App builds
         if: ${{ matrix.variant == 'app' }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7
 
       - name: Install Tauri CLI
         if: ${{ matrix.variant == 'app' }}

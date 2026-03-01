@@ -109,7 +109,7 @@ fn is_tcp_ready(raw_addr: &str, timeout: Duration) -> bool {
                 }
                 sleep(sleep_for);
             }
-            Err("timeout")
+            Err("timeout".to_string())
         })
         .is_ok()
 }
