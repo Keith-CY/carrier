@@ -14,6 +14,7 @@ Carrier is a local control plane for onboarding agent credentials, installing ma
 
 - CLI reference: [`docs/carrier-cli.md`](./docs/carrier-cli.md)
 - Task-first guide: [`docs/task-first-quickstart.md`](./docs/task-first-quickstart.md)
+- Glossary: [`GLOSSARY.md`](./GLOSSARY.md)
 - Remote sync API: [`docs/api/remote-sync-api.md`](./docs/api/remote-sync-api.md)
 - Remote codeagent API: [`docs/api/remote-codeagent-api.md`](./docs/api/remote-codeagent-api.md)
 - Architecture: [`ARCHITECTURE.md`](./ARCHITECTURE.md)
