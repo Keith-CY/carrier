@@ -66,6 +66,28 @@ func sanitizeForInstanceName(value string) string {
 	return strings.Trim(b.String(), "-")
 }
 
+// sanitizeForWorkspacePath is less restrictive than sanitizeForInstanceName.
+// It preserves case and allows characters valid in filesystem paths to prevent
+// collisions between different agent IDs (e.g., agent1, Agent1, agent.1, agent_1).
+func sanitizeForWorkspacePath(agentID string) string {
+	trimmed := strings.TrimSpace(agentID)
+	var b strings.Builder
+	for _, r := range trimmed {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+		case r == '-' || r == '_' || r == '.':
+			b.WriteRune(r)
+		default:
+			// Encode other characters as hex to preserve uniqueness
+			b.WriteString(fmt.Sprintf("-%02x-", r))
+		}
+	}
+	result := b.String()
+	// Remove leading/trailing dashes from hex encoding artifacts
+	return strings.Trim(result, "-")
+}
+
 func generateLimaInstanceName(agentID string) (string, error) {
 	sanitized := sanitizeForInstanceName(agentID)
 	if sanitized == "" {
@@ -114,7 +136,9 @@ func resolveWorkspacePathForAgent(agentID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sanitized := sanitizeForInstanceName(agentID)
+	// Use sanitizeForWorkspacePath (not sanitizeForInstanceName) to preserve uniqueness
+	// across different agent IDs with similar characters (e.g., agent1 vs Agent1 vs agent.1).
+	sanitized := sanitizeForWorkspacePath(agentID)
 	if sanitized == "" {
 		return "", fmt.Errorf("%w: agent ID %q is not valid for workspace resolution", ErrIsolationUnavailable, agentID)
 	}
