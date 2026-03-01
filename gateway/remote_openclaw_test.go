@@ -144,8 +144,12 @@ func TestShellPathValuePreservingHomeExpansion(t *testing.T) {
 		in   string
 		want string
 	}{
+		{name: "empty", in: "", want: "''"},
+		{name: "whitespace", in: "  ", want: "''"},
 		{name: "home only", in: "$HOME", want: `"$HOME"`},
+		{name: "home with slash", in: "$HOME/", want: `"$HOME"`},
 		{name: "home subpath", in: "$HOME/.picoclaw/memory", want: `"$HOME"/'.picoclaw/memory'`},
+		{name: "home subpath with single quote", in: "$HOME/foo'bar", want: `"$HOME"/'foo'\''bar'`},
 		{name: "plain path", in: "/tmp/memory path", want: `'/tmp/memory path'`},
 	}
 	for _, tc := range cases {

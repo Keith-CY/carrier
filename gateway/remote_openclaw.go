@@ -1718,14 +1718,11 @@ func shellPathValuePreservingHomeExpansion(path string) string {
 	if trimmed == "" {
 		return shellSingleQuote("")
 	}
-	if trimmed == "$HOME" {
+	if trimmed == "$HOME" || trimmed == "$HOME/" {
 		return `"$HOME"`
 	}
 	if strings.HasPrefix(trimmed, "$HOME/") {
 		suffix := strings.TrimPrefix(trimmed, "$HOME/")
-		if suffix == "" {
-			return `"$HOME"`
-		}
 		return `"$HOME"/` + shellSingleQuote(suffix)
 	}
 	return shellSingleQuote(trimmed)
