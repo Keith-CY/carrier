@@ -160,13 +160,9 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	}
 	selectedChannel := strings.TrimSpace(sess.SelectedChannel)
 	channelToken := strings.TrimSpace(sess.ChannelToken)
-	channelSetupPending := sess.ChannelSetupPending
-	if selectedChannel == "" {
-		channelSetupPending = true
-	}
-	if !channelSetupPending && channelToken == "" && selectedChannel != "" {
-		channelSetupPending = true
-	}
+	// Channel setup is pending if the session says so, if no channel is selected (WebUI-only),
+	// or if a channel is selected without a token.
+	channelSetupPending := sess.ChannelSetupPending || selectedChannel == "" || channelToken == ""
 	if !channelSetupPending && channelToken == "" {
 		return nil, fmt.Errorf("%s channel token is required", cfg.ID)
 	}
