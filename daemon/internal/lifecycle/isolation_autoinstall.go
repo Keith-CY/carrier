@@ -62,7 +62,6 @@ func attemptAutoInstallBwrap() (*BwrapAutoInstallResult, error) {
 	}
 
 	if hasSudo && passwordless {
-		sudoTried = true
 		output, sudoErr := runInstallCommand("sudo", append([]string{"-n"}, pm.InstallCmd...)...)
 		result.SudoOutput = strings.TrimSpace(joinOutput(result.SudoOutput, output))
 		if sudoErr == nil {
