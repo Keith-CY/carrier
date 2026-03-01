@@ -192,3 +192,100 @@ func TestPrepareManagedAgentAddArtifactsWritesPairedChatID(t *testing.T) {
 		t.Fatalf("record paired_chat_id = %q, want %q", recordPayload.PairedChatID, "88990011")
 	}
 }
+
+func TestPrepareManagedAgentAddArtifactsAllowsWebUIOnlyChannel(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	provider := choiceOption{
+		ID:           "openai",
+		Name:         "OpenAI",
+		AuthMode:     authModeAPIKey,
+		ProviderEnv:  "OPENAI_API_KEY",
+		ExampleModel: "openai/gpt-5.2",
+	}
+	envVars := map[string]string{
+		"OPENAI_API_KEY": "sk-unit-test",
+	}
+
+	result, err := prepareManagedAgentAddArtifacts(
+		"openclaw",
+		"openclaw-webui-only",
+		"",
+		"",
+		provider,
+		envVars,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("prepareManagedAgentAddArtifacts: %v", err)
+	}
+
+	rawCfg, err := os.ReadFile(result.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfgPayload map[string]interface{}
+	if err := json.Unmarshal(rawCfg, &cfgPayload); err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	channels, _ := cfgPayload["channels"].(map[string]interface{})
+	if len(channels) != 0 {
+		t.Fatalf("channels = %#v, want empty map for WebUI-only", channels)
+	}
+}
+
+func TestPrepareManagedAgentAddArtifactsAllowsPendingChannelToken(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	provider := choiceOption{
+		ID:           "openai",
+		Name:         "OpenAI",
+		AuthMode:     authModeAPIKey,
+		ProviderEnv:  "OPENAI_API_KEY",
+		ExampleModel: "openai/gpt-5.2",
+	}
+	envVars := map[string]string{
+		"OPENAI_API_KEY": "sk-unit-test",
+	}
+
+	result, err := prepareManagedAgentAddArtifacts(
+		"picoclaw",
+		"picoclaw-channel-pending",
+		"telegram",
+		"",
+		provider,
+		envVars,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("prepareManagedAgentAddArtifacts: %v", err)
+	}
+
+	rawCfg, err := os.ReadFile(result.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfgPayload map[string]interface{}
+	if err := json.Unmarshal(rawCfg, &cfgPayload); err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	channels, _ := cfgPayload["channels"].(map[string]interface{})
+	telegram, _ := channels["telegram"].(map[string]interface{})
+	if telegram["enabled"] != false {
+		t.Fatalf("channels.telegram.enabled = %#v, want false", telegram["enabled"])
+	}
+	if telegram["setup_pending"] != true {
+		t.Fatalf("channels.telegram.setup_pending = %#v, want true", telegram["setup_pending"])
+	}
+	if _, ok := telegram["token"]; ok {
+		t.Fatalf("channels.telegram.token should be omitted when setup is pending")
+	}
+}

@@ -133,3 +133,22 @@ func TestBuildManagedConfigPayloadWritesChannelTokenWhenReady(t *testing.T) {
 		t.Fatalf("apiKey.id=%#v, want /providers/provider~1key/apiKey", apiKey["id"])
 	}
 }
+
+func TestBuildManagedConfigPayloadOmitsChannelsInWebUIOnlyMode(t *testing.T) {
+	params := ManagedPayloadParams{
+		ChannelID:           "",
+		ChannelToken:        "",
+		ChannelSetupPending: false,
+		ProviderID:          "openai",
+		ProviderKey:         "openai",
+		IncludeAPIKeyRef:    true,
+		ModelID:             "openai/gpt-5.2",
+		WorkspacePath:       ".",
+	}
+
+	payload := BuildManagedConfigPayload(params)
+	channels := payload["channels"].(map[string]interface{})
+	if len(channels) != 0 {
+		t.Fatalf("channels=%#v, want empty map in webui-only mode", channels)
+	}
+}

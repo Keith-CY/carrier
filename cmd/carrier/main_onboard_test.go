@@ -154,3 +154,23 @@ func TestRunOnboardSupportsWebUIOnlyWithoutChannel(t *testing.T) {
 		t.Fatalf("stdout missing WebUI-only message: %q", out.String())
 	}
 }
+
+func TestNeedsInitialOnboardAllowsWebUIOnlyConfig(t *testing.T) {
+	cfg := &configv2.Config{
+		ModelList: []configv2.Model{
+			{
+				ModelName:  "openai-default",
+				Model:      "openai/gpt-5.2",
+				ProviderID: "openai",
+			},
+		},
+		Channels:     []configv2.Channel{},
+		ConfiguredAt: "2026-03-01T00:00:00Z",
+	}
+	loadFn := func() (*configv2.Config, string, error) {
+		return cfg, "/tmp/config.v2.json", nil
+	}
+	if needsInitialOnboard(loadFn) {
+		t.Fatal("expected needsInitialOnboard=false when model is configured and channels are empty")
+	}
+}

@@ -83,32 +83,24 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		return
 	}
 
-	channelID := strings.TrimSpace(req.Channel)
-	ch, ok := parseManagedChannel(agentID, channelID)
-	if !ok && channelID == "" {
-		if inferred := inferManagedChannelID(agentID); inferred != "" {
-			channelID = inferred
-			ch, ok = parseManagedChannel(agentID, channelID)
-		}
-	}
-	if !ok && channelID == "" {
-		if strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_BOT_TOKEN")) != "" {
-			channelID = "telegram"
-			ch, ok = parseManagedChannel(agentID, channelID)
-		}
-	}
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", fmt.Sprintf("unsupported channel for %s", agentID)))
+	channelID, webUIOnly, err := normalizeAddChannel(req.Channel)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
 		return
 	}
 	req.Channel = channelID
-	channelToken := strings.TrimSpace(req.ChannelToken)
-	if channelToken == "" && ch.ID == "telegram" {
-		channelToken = strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_BOT_TOKEN"))
+	var ch picoclawChannel
+	if !webUIOnly {
+		var ok bool
+		ch, ok = parseManagedChannel(agentID, channelID)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", fmt.Sprintf("unsupported channel for %s", agentID)))
+			return
+		}
 	}
-	if channelToken == "" {
-		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "channelToken is required"))
-		return
+	channelToken := strings.TrimSpace(req.ChannelToken)
+	if !webUIOnly && channelToken == "" && ch.ID == "telegram" {
+		channelToken = strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_BOT_TOKEN"))
 	}
 	providerID := strings.TrimSpace(req.ProviderID)
 	if providerID == "" {
@@ -170,12 +162,14 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		}
 	}
 
+	channelSetupPending := webUIOnly || (!webUIOnly && channelToken == "")
 	sess := &OnboardSession{
-		SelectedAgent:    agentID,
-		SelectedChannel:  ch.ID,
-		ChannelToken:     channelToken,
-		SelectedProvider: provider.ID,
-		EnvVars:          envVars,
+		SelectedAgent:       agentID,
+		SelectedChannel:     channelID,
+		ChannelToken:        channelToken,
+		ChannelSetupPending: channelSetupPending,
+		SelectedProvider:    provider.ID,
+		EnvVars:             envVars,
 	}
 	instanceID := strings.TrimSpace(req.InstanceID)
 	if instanceID == "" {
@@ -194,7 +188,7 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 	}
 
 	prefetchedChatID := strings.TrimSpace(req.ChannelChatID)
-	if strings.EqualFold(ch.ID, "telegram") && prefetchedChatID != "" {
+	if strings.EqualFold(channelID, "telegram") && prefetchedChatID != "" {
 		if actorChatID("telegram:"+prefetchedChatID) == "" {
 			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "channelChatId must be a numeric telegram chat id"))
 			return
@@ -233,7 +227,7 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 			}
 		}
 	}
-	pairRequired := strings.EqualFold(ch.ID, "telegram") && strings.TrimSpace(pairedChatID) == ""
+	pairRequired := strings.EqualFold(channelID, "telegram") && strings.TrimSpace(channelToken) != "" && strings.TrimSpace(pairedChatID) == ""
 	if !isPicoclawAgent(agentID) {
 		pairRequired = false
 	}
@@ -258,7 +252,7 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		Workspace:    workspacePath,
 		ConfigPath:   configPath,
 		RecordPath:   recordPath,
-		Channel:      ch.ID,
+		Channel:      channelID,
 		Provider:     provider.ID,
 		PairRequired: pairRequired,
 		PairCode:     pairCode,
@@ -302,6 +296,18 @@ func sanitizeEnvVars(input map[string]string) map[string]string {
 		sanitized[key] = strings.TrimSpace(v)
 	}
 	return sanitized
+}
+
+func normalizeAddChannel(raw string) (string, bool, error) {
+	channelID := strings.ToLower(strings.TrimSpace(raw))
+	switch channelID {
+	case "", "skip", "none", "webui":
+		return "", true, nil
+	case "telegram", "discord", "feishu":
+		return channelID, false, nil
+	default:
+		return "", false, fmt.Errorf("unsupported channel %q; expected telegram, discord, feishu, or skip", raw)
+	}
 }
 
 func gatewayURLFromRequest(r *http.Request) string {

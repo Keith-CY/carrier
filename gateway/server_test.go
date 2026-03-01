@@ -1152,7 +1152,7 @@ func TestAddEndpoint_OpenClawSuccess_AutoSelectsProviderAndChannel(t *testing.T)
 	})
 	defer srv.Close()
 
-	req := httptest.NewRequest("POST", "/api/v1/add", strings.NewReader(`{"agentId":"openclaw","envVars":{"OPENCLAW_MODE":"managed"}}`))
+	req := httptest.NewRequest("POST", "/api/v1/add", strings.NewReader(`{"agentId":"openclaw","channel":"telegram","envVars":{"OPENCLAW_MODE":"managed"}}`))
 	req.Header.Set("Authorization", "Bearer test-gateway-token")
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1503,6 +1503,7 @@ func TestAddEndpoint_PicoClawSuccess_WithEnvFallbackChannelAndToken(t *testing.T
 
 	body := `{
 		"agentId":"picoclaw",
+		"channel":"telegram",
 		"providerId":"openai",
 		"providerToken":"sk-test-token",
 		"reuseCredential":false,

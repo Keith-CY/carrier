@@ -2706,16 +2706,10 @@ func needsInitialOnboard(loadFn func() (*configv2.Config, string, error)) bool {
 	if err != nil || cfg == nil {
 		return true
 	}
-	enabledChannels := 0
-	for _, ch := range cfg.Channels {
-		if ch.Enabled {
-			enabledChannels++
-		}
-	}
-	if enabledChannels == 0 {
+	if len(cfg.ModelList) == 0 {
 		return true
 	}
-	if len(cfg.ModelList) == 0 {
+	if strings.TrimSpace(cfg.ConfiguredAt) == "" {
 		return true
 	}
 	return false
@@ -5565,31 +5559,45 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 	_, _ = fmt.Fprintf(out, "Instance: %s\n", instanceID)
 	_, _ = fmt.Fprintf(out, "Name: %s\n", instanceName)
 	_, _ = fmt.Fprintln(out, "Step 1/4: Configure chat channel")
-	channel, ok := resolveManagedAgentChannel(cfg.ID)
-	if !ok {
-		return fmt.Errorf("%s channel is unavailable", cfg.ID)
+	channel, hasChannel, err := promptManagedChannelSelection(reader, out, cfg.ID, quiet)
+	if err != nil {
+		return err
 	}
-	_, _ = fmt.Fprintf(out, "Using channel: %s (default)\n", channel.Name)
-	reuseChannelToken := managedAddReusesChannelToken(cfg.ID, channel.ID)
+	channelID := ""
+	channelName := ""
 	token := ""
 	tokenSource := ""
+	if hasChannel {
+		channelID = channel.ID
+		channelName = channel.Name
+		_, _ = fmt.Fprintf(out, "Using channel: %s\n", channel.Name)
+	}
+	reuseChannelToken := hasChannel && managedAddReusesChannelToken(cfg.ID, channel.ID)
 	if reuseChannelToken {
 		token, tokenSource = resolveManagedChannelToken(channel.ID)
 		if tokenSource != "" {
 			_, _ = fmt.Fprintf(out, "Reused %s token from %s.\n", channel.Name, tokenSource)
 		}
 	}
-	if tokenSource == "" {
+	if hasChannel && tokenSource == "" {
 		if !reuseChannelToken {
 			_, _ = fmt.Fprintf(out, "Token reuse is disabled for %s to avoid shared bot conflicts.\n", cfg.Name)
 		}
-		token, err = promptInput(reader, out, channel.TokenLabel, true)
+		token, err = promptInput(reader, out, channel.TokenLabel+" (press Enter to skip)", false)
 		if err != nil {
 			return err
 		}
+		if strings.TrimSpace(token) == "" {
+			_, _ = fmt.Fprintln(out, "Channel token skipped. Channel will be created but disabled.")
+			_, _ = fmt.Fprintln(out, "Configure later via WebUI or `carrier config set`.")
+		}
 	}
-	pairedChatID, pairedChatIDSource := latestManagedPairedChatID(cfg.ID, channel.ID)
-	if pairedChatIDSource != "" {
+	pairedChatID := ""
+	pairedChatIDSource := ""
+	if hasChannel {
+		pairedChatID, pairedChatIDSource = latestManagedPairedChatID(cfg.ID, channel.ID)
+	}
+	if hasChannel && pairedChatIDSource != "" {
 		_, _ = fmt.Fprintf(out, "Reused paired %s user id from %s: %s\n", channel.Name, pairedChatIDSource, pairedChatID)
 	}
 
@@ -5617,7 +5625,7 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 
 	_, _ = fmt.Fprintln(out, "")
 	_, _ = fmt.Fprintf(out, "Step 3/4: Prepare %s configuration\n", cfg.Name)
-	result, err := prepareManagedAgentAddArtifacts(cfg.ID, instanceID, channel.ID, token, provider, envVars, pairedChatID)
+	result, err := prepareManagedAgentAddArtifacts(cfg.ID, instanceID, channelID, token, provider, envVars, pairedChatID)
 	if err != nil {
 		return err
 	}
@@ -5646,13 +5654,15 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 	if err := daemonAgentActionWithPayloadWithProgress(out, cfg.ID, "start", startPayload, quiet); err != nil {
 		return err
 	}
-	if strings.EqualFold(cfg.ID, "picoclaw") {
+	if strings.EqualFold(cfg.ID, "picoclaw") && hasChannel && strings.EqualFold(channel.ID, "telegram") && strings.TrimSpace(token) != "" {
 		if pairCode, _ := daemonExtractPairCodeFromLogs(cfg.ID); strings.TrimSpace(pairCode) != "" {
 			_, _ = fmt.Fprintf(out, "PicoClaw pair code: %s\n", pairCode)
 			_, _ = fmt.Fprintf(out, "Next: send `/pair %s` in your PicoClaw Telegram bot chat.\n", pairCode)
 		} else {
 			_, _ = fmt.Fprintln(out, "Pair code not detected yet. Open PicoClaw Telegram bot chat and follow `/start` -> `/pair` prompts.")
 		}
+	} else if hasChannel && strings.TrimSpace(token) == "" {
+		_, _ = fmt.Fprintf(out, "%s channel token is not set yet; configure it to enable chat pairing.\n", channelName)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if createdAt == "" {
@@ -5670,7 +5680,7 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 		RecordPath:   result.RecordPath,
 		Channel:      result.ChannelID,
 		Provider:     result.ProviderID,
-		PairRequired: strings.TrimSpace(result.PairedChatID) == "",
+		PairRequired: hasChannel && strings.TrimSpace(token) != "" && strings.TrimSpace(result.PairedChatID) == "",
 		PairedChatID: result.PairedChatID,
 		Port:         result.Port,
 		RuntimeState: "running",
@@ -6515,12 +6525,6 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 	channelID = strings.TrimSpace(channelID)
 	channelToken = strings.TrimSpace(channelToken)
 	pairedChatID = strings.TrimSpace(pairedChatID)
-	if channelID == "" {
-		return nil, fmt.Errorf("%s channel is required", cfg.ID)
-	}
-	if channelToken == "" {
-		return nil, fmt.Errorf("%s channel token is required", cfg.ID)
-	}
 	if strings.TrimSpace(provider.ID) == "" {
 		return nil, fmt.Errorf("%s provider is required", cfg.ID)
 	}
@@ -6591,12 +6595,14 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 	if pairedChatID != "" {
 		allowFrom = []string{pairedChatID}
 	}
+	channelSetupPending := channelID != "" && channelToken == ""
 
 	var payload map[string]interface{}
 	if strings.EqualFold(cfg.ID, "openclaw") {
 		payload = buildManagedOpenClawConfigPayload(
 			channelID,
 			channelToken,
+			channelSetupPending,
 			allowFrom,
 			provider,
 			providerKey,
@@ -6624,6 +6630,7 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 		payload = buildManagedPicoClawConfigPayload(
 			channelID,
 			channelToken,
+			channelSetupPending,
 			allowFrom,
 			provider,
 			providerKey,
@@ -6675,6 +6682,7 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 
 func buildManagedPicoClawConfigPayload(
 	channelID, channelToken string,
+	channelSetupPending bool,
 	allowFrom []string,
 	provider choiceOption,
 	providerKey, providerToken, modelID, modelName, workspacePath string,
@@ -6693,6 +6701,21 @@ func buildManagedPicoClawConfigPayload(
 		providerItem["api_key"] = providerToken
 	}
 
+	channels := map[string]interface{}{}
+	if strings.TrimSpace(channelID) != "" {
+		channelConfig := map[string]interface{}{
+			"enabled":    true,
+			"allow_from": allowFrom,
+		}
+		if channelSetupPending {
+			channelConfig["enabled"] = false
+			channelConfig["setup_pending"] = true
+		} else {
+			channelConfig["token"] = channelToken
+		}
+		channels[channelID] = channelConfig
+	}
+
 	return map[string]interface{}{
 		"agents": map[string]interface{}{
 			"defaults": map[string]interface{}{
@@ -6709,31 +6732,27 @@ func buildManagedPicoClawConfigPayload(
 		"providers": map[string]interface{}{
 			providerKey: providerItem,
 		},
-		"channels": map[string]interface{}{
-			channelID: map[string]interface{}{
-				"enabled":    true,
-				"token":      channelToken,
-				"allow_from": allowFrom,
-			},
-		},
+		"channels": channels,
 	}
 }
 
 func buildManagedOpenClawConfigPayload(
 	channelID, channelToken string,
+	channelSetupPending bool,
 	allowFrom []string,
 	provider choiceOption,
 	providerKey, providerToken, modelID, workspacePath string,
 ) map[string]interface{} {
 	return openclawcfg.BuildManagedConfigPayload(openclawcfg.ManagedPayloadParams{
-		ChannelID:        channelID,
-		ChannelToken:     channelToken,
-		AllowFrom:        allowFrom,
-		ProviderID:       provider.ID,
-		ProviderKey:      providerKey,
-		IncludeAPIKeyRef: strings.TrimSpace(providerToken) != "",
-		ModelID:          modelID,
-		WorkspacePath:    workspacePath,
+		ChannelID:           channelID,
+		ChannelToken:        channelToken,
+		ChannelSetupPending: channelSetupPending,
+		AllowFrom:           allowFrom,
+		ProviderID:          provider.ID,
+		ProviderKey:         providerKey,
+		IncludeAPIKeyRef:    strings.TrimSpace(providerToken) != "",
+		ModelID:             modelID,
+		WorkspacePath:       workspacePath,
 	})
 }
 
@@ -7073,8 +7092,12 @@ func promptMinimalChannelSelection(reader *bufio.Reader, out io.Writer) (choiceO
 		}
 		return choiceOption{}, false, errors.New("telegram channel is unavailable")
 	}
-	_, _ = fmt.Fprintln(out, "Type channel id to enable chat onboarding (telegram), or press Enter for WebUI-only mode.")
-	_, _ = fmt.Fprint(out, "Channel id [telegram/WebUI-only]: ")
+	channelIDs := make([]string, 0, len(onboardChannelOptions))
+	for _, ch := range onboardChannelOptions {
+		channelIDs = append(channelIDs, ch.ID)
+	}
+	_, _ = fmt.Fprintf(out, "Type channel id to enable chat onboarding (%s), or press Enter for WebUI-only mode.\n", strings.Join(channelIDs, ", "))
+	_, _ = fmt.Fprintf(out, "Channel id [%s/WebUI-only]: ", strings.Join(channelIDs, "/"))
 	line, err := reader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return choiceOption{}, false, err
@@ -7088,6 +7111,46 @@ func promptMinimalChannelSelection(reader *bufio.Reader, out io.Writer) (choiceO
 		return choiceOption{}, false, fmt.Errorf("unknown channel %q", trimmed)
 	}
 	return channel, true, nil
+}
+
+func promptManagedChannelSelection(reader *bufio.Reader, out io.Writer, agentID string, quiet bool) (picoclawChannel, bool, error) {
+	channels, ok := managedAgentChannels(agentID)
+	if !ok || len(channels) == 0 {
+		return picoclawChannel{}, false, nil
+	}
+
+	preferred := channels[0]
+	if quiet {
+		if token, _ := resolveManagedChannelToken(preferred.ID); token != "" {
+			return preferred, true, nil
+		}
+		_, _ = fmt.Fprintln(out, "Channel: WebUI-only (no token available, quiet mode)")
+		return picoclawChannel{}, false, nil
+	}
+
+	channelIDs := make([]string, 0, len(channels))
+	for _, ch := range channels {
+		channelIDs = append(channelIDs, ch.ID)
+	}
+	_, _ = fmt.Fprintf(out, "  Available channels: %s\n", strings.Join(channelIDs, ", "))
+	_, _ = fmt.Fprintln(out, "  Type a channel ID to configure, or press Enter for WebUI-only mode.")
+	_, _ = fmt.Fprintf(out, "  Channel [%s/WebUI-only]: ", strings.Join(channelIDs, "/"))
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return picoclawChannel{}, false, err
+	}
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		_, _ = fmt.Fprintln(out, "WebUI-only mode selected.")
+		_, _ = fmt.Fprintln(out, "No chat channel will be configured. Add one later via WebUI or `carrier config set`.")
+		return picoclawChannel{}, false, nil
+	}
+	for _, ch := range channels {
+		if strings.EqualFold(ch.ID, trimmed) {
+			return ch, true, nil
+		}
+	}
+	return picoclawChannel{}, false, fmt.Errorf("unknown channel %q for %s", trimmed, agentID)
 }
 
 func promptMinimalProviderOverride(reader *bufio.Reader, out io.Writer, selected choiceOption) (choiceOption, bool, error) {
