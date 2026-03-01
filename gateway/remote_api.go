@@ -438,12 +438,14 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "message is required"))
 			return
 		}
-		timeout := 60 * time.Second
+		const defaultRunTimeout = 60 * time.Second
+		const maxRunTimeout = 5 * time.Minute
+		timeout := defaultRunTimeout
 		if req.TimeoutMs > 0 {
-			if req.TimeoutMs > 5*60*1000 {
-				req.TimeoutMs = 5 * 60 * 1000
-			}
 			timeout = time.Duration(req.TimeoutMs) * time.Millisecond
+			if timeout > maxRunTimeout {
+				timeout = maxRunTimeout
+			}
 		}
 		startedAt := time.Now()
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
