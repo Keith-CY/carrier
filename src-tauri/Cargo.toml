@@ -1,0 +1,11 @@
+[package]
+name = "carrier-tauri"
+version = "0.1.0"
+description = "Carrier desktop app shell"
+edition = "2021"
+
+[dependencies]
+tauri = { version = "2" }
+
+[build-dependencies]
+tauri-build = { version = "2" }

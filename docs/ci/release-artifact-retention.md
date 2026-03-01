@@ -8,6 +8,9 @@ Retention policy is enforced by release workflow and documented here for operato
 
 - CI artifacts uploaded by `release.yml` use `retention-days: 14`.
 - Applies to packaged ZIP and checksum artifacts uploaded by `actions/upload-artifact`.
+- Both CLI and App artifacts are uploaded and retained by this policy:
+  - `carrier-<tag>-<label>.zip` + `.sha256`
+  - `carrier-app-<tag>-<label>.zip` + `.sha256`
 
 ## Release Trigger Policy
 
