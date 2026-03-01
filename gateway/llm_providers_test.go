@@ -35,7 +35,9 @@ func TestGetLLMProvider_KnownProviders(t *testing.T) {
 		{"anthropic", AuthModeAPIKey, "ANTHROPIC_API_KEY", "builtin"},
 		{"openai", AuthModeAPIKey, "OPENAI_API_KEY", "builtin"},
 		{"openai-codex", AuthModeOAuthDeviceCode, "OPENAI_CODEX_TOKEN", "custom"},
-		{"openai-compatible", AuthModeNone, "OPENAI_COMPATIBLE_API_KEY", "generic"},
+		{"openrouter", AuthModeAPIKey, "OPENROUTER_API_KEY", "compatible"},
+		{"ollama", AuthModeNone, "", "compatible"},
+		{"openai-compatible", AuthModeAPIKey, "OPENAI_COMPATIBLE_API_KEY", "compatible"},
 	}
 
 	for _, tc := range cases {
@@ -93,7 +95,7 @@ func TestGetLLMProvider_ReturnsCopy(t *testing.T) {
 func TestLLMProvidersByCategory(t *testing.T) {
 	bycat := LLMProvidersByCategory()
 
-	for _, cat := range []string{"builtin", "custom", "generic"} {
+	for _, cat := range []string{"builtin", "custom", "compatible", "generic"} {
 		providers, ok := bycat[cat]
 		if !ok {
 			t.Errorf("category %q missing from result", cat)
@@ -119,16 +121,16 @@ func TestLLMProvidersByCategory(t *testing.T) {
 		t.Error("anthropic should be in builtin category")
 	}
 
-	generic := bycat["generic"]
+	compatible := bycat["compatible"]
 	foundOpenAICompat := false
-	for _, p := range generic {
+	for _, p := range compatible {
 		if p.ID == "openai-compatible" {
 			foundOpenAICompat = true
 			break
 		}
 	}
 	if !foundOpenAICompat {
-		t.Error("openai-compatible should be in generic category")
+		t.Error("openai-compatible should be in compatible category")
 	}
 
 	custom := bycat["custom"]
@@ -146,7 +148,7 @@ func TestLLMProvidersByCategory(t *testing.T) {
 func TestLLMProvidersByCategory_TotalCount(t *testing.T) {
 	all := ListLLMProviders()
 	bycat := LLMProvidersByCategory()
-	total := len(bycat["builtin"]) + len(bycat["custom"]) + len(bycat["generic"])
+	total := len(bycat["builtin"]) + len(bycat["custom"]) + len(bycat["compatible"]) + len(bycat["generic"])
 	if total != len(all) {
 		t.Errorf("by-category total %d != catalog total %d", total, len(all))
 	}

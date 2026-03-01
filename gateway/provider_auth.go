@@ -11,6 +11,8 @@ type ProviderAuthResult struct {
 	EnvVar string
 	// Value is the value to set for EnvVar.
 	Value string
+	// BaseURL is an optional endpoint override for compatible providers.
+	BaseURL string
 	// Instructions is a human-readable message to show the user (for non-API-key flows).
 	Instructions string
 	// Done reports whether auth is complete (true for api_key / none / instructions-only modes).
@@ -22,6 +24,25 @@ type ProviderAuthResult struct {
 func BuildProviderAuthPrompt(p *LLMProvider) string {
 	switch p.AuthMode {
 	case AuthModeAPIKey:
+		if strings.TrimSpace(p.BaseURLEnv) != "" {
+			if strings.TrimSpace(p.DefaultBase) == "" {
+				return fmt.Sprintf(
+					"Please paste your API key for **%s** (env: `%s`).\n\n"+
+						"Then provide the base URL (env: `%s`), e.g.:\n"+
+						"  https://your-endpoint.example.com/v1\n\n"+
+						"Reply with: <api-key> or KEY=<api-key> URL=<base-url>\n\n"+
+						"Tip: reply `/onboard reuse` to reuse a credential saved by Carrier.",
+					p.Name, p.EnvVar, p.BaseURLEnv,
+				)
+			}
+			return fmt.Sprintf(
+				"Please paste your API key for **%s** (env: `%s`).\n\n"+
+					"Default base URL: %s\n"+
+					"To override, reply: KEY=<api-key> URL=<custom-url>\n\n"+
+					"Tip: reply `/onboard reuse` to reuse a credential saved by Carrier.",
+				p.Name, p.EnvVar, p.DefaultBase,
+			)
+		}
 		return fmt.Sprintf(
 			"Please paste your API key for **%s** (env: `%s`).\n\n"+
 				"Tip: reply `/onboard reuse` to reuse a credential saved by Carrier.",
@@ -56,6 +77,24 @@ func BuildProviderAuthPrompt(p *LLMProvider) string {
 			p.Name,
 		)
 	case AuthModeNone:
+		if strings.TrimSpace(p.BaseURLEnv) != "" {
+			if strings.TrimSpace(p.DefaultBase) != "" {
+				return fmt.Sprintf(
+					"**%s** requires no API key.\n\n"+
+						"Default endpoint: %s\n"+
+						"To use a custom endpoint, reply: URL=<your-url>\n"+
+						"Or reply `/onboard confirm` to use the default.",
+					p.Name,
+					p.DefaultBase,
+				)
+			}
+			return fmt.Sprintf(
+				"**%s** requires no API key.\n\n"+
+					"Provide endpoint URL with: URL=<your-url>\n"+
+					"Then reply `/onboard confirm`.",
+				p.Name,
+			)
+		}
 		return fmt.Sprintf("**%s** requires no authentication. Proceeding automatically.", p.Name)
 	default:
 		return fmt.Sprintf("Provider **%s** auth mode is not recognised. Reply `/onboard confirm` to continue.", p.Name)
@@ -70,7 +109,24 @@ func HandleProviderAuthInput(p *LLMProvider, input string) (*ProviderAuthResult,
 
 	switch p.AuthMode {
 	case AuthModeAPIKey:
-		return handlePastedCredentialInput(p, input, lower, "API key")
+		keyValue, baseURL, parseErr := parseKeyAndURLInput(input)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		if strings.Contains(input, "KEY=") || strings.Contains(input, "URL=") {
+			if strings.TrimSpace(keyValue) == "" {
+				return nil, fmt.Errorf("KEY is required for %s", p.Name)
+			}
+		}
+		if keyValue != "" {
+			input = keyValue
+		}
+		result, err := handlePastedCredentialInput(p, input, lower, "API key")
+		if err != nil {
+			return nil, err
+		}
+		result.BaseURL = strings.TrimSpace(baseURL)
+		return result, nil
 
 	case AuthModeOAuthDeviceCode:
 		// Prefer token paste so Carrier can persist and later reuse credentials.
@@ -95,7 +151,22 @@ func HandleProviderAuthInput(p *LLMProvider, input string) (*ProviderAuthResult,
 		return nil, fmt.Errorf("reply `/onboard confirm` once you have completed the auth steps shown above")
 
 	case AuthModeNone:
-		// No key needed — auto-complete.
+		_, baseURL, parseErr := parseKeyAndURLInput(input)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		if strings.TrimSpace(baseURL) != "" {
+			return &ProviderAuthResult{
+				Done:         true,
+				Instructions: fmt.Sprintf("Saved endpoint override for **%s**.", p.Name),
+				BaseURL:      strings.TrimSpace(baseURL),
+			}, nil
+		}
+		if strings.TrimSpace(p.BaseURLEnv) != "" && strings.TrimSpace(p.DefaultBase) == "" {
+			if lower == "confirm" || lower == "done" || lower == "yes" || lower == "y" {
+				return nil, fmt.Errorf("reply with URL=<your-url> for %s", p.Name)
+			}
+		}
 		return &ProviderAuthResult{
 			Done: true,
 		}, nil
@@ -103,6 +174,53 @@ func HandleProviderAuthInput(p *LLMProvider, input string) (*ProviderAuthResult,
 	default:
 		return &ProviderAuthResult{Done: true}, nil
 	}
+}
+
+func parseKeyAndURLInput(input string) (keyValue string, baseURL string, err error) {
+	trimmedInput := strings.TrimSpace(input)
+	if trimmedInput == "" {
+		return "", "", nil
+	}
+
+	// Look for KEY= and URL= markers using substring search instead of Fields
+	// This handles API keys that contain spaces
+	keyIdx := strings.Index(trimmedInput, "KEY=")
+	urlIdx := strings.Index(trimmedInput, "URL=")
+
+	if keyIdx == -1 && urlIdx == -1 {
+		// No explicit format markers found
+		return "", "", nil
+	}
+
+	// Extract KEY value
+	if keyIdx != -1 {
+		keyStart := keyIdx + 4 // len("KEY=")
+		keyEnd := len(trimmedInput)
+		// KEY value ends at URL= if present and after KEY=
+		if urlIdx > keyIdx {
+			keyEnd = urlIdx
+		}
+		keyValue = strings.TrimSpace(trimmedInput[keyStart:keyEnd])
+	}
+
+	// Extract URL value
+	if urlIdx != -1 {
+		urlStart := urlIdx + 4 // len("URL=")
+		urlEnd := len(trimmedInput)
+		// URL value ends at KEY= if present and after URL=
+		if keyIdx > urlIdx {
+			urlEnd = keyIdx
+		}
+		baseURL = strings.TrimSpace(trimmedInput[urlStart:urlEnd])
+	}
+
+	if keyValue == "" && baseURL == "" {
+		return "", "", fmt.Errorf("auth input was parsed but neither KEY nor URL had a value")
+	}
+	if baseURL != "" && !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		return "", "", fmt.Errorf("URL must start with http:// or https://")
+	}
+	return keyValue, baseURL, nil
 }
 
 func handlePastedCredentialInput(p *LLMProvider, input, lowerInput, label string) (*ProviderAuthResult, error) {
@@ -144,20 +262,32 @@ func handlePastedCredentialInput(p *LLMProvider, input, lowerInput, label string
 
 // ProviderEnvVarsToSet returns the env var map entries that should be auto-set for a provider,
 // given a credential value. For api_key mode this is {EnvVar: value}; for others it may be empty.
-func ProviderEnvVarsToSet(p *LLMProvider, value string) map[string]string {
+func ProviderEnvVarsToSet(p *LLMProvider, value, baseURL string) map[string]string {
 	if p == nil {
 		return nil
 	}
+	out := map[string]string{}
 	trimmed := strings.TrimSpace(value)
-	if strings.TrimSpace(p.EnvVar) == "" || trimmed == "" {
-		return nil
+	if strings.TrimSpace(p.EnvVar) != "" && trimmed != "" {
+		out[p.EnvVar] = trimmed
 	}
-	out := map[string]string{p.EnvVar: trimmed}
+	if strings.TrimSpace(p.BaseURLEnv) != "" {
+		resolvedBase := strings.TrimSpace(baseURL)
+		if resolvedBase == "" {
+			resolvedBase = strings.TrimSpace(p.DefaultBase)
+		}
+		if resolvedBase != "" {
+			out[p.BaseURLEnv] = resolvedBase
+		}
+	}
 	// Compatibility alias:
 	// some downstream runtimes (including older PicoClaw flows) still
 	// resolve OpenAI-compatible credentials from OPENAI_API_KEY.
-	if strings.EqualFold(strings.TrimSpace(p.ID), "openai-codex") {
+	if strings.EqualFold(strings.TrimSpace(p.ID), "openai-codex") && trimmed != "" {
 		out["OPENAI_API_KEY"] = trimmed
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

@@ -4,8 +4,8 @@ import "testing"
 
 func TestDefaultEntriesContainsOpenClawAsActive(t *testing.T) {
 	entries := DefaultEntries()
-	if len(entries) != 5 {
-		t.Fatalf("expected 5 entries, got %d", len(entries))
+	if len(entries) != 7 {
+		t.Fatalf("expected 7 entries, got %d", len(entries))
 	}
 
 	openclaw, ok := FindByID("openclaw")
@@ -62,17 +62,32 @@ func TestZeroClawIsActive(t *testing.T) {
 	}
 }
 
+func TestCodexAndOpenCodeAreActive(t *testing.T) {
+	for _, id := range []string{"codex", "opencode"} {
+		entry, ok := FindByID(id)
+		if !ok {
+			t.Fatalf("expected %s in catalog", id)
+		}
+		if entry.Status != StatusActive {
+			t.Fatalf("expected %s status active, got %s", id, entry.Status)
+		}
+		if !entry.HasCapability("code") {
+			t.Fatalf("expected %s to have code capability", id)
+		}
+	}
+}
+
 func TestListReturnsAllEntries(t *testing.T) {
 	all := List()
-	if len(all) != 5 {
-		t.Fatalf("expected 5 entries from List(), got %d", len(all))
+	if len(all) != 7 {
+		t.Fatalf("expected 7 entries from List(), got %d", len(all))
 	}
 }
 
 func TestActiveEntriesOnlyReturnsActive(t *testing.T) {
 	active := ActiveEntries()
-	if len(active) != 3 {
-		t.Fatalf("expected 3 active entries from ActiveEntries(), got %d", len(active))
+	if len(active) != 5 {
+		t.Fatalf("expected 5 active entries from ActiveEntries(), got %d", len(active))
 	}
 	for _, e := range active {
 		if e.Status != StatusActive {
@@ -99,8 +114,8 @@ func TestFindByIDNotFound(t *testing.T) {
 
 func TestListByStatusActive(t *testing.T) {
 	active := ListByStatus(StatusActive)
-	if len(active) != 3 {
-		t.Fatalf("expected 3 active entries, got %d", len(active))
+	if len(active) != 5 {
+		t.Fatalf("expected 5 active entries, got %d", len(active))
 	}
 }
 

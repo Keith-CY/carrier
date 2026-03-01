@@ -100,6 +100,22 @@ func DefaultEntries() []Entry {
 			Capabilities: []string{"chat", "code"},
 			Description:  "Go-based ultra-lightweight AI assistant",
 		},
+		{
+			ID:           "codex",
+			Name:         "Codex CLI",
+			Version:      "latest",
+			Status:       StatusActive,
+			Capabilities: []string{"code"},
+			Description:  "OpenAI Codex CLI agent for code generation and editing",
+		},
+		{
+			ID:           "opencode",
+			Name:         "OpenCode",
+			Version:      "latest",
+			Status:       StatusActive,
+			Capabilities: []string{"code"},
+			Description:  "OpenCode AI coding agent",
+		},
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].ID < entries[j].ID

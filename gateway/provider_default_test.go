@@ -27,7 +27,7 @@ func TestBuildCarrierDefaultProviderInfo_ConfiguredButUnknownProvider(t *testing
 }
 
 func TestBuildCarrierDefaultProviderInfo_AuthModeNoneIsReusable(t *testing.T) {
-	writeGatewayDefaultProviderConfig(t, "openai-compatible", "openai-compatible/demo", "OPENAI_COMPATIBLE_API_KEY")
+	writeGatewayDefaultProviderConfig(t, "ollama", "ollama/llama3", "")
 
 	info := buildCarrierDefaultProviderInfo()
 	if info["configured"] != true || info["available"] != true || info["reusable"] != true {
@@ -38,7 +38,7 @@ func TestBuildCarrierDefaultProviderInfo_AuthModeNoneIsReusable(t *testing.T) {
 	}
 
 	p, ok := info["provider"].(*LLMProvider)
-	if !ok || p == nil || p.ID != "openai-compatible" {
+	if !ok || p == nil || p.ID != "ollama" {
 		t.Fatalf("unexpected provider payload: %#v", info["provider"])
 	}
 }

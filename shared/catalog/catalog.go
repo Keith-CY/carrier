@@ -22,6 +22,8 @@ type ProviderSpec struct {
 	ExampleModel string   `json:"example_model,omitempty"`
 	Category     string   `json:"category"`
 	Description  string   `json:"description,omitempty"`
+	BaseURLEnv   string   `json:"base_url_env,omitempty"`
+	DefaultBase  string   `json:"default_base,omitempty"`
 	Setup        string   `json:"-"`
 }
 
@@ -67,13 +69,37 @@ var providerCatalog = []ProviderSpec{
 		Setup:        "OAuth device-code login",
 	},
 	{
-		ID:           "openai-compatible",
-		Name:         "OpenAI-Compatible (v1)",
+		ID:           "openrouter",
+		Name:         "OpenRouter",
+		AuthMode:     AuthModeAPIKey,
+		EnvVar:       "OPENROUTER_API_KEY",
+		ExampleModel: "openrouter/anthropic/claude-sonnet-4-6",
+		Category:     "compatible",
+		Description:  "OpenRouter multi-model proxy (OpenAI-compatible)",
+		BaseURLEnv:   "OPENROUTER_BASE_URL",
+		DefaultBase:  "https://openrouter.ai/api/v1",
+		Setup:        "API key from openrouter.ai",
+	},
+	{
+		ID:           "ollama",
+		Name:         "Ollama (local)",
 		AuthMode:     AuthModeNone,
+		ExampleModel: "ollama/llama3",
+		Category:     "compatible",
+		Description:  "Local Ollama instance (OpenAI-compatible)",
+		BaseURLEnv:   "OLLAMA_BASE_URL",
+		DefaultBase:  "http://localhost:11434/v1",
+		Setup:        "Local Ollama endpoint",
+	},
+	{
+		ID:           "openai-compatible",
+		Name:         "OpenAI-Compatible (custom)",
+		AuthMode:     AuthModeAPIKey,
 		EnvVar:       "OPENAI_COMPATIBLE_API_KEY",
 		ExampleModel: "openai-compatible/your-model-id",
-		Category:     "generic",
-		Description:  "OpenAI v1-compatible endpoint",
+		Category:     "compatible",
+		Description:  "Custom OpenAI v1-compatible endpoint",
+		BaseURLEnv:   "OPENAI_COMPATIBLE_BASE_URL",
 		Setup:        "OpenAI v1-compatible endpoint",
 	},
 }
@@ -153,9 +179,10 @@ func SupportedProviderIDs() []string {
 // ProvidersByCategory returns providers grouped by category.
 func ProvidersByCategory() map[string][]ProviderSpec {
 	result := map[string][]ProviderSpec{
-		"builtin": {},
-		"custom":  {},
-		"generic": {},
+		"builtin":    {},
+		"custom":     {},
+		"compatible": {},
+		"generic":    {},
 	}
 	for _, provider := range providerCatalog {
 		result[provider.Category] = append(result[provider.Category], provider)
@@ -194,6 +221,10 @@ func MapToManagedProvider(providerID string) string {
 	switch normalized {
 	case "openai-codex", "openai-compatible":
 		return "openai"
+	case "openrouter":
+		return "openrouter"
+	case "ollama":
+		return "ollama"
 	default:
 		return normalized
 	}

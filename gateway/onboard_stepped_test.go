@@ -270,6 +270,7 @@ func TestBuildProviderListResponse(t *testing.T) {
 		"`openai-codex`",
 		"[OAuth device code]",
 		"`openai-compatible`",
+		"`ollama`",
 		"[no auth]",
 	}
 	for _, needle := range expectContains {

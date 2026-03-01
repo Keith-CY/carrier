@@ -48,6 +48,7 @@ func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts I
 		}
 		resolveOpts := isolationBackendOptions{}
 		if strings.EqualFold(strings.TrimSpace(isolationRuntimeGOOS), manifest.CommandOSDarwin) {
+			// Per-agent Lima isolation for macOS
 			if state.LimaInstanceName != "" {
 				cleanupBackend, cleanupErr := resolveIsolationBackend(isolationBackendOptions{
 					InstanceName: state.LimaInstanceName,
@@ -72,6 +73,29 @@ func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts I
 			resolveOpts.WorkspacePath = workspacePath
 		}
 		backend, err = resolveIsolationBackend(resolveOpts)
+		// Auto-install bwrap on Linux if isolation backend not available
+		if err != nil && errors.Is(err, ErrIsolationUnavailable) && strings.EqualFold(strings.TrimSpace(isolationRuntimeGOOS), manifest.CommandOSLinux) {
+			autoInstallResult, autoInstallErr := attemptAutoInstallBwrap()
+			if autoInstallErr != nil {
+				s.appendLog(agentID, fmt.Sprintf("isolation auto-install failed: %v", autoInstallErr))
+				if autoInstallResult != nil {
+					if strings.TrimSpace(autoInstallResult.SudoOutput) != "" {
+						s.appendLog(agentID, fmt.Sprintf("isolation auto-install sudo output: %s", autoInstallResult.SudoOutput))
+					}
+					if strings.TrimSpace(autoInstallResult.DirectOutput) != "" {
+						s.appendLog(agentID, fmt.Sprintf("isolation auto-install direct output: %s", autoInstallResult.DirectOutput))
+					}
+				}
+			} else if autoInstallResult != nil {
+				s.appendLog(agentID, fmt.Sprintf(
+					"isolation auto-install succeeded via %s (sudo=%t, path=%s)",
+					autoInstallResult.PackageManager,
+					autoInstallResult.UsedSudo,
+					autoInstallResult.VerifyPath,
+				))
+			}
+			backend, err = resolveIsolationBackend(resolveOpts)
+		}
 		if err != nil {
 			return failWithRollback(err, "E_ISOLATION_UNAVAILABLE")
 		}

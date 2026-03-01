@@ -282,7 +282,7 @@ func TestLoadRejectsUnsupportedProvider(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{
   "config_version": 2,
   "default_model": "x",
-  "model_list": [{"model_name":"x","model":"openrouter/auto","provider_id":"openrouter"}]
+  "model_list": [{"model_name":"x","model":"unknown/auto","provider_id":"unknown-provider"}]
 }`), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -290,6 +290,39 @@ func TestLoadRejectsUnsupportedProvider(t *testing.T) {
 	if _, _, err := Load(); err == nil {
 		t.Fatal("expected unsupported provider error")
 	}
+}
+
+func TestLoadRejectsInvalidModelBaseURL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.v2.json")
+	t.Setenv("CARRIER_CONFIG", path)
+	if err := os.WriteFile(path, []byte(`{
+  "config_version": 2,
+  "default_model": "x",
+  "model_list": [{"model_name":"x","model":"openrouter/auto","provider_id":"openrouter","base_url":"ftp://bad"}]
+}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, _, err := Load(); err == nil {
+		t.Fatal("expected invalid base_url error")
+	}
+}
+
+func TestApplyGatewayEnvironmentSetsProviderBaseURLEnv(t *testing.T) {
+	t.Setenv("OPENROUTER_BASE_URL", "")
+	cfg := &Config{
+		ModelList: []Model{
+			{
+				ModelName:  "openrouter-default",
+				Model:      "openrouter/anthropic/claude-sonnet-4-6",
+				ProviderID: "openrouter",
+				BaseURL:    "https://mirror.example.com/v1",
+			},
+		},
+	}
+	if err := ApplyGatewayEnvironment(cfg); err != nil {
+		t.Fatalf("ApplyGatewayEnvironment returned error: %v", err)
+	}
+	assertEnv(t, "OPENROUTER_BASE_URL", "https://mirror.example.com/v1")
 }
 
 func TestLoadRejectsUnsupportedChannel(t *testing.T) {
