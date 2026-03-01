@@ -162,6 +162,45 @@ func TestFusionSearchUsesSQLiteIndexCache(t *testing.T) {
 	}
 }
 
+func TestFusionSearchReranksWithHybridWeights(t *testing.T) {
+	store := NewStore()
+	phrase, err := store.UpsertRecord(UpsertRecordInput{
+		Subject:        "agent-a",
+		Scope:          Scope("agent:agent-a"),
+		ContentSummary: "alpha rollout checklist includes integration smoke tests",
+	})
+	if err != nil {
+		t.Fatalf("upsert phrase record: %v", err)
+	}
+	_, err = store.UpsertRecord(UpsertRecordInput{
+		Subject:        "agent-a",
+		Scope:          Scope("agent:agent-a"),
+		ContentSummary: "alpha rollout",
+	})
+	if err != nil {
+		t.Fatalf("upsert topic record: %v", err)
+	}
+
+	rerank := true
+	adaptive := true
+	lex := 0.2
+	sem := 0.8
+	hits := store.Search(SearchOptions{
+		Subject:        "agent-a",
+		Query:          "alpha rollout checklist",
+		AdaptiveRecall: &adaptive,
+		Rerank:         &rerank,
+		LexicalWeight:  &lex,
+		SemanticWeight: &sem,
+	})
+	if len(hits) == 0 {
+		t.Fatal("expected hybrid rerank hits")
+	}
+	if hits[0].ID != phrase.ID {
+		t.Fatalf("expected best hit %s, got %s", phrase.ID, hits[0].ID)
+	}
+}
+
 func TestFusionRecordReadArchiveAndAccessControl(t *testing.T) {
 	store := NewStore(WithRootDir(t.TempDir()))
 

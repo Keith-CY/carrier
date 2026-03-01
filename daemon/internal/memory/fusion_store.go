@@ -12,13 +12,26 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
 	maxDefaultSearchResults = 8
 	maxSearchResults        = 50
 	defaultSnippetLimit     = 240
+	defaultSearchMultiplier = 4
+	maxSearchMultiplier     = 20
+	maxCandidateLimit       = 300
+	minCandidateLimit       = 20
+	defaultLexicalWeight    = 0.65
+	defaultSemanticWeight   = 0.35
 )
+
+type searchCandidate struct {
+	hit      SearchHit
+	lexical  float64
+	semantic float64
+}
 
 var errRecordNotFound = errors.New("memory record not found")
 
@@ -39,14 +52,109 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 	if maxResults > maxSearchResults {
 		maxResults = maxSearchResults
 	}
-
-	lowerQuery := strings.ToLower(query)
 	allowed := s.allowedScopesForSubjectLocked(subject)
-	if sqliteHits, ok := s.searchSQLiteLocked(allowed, query, maxResults, opts.MinScore); ok {
-		return sqliteHits
+
+	candidateMultiplier := opts.CandidateMultiplier
+	if candidateMultiplier <= 0 {
+		candidateMultiplier = defaultSearchMultiplier
 	}
-	// TODO(fusionmem): keep this in-memory linear scan as fallback only; prefer SQLite FTS when available.
+	if candidateMultiplier > maxSearchMultiplier {
+		candidateMultiplier = maxSearchMultiplier
+	}
+	candidateLimit := maxResults * candidateMultiplier
+	if candidateLimit < minCandidateLimit {
+		candidateLimit = minCandidateLimit
+	}
+	if candidateLimit > maxCandidateLimit {
+		candidateLimit = maxCandidateLimit
+	}
+
+	lexicalWeight := optionFloat(opts.LexicalWeight, defaultLexicalWeight)
+	semanticWeight := optionFloat(opts.SemanticWeight, defaultSemanticWeight)
+	enableRerank := optionBool(opts.Rerank, true)
+	enableAdaptiveRecall := optionBool(opts.AdaptiveRecall, true)
+	if lexicalWeight < 0 {
+		lexicalWeight = 0
+	}
+	if semanticWeight < 0 {
+		semanticWeight = 0
+	}
+	weightSum := lexicalWeight + semanticWeight
+	if weightSum == 0 {
+		lexicalWeight = defaultLexicalWeight
+		semanticWeight = defaultSemanticWeight
+		weightSum = lexicalWeight + semanticWeight
+	}
+	lexicalWeight /= weightSum
+	semanticWeight /= weightSum
+
+	candidates := make(map[string]searchCandidate, maxResults)
+	usedSQLite := false
+	sqliteMinScore := opts.MinScore
+	if enableRerank {
+		sqliteMinScore = 0
+	}
+	lowerQuery := strings.ToLower(query)
+	if sqliteHits, ok := s.searchSQLiteLocked(allowed, query, candidateLimit, sqliteMinScore); ok {
+		for _, hit := range sqliteHits {
+			candidates[hit.ID] = searchCandidate{
+				hit:     hit,
+				lexical: hit.Score,
+			}
+		}
+		usedSQLite = true
+	}
+	needInMemory := !usedSQLite || (enableAdaptiveRecall && len(candidates) < maxResults)
+	if needInMemory {
+		inMemoryHits := s.searchInMemoryLocked(allowed, query, candidateLimit, 0)
+		for _, hit := range inMemoryHits {
+			existing, ok := candidates[hit.ID]
+			if !ok || hit.Score > existing.lexical {
+				candidates[hit.ID] = searchCandidate{
+					hit:     hit,
+					lexical: hit.Score,
+				}
+			}
+		}
+	}
+
+	results := make([]SearchHit, 0, len(candidates))
+	for _, candidate := range candidates {
+		contentText := candidate.hit.Snippet
+		if rec, ok := s.records[candidate.hit.ID]; ok {
+			contentText = strings.TrimSpace(rec.ContentSummary)
+			if contentText == "" {
+				contentText = strings.TrimSpace(rec.ContentRaw)
+			}
+		}
+		semanticScore := scoreText(contentText, lowerQuery)
+		candidate.semantic = semanticScore
+		if enableRerank {
+			candidate.hit.Score = blendScore(candidate.lexical, candidate.semantic, lexicalWeight, semanticWeight)
+		} else {
+			candidate.hit.Score = candidate.lexical
+		}
+		if opts.MinScore > 0 && candidate.hit.Score < opts.MinScore {
+			continue
+		}
+		results = append(results, candidate.hit)
+	}
+
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].Score == results[j].Score {
+			return results[i].ID < results[j].ID
+		}
+		return results[i].Score > results[j].Score
+	})
+	if len(results) > maxResults {
+		results = results[:maxResults]
+	}
+	return results
+}
+
+func (s *Store) searchInMemoryLocked(allowed map[Scope]struct{}, query string, maxResults int, minScore float64) []SearchHit {
 	hits := make([]SearchHit, 0, maxResults)
+	lowerQuery := strings.ToLower(query)
 	for _, rec := range s.records {
 		if rec.ArchivedAt != nil {
 			continue
@@ -65,7 +173,7 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 		if score <= 0 {
 			continue
 		}
-		if opts.MinScore > 0 && score < opts.MinScore {
+		if minScore > 0 && score < minScore {
 			continue
 		}
 		hits = append(hits, SearchHit{
@@ -651,26 +759,75 @@ func scopeAllowed(allowed map[Scope]struct{}, candidate Scope) bool {
 
 func scoreText(text, lowerQuery string) float64 {
 	lower := strings.ToLower(text)
+	lower = strings.TrimSpace(lower)
 	if lowerQuery == "" || lower == "" {
 		return 0
 	}
 	if strings.Contains(lower, lowerQuery) {
 		return 1
 	}
-	parts := strings.Fields(lowerQuery)
+	parts := tokenizeText(lowerQuery)
 	if len(parts) == 0 {
 		return 0
 	}
-	matched := 0
+	matched := 0.0
+	textParts := tokenizeText(lower)
+	if len(textParts) == 0 {
+		return 0
+	}
+	textSet := make(map[string]struct{}, len(textParts))
+	for _, part := range textParts {
+		if part == "" {
+			continue
+		}
+		textSet[part] = struct{}{}
+	}
 	for _, part := range parts {
 		if part != "" && strings.Contains(lower, part) {
+			matched++
+			continue
+		}
+		if _, ok := textSet[part]; ok {
 			matched++
 		}
 	}
 	if matched == 0 {
 		return 0
 	}
-	return float64(matched) / float64(len(parts))
+	ratio := matched / float64(len(parts))
+	if ratio > 1 {
+		ratio = 1
+	}
+	return ratio
+}
+
+func blendScore(lexicalScore, semanticScore, lexicalWeight, semanticWeight float64) float64 {
+	if lexicalWeight+semanticWeight == 0 {
+		return lexicalScore
+	}
+	sum := lexicalWeight + semanticWeight
+	return (lexicalScore*lexicalWeight + semanticScore*semanticWeight) / sum
+}
+
+func optionBool(v *bool, fallback bool) bool {
+	if v == nil {
+		return fallback
+	}
+	return *v
+}
+
+func optionFloat(v *float64, fallback float64) float64 {
+	if v == nil {
+		return fallback
+	}
+	return *v
+}
+
+func tokenizeText(input string) []string {
+	input = strings.ToLower(input)
+	return strings.FieldsFunc(input, func(r rune) bool {
+		return !(unicode.IsLetter(r) || unicode.IsDigit(r))
+	})
 }
 
 func clipSnippet(text string, limit int) string {

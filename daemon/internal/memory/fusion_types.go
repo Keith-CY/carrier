@@ -70,6 +70,18 @@ type SearchOptions struct {
 	Query      string
 	MaxResults int
 	MinScore   float64
+
+	// CandidateMultiplier controls how many candidates are pulled for reranking.
+	// Larger values increase recall at the cost of search-time work.
+	CandidateMultiplier int
+	// AdaptiveRecall enables secondary in-memory fallback when SQLite returns sparse results.
+	AdaptiveRecall *bool
+	// Rerank enables semantic + lexical score fusion for final ranking.
+	Rerank *bool
+	// LexicalWeight controls the fusion weight for SQLite/full-text score.
+	LexicalWeight *float64
+	// SemanticWeight controls the fusion weight for semantic overlap score.
+	SemanticWeight *float64
 }
 
 // SearchHit is the compact result from progressive search.
