@@ -103,6 +103,23 @@ func TestBuildManagedConfigPayloadHandlesPendingAndAllowFrom(t *testing.T) {
 	}
 }
 
+func TestBuildManagedConfigPayloadWebUIOnlyEmptyChannels(t *testing.T) {
+	params := ManagedPayloadParams{
+		ChannelID:        "",
+		ProviderID:       "openai",
+		ProviderKey:      "openai",
+		IncludeAPIKeyRef: false,
+		ModelID:          "gpt-4.1",
+		WorkspacePath:    "/tmp/work",
+	}
+
+	payload := BuildManagedConfigPayload(params)
+	channels := payload["channels"].(map[string]interface{})
+	if len(channels) != 0 {
+		t.Fatalf("expected empty channels map for webui-only mode, got %#v", channels)
+	}
+}
+
 func TestBuildManagedConfigPayloadWritesChannelTokenWhenReady(t *testing.T) {
 	params := ManagedPayloadParams{
 		ChannelID:           "discord",
