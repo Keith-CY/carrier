@@ -157,7 +157,7 @@ jobs:
               (cd dist && zip -j "${package_file}" "${package_source}")
             fi
           fi
-          node -e "const fs=require('node:fs');const crypto=require('node:crypto');const file=process.argv[1];const data=fs.readFileSync(file);const hash=crypto.createHash('sha256').update(data).digest('hex');fs.writeFileSync(`${file}.sha256`, `${hash}  ${file.split('/').slice(-1)[0]}\\n`);" dist/"${package_file}"
+          node -e 'const fs=require("node:fs");const crypto=require("node:crypto");const path=require("node:path");const file=process.argv[1];const data=fs.readFileSync(file);const hash=crypto.createHash("sha256").update(data).digest("hex");const filename=path.basename(file);fs.writeFileSync(`${file}.sha256`, `${hash}  ${filename}\n`);' "dist/${package_file}"
 
           echo "package_file=${package_file}" >> "${GITHUB_OUTPUT}"
 
