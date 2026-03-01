@@ -12,3 +12,4 @@ carrier
 !cmd/carrier/main_test.go
 agentd
 .gocache/
+.gomodcache/
