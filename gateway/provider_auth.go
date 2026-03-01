@@ -177,24 +177,43 @@ func HandleProviderAuthInput(p *LLMProvider, input string) (*ProviderAuthResult,
 }
 
 func parseKeyAndURLInput(input string) (keyValue string, baseURL string, err error) {
-	parts := strings.Fields(strings.TrimSpace(input))
-	if len(parts) == 0 {
+	trimmedInput := strings.TrimSpace(input)
+	if trimmedInput == "" {
 		return "", "", nil
 	}
-	var explicit bool
-	for _, part := range parts {
-		switch {
-		case strings.HasPrefix(part, "KEY="):
-			explicit = true
-			keyValue = strings.TrimSpace(strings.TrimPrefix(part, "KEY="))
-		case strings.HasPrefix(part, "URL="):
-			explicit = true
-			baseURL = strings.TrimSpace(strings.TrimPrefix(part, "URL="))
+
+	// Look for KEY= and URL= markers using substring search instead of Fields
+	// This handles API keys that contain spaces
+	keyIdx := strings.Index(trimmedInput, "KEY=")
+	urlIdx := strings.Index(trimmedInput, "URL=")
+
+	if keyIdx == -1 && urlIdx == -1 {
+		// No explicit format markers found
+		return "", "", nil
+	}
+
+	// Extract KEY value
+	if keyIdx != -1 {
+		keyStart := keyIdx + 4 // len("KEY=")
+		keyEnd := len(trimmedInput)
+		// KEY value ends at URL= if present and after KEY=
+		if urlIdx > keyIdx {
+			keyEnd = urlIdx
 		}
+		keyValue = strings.TrimSpace(trimmedInput[keyStart:keyEnd])
 	}
-	if !explicit {
-		return "", "", nil
+
+	// Extract URL value
+	if urlIdx != -1 {
+		urlStart := urlIdx + 4 // len("URL=")
+		urlEnd := len(trimmedInput)
+		// URL value ends at KEY= if present and after URL=
+		if keyIdx > urlIdx {
+			urlEnd = keyIdx
+		}
+		baseURL = strings.TrimSpace(trimmedInput[urlStart:urlEnd])
 	}
+
 	if keyValue == "" && baseURL == "" {
 		return "", "", fmt.Errorf("auth input was parsed but neither KEY nor URL had a value")
 	}
