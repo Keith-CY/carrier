@@ -118,3 +118,43 @@ func TestDetectRemoteHostPlatformRejectsAlpine(t *testing.T) {
 		t.Fatalf("expected alpine reason, got %q", platform.Reason)
 	}
 }
+
+func TestWrapRemoteCommandWithMemoryContractPreservesHomeExpansion(t *testing.T) {
+	t.Parallel()
+
+	contract := remoteMemoryRuntimeContract{
+		ContractID:     "cid",
+		ContractDigest: "digest",
+		MemoryPath:     "$HOME/.openclaw/agents/main/memory",
+	}
+	got := wrapRemoteCommandWithMemoryContract("echo ok", contract)
+	if !strings.Contains(got, `mem_path="$HOME"/'.openclaw/agents/main/memory'`) {
+		t.Fatalf("expected HOME expansion-safe assignment, got: %s", got)
+	}
+	if strings.Contains(got, `mem_path='$HOME/.openclaw/agents/main/memory'`) {
+		t.Fatalf("expected not to single-quote full $HOME path, got: %s", got)
+	}
+}
+
+func TestShellPathValuePreservingHomeExpansion(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "home only", in: "$HOME", want: `"$HOME"`},
+		{name: "home subpath", in: "$HOME/.picoclaw/memory", want: `"$HOME"/'.picoclaw/memory'`},
+		{name: "plain path", in: "/tmp/memory path", want: `'/tmp/memory path'`},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := shellPathValuePreservingHomeExpansion(tc.in); got != tc.want {
+				t.Fatalf("shellPathValuePreservingHomeExpansion(%q)=%q want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
