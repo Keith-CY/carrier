@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,9 +12,7 @@ import (
 )
 
 const (
-	defaultLimaInstanceEnvKey = "CARRIER_ISOLATION_LIMA_INSTANCE"
-	defaultLimaInstanceName   = "default"
-	defaultWSLDistroEnvKey    = "CARRIER_ISOLATION_WSL_DISTRO"
+	defaultWSLDistroEnvKey = "CARRIER_ISOLATION_WSL_DISTRO"
 )
 
 var (
@@ -45,6 +44,7 @@ type isolationBackend interface {
 	WrapCommand(command string) (string, error)
 	WrapStartCommand(startCommand string) (string, error)
 	PrepareCommands() ([]string, error)
+	Cleanup() error
 }
 
 type linuxIsolationBackend struct {
@@ -73,27 +73,36 @@ func (b linuxIsolationBackend) PrepareCommands() ([]string, error) {
 	}, nil
 }
 
-type limaIsolationBackend struct {
-	limactlPath string
-	instance    string
+func (b linuxIsolationBackend) Cleanup() error {
+	return nil
 }
 
-func (b limaIsolationBackend) CommandGOOS() string {
+type perAgentLimaIsolationBackend struct {
+	limactlPath   string
+	instanceName  string
+	workspacePath string
+	templatePath  string
+}
+
+func (b perAgentLimaIsolationBackend) CommandGOOS() string {
 	return manifest.CommandOSLinux
 }
 
-func (b limaIsolationBackend) WrapCommand(command string) (string, error) {
+func (b perAgentLimaIsolationBackend) WrapCommand(command string) (string, error) {
 	trimmed := strings.TrimSpace(command)
 	if trimmed == "" {
 		return "", fmt.Errorf("%w: runtime command is empty", ErrIsolationUnavailable)
 	}
+	if err := validateLimaInstanceName(b.instanceName); err != nil {
+		return "", err
+	}
 	safeLimaPath := shellSingleQuote(strings.TrimSpace(b.limactlPath))
-	safeInstance := shellSingleQuote(strings.TrimSpace(b.instance))
+	safeInstance := shellSingleQuote(strings.TrimSpace(b.instanceName))
 	safeCommand := shellSingleQuote(trimmed)
 	return fmt.Sprintf("%s shell %s -- sh -lc %s", safeLimaPath, safeInstance, safeCommand), nil
 }
 
-func (b limaIsolationBackend) WrapStartCommand(startCommand string) (string, error) {
+func (b perAgentLimaIsolationBackend) WrapStartCommand(startCommand string) (string, error) {
 	guestCommand, err := buildGuestBwrapCommand(startCommand)
 	if err != nil {
 		return "", err
@@ -101,15 +110,42 @@ func (b limaIsolationBackend) WrapStartCommand(startCommand string) (string, err
 	return b.WrapCommand(guestCommand)
 }
 
-func (b limaIsolationBackend) PrepareCommands() ([]string, error) {
+func (b *perAgentLimaIsolationBackend) ensureTemplatePath() (string, error) {
+	if b.templatePath != "" {
+		return b.templatePath, nil
+	}
+	if err := validateLimaInstanceName(b.instanceName); err != nil {
+		return "", err
+	}
+	if err := validateWorkspacePath(b.workspacePath); err != nil {
+		return "", err
+	}
+	path, err := writeLimaTemplate(b.instanceName, b.workspacePath)
+	if err != nil {
+		return "", err
+	}
+	b.templatePath = path
+	return path, nil
+}
+
+func (b *perAgentLimaIsolationBackend) PrepareCommands() ([]string, error) {
+	if err := validateLimaInstanceName(b.instanceName); err != nil {
+		return nil, err
+	}
+	tmplPath, err := b.ensureTemplatePath()
+	if err != nil {
+		return nil, err
+	}
 	safeLimaPath := shellSingleQuote(strings.TrimSpace(b.limactlPath))
-	safeInstance := shellSingleQuote(strings.TrimSpace(b.instance))
+	safeInstance := shellSingleQuote(strings.TrimSpace(b.instanceName))
+	safeTemplatePath := shellSingleQuote(strings.TrimSpace(tmplPath))
 	ensureInstance := fmt.Sprintf(
-		"%s list 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -Fxq %s || %s create -y --name %s",
+		"%s list 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -Fxq %s || %s create -y --name %s %s",
 		safeLimaPath,
 		safeInstance,
 		safeLimaPath,
 		safeInstance,
+		safeTemplatePath,
 	)
 	startInstance := fmt.Sprintf("%s start %s", safeLimaPath, safeInstance)
 	ensureGuestBwrap, err := b.WrapCommand(buildGuestEnsureBwrapCommand())
@@ -117,6 +153,48 @@ func (b limaIsolationBackend) PrepareCommands() ([]string, error) {
 		return nil, err
 	}
 	return []string{ensureInstance, startInstance, ensureGuestBwrap}, nil
+}
+
+func (b *perAgentLimaIsolationBackend) Cleanup() error {
+	if err := validateLimaInstanceName(b.instanceName); err != nil {
+		return err
+	}
+	safePath := strings.TrimSpace(b.limactlPath)
+	if safePath == "" {
+		return fmt.Errorf("%w: lima executable (limactl) path is empty", ErrIsolationUnavailable)
+	}
+
+	var errs []error
+	if out, err := exec.Command(safePath, "stop", b.instanceName).CombinedOutput(); err != nil {
+		if !isLimaNotRunningError(err, string(out)) {
+			errs = append(errs, fmt.Errorf("stop lima instance %q: %w (%s)", b.instanceName, err, strings.TrimSpace(string(out))))
+		}
+	}
+	if out, err := exec.Command(safePath, "delete", b.instanceName).CombinedOutput(); err != nil {
+		if !isLimaNotFoundError(err, string(out)) {
+			errs = append(errs, fmt.Errorf("delete lima instance %q: %w (%s)", b.instanceName, err, strings.TrimSpace(string(out))))
+		}
+	}
+	if err := removeLimaTemplate(b.instanceName); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+func isLimaNotRunningError(err error, output string) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error() + " " + output)
+	return strings.Contains(message, "not running")
+}
+
+func isLimaNotFoundError(err error, output string) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error() + " " + output)
+	return strings.Contains(message, "not found") || strings.Contains(message, "does not exist")
 }
 
 type wslIsolationBackend struct {
@@ -158,7 +236,16 @@ func (b wslIsolationBackend) PrepareCommands() ([]string, error) {
 	return []string{ensureGuestBwrap}, nil
 }
 
-func resolveIsolationBackend() (isolationBackend, error) {
+func (b wslIsolationBackend) Cleanup() error {
+	return nil
+}
+
+type isolationBackendOptions struct {
+	InstanceName  string
+	WorkspacePath string
+}
+
+func resolveIsolationBackend(options isolationBackendOptions) (isolationBackend, error) {
 	switch strings.ToLower(strings.TrimSpace(isolationRuntimeGOOS)) {
 	case manifest.CommandOSLinux:
 		bwrapPath, err := isolationBackendLookup("bwrap")
@@ -180,13 +267,17 @@ func resolveIsolationBackend() (isolationBackend, error) {
 		if strings.TrimSpace(limactlPath) == "" {
 			return nil, fmt.Errorf("%w: Lima executable (limactl) not found in PATH; install Lima (for example: brew install lima) and ensure limactl is available", ErrIsolationUnavailable)
 		}
-		instance := strings.TrimSpace(isolationEnvLookup(defaultLimaInstanceEnvKey))
+		instance := strings.TrimSpace(options.InstanceName)
 		if instance == "" {
-			instance = defaultLimaInstanceName
+			return nil, fmt.Errorf("%w: missing lima instance name for darwin isolation", ErrIsolationUnavailable)
 		}
-		return limaIsolationBackend{
-			limactlPath: strings.TrimSpace(limactlPath),
-			instance:    instance,
+		if err := validateLimaInstanceName(instance); err != nil {
+			return nil, err
+		}
+		return &perAgentLimaIsolationBackend{
+			limactlPath:   strings.TrimSpace(limactlPath),
+			instanceName:  instance,
+			workspacePath: strings.TrimSpace(options.WorkspacePath),
 		}, nil
 	case manifest.CommandOSWindows:
 		wslPath, err := isolationBackendLookup("wsl")

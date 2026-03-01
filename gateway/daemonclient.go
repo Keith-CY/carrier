@@ -32,6 +32,8 @@ type AgentState struct {
 	StartedAt            *string `json:"startedAt,omitempty"`
 	RestartCount         int     `json:"restartCount"`
 	NeedsRemoteDiagnosis bool    `json:"needsRemoteDiagnosis"`
+	Isolated             bool    `json:"isolated"`
+	LimaInstanceName     *string `json:"limaInstanceName,omitempty"`
 	LastError            *string `json:"lastError,omitempty"`
 	UpdatedAt            string  `json:"updatedAt"`
 }

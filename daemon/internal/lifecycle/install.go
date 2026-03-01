@@ -16,7 +16,7 @@ func (s *Service) Install(ctx context.Context, agentID string) error {
 }
 
 func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts InstallOptions) error {
-	m, _, err := s.getManifestAndState(agentID)
+	m, state, err := s.getManifestAndState(agentID)
 	if err != nil {
 		return err
 	}
@@ -41,11 +41,35 @@ func (s *Service) InstallWithOptions(ctx context.Context, agentID string, opts I
 
 	commandGOOS := isolationRuntimeGOOS
 	var backend isolationBackend
+	var limaInstanceName string
 	if opts.Isolation {
 		if err := s.runDeterministicIsolationHostPipeline(opCtx, agentID); err != nil {
 			return failWithRollback(err, "E_ISOLATION_UNAVAILABLE")
 		}
-		backend, err = resolveIsolationBackend()
+		resolveOpts := isolationBackendOptions{}
+		if strings.EqualFold(strings.TrimSpace(isolationRuntimeGOOS), manifest.CommandOSDarwin) {
+			if state.LimaInstanceName != "" {
+				cleanupBackend, cleanupErr := resolveIsolationBackend(isolationBackendOptions{
+					InstanceName: state.LimaInstanceName,
+				})
+				if cleanupErr == nil {
+					if cleanupRunErr := cleanupBackend.Cleanup(); cleanupRunErr != nil {
+						s.appendLog(agentID, fmt.Sprintf("previous lima cleanup failed: %v", cleanupRunErr))
+					}
+				}
+			}
+			limaInstanceName, err = generateLimaInstanceName(agentID)
+			if err != nil {
+				return failWithRollback(err, "E_ISOLATION_UNAVAILABLE")
+			}
+			workspacePath, workspaceErr := resolveWorkspacePathForAgent(agentID)
+			if workspaceErr != nil {
+				return failWithRollback(workspaceErr, "E_ISOLATION_UNAVAILABLE")
+			}
+			resolveOpts.InstanceName = limaInstanceName
+			resolveOpts.WorkspacePath = workspacePath
+		}
+		backend, err = resolveIsolationBackend(resolveOpts)
 		if err != nil {
 			return failWithRollback(err, "E_ISOLATION_UNAVAILABLE")
 		}
@@ -119,7 +143,7 @@ installSuccess:
 	if len(contract.Env) > 0 {
 		s.autoUnmountMemories(agentID)
 	}
-	s.markInstallSuccess(agentID)
+	s.markInstallSuccess(agentID, opts.Isolation, limaInstanceName)
 	_ = s.webhookManager.FireEvent(WebhookEvent{Type: WebhookEventAgentInstalled, AgentID: agentID})
 	if rollbackSnapshotReady {
 		if cleanupErr := cleanupRollbackSnapshot(agentID); cleanupErr != nil {
@@ -303,7 +327,7 @@ func (s *Service) finalizeInstallFailure(agentID string, runErr error, code stri
 	return fmt.Errorf("%w (diagnose artifact: %s)", runErr, diagnosePath)
 }
 
-func (s *Service) markInstallSuccess(agentID string) {
+func (s *Service) markInstallSuccess(agentID string, isolated bool, limaInstanceName string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -317,6 +341,8 @@ func (s *Service) markInstallSuccess(agentID string) {
 	state.LastError = ""
 	state.LastTriageSummary = ""
 	state.NeedsRemoteDiagnosis = false
+	state.Isolated = isolated
+	state.LimaInstanceName = strings.TrimSpace(limaInstanceName)
 	state.UpdatedAt = s.now()
 	s.states[agentID] = state
 }

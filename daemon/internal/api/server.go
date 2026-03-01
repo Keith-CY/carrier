@@ -70,6 +70,8 @@ type daemonAgent struct {
 	StartedAt            string             `json:"startedAt,omitempty"`
 	RestartCount         int                `json:"restartCount"`
 	NeedsRemoteDiagnosis bool               `json:"needsRemoteDiagnosis"`
+	Isolated             bool               `json:"isolated"`
+	LimaInstanceName     string             `json:"limaInstanceName,omitempty"`
 	LastError            string             `json:"lastError,omitempty"`
 	LastTriageSummary    string             `json:"lastTriageSummary,omitempty"`
 	LastDiagnoseFile     string             `json:"lastDiagnoseFile,omitempty"`
@@ -120,6 +122,8 @@ func (s *Server) agentFromState(state lifecycle.AgentState) daemonAgent {
 		StartedAt:            startedAt,
 		RestartCount:         state.RestartCount,
 		NeedsRemoteDiagnosis: state.NeedsRemoteDiagnosis,
+		Isolated:             state.Isolated,
+		LimaInstanceName:     state.LimaInstanceName,
 		LastError:            redact.RedactText(state.LastError),
 		LastTriageSummary:    redact.RedactText(state.LastTriageSummary),
 		LastDiagnoseFile:     state.LastDiagnoseFile,

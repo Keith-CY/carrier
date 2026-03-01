@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // Uninstall stops a running agent (if necessary) and removes its installed artifacts,
@@ -21,6 +22,22 @@ func (s *Service) Uninstall(ctx context.Context, agentID string) error {
 		}
 	}
 
+	var isolationCleanupErr error
+	instanceName := strings.TrimSpace(state.LimaInstanceName)
+	if instanceName != "" && strings.EqualFold(strings.TrimSpace(isolationRuntimeGOOS), "darwin") {
+		backend, err := resolveIsolationBackend(isolationBackendOptions{InstanceName: instanceName})
+		if err != nil {
+			isolationCleanupErr = err
+		} else if err := backend.Cleanup(); err != nil {
+			isolationCleanupErr = err
+		}
+		if isolationCleanupErr != nil {
+			s.appendLog(agentID, fmt.Sprintf("lima cleanup failed: %v", isolationCleanupErr))
+		} else {
+			s.appendLog(agentID, fmt.Sprintf("lima cleanup succeeded for %s", instanceName))
+		}
+	}
+
 	s.mu.Lock()
 	state = s.states[agentID]
 	state.Install = InstallStateNotInstalled
@@ -32,6 +49,8 @@ func (s *Service) Uninstall(ctx context.Context, agentID string) error {
 	state.Ports = []int{}
 	state.RestartCount = 0
 	state.StartedAt = nil
+	state.Isolated = false
+	state.LimaInstanceName = ""
 	state.UpdatedAt = s.now()
 	s.states[agentID] = state
 
@@ -45,5 +64,8 @@ func (s *Service) Uninstall(ctx context.Context, agentID string) error {
 	s.recordAudit("", "system", "uninstall", agentID, AuditResultSuccess, "", "uninstall completed")
 	s.saveState()
 
+	if isolationCleanupErr != nil {
+		return fmt.Errorf("isolation cleanup failed: %w", isolationCleanupErr)
+	}
 	return nil
 }
