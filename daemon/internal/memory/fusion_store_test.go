@@ -185,14 +185,14 @@ func TestFusionSearchReranksWithHybridWeights(t *testing.T) {
 	rerank := true
 	adaptive := true
 	lex := 0.2
-	overlap := 0.8
+	sem := 0.8
 	hits := store.Search(SearchOptions{
 		Subject:        "agent-a",
 		Query:          "alpha rollout checklist",
 		AdaptiveRecall: &adaptive,
 		Rerank:         &rerank,
 		LexicalWeight:  &lex,
-		OverlapWeight:  &overlap,
+		SemanticWeight: &sem,
 	})
 	if len(hits) == 0 {
 		t.Fatal("expected hybrid rerank hits")
@@ -239,13 +239,13 @@ func TestFusionSearchZeroWeightsFallbackToDefaults(t *testing.T) {
 
 	rerank := true
 	zeroLex := 0.0
-	zeroOverlap := 0.0
+	zeroSem := 0.0
 	hits := store.Search(SearchOptions{
-		Subject:       "agent-a",
-		Query:         "deployment",
-		Rerank:        &rerank,
-		LexicalWeight: &zeroLex,
-		OverlapWeight: &zeroOverlap,
+		Subject:        "agent-a",
+		Query:          "deployment",
+		Rerank:         &rerank,
+		LexicalWeight:  &zeroLex,
+		SemanticWeight: &zeroSem,
 	})
 	// Should fallback to defaults and still return results
 	if len(hits) == 0 {
@@ -282,7 +282,6 @@ func TestFusionSearchLargeCandidateMultiplier(t *testing.T) {
 		t.Fatalf("expected max 5 results, got %d", len(hits))
 	}
 }
-
 func TestFusionRecordReadArchiveAndAccessControl(t *testing.T) {
 	store := NewStore(WithRootDir(t.TempDir()))
 

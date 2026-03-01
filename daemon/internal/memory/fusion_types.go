@@ -76,13 +76,12 @@ type SearchOptions struct {
 	CandidateMultiplier int
 	// AdaptiveRecall enables secondary in-memory fallback when SQLite returns sparse results.
 	AdaptiveRecall *bool
-	// Rerank enables token-overlap + lexical score fusion for final ranking.
+	// Rerank enables semantic + lexical score fusion for final ranking.
 	Rerank *bool
 	// LexicalWeight controls the fusion weight for SQLite/full-text score.
 	LexicalWeight *float64
-	// OverlapWeight controls the fusion weight for token-overlap score.
-	// (Named "overlap" rather than "semantic" since this is token matching, not embedding-based.)
-	OverlapWeight *float64
+	// SemanticWeight controls the fusion weight for semantic overlap score.
+	SemanticWeight *float64
 }
 
 // SearchHit is the compact result from progressive search.

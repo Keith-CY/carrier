@@ -404,7 +404,7 @@ func buildHTTPMuxWithBaseAgent(
 			AdaptiveRecall      *bool    `json:"adaptiveRecall"`
 			Rerank              *bool    `json:"rerank"`
 			LexicalWeight       *float64 `json:"lexicalWeight"`
-			OverlapWeight       *float64 `json:"overlapWeight"`
+			SemanticWeight      *float64 `json:"semanticWeight"`
 		}
 		if !decodeBody(w, r, &body) {
 			return
@@ -418,7 +418,7 @@ func buildHTTPMuxWithBaseAgent(
 			AdaptiveRecall:      body.AdaptiveRecall,
 			Rerank:              body.Rerank,
 			LexicalWeight:       body.LexicalWeight,
-			OverlapWeight:       body.OverlapWeight,
+			SemanticWeight:      body.SemanticWeight,
 		})
 		writeJSON(w, http.StatusOK, map[string]interface{}{"results": results})
 	})

@@ -24,7 +24,7 @@ const (
 	maxCandidateLimit       = 300
 	minCandidateLimit       = 20
 	defaultLexicalWeight    = 0.65
-	defaultOverlapWeight    = 0.35
+	defaultSemanticWeight   = 0.35
 )
 
 type searchCandidate struct {
@@ -70,23 +70,23 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 	}
 
 	lexicalWeight := optionFloat(opts.LexicalWeight, defaultLexicalWeight)
-	overlapWeight := optionFloat(opts.OverlapWeight, defaultOverlapWeight)
+	semanticWeight := optionFloat(opts.SemanticWeight, defaultSemanticWeight)
 	enableRerank := optionBool(opts.Rerank, true)
 	enableAdaptiveRecall := optionBool(opts.AdaptiveRecall, true)
 	if lexicalWeight < 0 {
 		lexicalWeight = 0
 	}
-	if overlapWeight < 0 {
-		overlapWeight = 0
+	if semanticWeight < 0 {
+		semanticWeight = 0
 	}
-	weightSum := lexicalWeight + overlapWeight
+	weightSum := lexicalWeight + semanticWeight
 	if weightSum == 0 {
 		lexicalWeight = defaultLexicalWeight
-		overlapWeight = defaultOverlapWeight
-		weightSum = lexicalWeight + overlapWeight
+		semanticWeight = defaultSemanticWeight
+		weightSum = lexicalWeight + semanticWeight
 	}
 	lexicalWeight /= weightSum
-	overlapWeight /= weightSum
+	semanticWeight /= weightSum
 
 	candidates := make(map[string]searchCandidate, maxResults)
 	usedSQLite := false
@@ -127,10 +127,10 @@ func (s *Store) Search(opts SearchOptions) []SearchHit {
 				contentText = strings.TrimSpace(rec.ContentRaw)
 			}
 		}
-		overlapScore := scoreText(contentText, lowerQuery)
-		candidate.semantic = overlapScore
+		semanticScore := scoreText(contentText, lowerQuery)
+		candidate.semantic = semanticScore
 		if enableRerank {
-			candidate.hit.Score = blendScore(candidate.lexical, candidate.semantic, lexicalWeight, overlapWeight)
+			candidate.hit.Score = blendScore(candidate.lexical, candidate.semantic, lexicalWeight, semanticWeight)
 		} else {
 			candidate.hit.Score = candidate.lexical
 		}
@@ -763,6 +763,9 @@ func scoreText(text, lowerQuery string) float64 {
 	if lowerQuery == "" || lower == "" {
 		return 0
 	}
+	if strings.Contains(lower, lowerQuery) {
+		return 1
+	}
 	parts := tokenizeText(lowerQuery)
 	if len(parts) == 0 {
 		return 0
@@ -788,15 +791,18 @@ func scoreText(text, lowerQuery string) float64 {
 		return 0
 	}
 	ratio := matched / float64(len(parts))
+	if ratio > 1 {
+		ratio = 1
+	}
 	return ratio
 }
 
-func blendScore(lexicalScore, overlapScore, lexicalWeight, overlapWeight float64) float64 {
-	if lexicalWeight+overlapWeight == 0 {
+func blendScore(lexicalScore, semanticScore, lexicalWeight, semanticWeight float64) float64 {
+	if lexicalWeight+semanticWeight == 0 {
 		return lexicalScore
 	}
-	sum := lexicalWeight + overlapWeight
-	return (lexicalScore*lexicalWeight + overlapScore*overlapWeight) / sum
+	sum := lexicalWeight + semanticWeight
+	return (lexicalScore*lexicalWeight + semanticScore*semanticWeight) / sum
 }
 
 func optionBool(v *bool, fallback bool) bool {
