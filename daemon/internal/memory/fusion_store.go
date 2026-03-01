@@ -763,9 +763,6 @@ func scoreText(text, lowerQuery string) float64 {
 	if lowerQuery == "" || lower == "" {
 		return 0
 	}
-	if strings.Contains(lower, lowerQuery) {
-		return 1
-	}
 	parts := tokenizeText(lowerQuery)
 	if len(parts) == 0 {
 		return 0
@@ -783,10 +780,6 @@ func scoreText(text, lowerQuery string) float64 {
 		textSet[part] = struct{}{}
 	}
 	for _, part := range parts {
-		if part != "" && strings.Contains(lower, part) {
-			matched++
-			continue
-		}
 		if _, ok := textSet[part]; ok {
 			matched++
 		}
@@ -795,9 +788,6 @@ func scoreText(text, lowerQuery string) float64 {
 		return 0
 	}
 	ratio := matched / float64(len(parts))
-	if ratio > 1 {
-		ratio = 1
-	}
 	return ratio
 }
 
