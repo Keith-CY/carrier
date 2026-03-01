@@ -501,9 +501,6 @@ func buildManagedOpenClawJSONConfigPayload(
 		ModelID:             modelID,
 		WorkspacePath:       workspacePath,
 	})
-	if strings.TrimSpace(channelID) == "" {
-		payload["channels"] = map[string]interface{}{}
-	}
 	if strings.TrimSpace(providerBaseURL) != "" {
 		models, _ := payload["models"].(map[string]interface{})
 		modelProviders, _ := models["providers"].(map[string]interface{})

@@ -64,9 +64,14 @@ func BuildManagedConfigPayload(params ManagedPayloadParams) map[string]interface
 				"file": CarrierFileSecretProviderAlias,
 			},
 		},
-		"channels": map[string]interface{}{
-			strings.TrimSpace(params.ChannelID): channelConfig,
-		},
+		"channels": func() map[string]interface{} {
+			if strings.TrimSpace(params.ChannelID) == "" {
+				return map[string]interface{}{}
+			}
+			return map[string]interface{}{
+				strings.TrimSpace(params.ChannelID): channelConfig,
+			}
+		}(),
 	}
 }
 
