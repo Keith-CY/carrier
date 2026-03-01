@@ -4,8 +4,11 @@ import "strings"
 
 const (
 	CarrierFileSecretProviderAlias = "carrier_file"
-	CarrierFileSecretsPath         = "./carrier-secrets.json"
-	CarrierSecretFilePatchKey      = "_carrier_openclaw_secret_file"
+	// CarrierFileSecretsPath is relative to OpenClaw's working directory (its workspace).
+	// This is intentional - carrier-secrets.json is rsync'd to the instance's workspace directory,
+	// and OpenClaw is started from there. Do not change to absolute path.
+	CarrierFileSecretsPath     = "./carrier-secrets.json"
+	CarrierSecretFilePatchKey  = "_carrier_openclaw_secret_file"
 )
 
 type ManagedPayloadParams struct {

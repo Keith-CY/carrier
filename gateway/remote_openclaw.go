@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -1496,10 +1497,14 @@ func remoteWriteOpenClawCarrierSecrets(ctx context.Context, host RemoteHost, pay
 
 func defaultRemoteRsyncRunner(ctx context.Context, args []string) (remoteExecResult, error) {
 	cmd := exec.CommandContext(ctx, "rsync", args...)
-	out, err := cmd.CombinedOutput()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
 	result := remoteExecResult{
 		Command: "rsync " + strings.Join(args, " "),
-		Stdout:  string(out),
+		Stdout:  stdout.String(),
+		Stderr:  stderr.String(),
 	}
 	if err == nil {
 		result.ExitCode = 0
@@ -1507,7 +1512,6 @@ func defaultRemoteRsyncRunner(ctx context.Context, args []string) (remoteExecRes
 	}
 	if ee, ok := err.(*exec.ExitError); ok {
 		result.ExitCode = ee.ExitCode()
-		result.Stderr = string(ee.Stderr)
 		return result, nil
 	}
 	return result, fmt.Errorf("execute rsync: %w", err)
