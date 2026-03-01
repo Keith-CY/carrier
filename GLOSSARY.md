@@ -287,10 +287,3 @@
 
 - This glossary is intentionally business-oriented and scoped to currently implemented Carrier behavior.
 - Term names follow project source conventions where practical (`baseagent`, `install_state`, `runtime_state`, `syncMode`, gateway errors, and audit actions).
-
-### Validation checks
-
-- **File existence**: `/Users/ChenYu/.codex/worktrees/b1f5/carrier/GLOSSARY.md`
-- **Terminology alignment spot checks**: `baseagent.NewRuntime`, `installState`, `runtimeState`, `/pair`, `E_SESSION_REQUIRED`, `SyncModeAlwaysPush`, `ErrInstall`
-- **Enum checks**: `not_installed`, `installed`, `broken`, `crash_loop`, `always_push`, `pull_validate_push`, `manual`
-- **Markdown sanity**: top-level headings and list structure are valid and readable.
