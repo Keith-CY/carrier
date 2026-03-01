@@ -74,8 +74,13 @@ func TestYAMLInjectionViaMaliciousWorkspacePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateLimaTemplate: %v", err)
 	}
-	if strings.Count(string(data), "injection: true") != 1 {
-		t.Fatalf("unexpected yaml injection behavior:\n%s", string(data))
+	// More robust YAML injection check: unmarshal and verify no unexpected fields were injected
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+	if _, ok := parsed["injection"]; ok {
+		t.Fatalf("YAML injection was successful; unexpected 'injection' key found in parsed output")
 	}
 }
 
