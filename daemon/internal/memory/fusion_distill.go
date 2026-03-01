@@ -368,19 +368,12 @@ func scoreAndFilterDistillCandidates(candidates []distillCandidate, opts Instanc
 		return
 	}
 	maxAge := 0.0
-	minAge := math.MaxFloat64
 	searchCounts := make([]float64, 0, len(candidates))
 	for _, c := range candidates {
 		if c.ageDays > maxAge {
 			maxAge = c.ageDays
 		}
-		if c.ageDays < minAge {
-			minAge = c.ageDays
-		}
 		searchCounts = append(searchCounts, float64(c.searchCount7d))
-	}
-	if minAge == math.MaxFloat64 {
-		minAge = 0
 	}
 	p95Search := percentile(searchCounts, 95)
 	scopeGroups := make(map[Scope][]int)
