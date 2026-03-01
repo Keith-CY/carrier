@@ -134,7 +134,8 @@ func TestE2ECarrierBinaryAddOpenClawReusesPairedUserAndProviderCredential(t *tes
 
 	const pairedChatID = "123456789"
 	const openaiToken = "sk-openai-reused"
-	const openclawTelegramToken = "tg-openclaw-dedicated"
+	const openclawChannelInput = "telegram"
+	const openclawDedicatedToken = "tg-openclaw-dedicated"
 
 	if _, err := saveProviderCredential("openai", openaiToken); err != nil {
 		t.Fatalf("saveProviderCredential(openai): %v", err)
@@ -185,7 +186,7 @@ func TestE2ECarrierBinaryAddOpenClawReusesPairedUserAndProviderCredential(t *tes
 	setProbeEnvFromURL(t, "CARRIER_SERVER_HOST", "CARRIER_SERVER_PORT", daemon.URL)
 
 	bin := buildCarrierBinary(t)
-	stdout, stderr, err := runCarrierBinary(t, bin, openclawTelegramToken+"\n", "add", "openclaw")
+	stdout, stderr, err := runCarrierBinary(t, bin, openclawChannelInput+"\n"+openclawDedicatedToken+"\n", "add", "openclaw")
 	if err != nil {
 		t.Fatalf("carrier add openclaw failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -237,8 +238,8 @@ func TestE2ECarrierBinaryAddOpenClawReusesPairedUserAndProviderCredential(t *tes
 	}
 	channels, _ := cfgPayload["channels"].(map[string]interface{})
 	telegram, _ := channels["telegram"].(map[string]interface{})
-	if got := strings.TrimSpace(anyToString(telegram["botToken"])); got != openclawTelegramToken {
-		t.Fatalf("channels.telegram.botToken = %q, want %q", got, openclawTelegramToken)
+	if got := strings.TrimSpace(anyToString(telegram["botToken"])); got != openclawDedicatedToken {
+		t.Fatalf("channels.telegram.botToken = %q, want %q", got, openclawDedicatedToken)
 	}
 	if strings.TrimSpace(anyToString(telegram["botToken"])) == carrierTelegramToken {
 		t.Fatalf("channels.telegram.botToken should not reuse carrier token %q", carrierTelegramToken)
@@ -346,7 +347,7 @@ func TestE2ECarrierBinaryAddOpenClawIsolationSendsInstallAndStartIsolationPayloa
 	setProbeEnvFromURL(t, "CARRIER_SERVER_HOST", "CARRIER_SERVER_PORT", daemon.URL)
 
 	bin := buildCarrierBinary(t)
-	stdout, stderr, err := runCarrierBinary(t, bin, "tg-openclaw-dedicated\n", "add", "openclaw", "--isolation")
+	stdout, stderr, err := runCarrierBinary(t, bin, "telegram\n", "add", "openclaw", "--isolation")
 	if err != nil {
 		t.Fatalf("carrier add openclaw --isolation failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -414,7 +415,7 @@ func TestE2ECarrierBinaryAddManagedAgentsIsolationSendsInstallAndStartIsolationP
 			setProbeEnvFromURL(t, "CARRIER_SERVER_HOST", "CARRIER_SERVER_PORT", daemon.URL)
 
 			bin := buildCarrierBinary(t)
-			stdout, stderr, err := runCarrierBinary(t, bin, "tg-"+agentID+"-dedicated\n", "add", agentID, "--isolation")
+			stdout, stderr, err := runCarrierBinary(t, bin, "telegram\n", "add", agentID, "--isolation")
 			if err != nil {
 				t.Fatalf("carrier add %s --isolation failed: %v\nstdout:\n%s\nstderr:\n%s", agentID, err, stdout, stderr)
 			}

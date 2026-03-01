@@ -104,7 +104,8 @@ func TestOnboardHandleAuth_NoSessionAndUnknownProvider(t *testing.T) {
 func TestOnboardConfirm_ManagedPrepareFailure(t *testing.T) {
 	store := NewOnboardStore()
 	key := "telegram:managed-prepare-fail"
-	seedManagedEnvConfiguredSession(store, key, "openclaw", "", "", "openai", map[string]string{
+	// Use a missing provider to trigger prepare failure (channel-skip is now allowed).
+	seedManagedEnvConfiguredSession(store, key, "openclaw", "", "", "nonexistent-provider", map[string]string{
 		"OPENAI_API_KEY": "sk-test",
 	})
 

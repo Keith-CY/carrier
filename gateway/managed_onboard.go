@@ -158,11 +158,15 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	if !strings.EqualFold(strings.TrimSpace(sess.SelectedAgent), cfg.ID) {
 		return nil, fmt.Errorf("managed onboarding is only supported for %s", cfg.ID)
 	}
-	if strings.TrimSpace(sess.SelectedChannel) == "" {
-		return nil, fmt.Errorf("%s channel is required", cfg.ID)
-	}
+	selectedChannel := strings.TrimSpace(sess.SelectedChannel)
 	channelToken := strings.TrimSpace(sess.ChannelToken)
 	channelSetupPending := sess.ChannelSetupPending
+	if selectedChannel == "" {
+		channelSetupPending = true
+	}
+	if !channelSetupPending && channelToken == "" && selectedChannel != "" {
+		channelSetupPending = true
+	}
 	if !channelSetupPending && channelToken == "" {
 		return nil, fmt.Errorf("%s channel token is required", cfg.ID)
 	}
@@ -263,7 +267,7 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	configRaw, err := renderManagedConfigBytes(
 		renderer,
 		cfg,
-		sess.SelectedChannel,
+		selectedChannel,
 		channelToken,
 		channelSetupPending,
 		allowFrom,
@@ -303,7 +307,7 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 		"agent_id":              cfg.ID,
 		"workspace_path":        workspacePath,
 		"config_path":           configPath,
-		"channel":               sess.SelectedChannel,
+		"channel":               selectedChannel,
 		"channel_setup_pending": channelSetupPending,
 		"provider":              provider.ID,
 		"renderer_id":           renderer.RendererID,
@@ -401,18 +405,19 @@ func buildManagedPicoClawJSONConfigPayload(
 		providerItem["api_key"] = providerToken
 	}
 
-	channelConfig := map[string]interface{}{
-		"enabled":    true,
-		"allow_from": allowFrom,
-	}
-	if channelSetupPending {
-		channelConfig["enabled"] = false
-		channelConfig["setup_pending"] = true
-	} else {
-		channelConfig["token"] = channelToken
-	}
-	channels := map[string]interface{}{
-		channelID: channelConfig,
+	channels := map[string]interface{}{}
+	if strings.TrimSpace(channelID) != "" {
+		channelConfig := map[string]interface{}{
+			"enabled":    true,
+			"allow_from": allowFrom,
+		}
+		if channelSetupPending {
+			channelConfig["enabled"] = false
+			channelConfig["setup_pending"] = true
+		} else {
+			channelConfig["token"] = channelToken
+		}
+		channels[channelID] = channelConfig
 	}
 
 	return map[string]interface{}{
@@ -461,9 +466,6 @@ func renderZeroClawConfigTOML(
 	allowFrom []string,
 	providerKey, providerToken, modelID string,
 ) []byte {
-	if strings.TrimSpace(channelID) == "" {
-		channelID = "telegram"
-	}
 	if strings.TrimSpace(providerKey) == "" {
 		providerKey = "openai"
 	}
@@ -500,12 +502,22 @@ func renderZeroClawConfigTOML(
 		"",
 		"[agent]",
 		"max_tool_iterations = 20",
+	}
+	if strings.TrimSpace(channelID) == "" {
+		lines = append(lines,
+			"",
+			"# No chat channel configured (WebUI-only mode)",
+		)
+		return []byte(strings.Join(lines, "\n") + "\n")
+	}
+
+	lines = append(lines,
 		"",
 		fmt.Sprintf("[channels_config.%s]", channelID),
 		fmt.Sprintf("bot_token = %s", strconv.Quote(channelToken)),
 		fmt.Sprintf("allowed_users = %s", allowedUsers),
 		"mention_only = false",
-	}
+	)
 	if channelSetupPending {
 		lines = append(lines,
 			"",

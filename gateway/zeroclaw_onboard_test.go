@@ -104,3 +104,35 @@ func TestPrepareZeroclawManagedOnboard_RejectsUnsupportedVersion(t *testing.T) {
 		t.Fatalf("expected unsupported version error, got %v", err)
 	}
 }
+
+func TestPrepareZeroclawManagedOnboard_AllowsWebUIOnlyMode(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("CARRIER_MANAGED_ZEROCLAW_VERSION", "0.1.7")
+
+	sess := &OnboardSession{
+		SelectedAgent:    "zeroclaw",
+		SelectedChannel:  "",
+		SelectedProvider: "openai",
+		EnvVars: map[string]string{
+			"OPENAI_API_KEY": "sk-zeroclaw-webui",
+		},
+	}
+
+	result, err := prepareManagedOnboard("zeroclaw", sess, "webui:add")
+	if err != nil {
+		t.Fatalf("prepareManagedOnboard: %v", err)
+	}
+
+	cfgRaw, err := os.ReadFile(result.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	cfgText := string(cfgRaw)
+	if strings.Contains(cfgText, "[channels_config.") {
+		t.Fatalf("expected no channels_config section in webui-only mode, got:\n%s", cfgText)
+	}
+	if !strings.Contains(cfgText, "No chat channel configured (WebUI-only mode)") {
+		t.Fatalf("expected webui-only comment in config, got:\n%s", cfgText)
+	}
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -204,6 +205,45 @@ func TestResolveManagedAgentChannelUsesManagedChannelRegistry(t *testing.T) {
 func TestResolveManagedAgentChannelRejectsUnknownAgent(t *testing.T) {
 	if _, ok := resolveManagedAgentChannel("unknown-agent"); ok {
 		t.Fatal("expected unknown managed agent channel resolution to fail")
+	}
+}
+
+func TestPromptManagedChannelSelectionSupportsWebUIOnly(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("\n"))
+	var out bytes.Buffer
+
+	channel, hasChannel, err := promptManagedChannelSelection(reader, &out, "openclaw", false)
+	if err != nil {
+		t.Fatalf("promptManagedChannelSelection: %v", err)
+	}
+	if hasChannel {
+		t.Fatalf("hasChannel = true, want false (WebUI-only)")
+	}
+	if channel.ID != "" {
+		t.Fatalf("channel.ID = %q, want empty", channel.ID)
+	}
+	if !strings.Contains(out.String(), "WebUI-only mode selected.") {
+		t.Fatalf("output missing WebUI-only hint: %q", out.String())
+	}
+}
+
+func TestPromptManagedChannelSelectionQuietFallsBackToWebUIOnly(t *testing.T) {
+	t.Setenv("CARRIER_TELEGRAM_BOT_TOKEN", "")
+	t.Setenv("CARRIER_CONFIG", filepath.Join(t.TempDir(), "missing-config.v2.json"))
+	var out bytes.Buffer
+
+	channel, hasChannel, err := promptManagedChannelSelection(bufio.NewReader(strings.NewReader("")), &out, "openclaw", true)
+	if err != nil {
+		t.Fatalf("promptManagedChannelSelection: %v", err)
+	}
+	if hasChannel {
+		t.Fatalf("hasChannel = true, want false in quiet mode without token")
+	}
+	if channel.ID != "" {
+		t.Fatalf("channel.ID = %q, want empty", channel.ID)
+	}
+	if !strings.Contains(out.String(), "quiet mode") {
+		t.Fatalf("output missing quiet mode message: %q", out.String())
 	}
 }
 

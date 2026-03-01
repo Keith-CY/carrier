@@ -252,7 +252,7 @@ func buildSSHArgs(host RemoteHost, remoteCommand string) ([]string, error) {
 }
 
 // shellSingleQuote is the canonical shell-safe quoting function for remote command arguments.
-// It wraps input in single quotes and escapes embedded single quotes using the '\'' idiom.
+// It wraps input in single quotes and escapes embedded single quotes using the '\” idiom.
 // Used in security-sensitive paths (e.g. wrapRemoteCommandForSSH) to prevent shell injection.
 func shellSingleQuote(input string) string {
 	if input == "" {

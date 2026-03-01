@@ -184,7 +184,7 @@ func TestPrepareOpenclawManagedOnboard_AllowsPendingChannelSetupWithoutToken(t *
 	}
 }
 
-func TestPrepareOpenclawManagedOnboard_RequiresChannelTokenWhenNotPending(t *testing.T) {
+func TestPrepareOpenclawManagedOnboard_EmptyTokenAutoSetsPending(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
@@ -197,8 +197,23 @@ func TestPrepareOpenclawManagedOnboard_RequiresChannelTokenWhenNotPending(t *tes
 		},
 	}
 
-	if _, err := prepareManagedOnboard("openclaw", sess, "telegram:418258935"); err == nil || !strings.Contains(err.Error(), "channel token is required") {
-		t.Fatalf("expected channel token required error, got %v", err)
+	result, err := prepareManagedOnboard("openclaw", sess, "telegram:418258935")
+	if err != nil {
+		t.Fatalf("prepareManagedOnboard: %v", err)
+	}
+
+	cfgRaw, err := os.ReadFile(result.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(cfgRaw, &cfg); err != nil {
+		t.Fatalf("parse config json: %v", err)
+	}
+	channels, _ := cfg["channels"].(map[string]interface{})
+	telegram, _ := channels["telegram"].(map[string]interface{})
+	if telegram["enabled"] != false || telegram["setup_pending"] != true {
+		t.Fatalf("expected pending telegram channel, got %#v", telegram)
 	}
 }
 
@@ -218,5 +233,40 @@ func TestPrepareOpenclawManagedOnboard_RequiresOpenAIKey(t *testing.T) {
 
 	if _, err := prepareManagedOnboard("openclaw", sess, "telegram:418258935"); err == nil {
 		t.Fatal("expected error when OPENAI_API_KEY cannot be resolved")
+	}
+}
+
+func TestPrepareOpenclawManagedOnboard_AllowsWebUIOnlyMode(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	sess := &OnboardSession{
+		SelectedAgent:    "openclaw",
+		SelectedChannel:  "",
+		SelectedProvider: "openai",
+		EnvVars: map[string]string{
+			"OPENAI_API_KEY": "sk-openclaw-webui-only",
+		},
+	}
+
+	result, err := prepareManagedOnboard("openclaw", sess, "webui:add")
+	if err != nil {
+		t.Fatalf("prepareManagedOnboard: %v", err)
+	}
+
+	cfgRaw, err := os.ReadFile(result.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(cfgRaw, &cfg); err != nil {
+		t.Fatalf("parse config json: %v", err)
+	}
+	channels, ok := cfg["channels"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected channels object, got %#v", cfg["channels"])
+	}
+	if len(channels) != 0 {
+		t.Fatalf("expected empty channels for webui-only mode, got %#v", channels)
 	}
 }

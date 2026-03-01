@@ -23,17 +23,21 @@ type ManagedPayloadParams struct {
 func BuildManagedConfigPayload(params ManagedPayloadParams) map[string]interface{} {
 	providerItem := BuildProviderEntry(params.ProviderID, params.ProviderKey, params.IncludeAPIKeyRef)
 
-	channelConfig := map[string]interface{}{
-		"enabled": true,
-	}
-	if params.ChannelSetupPending {
-		channelConfig["enabled"] = false
-		channelConfig["setup_pending"] = true
-	} else {
-		channelConfig[ChannelTokenField(params.ChannelID)] = params.ChannelToken
-	}
-	if len(params.AllowFrom) > 0 {
-		channelConfig["allowFrom"] = params.AllowFrom
+	channels := map[string]interface{}{}
+	if channelID := strings.TrimSpace(params.ChannelID); channelID != "" {
+		channelConfig := map[string]interface{}{
+			"enabled": true,
+		}
+		if params.ChannelSetupPending {
+			channelConfig["enabled"] = false
+			channelConfig["setup_pending"] = true
+		} else {
+			channelConfig[ChannelTokenField(channelID)] = params.ChannelToken
+		}
+		if len(params.AllowFrom) > 0 {
+			channelConfig["allowFrom"] = params.AllowFrom
+		}
+		channels[channelID] = channelConfig
 	}
 
 	return map[string]interface{}{
@@ -64,9 +68,7 @@ func BuildManagedConfigPayload(params ManagedPayloadParams) map[string]interface
 				"file": CarrierFileSecretProviderAlias,
 			},
 		},
-		"channels": map[string]interface{}{
-			strings.TrimSpace(params.ChannelID): channelConfig,
-		},
+		"channels": channels,
 	}
 }
 

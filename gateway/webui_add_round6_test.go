@@ -143,16 +143,79 @@ func TestHandleWebUIAdd_ManagedValidationAndCredentialBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("missing channel token", func(t *testing.T) {
+	t.Run("missing channel token marks setup pending", func(t *testing.T) {
 		tmp := t.TempDir()
 		t.Setenv("HOME", tmp)
 		t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
 		t.Setenv("CARRIER_TELEGRAM_BOT_TOKEN", "")
-		_, daemon, _, _, _ := setupTestEnv(t, nil)
+		_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+			"POST /api/v1/agents/openclaw/install": func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+			},
+			"POST /api/v1/agents/openclaw/start": func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+			},
+		})
 
 		rec, payload := callHandleWebUIAdd(t, daemon, `{"agentId":"openclaw","channel":"telegram","providerId":"openai","providerToken":"k"}`)
-		if rec.Code != http.StatusBadRequest || payload["errorCode"] != "E_USAGE" {
-			t.Fatalf("expected channel token required E_USAGE, got %d %#v", rec.Code, payload)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for pending channel setup, got %d %#v", rec.Code, payload)
+		}
+		if payload["pairRequired"] != false {
+			t.Fatalf("pairRequired = %#v, want false when channel token is missing", payload["pairRequired"])
+		}
+		configPath := strings.TrimSpace(anyToString(payload["configPath"]))
+		raw, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("read config: %v", err)
+		}
+		var cfg map[string]interface{}
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			t.Fatalf("parse config: %v", err)
+		}
+		channels := cfg["channels"].(map[string]interface{})
+		telegram := channels["telegram"].(map[string]interface{})
+		if telegram["enabled"] != false || telegram["setup_pending"] != true {
+			t.Fatalf("telegram channel pending flags = %#v", telegram)
+		}
+	})
+
+	t.Run("channel skip enables webui-only mode", func(t *testing.T) {
+		tmp := t.TempDir()
+		t.Setenv("HOME", tmp)
+		t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+		_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+			"POST /api/v1/agents/openclaw/install": func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+			},
+			"POST /api/v1/agents/openclaw/start": func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+			},
+		})
+
+		rec, payload := callHandleWebUIAdd(t, daemon, `{"agentId":"openclaw","channel":"skip","providerId":"openai","providerToken":"k"}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 for webui-only mode, got %d %#v", rec.Code, payload)
+		}
+		if got := strings.TrimSpace(anyToString(payload["pairRequired"])); got != "false" && payload["pairRequired"] != false {
+			t.Fatalf("pairRequired = %#v, want false", payload["pairRequired"])
+		}
+		configPath := strings.TrimSpace(anyToString(payload["configPath"]))
+		raw, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("read config: %v", err)
+		}
+		var cfg map[string]interface{}
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			t.Fatalf("parse config: %v", err)
+		}
+		channels := cfg["channels"].(map[string]interface{})
+		if len(channels) != 0 {
+			t.Fatalf("channels = %#v, want empty map in webui-only mode", channels)
 		}
 	})
 
