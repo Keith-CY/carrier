@@ -394,6 +394,7 @@ func TestFusionInstanceDistillDryRunAndApply(t *testing.T) {
 	)
 
 	if _, err := store.UpsertRecord(UpsertRecordInput{
+		ID:             "dup-1",
 		Subject:        "agent-a",
 		Scope:          Scope("agent:agent-a"),
 		ContentSummary: "deployment region is tokyo",
@@ -401,6 +402,7 @@ func TestFusionInstanceDistillDryRunAndApply(t *testing.T) {
 		t.Fatalf("upsert first record: %v", err)
 	}
 	if _, err := store.UpsertRecord(UpsertRecordInput{
+		ID:             "dup-2",
 		Subject:        "agent-a",
 		Scope:          Scope("agent:agent-a"),
 		ContentSummary: "deployment region is tokyo",
