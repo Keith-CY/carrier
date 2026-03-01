@@ -203,7 +203,8 @@ func ensureProfilesRepoGitIgnore(repoRoot string) error {
 
 	existingLines := make(map[string]bool)
 	var lines []string
-	if err == nil {
+	if err == nil && len(current) > 0 {
+		// Only split if file has content; empty file should not produce [""]
 		lines = strings.Split(string(current), "\n")
 		for _, l := range lines {
 			existingLines[l] = true
