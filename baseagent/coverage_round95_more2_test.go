@@ -234,3 +234,29 @@ func TestRenderToolSummaryDescriptionBranches(t *testing.T) {
 		t.Fatalf("unexpected tool summary: %q", summary)
 	}
 }
+
+func TestWantsListAgentsBranches(t *testing.T) {
+	positives := []string{
+		"/agents status",
+		"/list agents",
+		"show agents",
+		"what agents are running",
+	}
+	for _, in := range positives {
+		if !wantsListAgents(in) {
+			t.Fatalf("expected wantsListAgents true for %q", in)
+		}
+	}
+
+	negatives := []string{
+		"hello world",
+		"status openclaw",
+		"install agents",
+		"add agents",
+	}
+	for _, in := range negatives {
+		if wantsListAgents(in) {
+			t.Fatalf("expected wantsListAgents false for %q", in)
+		}
+	}
+}
