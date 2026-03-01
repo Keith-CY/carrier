@@ -31,7 +31,7 @@ Rather than trying to selectively `.gitignore` files, we **split the config stru
 
 | Tier | What | Storage | Synced? |
 |------|-------|---------|---------|
-| **Profile** | Model list, default model, base agent spec, channel *structure* (ID, enabled, transport mode, allow_from) | `~/.carrier/sync/profile.json` | ✅ Yes |
+| **Profile** | Model list, default model, base agent spec, channel *structure* (ID, enabled, transport mode, allow_from) | `~/.carrier/profiles-repo/config/profile.json` | ✅ Yes |
 | **Secrets** | Channel bot_token, webhook_secret, webhook_url; credential store | `~/.carrier/secrets.json` + keychain | ❌ Never |
 
 On save, `configv2.Save()` continues writing `config.v2.json` as the runtime truth. A new `configsync` package produces the split:
@@ -39,22 +39,23 @@ On save, `configv2.Save()` continues writing `config.v2.json` as the runtime tru
 ```
 config.v2.json  (runtime, local-only, .gitignored)
     │
-    ├──► sync/profile.json     (safe to commit — no secrets)
-    └──► secrets.json          (never committed — stays local)
-         credentials.json      (never committed — stays local)
+    ├──► profiles-repo/config/profile.json     (safe to commit — no secrets)
+    └──► secrets.json                           (never committed — stays local)
+         credentials.json                       (never committed — stays local)
 ```
 
 On load during `pull`, the reverse merge happens: `profile.json` fields are overlaid onto the local `config.v2.json`, and secrets are left untouched from the local store.
 
 ### 2.2 What Gets Synced
 
-**Synced (in `sync/` directory, committed to git):**
+**Synced (in `profiles-repo/` git repository):**
 
 | File | Contents |
 |------|----------|
-| `sync/profile.json` | Channels (structure only: id, enabled, transport_mode, allow_from), model_list (model_name, model, provider_id, auth_mode, env_var, credential_ref), default_model, base_agent spec, config_version |
-| `sync/metadata.json` | Sync version, last-sync timestamp, device ID, carrier version |
-| `sync/.gitignore` | Deny-list as defense in depth (see §3) |
+| `profiles-repo/config/profile.json` | Channels (structure only: id, enabled, transport_mode, allow_from), model_list (model_name, model, provider_id, auth_mode, env_var, credential_ref), default_model, base_agent spec, config_version |
+| `profiles-repo/config/metadata.json` | Sync version, last-sync timestamp, device ID, carrier version |
+| `profiles-repo/instances/<agentID>/memory-contract.json` | Per-instance memory contracts (existing, from PR #1510) |
+| `profiles-repo/.gitignore` | Deny-list as defense in depth (see §3) |
 
 **Never synced (local only):**
 
@@ -63,83 +64,112 @@ On load during `pull`, the reverse merge happens: `profile.json` fields are over
 | `config.v2.json` | Full runtime config (merged from profile + secrets) |
 | `credentials.json` | Provider API keys (managed by `credentialstore`) |
 | `secrets.json` | Channel secrets extracted from config |
-| `profiles-repo/` | Existing profilesync data (instance profiles) |
 
-### 2.3 Component Diagram
+### 2.3 Unified Repository Structure
 
 ```
-┌────────────────────────────────────────────────────────┐
-│  ~/.carrier/                                           │
-│                                                        │
-│  config.v2.json          ← runtime config (local only) │
-│  credentials.json        ← provider keys (local only)  │
-│  secrets.json            ← channel secrets (local only) │
-│                                                        │
-│  sync/                   ← git repo (synced)           │
-│    .git/                                               │
-│    .gitignore            ← defense-in-depth deny list  │
-│    profile.json          ← sync-safe config extract    │
-│    metadata.json         ← sync metadata               │
-│    instances/            ← (future: instance profiles) │
-│                                                        │
-│  profiles-repo/          ← existing profilesync        │
-│    (unchanged — separate concern)                      │
-└────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  ~/.carrier/                                                │
+│                                                             │
+│  config.v2.json          ← runtime config (local only)      │
+│  credentials.json        ← provider keys (local only)       │
+│  secrets.json            ← channel secrets (local only)     │
+│                                                             │
+│  profiles-repo/          ← UNIFIED git repo (synced)        │
+│    .git/                 ← shared git repository            │
+│    .gitignore            ← blocks secrets (see §3)          │
+│                                                             │
+│    config/               ← user-global config sync (#1492)  │
+│      profile.json        ← sync-safe config extract         │
+│      metadata.json       ← sync metadata                    │
+│      secrets.json        ← local only (.gitignored)         │
+│                                                             │
+│    instances/            ← instance state sync (PR #1510)   │
+│      <agentID>/                                             │
+│        memory-contract.json  ← per-instance memory          │
+│        auth-profiles.json    ← local only (.gitignored)     │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 2.3.1 Relation to Memory Contract Sync
+**Key decision:** Config sync is **integrated into** the existing `profiles-repo/` rather than creating a second git repository. This provides:
+- Single remote URL for all sync operations
+- Code reuse (git infrastructure from `profilesync`)
+- Unified user experience (`carrier sync push` handles both config + instances)
 
-**Note:** This design (user-global config sync) is **orthogonal** to the instance-level memory contract sync introduced in PR #1510.
+### 2.3.1 Integration with Memory Contract Sync (PR #1510)
 
-| Feature | Scope | Location | Git Repo | Managed By |
-|---------|-------|----------|----------|------------|
-| **Config Sync** (#1492) | User-global settings (model list, channels, agent defaults) | `~/.carrier/sync/profile.json` | `~/.carrier/sync/.git/` | `configsync` package |
-| **Memory Contract Sync** (PR #1510) | Per-instance memory contracts | `~/.carrier/profiles-repo/instances/<agentID>/memory-contract.json` | `~/.carrier/profiles-repo/.git/` | `profilesync.SyncInstanceMemoryContract()` |
+This design **extends** the existing `profiles-repo/` git repository introduced in PR #1510, rather than creating a separate sync system.
 
-Both sync systems coexist and use separate git repos. Config sync operates at the **user settings** layer, while memory contract sync operates at the **instance runtime state** layer. They do not conflict.
+| Feature | Scope | Location | Managed By |
+|---------|-------|----------|------------|
+| **Config Sync** (#1492) | User-global settings (model list, channels, defaults) | `profiles-repo/config/profile.json` | `profilesync.SyncUserConfig()` (new) |
+| **Memory Contract Sync** (PR #1510) | Per-instance memory contracts | `profiles-repo/instances/<agentID>/memory-contract.json` | `profilesync.SyncInstanceMemoryContract()` (existing) |
 
-When a user syncs config across devices:
-- The **channel structure, model list, and defaults** are pulled from the config sync repo
-- The **channel secrets** remain device-local (re-onboard or restore from backup)
-- The **instance memory contracts** are synced separately (if remote execution with memory git sync is enabled)
+**Both systems share:**
+- The same git repository (`profiles-repo/.git/`)
+- The same remote URL (one `git push` syncs both config + instances)
+- The same git infrastructure (atomic writes, rebase, conflict handling from PR #1510)
 
-### 2.4 Sync Backend Interface
+**When a user syncs across devices:**
+1. `carrier sync push` commits both `config/profile.json` (if changed) **and** any `instances/*/memory-contract.json` updates
+2. `carrier sync pull` fetches and merges both layers
+3. Secrets (`config/secrets.json`, `instances/*/auth-profiles.json`) are `.gitignored` and remain device-local
+
+### 2.4 Extending `profilesync` Package
+
+**New functions added to `profilesync/git_repo.go`:**
 
 ```go
-package configsync
-
-type Backend interface {
-    // Init sets up the sync backend (e.g., git init + remote add)
-    Init(opts InitOptions) error
+// SyncUserConfig commits user-global config to the shared profiles-repo.
+// Reuses the same git repo as SyncInstanceMemoryContract (PR #1510).
+func SyncUserConfig(profile UserConfigProfile, repoURL, branch, reason string) (string, bool, error) {
+    repoRoot, _ := profilesyncRepoRoot()  // reuses existing ~/.carrier/profiles-repo/
+    ensureGitRepo(repoRoot)
     
-    // Push exports local profile to the backend
-    Push(profile *SyncProfile, msg string) error
+    if repoURL != "" {
+        ensureGitRemote(repoRoot, "origin", repoURL)
+        checkoutBranch(repoRoot, branch)
+        pullRemoteBranch(repoRoot, "origin", branch)
+    }
     
-    // Pull fetches remote profile; returns nil if no remote changes
-    Pull() (*SyncProfile, *SyncMetadata, error)
+    // Write config/profile.json (secrets already stripped by caller)
+    configPath := filepath.Join(repoRoot, "config", "profile.json")
+    writeFileAtomic(configPath, marshal(profile), 0o600)
     
-    // Status returns diff between local and remote
-    Status() (*SyncStatus, error)
+    // Write config/metadata.json
+    metadataPath := filepath.Join(repoRoot, "config", "metadata.json")
+    writeFileAtomic(metadataPath, marshal(buildMetadata()), 0o600)
     
-    // Close cleans up resources
-    Close() error
+    runGit(repoRoot, "add", "config/profile.json", "config/metadata.json")
+    
+    if changed, _ := gitHasStagedChanges(repoRoot); !changed {
+        return gitHead(repoRoot), false, nil
+    }
+    
+    runGit(repoRoot, "commit", "-m", fmt.Sprintf("config(%s): %s", reason, hostname()))
+    
+    if repoURL != "" {
+        pushRemoteBranch(repoRoot, "origin", branch)  // reuses PR #1510's rebase logic
+    }
+    
+    return gitHead(repoRoot), true, nil
 }
 
-type InitOptions struct {
-    RemoteURL   string   // e.g. git@github.com:user/carrier-config.git
-    BackendType string   // "git", "icloud", "gdrive"
+// PullUserConfig fetches remote config and merges with local secrets.
+func PullUserConfig(repoURL, branch string) (*UserConfigProfile, error) {
+    // fetch + merge, then read config/profile.json
 }
 ```
 
-**Git backend** (priority 1) maps to:
-- `Init` → `git init` + `git remote add origin <url>` inside `~/.carrier/sync/`
-- `Push` → write `profile.json` + `git add` + `git commit` + `git push`
-- `Pull` → `git fetch` + `git merge` (or detect conflicts)
-- `Status` → `git fetch` + `git diff HEAD..origin/main`
+**Reused infrastructure from PR #1510:**
+- `ensureGitRepo()`, `ensureGitRemote()`, `checkoutBranch()`
+- `pullRemoteBranch()` — handles fast-forward and rebase
+- `pushRemoteBranch()` — handles non-fast-forward with retry
+- `writeFileAtomic()` — temp file + rename for crash safety
+- `gitHasStagedChanges()`, `gitHead()`
 
-**iCloud backend** (priority 2): symlink/copy `sync/` to `~/Library/Mobile Documents/com~apple~CloudDocs/carrier/sync/`
-
-**Google Drive backend** (priority 3): upload/download `sync/` directory via Drive API
+**Key benefit:** Zero code duplication. The existing git tooling from PR #1510 is production-tested and secure.
 
 ---
 
@@ -185,17 +215,25 @@ type SyncChannel struct {
 }
 ```
 
-**Layer 2: `.gitignore` deny-list.** The `sync/.gitignore` file explicitly blocks known secret files as a safety net:
+**Layer 2: `.gitignore` deny-list.** The `profiles-repo/.gitignore` file explicitly blocks known secret files as a safety net:
 
 ```gitignore
-# Defense in depth — these should never appear in sync/ but block them anyway
-config.v2.json
-credentials.json
-secrets.json
+# Defense in depth — block secret-bearing files
+config/secrets.json
+instances/*/auth-profiles.json
+
+# Never sync runtime config or credential stores
+../config.v2.json
+../credentials.json
+
+# Generic secret patterns
 *.key
 *.pem
 *.env
+*secret*
 ```
+
+**Note:** This `.gitignore` is created automatically during `profilesync.ensureGitRepo()` (extended to include config sync rules).
 
 **Layer 3: Pre-commit validation.** Before every `git add`, the sync engine:
 1. Reads `profile.json` back from disk
@@ -227,19 +265,19 @@ func ValidateNoSecrets(profile *SyncProfile) error {
 ### 3.3 Secrets Lifecycle
 
 ```
-                    ┌─ On save ──────────────────────────────┐
-                    │                                        │
-config.v2.json ─────┤  Extract secrets → secrets.json        │
-  (runtime)         │  Extract profile → sync/profile.json   │
-                    │                                        │
-                    └────────────────────────────────────────┘
+                    ┌─ On save ──────────────────────────────────────────┐
+                    │                                                   │
+config.v2.json ─────┤  Extract secrets → secrets.json                   │
+  (runtime)         │  Extract profile → profiles-repo/config/profile.json   │
+                    │                                                   │
+                    └───────────────────────────────────────────────────┘
 
-                    ┌─ On pull ──────────────────────────────┐
-                    │                                        │
-sync/profile.json ──┤  Merge with local secrets.json          │
-  (from git)        │  Write merged → config.v2.json          │
-                    │                                        │
-                    └────────────────────────────────────────┘
+                    ┌─ On pull ──────────────────────────────────────────┐
+                    │                                                    │
+profiles-repo/      ┤  Merge with local secrets.json                      │
+config/profile.json │  Write merged → config.v2.json                      │
+  (from git)        │                                                    │
+                    └────────────────────────────────────────────────────┘
 ```
 
 Secrets remain exclusively in:
@@ -340,41 +378,49 @@ When `auto` mode is enabled, conflicts are **never auto-resolved**. Instead:
 
 ## 5. File Structure Changes
 
-### 5.1 New Files
+### 5.1 Modified File Structure
 
 ```
 ~/.carrier/
 ├── config.v2.json            # UNCHANGED — runtime config
 ├── credentials.json          # UNCHANGED — provider credentials
-├── secrets.json              # NEW — extracted channel secrets
-├── sync/                     # NEW — git-tracked sync directory
-│   ├── .git/
-│   ├── .gitignore
-│   ├── profile.json          # sync-safe config extract
-│   └── metadata.json         # sync metadata
-└── profiles-repo/            # UNCHANGED — existing profilesync
+├── secrets.json              # NEW — extracted channel secrets (local only)
+└── profiles-repo/            # EXTENDED — unified sync repo
+    ├── .git/                 # Shared git repo (existing)
+    ├── .gitignore            # EXTENDED — now blocks config/secrets.json + instances/*/auth-profiles.json
+    ├── config/               # NEW — user-global config sync
+    │   ├── profile.json      # Sync-safe config extract (committed)
+    │   ├── metadata.json     # Sync metadata (committed)
+    │   └── secrets.json      # Channel secrets (local only, .gitignored)
+    └── instances/            # EXISTING — per-instance state (PR #1510)
+        └── <agentID>/
+            ├── memory-contract.json  # Committed
+            └── auth-profiles.json    # Local only, .gitignored
 ```
 
-### 5.2 New Go Packages
+### 5.2 Modified Go Packages
 
+**Extended `profilesync/` package:**
 ```
-carrier/
-├── configsync/               # NEW — top-level sync package
-│   ├── configsync.go         # Core sync logic (extract, merge, validate)
-│   ├── profile.go            # SyncProfile / SyncChannel types
-│   ├── secrets.go            # secrets.json read/write
-│   ├── validate.go           # Pre-commit secret scanning
-│   ├── backend.go            # Backend interface
-│   ├── git_backend.go        # Git backend implementation
-│   ├── git_backend_test.go
-│   ├── icloud_backend.go     # iCloud backend (stub, priority 2)
-│   ├── gdrive_backend.go     # Google Drive backend (stub, priority 3)
-│   └── metadata.go           # Sync metadata types
-├── configv2/
-│   └── config.go             # MODIFIED — add secrets extraction/injection helpers
-└── cmd/carrier/
-    └── main.go               # MODIFIED — add `config sync` subcommands
+profilesync/
+├── git_repo.go               # EXTENDED — add SyncUserConfig(), PullUserConfig()
+├── types.go                  # EXTENDED — add UserConfigProfile, UserConfigMetadata
+└── secrets.go                # NEW — secrets.json read/write helpers
 ```
+
+**Modified `configv2/` package:**
+```
+configv2/
+└── config.go                 # EXTENDED — add ExtractSyncProfile(), MergeProfileIntoConfig()
+```
+
+**Modified `cmd/carrier/`:**
+```
+cmd/carrier/
+└── main.go                   # EXTENDED — add `carrier config sync` subcommands
+```
+
+**Note:** No new top-level packages created. All functionality is integrated into existing packages.
 
 ### 5.3 Changes to `configv2`
 
@@ -398,7 +444,7 @@ Current flow:
 
 New flow:
   Load() → read config.v2.json → inject secrets from secrets.json → return Config
-  Save() → write config.v2.json → extract profile → write sync/profile.json
+  Save() → write config.v2.json → extract profile → write profiles-repo/config/profile.json
                                 → extract secrets → write secrets.json
                                 → (if auto-sync) trigger push
 ```
@@ -417,11 +463,11 @@ carrier config sync init --backend=git --remote=<url>
   Initialize config sync with the specified backend.
   
   For git backend:
-    1. Creates ~/.carrier/sync/ directory
+    1. Creates ~/.carrier/profiles-repo/config/ directory
     2. Runs git init (or clones from --remote if provided)
-    3. Extracts current config into sync/profile.json
+    3. Extracts current config into profiles-repo/config/profile.json
     4. Extracts secrets into secrets.json (local only)
-    5. Writes sync/.gitignore with deny-list
+    5. Writes profiles-repo/.gitignore with deny-list
     6. Installs .git/hooks/pre-commit validation hook
     7. Makes initial commit of profile.json + metadata.json
     8. If --remote provided: git remote add origin <url> && git push
@@ -443,7 +489,7 @@ carrier config sync push [--message=<msg>]
   Push local config profile to remote.
   
   Steps:
-    1. Extract current config.v2.json → sync/profile.json
+    1. Extract current config.v2.json → profiles-repo/config/profile.json
     2. Validate no secrets in profile.json (Layer 3 check)
     3. git add profile.json metadata.json
     4. git commit -m "<auto or custom message>"
@@ -536,7 +582,7 @@ carrier config sync auto [--enable|--disable]
     - Conflicts are never auto-resolved; auto-sync pauses and warns
     
   State stored in:
-    sync/metadata.json → { "auto_sync": true, "poll_interval_sec": 300 }
+    profiles-repo/config/metadata.json → { "auto_sync": true, "poll_interval_sec": 300 }
     
   Flags:
     --enable     Enable auto-sync (default if no flag)
@@ -563,7 +609,7 @@ $ carrier config sync init --backend=git --remote=git@github.com:me/cfg.git
 Initializing config sync...
   ✓ Extracted sync profile (2 channels, 3 models)
   ✓ Extracted secrets to ~/.carrier/secrets.json (0600)
-  ✓ Created ~/.carrier/sync/ with git repo
+  ✓ Created ~/.carrier/profiles-repo/config/ with git repo
   ✓ Installed pre-commit validation hook
   ✓ Initial commit: "sync: initial profile export"
   ✓ Pushed to git@github.com:me/cfg.git
@@ -578,7 +624,7 @@ Initializing config sync...
 ```
 $ carrier config sync init --backend=git --remote=git@github.com:me/cfg.git
 
-  ✓ Cloned remote config into ~/.carrier/sync/
+  ✓ Cloned remote config into ~/.carrier/profiles-repo/config/
   ✓ Applied profile (2 channels, 3 models, default_model=claude-sonnet-4-20250514)
   ✓ Written config.v2.json
 
@@ -595,19 +641,24 @@ $ carrier config sync init --backend=git --remote=git@github.com:me/cfg.git
 
 ## 8. Relationship to Existing `profilesync` Package
 
-The existing `profilesync` package handles **instance profile sync** (per-agent workspace manifests). This new `configsync` package handles **carrier-level config sync** (the user's global settings).
+The existing `profilesync` package (introduced in PR #1510) already provides:
+- Git repository at `~/.carrier/profiles-repo/`
+- Instance-level memory contract sync (`SyncInstanceMemoryContract()`)
+- Git infrastructure (atomic writes, rebase, push retry, conflict handling)
 
-They are complementary:
+**This design extends `profilesync` rather than creating a separate package.** Benefits:
+- Single git repository for all sync operations
+- Code reuse (zero duplication of git tooling)
+- Unified user experience (one remote URL, one `carrier sync push` command)
 
-| | `profilesync` | `configsync` (new) |
+| | Instance Sync (PR #1510) | Config Sync (#1492) |
 |---|---|---|
-| What | Agent instance manifests | Global carrier config |
-| Scope | Per-instance (workspace files, AGENTS.md, etc.) | Per-user (channels, models, preferences) |
-| Storage | `~/.carrier/profiles-repo/` | `~/.carrier/sync/` |
-| Git remote | Not yet (local only) | User-provided remote |
-| Secret handling | `SecretBearingFiles` list in manifest | Structural type separation |
+| What | Per-instance memory contracts | User-global settings (channels, models) |
+| Scope | `profiles-repo/instances/<agentID>/` | `profiles-repo/config/` |
+| Function | `SyncInstanceMemoryContract()` (existing) | `SyncUserConfig()` (new, reuses git infra) |
+| Secret handling | No secrets in memory contracts | Type-system enforced separation |
 
-Future consideration: merge `profilesync`'s git repo into `configsync`'s `sync/` directory, with instance profiles under `sync/instances/`. But that's a separate effort.
+Both systems **share the same git repo** (`profiles-repo/.git/`), but operate on different subdirectories and have different data models.
 
 ---
 
@@ -619,7 +670,7 @@ Future consideration: merge `profilesync`'s git repo into `configsync`'s `sync/`
 
 3. **Should we support multiple remotes?** (e.g., push to both a private git and iCloud) — Defer to v2.
 
-4. **Should `configv2.Save()` always update `sync/profile.json`?** Yes for consistency, but the actual git commit/push should only happen in auto-sync mode or explicit `push`. Writing the file is cheap.
+4. **Should `configv2.Save()` always update `profiles-repo/config/profile.json`?** Yes for consistency, but the actual git commit/push should only happen in auto-sync mode or explicit `push`. Writing the file is cheap.
 
 5. **What about `carrier onboard` flow?** It should be updated to write channel secrets to `secrets.json` instead of (or in addition to) `config.v2.json`. During migration, both are supported.
 
@@ -654,7 +705,7 @@ Future consideration: merge `profilesync`'s git repo into `configsync`'s `sync/`
 Before merging any implementation PR, verify:
 
 - [ ] `SyncProfile` struct has NO secret fields (type-level guarantee)
-- [ ] `sync/.gitignore` blocks `config.v2.json`, `credentials.json`, `secrets.json`
+- [ ] `profiles-repo/.gitignore` blocks `config.v2.json`, `credentials.json`, `secrets.json`
 - [ ] Pre-commit validation scans for secret patterns
 - [ ] Git pre-commit hook installed during `init`
 - [ ] `secrets.json` has `0600` permissions
