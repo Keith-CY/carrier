@@ -263,7 +263,7 @@ jobs:
         shell: bash
         run: |
           if ! command -v cargo-tauri >/dev/null 2>&1; then
-            cargo install --locked tauri-cli --version 2
+            cargo install --locked tauri-cli --version '^2'
           fi
 
       - name: Build WebUI Assets
