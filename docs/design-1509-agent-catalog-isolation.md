@@ -308,7 +308,8 @@ func BuildNpmAgentManifest(spec NpmAgentSpec) manifest.Manifest {
         },
         Network: manifest.NetworkSpec{
             Healthcheck: manifest.HealthcheckSpec{
-                Type: "process",
+                Type:    "command",
+                Command: buildNpmHealthCommand(spec), // e.g. "codex --version"
             },
         },
         Env: manifest.EnvSpec{

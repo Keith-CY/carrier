@@ -215,8 +215,9 @@ $ carrier sync instance openclaw --to ssh://vps
 
 ```gitignore
 # Carrier-level secrets (never sync)
-../credentials.json
-../carrier-secrets.json
+# (These files are at repo root, one level up from profiles-repo/)
+/credentials.json
+/carrier-secrets.json
 
 # Instance-level secrets (rsync only, NOT git)
 instances/*/carrier-secrets.json

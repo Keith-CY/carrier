@@ -437,10 +437,7 @@ The generated template for an agent with workspace at `~/.carrier/instances/open
 ```yaml
 # Managed by Carrier — do not edit manually
 images:
-  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
-    arch: "x86_64"
-  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
-    arch: "aarch64"
+  - location: "ubuntu-lts"  # Lima built-in alias for latest LTS (auto-selects arch)
 
 mounts:
   - location: "/Users/username/.carrier/instances/openclaw-a3f2/workspace"
