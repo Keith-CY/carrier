@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -160,5 +162,101 @@ func TestShellPathValuePreservingHomeExpansion(t *testing.T) {
 				t.Fatalf("shellPathValuePreservingHomeExpansion(%q)=%q want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRunRemoteRsyncBuildsSSHTransportForPrivateKeyHost(t *testing.T) {
+	orig := remoteRsyncRunner
+	defer func() { remoteRsyncRunner = orig }()
+
+	var captured []string
+	remoteRsyncRunner = func(_ context.Context, args []string) (remoteExecResult, error) {
+		captured = append([]string{}, args...)
+		return remoteExecResult{ExitCode: 0}, nil
+	}
+
+	host := RemoteHost{
+		ID:       "h1",
+		Name:     "h1",
+		Host:     "198.51.100.10",
+		Port:     2222,
+		User:     "ubuntu",
+		AuthMode: RemoteAuthModePrivateKey,
+		KeyPath:  "~/.ssh/id_ed25519",
+	}
+	if _, err := runRemoteRsync(context.Background(), host, "/tmp/local-secrets.json", remoteOpenClawCarrierSecretsPath); err != nil {
+		t.Fatalf("runRemoteRsync error: %v", err)
+	}
+	if len(captured) == 0 {
+		t.Fatal("expected rsync args to be captured")
+	}
+	joined := strings.Join(captured, " ")
+	if !strings.Contains(joined, "--rsync-path") || !strings.Contains(joined, "mkdir -p") {
+		t.Fatalf("expected --rsync-path mkdir command in rsync args, got %q", joined)
+	}
+	if !strings.Contains(joined, "ubuntu@198.51.100.10:"+remoteOpenClawCarrierSecretsPath) {
+		t.Fatalf("expected destination target in rsync args, got %q", joined)
+	}
+	if !strings.Contains(joined, "IdentitiesOnly=yes") || !strings.Contains(joined, "id_ed25519") {
+		t.Fatalf("expected private key ssh options in rsync args, got %q", joined)
+	}
+}
+
+func TestRemoteWriteOpenClawCarrierSecretsUsesRsyncPayload(t *testing.T) {
+	orig := remoteRsyncRunner
+	defer func() { remoteRsyncRunner = orig }()
+
+	var (
+		capturedArgs []string
+		payload      map[string]interface{}
+	)
+	remoteRsyncRunner = func(_ context.Context, args []string) (remoteExecResult, error) {
+		capturedArgs = append([]string{}, args...)
+		if len(args) < 2 {
+			t.Fatalf("unexpected rsync args: %v", args)
+		}
+		raw, err := os.ReadFile(args[len(args)-2])
+		if err != nil {
+			t.Fatalf("read rsync source file: %v", err)
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			t.Fatalf("parse rsync payload json: %v", err)
+		}
+		return remoteExecResult{ExitCode: 0}, nil
+	}
+
+	host := RemoteHost{
+		ID:            "h2",
+		Name:          "h2",
+		Host:          "203.0.113.5",
+		User:          "carrier",
+		AuthMode:      RemoteAuthModeSSHConfig,
+		SSHConfigHost: "carrier-h2",
+	}
+	input := map[string]interface{}{
+		"providers": map[string]interface{}{
+			"openai": map[string]interface{}{
+				"apiKey": "sk-openai-rsync",
+			},
+		},
+	}
+	res, err := remoteWriteOpenClawCarrierSecrets(context.Background(), host, input)
+	if err != nil {
+		t.Fatalf("remoteWriteOpenClawCarrierSecrets error: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("expected exit 0, got %+v", res)
+	}
+	if len(capturedArgs) == 0 {
+		t.Fatal("expected rsync invocation")
+	}
+	dest := capturedArgs[len(capturedArgs)-1]
+	if !strings.HasSuffix(dest, ":"+remoteOpenClawCarrierSecretsPath) {
+		t.Fatalf("unexpected rsync destination: %q", dest)
+	}
+	providers, _ := payload["providers"].(map[string]interface{})
+	openai, _ := providers["openai"].(map[string]interface{})
+	if strings.TrimSpace(anyToString(openai["apiKey"])) != "sk-openai-rsync" {
+		t.Fatalf("unexpected secrets payload: %+v", payload)
 	}
 }

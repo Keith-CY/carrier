@@ -4,7 +4,7 @@ import "strings"
 
 const (
 	CarrierFileSecretProviderAlias = "carrier_file"
-	CarrierFileSecretsPath         = "~/.openclaw/carrier-secrets.json"
+	CarrierFileSecretsPath         = "./carrier-secrets.json"
 	CarrierSecretFilePatchKey      = "_carrier_openclaw_secret_file"
 )
 

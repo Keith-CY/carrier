@@ -171,6 +171,41 @@ func ensureGitRepo(repoRoot string) error {
 	if _, err := runGit(repoRoot, "config", "user.email", "carrier-profilesync@localhost"); err != nil {
 		return err
 	}
+	if err := ensureProfilesRepoGitIgnore(repoRoot); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureProfilesRepoGitIgnore(repoRoot string) error {
+	const gitignore = `# Carrier secrets (never commit)
+/credentials.json
+/carrier-secrets.json
+instances/*/carrier-secrets.json
+
+# Runtime artifacts
+instances/*/logs/
+instances/*/.cache/
+instances/*/tmp/
+
+# Defense in depth
+*secret*.json
+*credential*.json
+*.key
+*.pem
+`
+	path := filepath.Join(repoRoot, ".gitignore")
+	current, err := os.ReadFile(path)
+	if err == nil {
+		if strings.TrimSpace(string(current)) == strings.TrimSpace(gitignore) {
+			return nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read profilesync .gitignore: %w", err)
+	}
+	if err := writeFileAtomic(path, []byte(gitignore), 0o600); err != nil {
+		return fmt.Errorf("write profilesync .gitignore: %w", err)
+	}
 	return nil
 }
 

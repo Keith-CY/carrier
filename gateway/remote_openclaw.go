@@ -6,6 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +24,8 @@ const (
 	remotePicoClawConfigPath         = "$HOME/.picoclaw/config.json"
 	remoteZeroClawConfigPath         = "$HOME/.zeroclaw/config.toml"
 )
+
+var remoteRsyncRunner = defaultRemoteRsyncRunner
 
 type remoteDiscoveryPullOptions struct {
 	PullNew         bool
@@ -1471,20 +1476,71 @@ func remoteWriteOpenClawCarrierSecrets(ctx context.Context, host RemoteHost, pay
 	if err != nil {
 		return remoteExecResult{}, fmt.Errorf("marshal openclaw carrier secrets: %w", err)
 	}
-	delimiter := fmt.Sprintf("CARRIER_SECRETS_%d", time.Now().UnixNano())
-	cmd := fmt.Sprintf(
-		"mkdir -p \"$HOME/.openclaw\"; cat > \"%s\" <<'%s'\n%s\n%s\nchmod 600 \"%s\"",
-		remoteOpenClawCarrierSecretsPath,
-		delimiter,
-		string(raw),
-		delimiter,
-		remoteOpenClawCarrierSecretsPath,
-	)
-	res, runErr := runRemoteCommand(ctx, host, cmd)
+	tmpFile, err := os.CreateTemp("", "carrier-openclaw-secrets-*.json")
+	if err != nil {
+		return remoteExecResult{}, fmt.Errorf("create temp secrets file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	_ = tmpFile.Close()
+	defer os.Remove(tmpPath)
+	if err := os.WriteFile(tmpPath, append(raw, '\n'), 0o600); err != nil {
+		return remoteExecResult{}, fmt.Errorf("write temp secrets file: %w", err)
+	}
+
+	res, runErr := runRemoteRsync(ctx, host, tmpPath, remoteOpenClawCarrierSecretsPath)
 	if runErr != nil {
 		return res, runErr
 	}
 	return res, nil
+}
+
+func defaultRemoteRsyncRunner(ctx context.Context, args []string) (remoteExecResult, error) {
+	cmd := exec.CommandContext(ctx, "rsync", args...)
+	out, err := cmd.CombinedOutput()
+	result := remoteExecResult{
+		Command: "rsync " + strings.Join(args, " "),
+		Stdout:  string(out),
+	}
+	if err == nil {
+		result.ExitCode = 0
+		return result, nil
+	}
+	if ee, ok := err.(*exec.ExitError); ok {
+		result.ExitCode = ee.ExitCode()
+		result.Stderr = string(ee.Stderr)
+		return result, nil
+	}
+	return result, fmt.Errorf("execute rsync: %w", err)
+}
+
+func runRemoteRsync(ctx context.Context, host RemoteHost, localPath, remotePath string) (remoteExecResult, error) {
+	sshArgs, target, err := buildSSHConnectionArgs(host)
+	if err != nil {
+		return remoteExecResult{}, err
+	}
+	sshCommandParts := append([]string{"ssh"}, sshArgs...)
+	quoted := make([]string, 0, len(sshCommandParts))
+	for _, part := range sshCommandParts {
+		quoted = append(quoted, shellSingleQuote(part))
+	}
+	sshCommand := strings.Join(quoted, " ")
+
+	localPath = filepath.Clean(strings.TrimSpace(localPath))
+	remotePath = strings.TrimSpace(remotePath)
+	rsyncPath := fmt.Sprintf("mkdir -p %s && rsync", shellSingleQuote(filepath.Dir(remotePath)))
+	args := []string{
+		"-az",
+		"--chmod=F600,D700",
+		"-e", sshCommand,
+		"--rsync-path", rsyncPath,
+		localPath,
+		target + ":" + remotePath,
+	}
+	result, runErr := remoteRsyncRunner(ctx, args)
+	if strings.TrimSpace(result.Command) == "" {
+		result.Command = "rsync " + strings.Join(args, " ")
+	}
+	return result, runErr
 }
 
 func remotePatchPicoClawConfig(ctx context.Context, host RemoteHost, patch map[string]interface{}) (map[string]interface{}, string, []remoteExecResult, error) {
