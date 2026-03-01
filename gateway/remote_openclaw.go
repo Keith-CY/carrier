@@ -1703,7 +1703,7 @@ func buildRemoteMemoryRuntimeContract(agentID string) remoteMemoryRuntimeContrac
 func wrapRemoteCommandWithMemoryContract(command string, contract remoteMemoryRuntimeContract) string {
 	return strings.Join([]string{
 		"set -e",
-		fmt.Sprintf("mem_path=\"%s\"", strings.TrimSpace(contract.MemoryPath)),
+		fmt.Sprintf("mem_path=%s", shellSingleQuote(strings.TrimSpace(contract.MemoryPath))),
 		"mkdir -p \"$mem_path\"",
 		fmt.Sprintf("export AGENTD_MEMORY_CONTRACT_ID=%s", shellSingleQuote(contract.ContractID)),
 		"export AGENTD_MEMORY_PATH=\"$mem_path\"",

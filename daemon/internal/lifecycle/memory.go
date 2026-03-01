@@ -7,7 +7,7 @@ import (
 	"carrier/daemon/internal/memory"
 )
 
-const memoryContractIDDigestLength = 12
+const memoryContractIDDigestLength = 16
 
 // autoMountMemories prepares and mounts the memory contract for runtime start.
 func (s *Service) autoMountMemories(agentID string) (memory.RuntimeMemoryContract, error) {
@@ -113,13 +113,13 @@ func buildMemoryContractID(agentID, digest string) string {
 }
 
 func (s *Service) setMemoryContractState(agentID, digest, syncError string) {
+	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state, ok := s.states[agentID]
 	if !ok {
 		return
 	}
-	now := s.now()
 	memoryState := &MemoryState{
 		ContractID:     buildMemoryContractID(agentID, digest),
 		ContractDigest: strings.TrimSpace(digest),
