@@ -1703,7 +1703,7 @@ func buildRemoteMemoryRuntimeContract(agentID string) remoteMemoryRuntimeContrac
 func wrapRemoteCommandWithMemoryContract(command string, contract remoteMemoryRuntimeContract) string {
 	return strings.Join([]string{
 		"set -e",
-		fmt.Sprintf("mem_path=%s", shellSingleQuote(strings.TrimSpace(contract.MemoryPath))),
+		fmt.Sprintf("mem_path=%s", shellPathValuePreservingHomeExpansion(contract.MemoryPath)),
 		"mkdir -p \"$mem_path\"",
 		fmt.Sprintf("export AGENTD_MEMORY_CONTRACT_ID=%s", shellSingleQuote(contract.ContractID)),
 		"export AGENTD_MEMORY_PATH=\"$mem_path\"",
@@ -1711,6 +1711,21 @@ func wrapRemoteCommandWithMemoryContract(command string, contract remoteMemoryRu
 		fmt.Sprintf("export AGENTD_MEMORY_VIEW_DIGEST=%s", shellSingleQuote(contract.ContractDigest)),
 		strings.TrimSpace(command),
 	}, "; ")
+}
+
+func shellPathValuePreservingHomeExpansion(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return shellSingleQuote("")
+	}
+	if trimmed == "$HOME" || trimmed == "$HOME/" {
+		return `"$HOME"`
+	}
+	if strings.HasPrefix(trimmed, "$HOME/") {
+		suffix := strings.TrimPrefix(trimmed, "$HOME/")
+		return `"$HOME"/` + shellSingleQuote(suffix)
+	}
+	return shellSingleQuote(trimmed)
 }
 
 func remoteDeleteSession(ctx context.Context, host RemoteHost, agentID, sessionID string) ([]remoteExecResult, error) {
