@@ -42,7 +42,7 @@ func TestHandlePairingSessionsSummarizesSessions(t *testing.T) {
 	s.sessions["telegram:"] = nil
 	s.mu.Unlock()
 
-	req := httptest.NewRequest(http.MethodGet, "/?provider= telegram ", nil)
+	req := httptest.NewRequest(http.MethodGet, "/?provider=%20telegram%20", nil)
 	rec := httptest.NewRecorder()
 	handlePairingSessions(rec, req, "r4", s)
 	if rec.Code != http.StatusOK {

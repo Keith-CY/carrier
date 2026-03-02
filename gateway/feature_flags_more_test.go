@@ -38,6 +38,7 @@ func TestFeatureFlagsNormalizationResetsWhenDependencyDisabled(t *testing.T) {
 }
 
 func TestWebUIHandlerFactoryLifecycle(t *testing.T) {
+	SetWebUIHandlerFactory(nil)
 	t.Cleanup(func() {
 		SetWebUIHandlerFactory(nil)
 	})

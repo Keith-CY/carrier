@@ -57,6 +57,9 @@ func TestLoadSaveManagedInstances(t *testing.T) {
 		t.Fatalf("expected empty instances, got %d", len(instances))
 	}
 
+	if err := os.MkdirAll(filepath.Dir(storePath), 0o700); err != nil {
+		t.Fatalf("prepare invalid JSON dir error: %v", err)
+	}
 	if err := os.WriteFile(storePath, []byte("{bad json}"), 0o600); err != nil {
 		t.Fatalf("prepare invalid JSON file error: %v", err)
 	}
