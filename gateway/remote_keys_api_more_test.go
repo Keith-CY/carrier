@@ -11,6 +11,16 @@ import (
 	"testing"
 )
 
+func getRemoteKeyErrorMessage(payload map[string]interface{}) string {
+	if message, ok := payload["errorMessage"].(string); ok {
+		return message
+	}
+	if message, ok := payload["message"].(string); ok {
+		return message
+	}
+	return ""
+}
+
 func TestHandleRemoteKeysValidationBranches(t *testing.T) {
 	mux := buildRemoteFeatureMux(t)
 	t.Setenv("CARRIER_REMOTE_KEY_DIR", filepath.Join(t.TempDir(), "keys"))
@@ -40,7 +50,7 @@ func TestHandleRemoteKeysValidationBranches(t *testing.T) {
 		if payload["errorCode"] != "E_USAGE" {
 			t.Fatalf("unexpected error code: %#v", payload)
 		}
-		if message, _ := payload["errorMessage"].(string); !strings.Contains(message, "file is required") {
+		if message := getRemoteKeyErrorMessage(payload); !strings.Contains(message, "file is required") {
 			t.Fatalf("unexpected error message: %#v", payload)
 		}
 	})
@@ -58,7 +68,7 @@ func TestHandleRemoteKeysValidationBranches(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 			t.Fatalf("decode error response: %v", err)
 		}
-		if message, _ := payload["errorMessage"].(string); !strings.Contains(message, "request must be multipart/form-data") {
+		if message := getRemoteKeyErrorMessage(payload); !strings.Contains(message, "request must be multipart/form-data") {
 			t.Fatalf("unexpected error message: %#v", payload)
 		}
 	})
@@ -75,7 +85,7 @@ func TestHandleRemoteKeysValidationBranches(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 			t.Fatalf("decode error response: %v", err)
 		}
-		if message, _ := payload["errorMessage"].(string); !strings.Contains(message, "PEM") {
+		if message := getRemoteKeyErrorMessage(payload); !strings.Contains(message, "PEM") {
 			t.Fatalf("unexpected error message: %#v", payload)
 		}
 	})
@@ -109,7 +119,7 @@ func TestHandleRemoteKeysRequestSizeLimit(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if message, _ := payload["errorMessage"].(string); !strings.Contains(message, "request body exceeds") {
+	if message := getRemoteKeyErrorMessage(payload); !strings.Contains(message, "request body exceeds") {
 		t.Fatalf("unexpected error message: %#v", payload)
 	}
 }
