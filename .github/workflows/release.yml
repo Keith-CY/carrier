@@ -145,10 +145,10 @@ jobs:
         run: ./scripts/run-e2e-tests.sh
 
   build-packages:
-    name: Build Packages (${{ matrix.label }})
+    name: Build Packages (${{ matrix.variant }}-${{ matrix.label }})
     needs: [prepare, e2e-deploy]
     if: always() && needs.prepare.result == 'success' && (needs.e2e-deploy.result == 'success' || needs.e2e-deploy.result == 'skipped')
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -157,32 +157,86 @@ jobs:
         include:
           - goos: linux
             goarch: amd64
+            variant: cli
             label: linux-x64
+            runs_on: ubuntu-latest
             ext: ""
             archive_ext: zip
           - goos: linux
             goarch: arm64
+            variant: cli
             label: linux-arm64
+            runs_on: ubuntu-latest
             ext: ""
             archive_ext: zip
           - goos: darwin
             goarch: amd64
+            variant: cli
             label: darwin-x64
+            runs_on: macos-latest
             ext: ""
             archive_ext: zip
           - goos: darwin
             goarch: arm64
+            variant: cli
             label: darwin-arm64
+            runs_on: macos-latest
             ext: ""
             archive_ext: zip
           - goos: windows
             goarch: amd64
+            variant: cli
             label: windows-x64
+            runs_on: ubuntu-latest
             ext: ".exe"
             archive_ext: zip
           - goos: windows
             goarch: arm64
+            variant: cli
             label: windows-arm64
+            runs_on: ubuntu-latest
+            ext: ".exe"
+            archive_ext: zip
+          - goos: linux
+            goarch: amd64
+            variant: app
+            label: linux-x64
+            runs_on: ubuntu-latest
+            ext: ""
+            archive_ext: zip
+          - goos: linux
+            goarch: arm64
+            variant: app
+            label: linux-arm64
+            runs_on: ubuntu-latest
+            ext: ""
+            archive_ext: zip
+          - goos: darwin
+            goarch: amd64
+            variant: app
+            label: darwin-x64
+            runs_on: macos-latest
+            ext: ""
+            archive_ext: zip
+          - goos: darwin
+            goarch: arm64
+            variant: app
+            label: darwin-arm64
+            runs_on: macos-latest
+            ext: ""
+            archive_ext: zip
+          - goos: windows
+            goarch: amd64
+            variant: app
+            label: windows-x64
+            runs_on: windows-latest
+            ext: ".exe"
+            archive_ext: zip
+          - goos: windows
+            goarch: arm64
+            variant: app
+            label: windows-arm64
+            runs_on: windows-latest
             ext: ".exe"
             archive_ext: zip
 
@@ -200,6 +254,32 @@ jobs:
         with:
           bun-version: 1.1.8
 
+      - name: Setup Rust toolchain for App builds
+        if: ${{ matrix.variant == 'app' }}
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7
+
+      - name: Install Tauri CLI
+        if: ${{ matrix.variant == 'app' }}
+        shell: bash
+        run: |
+          if ! command -v cargo-tauri >/dev/null 2>&1; then
+            cargo install --locked tauri-cli --version '^2'
+          fi
+
+      - name: Install Linux Tauri app dependencies
+        if: ${{ matrix.variant == 'app' && matrix.goos == 'linux' }}
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libwebkit2gtk-4.1-dev
+
       - name: Build WebUI Assets
         shell: bash
         run: |
@@ -211,9 +291,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          archive_name="${{ needs.prepare.outputs.package_prefix }}-${{ matrix.label }}"
+          base_prefix="${{ needs.prepare.outputs.package_prefix }}"
+          release_tag="${{ needs.prepare.outputs.release_tag }}"
+          if [[ -z "${release_tag}" ]]; then
+            release_tag="${base_prefix#carrier-}"
+          fi
+          if [[ "${{ matrix.variant }}" == "app" ]]; then
+            archive_name="carrier-app-${release_tag}"
+          else
+            archive_name="${base_prefix}"
+          fi
+          package_file="${archive_name}-${{ matrix.label }}.${{ matrix.archive_ext }}"
           binary_name="carrier${{ matrix.ext }}"
-          package_file="${archive_name}.${{ matrix.archive_ext }}"
+          package_source=""
 
           mkdir -p dist
 
@@ -231,12 +321,63 @@ jobs:
             "-X=main.carrierBuildDate=${carrier_build_date}"
           )
 
-          CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
-            go build -tags webui -trimpath -ldflags="${ldflags[*]}" -o "dist/${binary_name}" ./cmd/carrier
+          if [[ "${{ matrix.variant }}" == "app" ]] && [[ -f "src-tauri/tauri.conf.json" ]]; then
+            if ! command -v bun >/dev/null 2>&1; then
+              echo "ERROR: bun is required to build App variant."
+              exit 1
+            fi
+            if ! command -v rustc >/dev/null 2>&1 || ! command -v cargo >/dev/null 2>&1; then
+              echo "ERROR: rustc and cargo are required to build App variant."
+              exit 1
+            fi
 
-          # Release package should contain only the executable binary.
-          (cd dist && zip -j "${package_file}" "${binary_name}")
-          (cd dist && sha256sum "${package_file}" > "${package_file}.sha256")
+            tauri_target_dir="src-tauri/target"
+            if [[ "${{ matrix.goos }}" == "darwin" && "${{ matrix.goarch }}" == "arm64" ]]; then
+              cargo tauri build --config src-tauri/tauri.conf.json --bundles app
+            else
+              cargo tauri build --config src-tauri/tauri.conf.json
+            fi
+            if ! app_bundle="$(node scripts/ci/select-tauri-bundle.cjs \
+              --target-dir "${tauri_target_dir}" \
+              --goos "${{ matrix.goos }}" \
+              --goarch "${{ matrix.goarch }}")"; then
+              echo "ERROR: no Tauri bundle found in ${tauri_target_dir}/**/release/bundle."
+              exit 1
+            fi
+
+            package_source="$(basename "${app_bundle}")"
+            if [[ -d "${app_bundle}" ]]; then
+              cp -R "${app_bundle}" "dist/${package_source}"
+            else
+              cp "${app_bundle}" "dist/${package_source}"
+            fi
+          fi
+
+          if [[ -z "${package_source}" ]]; then
+            if [[ "${{ matrix.variant }}" == "app" ]]; then
+              echo "ERROR: app variant requires a built App artifact."
+              exit 1
+            fi
+            CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
+              go build -tags webui -trimpath -ldflags="${ldflags[*]}" -o "dist/${binary_name}" ./cmd/carrier
+            package_source="${binary_name}"
+          fi
+
+          # Release package should contain a distributable artifact (Tauri bundle or CLI binary).
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            if [[ -d "dist/${package_source}" ]]; then
+              pwsh -NoProfile -Command "Compress-Archive -Path 'dist/${package_source}' -DestinationPath 'dist/${package_file}' -Force"
+            else
+              pwsh -NoProfile -Command "Compress-Archive -Path 'dist/${package_source}' -DestinationPath 'dist/${package_file}' -Force"
+            fi
+          else
+            if [[ -d "dist/${package_source}" ]]; then
+              (cd dist && zip -r "${package_file}" "${package_source}")
+            else
+              (cd dist && zip -j "${package_file}" "${package_source}")
+            fi
+          fi
+          node -e 'const fs=require("node:fs");const crypto=require("node:crypto");const path=require("node:path");const file=process.argv[1];const data=fs.readFileSync(file);const hash=crypto.createHash("sha256").update(data).digest("hex");const filename=path.basename(file);fs.writeFileSync(`${file}.sha256`, `${hash}  ${filename}\n`);' "dist/${package_file}"
 
           echo "archive_name=${archive_name}" >> "${GITHUB_OUTPUT}"
           echo "package_file=${package_file}" >> "${GITHUB_OUTPUT}"
@@ -262,18 +403,19 @@ jobs:
           jq -n \
             --arg label "${{ matrix.label }}" \
             --arg archive_name "${{ steps.build.outputs.archive_name }}" \
+            --arg variant "${{ matrix.variant }}" \
             --arg package_file "${{ steps.build.outputs.package_file }}" \
             --arg artifact_id "${{ steps.upload.outputs.artifact-id }}" \
-            '{label: $label, archive_name: $archive_name, package_file: $package_file, artifact_id: $artifact_id}' \
-            > "pr-meta/${{ matrix.label }}.json"
+            '{label: $label, variant: $variant, archive_name: $archive_name, package_file: $package_file, artifact_id: $artifact_id}' \
+            > "pr-meta/${{ matrix.variant }}-${{ matrix.label }}.json"
 
       - name: Upload PR metadata
         if: needs.prepare.outputs.build_mode == 'pr-test'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: pr-meta-${{ matrix.label }}
+          name: pr-meta-${{ matrix.variant }}-${{ matrix.label }}
           retention-days: 7
-          path: pr-meta/${{ matrix.label }}.json
+          path: pr-meta/${{ matrix.variant }}-${{ matrix.label }}.json
           if-no-files-found: error
 
   sign-artifacts:
@@ -292,7 +434,6 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: dist
-          pattern: ${{ needs.prepare.outputs.package_prefix }}-*
           merge-multiple: true
 
       - name: Install cosign
@@ -340,7 +481,6 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: dist
-          pattern: ${{ needs.prepare.outputs.package_prefix }}-*
           merge-multiple: true
 
       - name: Download signatures

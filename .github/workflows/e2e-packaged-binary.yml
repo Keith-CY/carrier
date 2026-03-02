@@ -28,23 +28,47 @@ permissions:
 
 jobs:
   build-packages:
-    name: Build Package (${{ matrix.label }})
-    runs-on: ubuntu-latest
+    name: Build Package (${{ matrix.variant }}-${{ matrix.label }})
+    runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 30
     strategy:
       matrix:
         include:
           - goos: linux
             goarch: amd64
+            variant: cli
             label: linux-x64
+            runs_on: ubuntu-latest
+            ext: ''
+          - goos: linux
+            goarch: amd64
+            variant: app
+            label: linux-x64
+            runs_on: ubuntu-latest
             ext: ''
           - goos: darwin
             goarch: amd64
+            variant: cli
             label: darwin-x64
+            runs_on: macos-latest
+            ext: ''
+          - goos: darwin
+            goarch: amd64
+            variant: app
+            label: darwin-x64
+            runs_on: macos-latest
             ext: ''
           - goos: windows
             goarch: amd64
+            variant: cli
             label: windows-x64
+            runs_on: windows-latest
+            ext: '.exe'
+          - goos: windows
+            goarch: amd64
+            variant: app
+            label: windows-x64
+            runs_on: windows-latest
             ext: '.exe'
     steps:
       - name: Checkout
@@ -60,33 +84,104 @@ jobs:
         with:
           bun-version: 1.1.8
 
+      - name: Setup Rust toolchain for App builds
+        if: ${{ matrix.variant == 'app' }}
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7
+
+      - name: Install Tauri CLI
+        if: ${{ matrix.variant == 'app' }}
+        shell: bash
+        run: |
+          if ! command -v cargo-tauri >/dev/null 2>&1; then
+            cargo install --locked tauri-cli --version '^2'
+          fi
+
+      - name: Install Linux Tauri app dependencies
+        if: ${{ matrix.variant == 'app' && matrix.goos == 'linux' }}
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libwebkit2gtk-4.1-dev
+
       - name: Build WebUI assets
         run: bash scripts/build-webui.sh
 
       - name: Build package
+        id: build
         shell: bash
         run: |
           set -euo pipefail
+          e2e_tag="e2e"
+          package_source=""
 
           mkdir -p dist
-          archive_name="carrier-e2e-${{ matrix.label }}"
+          if [[ "${{ matrix.variant }}" == "app" ]]; then
+            if ! command -v bun >/dev/null 2>&1; then
+              echo "ERROR: bun is required to build App variant."
+              exit 1
+            fi
+            if ! command -v rustc >/dev/null 2>&1 || ! command -v cargo >/dev/null 2>&1; then
+              echo "ERROR: rustc and cargo are required to build App variant."
+              exit 1
+            fi
+
+            cargo tauri build --config src-tauri/tauri.conf.json
+            tauri_target_dir="src-tauri/target"
+            if ! app_bundle="$(node scripts/ci/select-tauri-bundle.cjs \
+              --target-dir "${tauri_target_dir}" \
+              --goos "${{ matrix.goos }}" \
+              --goarch "${{ matrix.goarch }}")"; then
+              echo "ERROR: no Tauri bundle found in ${tauri_target_dir}/**/release/bundle."
+              exit 1
+            fi
+
+            package_source="$(basename "${app_bundle}")"
+            if [[ -d "${app_bundle}" ]]; then
+              cp -R "${app_bundle}" "dist/${package_source}"
+            else
+              cp "${app_bundle}" "dist/${package_source}"
+            fi
+            archive_name="carrier-app-${e2e_tag}-${{ matrix.label }}"
+          else
+            archive_name="carrier-${e2e_tag}-${{ matrix.label }}"
+          fi
           binary_name="carrier${{ matrix.ext }}"
           package_file="${archive_name}.zip"
 
-          CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
-            go build -tags webui -trimpath -o "dist/${binary_name}" ./cmd/carrier
+          if [[ -z "${package_source}" ]]; then
+            CGO_ENABLED=0 GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" \
+              go build -tags webui -trimpath -o "dist/${binary_name}" ./cmd/carrier
+            package_source="${binary_name}"
+          fi
 
-          (cd dist && zip -j "${package_file}" "${binary_name}")
-          (cd dist && sha256sum "${package_file}" > "${package_file}.sha256")
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            pwsh -NoProfile -Command "Compress-Archive -Path 'dist/${package_source}' -DestinationPath 'dist/${package_file}' -Force"
+          else
+            if [[ -d "dist/${package_source}" ]]; then
+              (cd dist && zip -r "${package_file}" "${package_source}")
+            else
+              (cd dist && zip -j "${package_file}" "${package_source}")
+            fi
+          fi
+          node -e 'const fs=require("node:fs");const crypto=require("node:crypto");const path=require("node:path");const file=process.argv[1];const data=fs.readFileSync(file);const hash=crypto.createHash("sha256").update(data).digest("hex");const filename=path.basename(file);fs.writeFileSync(`${file}.sha256`, `${hash}  ${filename}\n`);' "dist/${package_file}"
+
+          echo "package_file=${package_file}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload package artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: package-${{ matrix.label }}
+          name: package-${{ matrix.variant }}-${{ matrix.label }}
           retention-days: 7
           path: |
-            dist/carrier-e2e-${{ matrix.label }}.zip
-            dist/carrier-e2e-${{ matrix.label }}.zip.sha256
+            dist/${{ steps.build.outputs.package_file }}
+            dist/${{ steps.build.outputs.package_file }}.sha256
           if-no-files-found: error
 
   binary-smoke:
@@ -110,7 +205,7 @@ jobs:
       - name: Download package artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: package-${{ matrix.label }}
+          name: package-cli-${{ matrix.label }}
           path: ${{ runner.temp }}/package
 
       - name: Verify checksum + extract package (Linux/macOS)
@@ -193,7 +288,7 @@ jobs:
       - name: Download Linux package artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: package-linux-x64
+          name: package-cli-linux-x64
           path: ${{ runner.temp }}/package-linux
 
       - name: Run WSL2 OpenClaw install flow via `carrier add`
@@ -454,7 +549,7 @@ jobs:
       - name: Download Linux package artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: package-linux-x64
+          name: package-cli-linux-x64
           path: ${{ runner.temp }}/package
 
       - name: Run remote VPS agent suite via packaged binary
