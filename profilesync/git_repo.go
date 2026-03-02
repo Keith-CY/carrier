@@ -193,8 +193,8 @@ func ensureProfilesRepoGitIgnore(repoRoot string) error {
 	}
 
 	// The canonical block appended when entries are missing, with comments and spacing.
-	const carrierBlock = `
-# Carrier secrets (never commit)
+	// Note: no leading newline - the concatenation logic handles spacing.
+	const carrierBlock = `# Carrier secrets (never commit)
 /credentials.json
 /carrier-secrets.json
 instances/*/carrier-secrets.json
@@ -208,8 +208,7 @@ instances/*/tmp/
 *secret*.json
 *credential*.json
 *.key
-*.pem
-`
+*.pem`
 
 	path := filepath.Join(repoRoot, ".gitignore")
 	current, err := os.ReadFile(path)
@@ -222,28 +221,37 @@ instances/*/tmp/
 		existingContent = string(current)
 	}
 
-	// Check whether all required lines are already present.
+	// Check which required lines are already present.
 	existingLines := make(map[string]bool)
 	for _, l := range strings.Split(existingContent, "\n") {
 		existingLines[strings.TrimSpace(l)] = true
 	}
-	allPresent := true
+
+	// Find missing entries.
+	var missingLines []string
 	for _, req := range requiredLines {
 		if !existingLines[req] {
-			allPresent = false
-			break
+			missingLines = append(missingLines, req)
 		}
 	}
-	if allPresent {
+	if len(missingLines) == 0 {
 		return nil
 	}
 
-	// Append the carrier block to existing content.
-	content := strings.TrimRight(existingContent, "\n")
+	// Append only missing lines, or the full block if none are present.
+	content := strings.TrimSpace(existingContent)
 	if content != "" {
-		content += "\n"
+		content += "\n\n"
 	}
-	content += carrierBlock
+	// If no required entries exist yet, use the formatted block with comments.
+	// Otherwise, append only the missing individual lines to avoid duplicates.
+	anyPresent := len(missingLines) < len(requiredLines)
+	if anyPresent {
+		content += strings.Join(missingLines, "\n")
+	} else {
+		content += carrierBlock
+	}
+	content += "\n"
 
 	if err := writeFileAtomic(path, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("write profilesync .gitignore: %w", err)
