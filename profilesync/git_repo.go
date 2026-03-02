@@ -178,57 +178,73 @@ func ensureGitRepo(repoRoot string) error {
 }
 
 func ensureProfilesRepoGitIgnore(repoRoot string) error {
-	requiredEntries := []string{
-		"# Carrier secrets (never commit)",
+	// Required non-blank lines that must appear in .gitignore.
+	requiredLines := []string{
 		"/credentials.json",
 		"/carrier-secrets.json",
 		"instances/*/carrier-secrets.json",
-		"",
-		"# Runtime artifacts",
 		"instances/*/logs/",
 		"instances/*/.cache/",
 		"instances/*/tmp/",
-		"",
-		"# Defense in depth",
 		"*secret*.json",
 		"*credential*.json",
 		"*.key",
 		"*.pem",
 	}
+
+	// The canonical block appended when entries are missing, with comments and spacing.
+	const carrierBlock = `
+# Carrier secrets (never commit)
+/credentials.json
+/carrier-secrets.json
+instances/*/carrier-secrets.json
+
+# Runtime artifacts
+instances/*/logs/
+instances/*/.cache/
+instances/*/tmp/
+
+# Defense in depth
+*secret*.json
+*credential*.json
+*.key
+*.pem
+`
+
 	path := filepath.Join(repoRoot, ".gitignore")
 	current, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("read profilesync .gitignore: %w", err)
 	}
 
+	existingContent := ""
+	if err == nil {
+		existingContent = string(current)
+	}
+
+	// Check whether all required lines are already present.
 	existingLines := make(map[string]bool)
-	var lines []string
-	if err == nil && len(current) > 0 {
-		// Only split if file has content; empty file should not produce [""]
-		lines = strings.Split(string(current), "\n")
-		for _, l := range lines {
-			existingLines[l] = true
+	for _, l := range strings.Split(existingContent, "\n") {
+		existingLines[strings.TrimSpace(l)] = true
+	}
+	allPresent := true
+	for _, req := range requiredLines {
+		if !existingLines[req] {
+			allPresent = false
+			break
 		}
 	}
-
-	// Append any missing required entries, preserving existing content.
-	changed := false
-	for _, entry := range requiredEntries {
-		if !existingLines[entry] {
-			lines = append(lines, entry)
-			existingLines[entry] = true
-			changed = true
-		}
-	}
-
-	if !changed {
+	if allPresent {
 		return nil
 	}
 
-	content := strings.Join(lines, "\n")
-	if !strings.HasSuffix(content, "\n") {
+	// Append the carrier block to existing content.
+	content := strings.TrimRight(existingContent, "\n")
+	if content != "" {
 		content += "\n"
 	}
+	content += carrierBlock
+
 	if err := writeFileAtomic(path, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("write profilesync .gitignore: %w", err)
 	}
