@@ -129,6 +129,11 @@ var channelCatalog = []ChannelSpec{
 	},
 }
 
+var providerAliases = map[string]string{
+	"claude-code": "openai-codex",
+	"opencode":    "openai-codex",
+}
+
 var providerIndex map[string]ProviderSpec
 var channelIndex map[string]ChannelSpec
 
@@ -144,6 +149,20 @@ func init() {
 	}
 }
 
+// NormalizeProviderID normalizes aliases to canonical provider IDs.
+func NormalizeProviderID(id string) string {
+	normalized := strings.ToLower(strings.TrimSpace(id))
+	if canonical, ok := providerAliases[normalized]; ok {
+		return canonical
+	}
+	return normalized
+}
+
+// IsOpenAICodexProviderID reports whether the provider ID refers to OpenAI Codex.
+func IsOpenAICodexProviderID(id string) bool {
+	return NormalizeProviderID(id) == "openai-codex"
+}
+
 // ListProviders returns a copy of canonical provider entries.
 func ListProviders() []ProviderSpec {
 	out := make([]ProviderSpec, len(providerCatalog))
@@ -153,7 +172,7 @@ func ListProviders() []ProviderSpec {
 
 // GetProvider returns a provider by canonical ID.
 func GetProvider(id string) *ProviderSpec {
-	provider, ok := providerIndex[strings.ToLower(strings.TrimSpace(id))]
+	provider, ok := providerIndex[NormalizeProviderID(id)]
 	if !ok {
 		return nil
 	}
@@ -163,7 +182,7 @@ func GetProvider(id string) *ProviderSpec {
 
 // IsSupportedProvider reports whether the provider ID is canonical and supported.
 func IsSupportedProvider(id string) bool {
-	_, ok := providerIndex[strings.ToLower(strings.TrimSpace(id))]
+	_, ok := providerIndex[NormalizeProviderID(id)]
 	return ok
 }
 
@@ -217,7 +236,7 @@ func IsSupportedChannel(id string) bool {
 // Managed agents currently support a smaller provider key surface and collapse
 // compatible providers onto "openai".
 func MapToManagedProvider(providerID string) string {
-	normalized := strings.ToLower(strings.TrimSpace(providerID))
+	normalized := NormalizeProviderID(providerID)
 	switch normalized {
 	case "openai-codex", "openai-compatible":
 		return "openai"

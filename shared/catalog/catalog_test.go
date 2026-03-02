@@ -22,8 +22,20 @@ func TestProviderCatalogBasics(t *testing.T) {
 	if !IsSupportedProvider("openai") {
 		t.Fatal("openai should be supported")
 	}
+	if !IsSupportedProvider("claude-code") {
+		t.Fatal("claude-code should be supported via alias")
+	}
+	if !IsSupportedProvider("opencode") {
+		t.Fatal("opencode should be supported via alias")
+	}
 	if !IsSupportedProvider("openrouter") {
 		t.Fatal("openrouter should be supported")
+	}
+	if p := GetProvider("claude-code"); p == nil || p.ID != "openai-codex" {
+		t.Fatalf("GetProvider(claude-code) = %#v, want openai-codex", p)
+	}
+	if p := GetProvider("opencode"); p == nil || p.ID != "openai-codex" {
+		t.Fatalf("GetProvider(opencode) = %#v, want openai-codex", p)
 	}
 	ids := SupportedProviderIDs()
 	if len(ids) != 6 {
@@ -76,6 +88,8 @@ func TestMapToManagedProvider(t *testing.T) {
 		"openrouter":        "openrouter",
 		"ollama":            "ollama",
 		"openai":            "openai",
+		"claude-code":       "openai",
+		"opencode":          "openai",
 		"anthropic":         "anthropic",
 		"  custom  ":        "custom",
 	}

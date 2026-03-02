@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"carrier/shared/catalog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -316,7 +317,7 @@ func applyOnboardConfigEnvironment(cfg *onboardConfigFile) error {
 		if err := setOnboardEnv(envName, value); err != nil {
 			return err
 		}
-		if strings.EqualFold(strings.TrimSpace(m.ProviderID), "openai-codex") {
+		if catalog.IsOpenAICodexProviderID(m.ProviderID) {
 			if err := setOnboardEnv("OPENAI_API_KEY", value); err != nil {
 				return err
 			}

@@ -453,7 +453,7 @@ func resolveLLMRuntimeConfigForProvider(providerID string) (*llmRuntimeConfig, e
 	if err != nil || cfg == nil {
 		return nil, errors.New("default model is not configured")
 	}
-	providerID = strings.ToLower(strings.TrimSpace(cfg.ProviderID))
+	providerID = catalog.NormalizeProviderID(cfg.ProviderID)
 	modelID := strings.TrimSpace(cfg.ModelID)
 	envVar := strings.TrimSpace(cfg.EnvVar)
 
@@ -552,7 +552,7 @@ func extractModelContent(raw interface{}) string {
 }
 
 func isOpenAICodexProvider(providerID string) bool {
-	return strings.EqualFold(strings.TrimSpace(providerID), "openai-codex")
+	return catalog.IsOpenAICodexProviderID(providerID)
 }
 
 func extractOpenAICodexAccountID(token string) string {

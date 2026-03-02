@@ -227,7 +227,7 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	if modelID == "" {
 		modelID = provider.ID + "/default"
 	}
-	if strings.EqualFold(provider.ID, "openai-codex") {
+	if catalog.IsOpenAICodexProviderID(provider.ID) {
 		if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
 			modelID = "openai/" + strings.TrimSpace(name)
 		} else {
@@ -244,7 +244,7 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	}
 	providerKey = mapCarrierProviderToManagedProvider(providerKey)
 	providerToken := pickProviderToken(provider, sess.EnvVars)
-	if strings.EqualFold(provider.ID, "openai-codex") && strings.EqualFold(cfg.ID, "picoclaw") {
+	if catalog.IsOpenAICodexProviderID(provider.ID) && strings.EqualFold(cfg.ID, "picoclaw") {
 		accountID := extractOpenAIAccountID(providerToken)
 		if err := savePicoclawAuthCredential(home, "openai", providerToken, accountID); err != nil {
 			return nil, fmt.Errorf("write picoclaw auth store: %w", err)
@@ -391,7 +391,7 @@ func buildManagedPicoClawJSONConfigPayload(
 	providerItem := map[string]interface{}{
 		"credential_ref": provider.ID,
 	}
-	if strings.EqualFold(provider.ID, "openai-codex") {
+	if catalog.IsOpenAICodexProviderID(provider.ID) {
 		modelItem["auth_method"] = "oauth"
 		providerItem["auth_method"] = "oauth"
 	} else if providerToken != "" {

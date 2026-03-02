@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"carrier/shared/catalog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -90,7 +91,7 @@ func pickProviderToken(provider *LLMProvider, envVars map[string]string) string 
 	if provider == nil || envVars == nil {
 		return ""
 	}
-	if strings.EqualFold(provider.ID, "openai-codex") {
+	if catalog.IsOpenAICodexProviderID(provider.ID) {
 		for _, key := range []string{"OPENAI_CODEX_TOKEN", "OPENAI_API_KEY", provider.EnvVar} {
 			if token := strings.TrimSpace(envVars[key]); token != "" {
 				return token

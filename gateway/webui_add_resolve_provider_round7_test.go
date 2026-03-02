@@ -95,3 +95,45 @@ func TestResolveWebUIAddProviderID_UsesLatestInstanceWhenConfiguredDefaultUnavai
 		t.Fatalf("resolveWebUIAddProviderID(openclaw) = %q, want anthropic", got)
 	}
 }
+
+func TestResolveWebUIAddProviderID_UsesLatestInstanceAliasProvider(t *testing.T) {
+	t.Run("claude-code alias", func(t *testing.T) {
+		prepareResolveProviderTestEnv(t)
+		storePath := filepath.Join(t.TempDir(), "instances.json")
+		t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+		if err := saveManagedInstances(storePath, []managedAgentInstance{
+			{
+				ID:       "openclaw-legacy",
+				Type:     "openclaw",
+				AgentID:  "openclaw",
+				Provider: "claude-code",
+			},
+		}); err != nil {
+			t.Fatalf("saveManagedInstances: %v", err)
+		}
+
+		if got := resolveWebUIAddProviderID("openclaw"); got != "openai-codex" {
+			t.Fatalf("resolveWebUIAddProviderID(openclaw) = %q, want %q", got, "openai-codex")
+		}
+	})
+
+	t.Run("opencode alias", func(t *testing.T) {
+		prepareResolveProviderTestEnv(t)
+		storePath := filepath.Join(t.TempDir(), "instances.json")
+		t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+		if err := saveManagedInstances(storePath, []managedAgentInstance{
+			{
+				ID:       "openclaw-legacy",
+				Type:     "openclaw",
+				AgentID:  "openclaw",
+				Provider: "opencode",
+			},
+		}); err != nil {
+			t.Fatalf("saveManagedInstances: %v", err)
+		}
+
+		if got := resolveWebUIAddProviderID("openclaw"); got != "openai-codex" {
+			t.Fatalf("resolveWebUIAddProviderID(openclaw) = %q, want %q", got, "openai-codex")
+		}
+	})
+}

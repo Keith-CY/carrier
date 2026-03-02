@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"carrier/shared/catalog"
 	"os"
 	"os/exec"
 	"os/user"
@@ -24,24 +25,27 @@ var (
 )
 
 func LoadProviderCredential(providerID string) (string, string, bool, error) {
-	service := providerCredentialService(providerID)
-	if value, err := loadCredentialFromKeychain(service); err == nil {
-		return value, "macOS-keychain", true, nil
-	} else if !errors.Is(err, errCredentialNotFound) && !errors.Is(err, errCredentialBackendUnavailable) {
-		return "", "", false, err
-	}
+	for _, candidate := range credentialIDCandidates(providerID) {
+		service := providerCredentialService(candidate)
+		if value, err := loadCredentialFromKeychain(service); err == nil {
+			return value, "macOS-keychain", true, nil
+		} else if !errors.Is(err, errCredentialNotFound) && !errors.Is(err, errCredentialBackendUnavailable) {
+			return "", "", false, err
+		}
 
-	value, err := loadCredentialFromFile(providerID)
-	if err == nil {
-		return value, "local-file", true, nil
+		value, err := loadCredentialFromFile(candidate)
+		if err == nil {
+			return value, "local-file", true, nil
+		}
+		if !errors.Is(err, errCredentialNotFound) {
+			return "", "", false, err
+		}
 	}
-	if errors.Is(err, errCredentialNotFound) {
-		return "", "", false, nil
-	}
-	return "", "", false, err
+	return "", "", false, nil
 }
 
 func SaveProviderCredential(providerID, value string) (string, error) {
+	providerID = catalog.NormalizeProviderID(providerID)
 	service := providerCredentialService(providerID)
 	if err := saveCredentialToKeychain(service, value); err == nil {
 		return "macOS-keychain", nil
@@ -52,6 +56,31 @@ func SaveProviderCredential(providerID, value string) (string, error) {
 		return "", err
 	}
 	return "local-file", nil
+}
+
+func credentialIDCandidates(providerID string) []string {
+	raw := strings.TrimSpace(providerID)
+	normalized := catalog.NormalizeProviderID(raw)
+	seen := map[string]struct{}{}
+	candidates := make([]string, 0, 4)
+	seenAdd := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			return
+		}
+		if _, exists := seen[candidate]; exists {
+			return
+		}
+		seen[candidate] = struct{}{}
+		candidates = append(candidates, candidate)
+	}
+	seenAdd(normalized)
+	seenAdd(raw)
+	if normalized == "openai-codex" {
+		seenAdd("claude-code")
+		seenAdd("opencode")
+	}
+	return candidates
 }
 
 func providerCredentialService(providerID string) string {
