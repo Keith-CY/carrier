@@ -1,0 +1,39 @@
+FROM ubuntu:22.04
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends openssh-server sudo && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /run/sshd
+
+# Create test user with sudo access
+RUN useradd -m -s /bin/bash testuser && \
+    echo "testuser:testpassword" | chpasswd && \
+    echo "testuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# Generate a passphrase-protected ed25519 key pair for the test user
+# Passphrase: e2e-test-passphrase
+RUN mkdir -p /home/testuser/.ssh && \
+    ssh-keygen -t ed25519 -f /home/testuser/.ssh/id_ed25519 \
+      -N "e2e-test-passphrase" -C "e2e-test-key" && \
+    cp /home/testuser/.ssh/id_ed25519.pub /home/testuser/.ssh/authorized_keys && \
+    chmod 700 /home/testuser/.ssh && \
+    chmod 600 /home/testuser/.ssh/id_ed25519 /home/testuser/.ssh/authorized_keys && \
+    chown -R testuser:testuser /home/testuser/.ssh
+
+# Copy the private key to a shared location so the host test can access it
+RUN cp /home/testuser/.ssh/id_ed25519 /tmp/e2e_test_key && \
+    chmod 644 /tmp/e2e_test_key
+
+# Configure sshd: allow pubkey auth, disable password auth for test purity
+RUN sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config && \
+    echo "PermitRootLogin no" >> /etc/ssh/sshd_config
+
+# Stub openclaw: create a minimal script that simulates openclaw responses
+RUN mkdir -p /home/testuser/.openclaw/agents/main && \
+    printf '#!/bin/bash\necho "openclaw stub v0.0.0-e2e"\n' > /usr/local/bin/openclaw && \
+    chmod +x /usr/local/bin/openclaw
+
+EXPOSE 22
+
+CMD ["/usr/sbin/sshd", "-D", "-e"]
