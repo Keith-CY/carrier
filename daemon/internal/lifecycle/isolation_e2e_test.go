@@ -45,7 +45,10 @@ func TestE2EIsolationPIDNamespace(t *testing.T) {
 		t.Fatalf("isolated command failed: %v", err)
 	}
 
-	isolatedProcs, _ := strconv.Atoi(strings.TrimSpace(string(output)))
+	isolatedProcs, err := strconv.Atoi(strings.TrimSpace(string(output)))
+	if err != nil {
+		t.Fatalf("failed to parse isolated process count: %v", err)
+	}
 
 	// Isolated should see significantly fewer processes
 	if isolatedProcs >= hostProcs/2 {
@@ -110,8 +113,14 @@ func TestE2EIsolationMultiInstance(t *testing.T) {
 	}
 
 	// Start two isolated processes and get their PID lists
-	wrapped1, _ := backend.WrapCommand("echo $$; ps -e -o pid= | tr -d ' '")
-	wrapped2, _ := backend.WrapCommand("echo $$; ps -e -o pid= | tr -d ' '")
+	wrapped1, err := backend.WrapCommand("echo $$; ps -e -o pid= | tr -d ' '")
+	if err != nil {
+		t.Fatalf("WrapCommand for cmd1 failed: %v", err)
+	}
+	wrapped2, err := backend.WrapCommand("echo $$; ps -e -o pid= | tr -d ' '")
+	if err != nil {
+		t.Fatalf("WrapCommand for cmd2 failed: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -129,8 +138,8 @@ func TestE2EIsolationMultiInstance(t *testing.T) {
 		t.Fatalf("cmd2 start failed: %v", err)
 	}
 
-	cmd1.Wait()
-	cmd2.Wait()
+	_ = cmd1.Wait()
+	_ = cmd2.Wait()
 
 	lines1 := strings.Split(strings.TrimSpace(out1.String()), "\n")
 	lines2 := strings.Split(strings.TrimSpace(out2.String()), "\n")
@@ -175,7 +184,10 @@ func TestE2EIsolationDieWithParent(t *testing.T) {
 	}
 
 	// Start a long-running process inside isolation
-	wrapped, _ := backend.WrapCommand("sleep 60")
+	wrapped, err := backend.WrapCommand("sleep 60")
+	if err != nil {
+		t.Fatalf("WrapCommand failed: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -189,8 +201,8 @@ func TestE2EIsolationDieWithParent(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Kill the parent
-	cmd.Process.Kill()
-	cmd.Wait()
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
 
 	// Give it a moment to clean up
 	time.Sleep(200 * time.Millisecond)
@@ -198,7 +210,7 @@ func TestE2EIsolationDieWithParent(t *testing.T) {
 	// Check if process is still running
 	if err := exec.Command("kill", "-0", strconv.Itoa(pid)).Run(); err == nil {
 		t.Errorf("Child process %d survived parent exit", pid)
-		exec.Command("kill", "-9", strconv.Itoa(pid)).Run()
+		_ = exec.Command("kill", "-9", strconv.Itoa(pid)).Run()
 	} else {
 		t.Logf("Die-with-parent verified: child process %d terminated", pid)
 	}
@@ -241,6 +253,9 @@ func countHostProcesses(t *testing.T) int {
 	if err != nil {
 		return 0
 	}
-	count, _ := strconv.Atoi(strings.TrimSpace(string(output)))
+	count, err := strconv.Atoi(strings.TrimSpace(string(output)))
+	if err != nil {
+		return 0
+	}
 	return count
 }

@@ -18,9 +18,28 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-PLATFORM="${1:-auto}"
+PLATFORM="auto"
 TMPDIR=$(mktemp -d)
 PASS=0; FAIL=0; TOTAL=0
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --platform)
+      PLATFORM="${2:-auto}"
+      shift 2
+      ;;
+    -h|--help)
+      echo "Usage: $0 [--platform linux|macos|windows]"
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      echo "Usage: $0 [--platform linux|macos|windows]"
+      exit 1
+      ;;
+  esac
+done
 
 ###############################################################################
 # Helpers
@@ -233,7 +252,7 @@ test_macos_lima_vm_isolation() {
   vms=$(limactl list --format '{{.Name}}' 2>/dev/null | grep "^carrier-" || echo "")
   
   if [ -n "$vms" ]; then
-    pass "Found Carrier Lima VMs: $(echo $vms | tr '\n' ' ')"
+    pass "Found Carrier Lima VMs: $(echo "$vms" | tr '\n' ' ')"
     
     # Test that each VM is separate
     for vm in $vms; do
@@ -303,7 +322,7 @@ test_windows_wsl_distro() {
   distros=$($wsl_cmd --list --quiet 2>/dev/null | tr -d '\r' | head -5 || echo "")
   
   if [ -n "$distros" ]; then
-    pass "WSL distros available: $(echo $distros | tr '\n' ' ')"
+    pass "WSL distros available: $(echo "$distros" | tr '\n' ' ')"
   else
     fail "No WSL distros found"
     return 1
