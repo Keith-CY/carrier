@@ -17,6 +17,17 @@ const defaultProfilesyncRepoDirName = "profiles-repo"
 
 const gitInstallTimeout = 10 * time.Minute
 
+var runtimeGOOS = runtime.GOOS
+
+var (
+	verifyGitAvailableFn    = verifyGitAvailable
+	installGitFn            = installGit
+	gitInstallStrategiesFn  = gitInstallStrategies
+	commandExistsFn         = commandExists
+	runGitInstallStrategyFn = runGitInstallStrategy
+	osGeteuidFn             = os.Geteuid
+)
+
 func profilesyncRepoRoot() (string, error) {
 	if custom := strings.TrimSpace(os.Getenv("CARRIER_PROFILESYNC_REPO")); custom != "" {
 		return custom, nil
@@ -236,13 +247,13 @@ func ensureProfilesRepoGitIgnore(repoRoot string) error {
 }
 
 func ensureGitAvailable() error {
-	if err := verifyGitAvailable(); err == nil {
+	if err := verifyGitAvailableFn(); err == nil {
 		return nil
 	}
-	if err := installGit(); err != nil {
+	if err := installGitFn(); err != nil {
 		return fmt.Errorf("git is required for profile sync and auto-install failed: %w", err)
 	}
-	if err := verifyGitAvailable(); err != nil {
+	if err := verifyGitAvailableFn(); err != nil {
 		return fmt.Errorf("git remains unavailable after auto-install: %w", err)
 	}
 	return nil
@@ -270,9 +281,9 @@ type gitInstallStrategy struct {
 }
 
 func installGit() error {
-	strategies := gitInstallStrategies()
+	strategies := gitInstallStrategiesFn()
 	if len(strategies) == 0 {
-		return fmt.Errorf("unsupported operating system %q for automatic git installation", runtime.GOOS)
+		return fmt.Errorf("unsupported operating system %q for automatic git installation", runtimeGOOS)
 	}
 	tried := 0
 	failures := make([]string, 0, len(strategies))
@@ -281,27 +292,27 @@ func installGit() error {
 			continue
 		}
 		manager := strategy.InstallSteps[0][0]
-		if !commandExists(manager) {
+		if !commandExistsFn(manager) {
 			continue
 		}
 		tried++
-		if err := runGitInstallStrategy(strategy); err != nil {
+		if err := runGitInstallStrategyFn(strategy); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", strategy.Name, err))
 			continue
 		}
-		if err := verifyGitAvailable(); err == nil {
+		if err := verifyGitAvailableFn(); err == nil {
 			return nil
 		}
 		failures = append(failures, fmt.Sprintf("%s: install finished but git still unavailable", strategy.Name))
 	}
 	if tried == 0 {
-		return fmt.Errorf("no supported package manager found to install git on %s", runtime.GOOS)
+		return fmt.Errorf("no supported package manager found to install git on %s", runtimeGOOS)
 	}
 	return fmt.Errorf("all git installation attempts failed (%s)", strings.Join(failures, "; "))
 }
 
 func gitInstallStrategies() []gitInstallStrategy {
-	switch runtime.GOOS {
+	switch runtimeGOOS {
 	case "darwin":
 		return []gitInstallStrategy{
 			{
@@ -378,13 +389,13 @@ func runGitInstallStrategy(strategy gitInstallStrategy) error {
 }
 
 func applyPrivilege(command string, args []string, requireRoot bool) (string, []string, error) {
-	if !requireRoot || runtime.GOOS == "windows" {
+	if !requireRoot || runtimeGOOS == "windows" {
 		return command, args, nil
 	}
-	if os.Geteuid() == 0 {
+	if osGeteuidFn() == 0 {
 		return command, args, nil
 	}
-	if !commandExists("sudo") {
+	if !commandExistsFn("sudo") {
 		return "", nil, fmt.Errorf("%s requires root privileges but sudo is unavailable", command)
 	}
 	wrapped := make([]string, 0, len(args)+2)

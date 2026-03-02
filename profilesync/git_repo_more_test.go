@@ -313,3 +313,192 @@ func TestRemoteBranchHelpersHappyPath(t *testing.T) {
 		t.Fatalf("pullRemoteBranch should tolerate missing remote branch: %v", err)
 	}
 }
+
+func TestEnsureGitAvailableWithInjectedHooks(t *testing.T) {
+	origVerify := verifyGitAvailableFn
+	origInstall := installGitFn
+	defer func() {
+		verifyGitAvailableFn = origVerify
+		installGitFn = origInstall
+	}()
+
+	t.Run("already available", func(t *testing.T) {
+		verifyCalls := 0
+		installCalls := 0
+		verifyGitAvailableFn = func() error {
+			verifyCalls++
+			return nil
+		}
+		installGitFn = func() error {
+			installCalls++
+			return nil
+		}
+		if err := ensureGitAvailable(); err != nil {
+			t.Fatalf("ensureGitAvailable unexpected error: %v", err)
+		}
+		if verifyCalls != 1 || installCalls != 0 {
+			t.Fatalf("unexpected call counts verify=%d install=%d", verifyCalls, installCalls)
+		}
+	})
+
+	t.Run("install fails", func(t *testing.T) {
+		verifyGitAvailableFn = func() error { return errors.New("missing git") }
+		installGitFn = func() error { return errors.New("install failed") }
+		if err := ensureGitAvailable(); err == nil || !strings.Contains(err.Error(), "auto-install failed") {
+			t.Fatalf("expected auto-install failure, got %v", err)
+		}
+	})
+
+	t.Run("install succeeds but verify still fails", func(t *testing.T) {
+		verifyCount := 0
+		verifyGitAvailableFn = func() error {
+			verifyCount++
+			if verifyCount == 1 {
+				return errors.New("missing git")
+			}
+			return errors.New("still missing")
+		}
+		installGitFn = func() error { return nil }
+		if err := ensureGitAvailable(); err == nil || !strings.Contains(err.Error(), "remains unavailable") {
+			t.Fatalf("expected remains-unavailable error, got %v", err)
+		}
+	})
+
+	t.Run("install recovers availability", func(t *testing.T) {
+		verifyCount := 0
+		verifyGitAvailableFn = func() error {
+			verifyCount++
+			if verifyCount == 1 {
+				return errors.New("missing git")
+			}
+			return nil
+		}
+		installGitFn = func() error { return nil }
+		if err := ensureGitAvailable(); err != nil {
+			t.Fatalf("expected ensureGitAvailable recovery success, got %v", err)
+		}
+	})
+}
+
+func TestInstallGitWithInjectedHooks(t *testing.T) {
+	origRuntime := runtimeGOOS
+	origStrategies := gitInstallStrategiesFn
+	origExists := commandExistsFn
+	origRun := runGitInstallStrategyFn
+	origVerify := verifyGitAvailableFn
+	defer func() {
+		runtimeGOOS = origRuntime
+		gitInstallStrategiesFn = origStrategies
+		commandExistsFn = origExists
+		runGitInstallStrategyFn = origRun
+		verifyGitAvailableFn = origVerify
+	}()
+
+	runtimeGOOS = "linux"
+
+	t.Run("unsupported os when no strategies", func(t *testing.T) {
+		gitInstallStrategiesFn = func() []gitInstallStrategy { return nil }
+		if err := installGit(); err == nil || !strings.Contains(err.Error(), "unsupported operating system") {
+			t.Fatalf("expected unsupported-os error, got %v", err)
+		}
+	})
+
+	t.Run("no package manager found", func(t *testing.T) {
+		gitInstallStrategiesFn = func() []gitInstallStrategy {
+			return []gitInstallStrategy{{Name: "apt-get", InstallSteps: [][]string{{"apt-get", "install", "-y", "git"}}}}
+		}
+		commandExistsFn = func(string) bool { return false }
+		if err := installGit(); err == nil || !strings.Contains(err.Error(), "no supported package manager found") {
+			t.Fatalf("expected no-manager error, got %v", err)
+		}
+	})
+
+	t.Run("all attempts fail", func(t *testing.T) {
+		gitInstallStrategiesFn = func() []gitInstallStrategy {
+			return []gitInstallStrategy{{Name: "apt-get", InstallSteps: [][]string{{"apt-get", "install", "-y", "git"}}}}
+		}
+		commandExistsFn = func(string) bool { return true }
+		runGitInstallStrategyFn = func(gitInstallStrategy) error { return errors.New("step failed") }
+		verifyGitAvailableFn = func() error { return errors.New("missing git") }
+		if err := installGit(); err == nil || !strings.Contains(err.Error(), "all git installation attempts failed") {
+			t.Fatalf("expected all-attempts-failed error, got %v", err)
+		}
+	})
+
+	t.Run("install succeeds but verify fails", func(t *testing.T) {
+		gitInstallStrategiesFn = func() []gitInstallStrategy {
+			return []gitInstallStrategy{{Name: "apt-get", InstallSteps: [][]string{{"apt-get", "install", "-y", "git"}}}}
+		}
+		commandExistsFn = func(string) bool { return true }
+		runGitInstallStrategyFn = func(gitInstallStrategy) error { return nil }
+		verifyGitAvailableFn = func() error { return errors.New("still missing") }
+		if err := installGit(); err == nil || !strings.Contains(err.Error(), "all git installation attempts failed") {
+			t.Fatalf("expected all-attempts-failed verify error, got %v", err)
+		}
+	})
+
+	t.Run("install and verify succeed", func(t *testing.T) {
+		gitInstallStrategiesFn = func() []gitInstallStrategy {
+			return []gitInstallStrategy{{Name: "apt-get", InstallSteps: [][]string{{"apt-get", "install", "-y", "git"}}}}
+		}
+		commandExistsFn = func(string) bool { return true }
+		runGitInstallStrategyFn = func(gitInstallStrategy) error { return nil }
+		verifyGitAvailableFn = func() error { return nil }
+		if err := installGit(); err != nil {
+			t.Fatalf("expected installGit success, got %v", err)
+		}
+	})
+}
+
+func TestGitInstallStrategiesAllOSBranches(t *testing.T) {
+	origRuntime := runtimeGOOS
+	defer func() { runtimeGOOS = origRuntime }()
+
+	runtimeGOOS = "linux"
+	if got := gitInstallStrategies(); len(got) == 0 {
+		t.Fatalf("expected linux strategies")
+	}
+	runtimeGOOS = "darwin"
+	if got := gitInstallStrategies(); len(got) == 0 {
+		t.Fatalf("expected darwin strategies")
+	}
+	runtimeGOOS = "windows"
+	if got := gitInstallStrategies(); len(got) == 0 {
+		t.Fatalf("expected windows strategies")
+	}
+	runtimeGOOS = "plan9"
+	if got := gitInstallStrategies(); got != nil {
+		t.Fatalf("expected nil strategies for unsupported os, got %v", got)
+	}
+}
+
+func TestApplyPrivilegeWindowsAndRootBranches(t *testing.T) {
+	origRuntime := runtimeGOOS
+	origEuid := osGeteuidFn
+	origExists := commandExistsFn
+	defer func() {
+		runtimeGOOS = origRuntime
+		osGeteuidFn = origEuid
+		commandExistsFn = origExists
+	}()
+
+	runtimeGOOS = "windows"
+	cmd, args, err := applyPrivilege("apt-get", []string{"install", "git"}, true)
+	if err != nil || cmd != "apt-get" || len(args) != 2 {
+		t.Fatalf("expected windows branch passthrough, cmd=%q args=%v err=%v", cmd, args, err)
+	}
+
+	runtimeGOOS = "linux"
+	osGeteuidFn = func() int { return 0 }
+	cmd, args, err = applyPrivilege("apt-get", []string{"install", "git"}, true)
+	if err != nil || cmd != "apt-get" || len(args) != 2 {
+		t.Fatalf("expected root passthrough, cmd=%q args=%v err=%v", cmd, args, err)
+	}
+
+	osGeteuidFn = func() int { return 1000 }
+	commandExistsFn = func(name string) bool { return name == "sudo" }
+	cmd, args, err = applyPrivilege("apt-get", []string{"install", "git"}, true)
+	if err != nil || cmd != "sudo" || len(args) < 3 || args[0] != "-n" {
+		t.Fatalf("expected sudo wrapping, cmd=%q args=%v err=%v", cmd, args, err)
+	}
+}
