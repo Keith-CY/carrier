@@ -337,12 +337,11 @@ jobs:
             else
               cargo tauri build --config src-tauri/tauri.conf.json
             fi
-            app_bundle="$(find "${tauri_target_dir}" -type f \( -name '*.AppImage' -o -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.deb' -o -name '*.rpm' -o -name '*.appimage' -o -name '*.app' -o -name '*.pkg' -o -name '*.zip' \) | head -n 1 || true)"
-            if [[ -z "${app_bundle:-}" ]]; then
-              app_bundle="$(find "${tauri_target_dir}" -type d -name '*.app' | head -n 1 || true)"
-            fi
-            if [[ -z "${app_bundle:-}" ]]; then
-              echo "ERROR: no Tauri bundle found in ${tauri_target_dir}."
+            if ! app_bundle="$(node scripts/ci/select-tauri-bundle.cjs \
+              --target-dir "${tauri_target_dir}" \
+              --goos "${{ matrix.goos }}" \
+              --goarch "${{ matrix.goarch }}")"; then
+              echo "ERROR: no Tauri bundle found in ${tauri_target_dir}/**/release/bundle."
               exit 1
             fi
 
