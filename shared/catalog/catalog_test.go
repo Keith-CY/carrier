@@ -99,3 +99,22 @@ func TestMapToManagedProvider(t *testing.T) {
 		}
 	}
 }
+
+func TestIsOpenAICodexProviderID(t *testing.T) {
+	cases := map[string]bool{
+		"openai-codex":    true,
+		"claude-code":     true,
+		"opencode":        true,
+		"openAI-codex":    true,
+		"openai":          false,
+		"openrouter":      false,
+		"   OpEnAI-CoDeX": true,
+		"":                false,
+		"vllm":            false,
+	}
+	for input, want := range cases {
+		if got := IsOpenAICodexProviderID(input); got != want {
+			t.Fatalf("IsOpenAICodexProviderID(%q) = %v, want %v", input, got, want)
+		}
+	}
+}
