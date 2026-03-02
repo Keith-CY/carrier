@@ -79,9 +79,14 @@ fn spawn_background(args: &[&str]) -> Result<(), String> {
     command.stdin(Stdio::null());
     command.stdout(Stdio::null());
     command.stderr(Stdio::null());
-    command
+    let mut child = command
         .spawn()
         .map_err(|err| format!("failed to spawn `carrier {}`: {err}", args.join(" ")))?;
+    std::thread::spawn(move || {
+        if let Err(err) = child.wait() {
+            eprintln!("background service exited with error: {err}");
+        }
+    });
     Ok(())
 }
 
@@ -159,7 +164,10 @@ fn is_http_ready(url: &str) -> bool {
 
     let mut response_reader = BufReader::new(stream);
     let mut status_line = String::new();
-    let read_len = response_reader.read_line(&mut status_line).unwrap_or(0);
+    let read_len = match response_reader.read_line(&mut status_line) {
+        Ok(len) => len,
+        Err(_) => return false,
+    };
     if read_len == 0 {
         return false;
     }
