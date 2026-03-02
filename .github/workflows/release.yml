@@ -332,7 +332,11 @@ jobs:
             fi
 
             tauri_target_dir="src-tauri/target"
-            cargo tauri build --config src-tauri/tauri.conf.json
+            if [[ "${{ matrix.goos }}" == "darwin" && "${{ matrix.goarch }}" == "arm64" ]]; then
+              cargo tauri build --config src-tauri/tauri.conf.json --bundles app
+            else
+              cargo tauri build --config src-tauri/tauri.conf.json
+            fi
             app_bundle="$(find "${tauri_target_dir}" -type f \( -name '*.AppImage' -o -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.deb' -o -name '*.rpm' -o -name '*.appimage' -o -name '*.app' -o -name '*.pkg' -o -name '*.zip' \) | head -n 1 || true)"
             if [[ -z "${app_bundle:-}" ]]; then
               app_bundle="$(find "${tauri_target_dir}" -type d -name '*.app' | head -n 1 || true)"
