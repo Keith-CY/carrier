@@ -119,7 +119,7 @@ func TestUpsertManagedInstance(t *testing.T) {
 	}
 }
 
-func TestCleanupManagedInstanceFiles(t *testing.T) {
+func TestCleanupManagedInstanceFilesAdditionalCases(t *testing.T) {
 	testWorkspace := t.TempDir()
 	recordFile := filepath.Join(testWorkspace, "record.jsonl")
 	configFile := filepath.Join(testWorkspace, "config.toml")

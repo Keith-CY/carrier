@@ -63,7 +63,7 @@ func TestSanitizeAuditDetails(t *testing.T) {
 func TestAppendGatewayAuditEventAndRotate(t *testing.T) {
 	auditLog := filepath.Join(t.TempDir(), "gateway-audit.jsonl")
 
-	if err := os.WriteFile(auditLog, strings.Repeat("a", int(maxGatewayAuditLogBytes+1)), 0o600); err != nil {
+	if err := os.WriteFile(auditLog, []byte(strings.Repeat("a", int(maxGatewayAuditLogBytes+1))), 0o600); err != nil {
 		t.Fatalf("prepare audit log for rotation error: %v", err)
 	}
 

@@ -32,7 +32,7 @@ func TestRemoteControlStateLoadAndSaveValidation(t *testing.T) {
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatalf("write invalid state file: %v", err)
 	}
-	if _, err := loadRemoteControlState(); err == nil {
+	if _, _, err := loadRemoteControlState(); err == nil {
 		t.Fatal("expected parse failure for invalid state JSON")
 	}
 }
@@ -177,10 +177,14 @@ func TestProviderBindingUpdateAndLookup(t *testing.T) {
 		t.Fatalf("upsertProviderBinding failed: %v", err)
 	}
 
-	if err := deleteProviderBinding("missing"); err != nil {
+	deleted, err := deleteProviderBinding("missing")
+	if err != nil {
 		t.Fatalf("deleteProviderBinding on missing binding returned error: %v", err)
 	}
-	deleted, err := deleteProviderBinding(binding.ID)
+	if deleted {
+		t.Fatalf("deleteProviderBinding on missing binding should be false")
+	}
+	deleted, err = deleteProviderBinding(binding.ID)
 	if err != nil || !deleted {
 		t.Fatalf("deleteProviderBinding failed deleted=%v err=%v", deleted, err)
 	}
