@@ -16,8 +16,15 @@ func TestProviderCatalogBasics(t *testing.T) {
 			t.Fatalf("provider id = %q, want %q", p.ID, id)
 		}
 	}
-	if p := GetProvider("vllm"); p != nil {
-		t.Fatalf("expected nil for removed alias vllm, got %#v", p)
+	// Aliases should resolve to their canonical provider.
+	for _, alias := range []string{"vllm", "openai-v1"} {
+		p := GetProvider(alias)
+		if p == nil {
+			t.Fatalf("alias %q should resolve to openai-compatible", alias)
+		}
+		if p.ID != "openai-compatible" {
+			t.Fatalf("GetProvider(%q).ID = %q, want openai-compatible", alias, p.ID)
+		}
 	}
 	if !IsSupportedProvider("openai") {
 		t.Fatal("openai should be supported")
@@ -82,6 +89,24 @@ func TestMapToManagedProvider(t *testing.T) {
 	for input, want := range cases {
 		if got := MapToManagedProvider(input); got != want {
 			t.Fatalf("MapToManagedProvider(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestNormalizeProviderID(t *testing.T) {
+	cases := map[string]string{
+		"vllm":               "openai-compatible",
+		"VLLM":               "openai-compatible",
+		"openai-v1":          "openai-compatible",
+		"  openai-v1  ":      "openai-compatible",
+		"openai":             "openai",
+		"anthropic":          "anthropic",
+		"openai-compatible":  "openai-compatible",
+		"unknown-provider":   "unknown-provider",
+	}
+	for input, want := range cases {
+		if got := NormalizeProviderID(input); got != want {
+			t.Fatalf("NormalizeProviderID(%q) = %q, want %q", input, got, want)
 		}
 	}
 }

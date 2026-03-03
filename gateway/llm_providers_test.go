@@ -72,10 +72,13 @@ func TestGetLLMProvider_Unknown(t *testing.T) {
 	}
 }
 
-func TestGetLLMProvider_NoLegacyAlias(t *testing.T) {
+func TestGetLLMProvider_AliasResolution(t *testing.T) {
 	p := GetLLMProvider("vllm")
-	if p != nil {
-		t.Fatalf("expected nil provider for removed alias, got %#v", p)
+	if p == nil {
+		t.Fatal("expected vllm alias to resolve to openai-compatible")
+	}
+	if p.ID != "openai-compatible" {
+		t.Fatalf("GetLLMProvider(vllm).ID = %q, want openai-compatible", p.ID)
 	}
 }
 

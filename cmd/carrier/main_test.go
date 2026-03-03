@@ -68,9 +68,13 @@ func TestPickMinimalProviderWithReasonFallsBackToOpenAICodex(t *testing.T) {
 	}
 }
 
-func TestResolveChoice_ProviderAliasRemoved(t *testing.T) {
-	if _, ok := resolveChoice("vllm", providerOptions); ok {
-		t.Fatal("expected vllm alias to be unsupported")
+func TestResolveChoice_ProviderAlias(t *testing.T) {
+	opt, ok := resolveChoice("vllm", providerOptions)
+	if !ok {
+		t.Fatal("expected vllm alias to resolve via providerOptions")
+	}
+	if opt.ID != "openai-compatible" {
+		t.Fatalf("resolveChoice(vllm).ID = %q, want openai-compatible", opt.ID)
 	}
 }
 
