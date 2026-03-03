@@ -314,7 +314,6 @@ func TestRemoteInstallPicoClawAndStreaming(t *testing.T) {
 		if strings.Contains(command, "picoclaw_Linux") && onChunk != nil {
 			onChunk(remoteStreamChunk{Stream: "stdout", Text: "download"})
 			onChunk(remoteStreamChunk{Stream: "stdout", Text: "done"})
-			chunkCalls += 1
 		}
 		return remoteExecResult{ExitCode: 0, Stdout: "download\ndone"}
 	})
@@ -324,9 +323,8 @@ func TestRemoteInstallPicoClawAndStreaming(t *testing.T) {
 		"h1",
 		"picoclaw",
 		false,
-		func(chunk remoteStreamChunk) {
+		func(_ remoteStreamChunk) {
 			chunkCalls++
-			_ = chunk
 		},
 	)
 	if streamErr != nil {
@@ -335,8 +333,8 @@ func TestRemoteInstallPicoClawAndStreaming(t *testing.T) {
 	if !streamRes.Installed {
 		t.Fatal("expected streaming install installed=true")
 	}
-	if chunkCalls == 0 {
-		t.Fatal("expected stream chunks for picoclaw install")
+	if chunkCalls != 2 {
+		t.Fatalf("expected 2 stream chunks for picoclaw install, got %d", chunkCalls)
 	}
 }
 
@@ -368,7 +366,6 @@ func TestRemoteInstallZeroClawAndStreaming(t *testing.T) {
 		if strings.Contains(command, "zeroclaw_") || strings.Contains(command, "zeroclaw") {
 			if onChunk != nil {
 				onChunk(remoteStreamChunk{Stream: "stdout", Text: "installed"})
-				chunkCalls++
 			}
 		}
 		return remoteExecResult{ExitCode: 0}
@@ -389,8 +386,8 @@ func TestRemoteInstallZeroClawAndStreaming(t *testing.T) {
 	if !streamRes.Installed {
 		t.Fatal("expected zero claw streaming install installed=true")
 	}
-	if chunkCalls == 0 {
-		t.Fatal("expected stream chunks for zeroclaw install")
+	if chunkCalls != 1 {
+		t.Fatalf("expected 1 stream chunk for zeroclaw install, got %d", chunkCalls)
 	}
 }
 
