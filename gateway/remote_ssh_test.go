@@ -333,3 +333,37 @@ func TestRunRemoteCommandWithRetryStopsOnNonRetryableFailure(t *testing.T) {
 		t.Fatalf("expected exit code from failed command, got %d", res.ExitCode)
 	}
 }
+
+func TestEnsureSSHProcessEnvAddsHomeWhenMissing(t *testing.T) {
+	t.Setenv("HOME", "/tmp/carrier-home")
+	got := ensureSSHProcessEnv([]string{"PATH=/usr/bin"})
+	home, ok := lookupEnvValue(got, "HOME")
+	if !ok {
+		t.Fatalf("expected HOME to be added")
+	}
+	if home != "/tmp/carrier-home" {
+		t.Fatalf("expected HOME=/tmp/carrier-home, got %q", home)
+	}
+}
+
+func TestEnsureSSHProcessEnvPreservesExistingHome(t *testing.T) {
+	got := ensureSSHProcessEnv([]string{"HOME=/already-set", "PATH=/usr/bin"})
+	home, ok := lookupEnvValue(got, "HOME")
+	if !ok {
+		t.Fatalf("expected HOME to exist")
+	}
+	if home != "/already-set" {
+		t.Fatalf("expected HOME to stay /already-set, got %q", home)
+	}
+}
+
+func lookupEnvValue(env []string, key string) (string, bool) {
+	prefix := key + "="
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			continue
+		}
+		return strings.TrimPrefix(entry, prefix), true
+	}
+	return "", false
+}
