@@ -16,6 +16,10 @@ func TestProviderCatalogBasics(t *testing.T) {
 			t.Fatalf("provider id = %q, want %q", p.ID, id)
 		}
 	}
+	// Unknown provider returns nil.
+	if p := GetProvider("nonexistent-provider"); p != nil {
+		t.Fatalf("expected nil for unknown provider, got %#v", p)
+	}
 	// Aliases should resolve to their canonical provider.
 	for _, alias := range []string{"vllm", "openai-v1"} {
 		p := GetProvider(alias)
@@ -90,6 +94,24 @@ func TestMapToManagedProvider(t *testing.T) {
 		if got := MapToManagedProvider(input); got != want {
 			t.Fatalf("MapToManagedProvider(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestProviderAliasesFor(t *testing.T) {
+	aliases := ProviderAliasesFor("openai-compatible")
+	if len(aliases) != 2 {
+		t.Fatalf("ProviderAliasesFor(openai-compatible) len = %d, want 2", len(aliases))
+	}
+	seen := map[string]bool{}
+	for _, a := range aliases {
+		seen[a] = true
+	}
+	if !seen["vllm"] || !seen["openai-v1"] {
+		t.Fatalf("expected vllm and openai-v1, got %v", aliases)
+	}
+	// Provider with no aliases returns nil.
+	if got := ProviderAliasesFor("anthropic"); got != nil {
+		t.Fatalf("ProviderAliasesFor(anthropic) = %v, want nil", got)
 	}
 }
 
