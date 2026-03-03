@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -258,5 +259,396 @@ func TestRemoteWriteOpenClawCarrierSecretsUsesRsyncPayload(t *testing.T) {
 	openai, _ := providers["openai"].(map[string]interface{})
 	if strings.TrimSpace(anyToString(openai["apiKey"])) != "sk-openai-rsync" {
 		t.Fatalf("unexpected secrets payload: %+v", payload)
+	}
+}
+
+func TestRemoteInstallReleaseTagPrefersManagedVersionAndFallsBack(t *testing.T) {
+	resetManagedCompatLockForTests()
+	t.Cleanup(func() {
+		resetManagedCompatLockForTests()
+	})
+
+	lockPath := filepath.Join(t.TempDir(), "upstreams.lock.json")
+	lock := `{"schema_version":1,"agents":{"zeroclaw":{"repository":"zeroclaw-labs/zeroclaw","recommended_version":"1.2.3","supported_renderers":[{"id":"zeroclaw.toml.v1","version_range":">=0.1.0","config_format":"toml","config_path":"~/.zeroclaw/config.toml"}]}}}`
+	if err := os.WriteFile(lockPath, []byte(lock), 0o600); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+	t.Setenv("CARRIER_UPSTREAM_LOCK_PATH", lockPath)
+
+	managedVersion := remoteInstallReleaseTag("zeroclaw", "v9.9.9")
+	if managedVersion != "v1.2.3" {
+		t.Fatalf("expected v-prefixed managed version, got %q", managedVersion)
+	}
+
+	fallbackVersion := remoteInstallReleaseTag("ghost-claw", "v9.9.9")
+	if fallbackVersion != "v9.9.9" {
+		t.Fatalf("expected fallback version for unknown agent, got %q", fallbackVersion)
+	}
+}
+
+func TestRemoteInstallPicoClawAndStreaming(t *testing.T) {
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		if strings.Contains(command, "picoclaw_Linux") {
+			return remoteExecResult{ExitCode: 0}
+		}
+		return remoteExecResult{ExitCode: 0}
+	})
+
+	res, err := remoteInstallPicoClaw(context.Background(), RemoteHost{
+		Host:        "127.0.0.1",
+		Port:        22,
+		User:        "carrier",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     "/tmp/id_ed25519",
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	}, "h1", "picoclaw", false)
+	if err != nil {
+		t.Fatalf("remoteInstallPicoClaw()=%v", err)
+	}
+	if !res.Installed {
+		t.Fatal("expected picoclaw install installed=true")
+	}
+
+	chunkCalls := 0
+	configureSSHStreamRunner(t, func(command string, onChunk func(remoteStreamChunk)) remoteExecResult {
+		if strings.Contains(command, "picoclaw_Linux") && onChunk != nil {
+			onChunk(remoteStreamChunk{Stream: "stdout", Text: "download"})
+			onChunk(remoteStreamChunk{Stream: "stdout", Text: "done"})
+		}
+		return remoteExecResult{ExitCode: 0, Stdout: "download\ndone"}
+	})
+	streamRes, streamErr := remoteInstallPicoClawStreaming(
+		context.Background(),
+		RemoteHost{Host: "127.0.0.1", Port: 22, User: "carrier", AuthMode: RemoteAuthModePrivateKey, KeyPath: "/tmp/id_ed25519", RuntimeMode: RemoteRuntimeModeOnDemand},
+		"h1",
+		"picoclaw",
+		false,
+		func(_ remoteStreamChunk) {
+			chunkCalls++
+		},
+	)
+	if streamErr != nil {
+		t.Fatalf("remoteInstallPicoClawStreaming()=%v", streamErr)
+	}
+	if !streamRes.Installed {
+		t.Fatal("expected streaming install installed=true")
+	}
+	if chunkCalls != 2 {
+		t.Fatalf("expected 2 stream chunks for picoclaw install, got %d", chunkCalls)
+	}
+}
+
+func TestRemoteInstallZeroClawAndStreaming(t *testing.T) {
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		if strings.Contains(command, "zeroclaw-") {
+			return remoteExecResult{ExitCode: 0}
+		}
+		return remoteExecResult{ExitCode: 0}
+	})
+
+	res, err := remoteInstallZeroClaw(context.Background(), RemoteHost{
+		Host:        "127.0.0.1",
+		Port:        22,
+		User:        "carrier",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     "/tmp/id_ed25519",
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	}, "h1", "zeroclaw", false)
+	if err != nil {
+		t.Fatalf("remoteInstallZeroClaw()=%v", err)
+	}
+	if !res.Installed {
+		t.Fatal("expected zeroclaw install installed=true")
+	}
+
+	chunkCalls := 0
+	configureSSHStreamRunner(t, func(command string, onChunk func(remoteStreamChunk)) remoteExecResult {
+		if strings.Contains(command, "zeroclaw_") || strings.Contains(command, "zeroclaw") {
+			if onChunk != nil {
+				onChunk(remoteStreamChunk{Stream: "stdout", Text: "installed"})
+			}
+		}
+		return remoteExecResult{ExitCode: 0}
+	})
+	streamRes, streamErr := remoteInstallZeroClawStreaming(context.Background(), RemoteHost{
+		Host:        "127.0.0.1",
+		Port:        22,
+		User:        "carrier",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     "/tmp/id_ed25519",
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	}, "h1", "zeroclaw", false, func(_ remoteStreamChunk) {
+		chunkCalls++
+	})
+	if streamErr != nil {
+		t.Fatalf("remoteInstallZeroClawStreaming()=%v", streamErr)
+	}
+	if !streamRes.Installed {
+		t.Fatal("expected zero claw streaming install installed=true")
+	}
+	if chunkCalls != 1 {
+		t.Fatalf("expected 1 stream chunk for zeroclaw install, got %d", chunkCalls)
+	}
+}
+
+func TestRemoteInstallZeroClawStreamingAcceptsNilCallback(t *testing.T) {
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		return remoteExecResult{ExitCode: 0, Stdout: "ok"}
+	})
+	configureSSHStreamRunner(t, func(command string, onChunk func(remoteStreamChunk)) remoteExecResult {
+		if strings.Contains(command, "zeroclaw_") || strings.Contains(command, "zeroclaw") {
+			if onChunk != nil {
+				t.Fatal("expected nil callback to be accepted")
+			}
+		}
+		return remoteExecResult{ExitCode: 0, Stdout: "ok"}
+	})
+
+	streamRes, streamErr := remoteInstallZeroClawStreaming(context.Background(), RemoteHost{
+		Host:        "127.0.0.1",
+		Port:        22,
+		User:        "carrier",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     "/tmp/id_ed25519",
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	}, "h1", "zeroclaw", false, nil)
+	if streamErr != nil {
+		t.Fatalf("remoteInstallZeroClawStreaming()=%v", streamErr)
+	}
+	if !streamRes.Installed {
+		t.Fatal("expected zero claw streaming install installed=true")
+	}
+}
+
+func TestRemoteGetLogsClampTailBounds(t *testing.T) {
+	var captured []string
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		captured = append(captured, command)
+		switch {
+		case strings.Contains(command, "tail -n 200"):
+			return remoteExecResult{ExitCode: 0, Stdout: ""}
+		case strings.Contains(command, "tail -n 2000"):
+			return remoteExecResult{ExitCode: 0, Stdout: "logs"}
+		default:
+			return remoteExecResult{ExitCode: 1, Stderr: "unexpected command"}
+		}
+	})
+
+	host := RemoteHost{Host: "127.0.0.1", Port: 22, User: "carrier", AuthMode: RemoteAuthModePrivateKey, KeyPath: "/tmp/id_ed25519", RuntimeMode: RemoteRuntimeModeOnDemand}
+
+	if _, _, err := remoteGetLogs(context.Background(), host, "main", 0); err != nil {
+		t.Fatalf("remoteGetLogs default-tail returned error: %v", err)
+	}
+
+	if _, _, err := remoteGetLogs(context.Background(), host, "main", 3000); err != nil {
+		t.Fatalf("remoteGetLogs max-tail returned error: %v", err)
+	}
+	if len(captured) != 2 {
+		t.Fatalf("expected two log commands, got %d", len(captured))
+	}
+	if !strings.Contains(captured[0], "tail -n 200") {
+		t.Fatalf("expected default tail command to clamp to 200, command=%q", captured[0])
+	}
+	if !strings.Contains(captured[1], "tail -n 2000") {
+		t.Fatalf("expected max tail command to clamp to 2000, command=%q", captured[1])
+	}
+}
+
+func TestRemoteGetLogsTailClampsLowerBoundForGatewayOnly(t *testing.T) {
+	var capturedTail []string
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		capturedTail = append(capturedTail, command)
+		return remoteExecResult{ExitCode: 0, Stdout: "logs"}
+	})
+
+	host := RemoteHost{Host: "127.0.0.1", Port: 22, User: "carrier", AuthMode: RemoteAuthModePrivateKey, KeyPath: "/tmp/id_ed25519", RuntimeMode: RemoteRuntimeModeOnDemand}
+
+	if _, _, err := remoteGetLogs(context.Background(), host, "main", -1); err != nil {
+		t.Fatalf("remoteGetLogs default-tail returned error: %v", err)
+	}
+	if len(capturedTail) == 0 {
+		t.Fatal("expected captured command for tail clamp")
+	}
+	if !strings.Contains(capturedTail[len(capturedTail)-1], "tail -n 200") {
+		t.Fatalf("expected lower bound clamp to 200, command=%q", capturedTail[len(capturedTail)-1])
+	}
+}
+
+func TestRemoteGetLogsFailurePropagatesCommandError(t *testing.T) {
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		return remoteExecResult{ExitCode: 1, Stderr: "failed"}
+	})
+
+	_, _, err := remoteGetLogs(context.Background(), RemoteHost{
+		Host:        "127.0.0.1",
+		Port:        22,
+		User:        "carrier",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     "/tmp/id_ed25519",
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	}, "main", 10)
+	if err == nil {
+		t.Fatal("expected remoteGetLogs to fail")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "fetch remote logs") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRemotePatchPicoClawConfigMergesAndWritesSnapshot(t *testing.T) {
+	writeCommand := ""
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "cat \"$HOME/.picoclaw/config.json\""):
+			return remoteExecResult{ExitCode: 0, Stdout: `{"provider":"openai","nested":{"a":"1"}}`}
+		case strings.Contains(command, "cat > \"$HOME/.picoclaw/config.json\""):
+			writeCommand = command
+			return remoteExecResult{ExitCode: 0}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	merged, snapshot, _, err := remotePatchPicoClawConfig(context.Background(), RemoteHost{
+		Host:        "127.0.0.1",
+		Port:        22,
+		User:        "carrier",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     "/tmp/id_ed25519",
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	}, map[string]interface{}{
+		"nested":   map[string]interface{}{"b": "2"},
+		"provider": "openai",
+	})
+	if err != nil {
+		t.Fatalf("remotePatchPicoClawConfig()=%v", err)
+	}
+	if !strings.HasPrefix(snapshot, "$HOME/.picoclaw/snapshots/picoclaw-") {
+		t.Fatalf("unexpected snapshot path %q", snapshot)
+	}
+	if writeCommand == "" {
+		t.Fatal("expected picoclaw write command")
+	}
+	nestedRaw, ok := merged["nested"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected nested merged map, got %#v", merged["nested"])
+	}
+	if nestedRaw["a"] != "1" || nestedRaw["b"] != "2" {
+		t.Fatalf("unexpected merged nested config: %#v", nestedRaw)
+	}
+}
+
+func TestRemotePatchZeroClawConfigRequiresRawTomlAndWrites(t *testing.T) {
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "cat \"$HOME/.zeroclaw/config.toml\""):
+			return remoteExecResult{ExitCode: 0, Stdout: "api_key = \"old\""}
+		case strings.Contains(command, "cat > \"$HOME/.zeroclaw/config.toml\""):
+			return remoteExecResult{ExitCode: 0}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	patched, snapshot, _, err := remotePatchZeroClawConfig(context.Background(), RemoteHost{
+		Host:        "127.0.0.1",
+		Port:        22,
+		User:        "carrier",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     "/tmp/id_ed25519",
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	}, map[string]interface{}{"raw_toml": "api_key = \"new\""})
+	if err != nil {
+		t.Fatalf("remotePatchZeroClawConfig()=%v", err)
+	}
+	if !strings.HasPrefix(snapshot, "$HOME/.zeroclaw/snapshots/zeroclaw-") {
+		t.Fatalf("unexpected snapshot path: %q", snapshot)
+	}
+	if strings.TrimSpace(anyToString(patched["raw_toml"])) != "api_key = \"new\"" {
+		t.Fatalf("unexpected patched zeroclaw raw_toml: %#v", patched)
+	}
+
+	if _, _, _, err := remotePatchZeroClawConfig(context.Background(), RemoteHost{
+		Host:        "127.0.0.1",
+		Port:        22,
+		User:        "carrier",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     "/tmp/id_ed25519",
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	}, map[string]interface{}{"foo": "bar"}); err == nil {
+		t.Fatal("expected remotePatchZeroClawConfig to fail when raw_toml missing")
+	}
+}
+
+func TestRemoteListSessionsParsesSessionLines(t *testing.T) {
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		return remoteExecResult{ExitCode: 0, Stdout: "s1\tsessions\t12\t1700000000\t/home/main/sessions/s1.jsonl\ninvalidline\ns2\tsessions_archive\t5\t1700000001\t/home/main/sessions_archive/s2.jsonl"}
+	})
+
+	entries, steps, err := remoteListSessions(context.Background(), RemoteHost{
+		Host:        "127.0.0.1",
+		Port:        22,
+		User:        "carrier",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     "/tmp/id_ed25519",
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	}, "main")
+	if err != nil {
+		t.Fatalf("remoteListSessions()=%v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 parsed entries, got %d", len(entries))
+	}
+	if len(steps) == 0 {
+		t.Fatal("expected steps to include command result")
+	}
+
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		return remoteExecResult{ExitCode: 1, Stderr: "bad"}
+	})
+	if _, _, err := remoteListSessions(context.Background(), RemoteHost{
+		Host:        "127.0.0.1",
+		Port:        22,
+		User:        "carrier",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     "/tmp/id_ed25519",
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	}, "main"); err == nil {
+		t.Fatal("expected remoteListSessions error")
+	}
+}
+
+func TestRemoteArchiveSessionAndDeleteSessionActions(t *testing.T) {
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		if strings.Contains(command, "mv") {
+			return remoteExecResult{ExitCode: 0}
+		}
+		if strings.Contains(command, "rm -f") {
+			return remoteExecResult{ExitCode: 0}
+		}
+		return remoteExecResult{ExitCode: 0}
+	})
+
+	host := RemoteHost{Host: "127.0.0.1", Port: 22, User: "carrier", AuthMode: RemoteAuthModePrivateKey, KeyPath: "/tmp/id_ed25519", RuntimeMode: RemoteRuntimeModeOnDemand}
+	if _, err := remoteArchiveSession(context.Background(), host, "main", "sess-1"); err != nil {
+		t.Fatalf("remoteArchiveSession success returned error: %v", err)
+	}
+
+	if _, err := remoteDeleteSession(context.Background(), host, "main", "sess-1"); err != nil {
+		t.Fatalf("remoteDeleteSession success returned error: %v", err)
+	}
+
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		return remoteExecResult{ExitCode: 44}
+	})
+	if _, err := remoteArchiveSession(context.Background(), host, "main", "sess-missing"); err == nil {
+		t.Fatal("expected remoteArchiveSession not-found error")
+	}
+
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		return remoteExecResult{ExitCode: 1}
+	})
+	if _, err := remoteDeleteSession(context.Background(), host, "main", "sess-fail"); err == nil {
+		t.Fatal("expected remoteDeleteSession failure error")
 	}
 }
