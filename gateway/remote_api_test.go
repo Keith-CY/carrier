@@ -1523,3 +1523,100 @@ func TestRemoteCodeAgentValidationEdges(t *testing.T) {
 		t.Fatalf("expected invalid codeagent capability error, got status=%d body=%s", codeagentInvalidCapabilityRec.Code, codeagentInvalidCapabilityRec.Body.String())
 	}
 }
+
+func TestProviderProfilesAndBindingsErrorPaths(t *testing.T) {
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	disabledMux := buildRemoteFeatureMuxWithConfigAndDaemonHandlers(t, &GatewayConfig{
+		RemoteControlPlaneEnabled: false,
+		RemoteChatEnabled:         true,
+		ProviderBindingEnabled:    true,
+	}, nil)
+	disabledProfilesRec := runJSONRequest(t, disabledMux, http.MethodGet, "/api/v1/provider-profiles", "")
+	if disabledProfilesRec.Code != http.StatusNotFound {
+		t.Fatalf("expected provider-profiles disabled => 404, got status=%d body=%s", disabledProfilesRec.Code, disabledProfilesRec.Body.String())
+	}
+	disabledBindingsRec := runJSONRequest(t, disabledMux, http.MethodGet, "/api/v1/provider-bindings", "")
+	if disabledBindingsRec.Code != http.StatusNotFound {
+		t.Fatalf("expected provider-bindings disabled => 404, got status=%d body=%s", disabledBindingsRec.Code, disabledBindingsRec.Body.String())
+	}
+
+	methodNotAllowedRec := runJSONRequest(t, mux, http.MethodPut, "/api/v1/provider-profiles", "{}")
+	if methodNotAllowedRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected provider-profiles root method not allowed, got status=%d body=%s", methodNotAllowedRec.Code, methodNotAllowedRec.Body.String())
+	}
+
+	createProfileRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/provider-profiles", `{
+		"name":"test-model",
+		"provider":"openai",
+		"model":"gpt-4.1"
+	}`)
+	if createProfileRec.Code != http.StatusOK {
+		t.Fatalf("create profile status=%d body=%s", createProfileRec.Code, createProfileRec.Body.String())
+	}
+	profilePayload := decodeJSONMap(t, createProfileRec)
+	profile, _ := profilePayload["profile"].(map[string]interface{})
+	profileID, _ := profile["id"].(string)
+	if profileID == "" {
+		t.Fatalf("missing created profile id, payload=%v", profilePayload)
+	}
+
+	badPatchRec := runJSONRequest(t, mux, http.MethodPatch, "/api/v1/provider-profiles/"+profileID, `{"model":`)
+	if badPatchRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected provider profile patch bad JSON to return 400, got status=%d body=%s", badPatchRec.Code, badPatchRec.Body.String())
+	}
+
+	missingProfileRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/provider-profiles/missing", "")
+	if missingProfileRec.Code != http.StatusNotFound {
+		t.Fatalf("expected missing profile lookup to return 404, got status=%d body=%s", missingProfileRec.Code, missingProfileRec.Body.String())
+	}
+
+	unsupportedProfileActionRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/provider-profiles/"+profileID+"/unsupported", `{}`)
+	if unsupportedProfileActionRec.Code != http.StatusNotFound {
+		t.Fatalf("expected unsupported provider-profile action to return 404, got status=%d body=%s", unsupportedProfileActionRec.Code, unsupportedProfileActionRec.Body.String())
+	}
+
+	profileTestLocalRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/provider-profiles/"+profileID+"/test", `{}`)
+	if profileTestLocalRec.Code != http.StatusOK {
+		t.Fatalf("expected local provider profile test to return 200, got status=%d body=%s", profileTestLocalRec.Code, profileTestLocalRec.Body.String())
+	}
+	testBody := decodeJSONMap(t, profileTestLocalRec)
+	testPayload, _ := testBody["test"].(map[string]interface{})
+	if okVal, _ := testPayload["ok"].(bool); !okVal {
+		t.Fatalf("expected local profile test ok=true payload=%v", testBody)
+	}
+
+	instanceBindingBadTargetRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/provider-bindings", `{
+		"profileId":"`+profileID+`",
+		"targetType":"instance",
+		"targetId":"invalid-format"
+	}`)
+	if instanceBindingBadTargetRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected instance target format validation error, got status=%d body=%s", instanceBindingBadTargetRec.Code, instanceBindingBadTargetRec.Body.String())
+	}
+
+	badBindingMethodRec := runJSONRequest(t, mux, http.MethodPut, "/api/v1/provider-bindings/"+profileID, `{}`)
+	if badBindingMethodRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected provider-bindings delete path with PUT to return 405, got status=%d body=%s", badBindingMethodRec.Code, badBindingMethodRec.Body.String())
+	}
+
+	missingBindingDeleteRec := runJSONRequest(t, mux, http.MethodDelete, "/api/v1/provider-bindings/never-seen", "")
+	if missingBindingDeleteRec.Code != http.StatusNotFound {
+		t.Fatalf("expected deleting missing binding to return 404, got status=%d body=%s", missingBindingDeleteRec.Code, missingBindingDeleteRec.Body.String())
+	}
+
+	disabledBindingMux := buildRemoteFeatureMuxWithConfigAndDaemonHandlers(t, &GatewayConfig{
+		RemoteControlPlaneEnabled: true,
+		RemoteChatEnabled:         true,
+		ProviderBindingEnabled:    false,
+	}, nil)
+	missingBindingFeatureRec := runJSONRequest(t, disabledBindingMux, http.MethodPost, "/api/v1/provider-bindings", `{
+		"profileId":"`+profileID+`",
+		"targetType":"host",
+		"targetId":"`+hostID+`"
+	}`)
+	if missingBindingFeatureRec.Code != http.StatusForbidden {
+		t.Fatalf("expected provider-binding feature disabled => 403, got status=%d body=%s", missingBindingFeatureRec.Code, missingBindingFeatureRec.Body.String())
+	}
+}
