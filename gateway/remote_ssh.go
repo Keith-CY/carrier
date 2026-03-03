@@ -6,8 +6,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +36,7 @@ var knownHostEntryRemover = defaultKnownHostEntryRemover
 
 func defaultSSHExecRunner(ctx context.Context, args []string) (remoteExecResult, error) {
 	cmd := exec.CommandContext(ctx, "ssh", args...)
+	cmd.Env = ensureSSHProcessEnv(os.Environ())
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -60,6 +63,7 @@ func defaultSSHExecRunner(ctx context.Context, args []string) (remoteExecResult,
 
 func defaultSSHExecStreamRunner(ctx context.Context, args []string, onChunk func(remoteStreamChunk)) (remoteExecResult, error) {
 	cmd := exec.CommandContext(ctx, "ssh", args...)
+	cmd.Env = ensureSSHProcessEnv(os.Environ())
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return remoteExecResult{}, fmt.Errorf("prepare ssh stdout pipe: %w", err)
@@ -315,6 +319,62 @@ func wrapRemoteCommandForSSH(command string) string {
 	}
 	script := "export LC_ALL=C LANG=C; export PATH=\"$HOME/.npm-global/bin:$HOME/.local/bin:$PATH\"; " + cmd
 	return "bash -lc " + shellSingleQuote(script)
+}
+
+func ensureSSHProcessEnv(env []string) []string {
+	out := append([]string{}, env...)
+	if !hasNonEmptyEnv(out, "HOME") {
+		home := strings.TrimSpace(os.Getenv("HOME"))
+		if home == "" {
+			if resolved, err := os.UserHomeDir(); err == nil {
+				home = strings.TrimSpace(resolved)
+			}
+		}
+		if home == "" {
+			if runtime.GOOS == "windows" {
+				if profile := strings.TrimSpace(os.Getenv("USERPROFILE")); profile != "" {
+					home = profile
+				} else if drive, path := strings.TrimSpace(os.Getenv("HOMEDRIVE")), strings.TrimSpace(os.Getenv("HOMEPATH")); drive != "" && path != "" {
+					home = filepath.Clean(drive + path)
+				}
+			} else {
+				switch user := strings.TrimSpace(os.Getenv("USER")); user {
+				case "root", "":
+					home = "/root"
+				default:
+					home = filepath.Join("/home", user)
+				}
+			}
+		}
+		if home == "" {
+			home = "/tmp"
+		}
+		out = append(out, "HOME="+home)
+	}
+	if !hasNonEmptyEnv(out, "USER") {
+		if user := strings.TrimSpace(os.Getenv("USER")); user != "" {
+			out = append(out, "USER="+user)
+		}
+	}
+	if !hasNonEmptyEnv(out, "LOGNAME") {
+		if logname := strings.TrimSpace(os.Getenv("LOGNAME")); logname != "" {
+			out = append(out, "LOGNAME="+logname)
+		}
+	}
+	return out
+}
+
+func hasNonEmptyEnv(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			continue
+		}
+		if strings.TrimSpace(strings.TrimPrefix(entry, prefix)) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldRepairKnownHostMismatch(result remoteExecResult, err error) bool {

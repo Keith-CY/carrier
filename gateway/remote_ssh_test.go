@@ -270,3 +270,100 @@ func TestBuildSSHArgsUsesKeyRefWhenKeyPathMissing(t *testing.T) {
 		t.Fatalf("expected -i to use keyRef-resolved path %s, got args=%v", keyPath, args)
 	}
 }
+
+func TestRunRemoteCommandWithRetryRetriesTransientFailures(t *testing.T) {
+	orig := sshExecRunner
+	defer func() {
+		sshExecRunner = orig
+	}()
+
+	attempts := 0
+	sshExecRunner = func(_ context.Context, _ []string) (remoteExecResult, error) {
+		attempts++
+		if attempts == 1 {
+			return remoteExecResult{ExitCode: 1, Stderr: "connection reset by peer"}, nil
+		}
+		return remoteExecResult{ExitCode: 0}, nil
+	}
+
+	res, err := runRemoteCommandWithRetry(context.Background(), RemoteHost{
+		Host:     "127.0.0.1",
+		Port:     22,
+		User:     "carrier",
+		AuthMode: RemoteAuthModePrivateKey,
+		KeyPath:  "/tmp/id_ed25519",
+	}, "echo ok", 1)
+	if err != nil {
+		t.Fatalf("runRemoteCommandWithRetry()=%v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts with retry, got %d", attempts)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("expected successful exit code after retry, got %d", res.ExitCode)
+	}
+}
+
+func TestRunRemoteCommandWithRetryStopsOnNonRetryableFailure(t *testing.T) {
+	orig := sshExecRunner
+	defer func() {
+		sshExecRunner = orig
+	}()
+
+	attempts := 0
+	sshExecRunner = func(_ context.Context, _ []string) (remoteExecResult, error) {
+		attempts++
+		return remoteExecResult{ExitCode: 1, Stderr: "permission denied"}, fmt.Errorf("ssh command failed")
+	}
+
+	res, err := runRemoteCommandWithRetry(context.Background(), RemoteHost{
+		Host:     "127.0.0.1",
+		Port:     22,
+		User:     "carrier",
+		AuthMode: RemoteAuthModePrivateKey,
+		KeyPath:  "/tmp/id_ed25519",
+	}, "echo nope", 3)
+	if err == nil {
+		t.Fatal("expected error from non-retryable remote command")
+	}
+	if attempts != 1 {
+		t.Fatalf("expected single attempt for non-retryable failure, got %d", attempts)
+	}
+	if res.ExitCode != 1 {
+		t.Fatalf("expected exit code from failed command, got %d", res.ExitCode)
+	}
+}
+
+func TestEnsureSSHProcessEnvAddsHomeWhenMissing(t *testing.T) {
+	t.Setenv("HOME", "/tmp/carrier-home")
+	got := ensureSSHProcessEnv([]string{"PATH=/usr/bin"})
+	home, ok := lookupEnvValue(got, "HOME")
+	if !ok {
+		t.Fatalf("expected HOME to be added")
+	}
+	if home != "/tmp/carrier-home" {
+		t.Fatalf("expected HOME=/tmp/carrier-home, got %q", home)
+	}
+}
+
+func TestEnsureSSHProcessEnvPreservesExistingHome(t *testing.T) {
+	got := ensureSSHProcessEnv([]string{"HOME=/already-set", "PATH=/usr/bin"})
+	home, ok := lookupEnvValue(got, "HOME")
+	if !ok {
+		t.Fatalf("expected HOME to exist")
+	}
+	if home != "/already-set" {
+		t.Fatalf("expected HOME to stay /already-set, got %q", home)
+	}
+}
+
+func lookupEnvValue(env []string, key string) (string, bool) {
+	prefix := key + "="
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			continue
+		}
+		return strings.TrimPrefix(entry, prefix), true
+	}
+	return "", false
+}

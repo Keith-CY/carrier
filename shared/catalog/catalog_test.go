@@ -16,8 +16,19 @@ func TestProviderCatalogBasics(t *testing.T) {
 			t.Fatalf("provider id = %q, want %q", p.ID, id)
 		}
 	}
-	if p := GetProvider("vllm"); p != nil {
-		t.Fatalf("expected nil for removed alias vllm, got %#v", p)
+	// Unknown provider returns nil.
+	if p := GetProvider("nonexistent-provider"); p != nil {
+		t.Fatalf("expected nil for unknown provider, got %#v", p)
+	}
+	// Aliases should resolve to their canonical provider.
+	for _, alias := range []string{"vllm", "openai-v1"} {
+		p := GetProvider(alias)
+		if p == nil {
+			t.Fatalf("alias %q should resolve to openai-compatible", alias)
+		}
+		if p.ID != "openai-compatible" {
+			t.Fatalf("GetProvider(%q).ID = %q, want openai-compatible", alias, p.ID)
+		}
 	}
 	if !IsSupportedProvider("openai") {
 		t.Fatal("openai should be supported")
@@ -115,6 +126,44 @@ func TestIsOpenAICodexProviderID(t *testing.T) {
 	for input, want := range cases {
 		if got := IsOpenAICodexProviderID(input); got != want {
 			t.Fatalf("IsOpenAICodexProviderID(%q) = %v, want %v", input, got, want)
+		}
+	}
+}
+
+func TestProviderAliasesFor(t *testing.T) {
+	aliases := ProviderAliasesFor("openai-compatible")
+	if len(aliases) != 2 {
+		t.Fatalf("ProviderAliasesFor(openai-compatible) len = %d, want 2", len(aliases))
+	}
+	seen := map[string]bool{}
+	for _, a := range aliases {
+		seen[a] = true
+	}
+	if !seen["vllm"] || !seen["openai-v1"] {
+		t.Fatalf("expected vllm and openai-v1, got %v", aliases)
+	}
+	// Provider with no aliases returns nil.
+	if got := ProviderAliasesFor("anthropic"); got != nil {
+		t.Fatalf("ProviderAliasesFor(anthropic) = %v, want nil", got)
+	}
+}
+
+func TestNormalizeProviderID(t *testing.T) {
+	cases := map[string]string{
+		"claude-code":        "openai-codex",
+		"opencode":           "openai-codex",
+		"vllm":               "openai-compatible",
+		"VLLM":               "openai-compatible",
+		"openai-v1":          "openai-compatible",
+		"  openai-v1  ":      "openai-compatible",
+		"openai":             "openai",
+		"anthropic":          "anthropic",
+		"openai-compatible":  "openai-compatible",
+		"unknown-provider":   "unknown-provider",
+	}
+	for input, want := range cases {
+		if got := NormalizeProviderID(input); got != want {
+			t.Fatalf("NormalizeProviderID(%q) = %q, want %q", input, got, want)
 		}
 	}
 }
