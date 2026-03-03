@@ -270,3 +270,66 @@ func TestBuildSSHArgsUsesKeyRefWhenKeyPathMissing(t *testing.T) {
 		t.Fatalf("expected -i to use keyRef-resolved path %s, got args=%v", keyPath, args)
 	}
 }
+
+func TestRunRemoteCommandWithRetryRetriesTransientFailures(t *testing.T) {
+	orig := sshExecRunner
+	defer func() {
+		sshExecRunner = orig
+	}()
+
+	attempts := 0
+	sshExecRunner = func(_ context.Context, _ []string) (remoteExecResult, error) {
+		attempts++
+		if attempts == 1 {
+			return remoteExecResult{ExitCode: 1, Stderr: "connection reset by peer"}, nil
+		}
+		return remoteExecResult{ExitCode: 0}, nil
+	}
+
+	res, err := runRemoteCommandWithRetry(context.Background(), RemoteHost{
+		Host:     "127.0.0.1",
+		Port:     22,
+		User:     "carrier",
+		AuthMode: RemoteAuthModePrivateKey,
+		KeyPath:  "/tmp/id_ed25519",
+	}, "echo ok", 1)
+	if err != nil {
+		t.Fatalf("runRemoteCommandWithRetry()=%v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts with retry, got %d", attempts)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("expected successful exit code after retry, got %d", res.ExitCode)
+	}
+}
+
+func TestRunRemoteCommandWithRetryStopsOnNonRetryableFailure(t *testing.T) {
+	orig := sshExecRunner
+	defer func() {
+		sshExecRunner = orig
+	}()
+
+	attempts := 0
+	sshExecRunner = func(_ context.Context, _ []string) (remoteExecResult, error) {
+		attempts++
+		return remoteExecResult{ExitCode: 1, Stderr: "permission denied"}, fmt.Errorf("ssh command failed")
+	}
+
+	res, err := runRemoteCommandWithRetry(context.Background(), RemoteHost{
+		Host:     "127.0.0.1",
+		Port:     22,
+		User:     "carrier",
+		AuthMode: RemoteAuthModePrivateKey,
+		KeyPath:  "/tmp/id_ed25519",
+	}, "echo nope", 3)
+	if err == nil {
+		t.Fatal("expected error from non-retryable remote command")
+	}
+	if attempts != 1 {
+		t.Fatalf("expected single attempt for non-retryable failure, got %d", attempts)
+	}
+	if res.ExitCode != 1 {
+		t.Fatalf("expected exit code from failed command, got %d", res.ExitCode)
+	}
+}

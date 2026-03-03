@@ -1440,3 +1440,86 @@ func TestRemoteCodeAgentLifecycleAndAudit(t *testing.T) {
 		t.Fatalf("expected remote_codeagent_run audit entry, audit=%s", text)
 	}
 }
+
+func TestRemoteHostConfigEndpointMethodAndPayloadValidation(t *testing.T) {
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	putRec := runJSONRequest(t, mux, http.MethodPut, "/api/v1/remote/hosts/"+hostID+"/config", `{}`)
+	if putRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected config PUT method not allowed, got status=%d body=%s", putRec.Code, putRec.Body.String())
+	}
+
+	emptyPatchRec := runJSONRequest(t, mux, http.MethodPatch, "/api/v1/remote/hosts/"+hostID+"/config", `{}`)
+	if emptyPatchRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected empty config patch to fail, got status=%d body=%s", emptyPatchRec.Code, emptyPatchRec.Body.String())
+	}
+	patchRec := runJSONRequest(t, mux, http.MethodPatch, "/api/v1/remote/hosts/"+hostID+"/config", `{"patch":{}}`)
+	if patchRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected config patch wrapper empty payload to fail, got status=%d body=%s", patchRec.Code, patchRec.Body.String())
+	}
+}
+
+func TestRemoteInstancesAndSessionsValidationEdges(t *testing.T) {
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	listMethodRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances", `{}`)
+	if listMethodRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected instances list method not allowed, got status=%d body=%s", listMethodRec.Code, listMethodRec.Body.String())
+	}
+
+	missingActionRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/remote/hosts/"+hostID+"/instances/main", ``)
+	if missingActionRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected missing instance action error, got status=%d body=%s", missingActionRec.Code, missingActionRec.Body.String())
+	}
+
+	installSubActionRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/install/status", `{"isolation":true}`)
+	if installSubActionRec.Code != http.StatusNotFound {
+		t.Fatalf("expected unsupported install sub-action error, got status=%d body=%s", installSubActionRec.Code, installSubActionRec.Body.String())
+	}
+
+	configPatchRec := runJSONRequest(t, mux, http.MethodPatch, "/api/v1/remote/hosts/"+hostID+"/instances/main/config", `{}`)
+	if configPatchRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected empty instance config patch payload error, got status=%d body=%s", configPatchRec.Code, configPatchRec.Body.String())
+	}
+
+	sessionsMethodRec := runJSONRequest(t, mux, http.MethodDelete, "/api/v1/remote/hosts/"+hostID+"/sessions?agentId=main", `{}`)
+	if sessionsMethodRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected sessions list method not allowed, got status=%d body=%s", sessionsMethodRec.Code, sessionsMethodRec.Body.String())
+	}
+
+	sessionsActionPathRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/sessions/sess-1", `{"foo":1}`)
+	if sessionsActionPathRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected sessions action path required, got status=%d body=%s", sessionsActionPathRec.Code, sessionsActionPathRec.Body.String())
+	}
+
+	sessionsUnsupportedRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/sessions/sess-1/revert?agentId=main", `{}`)
+	if sessionsUnsupportedRec.Code != http.StatusNotFound {
+		t.Fatalf("expected unsupported session action, got status=%d body=%s", sessionsUnsupportedRec.Code, sessionsUnsupportedRec.Body.String())
+	}
+}
+
+func TestRemoteCodeAgentValidationEdges(t *testing.T) {
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	codeagentMissingActionRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/codeagent", `{"backend":"codex"}`)
+	if codeagentMissingActionRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected codeagent action path required, got status=%d body=%s", codeagentMissingActionRec.Code, codeagentMissingActionRec.Body.String())
+	}
+
+	codeagentUnsupportedActionRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/codeagent/frobnicate", `{"backend":"codex"}`)
+	if codeagentUnsupportedActionRec.Code != http.StatusNotFound {
+		t.Fatalf("expected unsupported codeagent action, got status=%d body=%s", codeagentUnsupportedActionRec.Code, codeagentUnsupportedActionRec.Body.String())
+	}
+
+	codeagentInvalidCapabilityRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/main/codeagent/run", `{
+		"backend":"codex",
+		"workspaceRoot":"/workspace",
+		"capability":"invalid"
+	}`)
+	if codeagentInvalidCapabilityRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid codeagent capability error, got status=%d body=%s", codeagentInvalidCapabilityRec.Code, codeagentInvalidCapabilityRec.Body.String())
+	}
+}
