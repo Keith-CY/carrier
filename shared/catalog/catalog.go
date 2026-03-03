@@ -129,6 +129,13 @@ var channelCatalog = []ChannelSpec{
 	},
 }
 
+// providerAliases maps legacy or shorthand provider IDs to their canonical ID.
+// Use NormalizeProviderID to resolve an alias before catalog lookup.
+var providerAliases = map[string]string{
+	"vllm":      "openai-compatible",
+	"openai-v1": "openai-compatible",
+}
+
 var providerIndex map[string]ProviderSpec
 var channelIndex map[string]ChannelSpec
 
@@ -144,6 +151,29 @@ func init() {
 	}
 }
 
+// NormalizeProviderID resolves legacy/shorthand provider aliases to their
+// canonical catalog ID. If id is not an alias it is returned as-is (lower-cased
+// and trimmed).
+func NormalizeProviderID(id string) string {
+	normalized := strings.ToLower(strings.TrimSpace(id))
+	if canonical, ok := providerAliases[normalized]; ok {
+		return canonical
+	}
+	return normalized
+}
+
+// ProviderAliasesFor returns the alias IDs that resolve to the given canonical
+// provider ID. Returns nil when no aliases exist.
+func ProviderAliasesFor(canonicalID string) []string {
+	var out []string
+	for alias, target := range providerAliases {
+		if target == canonicalID {
+			out = append(out, alias)
+		}
+	}
+	return out
+}
+
 // ListProviders returns a copy of canonical provider entries.
 func ListProviders() []ProviderSpec {
 	out := make([]ProviderSpec, len(providerCatalog))
@@ -151,9 +181,10 @@ func ListProviders() []ProviderSpec {
 	return out
 }
 
-// GetProvider returns a provider by canonical ID.
+// GetProvider returns a provider by canonical ID. Alias IDs (e.g. "vllm",
+// "openai-v1") are resolved to their canonical form before lookup.
 func GetProvider(id string) *ProviderSpec {
-	provider, ok := providerIndex[strings.ToLower(strings.TrimSpace(id))]
+	provider, ok := providerIndex[NormalizeProviderID(id)]
 	if !ok {
 		return nil
 	}
@@ -161,9 +192,9 @@ func GetProvider(id string) *ProviderSpec {
 	return &cp
 }
 
-// IsSupportedProvider reports whether the provider ID is canonical and supported.
+// IsSupportedProvider reports whether the provider ID (or an alias) is supported.
 func IsSupportedProvider(id string) bool {
-	_, ok := providerIndex[strings.ToLower(strings.TrimSpace(id))]
+	_, ok := providerIndex[NormalizeProviderID(id)]
 	return ok
 }
 

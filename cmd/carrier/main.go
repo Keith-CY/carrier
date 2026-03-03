@@ -348,6 +348,7 @@ func buildProviderOptionsFromCatalog() []choiceOption {
 			AuthMode:     spec.AuthMode,
 			ProviderEnv:  spec.EnvVar,
 			ExampleModel: spec.ExampleModel,
+			Aliases:      catalog.ProviderAliasesFor(spec.ID),
 		})
 	}
 	return out
