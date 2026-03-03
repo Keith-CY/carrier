@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/shared/catalog"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -353,7 +354,7 @@ func resolveWebUIAddProviderID(agentID string) string {
 	}
 
 	if inst, ok := latestManagedInstanceForAgent(agentID); ok {
-		if provider := GetLLMProvider(strings.TrimSpace(inst.Provider)); provider != nil && providerCompatibleForManagedAgent(agentID, provider) {
+		if provider := GetLLMProvider(catalog.NormalizeProviderID(strings.TrimSpace(inst.Provider))); provider != nil && providerCompatibleForManagedAgent(agentID, provider) {
 			return provider.ID
 		}
 	}

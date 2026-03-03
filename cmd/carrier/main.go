@@ -4352,7 +4352,7 @@ func buildOpenClawProviderEntry(model configv2.Model) (providerKey, modelName, m
 			"id":       openclawcfg.ProviderSecretPointer(providerKey),
 		},
 	}
-	if strings.EqualFold(strings.TrimSpace(model.ProviderID), "openai-codex") {
+	if catalog.IsOpenAICodexProviderID(model.ProviderID) {
 		providerItem["auth"] = "oauth"
 	}
 	return providerKey, modelName, modelID, providerItem, secretValue, nil
@@ -4393,7 +4393,7 @@ func buildZeroClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Con
 		if err != nil {
 			return nil, fmt.Errorf("load provider credential %q: %w", credentialRef, err)
 		}
-		if !strings.EqualFold(strings.TrimSpace(model.ProviderID), "openai-codex") {
+		if !catalog.IsOpenAICodexProviderID(model.ProviderID) {
 			if !okCred || strings.TrimSpace(token) == "" {
 				return nil, fmt.Errorf("missing credential for provider %q (ref=%q)", model.ProviderID, credentialRef)
 			}
@@ -4521,7 +4521,7 @@ func buildManagedProviderAndModelEntry(model configv2.Model) (providerKey string
 		"model_name": modelName,
 		"model":      modelID,
 	}
-	if strings.EqualFold(strings.TrimSpace(model.ProviderID), "openai-codex") {
+	if catalog.IsOpenAICodexProviderID(model.ProviderID) {
 		providerItem["auth_method"] = "oauth"
 		modelItem["auth_method"] = "oauth"
 		return providerKey, modelName, modelID, providerItem, modelItem, nil
@@ -5813,7 +5813,7 @@ func latestManagedInstanceProvider(agentID string) string {
 	if bestIdx < 0 {
 		return ""
 	}
-	return strings.TrimSpace(instances[bestIdx].Provider)
+	return catalog.NormalizeProviderID(strings.TrimSpace(instances[bestIdx].Provider))
 }
 
 func latestManagedPairedChatID(agentID, channelID string) (string, string) {
@@ -6567,7 +6567,7 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 	if modelID == "" {
 		modelID = provider.ID + "/default"
 	}
-	if strings.EqualFold(provider.ID, "openai-codex") {
+	if catalog.IsOpenAICodexProviderID(provider.ID) {
 		if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
 			modelID = "openai/" + strings.TrimSpace(name)
 		} else {
@@ -6585,7 +6585,7 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 	}
 	providerKey = mapCarrierProviderToManagedProvider(providerKey)
 	token := pickProviderTokenForManaged(provider, envVars)
-	if strings.EqualFold(provider.ID, "openai-codex") && strings.EqualFold(cfg.ID, "picoclaw") {
+	if catalog.IsOpenAICodexProviderID(provider.ID) && strings.EqualFold(cfg.ID, "picoclaw") {
 		accountID := extractOpenAIAccountIDFromToken(token)
 		if err := savePicoclawAuthCredential(home, "openai", token, accountID); err != nil {
 			return nil, fmt.Errorf("write picoclaw auth store: %w", err)
@@ -6695,7 +6695,7 @@ func buildManagedPicoClawConfigPayload(
 	providerItem := map[string]interface{}{
 		"credential_ref": provider.ID,
 	}
-	if strings.EqualFold(provider.ID, "openai-codex") {
+	if catalog.IsOpenAICodexProviderID(provider.ID) {
 		modelItem["auth_method"] = "oauth"
 		providerItem["auth_method"] = "oauth"
 	} else if providerToken != "" {
@@ -6887,7 +6887,7 @@ func pickProviderTokenForManaged(provider choiceOption, envVars map[string]strin
 	if envVars == nil {
 		return ""
 	}
-	if strings.EqualFold(provider.ID, "openai-codex") {
+	if catalog.IsOpenAICodexProviderID(provider.ID) {
 		for _, key := range []string{"OPENAI_CODEX_TOKEN", "OPENAI_API_KEY", provider.ProviderEnv} {
 			if token := strings.TrimSpace(envVars[key]); token != "" {
 				return token
@@ -7250,7 +7250,7 @@ func promptProviderAuthMinimal(reader *bufio.Reader, out io.Writer, provider cho
 		if ok {
 			return reused, true, nil
 		}
-		if provider.ID == "openai-codex" {
+		if catalog.IsOpenAICodexProviderID(provider.ID) {
 			token, err := runOpenAICodexDeviceCodeFlow(out)
 			if err != nil {
 				return nil, false, fmt.Errorf("openai-codex device-code login: %w", err)
@@ -7372,7 +7372,7 @@ func promptProviderAuth(reader *bufio.Reader, out io.Writer, provider choiceOpti
 			return reused, true, nil
 		}
 
-		if provider.ID == "openai-codex" {
+		if catalog.IsOpenAICodexProviderID(provider.ID) {
 			token, err := runOpenAICodexDeviceCodeFlow(out)
 			if err != nil {
 				return nil, false, fmt.Errorf("openai-codex device-code login: %w", err)
@@ -8199,12 +8199,13 @@ func resolveChoice(input string, options []choiceOption) (choiceOption, bool) {
 		return choiceOption{}, false
 	}
 
+	normalizedInput := catalog.NormalizeProviderID(input)
 	for _, opt := range options {
-		if strings.EqualFold(opt.ID, input) {
+		if catalog.NormalizeProviderID(opt.ID) == normalizedInput {
 			return opt, true
 		}
 		for _, alias := range opt.Aliases {
-			if strings.EqualFold(alias, input) {
+			if catalog.NormalizeProviderID(alias) == normalizedInput {
 				return opt, true
 			}
 		}

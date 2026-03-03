@@ -1,7 +1,9 @@
 package credentialstore
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
 	"os/user"
 	"path/filepath"
 	"runtime"
@@ -42,6 +44,61 @@ func TestSaveAndLoadProviderCredentialFileBackend(t *testing.T) {
 	}
 	if loadedBackend != "local-file" {
 		t.Fatalf("loaded backend = %q, want local-file", loadedBackend)
+	}
+}
+
+func TestSaveProviderCredentialCanonicalizesOpenAIAliases(t *testing.T) {
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	storePath := filepath.Join(t.TempDir(), "credentials.json")
+	t.Setenv("CARRIER_CREDENTIAL_STORE", storePath)
+
+	backend, err := SaveProviderCredential("claude-code", "alias-token")
+	if err != nil {
+		t.Fatalf("SaveProviderCredential error: %v", err)
+	}
+	if backend != "local-file" {
+		t.Fatalf("backend = %q, want local-file", backend)
+	}
+
+	raw, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatalf("read credential file: %v", err)
+	}
+	var payload struct {
+		Providers map[string]string `json:"providers"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("parse credentials file: %v", err)
+	}
+	if token := payload.Providers["openai-codex"]; token != "alias-token" {
+		t.Fatalf("payload openai-codex token = %q, want %q", token, "alias-token")
+	}
+	if _, ok := payload.Providers["claude-code"]; ok {
+		t.Fatalf("expected normalized credential key, found legacy alias key")
+	}
+}
+
+func TestLoadProviderCredentialPrefersCanonicalOpenAICodexEntryOrAlias(t *testing.T) {
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	storePath := filepath.Join(t.TempDir(), "credentials.json")
+	t.Setenv("CARRIER_CREDENTIAL_STORE", storePath)
+
+	if err := os.WriteFile(storePath, []byte(`{"providers":{"claude-code":"legacy-token"}}`), 0o600); err != nil {
+		t.Fatalf("seed credentials file: %v", err)
+	}
+
+	value, backend, ok, err := LoadProviderCredential("openai-codex")
+	if err != nil {
+		t.Fatalf("LoadProviderCredential error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected credential to load from alias fallback")
+	}
+	if backend != "local-file" {
+		t.Fatalf("loaded backend = %q, want local-file", backend)
+	}
+	if value != "legacy-token" {
+		t.Fatalf("value = %q, want legacy-token", value)
 	}
 }
 

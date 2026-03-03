@@ -606,6 +606,42 @@ func TestPickManagedAddProviderWithReasonUsesLatestManagedInstanceProvider(t *te
 	}
 }
 
+func TestPickManagedAddProviderWithReasonUsesLatestManagedInstanceAliasProvider(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("CARRIER_CONFIG", filepath.Join(t.TempDir(), "missing-config.v2.json"))
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+
+	instancesPath, err := managedInstancesPath()
+	if err != nil {
+		t.Fatalf("managedInstancesPath: %v", err)
+	}
+	instances := []managedAgentInstance{
+		{
+			ID:        "openclaw-legacy",
+			Type:      "openclaw",
+			AgentID:   "openclaw",
+			Provider:  "claude-code",
+			UpdatedAt: time.Date(2026, 2, 2, 8, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		},
+	}
+	if err := saveManagedInstances(instancesPath, instances); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	provider, reason, err := pickManagedAddProviderWithReason("openclaw")
+	if err != nil {
+		t.Fatalf("pickManagedAddProviderWithReason error: %v", err)
+	}
+	if provider.ID != "openai-codex" {
+		t.Fatalf("provider.ID = %q, want %q", provider.ID, "openai-codex")
+	}
+	if !strings.Contains(strings.ToLower(reason), "latest openclaw instance") {
+		t.Fatalf("reason should mention latest managed instance reuse, got %q", reason)
+	}
+}
+
 func TestParseCarrierCommandRoutesVersionAliases(t *testing.T) {
 	for _, command := range []string{"version", "--version", "-v", "-V"} {
 		t.Run(command, func(t *testing.T) {

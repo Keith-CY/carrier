@@ -33,8 +33,20 @@ func TestProviderCatalogBasics(t *testing.T) {
 	if !IsSupportedProvider("openai") {
 		t.Fatal("openai should be supported")
 	}
+	if !IsSupportedProvider("claude-code") {
+		t.Fatal("claude-code should be supported via alias")
+	}
+	if !IsSupportedProvider("opencode") {
+		t.Fatal("opencode should be supported via alias")
+	}
 	if !IsSupportedProvider("openrouter") {
 		t.Fatal("openrouter should be supported")
+	}
+	if p := GetProvider("claude-code"); p == nil || p.ID != "openai-codex" {
+		t.Fatalf("GetProvider(claude-code) = %#v, want openai-codex", p)
+	}
+	if p := GetProvider("opencode"); p == nil || p.ID != "openai-codex" {
+		t.Fatalf("GetProvider(opencode) = %#v, want openai-codex", p)
 	}
 	ids := SupportedProviderIDs()
 	if len(ids) != 6 {
@@ -87,12 +99,33 @@ func TestMapToManagedProvider(t *testing.T) {
 		"openrouter":        "openrouter",
 		"ollama":            "ollama",
 		"openai":            "openai",
+		"claude-code":       "openai",
+		"opencode":          "openai",
 		"anthropic":         "anthropic",
 		"  custom  ":        "custom",
 	}
 	for input, want := range cases {
 		if got := MapToManagedProvider(input); got != want {
 			t.Fatalf("MapToManagedProvider(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestIsOpenAICodexProviderID(t *testing.T) {
+	cases := map[string]bool{
+		"openai-codex":    true,
+		"claude-code":     true,
+		"opencode":        true,
+		"openAI-codex":    true,
+		"openai":          false,
+		"openrouter":      false,
+		"   OpEnAI-CoDeX": true,
+		"":                false,
+		"vllm":            false,
+	}
+	for input, want := range cases {
+		if got := IsOpenAICodexProviderID(input); got != want {
+			t.Fatalf("IsOpenAICodexProviderID(%q) = %v, want %v", input, got, want)
 		}
 	}
 }
@@ -117,6 +150,8 @@ func TestProviderAliasesFor(t *testing.T) {
 
 func TestNormalizeProviderID(t *testing.T) {
 	cases := map[string]string{
+		"claude-code":        "openai-codex",
+		"opencode":           "openai-codex",
 		"vllm":               "openai-compatible",
 		"VLLM":               "openai-compatible",
 		"openai-v1":          "openai-compatible",

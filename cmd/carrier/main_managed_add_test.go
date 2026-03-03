@@ -100,6 +100,31 @@ func TestLatestManagedInstanceProviderUsesLatestInstance(t *testing.T) {
 	}
 }
 
+func TestLatestManagedInstanceProviderNormalizesAliasProvider(t *testing.T) {
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(t.TempDir(), "instances.json"))
+
+	path, err := managedInstancesPath()
+	if err != nil {
+		t.Fatalf("managedInstancesPath: %v", err)
+	}
+	if err := saveManagedInstances(path, []managedAgentInstance{
+		{
+			ID:        "openclaw-legacy",
+			Type:      "openclaw",
+			AgentID:   "openclaw",
+			Provider:  "claude-code",
+			UpdatedAt: time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		},
+	}); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	providerID := latestManagedInstanceProvider("openclaw")
+	if providerID != "openai-codex" {
+		t.Fatalf("provider id = %q, want %q", providerID, "openai-codex")
+	}
+}
+
 func TestPrepareManagedAgentAddArtifactsWritesPairedChatID(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	if err := os.MkdirAll(home, 0o700); err != nil {

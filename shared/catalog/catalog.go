@@ -132,8 +132,10 @@ var channelCatalog = []ChannelSpec{
 // providerAliases maps legacy or shorthand provider IDs to their canonical ID.
 // Use NormalizeProviderID to resolve an alias before catalog lookup.
 var providerAliases = map[string]string{
-	"vllm":      "openai-compatible",
-	"openai-v1": "openai-compatible",
+	"claude-code": "openai-codex",
+	"opencode":    "openai-codex",
+	"vllm":        "openai-compatible",
+	"openai-v1":   "openai-compatible",
 }
 
 var providerIndex map[string]ProviderSpec
@@ -160,6 +162,11 @@ func NormalizeProviderID(id string) string {
 		return canonical
 	}
 	return normalized
+}
+
+// IsOpenAICodexProviderID reports whether the provider ID refers to OpenAI Codex.
+func IsOpenAICodexProviderID(id string) bool {
+	return NormalizeProviderID(id) == "openai-codex"
 }
 
 // ProviderAliasesFor returns the alias IDs that resolve to the given canonical
@@ -248,7 +255,7 @@ func IsSupportedChannel(id string) bool {
 // Managed agents currently support a smaller provider key surface and collapse
 // compatible providers onto "openai".
 func MapToManagedProvider(providerID string) string {
-	normalized := strings.ToLower(strings.TrimSpace(providerID))
+	normalized := NormalizeProviderID(providerID)
 	switch normalized {
 	case "openai-codex", "openai-compatible":
 		return "openai"

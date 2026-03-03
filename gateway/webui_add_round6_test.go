@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type failingRandReader struct{}
@@ -347,4 +348,47 @@ func TestHandleWebUIAdd_ManagedEnvAndDaemonFailureBranches(t *testing.T) {
 			t.Fatalf("expected non-200 on managed start failure, got %d: %s", rec.Code, rec.Body.String())
 		}
 	})
+}
+
+func TestHandleWebUIAdd_ManagedDefaultFromLatestAliasInstance(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+	t.Setenv("OPENAI_CODEX_TOKEN", "setup-token")
+	instancesPath := filepath.Join(tmp, "instances.json")
+	if err := saveManagedInstances(instancesPath, []managedAgentInstance{
+		{
+			ID:        "openclaw-old",
+			Type:      "openclaw",
+			AgentID:   "openclaw",
+			Provider:  "claude-code",
+			UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		},
+	}); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/openclaw/install": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		},
+		"POST /api/v1/agents/openclaw/start": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		},
+	})
+
+	rec, _ := callHandleWebUIAdd(t, daemon, `{"agentId":"openclaw","channel":"telegram","channelToken":"tg"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	latest, ok := latestManagedInstanceForAgent("openclaw")
+	if !ok {
+		t.Fatalf("expected latest managed instance")
+	}
+	if latest.Provider != "openai-codex" {
+		t.Fatalf("provider = %q, want openai-codex", latest.Provider)
+	}
 }

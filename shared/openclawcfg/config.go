@@ -1,6 +1,7 @@
 package openclawcfg
 
 import "strings"
+import "carrier/shared/catalog"
 
 const (
 	CarrierFileSecretProviderAlias = "carrier_file"
@@ -84,7 +85,7 @@ func BuildProviderEntry(providerID, providerKey string, includeAPIKeyRef bool) m
 			"id":       ProviderSecretPointer(providerKey),
 		}
 	}
-	if strings.EqualFold(strings.TrimSpace(providerID), "openai-codex") {
+	if catalog.IsOpenAICodexProviderID(providerID) {
 		providerItem["auth"] = "oauth"
 	}
 	return providerItem
