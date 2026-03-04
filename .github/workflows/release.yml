@@ -365,11 +365,7 @@ jobs:
 
           # Release package should contain a distributable artifact (Tauri bundle or CLI binary).
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            if [[ -d "dist/${package_source}" ]]; then
-              pwsh -NoProfile -Command "Compress-Archive -Path 'dist/${package_source}' -DestinationPath 'dist/${package_file}' -Force"
-            else
-              pwsh -NoProfile -Command "Compress-Archive -Path 'dist/${package_source}' -DestinationPath 'dist/${package_file}' -Force"
-            fi
+            pwsh -NoProfile -Command "Compress-Archive -Path 'dist/${package_source}' -DestinationPath 'dist/${package_file}' -Force"
           else
             if [[ -d "dist/${package_source}" ]]; then
               (cd dist && zip -r "${package_file}" "${package_source}")
