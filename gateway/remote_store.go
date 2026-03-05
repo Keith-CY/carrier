@@ -17,6 +17,8 @@ type remoteControlState struct {
 	Profiles      []ProviderProfile                   `json:"providerProfiles"`
 	Bindings      []ProviderBinding                   `json:"providerBindings"`
 	InstanceSyncs map[string]RemoteInstanceSyncStatus `json:"instanceSyncs,omitempty"`
+	Executions    []OrchestratorExecution             `json:"orchestratorExecutions,omitempty"`
+	WorkerLeases  []OrchestratorWorkerLease           `json:"orchestratorWorkerLeases,omitempty"`
 }
 
 type providerProfilePatch struct {
@@ -54,6 +56,8 @@ func loadRemoteControlState() (*remoteControlState, string, error) {
 				Profiles:      []ProviderProfile{},
 				Bindings:      []ProviderBinding{},
 				InstanceSyncs: map[string]RemoteInstanceSyncStatus{},
+				Executions:    []OrchestratorExecution{},
+				WorkerLeases:  []OrchestratorWorkerLease{},
 			}, path, nil
 		}
 		return nil, "", fmt.Errorf("read remote control store: %w", err)
@@ -73,6 +77,12 @@ func loadRemoteControlState() (*remoteControlState, string, error) {
 	}
 	if state.InstanceSyncs == nil {
 		state.InstanceSyncs = map[string]RemoteInstanceSyncStatus{}
+	}
+	if state.Executions == nil {
+		state.Executions = []OrchestratorExecution{}
+	}
+	if state.WorkerLeases == nil {
+		state.WorkerLeases = []OrchestratorWorkerLease{}
 	}
 	return &state, path, nil
 }
@@ -578,5 +588,208 @@ func deleteRemoteInstanceSyncStatus(hostID, agentID string) error {
 		return err
 	}
 	delete(state.InstanceSyncs, remoteInstanceSyncKey(hostID, agentID))
+	return saveRemoteControlState(path, state)
+}
+
+func listOrchestratorExecutions() ([]OrchestratorExecution, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, _, err := loadRemoteControlState()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]OrchestratorExecution, len(state.Executions))
+	copy(out, state.Executions)
+	return out, nil
+}
+
+func getOrchestratorExecution(executionID string) (OrchestratorExecution, bool, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, _, err := loadRemoteControlState()
+	if err != nil {
+		return OrchestratorExecution{}, false, err
+	}
+	id := strings.TrimSpace(executionID)
+	for _, execution := range state.Executions {
+		if strings.EqualFold(strings.TrimSpace(execution.ID), id) {
+			return execution, true, nil
+		}
+	}
+	return OrchestratorExecution{}, false, nil
+}
+
+func findOrchestratorExecutionByIdempotencyKey(idempotencyKey string) (OrchestratorExecution, bool, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, _, err := loadRemoteControlState()
+	if err != nil {
+		return OrchestratorExecution{}, false, err
+	}
+	key := strings.TrimSpace(idempotencyKey)
+	if key == "" {
+		return OrchestratorExecution{}, false, nil
+	}
+	for _, execution := range state.Executions {
+		if strings.EqualFold(strings.TrimSpace(execution.IdempotencyKey), key) {
+			return execution, true, nil
+		}
+	}
+	return OrchestratorExecution{}, false, nil
+}
+
+func upsertOrchestratorExecution(execution OrchestratorExecution) (OrchestratorExecution, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, path, err := loadRemoteControlState()
+	if err != nil {
+		return OrchestratorExecution{}, err
+	}
+	id := strings.TrimSpace(execution.ID)
+	if id == "" {
+		return OrchestratorExecution{}, fmt.Errorf("execution id is required")
+	}
+	execution.ID = id
+	execution.Goal = strings.TrimSpace(execution.Goal)
+	execution.IdempotencyKey = strings.TrimSpace(execution.IdempotencyKey)
+	execution.UpdatedAt = nowTimestamp()
+	if execution.CreatedAt == "" {
+		execution.CreatedAt = execution.UpdatedAt
+	}
+	if execution.ApprovalScope == "" {
+		execution.ApprovalScope = "infrastructure_only"
+	}
+	if execution.Results == nil {
+		execution.Results = []OrchestratorTaskResult{}
+	}
+
+	updated := false
+	for i := range state.Executions {
+		if strings.EqualFold(strings.TrimSpace(state.Executions[i].ID), id) {
+			execution.CreatedAt = state.Executions[i].CreatedAt
+			state.Executions[i] = execution
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		state.Executions = append(state.Executions, execution)
+	}
+	if err := saveRemoteControlState(path, state); err != nil {
+		return OrchestratorExecution{}, err
+	}
+	return execution, nil
+}
+
+func listOrchestratorWorkerLeases() ([]OrchestratorWorkerLease, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, _, err := loadRemoteControlState()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]OrchestratorWorkerLease, len(state.WorkerLeases))
+	copy(out, state.WorkerLeases)
+	return out, nil
+}
+
+func listOrchestratorWorkerLeasesByExecution(executionID string) ([]OrchestratorWorkerLease, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, _, err := loadRemoteControlState()
+	if err != nil {
+		return nil, err
+	}
+	id := strings.TrimSpace(executionID)
+	out := make([]OrchestratorWorkerLease, 0)
+	for _, lease := range state.WorkerLeases {
+		if strings.EqualFold(strings.TrimSpace(lease.ExecutionID), id) {
+			out = append(out, lease)
+		}
+	}
+	return out, nil
+}
+
+func upsertOrchestratorWorkerLease(lease OrchestratorWorkerLease) (OrchestratorWorkerLease, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, path, err := loadRemoteControlState()
+	if err != nil {
+		return OrchestratorWorkerLease{}, err
+	}
+	id := strings.TrimSpace(lease.ID)
+	if id == "" {
+		return OrchestratorWorkerLease{}, fmt.Errorf("worker lease id is required")
+	}
+	if strings.TrimSpace(lease.ExecutionID) == "" {
+		return OrchestratorWorkerLease{}, fmt.Errorf("executionId is required")
+	}
+	if strings.TrimSpace(lease.HostID) == "" {
+		return OrchestratorWorkerLease{}, fmt.Errorf("hostId is required")
+	}
+	if strings.TrimSpace(lease.AgentID) == "" {
+		return OrchestratorWorkerLease{}, fmt.Errorf("agentId is required")
+	}
+	lease.ID = id
+	lease.ExecutionID = strings.TrimSpace(lease.ExecutionID)
+	lease.HostID = strings.TrimSpace(lease.HostID)
+	lease.AgentID = strings.TrimSpace(lease.AgentID)
+	lease.LastError = strings.TrimSpace(lease.LastError)
+	lease.UpdatedAt = nowTimestamp()
+	if lease.CreatedAt == "" {
+		lease.CreatedAt = lease.UpdatedAt
+	}
+	if lease.HeartbeatAt == "" {
+		lease.HeartbeatAt = lease.UpdatedAt
+	}
+	if lease.LeaseExpireAt == "" {
+		lease.LeaseExpireAt = lease.UpdatedAt
+	}
+	if lease.State == "" {
+		lease.State = OrchestratorWorkerStateProvisioning
+	}
+
+	updated := false
+	for i := range state.WorkerLeases {
+		if strings.EqualFold(strings.TrimSpace(state.WorkerLeases[i].ID), id) {
+			lease.CreatedAt = state.WorkerLeases[i].CreatedAt
+			state.WorkerLeases[i] = lease
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		state.WorkerLeases = append(state.WorkerLeases, lease)
+	}
+	if err := saveRemoteControlState(path, state); err != nil {
+		return OrchestratorWorkerLease{}, err
+	}
+	return lease, nil
+}
+
+func deleteOrchestratorWorkerLease(leaseID string) error {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, path, err := loadRemoteControlState()
+	if err != nil {
+		return err
+	}
+	id := strings.TrimSpace(leaseID)
+	filtered := state.WorkerLeases[:0]
+	for _, lease := range state.WorkerLeases {
+		if strings.EqualFold(strings.TrimSpace(lease.ID), id) {
+			continue
+		}
+		filtered = append(filtered, lease)
+	}
+	state.WorkerLeases = filtered
 	return saveRemoteControlState(path, state)
 }
