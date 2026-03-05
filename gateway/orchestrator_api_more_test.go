@@ -1331,8 +1331,20 @@ func TestAcquireAndReclaimAdditionalBranches(t *testing.T) {
 			State:       OrchestratorWorkerStateReady,
 			Ephemeral:   true,
 		}}, true, 0)
-		if err == nil || summary["failed"] != 1 {
+		failedCount, _ := summary["failed"].(int)
+		if err == nil || failedCount < 1 {
 			t.Fatalf("expected host load error branch, err=%v summary=%+v", err, summary)
+		}
+		failures, _ := summary["failures"].([]string)
+		hasHostLoadFailure := false
+		for _, failure := range failures {
+			if strings.Contains(failure, "lease-1: read remote control store") {
+				hasHostLoadFailure = true
+				break
+			}
+		}
+		if !hasHostLoadFailure {
+			t.Fatalf("expected host load failure detail, summary=%+v", summary)
 		}
 	})
 }

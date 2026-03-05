@@ -5,6 +5,12 @@ import (
 	"strings"
 )
 
+const (
+	defaultOrchestratorTaskTimeoutMs = 60_000
+	maxOrchestratorTaskTimeoutMs     = 300_000
+	maxOrchestratorTaskRetryBudget   = 5
+)
+
 type OrchestratorExecutionStatus string
 
 const (
@@ -185,16 +191,16 @@ func normalizeOrchestratorTask(in OrchestratorTaskUnit, idx int) (OrchestratorTa
 	}
 	out.SessionID = strings.TrimSpace(out.SessionID)
 	if out.TimeoutMs <= 0 {
-		out.TimeoutMs = 60_000
+		out.TimeoutMs = defaultOrchestratorTaskTimeoutMs
 	}
-	if out.TimeoutMs > 300_000 {
-		out.TimeoutMs = 300_000
+	if out.TimeoutMs > maxOrchestratorTaskTimeoutMs {
+		out.TimeoutMs = maxOrchestratorTaskTimeoutMs
 	}
 	if out.RetryBudget < 0 {
 		out.RetryBudget = 0
 	}
-	if out.RetryBudget > 5 {
-		out.RetryBudget = 5
+	if out.RetryBudget > maxOrchestratorTaskRetryBudget {
+		out.RetryBudget = maxOrchestratorTaskRetryBudget
 	}
 	out.ToolPolicy = strings.TrimSpace(out.ToolPolicy)
 	return out, nil
@@ -238,7 +244,7 @@ func normalizeOrchestratorExecution(in OrchestratorExecution) (OrchestratorExecu
 		out.TaskUnits[i] = task
 	}
 	if out.MaxConcurrency <= 0 {
-		out.MaxConcurrency = 8
+		out.MaxConcurrency = defaultOrchestratorMaxConcurrency
 	}
 	if out.MaxConcurrency > 64 {
 		out.MaxConcurrency = 64

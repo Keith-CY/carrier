@@ -328,11 +328,15 @@ func runOrchestratorExecution(executionID string) {
 	results, runErr := runOrchestratorTasks(ctx, updated, leases)
 	if runErr != nil {
 		markOrchestratorExecutionFailed(updated, runErr, results)
-		_, _ = reclaimExecutionLeases(context.Background(), updated.ID, true)
+		if _, err := reclaimExecutionLeases(context.Background(), updated.ID, true); err != nil {
+			logOrchestratorPersistError("reclaim execution leases on failure", err)
+		}
 		return
 	}
 
-	_, _ = reclaimExecutionLeases(context.Background(), updated.ID, true)
+	if _, err := reclaimExecutionLeases(context.Background(), updated.ID, true); err != nil {
+		logOrchestratorPersistError("reclaim execution leases on success", err)
+	}
 	updated.Results = results
 	updated.Status = OrchestratorExecutionStatusCompleted
 	updated.CompletedAt = nowTimestamp()
@@ -723,6 +727,16 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 	failed := 0
 	failures := make([]string, 0)
 
+	recordPersistFailure := func(leaseID, step string, err error) {
+		if err == nil {
+			return
+		}
+		failed++
+		msg := fmt.Sprintf("%s: persist %s failed: %v", strings.TrimSpace(leaseID), strings.TrimSpace(step), err)
+		failures = append(failures, msg)
+		logOrchestratorPersistError("upsert orchestrator worker lease "+strings.TrimSpace(step), err)
+	}
+
 	for _, lease := range leases {
 		if lease.State == OrchestratorWorkerStateReclaimed {
 			skipped++
@@ -743,7 +757,7 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 		lease.State = OrchestratorWorkerStateReclaiming
 		lease.UpdatedAt = nowTimestamp()
 		if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
-			logOrchestratorPersistError("upsert orchestrator worker lease reclaiming", err)
+			recordPersistFailure(lease.ID, "reclaiming", err)
 		}
 
 		if lease.Ephemeral {
@@ -755,7 +769,7 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 				lease.LastError = hostErr.Error()
 				lease.UpdatedAt = nowTimestamp()
 				if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
-					logOrchestratorPersistError("upsert orchestrator worker lease host-error", err)
+					recordPersistFailure(lease.ID, "host-error", err)
 				}
 				continue
 			}
@@ -768,7 +782,7 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 					lease.LastError = uninstallErr.Error()
 					lease.UpdatedAt = nowTimestamp()
 					if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
-						logOrchestratorPersistError("upsert orchestrator worker lease uninstall-error", err)
+						recordPersistFailure(lease.ID, "uninstall-error", err)
 					}
 					continue
 				}
@@ -780,7 +794,7 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 		lease.HeartbeatAt = nowTimestamp()
 		lease.UpdatedAt = nowTimestamp()
 		if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
-			logOrchestratorPersistError("upsert orchestrator worker lease reclaimed", err)
+			recordPersistFailure(lease.ID, "reclaimed", err)
 		}
 		reclaimed++
 	}
