@@ -112,6 +112,41 @@ type OrchestratorWorkerLease struct {
 	UpdatedAt      string                  `json:"updatedAt"`
 }
 
+func normalizeOrchestratorExecutionForStore(in OrchestratorExecution) OrchestratorExecution {
+	out := in
+	out.ID = strings.TrimSpace(out.ID)
+	out.Goal = strings.TrimSpace(out.Goal)
+	out.IdempotencyKey = strings.TrimSpace(out.IdempotencyKey)
+	out.ApprovalScope = strings.TrimSpace(out.ApprovalScope)
+	if out.ApprovalScope == "" {
+		out.ApprovalScope = "infrastructure_only"
+	}
+	if out.MaxConcurrency <= 0 {
+		out.MaxConcurrency = defaultOrchestratorMaxConcurrency
+	}
+	if out.MaxConcurrency > 64 {
+		out.MaxConcurrency = 64
+	}
+	if out.Results == nil {
+		out.Results = []OrchestratorTaskResult{}
+	}
+	out.Error = strings.TrimSpace(out.Error)
+	return out
+}
+
+func normalizeOrchestratorWorkerLeaseForStore(in OrchestratorWorkerLease) OrchestratorWorkerLease {
+	out := in
+	out.ID = strings.TrimSpace(out.ID)
+	out.ExecutionID = strings.TrimSpace(out.ExecutionID)
+	out.HostID = strings.TrimSpace(out.HostID)
+	out.AgentID = strings.TrimSpace(out.AgentID)
+	out.LastError = strings.TrimSpace(out.LastError)
+	if out.State == "" {
+		out.State = OrchestratorWorkerStateProvisioning
+	}
+	return out
+}
+
 func normalizeOrchestratorRequiredWorker(in OrchestratorRequiredWorker) (OrchestratorRequiredWorker, error) {
 	out := in
 	out.HostID = strings.TrimSpace(out.HostID)

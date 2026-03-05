@@ -230,3 +230,53 @@ func TestErrOrchestratorValidationFormatting(t *testing.T) {
 		t.Fatalf("unexpected non-indexed error format: %q", got)
 	}
 }
+
+func TestNormalizeOrchestratorStoreHelpers(t *testing.T) {
+	exec := normalizeOrchestratorExecutionForStore(OrchestratorExecution{
+		ID:             " exec-1 ",
+		Goal:           "  g  ",
+		IdempotencyKey: " idem ",
+		ApprovalScope:  " ",
+		MaxConcurrency: 999,
+		Error:          "  boom  ",
+	})
+	if exec.ID != "exec-1" || exec.Goal != "g" || exec.IdempotencyKey != "idem" {
+		t.Fatalf("unexpected trimmed execution fields: %+v", exec)
+	}
+	if exec.ApprovalScope != "infrastructure_only" {
+		t.Fatalf("expected default approval scope, got %q", exec.ApprovalScope)
+	}
+	if exec.MaxConcurrency != 64 {
+		t.Fatalf("expected maxConcurrency clamp to 64, got %d", exec.MaxConcurrency)
+	}
+	if exec.Results == nil {
+		t.Fatalf("expected results to be initialized")
+	}
+	if exec.Error != "boom" {
+		t.Fatalf("expected trimmed error, got %q", exec.Error)
+	}
+
+	defaultExec := normalizeOrchestratorExecutionForStore(OrchestratorExecution{
+		ID: "exec-2",
+	})
+	if defaultExec.MaxConcurrency != defaultOrchestratorMaxConcurrency {
+		t.Fatalf("expected default maxConcurrency %d, got %d", defaultOrchestratorMaxConcurrency, defaultExec.MaxConcurrency)
+	}
+
+	lease := normalizeOrchestratorWorkerLeaseForStore(OrchestratorWorkerLease{
+		ID:          " lease-1 ",
+		ExecutionID: " exec-1 ",
+		HostID:      " host-1 ",
+		AgentID:     " agent-1 ",
+		LastError:   "  err  ",
+	})
+	if lease.ID != "lease-1" || lease.ExecutionID != "exec-1" || lease.HostID != "host-1" || lease.AgentID != "agent-1" {
+		t.Fatalf("unexpected trimmed lease fields: %+v", lease)
+	}
+	if lease.LastError != "err" {
+		t.Fatalf("expected trimmed lease error, got %q", lease.LastError)
+	}
+	if lease.State != OrchestratorWorkerStateProvisioning {
+		t.Fatalf("expected default lease state provisioning, got %q", lease.State)
+	}
+}

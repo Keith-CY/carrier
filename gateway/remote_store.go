@@ -649,22 +649,14 @@ func upsertOrchestratorExecution(execution OrchestratorExecution) (OrchestratorE
 	if err != nil {
 		return OrchestratorExecution{}, err
 	}
-	id := strings.TrimSpace(execution.ID)
+	execution = normalizeOrchestratorExecutionForStore(execution)
+	id := execution.ID
 	if id == "" {
 		return OrchestratorExecution{}, fmt.Errorf("execution id is required")
 	}
-	execution.ID = id
-	execution.Goal = strings.TrimSpace(execution.Goal)
-	execution.IdempotencyKey = strings.TrimSpace(execution.IdempotencyKey)
 	execution.UpdatedAt = nowTimestamp()
 	if execution.CreatedAt == "" {
 		execution.CreatedAt = execution.UpdatedAt
-	}
-	if execution.ApprovalScope == "" {
-		execution.ApprovalScope = "infrastructure_only"
-	}
-	if execution.Results == nil {
-		execution.Results = []OrchestratorTaskResult{}
 	}
 
 	updated := false
@@ -724,24 +716,20 @@ func upsertOrchestratorWorkerLease(lease OrchestratorWorkerLease) (OrchestratorW
 	if err != nil {
 		return OrchestratorWorkerLease{}, err
 	}
-	id := strings.TrimSpace(lease.ID)
+	lease = normalizeOrchestratorWorkerLeaseForStore(lease)
+	id := lease.ID
 	if id == "" {
 		return OrchestratorWorkerLease{}, fmt.Errorf("worker lease id is required")
 	}
-	if strings.TrimSpace(lease.ExecutionID) == "" {
+	if lease.ExecutionID == "" {
 		return OrchestratorWorkerLease{}, fmt.Errorf("executionId is required")
 	}
-	if strings.TrimSpace(lease.HostID) == "" {
+	if lease.HostID == "" {
 		return OrchestratorWorkerLease{}, fmt.Errorf("hostId is required")
 	}
-	if strings.TrimSpace(lease.AgentID) == "" {
+	if lease.AgentID == "" {
 		return OrchestratorWorkerLease{}, fmt.Errorf("agentId is required")
 	}
-	lease.ID = id
-	lease.ExecutionID = strings.TrimSpace(lease.ExecutionID)
-	lease.HostID = strings.TrimSpace(lease.HostID)
-	lease.AgentID = strings.TrimSpace(lease.AgentID)
-	lease.LastError = strings.TrimSpace(lease.LastError)
 	lease.UpdatedAt = nowTimestamp()
 	if lease.CreatedAt == "" {
 		lease.CreatedAt = lease.UpdatedAt
@@ -751,9 +739,6 @@ func upsertOrchestratorWorkerLease(lease OrchestratorWorkerLease) (OrchestratorW
 	}
 	if lease.LeaseExpireAt == "" {
 		lease.LeaseExpireAt = lease.UpdatedAt
-	}
-	if lease.State == "" {
-		lease.State = OrchestratorWorkerStateProvisioning
 	}
 
 	updated := false

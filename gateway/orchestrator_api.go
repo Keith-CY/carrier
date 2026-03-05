@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -28,6 +29,13 @@ var (
 	orchestratorListLeasesByExecution = listOrchestratorWorkerLeasesByExecution
 	orchestratorInstallAgent          = remoteInstallAgent
 )
+
+func logOrchestratorPersistError(context string, err error) {
+	if err == nil {
+		return
+	}
+	log.Printf("[gateway] %s: %s", strings.TrimSpace(context), RedactErrorMessage(err.Error()))
+}
 
 type orchestratorWorkerPool struct {
 	key string
@@ -330,7 +338,9 @@ func runOrchestratorExecution(executionID string) {
 	updated.CompletedAt = nowTimestamp()
 	updated.UpdatedAt = updated.CompletedAt
 	updated.Error = ""
-	_, _ = upsertOrchestratorExecution(updated)
+	if _, err := upsertOrchestratorExecution(updated); err != nil {
+		logOrchestratorPersistError("upsert orchestrator execution completed", err)
+	}
 }
 
 func markOrchestratorExecutionFailed(execution OrchestratorExecution, runErr error, results []OrchestratorTaskResult) {
@@ -341,7 +351,9 @@ func markOrchestratorExecutionFailed(execution OrchestratorExecution, runErr err
 	if results != nil {
 		execution.Results = results
 	}
-	_, _ = upsertOrchestratorExecution(execution)
+	if _, err := upsertOrchestratorExecution(execution); err != nil {
+		logOrchestratorPersistError("upsert orchestrator execution failed", err)
+	}
 }
 
 func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExecution) ([]OrchestratorWorkerLease, error) {
@@ -379,7 +391,9 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 				lease.State = OrchestratorWorkerStateError
 				lease.LastError = existsErr.Error()
 				lease.UpdatedAt = nowTimestamp()
-				_, _ = upsertOrchestratorWorkerLease(lease)
+				if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
+					logOrchestratorPersistError("upsert orchestrator worker lease config-check error", err)
+				}
 				return nil, existsErr
 			}
 
@@ -390,7 +404,9 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 					lease.State = OrchestratorWorkerStateError
 					lease.LastError = installErr.Error()
 					lease.UpdatedAt = nowTimestamp()
-					_, _ = upsertOrchestratorWorkerLease(lease)
+					if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
+						logOrchestratorPersistError("upsert orchestrator worker lease install error", err)
+					}
 					return nil, installErr
 				}
 				if installResult == nil || !installResult.Installed {
@@ -417,6 +433,10 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 }
 
 func runOrchestratorTasks(ctx context.Context, execution OrchestratorExecution, leases []OrchestratorWorkerLease) ([]OrchestratorTaskResult, error) {
+	if len(execution.TaskUnits) == 0 {
+		return []OrchestratorTaskResult{}, nil
+	}
+
 	pools := map[string]orchestratorWorkerPool{}
 	firstPoolKey := ""
 	for _, lease := range leases {
@@ -445,10 +465,6 @@ func runOrchestratorTasks(ctx context.Context, execution OrchestratorExecution, 
 	if maxConcurrency > len(execution.TaskUnits) {
 		maxConcurrency = len(execution.TaskUnits)
 	}
-	if maxConcurrency <= 0 {
-		maxConcurrency = 1
-	}
-
 	type taskOutcome struct {
 		index  int
 		result OrchestratorTaskResult
@@ -520,7 +536,9 @@ func runTaskWithRetries(
 		lease.State = OrchestratorWorkerStateBusy
 		lease.HeartbeatAt = nowTimestamp()
 		lease.UpdatedAt = nowTimestamp()
-		_, _ = upsertOrchestratorWorkerLease(lease)
+		if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
+			logOrchestratorPersistError("upsert orchestrator worker lease busy", err)
+		}
 
 		start := time.Now()
 		result, execErr := runOrchestratorTaskAttempt(ctx, execution, task, lease, attempt)
@@ -529,7 +547,9 @@ func runTaskWithRetries(
 		if execErr != nil {
 			lease.State = OrchestratorWorkerStateReady
 			lease.LastError = execErr.Error()
-			_, _ = upsertOrchestratorWorkerLease(lease)
+			if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
+				logOrchestratorPersistError("upsert orchestrator worker lease ready-on-error", err)
+			}
 			releaseWorkerToPool(lease, pools[key])
 
 			lastErr = execErr
@@ -544,7 +564,9 @@ func runTaskWithRetries(
 		lease.State = OrchestratorWorkerStateReady
 		lease.LastError = ""
 		lease.TaskCount++
-		_, _ = upsertOrchestratorWorkerLease(lease)
+		if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
+			logOrchestratorPersistError("upsert orchestrator worker lease ready", err)
+		}
 		releaseWorkerToPool(lease, pools[key])
 
 		result.Status = OrchestratorTaskStatusCompleted
@@ -720,7 +742,9 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 
 		lease.State = OrchestratorWorkerStateReclaiming
 		lease.UpdatedAt = nowTimestamp()
-		_, _ = upsertOrchestratorWorkerLease(lease)
+		if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
+			logOrchestratorPersistError("upsert orchestrator worker lease reclaiming", err)
+		}
 
 		if lease.Ephemeral {
 			host, found, hostErr := getRemoteHost(lease.HostID)
@@ -730,7 +754,9 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 				lease.State = OrchestratorWorkerStateError
 				lease.LastError = hostErr.Error()
 				lease.UpdatedAt = nowTimestamp()
-				_, _ = upsertOrchestratorWorkerLease(lease)
+				if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
+					logOrchestratorPersistError("upsert orchestrator worker lease host-error", err)
+				}
 				continue
 			}
 			if found {
@@ -741,7 +767,9 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 					lease.State = OrchestratorWorkerStateError
 					lease.LastError = uninstallErr.Error()
 					lease.UpdatedAt = nowTimestamp()
-					_, _ = upsertOrchestratorWorkerLease(lease)
+					if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
+						logOrchestratorPersistError("upsert orchestrator worker lease uninstall-error", err)
+					}
 					continue
 				}
 			}
@@ -751,7 +779,9 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 		lease.LastError = ""
 		lease.HeartbeatAt = nowTimestamp()
 		lease.UpdatedAt = nowTimestamp()
-		_, _ = upsertOrchestratorWorkerLease(lease)
+		if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
+			logOrchestratorPersistError("upsert orchestrator worker lease reclaimed", err)
+		}
 		reclaimed++
 	}
 
@@ -855,35 +885,30 @@ func remoteRunViaZeroClaw(ctx context.Context, host RemoteHost, hostID, agentID,
 func parseRemoteRunPayload(stdout string, contract remoteMemoryRuntimeContract) map[string]interface{} {
 	payload := strings.TrimSpace(extractJSONObjectOrArray(stdout))
 	if payload == "" {
-		return map[string]interface{}{
-			"message": strings.TrimSpace(stdout),
-			"memory": map[string]interface{}{
-				"contractId":     contract.ContractID,
-				"contractDigest": contract.ContractDigest,
-				"syncState":      "ready",
-				"syncedAt":       nowTimestamp(),
-			},
-		}
+		return defaultRemoteRunPayload(stdout, contract)
 	}
 	var out map[string]interface{}
 	if err := json.Unmarshal([]byte(payload), &out); err != nil {
-		return map[string]interface{}{
-			"message": strings.TrimSpace(stdout),
-			"memory": map[string]interface{}{
-				"contractId":     contract.ContractID,
-				"contractDigest": contract.ContractDigest,
-				"syncState":      "ready",
-				"syncedAt":       nowTimestamp(),
-			},
-		}
+		return defaultRemoteRunPayload(stdout, contract)
 	}
 	if _, ok := out["memory"]; !ok {
-		out["memory"] = map[string]interface{}{
-			"contractId":     contract.ContractID,
-			"contractDigest": contract.ContractDigest,
-			"syncState":      "ready",
-			"syncedAt":       nowTimestamp(),
-		}
+		out["memory"] = defaultRemoteRunMemoryPayload(contract)
 	}
 	return out
+}
+
+func defaultRemoteRunPayload(stdout string, contract remoteMemoryRuntimeContract) map[string]interface{} {
+	return map[string]interface{}{
+		"message": strings.TrimSpace(stdout),
+		"memory":  defaultRemoteRunMemoryPayload(contract),
+	}
+}
+
+func defaultRemoteRunMemoryPayload(contract remoteMemoryRuntimeContract) map[string]interface{} {
+	return map[string]interface{}{
+		"contractId":     contract.ContractID,
+		"contractDigest": contract.ContractDigest,
+		"syncState":      "ready",
+		"syncedAt":       nowTimestamp(),
+	}
 }
