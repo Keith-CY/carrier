@@ -21,6 +21,7 @@
   let addPairPollRunID = 0;
   let lastAddResult = null;
   let logSource = null;
+  let delegateEventSource = null;
   let logEntries = [];
   let logBuffer = [];
   let logPaused = false;
@@ -243,9 +244,89 @@
     });
   }
   function clearToken() {
+    disconnectDelegateEvents();
     token = "";
     localStorage.removeItem("carrier_token");
     showLogin();
+  }
+  function disconnectDelegateEvents() {
+    if (delegateEventSource) {
+      try {
+        delegateEventSource.close();
+      } catch (_) {
+      }
+      delegateEventSource = null;
+    }
+  }
+  function showDelegateNotification(message, status) {
+    const text = String(message || "").trim();
+    if (!text)
+      return;
+    let root = document.getElementById("delegate-toast-root");
+    if (!root) {
+      root = document.createElement("div");
+      root.id = "delegate-toast-root";
+      root.style.position = "fixed";
+      root.style.top = "16px";
+      root.style.right = "16px";
+      root.style.zIndex = "9999";
+      root.style.display = "flex";
+      root.style.flexDirection = "column";
+      root.style.gap = "8px";
+      document.body.appendChild(root);
+    }
+    const item = document.createElement("div");
+    item.textContent = text;
+    item.style.maxWidth = "420px";
+    item.style.padding = "10px 12px";
+    item.style.borderRadius = "10px";
+    item.style.boxShadow = "0 6px 24px rgba(0,0,0,0.18)";
+    item.style.color = "#0f172a";
+    item.style.background = String(status || "").toLowerCase() === "completed" ? "#dcfce7" : "#fee2e2";
+    item.style.border = String(status || "").toLowerCase() === "completed" ? "1px solid #86efac" : "1px solid #fca5a5";
+    root.appendChild(item);
+    setTimeout(() => {
+      item.remove();
+      if (root && root.childElementCount === 0) {
+        root.remove();
+      }
+    }, 7e3);
+  }
+  function connectDelegateEvents() {
+    disconnectDelegateEvents();
+    let sseUrl = "/api/v1/webui/delegate/events";
+    if (token)
+      sseUrl += "?token=" + encodeURIComponent(token);
+    try {
+      const es = new EventSource(sseUrl);
+      delegateEventSource = es;
+      es.onmessage = (e) => {
+        if (!e || !e.data)
+          return;
+        let payload = null;
+        try {
+          payload = JSON.parse(e.data);
+        } catch (_) {
+          return;
+        }
+        if (!payload || payload.type !== "delegate-finish")
+          return;
+        const executionId = String(payload.executionId || "").trim();
+        const status = String(payload.status || "").trim();
+        const error = String(payload.error || "").trim();
+        const msg = status === "completed" ? "Delegate completed: " + executionId : "Delegate failed: " + executionId + (error ? " (" + error + ")" : "");
+        showDelegateNotification(msg, status);
+      };
+      es.onerror = () => {
+        if (delegateEventSource !== es)
+          return;
+        disconnectDelegateEvents();
+        setTimeout(() => {
+          connectDelegateEvents();
+        }, 3e3);
+      };
+    } catch (_) {
+    }
   }
   function setMsg(id, text, type) {
     const el = $(id);
@@ -572,6 +653,7 @@
           localStorage.setItem("carrier_token", t);
           hideLogin();
           await refreshFeatureFlags();
+          connectDelegateEvents();
           navigate(location.hash || "#/welcome");
         } else {
           token = "";
@@ -5269,6 +5351,7 @@
         if (r.ok) {
           hideLogin();
           return refreshFeatureFlags().then(() => {
+            connectDelegateEvents();
             navigate(location.hash || "#/dashboard");
           });
         } else {
@@ -5286,6 +5369,7 @@
         if (r.ok) {
           hideLogin();
           return refreshFeatureFlags().then(() => {
+            connectDelegateEvents();
             navigate(location.hash || "#/welcome");
           });
         } else {

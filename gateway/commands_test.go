@@ -30,6 +30,12 @@ func TestParseInput_ValidCommands(t *testing.T) {
 			wantCmd: CmdChat, wantArgs: []string{"hello", "from", "terminal"}, wantSession: "session-abc",
 		},
 		{
+			name:         "delegate command",
+			input:        "telegram 123 req-delegate session-abc /delegate summarize logs",
+			wantProvider: "telegram", wantChatID: "123", wantReqID: "req-delegate",
+			wantCmd: CmdDelegate, wantArgs: []string{"summarize", "logs"}, wantSession: "session-abc",
+		},
+		{
 			name:         "agents command",
 			input:        "discord ch-1 req-2 /agents",
 			wantProvider: "discord", wantChatID: "ch-1", wantReqID: "req-2",

@@ -217,6 +217,58 @@ func TestBaseAgentChatEndpointBranches(t *testing.T) {
 	})
 }
 
+func TestBaseAgentDecomposeEndpointBranches(t *testing.T) {
+	t.Run("method not allowed", func(t *testing.T) {
+		svc := newTestServiceWithAgent(t)
+		var ready atomic.Bool
+		ready.Store(true)
+		mux := buildHTTPMuxWithBaseAgent(svc, nil, &ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/base-agent/decompose", nil)
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("expected 405, got %d", rec.Code)
+		}
+	})
+
+	t.Run("runtime unavailable", func(t *testing.T) {
+		svc := newTestServiceWithAgent(t)
+		var ready atomic.Bool
+		ready.Store(true)
+		mux := buildHTTPMuxWithBaseAgent(svc, nil, &ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/base-agent/decompose", strings.NewReader(`{"goal":"analyze logs"}`))
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("decode and validation errors", func(t *testing.T) {
+		svc := newTestServiceWithAgent(t)
+		var ready atomic.Bool
+		ready.Store(true)
+		rt := baseagent.NewRuntime(newLifecycleAgentServiceAdapter(svc), nil)
+		mux := buildHTTPMuxWithBaseAgent(svc, rt, &ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/base-agent/decompose", strings.NewReader(`{"goal"`))
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for decode error, got %d", rec.Code)
+		}
+
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/api/base-agent/decompose", strings.NewReader(`{"goal":"   "}`))
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for missing goal, got %d", rec.Code)
+		}
+	})
+}
+
 func TestPairingVerifyConsumeLimiterAndDecodeBranches(t *testing.T) {
 	svc := newTestServiceWithAgent(t)
 	var ready atomic.Bool
