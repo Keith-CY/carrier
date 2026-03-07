@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestHandleCommand_Delegate_Usage(t *testing.T) {
@@ -265,4 +266,52 @@ func parseDelegateExecutionID(message string) string {
 		return ""
 	}
 	return strings.TrimSpace(matches[1])
+}
+
+func TestUpsertDelegateExecution_TrimsOlderEntries(t *testing.T) {
+	t.Setenv("CARRIER_DELEGATE_STORE", t.TempDir()+"/delegate-store.json")
+	t.Setenv("CARRIER_DELEGATE_STORE_MAX_EXECUTIONS", "2")
+
+	makeExecution := func(id string, updatedAt time.Time) delegateExecution {
+		ts := updatedAt.UTC().Format(time.RFC3339Nano)
+		return delegateExecution{
+			ID:        id,
+			Goal:      "test",
+			Status:    delegateExecutionStatusQueued,
+			TaskUnits: []BaseAgentDecomposeTask{{ID: "task-1", Input: "noop"}},
+			CreatedAt: ts,
+			UpdatedAt: ts,
+		}
+	}
+
+	old := makeExecution("exec-old", time.Date(2026, 3, 8, 0, 0, 0, 0, time.UTC))
+	mid := makeExecution("exec-mid", time.Date(2026, 3, 8, 0, 1, 0, 0, time.UTC))
+	newest := makeExecution("exec-new", time.Date(2026, 3, 8, 0, 2, 0, 0, time.UTC))
+
+	if _, err := upsertDelegateExecution(old); err != nil {
+		t.Fatalf("upsert old execution: %v", err)
+	}
+	if _, err := upsertDelegateExecution(mid); err != nil {
+		t.Fatalf("upsert mid execution: %v", err)
+	}
+	if _, err := upsertDelegateExecution(newest); err != nil {
+		t.Fatalf("upsert newest execution: %v", err)
+	}
+
+	executions, err := listDelegateExecutions(0)
+	if err != nil {
+		t.Fatalf("list executions: %v", err)
+	}
+	if len(executions) != 2 {
+		t.Fatalf("expected 2 executions after trim, got %d", len(executions))
+	}
+	if executions[0].ID != "exec-new" || executions[1].ID != "exec-mid" {
+		t.Fatalf("unexpected retained execution order: %#v", []string{executions[0].ID, executions[1].ID})
+	}
+
+	if _, found, err := getDelegateExecution("exec-old"); err != nil {
+		t.Fatalf("get old execution: %v", err)
+	} else if found {
+		t.Fatalf("expected old execution to be trimmed")
+	}
 }

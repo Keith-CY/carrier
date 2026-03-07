@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,8 +27,9 @@ const (
 	delegateTaskStatusCompleted = "completed"
 	delegateTaskStatusFailed    = "failed"
 
-	defaultDelegateTaskTimeout = 60 * time.Second
-	maxDelegateConcurrency     = 8
+	defaultDelegateTaskTimeout        = 60 * time.Second
+	maxDelegateConcurrency            = 8
+	defaultDelegateStoreMaxExecutions = 500
 )
 
 type delegateTaskResult struct {
@@ -536,22 +538,18 @@ func (s *delegateWorkerScheduler) acquire(preferredAgentID string) (int, delegat
 
 	for {
 		if normalizedPreferred != "" {
-			if _, ok := s.agentPresence[normalizedPreferred]; ok {
+			if _, isPresent := s.agentPresence[normalizedPreferred]; isPresent {
 				if idx := s.findAvailableLocked(normalizedPreferred); idx >= 0 {
 					s.busy[idx] = true
 					return idx, s.workers[idx]
 				}
-			} else {
-				if idx := s.findAvailableLocked(""); idx >= 0 {
-					s.busy[idx] = true
-					return idx, s.workers[idx]
-				}
+				s.cond.Wait()
+				continue
 			}
-		} else {
-			if idx := s.findAvailableLocked(""); idx >= 0 {
-				s.busy[idx] = true
-				return idx, s.workers[idx]
-			}
+		}
+		if idx := s.findAvailableLocked(""); idx >= 0 {
+			s.busy[idx] = true
+			return idx, s.workers[idx]
 		}
 		s.cond.Wait()
 	}
@@ -911,10 +909,39 @@ func upsertDelegateExecution(execution delegateExecution) (delegateExecution, er
 	} else {
 		state.Executions = append(state.Executions, execution)
 	}
+	state.Executions = trimDelegateExecutions(state.Executions, delegateStoreMaxExecutions())
 	if err := saveDelegateState(path, state); err != nil {
 		return delegateExecution{}, err
 	}
 	return execution, nil
+}
+
+func delegateStoreMaxExecutions() int {
+	raw := strings.TrimSpace(os.Getenv("CARRIER_DELEGATE_STORE_MAX_EXECUTIONS"))
+	if raw == "" {
+		return defaultDelegateStoreMaxExecutions
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return defaultDelegateStoreMaxExecutions
+	}
+	return parsed
+}
+
+func trimDelegateExecutions(executions []delegateExecution, maxCount int) []delegateExecution {
+	if maxCount <= 0 || len(executions) <= maxCount {
+		return executions
+	}
+	copied := append([]delegateExecution(nil), executions...)
+	sort.Slice(copied, func(i, j int) bool {
+		ti := parseRFC3339OrNow(copied[i].UpdatedAt)
+		tj := parseRFC3339OrNow(copied[j].UpdatedAt)
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return strings.TrimSpace(copied[i].ID) > strings.TrimSpace(copied[j].ID)
+	})
+	return copied[:maxCount]
 }
 
 func getDelegateExecution(executionID string) (delegateExecution, bool, error) {
