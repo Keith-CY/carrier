@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,12 +30,6 @@ const (
 	maxDelegateConcurrency     = 8
 )
 
-type delegateTaskSpec struct {
-	ID      string `json:"id"`
-	Input   string `json:"input"`
-	AgentID string `json:"agentId,omitempty"`
-}
-
 type delegateTaskResult struct {
 	TaskID      string `json:"taskId"`
 	Status      string `json:"status"`
@@ -50,20 +45,20 @@ type delegateTaskResult struct {
 }
 
 type delegateExecution struct {
-	ID             string               `json:"id"`
-	Goal           string               `json:"goal"`
-	Provider       string               `json:"provider,omitempty"`
-	ChatID         string               `json:"chatId,omitempty"`
-	Actor          string               `json:"actor,omitempty"`
-	Status         string               `json:"status"`
-	PlannerWarning string               `json:"plannerWarning,omitempty"`
-	TaskUnits      []delegateTaskSpec   `json:"taskUnits"`
-	Results        []delegateTaskResult `json:"results,omitempty"`
-	Error          string               `json:"error,omitempty"`
-	CreatedAt      string               `json:"createdAt"`
-	StartedAt      string               `json:"startedAt,omitempty"`
-	CompletedAt    string               `json:"completedAt,omitempty"`
-	UpdatedAt      string               `json:"updatedAt"`
+	ID             string                   `json:"id"`
+	Goal           string                   `json:"goal"`
+	Provider       string                   `json:"provider,omitempty"`
+	ChatID         string                   `json:"chatId,omitempty"`
+	Actor          string                   `json:"actor,omitempty"`
+	Status         string                   `json:"status"`
+	PlannerWarning string                   `json:"plannerWarning,omitempty"`
+	TaskUnits      []BaseAgentDecomposeTask `json:"taskUnits"`
+	Results        []delegateTaskResult     `json:"results,omitempty"`
+	Error          string                   `json:"error,omitempty"`
+	CreatedAt      string                   `json:"createdAt"`
+	StartedAt      string                   `json:"startedAt,omitempty"`
+	CompletedAt    string                   `json:"completedAt,omitempty"`
+	UpdatedAt      string                   `json:"updatedAt"`
 }
 
 type delegateStoreState struct {
@@ -181,7 +176,7 @@ func submitDelegateExecution(
 	}
 	tasks, plannerWarning := decomposeDelegateGoal(ctx, daemon, trimmedGoal, actor, requestID)
 	if len(tasks) == 0 {
-		tasks = []delegateTaskSpec{{ID: "task-1", Input: trimmedGoal}}
+		tasks = []BaseAgentDecomposeTask{{ID: "task-1", Input: trimmedGoal}}
 		if strings.TrimSpace(plannerWarning) == "" {
 			plannerWarning = "planner returned no tasks; fell back to a single task"
 		}
@@ -214,43 +209,18 @@ func decomposeDelegateGoal(
 	goal string,
 	actor string,
 	requestID string,
-) ([]delegateTaskSpec, string) {
+) ([]BaseAgentDecomposeTask, string) {
 	if daemon == nil {
 		return nil, "daemon client is not configured; using single-task fallback"
 	}
 	tasks, err := daemon.DecomposeBaseAgent(ctx, strings.TrimSpace(goal), actor, requestID)
 	if err != nil {
-		return []delegateTaskSpec{{ID: "task-1", Input: strings.TrimSpace(goal)}}, err.Error()
+		return []BaseAgentDecomposeTask{{ID: "task-1", Input: strings.TrimSpace(goal)}}, err.Error()
 	}
-	normalized := make([]delegateTaskSpec, 0, len(tasks))
-	seen := map[string]struct{}{}
-	for i, task := range tasks {
-		input := strings.TrimSpace(task.Input)
-		if input == "" {
-			continue
-		}
-		id := strings.TrimSpace(task.ID)
-		if id == "" {
-			id = fmt.Sprintf("task-%d", i+1)
-		}
-		if _, ok := seen[id]; ok {
-			id = fmt.Sprintf("%s-%d", id, i+1)
-		}
-		seen[id] = struct{}{}
-		agentID := strings.ToLower(strings.TrimSpace(task.AgentID))
-		if !isDelegateSupportedAgent(agentID) {
-			agentID = ""
-		}
-		normalized = append(normalized, delegateTaskSpec{
-			ID:      id,
-			Input:   input,
-			AgentID: agentID,
-		})
+	if len(tasks) == 0 {
+		return []BaseAgentDecomposeTask{{ID: "task-1", Input: strings.TrimSpace(goal)}}, "planner returned empty task list; using single-task fallback"
 	}
-	if len(normalized) == 0 {
-		return []delegateTaskSpec{{ID: "task-1", Input: strings.TrimSpace(goal)}}, "planner returned empty task list; using single-task fallback"
-	}
-	return normalized, ""
+	return tasks, ""
 }
 
 func startDelegateExecutionAsync(executionID string, daemon *DaemonClient) {
@@ -302,7 +272,7 @@ func runDelegateExecution(executionID string, daemon *DaemonClient) {
 		execution.Error = workerErr.Error()
 		execution.CompletedAt = nowTimestamp()
 		execution.UpdatedAt = execution.CompletedAt
-		_, _ = upsertDelegateExecution(execution)
+		persistDelegateExecutionBestEffort(execution)
 		publishDelegateEvent(execution)
 		return
 	}
@@ -318,8 +288,19 @@ func runDelegateExecution(executionID string, daemon *DaemonClient) {
 		execution.Status = delegateExecutionStatusCompleted
 		execution.Error = ""
 	}
-	_, _ = upsertDelegateExecution(execution)
+	persistDelegateExecutionBestEffort(execution)
 	publishDelegateEvent(execution)
+}
+
+func persistDelegateExecutionBestEffort(execution delegateExecution) {
+	if _, err := upsertDelegateExecution(execution); err != nil {
+		log.Printf(
+			"[gateway/delegate] failed to persist delegate execution id=%s status=%s detail=%s",
+			strings.TrimSpace(execution.ID),
+			strings.TrimSpace(execution.Status),
+			RedactErrorMessage(err.Error()),
+		)
+	}
 }
 
 func collectDelegateWorkers(ctx context.Context, daemon *DaemonClient, requestID string) ([]delegateWorker, error) {
@@ -561,7 +542,7 @@ func runDelegateTask(
 	ctx context.Context,
 	daemon *DaemonClient,
 	executionID string,
-	task delegateTaskSpec,
+	task BaseAgentDecomposeTask,
 	worker delegateWorker,
 	index int,
 ) (delegateTaskResult, error) {
