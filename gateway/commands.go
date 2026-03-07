@@ -20,6 +20,7 @@ type CommandName string
 const (
 	CmdPair            CommandName = "/pair"
 	CmdChat            CommandName = "/chat"
+	CmdDelegate        CommandName = "/delegate"
 	CmdAgents          CommandName = "/agents"
 	CmdTools           CommandName = "/tools"
 	CmdProviders       CommandName = "/providers"
@@ -41,6 +42,7 @@ const (
 var validCommands = map[CommandName]struct{}{
 	CmdPair:            {},
 	CmdChat:            {},
+	CmdDelegate:        {},
 	CmdAgents:          {},
 	CmdTools:           {},
 	CmdProviders:       {},
@@ -181,6 +183,8 @@ func HandleCommand(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClien
 		return onboardViaGUIOnlyResp(cmd.RequestID)
 	case CmdChat:
 		return handleChat(ctx, cmd, daemon, actor)
+	case CmdDelegate:
+		return handleDelegate(ctx, cmd, daemon, actor)
 	case CmdAgents:
 		return handleAgents(ctx, cmd, daemon, actor)
 	case CmdTools:

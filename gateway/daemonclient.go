@@ -77,6 +77,7 @@ type RemoteDiagnosisHandoff struct {
 }
 
 type BaseAgentChatResult = baseagent.ChatResponse
+type BaseAgentDecomposeTask = baseagent.DecomposeTask
 
 type AgentChatResult struct {
 	AgentID   string `json:"agentId"`
@@ -354,6 +355,31 @@ func (c *DaemonClient) ChatBaseAgent(
 		return nil, fmt.Errorf("base-agent chat response: %w", err)
 	}
 	return &result, nil
+}
+
+func (c *DaemonClient) DecomposeBaseAgent(
+	ctx context.Context,
+	goal string,
+	actor string,
+	requestID string,
+) ([]baseagent.DecomposeTask, error) {
+	body := map[string]interface{}{
+		"goal": strings.TrimSpace(goal),
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/base-agent/decompose", body, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Tasks []baseagent.DecomposeTask `json:"tasks"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("base-agent decompose response: %w", err)
+	}
+	if result.Tasks == nil {
+		result.Tasks = []baseagent.DecomposeTask{}
+	}
+	return result.Tasks, nil
 }
 
 func (c *DaemonClient) ChatAgent(

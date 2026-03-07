@@ -284,6 +284,38 @@ func TestDaemonClient_ChatAgent(t *testing.T) {
 	}
 }
 
+func TestDaemonClient_DecomposeBaseAgent(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]interface{}
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"tasks": []map[string]interface{}{
+				{"id": "task-1", "input": "summarize logs"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	tasks, err := dc.DecomposeBaseAgent(context.Background(), "analyze logs", "actor", "req")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/api/v1/base-agent/decompose" {
+		t.Fatalf("unexpected path %q", gotPath)
+	}
+	if gotBody["goal"] != "analyze logs" {
+		t.Fatalf("unexpected goal body: %#v", gotBody)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "task-1" {
+		t.Fatalf("unexpected tasks: %+v", tasks)
+	}
+}
+
 func TestDaemonClient_GetLogs_ClampsTail(t *testing.T) {
 	var gotPath string
 	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -648,6 +680,15 @@ func TestDaemonClient_UpgradeDiagnoseAndChatParseErrors(t *testing.T) {
 				return err
 			},
 			want: "base-agent chat response",
+		},
+		{
+			name: "decompose parse error",
+			path: "/api/v1/base-agent/decompose",
+			run: func(c *DaemonClient) error {
+				_, err := c.DecomposeBaseAgent(context.Background(), "goal", "actor", "req")
+				return err
+			},
+			want: "base-agent decompose response",
 		},
 		{
 			name: "agent chat parse error",

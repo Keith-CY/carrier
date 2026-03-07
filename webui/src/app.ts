@@ -22,6 +22,7 @@
   let addPairPollRunID = 0;
   let lastAddResult = null;
   let logSource = null; // EventSource for SSE logs
+  let delegateEventSource = null; // EventSource for delegate completion notifications
   let logEntries = [];
   let logBuffer = [];
   let logPaused = false;
@@ -111,9 +112,76 @@
   }
 
   function clearToken() {
+    disconnectDelegateEvents();
     token = '';
     localStorage.removeItem('carrier_token');
     showLogin();
+  }
+
+  function disconnectDelegateEvents() {
+    if (delegateEventSource) {
+      try { delegateEventSource.close(); } catch (_) {}
+      delegateEventSource = null;
+    }
+  }
+
+  function showDelegateNotification(message, status) {
+    const text = String(message || '').trim();
+    if (!text) return;
+    let root = document.getElementById('delegate-toast-root');
+    if (!root) {
+      root = document.createElement('div');
+      root.id = 'delegate-toast-root';
+      root.className = 'delegate-toast-root';
+      document.body.appendChild(root);
+    }
+    const item = document.createElement('div');
+    item.textContent = text;
+    item.className = 'delegate-toast-item';
+    item.classList.add(String(status || '').toLowerCase() === 'completed' ? 'success' : 'error');
+    root.appendChild(item);
+    setTimeout(() => {
+      item.remove();
+      if (root && root.childElementCount === 0) {
+        root.remove();
+      }
+    }, 7000);
+  }
+
+  function connectDelegateEvents() {
+    disconnectDelegateEvents();
+    let sseUrl = '/api/v1/webui/delegate/events';
+    if (token) sseUrl += '?token=' + encodeURIComponent(token);
+    try {
+      const es = new EventSource(sseUrl);
+      delegateEventSource = es;
+      es.onmessage = e => {
+        if (!e || !e.data) return;
+        let payload = null;
+        try {
+          payload = JSON.parse(e.data);
+        } catch (_) {
+          return;
+        }
+        if (!payload || payload.type !== 'delegate-finish') return;
+        const executionId = String(payload.executionId || '').trim();
+        const status = String(payload.status || '').trim();
+        const error = String(payload.error || '').trim();
+        const msg = status === 'completed'
+          ? 'Delegate completed: ' + executionId
+          : 'Delegate failed: ' + executionId + (error ? ' (' + error + ')' : '');
+        showDelegateNotification(msg, status);
+      };
+      es.onerror = () => {
+        if (delegateEventSource !== es) return;
+        disconnectDelegateEvents();
+        setTimeout(() => {
+          connectDelegateEvents();
+        }, 3000);
+      };
+    } catch (_) {
+      // ignore
+    }
   }
 
   function setMsg(id, text, type) {
@@ -404,6 +472,7 @@
           localStorage.setItem('carrier_token', t);
           hideLogin();
           await refreshFeatureFlags();
+          connectDelegateEvents();
           navigate(location.hash || '#/welcome');
         } else {
           token = '';
@@ -5185,6 +5254,7 @@
           if (r.ok) {
             hideLogin();
             return refreshFeatureFlags().then(() => {
+              connectDelegateEvents();
               navigate(location.hash || '#/dashboard');
             });
           } else {
@@ -5206,6 +5276,7 @@
             // No auth required
             hideLogin();
             return refreshFeatureFlags().then(() => {
+              connectDelegateEvents();
               navigate(location.hash || '#/welcome');
             });
           } else {

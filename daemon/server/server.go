@@ -397,6 +397,36 @@ func buildHTTPMuxWithBaseAgent(
 		writeJSON(w, http.StatusOK, resp)
 	})
 
+	register("/api/base-agent/decompose", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if baseRuntime == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime is unavailable")
+			return
+		}
+		var body struct {
+			Provider string `json:"provider,omitempty"`
+			Goal     string `json:"goal"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if strings.TrimSpace(body.Goal) == "" {
+			writeJSONError(w, http.StatusBadRequest, "goal is required")
+			return
+		}
+		tasks, err := baseagent.DecomposeGoal(r.Context(), strings.TrimSpace(body.Provider), strings.TrimSpace(body.Goal))
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"tasks": tasks,
+		})
+	})
+
 	register("/api/v2/memory/search", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")

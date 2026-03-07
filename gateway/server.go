@@ -203,6 +203,14 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		}
 		handleFeatureFlags(w, r, requestID, cfg)
 	})
+	mux.HandleFunc("/api/v1/webui/delegate/events", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleWebUIDelegateEvents(w, r, requestID)
+	})
 	mux.HandleFunc("/api/v1/remote/hosts", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
 		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
