@@ -248,7 +248,15 @@ func startDelegateExecutionAsync(executionID string, daemon *DaemonClient) {
 
 func runDelegateExecution(executionID string, daemon *DaemonClient) {
 	execution, found, err := getDelegateExecution(executionID)
-	if err != nil || !found {
+	if err != nil {
+		log.Printf(
+			"[gateway/delegate] failed to load execution id=%s detail=%s",
+			strings.TrimSpace(executionID),
+			RedactErrorMessage(err.Error()),
+		)
+		return
+	}
+	if !found {
 		return
 	}
 	if execution.Status == delegateExecutionStatusCompleted || execution.Status == delegateExecutionStatusFailed {
@@ -260,6 +268,11 @@ func runDelegateExecution(executionID string, daemon *DaemonClient) {
 	execution.UpdatedAt = execution.StartedAt
 	execution.Error = ""
 	if _, err := upsertDelegateExecution(execution); err != nil {
+		log.Printf(
+			"[gateway/delegate] failed to persist running execution id=%s detail=%s",
+			strings.TrimSpace(execution.ID),
+			RedactErrorMessage(err.Error()),
+		)
 		return
 	}
 

@@ -130,25 +130,30 @@ func extractJSONCandidate(raw string) string {
 		return trimmed
 	}
 
-	// Handle fenced code blocks first.
-	if strings.Contains(trimmed, "```") {
-		lines := strings.Split(trimmed, "\n")
-		inFence := false
-		payload := make([]string, 0, len(lines))
-		for _, line := range lines {
-			l := strings.TrimSpace(line)
-			if strings.HasPrefix(l, "```") {
-				inFence = !inFence
-				continue
-			}
-			if inFence {
-				payload = append(payload, line)
-			}
+	// Handle fenced code blocks first. Parse each block independently to avoid
+	// concatenating content from multiple fenced blocks.
+	searchPos := 0
+	for searchPos < len(trimmed) {
+		startRel := strings.Index(trimmed[searchPos:], "```")
+		if startRel < 0 {
+			break
 		}
-		joined := strings.TrimSpace(strings.Join(payload, "\n"))
-		if joined != "" && json.Valid([]byte(joined)) {
-			return joined
+		start := searchPos + startRel
+		afterFence := start + 3
+		lineEndRel := strings.Index(trimmed[afterFence:], "\n")
+		if lineEndRel < 0 {
+			break
 		}
+		contentStart := afterFence + lineEndRel + 1
+		endRel := strings.Index(trimmed[contentStart:], "```")
+		if endRel < 0 {
+			break
+		}
+		payload := strings.TrimSpace(trimmed[contentStart : contentStart+endRel])
+		if payload != "" && json.Valid([]byte(payload)) {
+			return payload
+		}
+		searchPos = contentStart + endRel + 3
 	}
 
 	firstObject := strings.Index(trimmed, "{")

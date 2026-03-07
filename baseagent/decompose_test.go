@@ -44,6 +44,25 @@ func TestParseDecomposeTasks_FencedJSON(t *testing.T) {
 	}
 }
 
+func TestParseDecomposeTasks_MultipleFencedBlocks(t *testing.T) {
+	raw := strings.Join([]string{
+		"```text",
+		"not-json",
+		"```",
+		"noise",
+		"```json",
+		"[{\"input\":\"second block task\"}]",
+		"```",
+	}, "\n")
+	tasks, err := parseDecomposeTasks(raw)
+	if err != nil {
+		t.Fatalf("parseDecomposeTasks failed: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Input != "second block task" {
+		t.Fatalf("unexpected tasks: %+v", tasks)
+	}
+}
+
 func TestParseDecomposeTasks_NoJSON(t *testing.T) {
 	_, err := parseDecomposeTasks("not a json payload")
 	if err == nil || !strings.Contains(err.Error(), "no JSON") {
