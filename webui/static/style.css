@@ -215,6 +215,46 @@ nav {
   color: var(--text-dim);
 }
 
+.delegate-toast-root {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.delegate-toast-item {
+  max-width: 420px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  color: var(--text-primary);
+  background: var(--surface-primary);
+  border: 1px solid var(--line-strong);
+}
+
+.delegate-toast-item.success {
+  color: #166534;
+  background: rgba(134, 239, 172, 0.28);
+  border-color: rgba(34, 197, 94, 0.48);
+}
+
+.delegate-toast-item.error {
+  color: #991b1b;
+  background: rgba(252, 165, 165, 0.28);
+  border-color: rgba(239, 68, 68, 0.48);
+}
+
+[data-theme="dark"] .delegate-toast-item.success {
+  color: #dcfce7;
+}
+
+[data-theme="dark"] .delegate-toast-item.error {
+  color: #fee2e2;
+}
+
 .overlay {
   position: fixed;
   inset: 0;

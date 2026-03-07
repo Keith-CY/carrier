@@ -154,15 +154,13 @@ func extractJSONCandidate(raw string) string {
 	firstObject := strings.Index(trimmed, "{")
 	firstArray := strings.Index(trimmed, "[")
 	start := -1
-	if firstObject >= 0 && firstArray >= 0 {
-		if firstObject < firstArray {
-			start = firstObject
-		} else {
-			start = firstArray
-		}
-	} else if firstObject >= 0 {
+	if firstObject < 0 {
+		start = firstArray
+	} else if firstArray < 0 {
 		start = firstObject
-	} else if firstArray >= 0 {
+	} else if firstObject < firstArray {
+		start = firstObject
+	} else {
 		start = firstArray
 	}
 	if start < 0 {

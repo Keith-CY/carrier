@@ -266,24 +266,13 @@
     if (!root) {
       root = document.createElement("div");
       root.id = "delegate-toast-root";
-      root.style.position = "fixed";
-      root.style.top = "16px";
-      root.style.right = "16px";
-      root.style.zIndex = "9999";
-      root.style.display = "flex";
-      root.style.flexDirection = "column";
-      root.style.gap = "8px";
+      root.className = "delegate-toast-root";
       document.body.appendChild(root);
     }
     const item = document.createElement("div");
     item.textContent = text;
-    item.style.maxWidth = "420px";
-    item.style.padding = "10px 12px";
-    item.style.borderRadius = "10px";
-    item.style.boxShadow = "0 6px 24px rgba(0,0,0,0.18)";
-    item.style.color = "#0f172a";
-    item.style.background = String(status || "").toLowerCase() === "completed" ? "#dcfce7" : "#fee2e2";
-    item.style.border = String(status || "").toLowerCase() === "completed" ? "1px solid #86efac" : "1px solid #fca5a5";
+    item.className = "delegate-toast-item";
+    item.classList.add(String(status || "").toLowerCase() === "completed" ? "success" : "error");
     root.appendChild(item);
     setTimeout(() => {
       item.remove();

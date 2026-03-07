@@ -360,33 +360,62 @@ func discoverDelegateRemoteWorkers(ctx context.Context, requestID string) ([]del
 	if err != nil {
 		return nil, err
 	}
+	results := make(chan []delegateWorker, len(hosts))
+	var wg sync.WaitGroup
+	for _, host := range hosts {
+		host := host
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			hostCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			instances, _, listErr := remoteListInstancesForHost(hostCtx, host, host.ID)
+			cancel()
+			if listErr != nil {
+				return
+			}
+			hostWorkers := make([]delegateWorker, 0, len(instances))
+			hostSeen := map[string]struct{}{}
+			for _, inst := range instances {
+				agentID := strings.ToLower(strings.TrimSpace(inst.AgentID))
+				if !isDelegateSupportedAgent(agentID) {
+					continue
+				}
+				if !strings.EqualFold(strings.TrimSpace(inst.RuntimeState), "running") {
+					continue
+				}
+				key := workerPoolKey(host.ID, agentID)
+				if _, ok := hostSeen[key]; ok {
+					continue
+				}
+				hostSeen[key] = struct{}{}
+				hostWorkers = append(hostWorkers, delegateWorker{
+					Scope:   "remote",
+					HostID:  strings.TrimSpace(host.ID),
+					AgentID: agentID,
+				})
+			}
+			if len(hostWorkers) == 0 {
+				return
+			}
+			select {
+			case results <- hostWorkers:
+			case <-ctx.Done():
+			}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
 	workers := make([]delegateWorker, 0)
 	seen := map[string]struct{}{}
-	for _, host := range hosts {
-		hostCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		instances, _, listErr := remoteListInstancesForHost(hostCtx, host, host.ID)
-		cancel()
-		if listErr != nil {
-			continue
-		}
-		for _, inst := range instances {
-			agentID := strings.ToLower(strings.TrimSpace(inst.AgentID))
-			if !isDelegateSupportedAgent(agentID) {
-				continue
-			}
-			if !strings.EqualFold(strings.TrimSpace(inst.RuntimeState), "running") {
-				continue
-			}
-			key := workerPoolKey(host.ID, agentID)
+	for batch := range results {
+		for _, worker := range batch {
+			key := workerPoolKey(worker.HostID, worker.AgentID)
 			if _, ok := seen[key]; ok {
 				continue
 			}
 			seen[key] = struct{}{}
-			workers = append(workers, delegateWorker{
-				Scope:   "remote",
-				HostID:  strings.TrimSpace(host.ID),
-				AgentID: agentID,
-			})
+			workers = append(workers, worker)
 		}
 	}
 	sort.Slice(workers, func(i, j int) bool {
@@ -716,10 +745,12 @@ func handleWebUIDelegateEvents(w http.ResponseWriter, r *http.Request, requestID
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	_ = writeSSEEvent(w, map[string]interface{}{
+	if err := writeSSEEvent(w, map[string]interface{}{
 		"type":      "start",
 		"requestId": requestID,
-	})
+	}); err != nil {
+		return
+	}
 	flusher.Flush()
 
 	heartbeat := time.NewTicker(20 * time.Second)
@@ -730,17 +761,21 @@ func handleWebUIDelegateEvents(w http.ResponseWriter, r *http.Request, requestID
 		case <-r.Context().Done():
 			return
 		case evt := <-ch:
-			_ = writeSSEEvent(w, map[string]interface{}{
+			if err := writeSSEEvent(w, map[string]interface{}{
 				"type":        "delegate-finish",
 				"executionId": evt.ExecutionID,
 				"status":      evt.Status,
 				"goal":        evt.Goal,
 				"error":       evt.Error,
 				"completedAt": evt.CompletedAt,
-			})
+			}); err != nil {
+				return
+			}
 			flusher.Flush()
 		case <-heartbeat.C:
-			_, _ = w.Write([]byte(": keepalive\n\n"))
+			if _, err := w.Write([]byte(": keepalive\n\n")); err != nil {
+				return
+			}
 			flusher.Flush()
 		}
 	}
