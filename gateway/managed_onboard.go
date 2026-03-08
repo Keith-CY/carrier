@@ -534,28 +534,5 @@ func resolveManagedProviderBaseURL(provider *LLMProvider, providerKey string) st
 	if base := strings.TrimSpace(provider.DefaultBase); base != "" {
 		return base
 	}
-
-	switch catalog.NormalizeProviderID(provider.ID) {
-	case "openai", "openai-codex", "openai-compatible":
-		return "https://api.openai.com/v1"
-	case "anthropic":
-		return "https://api.anthropic.com/v1"
-	case "openrouter":
-		return "https://openrouter.ai/api/v1"
-	case "ollama":
-		return "http://localhost:11434/v1"
-	}
-
-	switch strings.ToLower(strings.TrimSpace(providerKey)) {
-	case "openai":
-		return "https://api.openai.com/v1"
-	case "anthropic":
-		return "https://api.anthropic.com/v1"
-	case "openrouter":
-		return "https://openrouter.ai/api/v1"
-	case "ollama":
-		return "http://localhost:11434/v1"
-	default:
-		return ""
-	}
+	return catalog.ResolveProviderBaseURL(provider.ID, providerKey, "")
 }

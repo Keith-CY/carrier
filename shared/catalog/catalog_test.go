@@ -150,20 +150,82 @@ func TestProviderAliasesFor(t *testing.T) {
 
 func TestNormalizeProviderID(t *testing.T) {
 	cases := map[string]string{
-		"claude-code":        "openai-codex",
-		"opencode":           "openai-codex",
-		"vllm":               "openai-compatible",
-		"VLLM":               "openai-compatible",
-		"openai-v1":          "openai-compatible",
-		"  openai-v1  ":      "openai-compatible",
-		"openai":             "openai",
-		"anthropic":          "anthropic",
-		"openai-compatible":  "openai-compatible",
-		"unknown-provider":   "unknown-provider",
+		"claude-code":       "openai-codex",
+		"opencode":          "openai-codex",
+		"vllm":              "openai-compatible",
+		"VLLM":              "openai-compatible",
+		"openai-v1":         "openai-compatible",
+		"  openai-v1  ":     "openai-compatible",
+		"openai":            "openai",
+		"anthropic":         "anthropic",
+		"openai-compatible": "openai-compatible",
+		"unknown-provider":  "unknown-provider",
 	}
 	for input, want := range cases {
 		if got := NormalizeProviderID(input); got != want {
 			t.Fatalf("NormalizeProviderID(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestResolveProviderBaseURL(t *testing.T) {
+	cases := []struct {
+		name     string
+		provider string
+		key      string
+		fallback string
+		wantBase string
+	}{
+		{
+			name:     "provider id direct mapping",
+			provider: "anthropic",
+			key:      "",
+			fallback: "",
+			wantBase: "https://api.anthropic.com/v1",
+		},
+		{
+			name:     "provider id alias mapping",
+			provider: "vllm",
+			key:      "",
+			fallback: "",
+			wantBase: "https://api.openai.com/v1",
+		},
+		{
+			name:     "provider key fallback mapping",
+			provider: "custom-unknown",
+			key:      "openrouter",
+			fallback: "",
+			wantBase: "https://openrouter.ai/api/v1",
+		},
+		{
+			name:     "provider key alias fallback mapping",
+			provider: "",
+			key:      "openai-v1",
+			fallback: "",
+			wantBase: "https://api.openai.com/v1",
+		},
+		{
+			name:     "explicit fallback when unknown",
+			provider: "custom-unknown",
+			key:      "unknown",
+			fallback: " https://example.invalid/v1 ",
+			wantBase: "https://example.invalid/v1",
+		},
+		{
+			name:     "empty when unknown and no fallback",
+			provider: "custom-unknown",
+			key:      "unknown",
+			fallback: "",
+			wantBase: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ResolveProviderBaseURL(tc.provider, tc.key, tc.fallback)
+			if got != tc.wantBase {
+				t.Fatalf("ResolveProviderBaseURL(%q, %q, %q)=%q, want %q", tc.provider, tc.key, tc.fallback, got, tc.wantBase)
+			}
+		})
 	}
 }

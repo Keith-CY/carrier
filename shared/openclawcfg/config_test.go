@@ -65,6 +65,38 @@ func TestBuildProviderEntryCodexSetsOAuth(t *testing.T) {
 	}
 }
 
+func TestBuildProviderEntryUsesExplicitBaseURLAndDefaultModel(t *testing.T) {
+	got := BuildProviderEntry("custom-provider", "custom-provider", "https://example.invalid/v1", "", false)
+	if got["baseUrl"] != "https://example.invalid/v1" {
+		t.Fatalf("baseUrl=%#v, want https://example.invalid/v1", got["baseUrl"])
+	}
+	if _, hasAPIKey := got["apiKey"]; hasAPIKey {
+		t.Fatalf("unexpected apiKey in provider entry: %#v", got["apiKey"])
+	}
+	models, ok := got["models"].([]interface{})
+	if !ok || len(models) != 1 {
+		t.Fatalf("models=%#v, want single model definition", got["models"])
+	}
+	model0, _ := models[0].(map[string]interface{})
+	if model0["id"] != "default" || model0["name"] != "default" {
+		t.Fatalf("model=%#v, want id/name default", model0)
+	}
+}
+
+func TestBuildProviderEntryFallsBackBaseURLFromProviderKey(t *testing.T) {
+	got := BuildProviderEntry("custom-provider", "anthropic", "", "claude-3-5-haiku", false)
+	if got["baseUrl"] != "https://api.anthropic.com/v1" {
+		t.Fatalf("baseUrl=%#v, want https://api.anthropic.com/v1", got["baseUrl"])
+	}
+}
+
+func TestBuildProviderEntryFallsBackBaseURLToOpenAI(t *testing.T) {
+	got := BuildProviderEntry("custom-provider", "custom-provider", "", "model-x", false)
+	if got["baseUrl"] != "https://api.openai.com/v1" {
+		t.Fatalf("baseUrl=%#v, want https://api.openai.com/v1", got["baseUrl"])
+	}
+}
+
 func TestBuildManagedConfigPayloadHandlesPendingAndAllowFrom(t *testing.T) {
 	params := ManagedPayloadParams{
 		ChannelID:           "telegram",

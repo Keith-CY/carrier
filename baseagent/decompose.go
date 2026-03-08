@@ -70,13 +70,12 @@ func parseDecomposeTasks(raw string) ([]DecomposeTask, error) {
 	if err := json.Unmarshal([]byte(candidate), &objectPayload); err != nil {
 		return nil, fmt.Errorf("parse planner output: %w", err)
 	}
-	if len(objectPayload.Tasks) > 0 {
+	switch {
+	case len(objectPayload.Tasks) > 0:
 		return normalizeDecomposeTasks(objectPayload.Tasks)
-	}
-	if len(objectPayload.TaskUnits) > 0 {
+	case len(objectPayload.TaskUnits) > 0:
 		return normalizeDecomposeTasks(objectPayload.TaskUnits)
-	}
-	if len(objectPayload.Subtasks) > 0 {
+	case len(objectPayload.Subtasks) > 0:
 		return normalizeDecomposeTasks(objectPayload.Subtasks)
 	}
 	return nil, errors.New("planner returned no tasks")
@@ -159,13 +158,10 @@ func extractJSONCandidate(raw string) string {
 	firstObject := strings.Index(trimmed, "{")
 	firstArray := strings.Index(trimmed, "[")
 	start := -1
-	if firstObject < 0 {
-		start = firstArray
-	} else if firstArray < 0 {
+	if firstObject >= 0 {
 		start = firstObject
-	} else if firstObject < firstArray {
-		start = firstObject
-	} else {
+	}
+	if firstArray >= 0 && (start < 0 || firstArray < start) {
 		start = firstArray
 	}
 	if start < 0 {

@@ -3386,9 +3386,6 @@ func decomposeOrchestrateGoal(goal, provider string) ([]orchestrateDecomposeTask
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, fmt.Errorf("decode base-agent decompose response: %w", err)
 	}
-	if len(payload.Tasks) == 0 {
-		return []orchestrateDecomposeTask{{ID: "task-1", Input: trimmedGoal, AgentID: "zeroclaw"}}, nil
-	}
 	out := make([]orchestrateDecomposeTask, 0, len(payload.Tasks))
 	seen := map[string]struct{}{}
 	for idx, task := range payload.Tasks {
@@ -3412,9 +3409,17 @@ func decomposeOrchestrateGoal(goal, provider string) ([]orchestrateDecomposeTask
 		})
 	}
 	if len(out) == 0 {
-		return []orchestrateDecomposeTask{{ID: "task-1", Input: trimmedGoal, AgentID: "zeroclaw"}}, nil
+		return orchestrateFallbackTasks(trimmedGoal), nil
 	}
 	return out, nil
+}
+
+func orchestrateFallbackTasks(goal string) []orchestrateDecomposeTask {
+	return []orchestrateDecomposeTask{{
+		ID:      "task-1",
+		Input:   strings.TrimSpace(goal),
+		AgentID: "zeroclaw",
+	}}
 }
 
 func assignOrchestrateTaskUnits(tasks []orchestrateDecomposeTask, hostIDs []string) []orchestrateTaskUnit {
@@ -3617,15 +3622,15 @@ func truncateOrchestrateText(input string, limit int) string {
 func writePrettyJSON(out io.Writer, raw []byte) error {
 	var payload interface{}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		_, _ = fmt.Fprintln(out, strings.TrimSpace(string(raw)))
-		return nil
+		_, writeErr := fmt.Fprintln(out, strings.TrimSpace(string(raw)))
+		return writeErr
 	}
 	formatted, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintln(out, string(formatted))
-	return nil
+	_, err = fmt.Fprintln(out, string(formatted))
+	return err
 }
 
 type remoteHostCheckResponse struct {

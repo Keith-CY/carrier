@@ -115,30 +115,7 @@ func BuildProviderEntry(providerID, providerKey, providerBaseURL, modelID string
 }
 
 func defaultProviderBaseURL(providerID, providerKey string) string {
-	normalizedID := catalog.NormalizeProviderID(providerID)
-	switch normalizedID {
-	case "openai", "openai-codex", "openai-compatible":
-		return "https://api.openai.com/v1"
-	case "anthropic":
-		return "https://api.anthropic.com/v1"
-	case "openrouter":
-		return "https://openrouter.ai/api/v1"
-	case "ollama":
-		return "http://localhost:11434/v1"
-	}
-
-	switch strings.ToLower(strings.TrimSpace(providerKey)) {
-	case "openai":
-		return "https://api.openai.com/v1"
-	case "anthropic":
-		return "https://api.anthropic.com/v1"
-	case "openrouter":
-		return "https://openrouter.ai/api/v1"
-	case "ollama":
-		return "http://localhost:11434/v1"
-	default:
-		return "https://api.openai.com/v1"
-	}
+	return catalog.ResolveProviderBaseURL(providerID, providerKey, "https://api.openai.com/v1")
 }
 
 func ProviderSecretPointer(providerKey string) string {

@@ -689,26 +689,7 @@ func runOpenClawIsolationProviderFlow(t *testing.T, providerID string) {
 }
 
 func expectedManagedProviderBaseURL(providerID, providerKey string) string {
-	switch catalog.NormalizeProviderID(providerID) {
-	case "anthropic":
-		return "https://api.anthropic.com/v1"
-	case "openrouter":
-		return "https://openrouter.ai/api/v1"
-	case "ollama":
-		return "http://localhost:11434/v1"
-	default:
-		normalizedKey := strings.ToLower(strings.TrimSpace(providerKey))
-		switch normalizedKey {
-		case "anthropic":
-			return "https://api.anthropic.com/v1"
-		case "openrouter":
-			return "https://openrouter.ai/api/v1"
-		case "ollama":
-			return "http://localhost:11434/v1"
-		default:
-			return "https://api.openai.com/v1"
-		}
-	}
+	return catalog.ResolveProviderBaseURL(providerID, providerKey, "https://api.openai.com/v1")
 }
 
 func buildCarrierBinary(t *testing.T) string {
