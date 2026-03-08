@@ -512,10 +512,14 @@ Usage:
                         Decompose goal with base agent, then run orchestration
   carrier orchestrate status <execution_id> [--json]
                         Show orchestration execution status/results
+  carrier orchestrate cancel <execution_id> [--json]
+                        Cancel orchestration execution
   carrier executions [list] [--limit <n>] [--json]
                         List orchestration executions
   carrier executions show <execution_id> [--json]
                         Show orchestration execution status/results
+  carrier executions cancel <execution_id> [--json]
+                        Cancel orchestration execution
   carrier --help         Show this help message
 
 Notes:
@@ -2233,7 +2237,7 @@ func parseRemoteStoreCommandArgs(args []string) (remoteStoreCommandOptions, erro
 
 func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, error) {
 	if len(args) == 0 {
-		return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate <goal...> [--host-id <id>]... [--provider <provider-id>] [--max-concurrency <n>] [--idempotency-key <key>] [--timeout <duration>] [--async] [--dry-run] [--json] OR carrier orchestrate status <execution_id> [--json]")
+		return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate <goal...> [--host-id <id>]... [--provider <provider-id>] [--max-concurrency <n>] [--idempotency-key <key>] [--timeout <duration>] [--async] [--dry-run] [--json] OR carrier orchestrate <status|cancel> <execution_id> [--json]")
 	}
 
 	opts := orchestrateCommandOptions{
@@ -2241,8 +2245,9 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 		Timeout: defaultOrchestrateWaitTimeout,
 	}
 
-	if strings.EqualFold(strings.TrimSpace(args[0]), "status") {
-		opts.Action = "status"
+	firstArg := strings.ToLower(strings.TrimSpace(args[0]))
+	if firstArg == "status" || firstArg == "cancel" {
+		opts.Action = firstArg
 		for i := 1; i < len(args); i++ {
 			raw := strings.TrimSpace(args[i])
 			lower := strings.ToLower(raw)
@@ -2252,7 +2257,7 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 				opts.JSON = true
 			default:
 				if strings.HasPrefix(raw, "-") {
-					return orchestrateCommandOptions{}, fmt.Errorf("unknown orchestrate status option: %s", raw)
+					return orchestrateCommandOptions{}, fmt.Errorf("unknown orchestrate %s option: %s", opts.Action, raw)
 				}
 				if opts.ExecutionID != "" {
 					return orchestrateCommandOptions{}, errors.New("multiple execution ids provided")
@@ -2261,7 +2266,7 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 			}
 		}
 		if strings.TrimSpace(opts.ExecutionID) == "" {
-			return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate status <execution_id> [--json]")
+			return orchestrateCommandOptions{}, fmt.Errorf("usage: carrier orchestrate %s <execution_id> [--json]", opts.Action)
 		}
 		return opts, nil
 	}
@@ -2366,6 +2371,9 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 	case "show", "status":
 		opts.Action = "status"
 		startIdx = 1
+	case "cancel":
+		opts.Action = "cancel"
+		startIdx = 1
 	default:
 		if strings.HasPrefix(mode, "-") {
 			opts.Action = "list"
@@ -2399,7 +2407,7 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 			if strings.HasPrefix(raw, "-") {
 				return orchestrateCommandOptions{}, fmt.Errorf("unknown executions option: %s", raw)
 			}
-			if opts.Action != "status" {
+			if opts.Action != "status" && opts.Action != "cancel" {
 				return orchestrateCommandOptions{}, fmt.Errorf("unexpected executions argument: %s", raw)
 			}
 			if opts.ExecutionID != "" {
@@ -2409,7 +2417,10 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 		}
 	}
 
-	if opts.Action == "status" && strings.TrimSpace(opts.ExecutionID) == "" {
+	if (opts.Action == "status" || opts.Action == "cancel") && strings.TrimSpace(opts.ExecutionID) == "" {
+		if opts.Action == "cancel" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions cancel <execution_id> [--json]")
+		}
 		return orchestrateCommandOptions{}, errors.New("usage: carrier executions show <execution_id> [--json]")
 	}
 	return opts, nil
@@ -3389,6 +3400,11 @@ func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error 
 			return err
 		}
 		return runOrchestrateStatus(out, opts.ExecutionID, opts.JSON)
+	case "cancel":
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+		return runOrchestrateCancel(out, opts.ExecutionID, opts.JSON)
 	case "run":
 		if _, err := ensureDaemonRunning(out); err != nil {
 			return err
@@ -3430,6 +3446,29 @@ func runOrchestrateStatus(out io.Writer, executionID string, outputJSON bool) er
 	resp, raw, err := fetchOrchestratorExecution(executionID)
 	if err != nil {
 		return err
+	}
+	if outputJSON {
+		return writePrettyJSON(out, raw)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestrateExecution(resp))
+	return nil
+}
+
+func runOrchestrateCancel(out io.Writer, executionID string, outputJSON bool) error {
+	trimmedID := strings.TrimSpace(executionID)
+	if trimmedID == "" {
+		return errors.New("execution id is required")
+	}
+	path := "/api/v1/orchestrator/executions/" + neturl.PathEscape(trimmedID) + "/cancel"
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, path, map[string]interface{}{
+		"actor": "carrier-cli",
+	}, 45*time.Second)
+	if err != nil {
+		return err
+	}
+	resp, decodeErr := decodeOrchestrateExecutionResponse(raw)
+	if decodeErr != nil {
+		return decodeErr
 	}
 	if outputJSON {
 		return writePrettyJSON(out, raw)
@@ -3753,7 +3792,7 @@ func waitForOrchestratorExecution(executionID string, timeout time.Duration) (or
 		}
 		status := strings.ToLower(strings.TrimSpace(resp.Execution.Status))
 		lastStatus = status
-		if status == "completed" || status == "failed" || status == "declined" {
+		if status == "completed" || status == "failed" || status == "declined" || status == "cancelled" {
 			return resp, raw, nil
 		}
 		if time.Now().After(deadline) {

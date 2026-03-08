@@ -115,6 +115,7 @@ Inspect execution history:
 ```bash
 carrier executions
 carrier executions show <execution_id>
+carrier executions cancel <execution_id>
 ```
 
 Expected result:
