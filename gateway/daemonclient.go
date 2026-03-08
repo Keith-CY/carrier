@@ -363,8 +363,21 @@ func (c *DaemonClient) DecomposeBaseAgent(
 	actor string,
 	requestID string,
 ) ([]baseagent.DecomposeTask, error) {
+	return c.DecomposeBaseAgentWithProvider(ctx, goal, "", actor, requestID)
+}
+
+func (c *DaemonClient) DecomposeBaseAgentWithProvider(
+	ctx context.Context,
+	goal string,
+	provider string,
+	actor string,
+	requestID string,
+) ([]baseagent.DecomposeTask, error) {
 	body := map[string]interface{}{
 		"goal": strings.TrimSpace(goal),
+	}
+	if trimmedProvider := strings.TrimSpace(provider); trimmedProvider != "" {
+		body["provider"] = trimmedProvider
 	}
 	raw, err := c.request(ctx, http.MethodPost, "/api/v1/base-agent/decompose", body, actor, requestID)
 	if err != nil {

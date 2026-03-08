@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mockAPIs, loginWithToken, MOCK_INSTANCES } from './helpers';
+import { mockAPIs, mockOrchestrationAPIs, loginWithToken, MOCK_INSTANCES } from './helpers';
 
 const MOBILE = { width: 375, height: 667 };
 const TABLET = { width: 768, height: 1024 };
@@ -65,6 +65,15 @@ for (const [label, viewport] of [['Mobile', MOBILE], ['Tablet', TABLET]] as cons
       await mockAPIs(page);
       await loginWithToken(page, '/#/settings');
       await expect(page.locator('#view-settings')).toBeVisible();
+    });
+
+    test('executions page is usable', async ({ page }) => {
+      await mockAPIs(page);
+      await mockOrchestrationAPIs(page);
+      await loginWithToken(page, '/#/executions');
+      await expect(page.locator('#executions-search')).toBeVisible();
+      await expect(page.locator('#executions-status-filter')).toBeVisible();
+      await expect(page.locator('#executions-list .execution-card')).toHaveCount(2);
     });
   });
 }
