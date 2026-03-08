@@ -840,6 +840,9 @@ func upsertOrchestratorWorkerLease(lease OrchestratorWorkerLease) (OrchestratorW
 	if lease.HeartbeatAt == "" {
 		lease.HeartbeatAt = lease.UpdatedAt
 	}
+	if lease.LastHeartbeatAt == "" {
+		lease.LastHeartbeatAt = lease.HeartbeatAt
+	}
 	if lease.LeaseExpireAt == "" {
 		lease.LeaseExpireAt = lease.UpdatedAt
 	}

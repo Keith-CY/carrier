@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 )
 
 func handleOrchestratorWorkers(w http.ResponseWriter, r *http.Request, requestID string, cfg *GatewayConfig, daemon *DaemonClient) {
@@ -17,7 +18,7 @@ func handleOrchestratorWorkers(w http.ResponseWriter, r *http.Request, requestID
 		return
 	}
 
-	workers, summary, warnings, err := listOrchestratorWorkerInventory(r, daemon, requestID)
+	workers, summary, warnings, err := listOrchestratorWorkerInventory(r, daemon, requestID, cfg)
 	if err != nil {
 		writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to list orchestrator workers", "list orchestrator worker inventory", err)
 		return
@@ -32,7 +33,58 @@ func handleOrchestratorWorkers(w http.ResponseWriter, r *http.Request, requestID
 	})
 }
 
-func listOrchestratorWorkerInventory(r *http.Request, daemon *DaemonClient, requestID string) ([]OrchestratorWorkerInventoryItem, OrchestratorWorkerInventorySummary, []string, error) {
+func handleOrchestratorWorkersQueue(w http.ResponseWriter, r *http.Request, requestID string, cfg *GatewayConfig) {
+	flags := effectiveGatewayFeatureFlags(cfg)
+	if !flags.RemoteControlPlaneEnabled {
+		writeJSON(w, http.StatusNotFound, gatewayErrBody("E_NOT_FOUND", "remote control plane is disabled"))
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+		return
+	}
+
+	executions, err := listOrchestratorExecutions()
+	if err != nil {
+		writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to list orchestrator executions", "list orchestrator executions for queue summary", err)
+		return
+	}
+	leases, err := listOrchestratorWorkerLeases()
+	if err != nil {
+		writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to list orchestrator worker leases", "list orchestrator worker leases for queue summary", err)
+		return
+	}
+	summary := buildOrchestratorWorkerQueueSummary(executions, leases, cfg, time.Now().UTC())
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"requestId": requestID,
+		"result":    "ok",
+		"summary":   summary,
+	})
+}
+
+func handleOrchestratorWorkersReclaimStale(w http.ResponseWriter, r *http.Request, requestID string, cfg *GatewayConfig) {
+	flags := effectiveGatewayFeatureFlags(cfg)
+	if !flags.RemoteControlPlaneEnabled {
+		writeJSON(w, http.StatusNotFound, gatewayErrBody("E_NOT_FOUND", "remote control plane is disabled"))
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+		return
+	}
+	summary, err := reclaimOrchestratorStaleWorkers(r.Context(), cfg)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_REMOTE_RECLAIM_FAILED", err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"requestId": requestID,
+		"result":    "ok",
+		"reclaim":   summary,
+	})
+}
+
+func listOrchestratorWorkerInventory(r *http.Request, daemon *DaemonClient, requestID string, cfg *GatewayConfig) ([]OrchestratorWorkerInventoryItem, OrchestratorWorkerInventorySummary, []string, error) {
 	hosts, err := listRemoteHosts()
 	if err != nil {
 		return nil, OrchestratorWorkerInventorySummary{}, nil, err
@@ -45,6 +97,13 @@ func listOrchestratorWorkerInventory(r *http.Request, daemon *DaemonClient, requ
 	if err != nil {
 		return nil, OrchestratorWorkerInventorySummary{}, nil, err
 	}
+	executions, err := listOrchestratorExecutions()
+	if err != nil {
+		return nil, OrchestratorWorkerInventorySummary{}, nil, err
+	}
+	executionsByID := buildOrchestratorExecutionIndex(executions)
+	now := time.Now().UTC()
+	leases = markStaleWorkerLeases(leases, executionsByID, now, cfg)
 
 	hostByID := make(map[string]RemoteHost, len(hosts))
 	for _, host := range hosts {
@@ -53,7 +112,7 @@ func listOrchestratorWorkerInventory(r *http.Request, daemon *DaemonClient, requ
 
 	workers := make([]OrchestratorWorkerInventoryItem, 0, len(syncStatuses)+len(leases)+4)
 	for _, lease := range leases {
-		workers = append(workers, workerInventoryItemFromLease(lease, hostByID[strings.TrimSpace(lease.HostID)]))
+		workers = append(workers, workerInventoryItemFromLease(lease, hostByID[strings.TrimSpace(lease.HostID)], now))
 	}
 	for _, syncStatus := range syncStatuses {
 		workers = append(workers, workerInventoryItemFromSync(syncStatus, hostByID[strings.TrimSpace(syncStatus.HostID)]))
@@ -192,7 +251,7 @@ func deriveRemoteSyncWorkerState(status RemoteInstanceSyncStatus) string {
 	return "managed"
 }
 
-func workerInventoryItemFromLease(lease OrchestratorWorkerLease, host RemoteHost) OrchestratorWorkerInventoryItem {
+func workerInventoryItemFromLease(lease OrchestratorWorkerLease, host RemoteHost, now time.Time) OrchestratorWorkerInventoryItem {
 	hostID := strings.TrimSpace(lease.HostID)
 	hostName := strings.TrimSpace(host.Name)
 	if hostID == orchestratorLocalHostID {
@@ -202,22 +261,29 @@ func workerInventoryItemFromLease(lease OrchestratorWorkerLease, host RemoteHost
 		hostName = hostID
 	}
 	return OrchestratorWorkerInventoryItem{
-		ID:             "lease:" + strings.TrimSpace(lease.ID),
-		Source:         "lease",
-		HostID:         hostID,
-		HostName:       hostName,
-		AgentID:        strings.ToLower(strings.TrimSpace(lease.AgentID)),
-		State:          string(lease.State),
-		ExecutionID:    strings.TrimSpace(lease.ExecutionID),
-		TaskCount:      lease.TaskCount,
-		Ephemeral:      lease.Ephemeral,
-		InstalledByRun: lease.InstalledByRun,
-		RuntimeMode:    strings.TrimSpace(string(host.RuntimeMode)),
-		Health:         strings.TrimSpace(string(host.LastHealth)),
-		LastError:      strings.TrimSpace(lease.LastError),
-		LeaseExpireAt:  strings.TrimSpace(lease.LeaseExpireAt),
-		HeartbeatAt:    strings.TrimSpace(lease.HeartbeatAt),
-		UpdatedAt:      strings.TrimSpace(lease.UpdatedAt),
+		ID:              "lease:" + strings.TrimSpace(lease.ID),
+		Source:          "lease",
+		HostID:          hostID,
+		HostName:        hostName,
+		AgentID:         strings.ToLower(strings.TrimSpace(lease.AgentID)),
+		State:           string(lease.State),
+		LeaseState:      strings.TrimSpace(lease.LeaseState),
+		ExecutionID:     strings.TrimSpace(lease.ExecutionID),
+		TaskCount:       lease.TaskCount,
+		QueuePosition:   lease.QueuePosition,
+		Ephemeral:       lease.Ephemeral,
+		InstalledByRun:  lease.InstalledByRun,
+		RuntimeMode:     strings.TrimSpace(string(host.RuntimeMode)),
+		Health:          strings.TrimSpace(string(host.LastHealth)),
+		LastError:       strings.TrimSpace(lease.LastError),
+		Stale:           lease.Stale,
+		StaleReason:     strings.TrimSpace(lease.StaleReason),
+		LeaseAgeSec:     orchestratorLeaseAgeSec(lease, now),
+		HeartbeatAgeSec: orchestratorHeartbeatAgeSec(lease, now),
+		LeaseExpireAt:   strings.TrimSpace(lease.LeaseExpireAt),
+		LastHeartbeatAt: strings.TrimSpace(lease.LastHeartbeatAt),
+		HeartbeatAt:     strings.TrimSpace(lease.HeartbeatAt),
+		UpdatedAt:       strings.TrimSpace(lease.UpdatedAt),
 	}
 }
 
@@ -225,25 +291,27 @@ func workerInventorySortPriority(state, source string) int {
 	switch strings.ToLower(strings.TrimSpace(state)) {
 	case "busy":
 		return 0
-	case "provisioning":
+	case "stale":
 		return 1
-	case "reclaiming":
+	case "provisioning":
 		return 2
-	case "available":
+	case "reclaiming":
 		return 3
-	case "managed":
+	case "available":
 		return 4
-	case "stopped":
+	case "managed":
 		return 5
-	case "reclaimed":
+	case "stopped":
 		return 6
-	case "error":
+	case "reclaimed":
 		return 7
+	case "error":
+		return 8
 	default:
 		if strings.EqualFold(strings.TrimSpace(source), "lease") {
-			return 2
+			return 3
 		}
-		return 8
+		return 9
 	}
 }
 
@@ -264,6 +332,9 @@ func summarizeWorkerInventory(workers []OrchestratorWorkerInventoryItem) Orchest
 		}
 		if state == "error" {
 			summary.Error++
+		}
+		if worker.Stale {
+			summary.Stale++
 		}
 	}
 	return summary

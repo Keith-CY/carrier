@@ -1003,6 +1003,123 @@ func TestHandleOrchestratorWorkersInventoryNegativeCases(t *testing.T) {
 	}
 }
 
+func TestReclaimStaleWorkersEndpointAndQueueSummary(t *testing.T) {
+	mux := buildRemoteFeatureMuxWithConfigAndDaemonHandlers(t, &GatewayConfig{
+		APIToken:                  "test-gateway-token",
+		MaxCommandBodyBytes:       64 * 1024,
+		RemoteControlPlaneEnabled: true,
+		RemoteChatEnabled:         true,
+		ProviderBindingEnabled:    true,
+		WorkerLeaseStaleAfter:     5 * time.Minute,
+		WorkerHeartbeatTimeout:    2 * time.Minute,
+	}, nil)
+	hostID := createRemoteHostForTests(t, mux)
+
+	if _, err := upsertOrchestratorExecution(OrchestratorExecution{
+		ID:        "exec-running",
+		Goal:      "investigate latency",
+		Status:    OrchestratorExecutionStatusRunning,
+		TaskUnits: []OrchestratorTaskUnit{{ID: "task-1", Input: "collect logs"}, {ID: "task-2", Input: "summarize"}, {ID: "task-3", Input: "report findings"}},
+		Results:   []OrchestratorTaskResult{{TaskID: "task-1", Status: OrchestratorTaskStatusCompleted}},
+		CreatedAt: nowTimestamp(),
+		UpdatedAt: nowTimestamp(),
+		StartedAt: nowTimestamp(),
+		Authorization: OrchestratorAuthorization{
+			InfrastructureApproved: true,
+		},
+	}); err != nil {
+		t.Fatalf("upsertOrchestratorExecution running failed: %v", err)
+	}
+	if _, err := upsertOrchestratorExecution(OrchestratorExecution{
+		ID:          "exec-done",
+		Goal:        "finished task",
+		Status:      OrchestratorExecutionStatusCompleted,
+		TaskUnits:   []OrchestratorTaskUnit{{ID: "task-3", Input: "done"}},
+		Results:     []OrchestratorTaskResult{{TaskID: "task-3", Status: OrchestratorTaskStatusCompleted}},
+		CreatedAt:   nowTimestamp(),
+		UpdatedAt:   nowTimestamp(),
+		CompletedAt: nowTimestamp(),
+	}); err != nil {
+		t.Fatalf("upsertOrchestratorExecution completed failed: %v", err)
+	}
+
+	if _, err := upsertOrchestratorWorkerLease(OrchestratorWorkerLease{
+		ID:            "lease-stale-terminal",
+		ExecutionID:   "exec-done",
+		HostID:        hostID,
+		AgentID:       "picoclaw",
+		State:         OrchestratorWorkerStateBusy,
+		Ephemeral:     false,
+		HeartbeatAt:   time.Now().UTC().Add(-30 * time.Second).Format(time.RFC3339),
+		LeaseExpireAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339),
+		CreatedAt:     nowTimestamp(),
+		UpdatedAt:     nowTimestamp(),
+	}); err != nil {
+		t.Fatalf("upsert stale terminal lease failed: %v", err)
+	}
+	if _, err := upsertOrchestratorWorkerLease(OrchestratorWorkerLease{
+		ID:            "lease-busy-healthy",
+		ExecutionID:   "exec-running",
+		HostID:        hostID,
+		AgentID:       "zeroclaw",
+		State:         OrchestratorWorkerStateBusy,
+		Ephemeral:     false,
+		HeartbeatAt:   time.Now().UTC().Add(-30 * time.Second).Format(time.RFC3339),
+		LeaseExpireAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339),
+		CreatedAt:     nowTimestamp(),
+		UpdatedAt:     nowTimestamp(),
+	}); err != nil {
+		t.Fatalf("upsert healthy lease failed: %v", err)
+	}
+
+	queueRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/orchestrator/workers/queue", "")
+	if queueRec.Code != http.StatusOK {
+		t.Fatalf("expected queue status 200, got %d body=%s", queueRec.Code, queueRec.Body.String())
+	}
+	queuePayload := decodeJSONMap(t, queueRec)
+	summary, _ := queuePayload["summary"].(map[string]interface{})
+	if got := int(anyToFloat(summary["activeExecutions"])); got != 1 {
+		t.Fatalf("activeExecutions=%d want 1 summary=%+v", got, summary)
+	}
+	if got := int(anyToFloat(summary["queuedTasks"])); got != 1 {
+		t.Fatalf("queuedTasks=%d want 1 summary=%+v", got, summary)
+	}
+	if got := int(anyToFloat(summary["staleLeases"])); got != 1 {
+		t.Fatalf("staleLeases=%d want 1 summary=%+v", got, summary)
+	}
+	if got := int(anyToFloat(summary["reclaimableWorkers"])); got != 1 {
+		t.Fatalf("reclaimableWorkers=%d want 1 summary=%+v", got, summary)
+	}
+
+	reclaimRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/workers/reclaim-stale", `{}`)
+	if reclaimRec.Code != http.StatusOK {
+		t.Fatalf("expected reclaim-stale status 200, got %d body=%s", reclaimRec.Code, reclaimRec.Body.String())
+	}
+	reclaimPayload := decodeJSONMap(t, reclaimRec)
+	reclaimMap, _ := reclaimPayload["reclaim"].(map[string]interface{})
+	if got := int(anyToFloat(reclaimMap["reclaimed"])); got != 1 {
+		t.Fatalf("reclaim-stale reclaimed=%d want 1 payload=%+v", got, reclaimPayload)
+	}
+	if got := int(anyToFloat(reclaimMap["skipped"])); got != 0 {
+		t.Fatalf("reclaim-stale skipped=%d want 0 payload=%+v", got, reclaimPayload)
+	}
+
+	leases, err := listOrchestratorWorkerLeases()
+	if err != nil {
+		t.Fatalf("listOrchestratorWorkerLeases failed: %v", err)
+	}
+	stateByID := map[string]OrchestratorWorkerLease{}
+	for _, lease := range leases {
+		stateByID[lease.ID] = lease
+	}
+	if stateByID["lease-stale-terminal"].State != OrchestratorWorkerStateReclaimed {
+		t.Fatalf("expected stale terminal lease reclaimed, got %+v", stateByID["lease-stale-terminal"])
+	}
+	if stateByID["lease-busy-healthy"].State != OrchestratorWorkerStateBusy {
+		t.Fatalf("expected healthy busy lease preserved, got %+v", stateByID["lease-busy-healthy"])
+	}
+}
+
 func TestOrchestratorExecutionCapturesGovernanceAndAudit(t *testing.T) {
 	auditPath := filepath.Join(t.TempDir(), "gateway-audit.jsonl")
 	t.Setenv("CARRIER_GATEWAY_AUDIT_LOG", auditPath)

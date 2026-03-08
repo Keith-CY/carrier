@@ -66,12 +66,14 @@ Inspect execution history:
 carrier executions
 carrier executions show <execution_id>
 carrier executions cancel <execution_id>
+carrier executions artifacts <execution_id>
+carrier executions retry <execution_id>
 ```
 
 Expected result:
 - the base agent returns a non-empty task plan
 - task units are assigned to local `picoclaw` / `zeroclaw`
-- the final execution output includes task results and worker targets
+- the final execution output includes task results, worker targets, and any attached artifacts
 
 ## Task 5: Install OpenClaw Locally (Optional)
 

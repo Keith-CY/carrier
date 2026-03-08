@@ -24,10 +24,14 @@ func TestGatewayMux_MethodAndAuthGuards(t *testing.T) {
 		{name: "pairing sessions unauthorized", method: http.MethodGet, path: "/api/v1/pairing/sessions", auth: false, want: http.StatusUnauthorized},
 		{name: "agents unauthorized", method: http.MethodGet, path: "/api/v1/agents", auth: false, want: http.StatusUnauthorized},
 		{name: "instances unauthorized", method: http.MethodGet, path: "/api/v1/instances", auth: false, want: http.StatusUnauthorized},
+		{name: "worker queue unauthorized", method: http.MethodGet, path: "/api/v1/orchestrator/workers/queue", auth: false, want: http.StatusUnauthorized},
+		{name: "worker reclaim stale unauthorized", method: http.MethodPost, path: "/api/v1/orchestrator/workers/reclaim-stale", auth: false, want: http.StatusUnauthorized},
 		{name: "pair init method guard", method: http.MethodGet, path: "/api/v1/telegram/pair/init", auth: true, want: http.StatusMethodNotAllowed},
 		{name: "pair wait method guard", method: http.MethodGet, path: "/api/v1/telegram/pair/wait", auth: true, want: http.StatusMethodNotAllowed},
 		{name: "transport method guard", method: http.MethodPost, path: "/api/v1/telegram/transport", auth: true, want: http.StatusMethodNotAllowed},
 		{name: "pairing sessions method guard", method: http.MethodPost, path: "/api/v1/pairing/sessions", auth: true, want: http.StatusMethodNotAllowed},
+		{name: "worker queue disabled when feature off", method: http.MethodPost, path: "/api/v1/orchestrator/workers/queue", auth: true, want: http.StatusNotFound},
+		{name: "worker reclaim stale disabled when feature off", method: http.MethodGet, path: "/api/v1/orchestrator/workers/reclaim-stale", auth: true, want: http.StatusNotFound},
 	}
 
 	for _, tc := range tests {
