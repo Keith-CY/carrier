@@ -27,6 +27,10 @@
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1"></rect><rect x="14" y="4" width="6" height="6" rx="1"></rect><rect x="4" y="14" width="6" height="6" rx="1"></rect><rect x="14" y="14" width="6" height="6" rx="1"></rect></svg></span>
           <span class="nav-text">Dashboard</span>
         </a>
+        <a href="#/executions" class="nav-link" data-route="executions">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 4h10"></path><path d="M7 9h10"></path><path d="M7 14h6"></path><path d="M7 19h10"></path><circle cx="17.5" cy="14" r="2.5"></circle></svg></span>
+          <span class="nav-text">Executions</span>
+        </a>
         <a href="#/servers" class="nav-link" data-route="servers">
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1.5"></rect><rect x="3" y="10" width="18" height="5" rx="1.5"></rect><rect x="3" y="16" width="18" height="5" rx="1.5"></rect></svg></span>
           <span class="nav-text">Servers</span>
@@ -194,6 +198,60 @@
 
     <!-- Management panel -->
     <section id="view-dashboard" class="view hidden">
+      <div id="dashboard-quick-launch-section" class="card dashboard-stack hidden">
+        <div class="section-head">
+          <div>
+            <h2>Quick Launch</h2>
+            <p class="text-dim">Preview the plan first, then create and authorize the execution.</p>
+          </div>
+          <div class="section-actions">
+            <button id="quick-launch-preview" class="btn-sm">Preview Plan</button>
+            <button id="quick-launch-reset" class="btn-sm btn-secondary" type="button">Reset</button>
+            <button id="quick-launch-advanced-toggle" class="btn-sm btn-secondary" type="button">Advanced</button>
+          </div>
+        </div>
+        <label for="quick-launch-goal">Goal</label>
+        <textarea id="quick-launch-goal" rows="4" placeholder="Describe the task for the base agent to decompose and dispatch."></textarea>
+        <div id="quick-launch-advanced" class="quick-launch-advanced hidden">
+          <div class="form-grid">
+            <div>
+              <label for="quick-launch-provider">Provider</label>
+              <select id="quick-launch-provider"></select>
+            </div>
+            <div>
+              <label for="quick-launch-max-concurrency">Max Concurrency</label>
+              <input id="quick-launch-max-concurrency" type="number" min="1" max="64" placeholder="Auto">
+            </div>
+          </div>
+          <div>
+            <label>Hosts</label>
+            <div id="quick-launch-hosts" class="quick-launch-hosts"></div>
+          </div>
+        </div>
+        <div id="quick-launch-msg"></div>
+        <div id="quick-launch-preview-card" class="quick-launch-preview hidden">
+          <div class="section-head">
+            <div>
+              <h3>Plan Preview</h3>
+              <p id="quick-launch-preview-summary" class="text-dim"></p>
+            </div>
+            <div class="section-actions">
+              <button id="quick-launch-edit" class="btn-sm btn-secondary" type="button">Back to Edit</button>
+              <button id="quick-launch-run" class="btn-sm" type="button">Run</button>
+            </div>
+          </div>
+          <div class="quick-launch-preview-grid">
+            <div class="quick-launch-preview-block">
+              <h4>Planner Tasks</h4>
+              <div id="quick-launch-preview-tasks"></div>
+            </div>
+            <div class="quick-launch-preview-block">
+              <h4>Workers</h4>
+              <div id="quick-launch-preview-workers"></div>
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="section-head">
         <h2>Installed Agents</h2>
         <div class="section-actions">
@@ -212,6 +270,48 @@
         </div>
         <p id="execution-summary" class="text-dim"></p>
         <div id="execution-list" class="agent-grid"></div>
+      </div>
+    </section>
+
+    <section id="view-executions" class="view hidden">
+      <div class="section-head">
+        <h2>Executions</h2>
+        <div class="section-actions">
+          <button id="executions-refresh" class="btn-sm btn-secondary">Refresh</button>
+        </div>
+      </div>
+      <div class="card executions-toolbar">
+        <div class="form-grid">
+          <div>
+            <label for="executions-search">Search</label>
+            <input id="executions-search" type="text" placeholder="Search by execution id or goal">
+          </div>
+          <div>
+            <label for="executions-status-filter">Status</label>
+            <select id="executions-status-filter">
+              <option value="all">All</option>
+              <option value="active">Active</option>
+              <option value="completed">Completed</option>
+              <option value="failed">Failed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </div>
+        </div>
+        <p id="executions-summary" class="text-dim"></p>
+      </div>
+      <div class="executions-layout">
+        <div class="card">
+          <div id="executions-list" class="executions-list"></div>
+        </div>
+        <div class="card">
+          <div class="section-head">
+            <h3>Execution Detail</h3>
+            <div class="section-actions">
+              <button id="executions-cancel" class="btn-sm btn-danger hidden" type="button">Cancel</button>
+            </div>
+          </div>
+          <div id="executions-detail" class="execution-details-panel">Select an execution to inspect workers and task results.</div>
+        </div>
       </div>
     </section>
 

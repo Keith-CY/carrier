@@ -61,6 +61,10 @@
   let dashboardExecutionPollTimer = null;
   let dashboardExecutionDetailsByID = {};
   let dashboardExpandedExecutionIDs = new Set;
+  let executionRecordsCache = [];
+  let selectedExecutionID = "";
+  let quickLaunchPlan = null;
+  let quickLaunchProviderCatalog = [];
   const DEFAULT_FEATURE_FLAGS = {
     remoteControlPlaneEnabled: false,
     remoteChatEnabled: false,
@@ -174,7 +178,8 @@
           msg = "Execution " + status + ": " + executionId + (error ? " (" + error + ")" : "");
         }
         showDelegateNotification(msg, status);
-        if (currentRouteName() === "dashboard") {
+        const routeName = currentRouteName();
+        if (routeName === "dashboard" || routeName === "executions") {
           refreshExecutions();
         }
       };
@@ -229,9 +234,22 @@
       return;
     link.classList.toggle("hidden", !visible);
   }
+  function parseRoute(hash) {
+    let normalized = String(hash || "#/welcome").trim();
+    if (!normalized || normalized === "#" || normalized === "#/")
+      normalized = "#/welcome";
+    let path = normalized.replace(/^#\/?/, "").replace(/^\/+/, "").replace(/\/+$/, "");
+    if (!path)
+      path = "welcome";
+    const segments = path.split("/").filter(Boolean);
+    return {
+      path,
+      name: segments[0] || "welcome",
+      segments
+    };
+  }
   function currentRouteName() {
-    const hash = location.hash || "#/welcome";
-    return hash.replace("#/", "");
+    return parseRoute(location.hash).name;
   }
   function formatDateTime(raw) {
     const text = String(raw || "").trim();
@@ -243,7 +261,7 @@
     return parsed.toLocaleString();
   }
   function isRouteEnabled(route) {
-    if (route === "servers" || route === "profiles" || route === "remote-observability") {
+    if (route === "executions" || route === "servers" || route === "profiles" || route === "remote-observability") {
       return !!featureFlags.remoteControlPlaneEnabled;
     }
     if (route === "remote-chat") {
@@ -254,6 +272,7 @@
   function applyFeatureFlags() {
     const remoteControlVisible = !!featureFlags.remoteControlPlaneEnabled;
     const remoteChatVisible = remoteControlVisible && !!featureFlags.remoteChatEnabled;
+    setNavRouteVisible("executions", remoteControlVisible);
     setNavRouteVisible("servers", remoteControlVisible);
     setNavRouteVisible("profiles", remoteControlVisible);
     setNavRouteVisible("remote-chat", remoteChatVisible);
@@ -261,6 +280,9 @@
     const executionSection = $("#dashboard-executions-section");
     if (executionSection)
       executionSection.classList.toggle("hidden", !remoteControlVisible);
+    const quickLaunchSection = $("#dashboard-quick-launch-section");
+    if (quickLaunchSection)
+      quickLaunchSection.classList.toggle("hidden", !remoteControlVisible);
   }
   async function refreshFeatureFlags() {
     const previous = { ...featureFlags };
@@ -392,6 +414,7 @@
     "install",
     "complete",
     "dashboard",
+    "executions",
     "agent-detail",
     "logs",
     "chat",
@@ -407,18 +430,18 @@
       if (el)
         el.classList.toggle("hidden", r !== name);
     });
-    if (name !== "dashboard")
+    if (name !== "dashboard" && name !== "executions")
       stopDashboardExecutionPolling();
     $$(".nav-link").forEach((a) => {
       a.classList.toggle("active", a.dataset.route === name);
     });
   }
   function navigate(hash) {
-    if (!hash || hash === "#" || hash === "#/")
-      hash = "#/welcome";
-    const route = hash.replace("#/", "");
-    if (route.startsWith("add/")) {
-      const agent = decodeURIComponent(route.slice(4)).trim().toLowerCase();
+    const routeInfo = parseRoute(hash);
+    const route = routeInfo.path;
+    const routeName = routeInfo.name;
+    if (routeName === "add") {
+      const agent = decodeURIComponent(routeInfo.segments[1] || "").trim().toLowerCase();
       if (!agent) {
         location.hash = "#/welcome";
         return;
@@ -431,22 +454,22 @@
     }
     if (isAddMode()) {
       const keepAddRoutes = new Set(["setup", "provider", "install", "complete"]);
-      if (!keepAddRoutes.has(route)) {
+      if (!keepAddRoutes.has(routeName)) {
         resetAddMode();
       }
     }
-    if (route !== "dashboard") {
+    if (routeName !== "dashboard") {
       closeAddAgentModal();
     }
-    const mgmtRoutes = ["dashboard", "logs", "chat", "settings", "servers", "profiles", "remote-chat", "remote-observability"];
-    if (mgmtRoutes.includes(route)) {
+    const mgmtRoutes = ["dashboard", "executions", "logs", "chat", "settings", "servers", "profiles", "remote-chat", "remote-observability"];
+    if (mgmtRoutes.includes(routeName)) {
       $("#nav").classList.remove("hidden");
     }
-    if (!isRouteEnabled(route)) {
+    if (!isRouteEnabled(routeName)) {
       location.hash = "#/dashboard";
       return;
     }
-    switch (route) {
+    switch (routeName) {
       case "welcome":
         initWelcome();
         break;
@@ -470,6 +493,9 @@
         break;
       case "dashboard":
         initDashboard();
+        break;
+      case "executions":
+        initExecutions(routeInfo.segments[1] || "");
         break;
       case "logs":
         initLogs();
@@ -1323,11 +1349,240 @@
       location.hash = "#/dashboard";
     };
   }
+  function flattenProviderCatalog(payload) {
+    const categories = payload && payload.by_category && typeof payload.by_category === "object" ? payload.by_category : {};
+    const out = [];
+    const seen = new Set;
+    Object.keys(categories).forEach((key) => {
+      const providers = Array.isArray(categories[key]) ? categories[key] : [];
+      providers.forEach((provider) => {
+        const id = String(provider && provider.id ? provider.id : "").trim().toLowerCase();
+        if (!id || seen.has(id))
+          return;
+        seen.add(id);
+        out.push(provider);
+      });
+    });
+    out.sort((left, right) => String(left && left.name ? left.name : left.id || "").localeCompare(String(right && right.name ? right.name : right.id || "")));
+    return out;
+  }
+  function renderQuickLaunchProviderOptions(providers) {
+    const select = $("#quick-launch-provider");
+    if (!select)
+      return;
+    const previous = String(select.value || "").trim().toLowerCase();
+    select.textContent = "";
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = "System default";
+    select.appendChild(empty);
+    providers.forEach((provider) => {
+      const opt = document.createElement("option");
+      opt.value = provider.id;
+      opt.textContent = provider.name || provider.id;
+      select.appendChild(opt);
+    });
+    if (previous && providers.some((provider) => String(provider.id || "").trim().toLowerCase() === previous)) {
+      select.value = previous;
+    }
+  }
+  function renderQuickLaunchHostOptions(hosts) {
+    const wrap = $("#quick-launch-hosts");
+    if (!wrap)
+      return;
+    const selected = new Set;
+    $$('#quick-launch-hosts input[type="checkbox"]:checked').forEach((input) => {
+      selected.add(String(input.value || "").trim());
+    });
+    wrap.textContent = "";
+    const items = [{ id: "local", name: "local" }].concat(Array.isArray(hosts) ? hosts : []);
+    const seen = new Set;
+    items.forEach((item) => {
+      const hostID = String(item && item.id ? item.id : "").trim();
+      if (!hostID || seen.has(hostID))
+        return;
+      seen.add(hostID);
+      const label = document.createElement("label");
+      label.className = "quick-launch-host-option";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.value = hostID;
+      input.checked = selected.size ? selected.has(hostID) : hostID === "local";
+      const text = document.createElement("span");
+      text.textContent = String(item && item.name ? item.name : hostID).trim() || hostID;
+      label.appendChild(input);
+      label.appendChild(text);
+      wrap.appendChild(label);
+    });
+  }
+  function selectedQuickLaunchHostIDs() {
+    return $$('#quick-launch-hosts input[type="checkbox"]:checked').map((input) => String(input.value || "").trim()).filter(Boolean);
+  }
+  function resetQuickLaunchPreview(clearForm) {
+    quickLaunchPlan = null;
+    const previewCard = $("#quick-launch-preview-card");
+    if (previewCard)
+      previewCard.classList.add("hidden");
+    if (clearForm) {
+      const goal = $("#quick-launch-goal");
+      const provider = $("#quick-launch-provider");
+      const maxConcurrency = $("#quick-launch-max-concurrency");
+      if (goal)
+        goal.value = "";
+      if (provider)
+        provider.value = "";
+      if (maxConcurrency)
+        maxConcurrency.value = "";
+      renderQuickLaunchHostOptions(remoteHostsCache);
+      setMsg("#quick-launch-msg", "", "info");
+    }
+  }
+  function renderQuickLaunchPlan(plan) {
+    quickLaunchPlan = plan;
+    const previewCard = $("#quick-launch-preview-card");
+    const summary = $("#quick-launch-preview-summary");
+    const tasks = $("#quick-launch-preview-tasks");
+    const workers = $("#quick-launch-preview-workers");
+    if (!previewCard || !summary || !tasks || !workers)
+      return;
+    previewCard.classList.remove("hidden");
+    summary.textContent = "Approval: " + String(plan.approvalScope || "infrastructure_only") + " \xB7 Task units: " + String(Array.isArray(plan.taskUnits) ? plan.taskUnits.length : 0) + " \xB7 Max concurrency: " + String(plan.maxConcurrency || 0);
+    tasks.textContent = "";
+    workers.textContent = "";
+    const plannerTasks = Array.isArray(plan.plannerTasks) ? plan.plannerTasks : [];
+    plannerTasks.forEach((task) => {
+      const row = document.createElement("div");
+      row.className = "quick-launch-line";
+      row.textContent = String(task.id || "task") + " \xB7 " + String(task.agentId || "zeroclaw") + " \xB7 " + String(task.input || "").trim();
+      tasks.appendChild(row);
+    });
+    const requiredWorkers = Array.isArray(plan.requiredWorkers) ? plan.requiredWorkers : [];
+    requiredWorkers.forEach((worker) => {
+      const row = document.createElement("div");
+      row.className = "quick-launch-line";
+      row.textContent = String(worker.hostId || "local") + "/" + String(worker.agentId || "zeroclaw") + " \xB7 count=" + String(worker.count || 1);
+      workers.appendChild(row);
+    });
+  }
+  async function loadQuickLaunchOptions() {
+    if (!featureFlags.remoteControlPlaneEnabled)
+      return;
+    const [providerPayload, hosts] = await Promise.all([
+      api("GET", "/api/v1/providers"),
+      fetchRemoteHosts().catch(() => [])
+    ]);
+    quickLaunchProviderCatalog = flattenProviderCatalog(providerPayload);
+    renderQuickLaunchProviderOptions(quickLaunchProviderCatalog);
+    renderQuickLaunchHostOptions(hosts);
+  }
+  async function previewQuickLaunchPlan() {
+    const goal = String(($("#quick-launch-goal") || {}).value || "").trim();
+    if (!goal) {
+      setMsg("#quick-launch-msg", "Goal is required.", "error");
+      return;
+    }
+    const previewBtn = $("#quick-launch-preview");
+    if (previewBtn)
+      previewBtn.disabled = true;
+    try {
+      const provider = String(($("#quick-launch-provider") || {}).value || "").trim();
+      const maxConcurrency = parseInt(String(($("#quick-launch-max-concurrency") || {}).value || "").trim(), 10);
+      const response = await api("POST", "/api/v1/orchestrator/plans", {
+        goal,
+        provider,
+        hostIds: selectedQuickLaunchHostIDs(),
+        maxConcurrency: Number.isFinite(maxConcurrency) ? maxConcurrency : 0
+      });
+      renderQuickLaunchPlan(response && response.plan ? response.plan : {});
+      setMsg("#quick-launch-msg", "Preview ready. Confirm to create and authorize the execution.", "info");
+    } catch (e) {
+      setMsg("#quick-launch-msg", "Preview failed: " + e.message, "error");
+    } finally {
+      if (previewBtn)
+        previewBtn.disabled = false;
+    }
+  }
+  async function runQuickLaunchExecution() {
+    if (!quickLaunchPlan) {
+      setMsg("#quick-launch-msg", "Preview a plan before running.", "error");
+      return;
+    }
+    const runBtn = $("#quick-launch-run");
+    if (runBtn)
+      runBtn.disabled = true;
+    try {
+      const createPayload = {
+        goal: String(quickLaunchPlan.goal || "").trim(),
+        approvalScope: String(quickLaunchPlan.approvalScope || "infrastructure_only").trim(),
+        requiredWorkers: Array.isArray(quickLaunchPlan.requiredWorkers) ? quickLaunchPlan.requiredWorkers : [],
+        taskUnits: Array.isArray(quickLaunchPlan.taskUnits) ? quickLaunchPlan.taskUnits : [],
+        maxConcurrency: Number(quickLaunchPlan.maxConcurrency || 0) || 0
+      };
+      const created = await api("POST", "/api/v1/orchestrator/executions", createPayload);
+      const execution = created && created.execution ? created.execution : {};
+      const executionID = String(execution.id || "").trim();
+      if (!executionID)
+        throw new Error("create response missing execution id");
+      await api("POST", "/api/v1/orchestrator/executions/" + encodeURIComponent(executionID) + "/authorize", {
+        approved: true,
+        actor: "webui",
+        maxConcurrency: Number(quickLaunchPlan.maxConcurrency || 0) || 0
+      });
+      setMsg("#quick-launch-msg", "Execution created: " + executionID, "info");
+      location.hash = "#/executions/" + encodeURIComponent(executionID);
+    } catch (e) {
+      setMsg("#quick-launch-msg", "Run failed: " + e.message, "error");
+    } finally {
+      if (runBtn)
+        runBtn.disabled = false;
+    }
+  }
+  async function initQuickLaunch() {
+    const section = $("#dashboard-quick-launch-section");
+    if (!section)
+      return;
+    section.classList.toggle("hidden", !featureFlags.remoteControlPlaneEnabled);
+    if (!featureFlags.remoteControlPlaneEnabled)
+      return;
+    const previewBtn = $("#quick-launch-preview");
+    const resetBtn = $("#quick-launch-reset");
+    const editBtn = $("#quick-launch-edit");
+    const runBtn = $("#quick-launch-run");
+    const toggleBtn = $("#quick-launch-advanced-toggle");
+    const advanced = $("#quick-launch-advanced");
+    if (previewBtn)
+      previewBtn.onclick = previewQuickLaunchPlan;
+    if (resetBtn)
+      resetBtn.onclick = () => resetQuickLaunchPreview(true);
+    if (editBtn)
+      editBtn.onclick = () => {
+        const previewCard = $("#quick-launch-preview-card");
+        if (previewCard)
+          previewCard.classList.add("hidden");
+      };
+    if (runBtn)
+      runBtn.onclick = runQuickLaunchExecution;
+    if (toggleBtn)
+      toggleBtn.onclick = () => {
+        if (!advanced)
+          return;
+        const hidden = advanced.classList.toggle("hidden");
+        toggleBtn.textContent = hidden ? "Advanced" : "Hide Advanced";
+      };
+    try {
+      await loadQuickLaunchOptions();
+    } catch (e) {
+      setMsg("#quick-launch-msg", "Failed to load orchestration options: " + e.message, "error");
+    }
+  }
   async function initDashboard() {
     resetAddMode();
     showView("dashboard");
     $("#nav").classList.remove("hidden");
-    await refreshInstances();
+    await Promise.all([
+      refreshInstances(),
+      initQuickLaunch()
+    ]);
     await refreshExecutions();
     startDashboardExecutionPolling();
     $("#refresh-instances").onclick = refreshInstances;
@@ -1336,6 +1591,27 @@
       refreshExecutionsBtn.onclick = refreshExecutions;
     $("#dashboard-add-agent").onclick = openAddAgentModal;
     $("#add-agent-cancel").onclick = closeAddAgentModal;
+  }
+  async function initExecutions(executionID) {
+    resetAddMode();
+    showView("executions");
+    $("#nav").classList.remove("hidden");
+    selectedExecutionID = String(executionID || "").trim();
+    const refreshBtn = $("#executions-refresh");
+    const searchInput = $("#executions-search");
+    const statusFilter = $("#executions-status-filter");
+    if (refreshBtn)
+      refreshBtn.onclick = refreshExecutions;
+    if (searchInput)
+      searchInput.oninput = () => {
+        renderExecutionsView(executionRecordsCache, false);
+      };
+    if (statusFilter)
+      statusFilter.onchange = () => {
+        renderExecutionsView(executionRecordsCache, false);
+      };
+    await refreshExecutions();
+    startDashboardExecutionPolling();
   }
   async function refreshInstances() {
     const el = $("#instance-list");
@@ -1434,25 +1710,32 @@
     if (!featureFlags.remoteControlPlaneEnabled)
       return;
     dashboardExecutionPollTimer = setInterval(() => {
-      if (currentRouteName() !== "dashboard") {
+      const routeName = currentRouteName();
+      if (routeName !== "dashboard" && routeName !== "executions") {
         stopDashboardExecutionPolling();
         return;
       }
       refreshExecutions();
     }, 5000);
   }
+  async function fetchExecutionDetails(executionID, force) {
+    const id = String(executionID || "").trim();
+    if (!id)
+      throw new Error("execution id is required");
+    if (!force && dashboardExecutionDetailsByID[id]) {
+      return dashboardExecutionDetailsByID[id];
+    }
+    const payload = await api("GET", "/api/v1/orchestrator/executions/" + encodeURIComponent(id));
+    dashboardExecutionDetailsByID[id] = payload;
+    return payload;
+  }
   async function loadExecutionDetails(executionID, target, force) {
     const id = String(executionID || "").trim();
     if (!id || !target)
       return;
-    if (!force && dashboardExecutionDetailsByID[id]) {
-      renderExecutionDetails(target, dashboardExecutionDetailsByID[id]);
-      return;
-    }
     target.textContent = "Loading details\u2026";
     try {
-      const payload = await api("GET", "/api/v1/orchestrator/executions/" + encodeURIComponent(id));
-      dashboardExecutionDetailsByID[id] = payload;
+      const payload = await fetchExecutionDetails(id, force);
       renderExecutionDetails(target, payload);
     } catch (e) {
       target.textContent = "Load failed: " + e.message;
@@ -1555,43 +1838,135 @@
     }
     target.appendChild(resultsWrap);
   }
-  async function refreshExecutions() {
-    const section = $("#dashboard-executions-section");
-    const list = $("#execution-list");
-    const summary = $("#execution-summary");
-    if (!section || !list || !summary)
+  function sortExecutionsByUpdatedAt(executions) {
+    return (Array.isArray(executions) ? executions.slice() : []).sort((a, b) => {
+      const left = new Date(String(a && a.updatedAt ? a.updatedAt : "")).getTime() || 0;
+      const right = new Date(String(b && b.updatedAt ? b.updatedAt : "")).getTime() || 0;
+      return right - left;
+    });
+  }
+  function executionCounts(execution) {
+    const taskUnits = Array.isArray(execution && execution.taskUnits) ? execution.taskUnits : [];
+    const results = Array.isArray(execution && execution.results) ? execution.results : [];
+    return {
+      taskUnits,
+      results,
+      completed: results.filter((item) => String(item && item.status ? item.status : "").trim() === "completed").length,
+      failed: results.filter((item) => {
+        const status = String(item && item.status ? item.status : "").trim().toLowerCase();
+        return status === "failed" || status === "cancelled";
+      }).length
+    };
+  }
+  function executionMatchesFilter(execution, filterValue, query) {
+    const status = String(execution && execution.status ? execution.status : "").trim().toLowerCase();
+    const id = String(execution && execution.id ? execution.id : "").trim().toLowerCase();
+    const goal = String(execution && execution.goal ? execution.goal : "").trim().toLowerCase();
+    const normalizedQuery = String(query || "").trim().toLowerCase();
+    if (normalizedQuery && !id.includes(normalizedQuery) && !goal.includes(normalizedQuery)) {
+      return false;
+    }
+    switch (String(filterValue || "all").trim().toLowerCase()) {
+      case "active":
+        return !isExecutionTerminalStatus(status);
+      case "completed":
+        return status === "completed";
+      case "failed":
+        return status === "failed" || status === "declined";
+      case "cancelled":
+        return status === "cancelled";
+      default:
+        return true;
+    }
+  }
+  async function cancelExecution(executionID, actor) {
+    const id = String(executionID || "").trim();
+    if (!id)
+      return;
+    await api("POST", "/api/v1/orchestrator/executions/" + encodeURIComponent(id) + "/cancel", {
+      actor: String(actor || "webui").trim() || "webui"
+    });
+    delete dashboardExecutionDetailsByID[id];
+    await refreshExecutions();
+  }
+  function renderExecutionsDetailPanel(target, payload) {
+    target.textContent = "";
+    const execution = payload && payload.execution && typeof payload.execution === "object" ? payload.execution : {};
+    const statusText = String(execution && execution.status ? execution.status : "unknown").trim();
+    const summaryCard = document.createElement("div");
+    summaryCard.className = "executions-detail-summary";
+    const header = document.createElement("div");
+    header.className = "section-head";
+    const titleWrap = document.createElement("div");
+    const title = document.createElement("h3");
+    title.textContent = String(execution && execution.goal ? execution.goal : "").trim() || "(no goal)";
+    const meta = document.createElement("div");
+    meta.className = "execution-detail-line";
+    meta.textContent = "ID: " + String(execution && execution.id ? execution.id : "").trim() + " \xB7 Updated: " + formatDateTime(execution && execution.updatedAt);
+    titleWrap.appendChild(title);
+    titleWrap.appendChild(meta);
+    const badge = document.createElement("span");
+    badge.className = executionStatusBadgeClass(statusText);
+    badge.textContent = statusText || "unknown";
+    header.appendChild(titleWrap);
+    header.appendChild(badge);
+    summaryCard.appendChild(header);
+    const error = String(execution && execution.error ? execution.error : "").trim();
+    if (error) {
+      const errorLine = document.createElement("div");
+      errorLine.className = "execution-detail-line";
+      errorLine.textContent = "Error: " + error;
+      summaryCard.appendChild(errorLine);
+    }
+    target.appendChild(summaryCard);
+    const blocks = document.createElement("div");
+    renderExecutionDetails(blocks, payload);
+    target.appendChild(blocks);
+  }
+  async function renderExecutionsView(executions, forceDetail) {
+    const list = $("#executions-list");
+    const summary = $("#executions-summary");
+    const detail = $("#executions-detail");
+    const cancelBtn = $("#executions-cancel");
+    if (!list || !summary || !detail || !cancelBtn)
       return;
     if (!featureFlags.remoteControlPlaneEnabled) {
-      section.classList.add("hidden");
+      list.textContent = "";
+      summary.textContent = "Remote control plane is disabled.";
+      detail.textContent = "Execution Center is unavailable.";
+      cancelBtn.classList.add("hidden");
       return;
     }
-    section.classList.remove("hidden");
-    if (!list.childElementCount)
-      list.textContent = "Loading\u2026";
-    try {
-      const payload = await api("GET", "/api/v1/orchestrator/executions");
-      const executions = payload && Array.isArray(payload.executions) ? payload.executions.slice() : [];
-      executions.sort((a, b) => {
-        const left = new Date(String(a && a.updatedAt ? a.updatedAt : "")).getTime() || 0;
-        const right = new Date(String(b && b.updatedAt ? b.updatedAt : "")).getTime() || 0;
-        return right - left;
-      });
-      const recent = executions.slice(0, 8);
-      const active = recent.filter((item) => !isExecutionTerminalStatus(item && item.status)).length;
-      summary.textContent = recent.length ? "Recent: " + recent.length + " \xB7 Active: " + active : "No executions recorded yet.";
-      list.textContent = "";
-      dashboardExecutionDetailsByID = {};
-      if (!recent.length)
-        return;
-      recent.forEach((execution) => {
+    const searchValue = String(($("#executions-search") || {}).value || "").trim();
+    const statusFilter = String(($("#executions-status-filter") || {}).value || "all").trim().toLowerCase();
+    const filtered = executions.filter((execution) => executionMatchesFilter(execution, statusFilter, searchValue));
+    const routeInfo = parseRoute(location.hash);
+    const routeExecutionID = routeInfo.name === "executions" ? String(routeInfo.segments[1] || "").trim() : "";
+    if (routeExecutionID)
+      selectedExecutionID = routeExecutionID;
+    if (!selectedExecutionID && filtered.length) {
+      selectedExecutionID = String(filtered[0] && filtered[0].id ? filtered[0].id : "").trim();
+    }
+    if (selectedExecutionID && !executions.some((item) => String(item && item.id ? item.id : "").trim() === selectedExecutionID) && filtered.length) {
+      selectedExecutionID = String(filtered[0] && filtered[0].id ? filtered[0].id : "").trim();
+    }
+    summary.textContent = executions.length ? "Total: " + executions.length + " \xB7 Visible: " + filtered.length : "No executions recorded yet.";
+    list.textContent = "";
+    if (!filtered.length) {
+      const empty = document.createElement("div");
+      empty.className = "card";
+      empty.textContent = "No executions match the current filter.";
+      list.appendChild(empty);
+    } else {
+      filtered.forEach((execution) => {
         const executionID = String(execution && execution.id ? execution.id : "").trim();
         const statusText = String(execution && execution.status ? execution.status : "unknown").trim();
-        const taskUnits = Array.isArray(execution && execution.taskUnits) ? execution.taskUnits : [];
-        const results = Array.isArray(execution && execution.results) ? execution.results : [];
-        const completed = results.filter((item) => String(item && item.status ? item.status : "").trim() === "completed").length;
-        const failed = results.filter((item) => String(item && item.status ? item.status : "").trim() === "failed").length;
-        const card = document.createElement("div");
-        card.className = "agent-card execution-card";
+        const counts = executionCounts(execution);
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "agent-card execution-card execution-list-card";
+        if (executionID && executionID === selectedExecutionID)
+          card.classList.add("active");
         const header = document.createElement("div");
         header.className = "section-head";
         const title = document.createElement("h4");
@@ -1608,59 +1983,178 @@
         card.appendChild(goal);
         const meta = document.createElement("div");
         meta.className = "instance-meta";
-        meta.textContent = "Tasks: " + String(taskUnits.length) + " \xB7 Completed: " + String(completed) + " \xB7 Failed: " + String(failed) + " \xB7 Updated: " + formatDateTime(execution && execution.updatedAt);
+        meta.textContent = "Tasks: " + String(counts.taskUnits.length) + " \xB7 Completed: " + String(counts.completed) + " \xB7 Failed: " + String(counts.failed) + " \xB7 Updated: " + formatDateTime(execution && execution.updatedAt);
         card.appendChild(meta);
-        const actions = document.createElement("div");
-        actions.className = "btn-row";
-        const detailToggle = document.createElement("button");
-        detailToggle.className = "btn-sm btn-secondary";
-        detailToggle.textContent = dashboardExpandedExecutionIDs.has(executionID) ? "Hide Details" : "View Details";
-        actions.appendChild(detailToggle);
-        if (!isExecutionTerminalStatus(statusText)) {
-          const cancelBtn = document.createElement("button");
-          cancelBtn.className = "btn-sm btn-danger";
-          cancelBtn.textContent = "Cancel";
-          cancelBtn.onclick = async () => {
-            cancelBtn.disabled = true;
-            try {
-              await api("POST", "/api/v1/orchestrator/executions/" + encodeURIComponent(executionID) + "/cancel", { actor: "webui" });
-              summary.textContent = "Execution cancelled: " + executionID;
-              await refreshExecutions();
-            } catch (e) {
-              summary.textContent = "Cancel failed: " + e.message;
-            } finally {
-              cancelBtn.disabled = false;
-            }
-          };
-          actions.appendChild(cancelBtn);
-        }
-        card.appendChild(actions);
-        const details = document.createElement("div");
-        details.className = "execution-details hidden";
-        card.appendChild(details);
-        detailToggle.onclick = async () => {
-          if (!executionID)
-            return;
-          const open = details.classList.toggle("hidden");
-          if (open) {
-            dashboardExpandedExecutionIDs.delete(executionID);
-            detailToggle.textContent = "View Details";
+        card.onclick = () => {
+          selectedExecutionID = executionID;
+          const targetHash = "#/executions/" + encodeURIComponent(executionID);
+          if (location.hash !== targetHash) {
+            location.hash = targetHash;
             return;
           }
-          dashboardExpandedExecutionIDs.add(executionID);
-          detailToggle.textContent = "Hide Details";
-          await loadExecutionDetails(executionID, details, true);
+          renderExecutionsView(executionRecordsCache, true);
         };
-        if (dashboardExpandedExecutionIDs.has(executionID)) {
-          details.classList.remove("hidden");
-          detailToggle.textContent = "Hide Details";
-          loadExecutionDetails(executionID, details, true);
-        }
         list.appendChild(card);
       });
+    }
+    if (!selectedExecutionID) {
+      detail.textContent = "Select an execution to inspect workers and task results.";
+      cancelBtn.classList.add("hidden");
+      return;
+    }
+    detail.textContent = "Loading details\u2026";
+    try {
+      const payload = await fetchExecutionDetails(selectedExecutionID, !!forceDetail);
+      renderExecutionsDetailPanel(detail, payload);
+      const execution = payload && payload.execution && typeof payload.execution === "object" ? payload.execution : {};
+      const terminal = isExecutionTerminalStatus(execution && execution.status);
+      cancelBtn.classList.toggle("hidden", terminal);
+      cancelBtn.onclick = async () => {
+        if (!window.confirm("Cancel execution " + selectedExecutionID + "?"))
+          return;
+        cancelBtn.disabled = true;
+        try {
+          await cancelExecution(selectedExecutionID, "webui");
+        } finally {
+          cancelBtn.disabled = false;
+        }
+      };
     } catch (e) {
-      list.textContent = "Error: " + e.message;
-      summary.textContent = "Execution history unavailable.";
+      detail.textContent = "Load failed: " + e.message;
+      cancelBtn.classList.add("hidden");
+    }
+  }
+  function renderDashboardExecutions(executions) {
+    const section = $("#dashboard-executions-section");
+    const list = $("#execution-list");
+    const summary = $("#execution-summary");
+    if (!section || !list || !summary)
+      return;
+    if (!featureFlags.remoteControlPlaneEnabled) {
+      section.classList.add("hidden");
+      return;
+    }
+    section.classList.remove("hidden");
+    const recent = executions.slice(0, 8);
+    const active = recent.filter((item) => !isExecutionTerminalStatus(item && item.status)).length;
+    summary.textContent = recent.length ? "Recent: " + recent.length + " \xB7 Active: " + active : "No executions recorded yet.";
+    list.textContent = "";
+    if (!recent.length)
+      return;
+    recent.forEach((execution) => {
+      const executionID = String(execution && execution.id ? execution.id : "").trim();
+      const statusText = String(execution && execution.status ? execution.status : "unknown").trim();
+      const counts = executionCounts(execution);
+      const card = document.createElement("div");
+      card.className = "agent-card execution-card";
+      const header = document.createElement("div");
+      header.className = "section-head";
+      const title = document.createElement("h4");
+      title.textContent = executionID || "execution";
+      const badge = document.createElement("span");
+      badge.className = executionStatusBadgeClass(statusText);
+      badge.textContent = statusText || "unknown";
+      header.appendChild(title);
+      header.appendChild(badge);
+      card.appendChild(header);
+      const goal = document.createElement("div");
+      goal.className = "execution-goal";
+      goal.textContent = String(execution && execution.goal ? execution.goal : "").trim() || "(no goal)";
+      card.appendChild(goal);
+      const meta = document.createElement("div");
+      meta.className = "instance-meta";
+      meta.textContent = "Tasks: " + String(counts.taskUnits.length) + " \xB7 Completed: " + String(counts.completed) + " \xB7 Failed: " + String(counts.failed) + " \xB7 Updated: " + formatDateTime(execution && execution.updatedAt);
+      card.appendChild(meta);
+      const actions = document.createElement("div");
+      actions.className = "btn-row";
+      const openBtn = document.createElement("button");
+      openBtn.className = "btn-sm";
+      openBtn.textContent = "Open";
+      openBtn.onclick = () => {
+        if (!executionID)
+          return;
+        location.hash = "#/executions/" + encodeURIComponent(executionID);
+      };
+      actions.appendChild(openBtn);
+      const detailToggle = document.createElement("button");
+      detailToggle.className = "btn-sm btn-secondary";
+      detailToggle.textContent = dashboardExpandedExecutionIDs.has(executionID) ? "Hide Details" : "View Details";
+      actions.appendChild(detailToggle);
+      if (!isExecutionTerminalStatus(statusText)) {
+        const cancelBtn = document.createElement("button");
+        cancelBtn.className = "btn-sm btn-danger";
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.onclick = async () => {
+          cancelBtn.disabled = true;
+          try {
+            await cancelExecution(executionID, "webui");
+            summary.textContent = "Execution cancelled: " + executionID;
+          } catch (e) {
+            summary.textContent = "Cancel failed: " + e.message;
+          } finally {
+            cancelBtn.disabled = false;
+          }
+        };
+        actions.appendChild(cancelBtn);
+      }
+      card.appendChild(actions);
+      const details = document.createElement("div");
+      details.className = "execution-details hidden";
+      card.appendChild(details);
+      detailToggle.onclick = async () => {
+        if (!executionID)
+          return;
+        const open = details.classList.toggle("hidden");
+        if (open) {
+          dashboardExpandedExecutionIDs.delete(executionID);
+          detailToggle.textContent = "View Details";
+          return;
+        }
+        dashboardExpandedExecutionIDs.add(executionID);
+        detailToggle.textContent = "Hide Details";
+        await loadExecutionDetails(executionID, details, true);
+      };
+      if (dashboardExpandedExecutionIDs.has(executionID)) {
+        details.classList.remove("hidden");
+        detailToggle.textContent = "Hide Details";
+        loadExecutionDetails(executionID, details, true);
+      }
+      list.appendChild(card);
+    });
+  }
+  async function refreshExecutions() {
+    const dashboardList = $("#execution-list");
+    const dashboardSummary = $("#execution-summary");
+    if (dashboardList && !dashboardList.childElementCount)
+      dashboardList.textContent = "Loading\u2026";
+    if (!featureFlags.remoteControlPlaneEnabled) {
+      renderDashboardExecutions([]);
+      await renderExecutionsView([], false);
+      return;
+    }
+    try {
+      const payload = await api("GET", "/api/v1/orchestrator/executions");
+      executionRecordsCache = sortExecutionsByUpdatedAt(payload && Array.isArray(payload.executions) ? payload.executions : []);
+      renderDashboardExecutions(executionRecordsCache);
+      if (currentRouteName() === "executions") {
+        await renderExecutionsView(executionRecordsCache, false);
+      }
+    } catch (e) {
+      if (dashboardList)
+        dashboardList.textContent = "Error: " + e.message;
+      if (dashboardSummary)
+        dashboardSummary.textContent = "Execution history unavailable.";
+      if (currentRouteName() === "executions") {
+        const list = $("#executions-list");
+        const summary = $("#executions-summary");
+        const detail = $("#executions-detail");
+        if (list)
+          list.textContent = "Error: " + e.message;
+        if (summary)
+          summary.textContent = "Execution history unavailable.";
+        if (detail)
+          detail.textContent = "Execution details unavailable.";
+      }
     }
   }
   async function instanceAction(instanceID, action) {

@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,79 @@ import (
 	"testing"
 	"time"
 )
+
+func TestHandleOrchestratorPlans(t *testing.T) {
+	var gotDecomposeBody string
+	mux := buildRemoteFeatureMuxWithDaemonHandlers(t, map[string]http.HandlerFunc{
+		"POST /api/v1/base-agent/decompose": func(w http.ResponseWriter, r *http.Request) {
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read decompose body: %v", err)
+			}
+			gotDecomposeBody = strings.TrimSpace(string(raw))
+			_, _ = w.Write([]byte(`{"tasks":[{"id":"task-1","input":"collect diagnostics","agentId":"zeroclaw"},{"id":"task-2","input":"summarize diagnostics","agentId":"picoclaw"}]}`))
+		},
+	})
+
+	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/plans", `{
+		"goal":"triage live issue",
+		"provider":"openrouter",
+		"hostIds":["host-a","host-a","host-b"],
+		"maxConcurrency":9
+	}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected planning status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(gotDecomposeBody, `"provider":"openrouter"`) {
+		t.Fatalf("expected provider to be forwarded, got body=%s", gotDecomposeBody)
+	}
+
+	payload := decodeJSONMap(t, rec)
+	plan, _ := payload["plan"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(plan["goal"])); got != "triage live issue" {
+		t.Fatalf("goal = %q, want triage live issue payload=%+v", got, payload)
+	}
+	if got := strings.TrimSpace(anyToString(plan["approvalScope"])); got != "infrastructure_only" {
+		t.Fatalf("approvalScope = %q, want infrastructure_only", got)
+	}
+	if got := int(anyToFloat(plan["maxConcurrency"])); got != 2 {
+		t.Fatalf("maxConcurrency = %d, want 2", got)
+	}
+	taskUnits, _ := plan["taskUnits"].([]interface{})
+	if len(taskUnits) != 2 {
+		t.Fatalf("taskUnits = %d, want 2", len(taskUnits))
+	}
+}
+
+func TestHandleOrchestratorPlansNegativeCases(t *testing.T) {
+	disabledMux := buildRemoteFeatureMuxWithConfigAndDaemonHandlers(t, &GatewayConfig{
+		APIToken:                  "test-gateway-token",
+		MaxCommandBodyBytes:       64 * 1024,
+		RemoteControlPlaneEnabled: false,
+		RemoteChatEnabled:         true,
+		ProviderBindingEnabled:    true,
+	}, nil)
+	disabled := runJSONRequest(t, disabledMux, http.MethodPost, "/api/v1/orchestrator/plans", `{"goal":"triage"}`)
+	if disabled.Code != http.StatusNotFound {
+		t.Fatalf("expected disabled planning status 404, got %d body=%s", disabled.Code, disabled.Body.String())
+	}
+
+	mux := buildRemoteFeatureMux(t)
+	methodRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/orchestrator/plans", "")
+	if methodRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected method not allowed, got %d body=%s", methodRec.Code, methodRec.Body.String())
+	}
+
+	badJSON := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/plans", "{")
+	if badJSON.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad request for invalid json, got %d body=%s", badJSON.Code, badJSON.Body.String())
+	}
+
+	emptyGoal := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/plans", `{"goal":" "}`)
+	if emptyGoal.Code != http.StatusBadRequest {
+		t.Fatalf("expected validation error for empty goal, got %d body=%s", emptyGoal.Code, emptyGoal.Body.String())
+	}
+}
 
 func TestOrchestratorExecutionEndpointNegativeCases(t *testing.T) {
 	mux := buildRemoteFeatureMux(t)

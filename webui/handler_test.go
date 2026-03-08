@@ -22,6 +22,12 @@ func TestHandlerServesRootAndSPAFallback(t *testing.T) {
 	if !strings.Contains(rootRec.Body.String(), `id="execution-list"`) {
 		t.Fatalf("expected dashboard execution list container in root html")
 	}
+	if !strings.Contains(rootRec.Body.String(), `id="quick-launch-goal"`) {
+		t.Fatalf("expected quick launch goal field in root html")
+	}
+	if !strings.Contains(rootRec.Body.String(), `id="view-executions"`) {
+		t.Fatalf("expected executions view container in root html")
+	}
 	if !strings.Contains(rootRec.Body.String(), `id="refresh-executions"`) {
 		t.Fatalf("expected dashboard execution refresh button in root html")
 	}

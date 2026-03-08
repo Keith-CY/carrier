@@ -316,6 +316,36 @@ func TestDaemonClient_DecomposeBaseAgent(t *testing.T) {
 	}
 }
 
+func TestDaemonClient_DecomposeBaseAgentWithProvider(t *testing.T) {
+	var gotBody map[string]interface{}
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"tasks": []map[string]interface{}{
+				{"id": "task-1", "input": "summarize logs", "agentId": "zeroclaw"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	tasks, err := dc.DecomposeBaseAgentWithProvider(context.Background(), "analyze logs", "openrouter", "actor", "req")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotBody["goal"] != "analyze logs" {
+		t.Fatalf("unexpected goal body: %#v", gotBody)
+	}
+	if gotBody["provider"] != "openrouter" {
+		t.Fatalf("unexpected provider body: %#v", gotBody)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "task-1" {
+		t.Fatalf("unexpected tasks: %+v", tasks)
+	}
+}
+
 func TestDaemonClient_GetLogs_ClampsTail(t *testing.T) {
 	var gotPath string
 	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

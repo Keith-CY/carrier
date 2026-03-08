@@ -60,6 +60,7 @@ import (
 
 	gatewayruntime "carrier/gateway"
 	"carrier/shared/catalog"
+	sharedorchestration "carrier/shared/orchestration"
 	"carrier/shared/openclawcfg"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -3296,28 +3297,12 @@ func runListInstances(out io.Writer) error {
 }
 
 const orchestratorLocalHostID = "local"
-const defaultOrchestrateMaxConcurrency = 8
 
-type orchestrateDecomposeTask struct {
-	ID      string `json:"id"`
-	Input   string `json:"input"`
-	AgentID string `json:"agentId,omitempty"`
-}
+type orchestrateDecomposeTask = sharedorchestration.DecomposeTask
 
-type orchestrateRequiredWorker struct {
-	HostID  string `json:"hostId"`
-	AgentID string `json:"agentId"`
-	Count   int    `json:"count"`
-}
+type orchestrateRequiredWorker = sharedorchestration.RequiredWorker
 
-type orchestrateTaskUnit struct {
-	ID          string `json:"id"`
-	Input       string `json:"input"`
-	TimeoutMs   int    `json:"timeoutMs,omitempty"`
-	RetryBudget int    `json:"retryBudget,omitempty"`
-	HostID      string `json:"hostId,omitempty"`
-	AgentID     string `json:"agentId,omitempty"`
-}
+type orchestrateTaskUnit = sharedorchestration.TaskUnit
 
 type orchestrateExecutionPayload struct {
 	Goal            string                      `json:"goal"`
@@ -3372,16 +3357,7 @@ type orchestrateExecutionListResponse struct {
 	Executions []orchestrateExecutionSnapshot `json:"executions"`
 }
 
-type orchestratePlanSnapshot struct {
-	Goal            string                      `json:"goal"`
-	Provider        string                      `json:"provider,omitempty"`
-	HostIDs         []string                    `json:"hostIds,omitempty"`
-	ApprovalScope   string                      `json:"approvalScope"`
-	MaxConcurrency  int                         `json:"maxConcurrency"`
-	PlannerTasks    []orchestrateDecomposeTask  `json:"plannerTasks"`
-	RequiredWorkers []orchestrateRequiredWorker `json:"requiredWorkers"`
-	TaskUnits       []orchestrateTaskUnit       `json:"taskUnits"`
-}
+type orchestratePlanSnapshot = sharedorchestration.Plan
 
 func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error {
 	switch opts.Action {
@@ -3548,23 +3524,13 @@ func buildOrchestratePlan(opts orchestrateCommandOptions) (orchestratePlanSnapsh
 	if err != nil {
 		return orchestratePlanSnapshot{}, err
 	}
-
-	taskUnits := assignOrchestrateTaskUnits(tasks, opts.HostIDs)
-	requiredWorkers := buildOrchestrateRequiredWorkers(taskUnits)
-	if len(taskUnits) == 0 || len(requiredWorkers) == 0 {
-		return orchestratePlanSnapshot{}, errors.New("failed to build orchestrator task plan")
-	}
-
-	return orchestratePlanSnapshot{
-		Goal:            strings.TrimSpace(opts.Goal),
-		Provider:        strings.TrimSpace(opts.Provider),
-		HostIDs:         dedupeStringSlice(opts.HostIDs),
-		ApprovalScope:   "infrastructure_only",
-		MaxConcurrency:  effectiveOrchestrateMaxConcurrency(len(taskUnits), opts.MaxConcurrency),
-		PlannerTasks:    tasks,
-		RequiredWorkers: requiredWorkers,
-		TaskUnits:       taskUnits,
-	}, nil
+	return sharedorchestration.BuildPlan(sharedorchestration.BuildPlanInput{
+		Goal:           strings.TrimSpace(opts.Goal),
+		Provider:       strings.TrimSpace(opts.Provider),
+		HostIDs:        opts.HostIDs,
+		MaxConcurrency: opts.MaxConcurrency,
+		Tasks:          tasks,
+	})
 }
 
 func decomposeOrchestrateGoal(goal, provider string) ([]orchestrateDecomposeTask, error) {
@@ -3603,7 +3569,7 @@ func decomposeOrchestrateGoal(goal, provider string) ([]orchestrateDecomposeTask
 			taskID = fmt.Sprintf("%s-%d", taskID, idx+1)
 		}
 		seen[taskID] = struct{}{}
-		agentID := normalizeOrchestrateAgentID(task.AgentID)
+		agentID := sharedorchestration.NormalizeAgentID(task.AgentID)
 		out = append(out, orchestrateDecomposeTask{
 			ID:      taskID,
 			Input:   input,
@@ -3611,107 +3577,9 @@ func decomposeOrchestrateGoal(goal, provider string) ([]orchestrateDecomposeTask
 		})
 	}
 	if len(out) == 0 {
-		return orchestrateFallbackTasks(trimmedGoal), nil
+		return nil, nil
 	}
 	return out, nil
-}
-
-func orchestrateFallbackTasks(goal string) []orchestrateDecomposeTask {
-	return []orchestrateDecomposeTask{{
-		ID:      "task-1",
-		Input:   strings.TrimSpace(goal),
-		AgentID: "zeroclaw",
-	}}
-}
-
-func assignOrchestrateTaskUnits(tasks []orchestrateDecomposeTask, hostIDs []string) []orchestrateTaskUnit {
-	trimmedHosts := dedupeStringSlice(hostIDs)
-	if len(trimmedHosts) == 0 {
-		trimmedHosts = []string{orchestratorLocalHostID}
-	}
-
-	agentOffsets := map[string]int{}
-	out := make([]orchestrateTaskUnit, 0, len(tasks))
-	for idx, task := range tasks {
-		agentID := normalizeOrchestrateAgentID(task.AgentID)
-		offset := agentOffsets[agentID]
-		hostID := trimmedHosts[offset%len(trimmedHosts)]
-		agentOffsets[agentID] = offset + 1
-
-		taskID := strings.TrimSpace(task.ID)
-		if taskID == "" {
-			taskID = fmt.Sprintf("task-%d", idx+1)
-		}
-		out = append(out, orchestrateTaskUnit{
-			ID:          taskID,
-			Input:       strings.TrimSpace(task.Input),
-			TimeoutMs:   60_000,
-			RetryBudget: 0,
-			HostID:      hostID,
-			AgentID:     agentID,
-		})
-	}
-	return out
-}
-
-func buildOrchestrateRequiredWorkers(taskUnits []orchestrateTaskUnit) []orchestrateRequiredWorker {
-	type workerKey struct {
-		hostID  string
-		agentID string
-	}
-	seen := map[workerKey]struct{}{}
-	workers := make([]orchestrateRequiredWorker, 0, len(taskUnits))
-	for _, task := range taskUnits {
-		hostID := strings.TrimSpace(task.HostID)
-		if hostID == "" {
-			hostID = orchestratorLocalHostID
-		}
-		agentID := normalizeOrchestrateAgentID(task.AgentID)
-		key := workerKey{hostID: hostID, agentID: agentID}
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		workers = append(workers, orchestrateRequiredWorker{
-			HostID:  hostID,
-			AgentID: agentID,
-			Count:   1,
-		})
-	}
-	sort.Slice(workers, func(i, j int) bool {
-		if workers[i].HostID == workers[j].HostID {
-			return workers[i].AgentID < workers[j].AgentID
-		}
-		return workers[i].HostID < workers[j].HostID
-	})
-	return workers
-}
-
-func effectiveOrchestrateMaxConcurrency(taskCount, requested int) int {
-	if taskCount <= 0 {
-		return 0
-	}
-	if requested <= 0 {
-		requested = defaultOrchestrateMaxConcurrency
-	}
-	if requested > 64 {
-		requested = 64
-	}
-	if requested > taskCount {
-		requested = taskCount
-	}
-	return requested
-}
-
-func normalizeOrchestrateAgentID(agentID string) string {
-	switch strings.ToLower(strings.TrimSpace(agentID)) {
-	case "picoclaw":
-		return "picoclaw"
-	case "zeroclaw":
-		return "zeroclaw"
-	default:
-		return "zeroclaw"
-	}
 }
 
 func decodeOrchestrateExecutionResponse(raw []byte) (orchestrateExecutionResponse, error) {

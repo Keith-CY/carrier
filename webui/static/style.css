@@ -503,10 +503,86 @@ button:disabled,
   margin-top: 22px;
 }
 
+.quick-launch-advanced {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+
+.quick-launch-hosts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.quick-launch-host-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.quick-launch-preview {
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.quick-launch-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.quick-launch-preview-block {
+  padding: 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.quick-launch-preview-block h4 {
+  margin-bottom: 8px;
+}
+
+.quick-launch-line {
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.quick-launch-line + .quick-launch-line {
+  margin-top: 6px;
+}
+
 .execution-card {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.execution-list-card {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  background: var(--surface-strong);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+}
+
+.execution-list-card.active {
+  border-color: rgba(118, 161, 243, 0.9);
+  box-shadow: 0 16px 32px rgba(118, 161, 243, 0.18);
 }
 
 .execution-goal {
@@ -537,6 +613,33 @@ button:disabled,
   font-size: 0.84rem;
   color: var(--text-dim);
   line-height: 1.45;
+}
+
+.executions-toolbar {
+  margin-top: 12px;
+}
+
+.executions-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  margin-top: 14px;
+}
+
+.executions-list {
+  display: grid;
+  gap: 12px;
+}
+
+.execution-details-panel {
+  min-height: 220px;
+}
+
+.executions-detail-summary {
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
 }
 
 .execution-result-item {
@@ -1691,7 +1794,9 @@ main {
   nav {
     display: flex;
     width: 100%;
-    justify-content: space-between;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 6px;
   }
 
   .nav-link {
@@ -1703,7 +1808,7 @@ main {
   }
 
   .nav-link {
-    flex: 1;
+    flex: 1 1 calc(50% - 6px);
     text-align: center;
     padding: 8px 10px;
   }
@@ -1719,6 +1824,11 @@ main {
   }
 
   .agent-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .quick-launch-preview-grid,
+  .executions-layout {
     grid-template-columns: 1fr;
   }
 
