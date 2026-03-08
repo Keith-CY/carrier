@@ -19,6 +19,12 @@ func TestHandlerServesRootAndSPAFallback(t *testing.T) {
 	if !strings.Contains(strings.ToLower(rootRec.Body.String()), "<html") {
 		t.Fatalf("expected html response for root path")
 	}
+	if !strings.Contains(rootRec.Body.String(), `id="execution-list"`) {
+		t.Fatalf("expected dashboard execution list container in root html")
+	}
+	if !strings.Contains(rootRec.Body.String(), `id="refresh-executions"`) {
+		t.Fatalf("expected dashboard execution refresh button in root html")
+	}
 
 	routeReq := httptest.NewRequest(http.MethodGet, "/app/route/does-not-exist", nil)
 	routeRec := httptest.NewRecorder()

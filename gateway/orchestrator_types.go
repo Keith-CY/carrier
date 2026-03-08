@@ -19,6 +19,7 @@ const (
 	OrchestratorExecutionStatusRunning              OrchestratorExecutionStatus = "running"
 	OrchestratorExecutionStatusCompleted            OrchestratorExecutionStatus = "completed"
 	OrchestratorExecutionStatusFailed               OrchestratorExecutionStatus = "failed"
+	OrchestratorExecutionStatusCancelled            OrchestratorExecutionStatus = "cancelled"
 	OrchestratorExecutionStatusDeclined             OrchestratorExecutionStatus = "declined"
 )
 

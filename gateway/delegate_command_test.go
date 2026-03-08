@@ -39,6 +39,7 @@ func TestHandleCommand_Delegate_SubmitAndStatus(t *testing.T) {
 
 	origStart := delegateStartExecutionFn
 	origRemoteDiscover := delegateDiscoverRemoteWorkersFn
+	origLocalDaemonClient := orchestratorLocalDaemonClientFn
 	delegateStartExecutionFn = func(executionID string, daemon *DaemonClient) {
 		runDelegateExecution(executionID, daemon)
 	}
@@ -48,6 +49,7 @@ func TestHandleCommand_Delegate_SubmitAndStatus(t *testing.T) {
 	t.Cleanup(func() {
 		delegateStartExecutionFn = origStart
 		delegateDiscoverRemoteWorkersFn = origRemoteDiscover
+		orchestratorLocalDaemonClientFn = origLocalDaemonClient
 	})
 
 	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
@@ -87,6 +89,7 @@ func TestHandleCommand_Delegate_SubmitAndStatus(t *testing.T) {
 		},
 	})
 	defer srv.Close()
+	orchestratorLocalDaemonClientFn = func() *DaemonClient { return dc }
 
 	token := pairAndGetSession(sessions, "telegram", "chat-2")
 	submit := &GatewayCommand{
@@ -105,6 +108,25 @@ func TestHandleCommand_Delegate_SubmitAndStatus(t *testing.T) {
 	executionID := parseDelegateExecutionID(submitResp.Message)
 	if executionID == "" {
 		t.Fatalf("expected execution id in message, got %q", submitResp.Message)
+	}
+
+	orchestrated := waitForDelegateOrchestratorExecution(t, executionID, 5*time.Second)
+	if orchestrated.Status != OrchestratorExecutionStatusCompleted {
+		t.Fatalf("expected orchestrator execution completed, got %+v", orchestrated)
+	}
+	if len(orchestrated.RequiredWorkers) != 1 {
+		t.Fatalf("expected one required worker, got %+v", orchestrated.RequiredWorkers)
+	}
+	if orchestrated.RequiredWorkers[0].HostID != orchestratorLocalHostID || orchestrated.RequiredWorkers[0].AgentID != "picoclaw" {
+		t.Fatalf("expected local picoclaw worker requirement, got %+v", orchestrated.RequiredWorkers[0])
+	}
+	if len(orchestrated.TaskUnits) != 1 || orchestrated.TaskUnits[0].AgentID != "picoclaw" {
+		t.Fatalf("expected orchestrator task unit to target picoclaw, got %+v", orchestrated.TaskUnits)
+	}
+	if _, found, err := getDelegateExecution(executionID); err != nil {
+		t.Fatalf("get delegate execution: %v", err)
+	} else if found {
+		t.Fatalf("expected /delegate compatibility flow to avoid delegate store writes, but found execution %s", executionID)
 	}
 
 	status := &GatewayCommand{
@@ -157,6 +179,7 @@ func TestHandleCommand_Delegate_RespectsTaskAgentPreference(t *testing.T) {
 
 	origStart := delegateStartExecutionFn
 	origRemoteDiscover := delegateDiscoverRemoteWorkersFn
+	origLocalDaemonClient := orchestratorLocalDaemonClientFn
 	delegateStartExecutionFn = func(executionID string, daemon *DaemonClient) {
 		runDelegateExecution(executionID, daemon)
 	}
@@ -166,6 +189,7 @@ func TestHandleCommand_Delegate_RespectsTaskAgentPreference(t *testing.T) {
 	t.Cleanup(func() {
 		delegateStartExecutionFn = origStart
 		delegateDiscoverRemoteWorkersFn = origRemoteDiscover
+		orchestratorLocalDaemonClientFn = origLocalDaemonClient
 	})
 
 	var picoclawCalls int32
@@ -210,6 +234,7 @@ func TestHandleCommand_Delegate_RespectsTaskAgentPreference(t *testing.T) {
 		},
 	})
 	defer srv.Close()
+	orchestratorLocalDaemonClientFn = func() *DaemonClient { return dc }
 
 	token := pairAndGetSession(sessions, "telegram", "chat-pref")
 	submit := &GatewayCommand{
@@ -228,6 +253,10 @@ func TestHandleCommand_Delegate_RespectsTaskAgentPreference(t *testing.T) {
 	executionID := parseDelegateExecutionID(submitResp.Message)
 	if executionID == "" {
 		t.Fatalf("expected execution id in message, got %q", submitResp.Message)
+	}
+	orchestrated := waitForDelegateOrchestratorExecution(t, executionID, 5*time.Second)
+	if orchestrated.Status != OrchestratorExecutionStatusCompleted {
+		t.Fatalf("expected orchestrator execution completed, got %+v", orchestrated)
 	}
 
 	status := &GatewayCommand{
@@ -266,6 +295,32 @@ func parseDelegateExecutionID(message string) string {
 		return ""
 	}
 	return strings.TrimSpace(matches[1])
+}
+
+func waitForDelegateOrchestratorExecution(t *testing.T, executionID string, timeout time.Duration) OrchestratorExecution {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		execution, found, err := getOrchestratorExecution(executionID)
+		if err == nil && found {
+			switch execution.Status {
+			case OrchestratorExecutionStatusCompleted, OrchestratorExecutionStatusFailed, OrchestratorExecutionStatusCancelled, OrchestratorExecutionStatusDeclined:
+				return execution
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	execution, found, err := getOrchestratorExecution(executionID)
+	if err != nil {
+		t.Fatalf("timed out waiting for orchestrator execution %s: %v", executionID, err)
+	}
+	if !found {
+		t.Fatalf("timed out waiting for orchestrator execution %s to appear", executionID)
+	}
+	t.Fatalf("timed out waiting for orchestrator execution %s to finish; last status=%s", executionID, execution.Status)
+	return OrchestratorExecution{}
 }
 
 func TestUpsertDelegateExecution_TrimsOlderEntries(t *testing.T) {

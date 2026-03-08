@@ -121,7 +121,7 @@ func handleDelegate(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClie
 		if executionID == "" {
 			return usageResp(cmd.RequestID, "/delegate status <execution_id>")
 		}
-		execution, found, err := getDelegateExecution(executionID)
+		execution, found, err := getOrchestratorExecution(executionID)
 		if err != nil {
 			return errResp(cmd.RequestID, "E_INTERNAL", "failed to load delegate execution status")
 		}
@@ -131,7 +131,7 @@ func handleDelegate(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClie
 		return GatewayResponse{
 			RequestID: cmd.RequestID,
 			Result:    "ok",
-			Message:   renderDelegateExecutionStatus(execution),
+			Message:   renderDelegateOrchestratorExecutionStatus(execution),
 		}
 	}
 
@@ -177,16 +177,46 @@ func submitDelegateExecution(
 		return delegateExecution{}, errors.New("goal is required")
 	}
 	tasks, plannerWarning := decomposeDelegateGoal(ctx, daemon, trimmedGoal, actor, requestID)
-	if len(tasks) == 0 {
-		tasks = []BaseAgentDecomposeTask{{ID: "task-1", Input: trimmedGoal}}
-		if strings.TrimSpace(plannerWarning) == "" {
-			plannerWarning = "planner returned no tasks; fell back to a single task"
-		}
+	orchestratorExecution, err := buildDelegateOrchestratorExecution(ctx, daemon, trimmedGoal, tasks, requestID)
+	if err != nil {
+		return delegateExecution{}, err
 	}
 
 	now := nowTimestamp()
-	execution := delegateExecution{
-		ID:             uuid.NewString(),
+	orchestratorExecution.ID = uuid.NewString()
+	orchestratorExecution.Status = OrchestratorExecutionStatusPendingAuthorization
+	orchestratorExecution.Authorization = OrchestratorAuthorization{}
+	orchestratorExecution.Results = []OrchestratorTaskResult{}
+	orchestratorExecution.CreatedAt = now
+	orchestratorExecution.UpdatedAt = now
+	orchestratorExecution.Error = ""
+
+	saved, err := upsertOrchestratorExecution(orchestratorExecution)
+	if err != nil {
+		return delegateExecution{}, err
+	}
+
+	saved.Authorization = OrchestratorAuthorization{
+		InfrastructureApproved: true,
+		ApprovedBy:             strings.TrimSpace(actor),
+		ApprovedAt:             nowTimestamp(),
+	}
+	if saved.Authorization.ApprovedBy == "" {
+		saved.Authorization.ApprovedBy = "gateway:delegate"
+	}
+	if saved.StartedAt == "" {
+		saved.StartedAt = nowTimestamp()
+	}
+	saved.Status = OrchestratorExecutionStatusProvisioning
+	saved.UpdatedAt = nowTimestamp()
+	updated, err := upsertOrchestratorExecution(saved)
+	if err != nil {
+		return delegateExecution{}, err
+	}
+	orchestratorLaunchExecutionFn(updated.ID)
+
+	return delegateExecution{
+		ID:             updated.ID,
 		Goal:           trimmedGoal,
 		Provider:       strings.TrimSpace(provider),
 		ChatID:         strings.TrimSpace(chatID),
@@ -194,15 +224,9 @@ func submitDelegateExecution(
 		Status:         delegateExecutionStatusQueued,
 		PlannerWarning: strings.TrimSpace(plannerWarning),
 		TaskUnits:      tasks,
-		Results:        []delegateTaskResult{},
-		CreatedAt:      now,
-		UpdatedAt:      now,
-	}
-	if _, err := upsertDelegateExecution(execution); err != nil {
-		return delegateExecution{}, err
-	}
-	delegateStartExecutionFn(execution.ID, daemon)
-	return execution, nil
+		CreatedAt:      updated.CreatedAt,
+		UpdatedAt:      updated.UpdatedAt,
+	}, nil
 }
 
 func decomposeDelegateGoal(
@@ -223,6 +247,90 @@ func decomposeDelegateGoal(
 		return []BaseAgentDecomposeTask{{ID: "task-1", Input: strings.TrimSpace(goal)}}, "planner returned empty task list; using single-task fallback"
 	}
 	return tasks, ""
+}
+
+func buildDelegateOrchestratorExecution(
+	ctx context.Context,
+	daemon *DaemonClient,
+	goal string,
+	tasks []BaseAgentDecomposeTask,
+	requestID string,
+) (OrchestratorExecution, error) {
+	if len(tasks) == 0 {
+		tasks = []BaseAgentDecomposeTask{{ID: "task-1", Input: strings.TrimSpace(goal)}}
+	}
+
+	workers, _ := collectDelegateWorkers(ctx, daemon, requestID)
+	requiredWorkers := buildDelegateRequiredWorkers(tasks, workers)
+	taskUnits := make([]OrchestratorTaskUnit, 0, len(tasks))
+	for idx, task := range tasks {
+		taskID := strings.TrimSpace(task.ID)
+		if taskID == "" {
+			taskID = fmt.Sprintf("task-%d", idx+1)
+		}
+		taskUnits = append(taskUnits, OrchestratorTaskUnit{
+			ID:          taskID,
+			Input:       strings.TrimSpace(task.Input),
+			AgentID:     strings.ToLower(strings.TrimSpace(task.AgentID)),
+			TimeoutMs:   int(defaultDelegateTaskTimeout / time.Millisecond),
+			RetryBudget: 0,
+		})
+	}
+
+	return normalizeOrchestratorExecution(OrchestratorExecution{
+		Goal:            strings.TrimSpace(goal),
+		ApprovalScope:   "infrastructure_only",
+		RequiredWorkers: requiredWorkers,
+		TaskUnits:       taskUnits,
+		MaxConcurrency:  min(len(taskUnits), defaultOrchestratorMaxConcurrency),
+		ToolPolicy: OrchestratorToolPolicy{
+			Mode: "restricted",
+		},
+	})
+}
+
+func buildDelegateRequiredWorkers(tasks []BaseAgentDecomposeTask, workers []delegateWorker) []OrchestratorRequiredWorker {
+	requiredWorkers := make([]OrchestratorRequiredWorker, 0)
+	seen := map[string]int{}
+
+	appendWorker := func(hostID, agentID string) {
+		host := strings.TrimSpace(hostID)
+		agent := strings.ToLower(strings.TrimSpace(agentID))
+		if agent == "" {
+			agent = "zeroclaw"
+		}
+		if host == "" {
+			host = orchestratorLocalHostID
+		}
+		key := workerPoolKey(host, agent)
+		if idx, ok := seen[key]; ok {
+			requiredWorkers[idx].Count++
+			return
+		}
+		seen[key] = len(requiredWorkers)
+		requiredWorkers = append(requiredWorkers, OrchestratorRequiredWorker{
+			HostID:  host,
+			AgentID: agent,
+			Count:   1,
+		})
+	}
+
+	for _, worker := range workers {
+		switch strings.ToLower(strings.TrimSpace(worker.Scope)) {
+		case "remote":
+			appendWorker(worker.HostID, worker.AgentID)
+		default:
+			appendWorker(orchestratorLocalHostID, worker.AgentID)
+		}
+	}
+
+	if len(requiredWorkers) == 0 {
+		for _, task := range tasks {
+			appendWorker(orchestratorLocalHostID, task.AgentID)
+		}
+	}
+
+	return requiredWorkers
 }
 
 func startDelegateExecutionAsync(executionID string, daemon *DaemonClient) {
@@ -667,6 +775,59 @@ func isDelegateSupportedAgent(agentID string) bool {
 	}
 }
 
+func renderDelegateOrchestratorExecutionStatus(execution OrchestratorExecution) string {
+	total := len(execution.TaskUnits)
+	completed := 0
+	failed := 0
+	for _, result := range execution.Results {
+		switch result.Status {
+		case OrchestratorTaskStatusCompleted:
+			completed++
+		case OrchestratorTaskStatusFailed:
+			failed++
+		}
+	}
+
+	lines := []string{
+		fmt.Sprintf("delegate execution %s", strings.TrimSpace(execution.ID)),
+		fmt.Sprintf("status: %s", strings.TrimSpace(string(execution.Status))),
+		fmt.Sprintf("goal: %s", strings.TrimSpace(execution.Goal)),
+		fmt.Sprintf("tasks: total=%d completed=%d failed=%d", total, completed, failed),
+	}
+	if strings.TrimSpace(execution.Error) != "" {
+		lines = append(lines, "error: "+strings.TrimSpace(execution.Error))
+	}
+	if len(execution.Results) > 0 {
+		lines = append(lines, "task results:")
+		for _, result := range execution.Results {
+			target := strings.TrimSpace(result.AgentID)
+			hostID := strings.TrimSpace(result.HostID)
+			if hostID != "" && !strings.EqualFold(hostID, orchestratorLocalHostID) {
+				target = hostID + "/" + target
+			}
+			if target == "" {
+				target = "(unknown target)"
+			}
+			summary := strings.TrimSpace(result.Error)
+			if summary == "" {
+				summary = strings.TrimSpace(result.Output)
+			}
+			if summary == "" {
+				summary = "(no output)"
+			}
+			lines = append(lines, fmt.Sprintf(
+				"- %s [%s] target=%s latency=%dms %s",
+				strings.TrimSpace(result.TaskID),
+				strings.TrimSpace(string(result.Status)),
+				target,
+				result.LatencyMs,
+				truncateDelegateText(summary, 140),
+			))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func renderDelegateExecutionStatus(execution delegateExecution) string {
 	total := len(execution.TaskUnits)
 	completed := 0
@@ -746,8 +907,8 @@ func handleWebUIDelegateEvents(w http.ResponseWriter, r *http.Request, requestID
 		return
 	}
 
-	subID, ch := subscribeDelegateEvents()
-	defer unsubscribeDelegateEvents(subID)
+	subID, ch := subscribeOrchestratorExecutionEvents()
+	defer unsubscribeOrchestratorExecutionEvents(subID)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")

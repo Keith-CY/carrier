@@ -499,6 +499,79 @@ button:disabled,
   word-break: break-word;
 }
 
+.dashboard-stack {
+  margin-top: 22px;
+}
+
+.execution-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.execution-goal {
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.execution-details {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.execution-detail-block + .execution-detail-block {
+  margin-top: 12px;
+}
+
+.execution-detail-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+.execution-detail-line {
+  font-size: 0.84rem;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+
+.execution-result-item {
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.execution-result-item:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.execution-result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.execution-result-body,
+.execution-result-meta {
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.execution-result-meta {
+  margin-top: 6px;
+}
+
+.execution-result-output {
+  margin-top: 8px;
+}
+
 .agent-status {
   color: var(--text-dim);
   font-size: 0.86rem;
