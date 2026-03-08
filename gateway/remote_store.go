@@ -16,6 +16,7 @@ type remoteControlState struct {
 	Hosts         []RemoteHost                        `json:"hosts"`
 	Profiles      []ProviderProfile                   `json:"providerProfiles"`
 	Bindings      []ProviderBinding                   `json:"providerBindings"`
+	Policies      []OrchestratorPolicyRule            `json:"orchestratorPolicies,omitempty"`
 	InstanceSyncs map[string]RemoteInstanceSyncStatus `json:"instanceSyncs,omitempty"`
 	Executions    []OrchestratorExecution             `json:"orchestratorExecutions,omitempty"`
 	WorkerLeases  []OrchestratorWorkerLease           `json:"orchestratorWorkerLeases,omitempty"`
@@ -55,6 +56,7 @@ func loadRemoteControlState() (*remoteControlState, string, error) {
 				Hosts:         []RemoteHost{},
 				Profiles:      []ProviderProfile{},
 				Bindings:      []ProviderBinding{},
+				Policies:      []OrchestratorPolicyRule{},
 				InstanceSyncs: map[string]RemoteInstanceSyncStatus{},
 				Executions:    []OrchestratorExecution{},
 				WorkerLeases:  []OrchestratorWorkerLease{},
@@ -74,6 +76,9 @@ func loadRemoteControlState() (*remoteControlState, string, error) {
 	}
 	if state.Bindings == nil {
 		state.Bindings = []ProviderBinding{}
+	}
+	if state.Policies == nil {
+		state.Policies = []OrchestratorPolicyRule{}
 	}
 	if state.InstanceSyncs == nil {
 		state.InstanceSyncs = map[string]RemoteInstanceSyncStatus{}
@@ -215,6 +220,9 @@ func patchRemoteHost(hostID string, patch RemoteHost) (RemoteHost, error) {
 		}
 		if strings.TrimSpace(string(patch.RuntimeMode)) != "" {
 			merged.RuntimeMode = patch.RuntimeMode
+		}
+		if patch.Labels != nil {
+			merged.Labels = patch.Labels
 		}
 		merged = normalizeRemoteHost(merged)
 		if err := validateRemoteHost(merged); err != nil {
@@ -513,6 +521,86 @@ func deleteProviderBinding(bindingID string) (bool, error) {
 	}
 	state.Bindings = filtered
 	if len(state.Bindings) == before {
+		return false, nil
+	}
+	if err := saveRemoteControlState(path, state); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func listOrchestratorPolicies() ([]OrchestratorPolicyRule, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, _, err := loadRemoteControlState()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]OrchestratorPolicyRule, len(state.Policies))
+	copy(out, state.Policies)
+	return sortOrchestratorPolicyRules(out), nil
+}
+
+func upsertOrchestratorPolicy(rule OrchestratorPolicyRule) (OrchestratorPolicyRule, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, path, err := loadRemoteControlState()
+	if err != nil {
+		return OrchestratorPolicyRule{}, err
+	}
+	normalized := normalizeOrchestratorPolicyRule(rule)
+	if err := validateOrchestratorPolicyRule(normalized); err != nil {
+		return OrchestratorPolicyRule{}, err
+	}
+	now := nowTimestamp()
+	if normalized.ID == "" {
+		normalized.ID = uuid.NewString()
+	}
+	if normalized.CreatedAt == "" {
+		normalized.CreatedAt = now
+	}
+	normalized.UpdatedAt = now
+
+	updated := false
+	for i := range state.Policies {
+		if strings.EqualFold(strings.TrimSpace(state.Policies[i].ID), normalized.ID) {
+			normalized.CreatedAt = state.Policies[i].CreatedAt
+			state.Policies[i] = normalized
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		state.Policies = append(state.Policies, normalized)
+	}
+	state.Policies = sortOrchestratorPolicyRules(state.Policies)
+	if err := saveRemoteControlState(path, state); err != nil {
+		return OrchestratorPolicyRule{}, err
+	}
+	return normalized, nil
+}
+
+func deleteOrchestratorPolicy(policyID string) (bool, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, path, err := loadRemoteControlState()
+	if err != nil {
+		return false, err
+	}
+	id := strings.TrimSpace(policyID)
+	before := len(state.Policies)
+	filtered := state.Policies[:0]
+	for _, policy := range state.Policies {
+		if strings.EqualFold(strings.TrimSpace(policy.ID), id) {
+			continue
+		}
+		filtered = append(filtered, policy)
+	}
+	state.Policies = filtered
+	if len(state.Policies) == before {
 		return false, nil
 	}
 	if err := saveRemoteControlState(path, state); err != nil {

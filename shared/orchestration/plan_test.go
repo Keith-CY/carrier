@@ -79,6 +79,50 @@ func TestBuildPlanFallsBackToSingleZeroclawTask(t *testing.T) {
 	}
 }
 
+func TestBuildPlanTargetsHostLabelsWhenHostIDsOmitted(t *testing.T) {
+	plan, err := BuildPlan(BuildPlanInput{
+		Goal:           "triage gpu incident",
+		HostLabels:     []string{"gpu", "prod", "gpu"},
+		MaxConcurrency: 4,
+		Tasks: []DecomposeTask{
+			{ID: "task-1", Input: "collect traces", AgentID: "zeroclaw"},
+			{ID: "task-2", Input: "summarize traces", AgentID: "picoclaw"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+
+	if len(plan.HostIDs) != 0 {
+		t.Fatalf("hostIDs = %v, want empty", plan.HostIDs)
+	}
+	if len(plan.HostLabels) != 2 || plan.HostLabels[0] != "gpu" || plan.HostLabels[1] != "prod" {
+		t.Fatalf("hostLabels = %v, want [gpu prod]", plan.HostLabels)
+	}
+	if len(plan.TaskUnits) != 2 {
+		t.Fatalf("taskUnits = %d, want 2", len(plan.TaskUnits))
+	}
+	for idx, task := range plan.TaskUnits {
+		if task.HostID != "" {
+			t.Fatalf("taskUnits[%d].hostId = %q, want empty", idx, task.HostID)
+		}
+		if len(task.HostLabels) != 2 || task.HostLabels[0] != "gpu" || task.HostLabels[1] != "prod" {
+			t.Fatalf("taskUnits[%d].hostLabels = %v, want [gpu prod]", idx, task.HostLabels)
+		}
+	}
+	if len(plan.RequiredWorkers) != 2 {
+		t.Fatalf("requiredWorkers = %d, want 2", len(plan.RequiredWorkers))
+	}
+	for idx, worker := range plan.RequiredWorkers {
+		if worker.HostID != "" {
+			t.Fatalf("requiredWorkers[%d].hostId = %q, want empty", idx, worker.HostID)
+		}
+		if len(worker.HostLabels) != 2 || worker.HostLabels[0] != "gpu" || worker.HostLabels[1] != "prod" {
+			t.Fatalf("requiredWorkers[%d].hostLabels = %v, want [gpu prod]", idx, worker.HostLabels)
+		}
+	}
+}
+
 func TestBuildPlanRejectsEmptyGoal(t *testing.T) {
 	if _, err := BuildPlan(BuildPlanInput{}); err == nil {
 		t.Fatal("expected empty goal error")

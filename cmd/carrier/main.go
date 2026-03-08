@@ -209,8 +209,10 @@ type orchestrateCommandOptions struct {
 	Goal           string
 	ExecutionID    string
 	HostIDs        []string
+	HostLabels     []string
 	Provider       string
 	MaxConcurrency int
+	PolicyApprove  bool
 	IdempotencyKey string
 	Limit          int
 	Timeout        time.Duration
@@ -2238,7 +2240,7 @@ func parseRemoteStoreCommandArgs(args []string) (remoteStoreCommandOptions, erro
 
 func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, error) {
 	if len(args) == 0 {
-		return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate <goal...> [--host-id <id>]... [--provider <provider-id>] [--max-concurrency <n>] [--idempotency-key <key>] [--timeout <duration>] [--async] [--dry-run] [--json] OR carrier orchestrate <status|cancel> <execution_id> [--json]")
+		return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate <goal...> [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--idempotency-key <key>] [--timeout <duration>] [--async] [--dry-run] [--json] OR carrier orchestrate <status|cancel|authorize> <execution_id> [--policy-approve] [--json]")
 	}
 
 	opts := orchestrateCommandOptions{
@@ -2247,7 +2249,7 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 	}
 
 	firstArg := strings.ToLower(strings.TrimSpace(args[0]))
-	if firstArg == "status" || firstArg == "cancel" {
+	if firstArg == "status" || firstArg == "cancel" || firstArg == "authorize" {
 		opts.Action = firstArg
 		for i := 1; i < len(args); i++ {
 			raw := strings.TrimSpace(args[i])
@@ -2256,6 +2258,8 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 			case "":
 			case "--json":
 				opts.JSON = true
+			case "--policy-approve":
+				opts.PolicyApprove = true
 			default:
 				if strings.HasPrefix(raw, "-") {
 					return orchestrateCommandOptions{}, fmt.Errorf("unknown orchestrate %s option: %s", opts.Action, raw)
@@ -2267,7 +2271,7 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 			}
 		}
 		if strings.TrimSpace(opts.ExecutionID) == "" {
-			return orchestrateCommandOptions{}, fmt.Errorf("usage: carrier orchestrate %s <execution_id> [--json]", opts.Action)
+			return orchestrateCommandOptions{}, fmt.Errorf("usage: carrier orchestrate %s <execution_id> [--policy-approve] [--json]", opts.Action)
 		}
 		return opts, nil
 	}
@@ -2288,6 +2292,17 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 				return orchestrateCommandOptions{}, errors.New("--host-id cannot be empty")
 			}
 			opts.HostIDs = append(opts.HostIDs, hostID)
+			i = next
+		case "--host-label":
+			value, next, err := parseRequiredFlagValue(args, i, "--host-label")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			hostLabel := strings.TrimSpace(value)
+			if hostLabel == "" {
+				return orchestrateCommandOptions{}, errors.New("--host-label cannot be empty")
+			}
+			opts.HostLabels = append(opts.HostLabels, hostLabel)
 			i = next
 		case "--provider":
 			value, next, err := parseRequiredFlagValue(args, i, "--provider")
@@ -2314,6 +2329,8 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 			}
 			opts.IdempotencyKey = strings.TrimSpace(value)
 			i = next
+		case "--policy-approve":
+			opts.PolicyApprove = true
 		case "--timeout":
 			value, next, err := parseRequiredFlagValue(args, i, "--timeout")
 			if err != nil {
@@ -2342,6 +2359,7 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 	opts.Provider = strings.ToLower(strings.TrimSpace(opts.Provider))
 	opts.IdempotencyKey = strings.TrimSpace(opts.IdempotencyKey)
 	opts.HostIDs = dedupeStringSlice(opts.HostIDs)
+	opts.HostLabels = normalizeStringSelectorSlice(opts.HostLabels)
 	if opts.MaxConcurrency > 64 {
 		opts.MaxConcurrency = 64
 	}
@@ -2375,6 +2393,9 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 	case "cancel":
 		opts.Action = "cancel"
 		startIdx = 1
+	case "authorize":
+		opts.Action = "authorize"
+		startIdx = 1
 	default:
 		if strings.HasPrefix(mode, "-") {
 			opts.Action = "list"
@@ -2393,6 +2414,8 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 		case "":
 		case "--json":
 			opts.JSON = true
+		case "--policy-approve":
+			opts.PolicyApprove = true
 		case "--limit":
 			value, next, err := parseRequiredFlagValue(args, i, "--limit")
 			if err != nil {
@@ -2408,7 +2431,7 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 			if strings.HasPrefix(raw, "-") {
 				return orchestrateCommandOptions{}, fmt.Errorf("unknown executions option: %s", raw)
 			}
-			if opts.Action != "status" && opts.Action != "cancel" {
+			if opts.Action != "status" && opts.Action != "cancel" && opts.Action != "authorize" {
 				return orchestrateCommandOptions{}, fmt.Errorf("unexpected executions argument: %s", raw)
 			}
 			if opts.ExecutionID != "" {
@@ -2418,9 +2441,12 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 		}
 	}
 
-	if (opts.Action == "status" || opts.Action == "cancel") && strings.TrimSpace(opts.ExecutionID) == "" {
+	if (opts.Action == "status" || opts.Action == "cancel" || opts.Action == "authorize") && strings.TrimSpace(opts.ExecutionID) == "" {
 		if opts.Action == "cancel" {
 			return orchestrateCommandOptions{}, errors.New("usage: carrier executions cancel <execution_id> [--json]")
+		}
+		if opts.Action == "authorize" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions authorize <execution_id> [--policy-approve] [--json]")
 		}
 		return orchestrateCommandOptions{}, errors.New("usage: carrier executions show <execution_id> [--json]")
 	}
@@ -3324,16 +3350,46 @@ type orchestrateTaskResultSnapshot struct {
 	LatencyMs int64  `json:"latencyMs,omitempty"`
 }
 
+type orchestrateToolPolicySnapshot struct {
+	Mode         string   `json:"mode,omitempty"`
+	AllowedTools []string `json:"allowedTools,omitempty"`
+}
+
+type orchestrateExecutionPolicyTargetSnapshot struct {
+	HostID     string   `json:"hostId,omitempty"`
+	HostLabels []string `json:"hostLabels,omitempty"`
+	AgentID    string   `json:"agentId"`
+	Count      int      `json:"count,omitempty"`
+}
+
+type orchestrateExecutionPolicySnapshot struct {
+	Decision                       string                                     `json:"decision"`
+	Reason                         string                                     `json:"reason,omitempty"`
+	Summary                        string                                     `json:"summary,omitempty"`
+	RequiresInfrastructureApproval bool                                       `json:"requiresInfrastructureApproval"`
+	ConfiguredMaxConcurrency       int                                        `json:"configuredMaxConcurrency,omitempty"`
+	EffectiveMaxConcurrency        int                                        `json:"effectiveMaxConcurrency,omitempty"`
+	ToolPolicy                     orchestrateToolPolicySnapshot              `json:"toolPolicy,omitempty"`
+	MaxTaskTimeoutMs               int                                        `json:"maxTaskTimeoutMs,omitempty"`
+	MaxRetryBudget                 int                                        `json:"maxRetryBudget,omitempty"`
+	MatchedRuleID                  string                                     `json:"matchedRuleId,omitempty"`
+	MatchedRuleName                string                                     `json:"matchedRuleName,omitempty"`
+	ApprovedBy                     string                                     `json:"approvedBy,omitempty"`
+	ApprovedAt                     string                                     `json:"approvedAt,omitempty"`
+	Targets                        []orchestrateExecutionPolicyTargetSnapshot `json:"targets,omitempty"`
+}
+
 type orchestrateExecutionSnapshot struct {
-	ID             string                          `json:"id"`
-	Goal           string                          `json:"goal"`
-	Status         string                          `json:"status"`
-	Error          string                          `json:"error,omitempty"`
-	MaxConcurrency int                             `json:"maxConcurrency,omitempty"`
-	CreatedAt      string                          `json:"createdAt,omitempty"`
-	UpdatedAt      string                          `json:"updatedAt,omitempty"`
-	TaskUnits      []orchestrateTaskUnit           `json:"taskUnits,omitempty"`
-	Results        []orchestrateTaskResultSnapshot `json:"results,omitempty"`
+	ID             string                             `json:"id"`
+	Goal           string                             `json:"goal"`
+	Status         string                             `json:"status"`
+	Error          string                             `json:"error,omitempty"`
+	MaxConcurrency int                                `json:"maxConcurrency,omitempty"`
+	Policy         orchestrateExecutionPolicySnapshot `json:"policy,omitempty"`
+	CreatedAt      string                             `json:"createdAt,omitempty"`
+	UpdatedAt      string                             `json:"updatedAt,omitempty"`
+	TaskUnits      []orchestrateTaskUnit              `json:"taskUnits,omitempty"`
+	Results        []orchestrateTaskResultSnapshot    `json:"results,omitempty"`
 }
 
 type orchestrateWorkerLeaseSnapshot struct {
@@ -3382,6 +3438,11 @@ func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error 
 			return err
 		}
 		return runOrchestrateCancel(out, opts.ExecutionID, opts.JSON)
+	case "authorize":
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+		return runOrchestrateAuthorize(out, opts.ExecutionID, opts.PolicyApprove, opts.JSON)
 	case "run":
 		if _, err := ensureDaemonRunning(out); err != nil {
 			return err
@@ -3454,6 +3515,34 @@ func runOrchestrateCancel(out io.Writer, executionID string, outputJSON bool) er
 	return nil
 }
 
+func runOrchestrateAuthorize(out io.Writer, executionID string, policyApprove bool, outputJSON bool) error {
+	trimmedID := strings.TrimSpace(executionID)
+	if trimmedID == "" {
+		return errors.New("execution id is required")
+	}
+	path := "/api/v1/orchestrator/executions/" + neturl.PathEscape(trimmedID) + "/authorize"
+	body := map[string]interface{}{
+		"approved": true,
+		"actor":    "carrier-cli",
+	}
+	if policyApprove {
+		body["policyApproved"] = true
+	}
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, path, body, 45*time.Second)
+	if err != nil {
+		return err
+	}
+	resp, decodeErr := decodeOrchestrateExecutionResponse(raw)
+	if decodeErr != nil {
+		return decodeErr
+	}
+	if outputJSON {
+		return writePrettyJSON(out, raw)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestrateExecution(resp))
+	return nil
+}
+
 func runOrchestrateStart(out io.Writer, opts orchestrateCommandOptions) error {
 	plan, err := buildOrchestratePlan(opts)
 	if err != nil {
@@ -3489,6 +3578,9 @@ func runOrchestrateStart(out io.Writer, opts orchestrateCommandOptions) error {
 	}
 	if opts.MaxConcurrency > 0 {
 		authorizeBody["maxConcurrency"] = opts.MaxConcurrency
+	}
+	if opts.PolicyApprove {
+		authorizeBody["policyApproved"] = true
 	}
 	authorizePath := "/api/v1/orchestrator/executions/" + neturl.PathEscape(executionID) + "/authorize"
 	authorizeRaw, _, err := gatewayRequestWithTimeout(http.MethodPost, authorizePath, authorizeBody, 90*time.Second)
@@ -3530,6 +3622,7 @@ func buildOrchestratePlan(opts orchestrateCommandOptions) (orchestratePlanSnapsh
 		Goal:           strings.TrimSpace(opts.Goal),
 		Provider:       strings.TrimSpace(opts.Provider),
 		HostIDs:        opts.HostIDs,
+		HostLabels:     opts.HostLabels,
 		MaxConcurrency: opts.MaxConcurrency,
 		Tasks:          tasks,
 	})
@@ -3684,6 +3777,52 @@ func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
 	if errText := strings.TrimSpace(execution.Error); errText != "" {
 		lines = append(lines, "error: "+errText)
 	}
+	if policyDecision := strings.TrimSpace(execution.Policy.Decision); policyDecision != "" {
+		policyParts := []string{"policy: " + policyDecision}
+		if toolMode := strings.TrimSpace(execution.Policy.ToolPolicy.Mode); toolMode != "" {
+			policyParts = append(policyParts, "tool mode="+toolMode)
+		}
+		if execution.Policy.EffectiveMaxConcurrency > 0 {
+			policyParts = append(policyParts, fmt.Sprintf("effective concurrency=%d", execution.Policy.EffectiveMaxConcurrency))
+		}
+		if execution.Policy.MaxTaskTimeoutMs > 0 {
+			policyParts = append(policyParts, fmt.Sprintf("max timeout=%dms", execution.Policy.MaxTaskTimeoutMs))
+		}
+		if execution.Policy.MaxRetryBudget > 0 || len(execution.TaskUnits) > 0 {
+			policyParts = append(policyParts, fmt.Sprintf("max retry=%d", execution.Policy.MaxRetryBudget))
+		}
+		lines = append(lines, strings.Join(policyParts, " · "))
+		if ruleName := strings.TrimSpace(execution.Policy.MatchedRuleName); ruleName != "" {
+			lines = append(lines, "policy rule: "+ruleName)
+		}
+		if reason := strings.TrimSpace(execution.Policy.Reason); reason != "" {
+			lines = append(lines, "policy reason: "+reason)
+		}
+		if summary := strings.TrimSpace(execution.Policy.Summary); summary != "" {
+			lines = append(lines, "policy summary: "+summary)
+		}
+		if approvedBy := strings.TrimSpace(execution.Policy.ApprovedBy); approvedBy != "" {
+			lines = append(lines, "policy approved by: "+approvedBy)
+		}
+		if len(execution.Policy.Targets) > 0 {
+			lines = append(lines, "policy targets:")
+			for _, target := range execution.Policy.Targets {
+				hostTarget := firstNonEmpty(strings.TrimSpace(target.HostID), "unknown")
+				if hostTarget == "unknown" && len(target.HostLabels) > 0 {
+					hostTarget = "labels[" + strings.Join(target.HostLabels, ",") + "]"
+				}
+				lines = append(lines, fmt.Sprintf(
+					"- %s/%s x%d",
+					hostTarget,
+					firstNonEmpty(strings.TrimSpace(target.AgentID), "unknown"),
+					maxInt(target.Count, 1),
+				))
+			}
+		}
+		if len(execution.Policy.ToolPolicy.AllowedTools) > 0 {
+			lines = append(lines, "allowed tools: "+strings.Join(execution.Policy.ToolPolicy.AllowedTools, ", "))
+		}
+	}
 	if len(execution.Results) > 0 {
 		lines = append(lines, "task results:")
 		for _, result := range execution.Results {
@@ -3768,6 +3907,8 @@ func renderOrchestratePlan(plan orchestratePlanSnapshot) string {
 			target := strings.TrimSpace(task.AgentID)
 			if host := strings.TrimSpace(task.HostID); host != "" {
 				target = host + "/" + target
+			} else if len(task.HostLabels) > 0 {
+				target = "labels[" + strings.Join(task.HostLabels, ",") + "]/" + target
 			}
 			if target == "" {
 				target = "(unassigned)"
@@ -3783,15 +3924,40 @@ func renderOrchestratePlan(plan orchestratePlanSnapshot) string {
 	if len(plan.RequiredWorkers) > 0 {
 		lines = append(lines, "required workers:")
 		for _, worker := range plan.RequiredWorkers {
+			hostTarget := firstNonEmpty(strings.TrimSpace(worker.HostID), orchestratorLocalHostID)
+			if strings.TrimSpace(worker.HostID) == "" && len(worker.HostLabels) > 0 {
+				hostTarget = "labels[" + strings.Join(worker.HostLabels, ",") + "]"
+			}
 			lines = append(lines, fmt.Sprintf(
 				"- %s/%s x%d",
-				firstNonEmpty(strings.TrimSpace(worker.HostID), orchestratorLocalHostID),
+				hostTarget,
 				firstNonEmpty(strings.TrimSpace(worker.AgentID), "zeroclaw"),
 				maxInt(worker.Count, 1),
 			))
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func normalizeStringSelectorSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		trimmed := strings.ToLower(strings.TrimSpace(value))
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func summarizeOrchestrateExecution(execution orchestrateExecutionSnapshot) (total, completed, failed int) {

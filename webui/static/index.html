@@ -228,6 +228,11 @@
             </div>
           </div>
           <div>
+            <label for="quick-launch-host-labels">Host Labels</label>
+            <input id="quick-launch-host-labels" type="text" placeholder="gpu, prod">
+            <p class="text-dim">Optional selector. When set, the preview targets matching labeled hosts instead of explicit host checkboxes.</p>
+          </div>
+          <div>
             <label>Hosts</label>
             <div id="quick-launch-hosts" class="quick-launch-hosts"></div>
           </div>
@@ -310,7 +315,8 @@
         <div class="card">
           <div class="section-head">
             <h3>Execution Detail</h3>
-            <div class="section-actions">
+          <div class="section-actions">
+              <button id="executions-policy-approve" class="btn-sm hidden" type="button">Approve Policy &amp; Run</button>
               <button id="executions-cancel" class="btn-sm btn-danger hidden" type="button">Cancel</button>
             </div>
           </div>
@@ -448,6 +454,10 @@
               <option value="on_demand">on_demand</option>
               <option value="managed_gateway">managed_gateway</option>
             </select>
+          </div>
+          <div>
+            <label for="server-labels">Labels</label>
+            <input id="server-labels" type="text" placeholder="prod, gpu">
           </div>
           <div>
             <label for="server-key-path">Key Path</label>
@@ -691,8 +701,73 @@
         <div id="governance-preview-out" class="instance-meta" style="white-space:pre-line; margin-top:12px"></div>
       </div>
 
+      <div class="card" style="margin-top:12px">
+        <h3>Execution Policies</h3>
+        <div class="form-grid">
+          <div>
+            <label for="execution-policy-name">Name</label>
+            <input id="execution-policy-name" type="text" placeholder="review prod picoclaw runs">
+          </div>
+          <div>
+            <label for="execution-policy-action">Action</label>
+            <select id="execution-policy-action">
+              <option value="ask">ask</option>
+              <option value="deny">deny</option>
+              <option value="allow">allow</option>
+            </select>
+          </div>
+          <div>
+            <label for="execution-policy-priority">Priority</label>
+            <input id="execution-policy-priority" type="number" min="0" max="1000" value="0">
+          </div>
+          <div>
+            <label for="execution-policy-reason">Reason</label>
+            <input id="execution-policy-reason" type="text" placeholder="operator review required">
+          </div>
+          <div>
+            <label for="execution-policy-providers">Requested Providers</label>
+            <input id="execution-policy-providers" type="text" placeholder="anthropic, openrouter">
+          </div>
+          <div>
+            <label for="execution-policy-host-ids">Host IDs</label>
+            <input id="execution-policy-host-ids" type="text" placeholder="host-1, host-2">
+          </div>
+          <div>
+            <label for="execution-policy-host-labels">Host Labels</label>
+            <input id="execution-policy-host-labels" type="text" placeholder="prod, gpu">
+          </div>
+          <div>
+            <label for="execution-policy-agent-ids">Agent IDs</label>
+            <input id="execution-policy-agent-ids" type="text" placeholder="picoclaw, zeroclaw">
+          </div>
+          <div>
+            <label for="execution-policy-allowed-tools">Allowed Tools</label>
+            <input id="execution-policy-allowed-tools" type="text" placeholder="grep, shell">
+          </div>
+          <div>
+            <label for="execution-policy-max-timeout-ms">Max Task Timeout (ms)</label>
+            <input id="execution-policy-max-timeout-ms" type="number" min="1" max="300000" placeholder="45000">
+          </div>
+          <div>
+            <label for="execution-policy-max-retry-budget">Max Retry Budget</label>
+            <input id="execution-policy-max-retry-budget" type="number" min="0" max="5" placeholder="1">
+          </div>
+          <div>
+            <label for="execution-policy-enabled">Enabled</label>
+            <select id="execution-policy-enabled">
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button id="execution-policy-save">Save Policy</button>
+        </div>
+      </div>
+
       <div id="profiles-list" class="agent-grid" style="margin-top:12px"></div>
       <div id="bindings-list" class="agent-grid" style="margin-top:12px"></div>
+      <div id="execution-policies-list" class="agent-grid" style="margin-top:12px"></div>
     </section>
 
     <section id="view-remote-chat" class="view hidden view-remote-chat-surface">

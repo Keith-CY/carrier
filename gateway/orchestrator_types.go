@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -47,9 +48,10 @@ type OrchestratorToolPolicy struct {
 }
 
 type OrchestratorRequiredWorker struct {
-	HostID  string `json:"hostId"`
-	AgentID string `json:"agentId"`
-	Count   int    `json:"count"`
+	HostID     string   `json:"hostId,omitempty"`
+	HostLabels []string `json:"hostLabels,omitempty"`
+	AgentID    string   `json:"agentId"`
+	Count      int      `json:"count"`
 }
 
 type OrchestratorTaskUnit struct {
@@ -60,6 +62,7 @@ type OrchestratorTaskUnit struct {
 	RetryBudget    int                    `json:"retryBudget,omitempty"`
 	ToolPolicy     string                 `json:"toolPolicy,omitempty"`
 	HostID         string                 `json:"hostId,omitempty"`
+	HostLabels     []string               `json:"hostLabels,omitempty"`
 	AgentID        string                 `json:"agentId,omitempty"`
 	SessionID      string                 `json:"sessionId,omitempty"`
 }
@@ -68,6 +71,30 @@ type OrchestratorAuthorization struct {
 	InfrastructureApproved bool   `json:"infrastructureApproved"`
 	ApprovedBy             string `json:"approvedBy,omitempty"`
 	ApprovedAt             string `json:"approvedAt,omitempty"`
+}
+
+type OrchestratorExecutionPolicyTarget struct {
+	HostID     string   `json:"hostId,omitempty"`
+	HostLabels []string `json:"hostLabels,omitempty"`
+	AgentID    string   `json:"agentId"`
+	Count      int      `json:"count"`
+}
+
+type OrchestratorExecutionPolicySnapshot struct {
+	Decision                       string                              `json:"decision"`
+	Reason                         string                              `json:"reason,omitempty"`
+	Summary                        string                              `json:"summary,omitempty"`
+	RequiresInfrastructureApproval bool                                `json:"requiresInfrastructureApproval"`
+	ConfiguredMaxConcurrency       int                                 `json:"configuredMaxConcurrency,omitempty"`
+	EffectiveMaxConcurrency        int                                 `json:"effectiveMaxConcurrency,omitempty"`
+	ToolPolicy                     OrchestratorToolPolicy              `json:"toolPolicy,omitempty"`
+	MaxTaskTimeoutMs               int                                 `json:"maxTaskTimeoutMs,omitempty"`
+	MaxRetryBudget                 int                                 `json:"maxRetryBudget,omitempty"`
+	MatchedRuleID                  string                              `json:"matchedRuleId,omitempty"`
+	MatchedRuleName                string                              `json:"matchedRuleName,omitempty"`
+	ApprovedBy                     string                              `json:"approvedBy,omitempty"`
+	ApprovedAt                     string                              `json:"approvedAt,omitempty"`
+	Targets                        []OrchestratorExecutionPolicyTarget `json:"targets,omitempty"`
 }
 
 type OrchestratorTaskResult struct {
@@ -85,24 +112,25 @@ type OrchestratorTaskResult struct {
 }
 
 type OrchestratorExecution struct {
-	ID                string                          `json:"id"`
-	Goal              string                          `json:"goal"`
-	RequestedProvider string                          `json:"requestedProvider,omitempty"`
-	IdempotencyKey    string                          `json:"idempotencyKey,omitempty"`
-	ApprovalScope     string                          `json:"approvalScope"`
-	ToolPolicy        OrchestratorToolPolicy          `json:"toolPolicy,omitempty"`
-	RequiredWorkers   []OrchestratorRequiredWorker    `json:"requiredWorkers"`
-	TaskUnits         []OrchestratorTaskUnit          `json:"taskUnits"`
-	Status            OrchestratorExecutionStatus     `json:"status"`
-	MaxConcurrency    int                             `json:"maxConcurrency,omitempty"`
-	Authorization     OrchestratorAuthorization       `json:"authorization"`
-	Governance        OrchestratorExecutionGovernance `json:"governance,omitempty"`
-	Results           []OrchestratorTaskResult        `json:"results,omitempty"`
-	Error             string                          `json:"error,omitempty"`
-	CreatedAt         string                          `json:"createdAt"`
-	StartedAt         string                          `json:"startedAt,omitempty"`
-	CompletedAt       string                          `json:"completedAt,omitempty"`
-	UpdatedAt         string                          `json:"updatedAt"`
+	ID                string                              `json:"id"`
+	Goal              string                              `json:"goal"`
+	RequestedProvider string                              `json:"requestedProvider,omitempty"`
+	IdempotencyKey    string                              `json:"idempotencyKey,omitempty"`
+	ApprovalScope     string                              `json:"approvalScope"`
+	ToolPolicy        OrchestratorToolPolicy              `json:"toolPolicy,omitempty"`
+	RequiredWorkers   []OrchestratorRequiredWorker        `json:"requiredWorkers"`
+	TaskUnits         []OrchestratorTaskUnit              `json:"taskUnits"`
+	Status            OrchestratorExecutionStatus         `json:"status"`
+	MaxConcurrency    int                                 `json:"maxConcurrency,omitempty"`
+	Authorization     OrchestratorAuthorization           `json:"authorization"`
+	Policy            OrchestratorExecutionPolicySnapshot `json:"policy,omitempty"`
+	Governance        OrchestratorExecutionGovernance     `json:"governance,omitempty"`
+	Results           []OrchestratorTaskResult            `json:"results,omitempty"`
+	Error             string                              `json:"error,omitempty"`
+	CreatedAt         string                              `json:"createdAt"`
+	StartedAt         string                              `json:"startedAt,omitempty"`
+	CompletedAt       string                              `json:"completedAt,omitempty"`
+	UpdatedAt         string                              `json:"updatedAt"`
 }
 
 type OrchestratorExecutionGovernance struct {
@@ -172,10 +200,12 @@ func normalizeOrchestratorExecutionForStore(in OrchestratorExecution) Orchestrat
 	if out.MaxConcurrency > 64 {
 		out.MaxConcurrency = 64
 	}
+	out.ToolPolicy = normalizeOrchestratorToolPolicy(out.ToolPolicy)
 	if out.Results == nil {
 		out.Results = []OrchestratorTaskResult{}
 	}
 	out.Error = strings.TrimSpace(out.Error)
+	out.Policy = buildOrchestratorExecutionPolicySnapshot(out)
 	return out
 }
 
@@ -195,6 +225,7 @@ func normalizeOrchestratorWorkerLeaseForStore(in OrchestratorWorkerLease) Orches
 func normalizeOrchestratorRequiredWorker(in OrchestratorRequiredWorker) (OrchestratorRequiredWorker, error) {
 	out := in
 	out.HostID = strings.TrimSpace(out.HostID)
+	out.HostLabels = normalizeStringSelectorList(out.HostLabels, true)
 	out.AgentID = strings.ToLower(strings.TrimSpace(out.AgentID))
 	if out.AgentID == "" {
 		out.AgentID = "zeroclaw"
@@ -222,6 +253,7 @@ func normalizeOrchestratorTask(in OrchestratorTaskUnit, idx int) (OrchestratorTa
 		return OrchestratorTaskUnit{}, errOrchestratorValidation("task input is required", idx)
 	}
 	out.HostID = strings.TrimSpace(out.HostID)
+	out.HostLabels = normalizeStringSelectorList(out.HostLabels, true)
 	out.AgentID = strings.ToLower(strings.TrimSpace(out.AgentID))
 	if out.AgentID != "" {
 		if err := validateAgentIdentifier(out.AgentID); err != nil {
@@ -268,8 +300,8 @@ func normalizeOrchestratorExecution(in OrchestratorExecution) (OrchestratorExecu
 		if err != nil {
 			return OrchestratorExecution{}, errOrchestratorValidation("invalid requiredWorkers entry: "+err.Error(), i)
 		}
-		if worker.HostID == "" {
-			return OrchestratorExecution{}, errOrchestratorValidation("requiredWorkers.hostId is required", i)
+		if worker.HostID == "" && len(worker.HostLabels) == 0 {
+			return OrchestratorExecution{}, errOrchestratorValidation("requiredWorkers.hostId or requiredWorkers.hostLabels is required", i)
 		}
 		out.RequiredWorkers[i] = worker
 	}
@@ -289,11 +321,128 @@ func normalizeOrchestratorExecution(in OrchestratorExecution) (OrchestratorExecu
 	if out.MaxConcurrency > 64 {
 		out.MaxConcurrency = 64
 	}
-	out.ToolPolicy.Mode = strings.TrimSpace(out.ToolPolicy.Mode)
-	if out.ToolPolicy.Mode == "" {
-		out.ToolPolicy.Mode = "restricted"
-	}
+	out.ToolPolicy = normalizeOrchestratorToolPolicy(out.ToolPolicy)
 	return out, nil
+}
+
+func normalizeOrchestratorToolPolicy(in OrchestratorToolPolicy) OrchestratorToolPolicy {
+	out := in
+	out.Mode = strings.TrimSpace(out.Mode)
+	if out.Mode == "" {
+		out.Mode = "restricted"
+	}
+	seen := map[string]struct{}{}
+	allowed := make([]string, 0, len(out.AllowedTools))
+	for _, tool := range out.AllowedTools {
+		trimmed := strings.TrimSpace(tool)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		allowed = append(allowed, trimmed)
+	}
+	sort.Strings(allowed)
+	out.AllowedTools = allowed
+	return out
+}
+
+func buildOrchestratorExecutionPolicySnapshot(in OrchestratorExecution) OrchestratorExecutionPolicySnapshot {
+	configuredMaxConcurrency := in.MaxConcurrency
+	if configuredMaxConcurrency <= 0 {
+		configuredMaxConcurrency = defaultOrchestratorMaxConcurrency
+	}
+	if configuredMaxConcurrency > 64 {
+		configuredMaxConcurrency = 64
+	}
+	effectiveMaxConcurrency := configuredMaxConcurrency
+	if taskCount := len(in.TaskUnits); taskCount > 0 && effectiveMaxConcurrency > taskCount {
+		effectiveMaxConcurrency = taskCount
+	}
+
+	maxTaskTimeoutMs := 0
+	maxRetryBudget := 0
+	for _, task := range in.TaskUnits {
+		if task.TimeoutMs > maxTaskTimeoutMs {
+			maxTaskTimeoutMs = task.TimeoutMs
+		}
+		if task.RetryBudget > maxRetryBudget {
+			maxRetryBudget = task.RetryBudget
+		}
+	}
+
+	targets := make([]OrchestratorExecutionPolicyTarget, 0, len(in.RequiredWorkers))
+	for _, worker := range in.RequiredWorkers {
+		hostID := strings.TrimSpace(worker.HostID)
+		agentID := strings.ToLower(strings.TrimSpace(worker.AgentID))
+		if agentID == "" {
+			agentID = "zeroclaw"
+		}
+		count := worker.Count
+		if count <= 0 {
+			count = 1
+		}
+		targets = append(targets, OrchestratorExecutionPolicyTarget{
+			HostID:     hostID,
+			HostLabels: normalizeStringSelectorList(worker.HostLabels, true),
+			AgentID:    agentID,
+			Count:      count,
+		})
+	}
+	sort.SliceStable(targets, func(i, j int) bool {
+		left := strings.ToLower(targets[i].HostID + ":" + strings.Join(targets[i].HostLabels, ",") + ":" + targets[i].AgentID)
+		right := strings.ToLower(targets[j].HostID + ":" + strings.Join(targets[j].HostLabels, ",") + ":" + targets[j].AgentID)
+		if left != right {
+			return left < right
+		}
+		return targets[i].Count < targets[j].Count
+	})
+
+	toolPolicy := normalizeOrchestratorToolPolicy(in.ToolPolicy)
+	policy := OrchestratorExecutionPolicySnapshot{
+		Decision:                       firstNonEmptyPolicyValue(strings.TrimSpace(in.Policy.Decision), orchestratorPolicyDecisionAllow),
+		Reason:                         strings.TrimSpace(in.Policy.Reason),
+		RequiresInfrastructureApproval: strings.EqualFold(strings.TrimSpace(in.ApprovalScope), "infrastructure_only"),
+		ConfiguredMaxConcurrency:       configuredMaxConcurrency,
+		EffectiveMaxConcurrency:        effectiveMaxConcurrency,
+		ToolPolicy:                     toolPolicy,
+		MaxTaskTimeoutMs:               maxTaskTimeoutMs,
+		MaxRetryBudget:                 maxRetryBudget,
+		MatchedRuleID:                  strings.TrimSpace(in.Policy.MatchedRuleID),
+		MatchedRuleName:                strings.TrimSpace(in.Policy.MatchedRuleName),
+		ApprovedBy:                     strings.TrimSpace(in.Policy.ApprovedBy),
+		ApprovedAt:                     strings.TrimSpace(in.Policy.ApprovedAt),
+		Targets:                        targets,
+	}
+
+	summaryParts := make([]string, 0, 5)
+	if policy.RequiresInfrastructureApproval {
+		summaryParts = append(summaryParts, "infrastructure approval required")
+	}
+	if toolPolicy.Mode != "" {
+		summaryParts = append(summaryParts, "tool mode "+toolPolicy.Mode)
+	}
+	if policy.EffectiveMaxConcurrency > 0 {
+		summaryParts = append(summaryParts, fmt.Sprintf("effective concurrency %d", policy.EffectiveMaxConcurrency))
+	}
+	if policy.MaxTaskTimeoutMs > 0 {
+		summaryParts = append(summaryParts, fmt.Sprintf("max timeout %dms", policy.MaxTaskTimeoutMs))
+	}
+	summaryParts = append(summaryParts, fmt.Sprintf("max retry %d", policy.MaxRetryBudget))
+	policy.Summary = strings.Join(summaryParts, "; ")
+	return policy
+}
+
+func firstNonEmptyPolicyValue(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func errOrchestratorValidation(message string, index int) error {

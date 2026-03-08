@@ -28,12 +28,14 @@
   function hostMetaText(host, hostOperation) {
     const keyRef = host && host.keyRef ? String(host.keyRef) : "";
     const keyPath = host && host.keyPath ? String(host.keyPath) : "";
+    const labels = host && Array.isArray(host.labels) ? host.labels.map((item) => String(item || "").trim()).filter(Boolean) : [];
     const lines = [
       "id: " + String(host && host.id ? host.id : "-"),
       "endpoint: " + hostEndpoint(host),
       "auth: " + String(host && host.authMode ? host.authMode : "-"),
       "key: " + (keyRef ? "uploaded:" + keyRef : keyPath || "-"),
       "runtime: " + String(host && host.runtimeMode ? host.runtimeMode : "-"),
+      "labels: " + (labels.length ? labels.join(", ") : "-"),
       "health: " + String(host && host.lastHealth ? host.lastHealth : "unknown")
     ];
     if (hostOperation && typeof hostOperation === "object") {

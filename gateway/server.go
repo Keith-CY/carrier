@@ -267,6 +267,22 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		}
 		handleOrchestratorPlans(w, r, requestID, cfg, daemon)
 	})
+	mux.HandleFunc("/api/v1/orchestrator/policies", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleOrchestratorPolicies(w, r, requestID, cfg)
+	})
+	mux.HandleFunc("/api/v1/orchestrator/policies/", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleOrchestratorPolicies(w, r, requestID, cfg)
+	})
 	mux.HandleFunc("/api/v1/orchestrator/executions/", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
 		if err := checkGatewayToken(r, cfg.APIToken); err != nil {

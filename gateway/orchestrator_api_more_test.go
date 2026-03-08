@@ -86,6 +86,48 @@ func TestHandleOrchestratorPlansNegativeCases(t *testing.T) {
 	}
 }
 
+func TestHandleOrchestratorPlansAcceptsHostLabels(t *testing.T) {
+	mux := buildRemoteFeatureMuxWithDaemonHandlers(t, map[string]http.HandlerFunc{
+		"POST /api/v1/base-agent/decompose": func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"tasks":[{"id":"task-1","input":"collect gpu diagnostics","agentId":"zeroclaw"},{"id":"task-2","input":"summarize gpu diagnostics","agentId":"picoclaw"}]}`))
+		},
+	})
+
+	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/plans", `{
+		"goal":"triage gpu incident",
+		"hostLabels":["gpu","prod","gpu"],
+		"maxConcurrency":9
+	}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected planning status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	plan, _ := payload["plan"].(map[string]interface{})
+	hostLabels, _ := plan["hostLabels"].([]interface{})
+	if len(hostLabels) != 2 || anyToString(hostLabels[0]) != "gpu" || anyToString(hostLabels[1]) != "prod" {
+		t.Fatalf("hostLabels = %+v, want [gpu prod]", hostLabels)
+	}
+	requiredWorkers, _ := plan["requiredWorkers"].([]interface{})
+	if len(requiredWorkers) != 2 {
+		t.Fatalf("requiredWorkers = %d, want 2", len(requiredWorkers))
+	}
+	firstWorker, _ := requiredWorkers[0].(map[string]interface{})
+	workerLabels, _ := firstWorker["hostLabels"].([]interface{})
+	if len(workerLabels) != 2 || anyToString(workerLabels[0]) != "gpu" || anyToString(workerLabels[1]) != "prod" {
+		t.Fatalf("requiredWorkers[0].hostLabels = %+v, want [gpu prod]", workerLabels)
+	}
+	taskUnits, _ := plan["taskUnits"].([]interface{})
+	if len(taskUnits) != 2 {
+		t.Fatalf("taskUnits = %d, want 2", len(taskUnits))
+	}
+	firstTask, _ := taskUnits[0].(map[string]interface{})
+	taskLabels, _ := firstTask["hostLabels"].([]interface{})
+	if len(taskLabels) != 2 || anyToString(taskLabels[0]) != "gpu" || anyToString(taskLabels[1]) != "prod" {
+		t.Fatalf("taskUnits[0].hostLabels = %+v, want [gpu prod]", taskLabels)
+	}
+}
+
 func TestOrchestratorExecutionEndpointNegativeCases(t *testing.T) {
 	mux := buildRemoteFeatureMux(t)
 	hostID := createRemoteHostForTests(t, mux)
@@ -225,6 +267,294 @@ func TestHandleOrchestratorExecutionsCancel(t *testing.T) {
 	}
 	if !strings.Contains(updated.Error, "operator-ui") {
 		t.Fatalf("expected cancellation reason to include actor, got %+v", updated)
+	}
+}
+
+func TestHandleOrchestratorExecutionsCreatePersistsPolicySnapshot(t *testing.T) {
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+
+	mux := buildRemoteFeatureMux(t)
+	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions", `{
+		"goal":"triage production incident",
+		"approvalScope":"infrastructure_only",
+		"toolPolicy":{"mode":"restricted","allowedTools":["shell","grep","shell"]},
+		"maxConcurrency":9,
+		"requiredWorkers":[
+			{"hostId":"local","agentId":"zeroclaw","count":1},
+			{"hostId":"host-b","agentId":"picoclaw","count":2}
+		],
+		"taskUnits":[
+			{"id":"t1","input":"collect traces","hostId":"local","agentId":"zeroclaw","timeoutMs":45000,"retryBudget":1},
+			{"id":"t2","input":"summarize traces","hostId":"host-b","agentId":"picoclaw","timeoutMs":120000,"retryBudget":3}
+		]
+	}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create execution status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	execMap, _ := payload["execution"].(map[string]interface{})
+	policy, _ := execMap["policy"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(policy["decision"])); got != "allow" {
+		t.Fatalf("policy.decision = %q, want allow payload=%+v", got, payload)
+	}
+	if got := int(anyToFloat(policy["configuredMaxConcurrency"])); got != 9 {
+		t.Fatalf("policy.configuredMaxConcurrency = %d, want 9", got)
+	}
+	if got := int(anyToFloat(policy["effectiveMaxConcurrency"])); got != 2 {
+		t.Fatalf("policy.effectiveMaxConcurrency = %d, want 2", got)
+	}
+	if got := int(anyToFloat(policy["maxTaskTimeoutMs"])); got != 120000 {
+		t.Fatalf("policy.maxTaskTimeoutMs = %d, want 120000", got)
+	}
+	if got := int(anyToFloat(policy["maxRetryBudget"])); got != 3 {
+		t.Fatalf("policy.maxRetryBudget = %d, want 3", got)
+	}
+	if got := strings.TrimSpace(anyToString(policy["summary"])); got == "" {
+		t.Fatalf("expected non-empty policy summary payload=%+v", payload)
+	}
+
+	toolPolicy, _ := policy["toolPolicy"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(toolPolicy["mode"])); got != "restricted" {
+		t.Fatalf("tool policy mode = %q, want restricted", got)
+	}
+	allowedTools, _ := toolPolicy["allowedTools"].([]interface{})
+	if len(allowedTools) != 2 {
+		t.Fatalf("allowedTools len = %d, want 2 payload=%+v", len(allowedTools), policy)
+	}
+
+	targets, _ := policy["targets"].([]interface{})
+	if len(targets) != 2 {
+		t.Fatalf("policy targets len = %d, want 2 payload=%+v", len(targets), policy)
+	}
+}
+
+func TestHandleOrchestratorPoliciesCRUDAndExecutionEnforcement(t *testing.T) {
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+
+	mux := buildRemoteFeatureMux(t)
+
+	denyRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/policies", `{
+		"name":"deny anthropic on picoclaw",
+		"action":"deny",
+		"reason":"anthropic is not approved for picoclaw workloads",
+		"requestedProviders":["anthropic"],
+		"agentIds":["picoclaw"]
+	}`)
+	if denyRec.Code != http.StatusOK {
+		t.Fatalf("create deny policy status=%d body=%s", denyRec.Code, denyRec.Body.String())
+	}
+	denyPayload := decodeJSONMap(t, denyRec)
+	denyRule, _ := denyPayload["policy"].(map[string]interface{})
+	denyRuleID := strings.TrimSpace(anyToString(denyRule["id"]))
+	if denyRuleID == "" {
+		t.Fatalf("missing deny rule id payload=%+v", denyPayload)
+	}
+
+	askRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/policies", `{
+		"name":"review picoclaw production runs",
+		"action":"ask",
+		"reason":"picoclaw on host-b needs explicit operator acknowledgement",
+		"hostIds":["host-b"],
+		"agentIds":["picoclaw"],
+		"priority":50
+	}`)
+	if askRec.Code != http.StatusOK {
+		t.Fatalf("create ask policy status=%d body=%s", askRec.Code, askRec.Body.String())
+	}
+
+	listRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/orchestrator/policies", "")
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list policies status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	listPayload := decodeJSONMap(t, listRec)
+	policies, _ := listPayload["policies"].([]interface{})
+	if len(policies) != 2 {
+		t.Fatalf("policies len=%d want 2 payload=%+v", len(policies), listPayload)
+	}
+
+	deniedCreate := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions", `{
+		"goal":"triage anthropic failure",
+		"requestedProvider":"anthropic",
+		"approvalScope":"infrastructure_only",
+		"requiredWorkers":[{"hostId":"host-b","agentId":"picoclaw","count":1}],
+		"taskUnits":[{"id":"t1","input":"triage failure","hostId":"host-b","agentId":"picoclaw"}]
+	}`)
+	if deniedCreate.Code != http.StatusForbidden {
+		t.Fatalf("expected deny create status 403, got %d body=%s", deniedCreate.Code, deniedCreate.Body.String())
+	}
+	deniedPayload := decodeJSONMap(t, deniedCreate)
+	policyMap, _ := deniedPayload["policy"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(policyMap["decision"])); got != "deny" {
+		t.Fatalf("policy decision=%q want deny payload=%+v", got, deniedPayload)
+	}
+
+	askedCreate := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions", `{
+		"goal":"summarize traces",
+		"approvalScope":"infrastructure_only",
+		"requiredWorkers":[{"hostId":"host-b","agentId":"picoclaw","count":1}],
+		"taskUnits":[{"id":"t1","input":"summarize traces","hostId":"host-b","agentId":"picoclaw"}]
+	}`)
+	if askedCreate.Code != http.StatusCreated {
+		t.Fatalf("expected ask create status 201, got %d body=%s", askedCreate.Code, askedCreate.Body.String())
+	}
+	askedPayload := decodeJSONMap(t, askedCreate)
+	execMap, _ := askedPayload["execution"].(map[string]interface{})
+	execID := strings.TrimSpace(anyToString(execMap["id"]))
+	if execID == "" {
+		t.Fatalf("expected execution id payload=%+v", askedPayload)
+	}
+	execPolicy, _ := execMap["policy"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(execPolicy["decision"])); got != "ask" {
+		t.Fatalf("policy decision=%q want ask payload=%+v", got, askedPayload)
+	}
+
+	blockedAuthorize := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions/"+execID+"/authorize", `{
+		"approved":true,
+		"actor":"carrier-cli"
+	}`)
+	if blockedAuthorize.Code != http.StatusConflict {
+		t.Fatalf("expected authorize blocked status 409, got %d body=%s", blockedAuthorize.Code, blockedAuthorize.Body.String())
+	}
+
+	approvedAuthorize := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions/"+execID+"/authorize", `{
+		"approved":true,
+		"actor":"carrier-cli",
+		"policyApproved":true
+	}`)
+	if approvedAuthorize.Code != http.StatusAccepted {
+		t.Fatalf("expected authorize accepted status 202, got %d body=%s", approvedAuthorize.Code, approvedAuthorize.Body.String())
+	}
+	approvedPayload := decodeJSONMap(t, approvedAuthorize)
+	approvedExec, _ := approvedPayload["execution"].(map[string]interface{})
+	approvedPolicy, _ := approvedExec["policy"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(approvedPolicy["approvedBy"])); got != "carrier-cli" {
+		t.Fatalf("policy approvedBy=%q want carrier-cli payload=%+v", got, approvedPayload)
+	}
+
+	deleteRec := runJSONRequest(t, mux, http.MethodDelete, "/api/v1/orchestrator/policies/"+denyRuleID, "")
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("delete policy status=%d body=%s", deleteRec.Code, deleteRec.Body.String())
+	}
+}
+
+func TestHandleOrchestratorPoliciesApplyConstraintsAndHostLabels(t *testing.T) {
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+
+	mux := buildRemoteFeatureMux(t)
+
+	host, err := upsertRemoteHost(RemoteHost{
+		Name:        "prod-gpu-1",
+		Host:        "10.0.0.10",
+		Port:        22,
+		User:        "ubuntu",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     filepath.Join(t.TempDir(), "id.key"),
+		Labels:      []string{"prod", "gpu", "prod"},
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	})
+	if err != nil {
+		t.Fatalf("upsertRemoteHost failed: %v", err)
+	}
+
+	policyRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/policies", `{
+		"name":"constrain prod gpu picoclaw runs",
+		"action":"allow",
+		"reason":"prod gpu runs must stay within bounded tools and retries",
+		"hostLabels":["prod","gpu"],
+		"agentIds":["picoclaw"],
+		"allowedTools":["shell","grep"],
+		"maxTaskTimeoutMs":45000,
+		"maxRetryBudget":1
+	}`)
+	if policyRec.Code != http.StatusOK {
+		t.Fatalf("create constraint policy status=%d body=%s", policyRec.Code, policyRec.Body.String())
+	}
+
+	createRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions", `{
+		"goal":"diagnose prod gpu drift",
+		"approvalScope":"infrastructure_only",
+		"toolPolicy":{"mode":"workspace_write","allowedTools":["grep","write_file","shell"]},
+		"requiredWorkers":[{"hostId":"`+host.ID+`","agentId":"picoclaw","count":1}],
+		"taskUnits":[
+			{"id":"t1","input":"diagnose","hostId":"`+host.ID+`","agentId":"picoclaw","timeoutMs":120000,"retryBudget":3}
+		]
+	}`)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create constrained execution status=%d body=%s", createRec.Code, createRec.Body.String())
+	}
+	createPayload := decodeJSONMap(t, createRec)
+	execMap, _ := createPayload["execution"].(map[string]interface{})
+	policyMap, _ := execMap["policy"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(policyMap["matchedRuleName"])); got != "constrain prod gpu picoclaw runs" {
+		t.Fatalf("matchedRuleName=%q payload=%+v", got, createPayload)
+	}
+	if got := int(anyToFloat(policyMap["maxTaskTimeoutMs"])); got != 45000 {
+		t.Fatalf("policy.maxTaskTimeoutMs=%d want 45000 payload=%+v", got, createPayload)
+	}
+	if got := int(anyToFloat(policyMap["maxRetryBudget"])); got != 1 {
+		t.Fatalf("policy.maxRetryBudget=%d want 1 payload=%+v", got, createPayload)
+	}
+	toolPolicy, _ := policyMap["toolPolicy"].(map[string]interface{})
+	allowedTools, _ := toolPolicy["allowedTools"].([]interface{})
+	if len(allowedTools) != 2 {
+		t.Fatalf("policy allowedTools len=%d want 2 payload=%+v", len(allowedTools), createPayload)
+	}
+	execToolPolicy, _ := execMap["toolPolicy"].(map[string]interface{})
+	execAllowedTools, _ := execToolPolicy["allowedTools"].([]interface{})
+	if len(execAllowedTools) != 2 {
+		t.Fatalf("execution allowedTools len=%d want 2 payload=%+v", len(execAllowedTools), createPayload)
+	}
+	taskUnits, _ := execMap["taskUnits"].([]interface{})
+	if len(taskUnits) != 1 {
+		t.Fatalf("taskUnits len=%d want 1 payload=%+v", len(taskUnits), createPayload)
+	}
+	taskMap, _ := taskUnits[0].(map[string]interface{})
+	if got := int(anyToFloat(taskMap["timeoutMs"])); got != 45000 {
+		t.Fatalf("task timeoutMs=%d want 45000 payload=%+v", got, createPayload)
+	}
+	if got := int(anyToFloat(taskMap["retryBudget"])); got != 1 {
+		t.Fatalf("task retryBudget=%d want 1 payload=%+v", got, createPayload)
+	}
+
+	unmatchedHost, err := upsertRemoteHost(RemoteHost{
+		Name:        "staging-1",
+		Host:        "10.0.0.11",
+		Port:        22,
+		User:        "ubuntu",
+		AuthMode:    RemoteAuthModePrivateKey,
+		KeyPath:     filepath.Join(t.TempDir(), "id-2.key"),
+		Labels:      []string{"staging"},
+		RuntimeMode: RemoteRuntimeModeOnDemand,
+	})
+	if err != nil {
+		t.Fatalf("upsert unmatched host failed: %v", err)
+	}
+	unmatchedRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions", `{
+		"goal":"diagnose staging drift",
+		"approvalScope":"infrastructure_only",
+		"toolPolicy":{"mode":"workspace_write","allowedTools":["grep","write_file","shell"]},
+		"requiredWorkers":[{"hostId":"`+unmatchedHost.ID+`","agentId":"picoclaw","count":1}],
+		"taskUnits":[
+			{"id":"t1","input":"diagnose","hostId":"`+unmatchedHost.ID+`","agentId":"picoclaw","timeoutMs":120000,"retryBudget":3}
+		]
+	}`)
+	if unmatchedRec.Code != http.StatusCreated {
+		t.Fatalf("create unmatched execution status=%d body=%s", unmatchedRec.Code, unmatchedRec.Body.String())
+	}
+	unmatchedPayload := decodeJSONMap(t, unmatchedRec)
+	unmatchedExec, _ := unmatchedPayload["execution"].(map[string]interface{})
+	unmatchedPolicy, _ := unmatchedExec["policy"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(unmatchedPolicy["matchedRuleName"])); got != "" {
+		t.Fatalf("expected empty matchedRuleName for unmatched host labels, got %q payload=%+v", got, unmatchedPayload)
+	}
+	unmatchedTasks, _ := unmatchedExec["taskUnits"].([]interface{})
+	unmatchedTask, _ := unmatchedTasks[0].(map[string]interface{})
+	if got := int(anyToFloat(unmatchedTask["timeoutMs"])); got != 120000 {
+		t.Fatalf("unmatched task timeoutMs=%d want 120000 payload=%+v", got, unmatchedPayload)
+	}
+	if got := int(anyToFloat(unmatchedTask["retryBudget"])); got != 3 {
+		t.Fatalf("unmatched task retryBudget=%d want 3 payload=%+v", got, unmatchedPayload)
 	}
 }
 
@@ -1488,6 +1818,53 @@ func TestProvisionOrchestratorWorkersErrorBranches(t *testing.T) {
 			t.Fatalf("expected install-result-incomplete error, got %v", err)
 		}
 	})
+
+	t.Run("resolve-required-worker-by-host-labels", func(t *testing.T) {
+		t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+		configureSSHRunner(t, func(command string) remoteExecResult {
+			if strings.Contains(command, `if [ -f "$HOME/.picoclaw/config.toml" ]`) {
+				return remoteExecResult{ExitCode: 0, Stdout: "1\n"}
+			}
+			return remoteExecResult{ExitCode: 0}
+		})
+		if _, err := upsertRemoteHost(RemoteHost{
+			Name:        "prod-a",
+			Host:        "127.0.0.1",
+			Port:        22,
+			User:        "ubuntu",
+			AuthMode:    RemoteAuthModePrivateKey,
+			KeyPath:     "~/.ssh/id_ed25519",
+			Labels:      []string{"prod"},
+			RuntimeMode: RemoteRuntimeModeOnDemand,
+		}); err != nil {
+			t.Fatalf("upsertRemoteHost hostA failed: %v", err)
+		}
+		hostB, err := upsertRemoteHost(RemoteHost{
+			Name:        "gpu-b",
+			Host:        "127.0.0.2",
+			Port:        22,
+			User:        "ubuntu",
+			AuthMode:    RemoteAuthModePrivateKey,
+			KeyPath:     "~/.ssh/id_ed25519",
+			Labels:      []string{"prod", "gpu"},
+			RuntimeMode: RemoteRuntimeModeOnDemand,
+		})
+		if err != nil {
+			t.Fatalf("upsertRemoteHost hostB failed: %v", err)
+		}
+		leases, err := provisionOrchestratorWorkers(context.Background(), OrchestratorExecution{
+			ID: "exec-labels",
+			RequiredWorkers: []OrchestratorRequiredWorker{
+				{HostLabels: []string{"gpu"}, AgentID: "picoclaw", Count: 1},
+			},
+		})
+		if err != nil {
+			t.Fatalf("provisionOrchestratorWorkers host-labels failed: %v", err)
+		}
+		if len(leases) != 1 || leases[0].HostID != hostB.ID {
+			t.Fatalf("unexpected label-based lease selection: %+v want host %s", leases, hostB.ID)
+		}
+	})
 }
 
 func TestRunTasksAndRetriesAdditionalBranches(t *testing.T) {
@@ -1689,6 +2066,55 @@ func TestAcquireAndReclaimAdditionalBranches(t *testing.T) {
 		}
 		if key != poolKey || lease.ID != "lease-1" {
 			t.Fatalf("unexpected acquired lease=%+v key=%q", lease, key)
+		}
+	})
+
+	t.Run("acquire-by-host-labels", func(t *testing.T) {
+		t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+		hostA, err := upsertRemoteHost(RemoteHost{
+			Name:        "prod-a",
+			Host:        "127.0.0.1",
+			Port:        22,
+			User:        "ubuntu",
+			AuthMode:    RemoteAuthModePrivateKey,
+			KeyPath:     "~/.ssh/id_ed25519",
+			Labels:      []string{"prod"},
+			RuntimeMode: RemoteRuntimeModeOnDemand,
+		})
+		if err != nil {
+			t.Fatalf("upsertRemoteHost hostA failed: %v", err)
+		}
+		hostB, err := upsertRemoteHost(RemoteHost{
+			Name:        "gpu-b",
+			Host:        "127.0.0.2",
+			Port:        22,
+			User:        "ubuntu",
+			AuthMode:    RemoteAuthModePrivateKey,
+			KeyPath:     "~/.ssh/id_ed25519",
+			Labels:      []string{"prod", "gpu"},
+			RuntimeMode: RemoteRuntimeModeOnDemand,
+		})
+		if err != nil {
+			t.Fatalf("upsertRemoteHost hostB failed: %v", err)
+		}
+		poolAKey := workerPoolKey(hostA.ID, "picoclaw")
+		poolBKey := workerPoolKey(hostB.ID, "picoclaw")
+		poolA := orchestratorWorkerPool{key: poolAKey, ch: make(chan OrchestratorWorkerLease, 1)}
+		poolB := orchestratorWorkerPool{key: poolBKey, ch: make(chan OrchestratorWorkerLease, 1)}
+		poolA.ch <- OrchestratorWorkerLease{ID: "lease-a", HostID: hostA.ID, AgentID: "picoclaw"}
+		poolB.ch <- OrchestratorWorkerLease{ID: "lease-b", HostID: hostB.ID, AgentID: "picoclaw"}
+		lease, key, err := acquireWorkerForTask(context.Background(), OrchestratorTaskUnit{
+			AgentID:    "picoclaw",
+			HostLabels: []string{"gpu"},
+		}, map[string]orchestratorWorkerPool{
+			poolAKey: poolA,
+			poolBKey: poolB,
+		}, poolAKey)
+		if err != nil {
+			t.Fatalf("acquireWorkerForTask host-labels failed: %v", err)
+		}
+		if key != poolBKey || lease.ID != "lease-b" {
+			t.Fatalf("unexpected host-label selection lease=%+v key=%q", lease, key)
 		}
 	})
 

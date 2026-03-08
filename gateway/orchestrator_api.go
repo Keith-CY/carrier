@@ -184,6 +184,36 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 					ProviderResolutions: resolutions,
 				}
 			}
+			policyRules, policyErr := listOrchestratorPolicies()
+			if policyErr != nil {
+				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to evaluate execution policy", "list orchestrator policies", policyErr)
+				return
+			}
+			remoteHosts, remoteHostsErr := listRemoteHosts()
+			if remoteHostsErr != nil {
+				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load remote hosts for policy evaluation", "list remote hosts", remoteHostsErr)
+				return
+			}
+			normalized = applyOrchestratorExecutionPolicy(normalized, policyRules, remoteHosts)
+			if normalized.Policy.Decision == orchestratorPolicyDecisionDeny {
+				emitRemoteAuditEvent(requestID, "orchestrator_execution_policy_deny", normalized.ID, "blocked", map[string]interface{}{
+					"goal":              normalized.Goal,
+					"requestedProvider": normalized.RequestedProvider,
+					"policyReason":      normalized.Policy.Reason,
+					"matchedRuleId":     normalized.Policy.MatchedRuleID,
+					"matchedRuleName":   normalized.Policy.MatchedRuleName,
+				})
+				writeJSON(w, http.StatusForbidden, map[string]interface{}{
+					"requestId": requestID,
+					"result":    "error",
+					"error": map[string]interface{}{
+						"code":    "E_POLICY_DENY",
+						"message": firstNonEmptyPolicyValue(normalized.Policy.Reason, "execution denied by policy"),
+					},
+					"policy": normalized.Policy,
+				})
+				return
+			}
 
 			saved, saveErr := upsertOrchestratorExecution(normalized)
 			if saveErr != nil {
@@ -191,10 +221,13 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 				return
 			}
 			emitRemoteAuditEvent(requestID, "orchestrator_execution_create", saved.ID, "success", map[string]interface{}{
-				"goal":              saved.Goal,
-				"requestedProvider": saved.RequestedProvider,
-				"workerCount":       len(saved.RequiredWorkers),
-				"resolutionCount":   len(saved.Governance.ProviderResolutions),
+				"goal":                    saved.Goal,
+				"requestedProvider":       saved.RequestedProvider,
+				"workerCount":             len(saved.RequiredWorkers),
+				"resolutionCount":         len(saved.Governance.ProviderResolutions),
+				"policyDecision":          saved.Policy.Decision,
+				"toolMode":                saved.Policy.ToolPolicy.Mode,
+				"effectiveMaxConcurrency": saved.Policy.EffectiveMaxConcurrency,
 			})
 			writeJSON(w, http.StatusCreated, map[string]interface{}{
 				"requestId": requestID,
@@ -254,6 +287,7 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			Approved       bool   `json:"approved"`
 			Actor          string `json:"actor"`
 			MaxConcurrency int    `json:"maxConcurrency,omitempty"`
+			PolicyApproved bool   `json:"policyApproved,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
@@ -299,6 +333,30 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 		if execution.MaxConcurrency > 64 {
 			execution.MaxConcurrency = 64
 		}
+		if execution.Policy.Decision == orchestratorPolicyDecisionDeny {
+			writeJSON(w, http.StatusForbidden, map[string]interface{}{
+				"requestId": requestID,
+				"result":    "error",
+				"execution": execution,
+				"error": map[string]interface{}{
+					"code":    "E_POLICY_DENY",
+					"message": firstNonEmptyPolicyValue(execution.Policy.Reason, "execution denied by policy"),
+				},
+			})
+			return
+		}
+		if execution.Policy.Decision == orchestratorPolicyDecisionAsk && !req.PolicyApproved {
+			writeJSON(w, http.StatusConflict, map[string]interface{}{
+				"requestId": requestID,
+				"result":    "error",
+				"execution": execution,
+				"error": map[string]interface{}{
+					"code":    "E_POLICY_APPROVAL_REQUIRED",
+					"message": firstNonEmptyPolicyValue(execution.Policy.Reason, "policy approval required before execution can run"),
+				},
+			})
+			return
+		}
 		if isOrchestratorExecutionTerminal(execution.Status) {
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"requestId": requestID,
@@ -312,6 +370,10 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			ApprovedBy:             actor,
 			ApprovedAt:             nowTimestamp(),
 		}
+		if execution.Policy.Decision == orchestratorPolicyDecisionAsk && req.PolicyApproved {
+			execution.Policy.ApprovedBy = actor
+			execution.Policy.ApprovedAt = nowTimestamp()
+		}
 		if execution.StartedAt == "" {
 			execution.StartedAt = nowTimestamp()
 		}
@@ -324,8 +386,11 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			return
 		}
 		emitRemoteAuditEvent(requestID, "orchestrator_execution_authorize", updated.ID, "success", map[string]interface{}{
-			"actor":          actor,
-			"maxConcurrency": updated.MaxConcurrency,
+			"actor":                   actor,
+			"maxConcurrency":          updated.MaxConcurrency,
+			"policyDecision":          updated.Policy.Decision,
+			"effectiveMaxConcurrency": updated.Policy.EffectiveMaxConcurrency,
+			"policyApproved":          req.PolicyApproved,
 		})
 		orchestratorLaunchExecutionFn(updated.ID)
 		writeJSON(w, http.StatusAccepted, map[string]interface{}{
@@ -575,28 +640,38 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 	installedByRun := map[string]bool{}
 
 	for _, req := range execution.RequiredWorkers {
-		if strings.EqualFold(strings.TrimSpace(req.HostID), orchestratorLocalHostID) {
-			localLeases, localErr := provisionOrchestratorLocalWorkers(ctx, execution, req)
+		resolvedReq := req
+		resolvedHostID := strings.TrimSpace(req.HostID)
+		if resolvedHostID == "" && len(req.HostLabels) > 0 {
+			host, resolveErr := selectOrchestratorRemoteHostByLabels(req.HostLabels)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			resolvedHostID = host.ID
+			resolvedReq.HostID = host.ID
+		}
+		if strings.EqualFold(resolvedHostID, orchestratorLocalHostID) {
+			localLeases, localErr := provisionOrchestratorLocalWorkers(ctx, execution, resolvedReq)
 			if localErr != nil {
 				return nil, localErr
 			}
 			leases = append(leases, localLeases...)
 			continue
 		}
-		host, found, err := getRemoteHost(req.HostID)
+		host, found, err := getRemoteHost(resolvedHostID)
 		if err != nil {
 			return nil, err
 		}
 		if !found {
-			return nil, fmt.Errorf("remote host %s not found", req.HostID)
+			return nil, fmt.Errorf("remote host %s not found", resolvedHostID)
 		}
-		key := strings.ToLower(strings.TrimSpace(req.HostID) + ":" + strings.TrimSpace(req.AgentID))
-		for i := 0; i < req.Count; i++ {
+		key := strings.ToLower(strings.TrimSpace(resolvedHostID) + ":" + strings.TrimSpace(resolvedReq.AgentID))
+		for i := 0; i < resolvedReq.Count; i++ {
 			lease := OrchestratorWorkerLease{
 				ID:          uuid.NewString(),
 				ExecutionID: execution.ID,
-				HostID:      req.HostID,
-				AgentID:     req.AgentID,
+				HostID:      resolvedHostID,
+				AgentID:     resolvedReq.AgentID,
 				State:       OrchestratorWorkerStateProvisioning,
 				CreatedAt:   nowTimestamp(),
 				UpdatedAt:   nowTimestamp(),
@@ -608,7 +683,7 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 				return nil, saveErr
 			}
 
-			exists, existsErr := remoteAgentConfigExists(ctx, host, req.AgentID)
+			exists, existsErr := remoteAgentConfigExists(ctx, host, resolvedReq.AgentID)
 			if existsErr != nil {
 				lease.State = OrchestratorWorkerStateError
 				lease.LastError = existsErr.Error()
@@ -621,7 +696,7 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 
 			ephemeral := !exists || installedByRun[key]
 			if !exists && !installedByRun[key] {
-				installResult, installErr := orchestratorInstallAgent(ctx, host, req.HostID, req.AgentID, false)
+				installResult, installErr := orchestratorInstallAgent(ctx, host, resolvedHostID, resolvedReq.AgentID, false)
 				if installErr != nil {
 					lease.State = OrchestratorWorkerStateError
 					lease.LastError = installErr.Error()
@@ -632,7 +707,7 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 					return nil, installErr
 				}
 				if installResult == nil || !installResult.Installed {
-					return nil, fmt.Errorf("worker install did not complete for %s:%s", req.HostID, req.AgentID)
+					return nil, fmt.Errorf("worker install did not complete for %s:%s", resolvedHostID, resolvedReq.AgentID)
 				}
 				installedByRun[key] = true
 				ephemeral = true
@@ -1063,6 +1138,7 @@ func acquireWorkerForTask(
 	firstPoolKey string,
 ) (OrchestratorWorkerLease, string, error) {
 	hostID := strings.TrimSpace(task.HostID)
+	hostLabels := normalizeStringSelectorList(task.HostLabels, true)
 	agentID := strings.TrimSpace(task.AgentID)
 	key := ""
 	if hostID != "" {
@@ -1083,7 +1159,10 @@ func acquireWorkerForTask(
 	}
 
 	if agentID != "" {
-		matching := matchingOrchestratorWorkerPools(agentID, pools)
+		matching, matchErr := matchingOrchestratorWorkerPools(agentID, hostLabels, pools)
+		if matchErr != nil {
+			return OrchestratorWorkerLease{}, "", matchErr
+		}
 		if len(matching) > 0 {
 			cases := make([]reflect.SelectCase, 0, len(matching)+1)
 			poolKeys := make([]string, 0, len(matching))
@@ -1123,10 +1202,10 @@ func acquireWorkerForTask(
 	}
 }
 
-func matchingOrchestratorWorkerPools(agentID string, pools map[string]orchestratorWorkerPool) []orchestratorWorkerPool {
+func matchingOrchestratorWorkerPools(agentID string, hostLabels []string, pools map[string]orchestratorWorkerPool) ([]orchestratorWorkerPool, error) {
 	normalized := strings.ToLower(strings.TrimSpace(agentID))
 	if normalized == "" {
-		return nil
+		return nil, nil
 	}
 	keys := make([]string, 0, len(pools))
 	for key, pool := range pools {
@@ -1137,6 +1216,19 @@ func matchingOrchestratorWorkerPools(agentID string, pools map[string]orchestrat
 		if !strings.EqualFold(strings.TrimSpace(poolAgentID), normalized) {
 			continue
 		}
+		if len(hostLabels) > 0 {
+			poolHostID := pool.key
+			if idx := strings.LastIndex(poolHostID, ":"); idx > 0 {
+				poolHostID = poolHostID[:idx]
+			}
+			matches, err := orchestratorHostMatchesLabels(poolHostID, hostLabels)
+			if err != nil {
+				return nil, err
+			}
+			if !matches {
+				continue
+			}
+		}
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
@@ -1144,7 +1236,63 @@ func matchingOrchestratorWorkerPools(agentID string, pools map[string]orchestrat
 	for _, key := range keys {
 		matching = append(matching, pools[key])
 	}
-	return matching
+	return matching, nil
+}
+
+func selectOrchestratorRemoteHostByLabels(hostLabels []string) (RemoteHost, error) {
+	required := normalizeStringSelectorList(hostLabels, true)
+	if len(required) == 0 {
+		return RemoteHost{}, fmt.Errorf("hostLabels are required to resolve a remote host")
+	}
+	hosts, err := listRemoteHosts()
+	if err != nil {
+		return RemoteHost{}, err
+	}
+	matching := make([]RemoteHost, 0, len(hosts))
+	for _, host := range hosts {
+		if stringSliceContainsAllFold(host.Labels, required) {
+			matching = append(matching, host)
+		}
+	}
+	if len(matching) == 0 {
+		return RemoteHost{}, fmt.Errorf("no remote host matches labels %s", strings.Join(required, ","))
+	}
+	sort.SliceStable(matching, func(i, j int) bool {
+		leftHealth := orchestratorRemoteHealthRank(matching[i].LastHealth)
+		rightHealth := orchestratorRemoteHealthRank(matching[j].LastHealth)
+		if leftHealth != rightHealth {
+			return leftHealth < rightHealth
+		}
+		leftName := strings.ToLower(strings.TrimSpace(firstNonEmptyPolicyValue(matching[i].Name, matching[i].ID)))
+		rightName := strings.ToLower(strings.TrimSpace(firstNonEmptyPolicyValue(matching[j].Name, matching[j].ID)))
+		return leftName < rightName
+	})
+	return matching[0], nil
+}
+
+func orchestratorHostMatchesLabels(hostID string, hostLabels []string) (bool, error) {
+	if strings.TrimSpace(hostID) == "" || strings.EqualFold(strings.TrimSpace(hostID), orchestratorLocalHostID) {
+		return false, nil
+	}
+	host, found, err := getRemoteHost(hostID)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+	return stringSliceContainsAllFold(host.Labels, hostLabels), nil
+}
+
+func orchestratorRemoteHealthRank(health RemoteHealth) int {
+	switch health {
+	case RemoteHealthHealthy:
+		return 0
+	case RemoteHealthUnknown:
+		return 1
+	default:
+		return 2
+	}
 }
 
 func releaseWorkerToPool(lease OrchestratorWorkerLease, pool orchestratorWorkerPool) {
