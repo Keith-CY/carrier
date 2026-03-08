@@ -42,10 +42,10 @@ func TestLiveProviderSmoke(t *testing.T) {
 
 	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("CARRIER_LIVE_BASE_URL")), "/")
 	if baseURL == "" {
-		baseURL = strings.TrimRight(strings.TrimSpace(spec.DefaultBase), "/")
-	}
-	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
+		baseURL = strings.TrimRight(
+			catalog.ResolveProviderBaseURL(providerID, providerID, "https://api.openai.com/v1"),
+			"/",
+		)
 	}
 
 	client := &http.Client{Timeout: 45 * time.Second}
