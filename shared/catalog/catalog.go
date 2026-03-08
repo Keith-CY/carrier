@@ -46,6 +46,7 @@ var providerCatalog = []ProviderSpec{
 		ExampleModel: "anthropic/claude-opus-4-6",
 		Category:     "builtin",
 		Description:  "Anthropic Claude models",
+		DefaultBase:  "https://api.anthropic.com/v1",
 		Setup:        "Claude direct API key",
 	},
 	{
