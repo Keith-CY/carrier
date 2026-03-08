@@ -208,6 +208,8 @@ jobs:
     needs: classify-scope
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    environment:
+      name: live_smoke
     timeout-minutes: 25
     strategy:
       fail-fast: false
