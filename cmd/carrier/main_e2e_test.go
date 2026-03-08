@@ -688,6 +688,115 @@ func runOpenClawIsolationProviderFlow(t *testing.T, providerID string) {
 	}
 }
 
+func TestE2ECarrierBinaryOrchestrateLocalFallbackAndResult(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+
+	t.Setenv("HOME", home)
+	t.Setenv("CARRIER_CONFIG", filepath.Join(tmp, "config.v2.json"))
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+
+	var mu sync.Mutex
+	var createBody string
+	var authorizeBody string
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/healthz":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case r.URL.Path == "/api/v1/base-agent/decompose" && r.Method == http.MethodPost:
+			_, _ = w.Write([]byte(`{"tasks":[{"id":"t1","input":"collect diagnostics","agentId":""},{"id":"t2","input":"summarize diagnostics","agentId":"picoclaw"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer daemon.Close()
+
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/healthz":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case r.URL.Path == "/api/v1/orchestrator/executions" && r.Method == http.MethodPost:
+			raw, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			createBody = strings.TrimSpace(string(raw))
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"result":"ok","execution":{"id":"exec-e2e-1","goal":"triage issue","status":"pending_authorization"}}`))
+		case r.URL.Path == "/api/v1/orchestrator/executions/exec-e2e-1/authorize" && r.Method == http.MethodPost:
+			raw, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			authorizeBody = strings.TrimSpace(string(raw))
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"result":"ok","execution":{"id":"exec-e2e-1","goal":"triage issue","status":"provisioning"}}`))
+		case r.URL.Path == "/api/v1/orchestrator/executions/exec-e2e-1" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"result":"ok","execution":{"id":"exec-e2e-1","goal":"triage issue","status":"completed","taskUnits":[{"id":"t1","hostId":"local","agentId":"zeroclaw"},{"id":"t2","hostId":"local","agentId":"picoclaw"}],"results":[{"taskId":"t1","status":"completed","hostId":"local","agentId":"zeroclaw","output":"diag ok","latencyMs":10},{"taskId":"t2","status":"completed","hostId":"local","agentId":"picoclaw","output":"summary ok","latencyMs":8}]},"workers":[{"id":"w1","hostId":"local","agentId":"zeroclaw","state":"reclaimed"},{"id":"w2","hostId":"local","agentId":"picoclaw","state":"reclaimed"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gateway.Close()
+
+	setProbeEnvFromURL(t, "CARRIER_SERVER_HOST", "CARRIER_SERVER_PORT", daemon.URL)
+	setProbeEnvFromURL(t, "CARRIER_GATEWAY_HOST", "CARRIER_GATEWAY_PORT", gateway.URL)
+
+	bin := buildCarrierBinary(t)
+	stdout, stderr, err := runCarrierBinary(t, bin, "", "orchestrate", "triage", "issue")
+	if err != nil {
+		t.Fatalf("carrier orchestrate failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+
+	mu.Lock()
+	gotCreateBody := createBody
+	gotAuthorizeBody := authorizeBody
+	mu.Unlock()
+	if strings.TrimSpace(gotCreateBody) == "" {
+		t.Fatal("expected orchestrator create request body")
+	}
+	var createPayload struct {
+		RequiredWorkers []struct {
+			HostID  string `json:"hostId"`
+			AgentID string `json:"agentId"`
+		} `json:"requiredWorkers"`
+		TaskUnits []struct {
+			ID      string `json:"id"`
+			HostID  string `json:"hostId"`
+			AgentID string `json:"agentId"`
+		} `json:"taskUnits"`
+	}
+	if err := json.Unmarshal([]byte(gotCreateBody), &createPayload); err != nil {
+		t.Fatalf("decode create payload: %v", err)
+	}
+	if len(createPayload.TaskUnits) != 2 {
+		t.Fatalf("task units len=%d, want 2", len(createPayload.TaskUnits))
+	}
+	if createPayload.TaskUnits[0].HostID != "local" || createPayload.TaskUnits[0].AgentID != "zeroclaw" {
+		t.Fatalf("task1 target = %+v, want host=local agent=zeroclaw", createPayload.TaskUnits[0])
+	}
+	if createPayload.TaskUnits[1].HostID != "local" || createPayload.TaskUnits[1].AgentID != "picoclaw" {
+		t.Fatalf("task2 target = %+v, want host=local agent=picoclaw", createPayload.TaskUnits[1])
+	}
+	if len(createPayload.RequiredWorkers) != 2 {
+		t.Fatalf("required workers len=%d, want 2", len(createPayload.RequiredWorkers))
+	}
+	if !strings.Contains(gotAuthorizeBody, `"approved":true`) {
+		t.Fatalf("authorize payload missing approved=true: %q", gotAuthorizeBody)
+	}
+	if !strings.Contains(stdout, "status: completed") {
+		t.Fatalf("stdout missing completed status: %q", stdout)
+	}
+	if !strings.Contains(stdout, "local/zeroclaw") {
+		t.Fatalf("stdout missing local/zeroclaw target: %q", stdout)
+	}
+	if !strings.Contains(stdout, "local/picoclaw") {
+		t.Fatalf("stdout missing local/picoclaw target: %q", stdout)
+	}
+}
+
 func expectedManagedProviderBaseURL(providerID, providerKey string) string {
 	return catalog.ResolveProviderBaseURL(providerID, providerKey, "https://api.openai.com/v1")
 }
