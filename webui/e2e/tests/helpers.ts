@@ -24,6 +24,38 @@ export const MOCK_INSTANCES = MOCK_AGENTS.map((agent, idx) => ({
 
 export const MOCK_EXECUTIONS = [
   {
+    id: 'exec-ask',
+    goal: 'Run picoclaw remediation on prod host',
+    requestedProvider: 'openrouter',
+    status: 'pending_authorization',
+    updatedAt: '2026-03-09T11:40:00Z',
+    authorization: {
+      infrastructureApproved: false,
+    },
+    policy: {
+      decision: 'ask',
+      reason: 'picoclaw on prod hosts needs explicit review',
+      matchedRuleName: 'review picoclaw production runs',
+      summary: 'infrastructure approval required; tool mode restricted; effective concurrency 1',
+      requiresInfrastructureApproval: true,
+      configuredMaxConcurrency: 1,
+      effectiveMaxConcurrency: 1,
+      maxTaskTimeoutMs: 60000,
+      maxRetryBudget: 0,
+      toolPolicy: {
+        mode: 'restricted',
+        allowedTools: ['grep', 'shell'],
+      },
+      targets: [
+        { hostId: 'host-1', agentId: 'picoclaw', count: 1 },
+      ],
+    },
+    taskUnits: [
+      { id: 'task-1', input: 'apply remediation', hostId: 'host-1', agentId: 'picoclaw' },
+    ],
+    results: [],
+  },
+  {
     id: 'exec-running',
     goal: 'Investigate checkout latency',
     requestedProvider: 'anthropic',
@@ -47,6 +79,23 @@ export const MOCK_EXECUTIONS = [
           model: 'claude-3-7-sonnet',
           syncMode: 'manual',
         },
+      ],
+    },
+    policy: {
+      decision: 'allow',
+      summary: 'infrastructure approval required; tool mode restricted; effective concurrency 2',
+      requiresInfrastructureApproval: true,
+      configuredMaxConcurrency: 3,
+      effectiveMaxConcurrency: 2,
+      maxTaskTimeoutMs: 120000,
+      maxRetryBudget: 2,
+      toolPolicy: {
+        mode: 'restricted',
+        allowedTools: ['grep', 'shell'],
+      },
+      targets: [
+        { hostId: 'local', agentId: 'zeroclaw', count: 1 },
+        { hostId: 'host-1', agentId: 'picoclaw', count: 1 },
       ],
     },
     taskUnits: [
@@ -81,6 +130,22 @@ export const MOCK_EXECUTIONS = [
           model: 'openai/gpt-4o-mini',
           syncMode: 'always_push',
         },
+      ],
+    },
+    policy: {
+      decision: 'allow',
+      summary: 'infrastructure approval required; tool mode restricted; effective concurrency 1',
+      requiresInfrastructureApproval: true,
+      configuredMaxConcurrency: 1,
+      effectiveMaxConcurrency: 1,
+      maxTaskTimeoutMs: 60000,
+      maxRetryBudget: 0,
+      toolPolicy: {
+        mode: 'restricted',
+        allowedTools: ['grep', 'shell'],
+      },
+      targets: [
+        { hostId: 'local', agentId: 'zeroclaw', count: 1 },
       ],
     },
     taskUnits: [
@@ -259,6 +324,17 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
           model: 'openai/gpt-4o-mini',
           syncMode: 'always_push',
         },
+      }),
+    }),
+  );
+
+  await page.route('**/api/v1/orchestrator/policies', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        policies: [],
       }),
     }),
   );
@@ -446,7 +522,16 @@ export async function mockOrchestrationAPIs(page: Page) {
     const goal = String(body.goal || '').trim();
     const provider = String(body.provider || '').trim();
     const hostIds = Array.isArray(body.hostIds) ? (body.hostIds as string[]) : [];
+    const hostLabels = Array.isArray(body.hostLabels) ? (body.hostLabels as string[]) : [];
     const maxConcurrency = Number(body.maxConcurrency || 0) || 2;
+    const firstHostId = hostIds[0] || '';
+    const secondHostId = hostIds[1] || hostIds[0] || '';
+    const workerSelector = hostLabels.length
+      ? { hostLabels }
+      : { hostId: firstHostId || 'local' };
+    const secondWorkerSelector = hostLabels.length
+      ? { hostLabels }
+      : { hostId: secondHostId || 'local' };
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -456,6 +541,7 @@ export async function mockOrchestrationAPIs(page: Page) {
           goal,
           provider,
           hostIds,
+          hostLabels,
           approvalScope: 'infrastructure_only',
           maxConcurrency,
           plannerTasks: [
@@ -463,12 +549,12 @@ export async function mockOrchestrationAPIs(page: Page) {
             { id: 'task-2', input: 'draft summary', agentId: 'picoclaw' },
           ],
           requiredWorkers: [
-            { hostId: hostIds[0] || 'local', agentId: 'zeroclaw', count: 1 },
-            { hostId: hostIds[1] || hostIds[0] || 'local', agentId: 'picoclaw', count: 1 },
+            { ...workerSelector, agentId: 'zeroclaw', count: 1 },
+            { ...secondWorkerSelector, agentId: 'picoclaw', count: 1 },
           ],
           taskUnits: [
-            { id: 'task-1', input: 'collect context', hostId: hostIds[0] || 'local', agentId: 'zeroclaw', timeoutMs: 60000, retryBudget: 0 },
-            { id: 'task-2', input: 'draft summary', hostId: hostIds[1] || hostIds[0] || 'local', agentId: 'picoclaw', timeoutMs: 60000, retryBudget: 0 },
+            { id: 'task-1', input: 'collect context', ...workerSelector, agentId: 'zeroclaw', timeoutMs: 60000, retryBudget: 0 },
+            { id: 'task-2', input: 'draft summary', ...secondWorkerSelector, agentId: 'picoclaw', timeoutMs: 60000, retryBudget: 0 },
           ],
         },
       }),
@@ -485,6 +571,11 @@ export async function mockOrchestrationAPIs(page: Page) {
     }
 
     const body = route.request().postDataJSON() as Record<string, unknown>;
+    const taskUnits = cloneJSON((body.taskUnits as Array<Record<string, unknown>>) || []);
+    const configuredMaxConcurrency = Number(body.maxConcurrency || 0) || taskUnits.length || 1;
+    const effectiveMaxConcurrency = taskUnits.length
+      ? Math.min(configuredMaxConcurrency, taskUnits.length)
+      : configuredMaxConcurrency;
     const execution = {
       id: `exec-preview-${nextExecutionID++}`,
       goal: String(body.goal || '').trim(),
@@ -509,7 +600,21 @@ export async function mockOrchestrationAPIs(page: Page) {
           },
         ],
       },
-      taskUnits: cloneJSON((body.taskUnits as Array<Record<string, unknown>>) || []),
+      policy: {
+        decision: 'allow',
+        summary: 'infrastructure approval required; tool mode restricted; effective concurrency ' + String(effectiveMaxConcurrency),
+        requiresInfrastructureApproval: true,
+        configuredMaxConcurrency,
+        effectiveMaxConcurrency,
+        maxTaskTimeoutMs: taskUnits.reduce((max, task) => Math.max(max, Number(task.timeoutMs || 0) || 0), 0),
+        maxRetryBudget: taskUnits.reduce((max, task) => Math.max(max, Number(task.retryBudget || 0) || 0), 0),
+        toolPolicy: {
+          mode: 'restricted',
+          allowedTools: ['grep', 'shell'],
+        },
+        targets: Array.isArray(body.requiredWorkers) ? cloneJSON(body.requiredWorkers as Array<Record<string, unknown>>) : [],
+      },
+      taskUnits,
       results: [],
     };
     executions.unshift(execution);
@@ -527,6 +632,20 @@ export async function mockOrchestrationAPIs(page: Page) {
     if (!execution) {
       return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ result: 'error', message: 'not found' }) });
     }
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    if (execution.id === 'exec-ask' && !body.policyApproved) {
+      return route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: {
+            code: 'E_POLICY_APPROVAL_REQUIRED',
+            message: 'policy approval required before execution can run',
+          },
+          execution,
+        }),
+      });
+    }
     execution.status = 'running';
     execution.updatedAt = '2026-03-08T12:01:00Z';
     execution.authorization = {
@@ -534,6 +653,14 @@ export async function mockOrchestrationAPIs(page: Page) {
       approvedBy: 'webui',
       approvedAt: '2026-03-08T12:01:00Z',
     };
+    if (body.policyApproved && execution.policy) {
+      execution.policy.approvedBy = 'webui';
+      execution.policy.approvedAt = '2026-03-09T11:42:00Z';
+    }
+    if (execution.id === 'exec-ask') {
+      execution.status = 'provisioning';
+      execution.updatedAt = '2026-03-09T11:42:00Z';
+    }
     return route.fulfill({
       status: 200,
       contentType: 'application/json',

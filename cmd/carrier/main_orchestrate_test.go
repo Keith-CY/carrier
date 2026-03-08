@@ -43,9 +43,13 @@ func TestParseOrchestrateCommandArgs(t *testing.T) {
 		"--host-id", "host-a",
 		"--host-id", "host-a",
 		"--host-id", "host-b",
+		"--host-label", "gpu",
+		"--host-label", "prod",
+		"--host-label", "gpu",
 		"--provider", "openrouter",
 		"--max-concurrency", "9",
 		"--idempotency-key", "idem-1",
+		"--policy-approve",
 		"--timeout", "45s",
 		"--async",
 		"--json",
@@ -62,6 +66,9 @@ func TestParseOrchestrateCommandArgs(t *testing.T) {
 	if len(opts.HostIDs) != 2 || opts.HostIDs[0] != "host-a" || opts.HostIDs[1] != "host-b" {
 		t.Fatalf("host_ids = %v, want [host-a host-b]", opts.HostIDs)
 	}
+	if len(opts.HostLabels) != 2 || opts.HostLabels[0] != "gpu" || opts.HostLabels[1] != "prod" {
+		t.Fatalf("host_labels = %v, want [gpu prod]", opts.HostLabels)
+	}
 	if opts.Provider != "openrouter" {
 		t.Fatalf("provider = %q, want openrouter", opts.Provider)
 	}
@@ -70,6 +77,9 @@ func TestParseOrchestrateCommandArgs(t *testing.T) {
 	}
 	if opts.IdempotencyKey != "idem-1" {
 		t.Fatalf("idempotency_key = %q, want idem-1", opts.IdempotencyKey)
+	}
+	if !opts.PolicyApprove {
+		t.Fatalf("policyApprove should be true")
 	}
 	if opts.Timeout != 45*time.Second {
 		t.Fatalf("timeout = %s, want 45s", opts.Timeout)
@@ -100,6 +110,14 @@ func TestParseOrchestrateCommandArgs(t *testing.T) {
 	}
 	if cancelOpts.Action != "cancel" || cancelOpts.ExecutionID != "exec-456" || !cancelOpts.JSON {
 		t.Fatalf("unexpected cancel opts: %+v", cancelOpts)
+	}
+
+	authorizeOpts, err := parseOrchestrateCommandArgs([]string{"authorize", "exec-789", "--policy-approve", "--json"})
+	if err != nil {
+		t.Fatalf("parseOrchestrateCommandArgs(authorize) error: %v", err)
+	}
+	if authorizeOpts.Action != "authorize" || authorizeOpts.ExecutionID != "exec-789" || !authorizeOpts.PolicyApprove || !authorizeOpts.JSON {
+		t.Fatalf("unexpected authorize opts: %+v", authorizeOpts)
 	}
 }
 
@@ -134,6 +152,14 @@ func TestParseExecutionsCommandArgs(t *testing.T) {
 	}
 	if cancelOpts.Action != "cancel" || cancelOpts.ExecutionID != "exec-55" || !cancelOpts.JSON {
 		t.Fatalf("unexpected cancel opts: %+v", cancelOpts)
+	}
+
+	authorizeOpts, err := parseExecutionsCommandArgs([]string{"authorize", "exec-66", "--policy-approve", "--json"})
+	if err != nil {
+		t.Fatalf("parseExecutionsCommandArgs(authorize) error: %v", err)
+	}
+	if authorizeOpts.Action != "authorize" || authorizeOpts.ExecutionID != "exec-66" || !authorizeOpts.PolicyApprove || !authorizeOpts.JSON {
+		t.Fatalf("unexpected authorize opts: %+v", authorizeOpts)
 	}
 }
 
@@ -289,6 +315,102 @@ func TestRunOrchestrateCommandDryRunPlan(t *testing.T) {
 	}
 	if !strings.Contains(output, "local/picoclaw") {
 		t.Fatalf("expected local/picoclaw in plan output, got %q", output)
+	}
+}
+
+func TestRunOrchestrateCommandDryRunPlanWithHostLabels(t *testing.T) {
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/base-agent/decompose":
+			_, _ = w.Write([]byte(`{"tasks":[{"id":"t1","input":"collect diagnostics","agentId":"zeroclaw"},{"id":"t2","input":"summarize diagnostics","agentId":"picoclaw"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer daemon.Close()
+
+	setProbeEnvFromURL(t, "CARRIER_SERVER_HOST", "CARRIER_SERVER_PORT", daemon.URL)
+
+	opts := orchestrateCommandOptions{
+		Action:     "plan",
+		Goal:       "triage issue",
+		HostLabels: []string{"gpu", "prod"},
+		Timeout:    2 * time.Second,
+	}
+	var out bytes.Buffer
+	if err := runOrchestrateCommand(&out, opts); err != nil {
+		t.Fatalf("runOrchestrateCommand(plan with host labels) error: %v", err)
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "labels[gpu,prod]/zeroclaw") {
+		t.Fatalf("expected labels[gpu,prod]/zeroclaw in plan output, got %q", output)
+	}
+	if !strings.Contains(output, "labels[gpu,prod]/picoclaw") {
+		t.Fatalf("expected labels[gpu,prod]/picoclaw in plan output, got %q", output)
+	}
+}
+
+func TestRenderOrchestrateExecutionIncludesPolicySummary(t *testing.T) {
+	raw := []byte(`{
+		"result":"ok",
+		"execution":{
+			"id":"exec-policy-1",
+			"goal":"triage issue",
+			"status":"running",
+			"policy":{
+				"decision":"ask",
+				"reason":"prod picoclaw runs require operator approval",
+				"summary":"infrastructure approval required; tool mode restricted; effective concurrency 2",
+				"matchedRuleName":"review picoclaw production runs",
+				"configuredMaxConcurrency":9,
+				"effectiveMaxConcurrency":2,
+				"maxTaskTimeoutMs":120000,
+				"maxRetryBudget":3,
+				"approvedBy":"operator-ui",
+				"approvedAt":"2026-03-09T12:00:00Z",
+				"toolPolicy":{"mode":"restricted","allowedTools":["grep","shell"]},
+				"targets":[
+					{"hostId":"local","agentId":"zeroclaw","count":1},
+					{"hostId":"host-b","agentId":"picoclaw","count":2}
+				]
+			},
+			"taskUnits":[
+				{"id":"task-1","input":"collect traces","hostId":"local","agentId":"zeroclaw"},
+				{"id":"task-2","input":"summarize traces","hostId":"host-b","agentId":"picoclaw"}
+			],
+			"results":[]
+		}
+	}`)
+	resp, err := decodeOrchestrateExecutionResponse(raw)
+	if err != nil {
+		t.Fatalf("decodeOrchestrateExecutionResponse error: %v", err)
+	}
+
+	out := renderOrchestrateExecution(resp)
+	if !strings.Contains(out, "policy: ask") {
+		t.Fatalf("expected policy decision in output, got %q", out)
+	}
+	if !strings.Contains(out, "policy rule: review picoclaw production runs") {
+		t.Fatalf("expected policy rule in output, got %q", out)
+	}
+	if !strings.Contains(out, "policy approved by: operator-ui") {
+		t.Fatalf("expected policy approval actor in output, got %q", out)
+	}
+	if !strings.Contains(out, "tool mode=restricted") {
+		t.Fatalf("expected tool mode in output, got %q", out)
+	}
+	if !strings.Contains(out, "effective concurrency=2") {
+		t.Fatalf("expected effective concurrency in output, got %q", out)
+	}
+	if !strings.Contains(out, "max timeout=120000ms") {
+		t.Fatalf("expected max timeout in output, got %q", out)
+	}
+	if !strings.Contains(out, "host-b/picoclaw x2") {
+		t.Fatalf("expected policy target in output, got %q", out)
 	}
 }
 

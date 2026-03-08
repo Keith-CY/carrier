@@ -33,6 +33,7 @@
   let remoteHostsCache = [];
   let sshConfigHostAliasesCache = [];
   let providerProfilesCache = [];
+  let orchestratorPolicyRulesCache = [];
   let serverManageHostID = "";
   let serverManageOperationRunning = false;
   let serverManageLastOperation = null;
@@ -105,7 +106,10 @@
       }
       if (!r.ok) {
         const errMsg = data && data.message || data && data.errorCode || data && data.error && (data.error.message || data.error.code) || data.error || "Request failed (" + r.status + ")";
-        throw new Error(errMsg);
+        const err = new Error(errMsg);
+        err.status = r.status;
+        err.payload = data;
+        throw err;
       }
       return data;
     });
@@ -1430,6 +1434,9 @@
   function selectedQuickLaunchHostIDs() {
     return $$('#quick-launch-hosts input[type="checkbox"]:checked').map((input) => String(input.value || "").trim()).filter(Boolean);
   }
+  function selectedQuickLaunchHostLabels() {
+    return parseCommaSeparatedValues(String(($("#quick-launch-host-labels") || {}).value || "").trim()).sort((a, b) => a.localeCompare(b));
+  }
   function resetQuickLaunchPreview(clearForm) {
     quickLaunchPlan = null;
     const previewCard = $("#quick-launch-preview-card");
@@ -1439,12 +1446,15 @@
       const goal = $("#quick-launch-goal");
       const provider = $("#quick-launch-provider");
       const maxConcurrency = $("#quick-launch-max-concurrency");
+      const hostLabels = $("#quick-launch-host-labels");
       if (goal)
         goal.value = "";
       if (provider)
         provider.value = "";
       if (maxConcurrency)
         maxConcurrency.value = "";
+      if (hostLabels)
+        hostLabels.value = "";
       renderQuickLaunchHostOptions(remoteHostsCache);
       setMsg("#quick-launch-msg", "", "info");
     }
@@ -1472,7 +1482,9 @@
     requiredWorkers.forEach((worker) => {
       const row = document.createElement("div");
       row.className = "quick-launch-line";
-      row.textContent = String(worker.hostId || "local") + "/" + String(worker.agentId || "zeroclaw") + " \xB7 count=" + String(worker.count || 1);
+      const hostLabels = Array.isArray(worker.hostLabels) ? worker.hostLabels.map((value) => String(value || "").trim()).filter(Boolean) : [];
+      const hostTarget = String(worker.hostId || "").trim() || (hostLabels.length ? "labels[" + hostLabels.join(",") + "]" : "local");
+      row.textContent = hostTarget + "/" + String(worker.agentId || "zeroclaw") + " \xB7 count=" + String(worker.count || 1);
       workers.appendChild(row);
     });
   }
@@ -1499,10 +1511,12 @@
     try {
       const provider = String(($("#quick-launch-provider") || {}).value || "").trim();
       const maxConcurrency = parseInt(String(($("#quick-launch-max-concurrency") || {}).value || "").trim(), 10);
+      const hostLabels = selectedQuickLaunchHostLabels();
       const response = await api("POST", "/api/v1/orchestrator/plans", {
         goal,
         provider,
-        hostIds: selectedQuickLaunchHostIDs(),
+        hostIds: hostLabels.length ? [] : selectedQuickLaunchHostIDs(),
+        hostLabels,
         maxConcurrency: Number.isFinite(maxConcurrency) ? maxConcurrency : 0
       });
       renderQuickLaunchPlan(response && response.plan ? response.plan : {});
@@ -1544,6 +1558,14 @@
       setMsg("#quick-launch-msg", "Execution created: " + executionID, "info");
       location.hash = "#/executions/" + encodeURIComponent(executionID);
     } catch (e) {
+      const payload = e && e.payload && typeof e.payload === "object" ? e.payload : null;
+      const blockedExecution = payload && payload.execution && typeof payload.execution === "object" ? payload.execution : null;
+      const blockedExecutionID = String(blockedExecution && blockedExecution.id ? blockedExecution.id : "").trim();
+      if (e && Number(e.status || 0) === 409 && blockedExecutionID) {
+        setMsg("#quick-launch-msg", "Execution created but waiting for policy approval: " + blockedExecutionID, "error");
+        location.hash = "#/executions/" + encodeURIComponent(blockedExecutionID);
+        return;
+      }
       setMsg("#quick-launch-msg", "Run failed: " + e.message, "error");
     } finally {
       if (runBtn)
@@ -1930,6 +1952,18 @@
     delete dashboardExecutionDetailsByID[id];
     await refreshExecutions();
   }
+  async function authorizeExecution(executionID, actor, policyApprove) {
+    const id = String(executionID || "").trim();
+    if (!id)
+      return;
+    await api("POST", "/api/v1/orchestrator/executions/" + encodeURIComponent(id) + "/authorize", {
+      approved: true,
+      actor: String(actor || "webui").trim() || "webui",
+      policyApproved: !!policyApprove
+    });
+    delete dashboardExecutionDetailsByID[id];
+    await refreshExecutions();
+  }
   function renderExecutionsDetailPanel(target, payload) {
     target.textContent = "";
     const execution = payload && payload.execution && typeof payload.execution === "object" ? payload.execution : {};
@@ -1952,6 +1986,10 @@
     header.appendChild(titleWrap);
     header.appendChild(badge);
     summaryCard.appendChild(header);
+    const statusLine = document.createElement("div");
+    statusLine.className = "execution-detail-line";
+    statusLine.textContent = "status: " + (statusText || "unknown");
+    summaryCard.appendChild(statusLine);
     const error = String(execution && execution.error ? execution.error : "").trim();
     if (error) {
       const errorLine = document.createElement("div");
@@ -1960,6 +1998,78 @@
       summaryCard.appendChild(errorLine);
     }
     target.appendChild(summaryCard);
+    const policy = execution && execution.policy && typeof execution.policy === "object" ? execution.policy : {};
+    const policyDecision = String(policy && policy.decision ? policy.decision : "").trim();
+    if (policyDecision) {
+      const policyCard = document.createElement("div");
+      policyCard.className = "execution-detail-block";
+      const policyTitle = document.createElement("div");
+      policyTitle.className = "execution-detail-title";
+      policyTitle.textContent = "Execution Policy";
+      policyCard.appendChild(policyTitle);
+      const policyLines = [];
+      const policySummary = String(policy && policy.summary ? policy.summary : "").trim();
+      const toolPolicy = policy && policy.toolPolicy && typeof policy.toolPolicy === "object" ? policy.toolPolicy : {};
+      const toolMode = String(toolPolicy && toolPolicy.mode ? toolPolicy.mode : "").trim();
+      const allowedTools = Array.isArray(toolPolicy && toolPolicy.allowedTools) ? toolPolicy.allowedTools : [];
+      const configuredMaxConcurrency = Number(policy && policy.configuredMaxConcurrency ? policy.configuredMaxConcurrency : 0);
+      const effectiveMaxConcurrency = Number(policy && policy.effectiveMaxConcurrency ? policy.effectiveMaxConcurrency : 0);
+      const maxTaskTimeoutMs = Number(policy && policy.maxTaskTimeoutMs ? policy.maxTaskTimeoutMs : 0);
+      const maxRetryBudget = Number(policy && policy.maxRetryBudget ? policy.maxRetryBudget : 0);
+      const requiresApproval = !!(policy && policy.requiresInfrastructureApproval);
+      const policyReason = String(policy && policy.reason ? policy.reason : "").trim();
+      const matchedRuleName = String(policy && policy.matchedRuleName ? policy.matchedRuleName : "").trim();
+      const policyApprovedBy = String(policy && policy.approvedBy ? policy.approvedBy : "").trim();
+      const policyApprovedAt = String(policy && policy.approvedAt ? policy.approvedAt : "").trim();
+      const targets = Array.isArray(policy && policy.targets) ? policy.targets : [];
+      policyLines.push("Decision: " + policyDecision);
+      policyLines.push("Infrastructure approval required: " + (requiresApproval ? "yes" : "no"));
+      if (matchedRuleName)
+        policyLines.push("Matched rule: " + matchedRuleName);
+      if (policyReason)
+        policyLines.push("Reason: " + policyReason);
+      if (toolMode)
+        policyLines.push("tool mode: " + toolMode);
+      if (configuredMaxConcurrency > 0)
+        policyLines.push("configured concurrency: " + String(configuredMaxConcurrency));
+      if (effectiveMaxConcurrency > 0)
+        policyLines.push("effective concurrency: " + String(effectiveMaxConcurrency));
+      if (maxTaskTimeoutMs > 0)
+        policyLines.push("max task timeout: " + String(maxTaskTimeoutMs) + "ms");
+      policyLines.push("max retry budget: " + String(maxRetryBudget));
+      if (policySummary)
+        policyLines.push("summary: " + policySummary);
+      if (policyApprovedBy)
+        policyLines.push("Approved by: " + policyApprovedBy);
+      if (policyApprovedAt)
+        policyLines.push("Approved at: " + formatDateTime(policyApprovedAt));
+      if (allowedTools.length) {
+        policyLines.push("Allowed tools: " + allowedTools.map((item) => String(item || "").trim()).filter(Boolean).join(", "));
+      }
+      policyLines.forEach((line) => {
+        const row = document.createElement("div");
+        row.className = "execution-detail-line";
+        row.textContent = line;
+        policyCard.appendChild(row);
+      });
+      if (targets.length) {
+        const targetsTitle = document.createElement("div");
+        targetsTitle.className = "execution-detail-line";
+        targetsTitle.textContent = "Worker scope";
+        policyCard.appendChild(targetsTitle);
+        targets.forEach((item) => {
+          const host = String(item && item.hostId ? item.hostId : "").trim();
+          const hostLabels = Array.isArray(item && item.hostLabels) ? item.hostLabels.map((value) => String(value || "").trim()).filter(Boolean) : [];
+          const agent = String(item && item.agentId ? item.agentId : "").trim() || "unknown";
+          const count = Number(item && item.count ? item.count : 0) || 1;
+          const row = document.createElement("div");
+          row.className = "execution-detail-line";
+          row.textContent = (host || (hostLabels.length ? "labels[" + hostLabels.join(",") + "]" : "local")) + "/" + agent + " \xB7 count=" + String(count);
+          policyCard.appendChild(row);
+        });
+      }
+      target.appendChild(policyCard);
+    }
     const governanceCard = document.createElement("div");
     governanceCard.className = "execution-detail-block";
     const governanceTitle = document.createElement("div");
@@ -2026,13 +2136,15 @@
     const summary = $("#executions-summary");
     const detail = $("#executions-detail");
     const cancelBtn = $("#executions-cancel");
-    if (!list || !summary || !detail || !cancelBtn)
+    const policyApproveBtn = $("#executions-policy-approve");
+    if (!list || !summary || !detail || !cancelBtn || !policyApproveBtn)
       return;
     if (!featureFlags.remoteControlPlaneEnabled) {
       list.textContent = "";
       summary.textContent = "Remote control plane is disabled.";
       detail.textContent = "Execution Center is unavailable.";
       cancelBtn.classList.add("hidden");
+      policyApproveBtn.classList.add("hidden");
       return;
     }
     const searchValue = String(($("#executions-search") || {}).value || "").trim();
@@ -2098,6 +2210,7 @@
     if (!selectedExecutionID) {
       detail.textContent = "Select an execution to inspect workers and task results.";
       cancelBtn.classList.add("hidden");
+      policyApproveBtn.classList.add("hidden");
       return;
     }
     detail.textContent = "Loading details\u2026";
@@ -2106,6 +2219,8 @@
       renderExecutionsDetailPanel(detail, payload);
       const execution = payload && payload.execution && typeof payload.execution === "object" ? payload.execution : {};
       const terminal = isExecutionTerminalStatus(execution && execution.status);
+      const policy = execution && execution.policy && typeof execution.policy === "object" ? execution.policy : {};
+      const policyAskPending = !terminal && String(policy && policy.decision ? policy.decision : "").trim() === "ask" && !String(policy && policy.approvedAt ? policy.approvedAt : "").trim();
       cancelBtn.classList.toggle("hidden", terminal);
       cancelBtn.onclick = async () => {
         if (!window.confirm("Cancel execution " + selectedExecutionID + "?"))
@@ -2117,9 +2232,19 @@
           cancelBtn.disabled = false;
         }
       };
+      policyApproveBtn.classList.toggle("hidden", !policyAskPending);
+      policyApproveBtn.onclick = async () => {
+        policyApproveBtn.disabled = true;
+        try {
+          await authorizeExecution(selectedExecutionID, "webui", true);
+        } finally {
+          policyApproveBtn.disabled = false;
+        }
+      };
     } catch (e) {
       detail.textContent = "Load failed: " + e.message;
       cancelBtn.classList.add("hidden");
+      policyApproveBtn.classList.add("hidden");
     }
   }
   function renderDashboardExecutions(executions) {
@@ -3138,6 +3263,7 @@
       "#server-key-path": "",
       "#server-ssh-config-host": "",
       "#server-runtime-mode": "on_demand",
+      "#server-labels": "",
       "#server-auth-mode": "private_key"
     };
     Object.keys(defaults).forEach((selector) => {
@@ -3171,6 +3297,7 @@
       "#server-key-path": host.keyPath || "",
       "#server-ssh-config-host": host.sshConfigHost || "",
       "#server-runtime-mode": host.runtimeMode || "on_demand",
+      "#server-labels": Array.isArray(host.labels) ? host.labels.join(", ") : "",
       "#server-auth-mode": host.authMode || "private_key"
     };
     Object.keys(map).forEach((selector) => {
@@ -4908,6 +5035,7 @@
         "endpoint: " + endpoint,
         "auth: " + (host.authMode || "-"),
         "runtime: " + (host.runtimeMode || "-"),
+        "labels: " + (Array.isArray(host.labels) && host.labels.length ? host.labels.join(", ") : "-"),
         "health: " + (host.lastHealth || "unknown")
       ];
       lines.push(...formatServerHostOperationMetaLines(host.id));
@@ -5205,7 +5333,8 @@
         authMode: mode,
         keyPath: ($("#server-key-path").value || "").trim(),
         sshConfigHost: ($("#server-ssh-config-host").value || "").trim(),
-        runtimeMode: ($("#server-runtime-mode").value || "on_demand").trim()
+        runtimeMode: ($("#server-runtime-mode").value || "on_demand").trim(),
+        labels: parseCommaSeparatedValues(($("#server-labels").value || "").trim()).sort((a, b) => a.localeCompare(b))
       };
       const editingID = String(serverEditingHostID || "").trim();
       try {
@@ -5233,13 +5362,15 @@
     }
     refreshBtn.click();
   }
-  function renderProfilesAndBindings(profiles, bindings) {
+  function renderProfilesAndBindings(profiles, bindings, policies) {
     const profilesWrap = $("#profiles-list");
     const bindingsWrap = $("#bindings-list");
-    if (!profilesWrap || !bindingsWrap)
+    const policiesWrap = $("#execution-policies-list");
+    if (!profilesWrap || !bindingsWrap || !policiesWrap)
       return;
     const profileByID = new Map((Array.isArray(profiles) ? profiles : []).map((profile) => [String(profile && profile.id ? profile.id : ""), profile]));
     const bindingByID = new Map((Array.isArray(bindings) ? bindings : []).map((binding) => [String(binding && binding.id ? binding.id : ""), binding]));
+    const policyByID = new Map((Array.isArray(policies) ? policies : []).map((policy) => [String(policy && policy.id ? policy.id : ""), policy]));
     async function handleTestProfile(profileID) {
       const key = String(profileID || "").trim();
       if (!key)
@@ -5295,83 +5426,131 @@
         setMsg("#profiles-msg", "Delete binding failed: " + e.message, "error");
       }
     }
+    async function handleDeletePolicy(policyID) {
+      const key = String(policyID || "").trim();
+      if (!key)
+        return;
+      const policy = policyByID.get(key) || {};
+      const label = String(policy && policy.name ? policy.name : key);
+      if (!window.confirm("Delete execution policy " + label + "?"))
+        return;
+      try {
+        await api("DELETE", "/api/v1/orchestrator/policies/" + encodeURIComponent(key));
+        setMsg("#profiles-msg", "Execution policy deleted: " + label, "success");
+        await initProfiles();
+      } catch (e) {
+        setMsg("#profiles-msg", "Delete execution policy failed: " + e.message, "error");
+      }
+    }
     const island = window.CarrierRemoteControlIslands;
-    if (island && typeof island.renderProfilesAndBindings === "function" && island.renderProfilesAndBindings(profilesWrap, bindingsWrap, profiles, bindings, {
+    const renderedByIsland = !!(island && typeof island.renderProfilesAndBindings === "function" && island.renderProfilesAndBindings(profilesWrap, bindingsWrap, profiles, bindings, {
       onTestProfile: handleTestProfile,
       onEditProfile: handleEditProfile,
       onDeleteProfile: handleDeleteProfile,
       onDeleteBinding: handleDeleteBinding
-    })) {
-      return;
+    }));
+    policiesWrap.textContent = "";
+    if (!renderedByIsland) {
+      profilesWrap.textContent = "";
+      bindingsWrap.textContent = "";
+      if (!profiles.length) {
+        const empty = document.createElement("div");
+        empty.className = "card";
+        empty.textContent = "No provider profiles configured.";
+        profilesWrap.appendChild(empty);
+      } else {
+        profiles.forEach((profile) => {
+          const card = document.createElement("div");
+          card.className = "agent-card";
+          const title = document.createElement("h4");
+          title.textContent = profile.name || profile.id;
+          const meta = document.createElement("div");
+          meta.className = "instance-meta";
+          meta.textContent = "id: " + (profile.id || "-") + "\nprovider/model: " + (profile.provider || "-") + "/" + (profile.model || "-") + "\nenabled: " + String(profile.enabled);
+          meta.style.whiteSpace = "pre-line";
+          const actions = document.createElement("div");
+          actions.className = "btn-row";
+          const testBtn = document.createElement("button");
+          testBtn.className = "btn-sm btn-secondary";
+          testBtn.textContent = "Test";
+          testBtn.onclick = () => handleTestProfile(profile.id);
+          const editBtn = document.createElement("button");
+          editBtn.className = "btn-sm btn-secondary";
+          editBtn.textContent = "Edit";
+          editBtn.onclick = () => handleEditProfile(profile.id);
+          const deleteBtn = document.createElement("button");
+          deleteBtn.className = "btn-sm btn-danger";
+          deleteBtn.textContent = "Delete";
+          deleteBtn.onclick = () => handleDeleteProfile(profile.id);
+          actions.appendChild(testBtn);
+          actions.appendChild(editBtn);
+          actions.appendChild(deleteBtn);
+          card.appendChild(title);
+          card.appendChild(meta);
+          card.appendChild(actions);
+          profilesWrap.appendChild(card);
+        });
+      }
+      if (!bindings.length) {
+        const empty = document.createElement("div");
+        empty.className = "card";
+        empty.textContent = "No provider bindings configured.";
+        bindingsWrap.appendChild(empty);
+      } else {
+        bindings.forEach((binding) => {
+          const card = document.createElement("div");
+          card.className = "agent-card";
+          const title = document.createElement("h4");
+          title.textContent = (binding.targetType || "-") + ": " + (binding.targetId || "-");
+          const meta = document.createElement("div");
+          meta.className = "instance-meta";
+          meta.textContent = "id: " + (binding.id || "-") + "\nprofileId: " + (binding.profileId || "-") + "\nsyncMode: " + (binding.syncMode || "always_push");
+          meta.style.whiteSpace = "pre-line";
+          const actions = document.createElement("div");
+          actions.className = "btn-row";
+          const deleteBtn = document.createElement("button");
+          deleteBtn.className = "btn-sm btn-danger";
+          deleteBtn.textContent = "Delete";
+          deleteBtn.onclick = () => handleDeleteBinding(binding.id);
+          card.appendChild(title);
+          card.appendChild(meta);
+          card.appendChild(actions);
+          actions.appendChild(deleteBtn);
+          bindingsWrap.appendChild(card);
+        });
+      }
     }
-    profilesWrap.textContent = "";
-    bindingsWrap.textContent = "";
-    if (!profiles.length) {
+    if (!policies.length) {
       const empty = document.createElement("div");
       empty.className = "card";
-      empty.textContent = "No provider profiles configured.";
-      profilesWrap.appendChild(empty);
+      empty.textContent = "No execution policies configured.";
+      policiesWrap.appendChild(empty);
     } else {
-      profiles.forEach((profile) => {
+      policies.forEach((policy) => {
         const card = document.createElement("div");
         card.className = "agent-card";
         const title = document.createElement("h4");
-        title.textContent = profile.name || profile.id;
+        title.textContent = policy.name || policy.id;
         const meta = document.createElement("div");
         meta.className = "instance-meta";
-        meta.textContent = "id: " + (profile.id || "-") + "\nprovider/model: " + (profile.provider || "-") + "/" + (profile.model || "-") + "\nenabled: " + String(profile.enabled);
+        meta.textContent = "action: " + (policy.action || "allow") + "\nenabled: " + String(policy.enabled !== false) + "\npriority: " + String(policy.priority || 0) + (policy.reason ? "\nreason: " + policy.reason : "") + (policy.requestedProviders && policy.requestedProviders.length ? "\nproviders: " + policy.requestedProviders.join(", ") : "") + (policy.hostIds && policy.hostIds.length ? "\nhosts: " + policy.hostIds.join(", ") : "") + (policy.hostLabels && policy.hostLabels.length ? "\nhost labels: " + policy.hostLabels.join(", ") : "") + (policy.agentIds && policy.agentIds.length ? "\nagents: " + policy.agentIds.join(", ") : "") + (policy.allowedTools && policy.allowedTools.length ? "\nallowed tools: " + policy.allowedTools.join(", ") : "") + (typeof policy.maxTaskTimeoutMs === "number" ? "\nmax timeout: " + String(policy.maxTaskTimeoutMs) + "ms" : "") + (typeof policy.maxRetryBudget === "number" ? "\nmax retry: " + String(policy.maxRetryBudget) : "");
         meta.style.whiteSpace = "pre-line";
         const actions = document.createElement("div");
         actions.className = "btn-row";
-        const testBtn = document.createElement("button");
-        testBtn.className = "btn-sm btn-secondary";
-        testBtn.textContent = "Test";
-        testBtn.onclick = () => handleTestProfile(profile.id);
-        const editBtn = document.createElement("button");
-        editBtn.className = "btn-sm btn-secondary";
-        editBtn.textContent = "Edit";
-        editBtn.onclick = () => handleEditProfile(profile.id);
         const deleteBtn = document.createElement("button");
         deleteBtn.className = "btn-sm btn-danger";
         deleteBtn.textContent = "Delete";
-        deleteBtn.onclick = () => handleDeleteProfile(profile.id);
-        actions.appendChild(testBtn);
-        actions.appendChild(editBtn);
+        deleteBtn.onclick = () => handleDeletePolicy(policy.id);
         actions.appendChild(deleteBtn);
         card.appendChild(title);
         card.appendChild(meta);
         card.appendChild(actions);
-        profilesWrap.appendChild(card);
+        policiesWrap.appendChild(card);
       });
     }
-    if (!bindings.length) {
-      const empty = document.createElement("div");
-      empty.className = "card";
-      empty.textContent = "No provider bindings configured.";
-      bindingsWrap.appendChild(empty);
-      return;
-    }
-    bindings.forEach((binding) => {
-      const card = document.createElement("div");
-      card.className = "agent-card";
-      const title = document.createElement("h4");
-      title.textContent = (binding.targetType || "-") + ": " + (binding.targetId || "-");
-      const meta = document.createElement("div");
-      meta.className = "instance-meta";
-      meta.textContent = "id: " + (binding.id || "-") + "\nprofileId: " + (binding.profileId || "-") + "\nsyncMode: " + (binding.syncMode || "always_push");
-      meta.style.whiteSpace = "pre-line";
-      const actions = document.createElement("div");
-      actions.className = "btn-row";
-      const deleteBtn = document.createElement("button");
-      deleteBtn.className = "btn-sm btn-danger";
-      deleteBtn.textContent = "Delete";
-      deleteBtn.onclick = () => handleDeleteBinding(binding.id);
-      card.appendChild(title);
-      card.appendChild(meta);
-      card.appendChild(actions);
-      actions.appendChild(deleteBtn);
-      bindingsWrap.appendChild(card);
-    });
+  }
+  function parseCommaSeparatedValues(raw) {
+    return String(raw || "").split(",").map((item) => String(item || "").trim()).filter(Boolean);
   }
   function renderGovernancePreviewResolution(payload) {
     const out = $("#governance-preview-out");
@@ -5402,6 +5581,7 @@
     const saveProfileBtn = $("#profile-save");
     const cancelEditBtn = $("#profile-cancel-edit");
     const saveBindingBtn = $("#binding-save");
+    const saveExecutionPolicyBtn = $("#execution-policy-save");
     const profileSelect = $("#binding-profile-id");
     const bindingTargetType = $("#binding-target-type");
     const bindingTargetID = $("#binding-target-id");
@@ -5440,14 +5620,17 @@
         if (featureFlags.providerBindingEnabled) {
           setMsg("#profiles-msg", "", "info");
         }
-        const [profilesPayload, bindingsPayload, hosts] = await Promise.all([
+        const [profilesPayload, bindingsPayload, hosts, policiesPayload] = await Promise.all([
           api("GET", "/api/v1/provider-profiles"),
           api("GET", "/api/v1/provider-bindings"),
-          fetchRemoteHosts()
+          fetchRemoteHosts(),
+          api("GET", "/api/v1/orchestrator/policies")
         ]);
         const profiles = profilesPayload && Array.isArray(profilesPayload.profiles) ? profilesPayload.profiles : [];
         const bindings = bindingsPayload && Array.isArray(bindingsPayload.bindings) ? bindingsPayload.bindings : [];
+        const policies = policiesPayload && Array.isArray(policiesPayload.policies) ? policiesPayload.policies : [];
         providerProfilesCache = profiles;
+        orchestratorPolicyRulesCache = policies;
         remoteHostsCache = hosts;
         pruneServerHostOperationCache(hosts);
         syncProfileTestHostOptions(hosts);
@@ -5460,7 +5643,7 @@
             governancePreviewHost.appendChild(opt);
           });
         }
-        renderProfilesAndBindings(profiles, bindings);
+        renderProfilesAndBindings(profiles, bindings, policies);
         syncProfileEditSelection(profiles);
         profileSelect.textContent = "";
         profiles.forEach((profile) => {
@@ -5471,7 +5654,7 @@
         });
       } catch (e) {
         setMsg("#profiles-msg", "Load failed: " + e.message, "error");
-        renderProfilesAndBindings([], []);
+        renderProfilesAndBindings([], [], []);
       } finally {
         syncBindingControls();
       }
@@ -5533,6 +5716,56 @@
         saveBindingBtn.disabled = false;
       }
     };
+    if (saveExecutionPolicyBtn) {
+      saveExecutionPolicyBtn.onclick = async () => {
+        const payload = {
+          name: ($("#execution-policy-name").value || "").trim(),
+          action: ($("#execution-policy-action").value || "ask").trim(),
+          priority: parseInt(($("#execution-policy-priority").value || "0").trim(), 10) || 0,
+          reason: ($("#execution-policy-reason").value || "").trim(),
+          requestedProviders: parseCommaSeparatedValues(($("#execution-policy-providers").value || "").trim()).sort((a, b) => a.localeCompare(b)),
+          hostIds: parseCommaSeparatedValues(($("#execution-policy-host-ids").value || "").trim()).sort((a, b) => a.localeCompare(b)),
+          hostLabels: parseCommaSeparatedValues(($("#execution-policy-host-labels").value || "").trim()).sort((a, b) => a.localeCompare(b)),
+          agentIds: parseCommaSeparatedValues(($("#execution-policy-agent-ids").value || "").trim()).sort((a, b) => a.localeCompare(b)),
+          allowedTools: parseCommaSeparatedValues(($("#execution-policy-allowed-tools").value || "").trim()).sort((a, b) => a.localeCompare(b)),
+          enabled: ($("#execution-policy-enabled").value || "true") === "true"
+        };
+        const timeoutRaw = String($("#execution-policy-max-timeout-ms").value || "").trim();
+        const retryRaw = String($("#execution-policy-max-retry-budget").value || "").trim();
+        if (timeoutRaw !== "") {
+          payload.maxTaskTimeoutMs = parseInt(timeoutRaw, 10) || 0;
+        }
+        if (retryRaw !== "") {
+          payload.maxRetryBudget = parseInt(retryRaw, 10);
+        }
+        if (!payload.name) {
+          setMsg("#profiles-msg", "execution policy name is required.", "error");
+          return;
+        }
+        try {
+          saveExecutionPolicyBtn.disabled = true;
+          await api("POST", "/api/v1/orchestrator/policies", payload);
+          $("#execution-policy-name").value = "";
+          $("#execution-policy-action").value = "ask";
+          $("#execution-policy-priority").value = "0";
+          $("#execution-policy-reason").value = "";
+          $("#execution-policy-providers").value = "";
+          $("#execution-policy-host-ids").value = "";
+          $("#execution-policy-host-labels").value = "";
+          $("#execution-policy-agent-ids").value = "";
+          $("#execution-policy-allowed-tools").value = "";
+          $("#execution-policy-max-timeout-ms").value = "";
+          $("#execution-policy-max-retry-budget").value = "";
+          $("#execution-policy-enabled").value = "true";
+          await refreshAll();
+          setMsg("#profiles-msg", "Execution policy saved.", "success");
+        } catch (e) {
+          setMsg("#profiles-msg", "Save execution policy failed: " + e.message, "error");
+        } finally {
+          saveExecutionPolicyBtn.disabled = false;
+        }
+      };
+    }
     if (governancePreviewResolve) {
       governancePreviewResolve.onclick = async () => {
         if (!featureFlags.providerBindingEnabled) {

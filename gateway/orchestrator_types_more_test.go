@@ -7,15 +7,19 @@ import (
 
 func TestNormalizeOrchestratorRequiredWorkerDefaultsAndValidation(t *testing.T) {
 	out, err := normalizeOrchestratorRequiredWorker(OrchestratorRequiredWorker{
-		HostID:  " host-1 ",
-		AgentID: "",
-		Count:   0,
+		HostID:     " host-1 ",
+		HostLabels: []string{" Prod ", "gpu", "prod"},
+		AgentID:    "",
+		Count:      0,
 	})
 	if err != nil {
 		t.Fatalf("normalizeOrchestratorRequiredWorker defaulting failed: %v", err)
 	}
 	if out.HostID != "host-1" {
 		t.Fatalf("expected trimmed host id, got %q", out.HostID)
+	}
+	if strings.Join(out.HostLabels, ",") != "gpu,prod" {
+		t.Fatalf("expected normalized host labels gpu,prod got %v", out.HostLabels)
 	}
 	if out.AgentID != "zeroclaw" {
 		t.Fatalf("expected default agent zeroclaw, got %q", out.AgentID)
@@ -46,6 +50,17 @@ func TestNormalizeOrchestratorRequiredWorkerDefaultsAndValidation(t *testing.T) 
 	}); err == nil {
 		t.Fatal("expected invalid agent id error")
 	}
+
+	selectorOnly, err := normalizeOrchestratorRequiredWorker(OrchestratorRequiredWorker{
+		HostLabels: []string{" staging "},
+		AgentID:    "picoclaw",
+	})
+	if err != nil {
+		t.Fatalf("normalizeOrchestratorRequiredWorker selector-only failed: %v", err)
+	}
+	if selectorOnly.HostID != "" || strings.Join(selectorOnly.HostLabels, ",") != "staging" {
+		t.Fatalf("unexpected selector-only worker: %+v", selectorOnly)
+	}
 }
 
 func TestNormalizeOrchestratorTaskValidationAndDefaults(t *testing.T) {
@@ -69,6 +84,7 @@ func TestNormalizeOrchestratorTaskValidationAndDefaults(t *testing.T) {
 		TimeoutMs:   -1,
 		RetryBudget: -5,
 		ToolPolicy:  " restricted ",
+		HostLabels:  []string{" gpu ", "prod"},
 		SessionID:   " sess-1 ",
 	}, 0)
 	if err != nil {
@@ -85,6 +101,9 @@ func TestNormalizeOrchestratorTaskValidationAndDefaults(t *testing.T) {
 	}
 	if out.ToolPolicy != "restricted" {
 		t.Fatalf("expected trimmed toolPolicy, got %q", out.ToolPolicy)
+	}
+	if strings.Join(out.HostLabels, ",") != "gpu,prod" {
+		t.Fatalf("expected normalized host labels gpu,prod got %v", out.HostLabels)
 	}
 	if out.SessionID != "sess-1" {
 		t.Fatalf("expected trimmed session id, got %q", out.SessionID)
@@ -136,8 +155,22 @@ func TestNormalizeOrchestratorExecutionValidationAndDefaults(t *testing.T) {
 			{HostID: "", AgentID: "zeroclaw", Count: 1},
 		},
 		TaskUnits: []OrchestratorTaskUnit{{ID: "t1", Input: "hello"}},
-	}); err == nil || !strings.Contains(err.Error(), "requiredWorkers.hostId is required") {
+	}); err == nil || !strings.Contains(err.Error(), "requiredWorkers.hostId or requiredWorkers.hostLabels is required") {
 		t.Fatalf("expected worker hostId validation error, got %v", err)
+	}
+
+	selectorExec, err := normalizeOrchestratorExecution(OrchestratorExecution{
+		Goal: "g",
+		RequiredWorkers: []OrchestratorRequiredWorker{
+			{HostLabels: []string{"prod"}, AgentID: "picoclaw", Count: 1},
+		},
+		TaskUnits: []OrchestratorTaskUnit{{ID: "t1", Input: "hello", HostLabels: []string{"prod"}, AgentID: "picoclaw"}},
+	})
+	if err != nil {
+		t.Fatalf("expected selector-based execution validation success, got %v", err)
+	}
+	if selectorExec.RequiredWorkers[0].HostID != "" || strings.Join(selectorExec.RequiredWorkers[0].HostLabels, ",") != "prod" {
+		t.Fatalf("unexpected normalized selector worker: %+v", selectorExec.RequiredWorkers[0])
 	}
 
 	if _, err := normalizeOrchestratorExecution(OrchestratorExecution{
@@ -238,7 +271,18 @@ func TestNormalizeOrchestratorStoreHelpers(t *testing.T) {
 		IdempotencyKey: " idem ",
 		ApprovalScope:  " ",
 		MaxConcurrency: 999,
-		Error:          "  boom  ",
+		ToolPolicy: OrchestratorToolPolicy{
+			Mode:         " restricted ",
+			AllowedTools: []string{" shell ", "grep", "shell"},
+		},
+		RequiredWorkers: []OrchestratorRequiredWorker{
+			{HostID: " local ", AgentID: "zeroclaw", Count: 1},
+		},
+		TaskUnits: []OrchestratorTaskUnit{
+			{ID: "t1", Input: "hello", TimeoutMs: 45000, RetryBudget: 1},
+			{ID: "t2", Input: "world", TimeoutMs: 120000, RetryBudget: 3},
+		},
+		Error: "  boom  ",
 	})
 	if exec.ID != "exec-1" || exec.Goal != "g" || exec.IdempotencyKey != "idem" {
 		t.Fatalf("unexpected trimmed execution fields: %+v", exec)
@@ -255,12 +299,30 @@ func TestNormalizeOrchestratorStoreHelpers(t *testing.T) {
 	if exec.Error != "boom" {
 		t.Fatalf("expected trimmed error, got %q", exec.Error)
 	}
+	if exec.Policy.Decision != "allow" {
+		t.Fatalf("expected default policy decision allow, got %+v", exec.Policy)
+	}
+	if exec.Policy.EffectiveMaxConcurrency != 2 {
+		t.Fatalf("expected effective maxConcurrency 2, got %+v", exec.Policy)
+	}
+	if exec.Policy.MaxTaskTimeoutMs != 120000 {
+		t.Fatalf("expected max task timeout 120000, got %+v", exec.Policy)
+	}
+	if exec.Policy.MaxRetryBudget != 3 {
+		t.Fatalf("expected max retry budget 3, got %+v", exec.Policy)
+	}
+	if len(exec.Policy.ToolPolicy.AllowedTools) != 2 {
+		t.Fatalf("expected normalized allowed tools, got %+v", exec.Policy.ToolPolicy.AllowedTools)
+	}
 
 	defaultExec := normalizeOrchestratorExecutionForStore(OrchestratorExecution{
 		ID: "exec-2",
 	})
 	if defaultExec.MaxConcurrency != defaultOrchestratorMaxConcurrency {
 		t.Fatalf("expected default maxConcurrency %d, got %d", defaultOrchestratorMaxConcurrency, defaultExec.MaxConcurrency)
+	}
+	if defaultExec.Policy.Decision != "allow" {
+		t.Fatalf("expected default policy decision allow, got %+v", defaultExec.Policy)
 	}
 
 	lease := normalizeOrchestratorWorkerLeaseForStore(OrchestratorWorkerLease{

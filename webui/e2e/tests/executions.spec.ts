@@ -15,17 +15,22 @@ test.describe('Execution Center', () => {
     await page.click('#quick-launch-advanced-toggle');
     await expect(page.locator('#quick-launch-provider')).toBeVisible();
     await expect(page.locator('#quick-launch-hosts')).toContainText('prod-host-1');
+    await page.fill('#quick-launch-host-labels', 'gpu, prod');
     await page.fill('#quick-launch-max-concurrency', '2');
 
     await page.click('#quick-launch-preview');
     await expect(page.locator('#quick-launch-preview-card')).toBeVisible();
     await expect(page.locator('#quick-launch-preview-card')).toContainText('collect context');
     await expect(page.locator('#quick-launch-preview-card')).toContainText('draft summary');
+    await expect(page.locator('#quick-launch-preview-card')).toContainText('labels[gpu,prod]/zeroclaw');
+    await expect(page.locator('#quick-launch-preview-card')).toContainText('labels[gpu,prod]/picoclaw');
 
     await page.click('#quick-launch-run');
     await expect.poll(() => page.url()).toContain('#/executions/exec-preview-1');
     await expect(page.locator('#executions-detail')).toContainText('Investigate checkout latency');
     await expect(page.locator('#executions-detail')).toContainText('Provider Governance');
+    await expect(page.locator('#executions-detail')).toContainText('Execution Policy');
+    await expect(page.locator('#executions-detail')).toContainText('effective concurrency');
     await expect(page.locator('#executions-detail')).toContainText('openrouter');
     await expect(page.locator('#executions-detail')).toContainText('task-1');
   });
@@ -33,7 +38,7 @@ test.describe('Execution Center', () => {
   test('executions page filters and searches', async ({ page }) => {
     await loginWithToken(page, '/#/executions');
 
-    await expect(page.locator('#executions-list .execution-card')).toHaveCount(2);
+    await expect(page.locator('#executions-list .execution-card')).toHaveCount(3);
     await page.selectOption('#executions-status-filter', 'completed');
     await expect(page.locator('#executions-list')).toContainText('Prepare release notes');
     await expect(page.locator('#executions-list')).not.toContainText('Investigate checkout latency');
@@ -49,9 +54,21 @@ test.describe('Execution Center', () => {
 
     await expect(page.locator('#executions-detail')).toContainText('Investigate checkout latency');
     await expect(page.locator('#executions-detail')).toContainText('Approved by');
+    await expect(page.locator('#executions-detail')).toContainText('Execution Policy');
+    await expect(page.locator('#executions-detail')).toContainText('tool mode');
     await expect(page.locator('#executions-detail')).toContainText('anthropic');
     page.once('dialog', (dialog) => dialog.accept());
     await page.click('#executions-cancel');
     await expect(page.locator('#executions-detail')).toContainText('cancelled');
+  });
+
+  test('execution detail can approve policy-gated execution', async ({ page }) => {
+    await loginWithToken(page, '/#/executions/exec-ask');
+
+    await expect(page.locator('#executions-detail')).toContainText('Decision: ask');
+    await expect(page.locator('#executions-policy-approve')).toBeVisible();
+    await page.click('#executions-policy-approve');
+    await expect(page.locator('#executions-detail')).toContainText('Approved by: webui');
+    await expect(page.locator('#executions-detail')).toContainText('status: provisioning');
   });
 });

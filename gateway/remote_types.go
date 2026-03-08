@@ -40,6 +40,7 @@ type RemoteHost struct {
 	KeyRef        string            `json:"keyRef,omitempty"`
 	SSHConfigHost string            `json:"sshConfigHost,omitempty"`
 	RuntimeMode   RemoteRuntimeMode `json:"runtimeMode"`
+	Labels        []string          `json:"labels,omitempty"`
 	LastHealth    RemoteHealth      `json:"lastHealth,omitempty"`
 	LastCheckAt   string            `json:"lastCheckAt,omitempty"`
 	LastError     string            `json:"lastError,omitempty"`
@@ -175,6 +176,7 @@ func normalizeRemoteHost(input RemoteHost) RemoteHost {
 	h.KeyPath = strings.TrimSpace(h.KeyPath)
 	h.KeyRef = strings.TrimSpace(h.KeyRef)
 	h.SSHConfigHost = strings.TrimSpace(h.SSHConfigHost)
+	h.Labels = normalizeStringSelectorList(h.Labels, true)
 	h.LastError = strings.TrimSpace(h.LastError)
 	if h.AuthMode == "" {
 		h.AuthMode = RemoteAuthModePrivateKey

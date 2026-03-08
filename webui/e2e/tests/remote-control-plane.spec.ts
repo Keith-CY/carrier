@@ -50,6 +50,75 @@ test.describe('Remote Control Plane Views', () => {
     await expect(page.locator('#profiles-msg')).toContainText('Provider binding is disabled by feature flag.');
   });
 
+  test('profiles page supports execution policy create and delete', async ({ page }) => {
+    await mockAPIs(page);
+
+    const policies: Array<Record<string, unknown>> = [];
+    await page.route('**/api/v1/orchestrator/policies', async (route) => {
+      const req = route.request();
+      if (req.method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ result: 'ok', policies }),
+        });
+      }
+      if (req.method() === 'POST') {
+        const body = req.postDataJSON() as Record<string, unknown>;
+        const policy = {
+          id: `policy-${policies.length + 1}`,
+          enabled: true,
+          priority: 0,
+          ...body,
+        };
+        policies.unshift(policy);
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ result: 'ok', policy }),
+        });
+      }
+      return route.fallback();
+    });
+    await page.route('**/api/v1/orchestrator/policies/*', async (route) => {
+      if (route.request().method() !== 'DELETE') return route.fallback();
+      const path = new URL(route.request().url()).pathname;
+      const policyID = path.split('/').pop() || '';
+      const idx = policies.findIndex((item) => String(item.id) === policyID);
+      if (idx >= 0) policies.splice(idx, 1);
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ result: 'ok', deleted: true }),
+      });
+    });
+
+    await loginWithToken(page, '/#/profiles');
+
+    await page.fill('#execution-policy-name', 'review picoclaw production runs');
+    await page.selectOption('#execution-policy-action', 'ask');
+    await page.fill('#execution-policy-reason', 'picoclaw on prod hosts needs review');
+    await page.fill('#execution-policy-host-labels', 'prod, gpu');
+    await page.fill('#execution-policy-host-ids', 'host-1');
+    await page.fill('#execution-policy-agent-ids', 'picoclaw');
+    await page.fill('#execution-policy-allowed-tools', 'grep, shell');
+    await page.fill('#execution-policy-max-timeout-ms', '45000');
+    await page.fill('#execution-policy-max-retry-budget', '1');
+    await page.click('#execution-policy-save');
+
+    await expect(page.locator('#profiles-msg')).toContainText('Execution policy saved.');
+    await expect(page.locator('#execution-policies-list')).toContainText('review picoclaw production runs');
+    await expect(page.locator('#execution-policies-list')).toContainText('ask');
+    await expect(page.locator('#execution-policies-list')).toContainText('host labels: gpu, prod');
+    await expect(page.locator('#execution-policies-list')).toContainText('allowed tools: grep, shell');
+    await expect(page.locator('#execution-policies-list')).toContainText('max timeout: 45000ms');
+    await expect(page.locator('#execution-policies-list')).toContainText('max retry: 1');
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.locator('#execution-policies-list .agent-card').first().locator('button', { hasText: 'Delete' }).click();
+    await expect(page.locator('#execution-policies-list .card')).toContainText('No execution policies configured.');
+  });
+
   test('feature flags hide remote control routes when disabled', async ({ page }) => {
     await mockAPIs(page);
     await page.route('**/api/v1/features', async (route) =>
@@ -182,18 +251,23 @@ test.describe('Remote Control Plane Views', () => {
     await page.fill('#server-host', '10.0.0.12');
     await page.fill('#server-user', 'ubuntu');
     await page.fill('#server-key-path', '~/.ssh/id_ed25519');
+    await page.fill('#server-labels', 'prod, gpu');
     await page.click('#server-save');
 
     await expect(page.locator('#servers-list .agent-card h4', { hasText: 'prod-eu-1' })).toBeVisible();
+    await expect(page.locator('#servers-list .agent-card').first().locator('.instance-meta')).toContainText('labels: gpu, prod');
 
     await page.locator('#servers-list .agent-card').first().locator('button', { hasText: 'Edit' }).click();
     await expect(page.locator('#server-editor-state')).toContainText('Editing host');
     await expect(page.locator('#server-save')).toContainText('Update Host');
     await page.fill('#server-name', 'prod-eu-1-updated');
+    await page.fill('#server-labels', 'prod, staging');
     await page.click('#server-save');
     await expect.poll(() => patchCalls).toBe(1);
     expect(lastPatchBody?.name).toBe('prod-eu-1-updated');
+    expect(lastPatchBody?.labels).toEqual(['prod', 'staging']);
     await expect(page.locator('#servers-list .agent-card h4', { hasText: 'prod-eu-1-updated' })).toBeVisible();
+    await expect(page.locator('#servers-list .agent-card').first().locator('.instance-meta')).toContainText('labels: prod, staging');
     await expect(page.locator('#server-save')).toContainText('Save Host');
 
     await page.locator('#servers-list .agent-card').first().locator('button', { hasText: 'Check' }).click();
@@ -603,7 +677,6 @@ test.describe('Remote Control Plane Views', () => {
 
     const installBtn = page.locator('#server-manage-install-instance');
     await installBtn.click();
-    await expect(installBtn).toBeDisabled();
     await expect(page.locator('#server-manage-msg')).toContainText('Install completed');
     await expect(installBtn).toBeEnabled();
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('Install');

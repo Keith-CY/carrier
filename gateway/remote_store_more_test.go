@@ -47,6 +47,7 @@ func TestRemoteHostManagementHelpers(t *testing.T) {
 		User:        "root",
 		AuthMode:    RemoteAuthModePrivateKey,
 		KeyPath:     filepath.Join(t.TempDir(), "id.key"),
+		Labels:      []string{" Prod ", "gpu", "prod"},
 		RuntimeMode: RemoteRuntimeModeOnDemand,
 	})
 	if err != nil {
@@ -58,16 +59,23 @@ func TestRemoteHostManagementHelpers(t *testing.T) {
 	if got, ok, err := getRemoteHost(host.ID); err != nil || !ok {
 		t.Fatalf("getRemoteHost(%q) expected hit, got ok=%v err=%v got=%+v", host.ID, ok, err, got)
 	}
+	if strings.Join(host.Labels, ",") != "gpu,prod" {
+		t.Fatalf("expected normalized labels gpu,prod got %+v", host.Labels)
+	}
 
 	got, err := patchRemoteHost(host.ID, RemoteHost{
-		Name: "patched",
-		Port: 23,
+		Name:   "patched",
+		Port:   23,
+		Labels: []string{" staging ", "gpu", "staging"},
 	})
 	if err != nil {
 		t.Fatalf("patchRemoteHost failed: %v", err)
 	}
 	if got.Name != "patched" || got.Port != 23 {
 		t.Fatalf("unexpected patched host: %+v", got)
+	}
+	if strings.Join(got.Labels, ",") != "gpu,staging" {
+		t.Fatalf("expected patched labels gpu,staging got %+v", got.Labels)
 	}
 
 	if err := updateRemoteHostHealth(host.ID, RemoteHealthHealthy, "ok"); err != nil {
