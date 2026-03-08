@@ -107,11 +107,71 @@ export const MOCK_EXECUTIONS = [
     ],
   },
   {
+    id: 'exec-retryable',
+    goal: 'Collect failing deployment evidence',
+    requestedProvider: 'openrouter',
+    status: 'retryable_failed',
+    updatedAt: '2026-03-08T10:45:00Z',
+    parentExecutionId: 'exec-seed-failure',
+    sourceExecutionId: 'exec-seed-failure',
+    launchReason: 'rerun_execution',
+    authorization: {
+      infrastructureApproved: true,
+      approvedBy: 'carrier-cli',
+      approvedAt: '2026-03-08T10:40:00Z',
+    },
+    policy: {
+      decision: 'allow',
+      summary: 'infrastructure approval required; tool mode restricted; effective concurrency 2',
+      requiresInfrastructureApproval: true,
+      configuredMaxConcurrency: 2,
+      effectiveMaxConcurrency: 2,
+      maxTaskTimeoutMs: 90000,
+      maxRetryBudget: 1,
+      toolPolicy: {
+        mode: 'restricted',
+        allowedTools: ['grep', 'shell'],
+      },
+      targets: [
+        { hostId: 'host-1', agentId: 'picoclaw', count: 1 },
+        { hostId: 'local', agentId: 'zeroclaw', count: 1 },
+      ],
+    },
+    taskUnits: [
+      { id: 'task-1', input: 'collect rollout logs', hostId: 'host-1', agentId: 'picoclaw' },
+      { id: 'task-2', input: 'summarize failures', hostId: 'local', agentId: 'zeroclaw' },
+    ],
+    results: [
+      { taskId: 'task-1', status: 'failed', hostId: 'host-1', agentId: 'picoclaw', summary: 'ssh exited with code 255', error: 'connection reset by peer', failureReason: 'remote ssh session dropped', failureCategory: 'worker_failed', attempts: 2, latencyMs: 213 },
+      { taskId: 'task-2', status: 'completed', hostId: 'local', agentId: 'zeroclaw', summary: 'partial incident notes drafted', output: 'draft ready', attempts: 1, latencyMs: 22 },
+    ],
+    outcome: {
+      summary: 'One task failed after retry budget was exhausted.',
+      failureReason: 'remote evidence collection failed',
+      failureCategory: 'retryable_failed',
+      artifacts: [
+        {
+          id: 'artifact-rollout-log',
+          taskId: 'task-2',
+          name: 'rollout-notes.md',
+          kind: 'report',
+          contentType: 'text/markdown',
+          sizeBytes: 512,
+          path: 'artifacts/rollout-notes.md',
+          createdAt: '2026-03-08T10:45:00Z',
+        },
+      ],
+    },
+  },
+  {
     id: 'exec-complete',
     goal: 'Prepare release notes',
     requestedProvider: 'openrouter',
     status: 'completed',
     updatedAt: '2026-03-08T10:30:00Z',
+    parentExecutionId: 'exec-seed-release',
+    sourceExecutionId: 'exec-seed-release',
+    launchReason: 'clone_execution',
     authorization: {
       infrastructureApproved: true,
       approvedBy: 'webui',
@@ -152,8 +212,23 @@ export const MOCK_EXECUTIONS = [
       { id: 'task-1', input: 'collect merged PRs', hostId: 'local', agentId: 'zeroclaw' },
     ],
     results: [
-      { taskId: 'task-1', status: 'completed', hostId: 'local', agentId: 'zeroclaw', output: 'release notes draft ready', attempts: 1, latencyMs: 18 },
+      { taskId: 'task-1', status: 'completed', hostId: 'local', agentId: 'zeroclaw', summary: 'release notes draft ready', output: 'release notes draft ready', attempts: 1, latencyMs: 18 },
     ],
+    outcome: {
+      summary: 'Release notes draft compiled and attached.',
+      artifacts: [
+        {
+          id: 'artifact-release-notes',
+          taskId: 'task-1',
+          name: 'release-notes.md',
+          kind: 'report',
+          contentType: 'text/markdown',
+          sizeBytes: 1024,
+          path: 'artifacts/release-notes.md',
+          createdAt: '2026-03-08T10:30:00Z',
+        },
+      ],
+    },
   },
 ];
 
@@ -516,6 +591,51 @@ export async function mockOrchestrationAPIs(page: Page) {
   const executions = cloneJSON(MOCK_EXECUTIONS);
   const workers = cloneJSON(MOCK_WORKERS);
   let nextExecutionID = 1;
+  let nextDerivedExecutionID = 1;
+
+  function deriveExecution(source: Record<string, unknown>, action: 'retry' | 'rerun' | 'clone') {
+    const nextID = `exec-derived-${nextDerivedExecutionID++}`;
+    const sourceExecutionID = String(source.sourceExecutionId || source.id || '').trim();
+    const policy = source.policy && typeof source.policy === 'object'
+      ? cloneJSON(source.policy as Record<string, unknown>)
+      : undefined;
+    if (policy) {
+      delete policy.approvedBy;
+      delete policy.approvedAt;
+    }
+    let taskUnits = Array.isArray(source.taskUnits)
+      ? cloneJSON(source.taskUnits as Array<Record<string, unknown>>)
+      : [];
+    if (action === 'retry') {
+      const failedTaskIDs = new Set(
+        (Array.isArray(source.results) ? source.results : [])
+          .filter((item) => String((item as Record<string, unknown>).status || '').trim().toLowerCase() === 'failed')
+          .map((item) => String((item as Record<string, unknown>).taskId || '').trim())
+          .filter(Boolean),
+      );
+      taskUnits = taskUnits.filter((task) => failedTaskIDs.has(String(task.id || '').trim()));
+      if (!taskUnits.length) return null;
+    }
+    const derived = {
+      ...cloneJSON(source),
+      id: nextID,
+      status: 'pending_authorization',
+      parentExecutionId: String(source.id || '').trim(),
+      sourceExecutionId: sourceExecutionID || String(source.id || '').trim(),
+      launchReason: action === 'retry' ? 'retry_failed_tasks' : action === 'rerun' ? 'rerun_execution' : 'clone_execution',
+      updatedAt: '2026-03-09T12:10:00Z',
+      authorization: {
+        infrastructureApproved: false,
+      },
+      policy,
+      taskUnits,
+      results: [],
+      outcome: {},
+      error: '',
+    };
+    executions.unshift(derived);
+    return derived;
+  }
 
   await page.route('**/api/v1/orchestrator/plans', async (route) => {
     const body = route.request().postDataJSON() as Record<string, unknown>;
@@ -684,6 +804,84 @@ export async function mockOrchestrationAPIs(page: Page) {
       status: 202,
       contentType: 'application/json',
       body: JSON.stringify({ result: 'ok', execution }),
+    });
+  });
+
+  await page.route('**/api/v1/orchestrator/executions/*/retry', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const executionID = path.split('/')[5];
+    const execution = executions.find((item) => item.id === executionID);
+    if (!execution) {
+      return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ result: 'error', message: 'not found' }) });
+    }
+    const derived = deriveExecution(execution as Record<string, unknown>, 'retry');
+    if (!derived) {
+      return route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          result: 'error',
+          error: {
+            code: 'E_ORCHESTRATOR_RETRY_NOTHING',
+            message: 'execution has no failed tasks to retry',
+          },
+        }),
+      });
+    }
+    return route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ result: 'ok', execution: derived }),
+    });
+  });
+
+  await page.route('**/api/v1/orchestrator/executions/*/rerun', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const executionID = path.split('/')[5];
+    const execution = executions.find((item) => item.id === executionID);
+    if (!execution) {
+      return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ result: 'error', message: 'not found' }) });
+    }
+    const derived = deriveExecution(execution as Record<string, unknown>, 'rerun');
+    return route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ result: 'ok', execution: derived }),
+    });
+  });
+
+  await page.route('**/api/v1/orchestrator/executions/*/clone', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const executionID = path.split('/')[5];
+    const execution = executions.find((item) => item.id === executionID);
+    if (!execution) {
+      return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ result: 'error', message: 'not found' }) });
+    }
+    const derived = deriveExecution(execution as Record<string, unknown>, 'clone');
+    return route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ result: 'ok', execution: derived }),
+    });
+  });
+
+  await page.route('**/api/v1/orchestrator/executions/*/artifacts/*', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const segments = path.split('/');
+    const executionID = segments[5];
+    const artifactID = segments[7];
+    const execution = executions.find((item) => item.id === executionID);
+    const artifacts = Array.isArray(execution && execution.outcome && (execution.outcome as Record<string, unknown>).artifacts)
+      ? ((execution.outcome as Record<string, unknown>).artifacts as Array<Record<string, unknown>>)
+      : [];
+    const artifact = artifacts.find((item) => String(item.id || '').trim() === artifactID);
+    if (!artifact) {
+      return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ result: 'error', message: 'not found' }) });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: String(artifact.contentType || 'text/plain'),
+      body: '# artifact ' + String(artifact.name || artifact.id || ''),
     });
   });
 

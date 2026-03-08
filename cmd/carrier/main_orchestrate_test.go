@@ -154,6 +154,38 @@ func TestParseExecutionsCommandArgs(t *testing.T) {
 		t.Fatalf("unexpected cancel opts: %+v", cancelOpts)
 	}
 
+	retryOpts, err := parseExecutionsCommandArgs([]string{"retry", "exec-77", "--json"})
+	if err != nil {
+		t.Fatalf("parseExecutionsCommandArgs(retry) error: %v", err)
+	}
+	if retryOpts.Action != "retry" || retryOpts.ExecutionID != "exec-77" || !retryOpts.JSON {
+		t.Fatalf("unexpected retry opts: %+v", retryOpts)
+	}
+
+	rerunOpts, err := parseExecutionsCommandArgs([]string{"rerun", "exec-88", "--json"})
+	if err != nil {
+		t.Fatalf("parseExecutionsCommandArgs(rerun) error: %v", err)
+	}
+	if rerunOpts.Action != "rerun" || rerunOpts.ExecutionID != "exec-88" || !rerunOpts.JSON {
+		t.Fatalf("unexpected rerun opts: %+v", rerunOpts)
+	}
+
+	cloneOpts, err := parseExecutionsCommandArgs([]string{"clone", "exec-99", "--json"})
+	if err != nil {
+		t.Fatalf("parseExecutionsCommandArgs(clone) error: %v", err)
+	}
+	if cloneOpts.Action != "clone" || cloneOpts.ExecutionID != "exec-99" || !cloneOpts.JSON {
+		t.Fatalf("unexpected clone opts: %+v", cloneOpts)
+	}
+
+	artifactsOpts, err := parseExecutionsCommandArgs([]string{"artifacts", "exec-100", "--json"})
+	if err != nil {
+		t.Fatalf("parseExecutionsCommandArgs(artifacts) error: %v", err)
+	}
+	if artifactsOpts.Action != "artifacts" || artifactsOpts.ExecutionID != "exec-100" || !artifactsOpts.JSON {
+		t.Fatalf("unexpected artifacts opts: %+v", artifactsOpts)
+	}
+
 	authorizeOpts, err := parseExecutionsCommandArgs([]string{"authorize", "exec-66", "--policy-approve", "--json"})
 	if err != nil {
 		t.Fatalf("parseExecutionsCommandArgs(authorize) error: %v", err)
@@ -490,5 +522,125 @@ func TestRunOrchestrateCancelCommand(t *testing.T) {
 	}
 	if !strings.Contains(output, "execution cancelled by carrier-cli") {
 		t.Fatalf("expected cancel reason in output, got %q", output)
+	}
+}
+
+func TestRunOrchestrateDerivedExecutionCommands(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/orchestrator/executions/exec-source/retry":
+			_, _ = w.Write([]byte(`{"result":"ok","execution":{"id":"exec-retry","goal":"retry source","status":"pending_authorization","parentExecutionId":"exec-source","sourceExecutionId":"exec-source","launchReason":"retry_failed_tasks"}}`))
+		case "/api/v1/orchestrator/executions/exec-source/rerun":
+			_, _ = w.Write([]byte(`{"result":"ok","execution":{"id":"exec-rerun","goal":"rerun source","status":"pending_authorization","parentExecutionId":"exec-source","sourceExecutionId":"exec-source","launchReason":"rerun_execution"}}`))
+		case "/api/v1/orchestrator/executions/exec-source/clone":
+			_, _ = w.Write([]byte(`{"result":"ok","execution":{"id":"exec-clone","goal":"clone source","status":"pending_authorization","parentExecutionId":"exec-source","sourceExecutionId":"exec-source","launchReason":"clone_execution"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gateway.Close()
+
+	setProbeEnvFromURL(t, "CARRIER_GATEWAY_HOST", "CARRIER_GATEWAY_PORT", gateway.URL)
+
+	cases := []struct {
+		action string
+		wantID string
+	}{
+		{action: "retry", wantID: "exec-retry"},
+		{action: "rerun", wantID: "exec-rerun"},
+		{action: "clone", wantID: "exec-clone"},
+	}
+
+	for _, tc := range cases {
+		var out bytes.Buffer
+		err := runOrchestrateCommand(&out, orchestrateCommandOptions{
+			Action:      tc.action,
+			ExecutionID: "exec-source",
+			JSON:        true,
+		})
+		if err != nil {
+			t.Fatalf("runOrchestrateCommand(%s) error: %v", tc.action, err)
+		}
+		if !strings.Contains(out.String(), tc.wantID) {
+			t.Fatalf("runOrchestrateCommand(%s) output=%s want id=%s", tc.action, out.String(), tc.wantID)
+		}
+	}
+}
+
+func TestRenderOrchestrateExecutionIncludesLineageAndArtifacts(t *testing.T) {
+	raw := []byte(`{
+		"result":"ok",
+		"execution":{
+			"id":"exec-derived-1",
+			"goal":"retry release notes generation",
+			"parentExecutionId":"exec-source-1",
+			"sourceExecutionId":"exec-source-1",
+			"launchReason":"retry_failed_tasks",
+			"status":"retryable_failed",
+			"outcome":{
+				"summary":"one task failed and can be retried",
+				"failureReason":"provider timeout",
+				"failureCategory":"provider_failed",
+				"artifacts":[
+					{"id":"artifact-1","taskId":"task-2","name":"release-notes.txt","kind":"text","contentType":"text/plain","sizeBytes":128}
+				]
+			},
+			"taskUnits":[
+				{"id":"task-2","input":"draft release notes","hostId":"local","agentId":"zeroclaw"}
+			],
+			"results":[
+				{"taskId":"task-2","status":"failed","summary":"provider timeout","failureReason":"timeout","failureCategory":"provider_failed","latencyMs":18}
+			]
+		}
+	}`)
+	resp, err := decodeOrchestrateExecutionResponse(raw)
+	if err != nil {
+		t.Fatalf("decodeOrchestrateExecutionResponse error: %v", err)
+	}
+
+	out := renderOrchestrateExecution(resp)
+	if !strings.Contains(out, "lineage: parent=exec-source-1 source=exec-source-1 launch=retry_failed_tasks") {
+		t.Fatalf("expected lineage in output, got %q", out)
+	}
+	if !strings.Contains(out, "outcome: one task failed and can be retried") {
+		t.Fatalf("expected outcome summary in output, got %q", out)
+	}
+	if !strings.Contains(out, "failure: provider_failed (provider timeout)") {
+		t.Fatalf("expected failure summary in output, got %q", out)
+	}
+	if !strings.Contains(out, "artifacts:") || !strings.Contains(out, "release-notes.txt") {
+		t.Fatalf("expected artifacts in output, got %q", out)
+	}
+}
+
+func TestRunExecutionArtifactsCommand(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/orchestrator/executions/exec-artifacts/artifacts":
+			_, _ = w.Write([]byte(`{"result":"ok","artifacts":[{"id":"artifact-1","taskId":"task-2","name":"release-notes.txt","kind":"text","contentType":"text/plain","sizeBytes":128},{"id":"artifact-2","taskId":"task-3","name":"summary.json","kind":"json","contentType":"application/json","sizeBytes":64}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gateway.Close()
+
+	setProbeEnvFromURL(t, "CARRIER_GATEWAY_HOST", "CARRIER_GATEWAY_PORT", gateway.URL)
+
+	var out bytes.Buffer
+	err := runOrchestrateCommand(&out, orchestrateCommandOptions{
+		Action:      "artifacts",
+		ExecutionID: "exec-artifacts",
+	})
+	if err != nil {
+		t.Fatalf("runOrchestrateCommand(artifacts) error: %v", err)
+	}
+	if !strings.Contains(out.String(), "artifact-1") || !strings.Contains(out.String(), "release-notes.txt") || !strings.Contains(out.String(), "summary.json") {
+		t.Fatalf("unexpected artifacts output: %q", out.String())
 	}
 }

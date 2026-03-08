@@ -38,7 +38,7 @@ test.describe('Execution Center', () => {
   test('executions page filters and searches', async ({ page }) => {
     await loginWithToken(page, '/#/executions');
 
-    await expect(page.locator('#executions-list .execution-card')).toHaveCount(3);
+    await expect(page.locator('#executions-list .execution-card')).toHaveCount(4);
     await page.selectOption('#executions-status-filter', 'completed');
     await expect(page.locator('#executions-list')).toContainText('Prepare release notes');
     await expect(page.locator('#executions-list')).not.toContainText('Investigate checkout latency');
@@ -70,5 +70,41 @@ test.describe('Execution Center', () => {
     await page.click('#executions-policy-approve');
     await expect(page.locator('#executions-detail')).toContainText('Approved by: webui');
     await expect(page.locator('#executions-detail')).toContainText('status: provisioning');
+  });
+
+  test('execution detail shows lineage, artifacts, and derived execution actions', async ({ page }) => {
+    await loginWithToken(page, '/#/executions/exec-complete');
+
+    await expect(page.locator('#executions-detail')).toContainText('Execution Lineage');
+    await expect(page.locator('#executions-detail')).toContainText('parent: exec-seed-release');
+    await expect(page.locator('#executions-detail')).toContainText('launch reason: clone_execution');
+    await expect(page.locator('#executions-detail')).toContainText('Outcome');
+    await expect(page.locator('#executions-detail')).toContainText('Release notes draft compiled and attached.');
+    await expect(page.locator('#executions-detail')).toContainText('Artifacts');
+    const artifactLink = page.locator('#executions-detail a[href*="/api/v1/orchestrator/executions/exec-complete/artifacts/artifact-release-notes"]');
+    await expect(artifactLink).toBeVisible();
+    await expect(page.locator('#executions-rerun')).toBeVisible();
+    await expect(page.locator('#executions-clone')).toBeVisible();
+
+    await page.click('#executions-clone');
+    await expect.poll(() => page.url()).toContain('#/executions/exec-derived-1');
+    await expect(page.locator('#executions-detail')).toContainText('parent: exec-complete');
+    await expect(page.locator('#executions-detail')).toContainText('launch reason: clone_execution');
+    await expect(page.locator('#executions-detail')).toContainText('status: pending_authorization');
+  });
+
+  test('retry action creates execution from failed tasks only', async ({ page }) => {
+    await loginWithToken(page, '/#/executions/exec-retryable');
+
+    await expect(page.locator('#executions-detail')).toContainText('retryable_failed');
+    await expect(page.locator('#executions-detail')).toContainText('Failure category: retryable_failed');
+    await expect(page.locator('#executions-retry')).toBeVisible();
+
+    await page.click('#executions-retry');
+    await expect.poll(() => page.url()).toContain('#/executions/exec-derived-1');
+    await expect(page.locator('#executions-detail')).toContainText('parent: exec-retryable');
+    await expect(page.locator('#executions-detail')).toContainText('launch reason: retry_failed_tasks');
+    await expect(page.locator('#executions-detail')).toContainText('collect rollout logs');
+    await expect(page.locator('#executions-detail')).not.toContainText('summarize failures');
   });
 });

@@ -270,6 +270,299 @@ func TestHandleOrchestratorExecutionsCancel(t *testing.T) {
 	}
 }
 
+func TestHandleOrchestratorExecutionsRetryRequiresFailedTasks(t *testing.T) {
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+
+	mux := buildRemoteFeatureMux(t)
+	seed, err := upsertOrchestratorExecution(OrchestratorExecution{
+		ID:              "exec-retry-none",
+		Goal:            "nothing to retry",
+		ApprovalScope:   "infrastructure_only",
+		Status:          OrchestratorExecutionStatusCompleted,
+		RequiredWorkers: []OrchestratorRequiredWorker{{HostID: orchestratorLocalHostID, AgentID: "zeroclaw", Count: 1}},
+		TaskUnits: []OrchestratorTaskUnit{
+			{ID: "task-1", Input: "collect logs", HostID: orchestratorLocalHostID, AgentID: "zeroclaw"},
+		},
+		Results: []OrchestratorTaskResult{
+			{TaskID: "task-1", Status: OrchestratorTaskStatusCompleted, Summary: "done"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed execution failed: %v", err)
+	}
+
+	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions/"+seed.ID+"/retry", `{}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected retry conflict status, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "E_ORCHESTRATOR_RETRY_NOTHING") {
+		t.Fatalf("expected retry empty error code, got body=%s", rec.Body.String())
+	}
+}
+
+func TestHandleOrchestratorExecutionsRetryCreatesDerivedExecution(t *testing.T) {
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+
+	mux := buildRemoteFeatureMux(t)
+	seed, err := upsertOrchestratorExecution(OrchestratorExecution{
+		ID:              "exec-retry-source",
+		Goal:            "retry failing step",
+		ApprovalScope:   "infrastructure_only",
+		Status:          OrchestratorExecutionStatusRetryableFailed,
+		RequiredWorkers: []OrchestratorRequiredWorker{{HostID: orchestratorLocalHostID, AgentID: "zeroclaw", Count: 1}},
+		TaskUnits: []OrchestratorTaskUnit{
+			{ID: "task-1", Input: "collect logs", HostID: orchestratorLocalHostID, AgentID: "zeroclaw"},
+			{ID: "task-2", Input: "summarize logs", HostID: orchestratorLocalHostID, AgentID: "zeroclaw"},
+		},
+		Results: []OrchestratorTaskResult{
+			{TaskID: "task-1", Status: OrchestratorTaskStatusCompleted, Summary: "done"},
+			{TaskID: "task-2", Status: OrchestratorTaskStatusFailed, Summary: "provider timeout", FailureReason: "timeout", FailureCategory: "provider_failed"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed execution failed: %v", err)
+	}
+
+	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions/"+seed.ID+"/retry", `{}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected retry created status, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	payload := decodeJSONMap(t, rec)
+	execMap, _ := payload["execution"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(execMap["status"])); got != string(OrchestratorExecutionStatusPendingAuthorization) {
+		t.Fatalf("retry status=%q, want pending_authorization payload=%+v", got, payload)
+	}
+	if got := strings.TrimSpace(anyToString(execMap["parentExecutionId"])); got != seed.ID {
+		t.Fatalf("parentExecutionId=%q, want %s", got, seed.ID)
+	}
+	if got := strings.TrimSpace(anyToString(execMap["sourceExecutionId"])); got != seed.ID {
+		t.Fatalf("sourceExecutionId=%q, want %s", got, seed.ID)
+	}
+	if got := strings.TrimSpace(anyToString(execMap["launchReason"])); got != "retry_failed_tasks" {
+		t.Fatalf("launchReason=%q, want retry_failed_tasks", got)
+	}
+	taskUnits, _ := execMap["taskUnits"].([]interface{})
+	if len(taskUnits) != 1 {
+		t.Fatalf("retry taskUnits=%d, want 1 payload=%+v", len(taskUnits), payload)
+	}
+	firstTask, _ := taskUnits[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(firstTask["id"])); got != "task-2" {
+		t.Fatalf("retry task id=%q, want task-2", got)
+	}
+	results, _ := execMap["results"].([]interface{})
+	if len(results) != 0 {
+		t.Fatalf("retry results len=%d, want 0", len(results))
+	}
+}
+
+func TestHandleOrchestratorExecutionsRerunAndCloneCreateDerivedExecutions(t *testing.T) {
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+
+	mux := buildRemoteFeatureMux(t)
+	seed, err := upsertOrchestratorExecution(OrchestratorExecution{
+		ID:                "exec-derived-source",
+		Goal:              "rerun and clone me",
+		RequestedProvider: "openrouter",
+		ApprovalScope:     "infrastructure_only",
+		Status:            OrchestratorExecutionStatusCompleted,
+		Authorization: OrchestratorAuthorization{
+			InfrastructureApproved: true,
+			ApprovedBy:             "operator",
+			ApprovedAt:             nowTimestamp(),
+		},
+		Policy: OrchestratorExecutionPolicySnapshot{
+			Decision:        orchestratorPolicyDecisionAsk,
+			Reason:          "manual review required",
+			MatchedRuleID:   "rule-1",
+			MatchedRuleName: "review production",
+			ApprovedBy:      "reviewer",
+			ApprovedAt:      nowTimestamp(),
+		},
+		RequiredWorkers: []OrchestratorRequiredWorker{{HostID: orchestratorLocalHostID, AgentID: "picoclaw", Count: 1}},
+		TaskUnits: []OrchestratorTaskUnit{
+			{ID: "task-1", Input: "collect logs", HostID: orchestratorLocalHostID, AgentID: "picoclaw"},
+		},
+		Results: []OrchestratorTaskResult{
+			{TaskID: "task-1", Status: OrchestratorTaskStatusCompleted, Summary: "done"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed execution failed: %v", err)
+	}
+
+	rerunRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions/"+seed.ID+"/rerun", `{}`)
+	if rerunRec.Code != http.StatusCreated {
+		t.Fatalf("expected rerun created status, got %d body=%s", rerunRec.Code, rerunRec.Body.String())
+	}
+	rerunPayload := decodeJSONMap(t, rerunRec)
+	rerunExec, _ := rerunPayload["execution"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(rerunExec["launchReason"])); got != "rerun_execution" {
+		t.Fatalf("rerun launchReason=%q, want rerun_execution", got)
+	}
+	if got := strings.TrimSpace(anyToString(rerunExec["status"])); got != string(OrchestratorExecutionStatusPendingAuthorization) {
+		t.Fatalf("rerun status=%q, want pending_authorization", got)
+	}
+	if auth, _ := rerunExec["authorization"].(map[string]interface{}); anyToString(auth["approvedBy"]) != "" {
+		t.Fatalf("rerun authorization should be reset: %+v", auth)
+	}
+	if policy, _ := rerunExec["policy"].(map[string]interface{}); strings.TrimSpace(anyToString(policy["matchedRuleName"])) != "review production" || strings.TrimSpace(anyToString(policy["approvedBy"])) != "" {
+		t.Fatalf("rerun policy mismatch/reset failure: %+v", policy)
+	}
+
+	cloneRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions/"+seed.ID+"/clone", `{}`)
+	if cloneRec.Code != http.StatusCreated {
+		t.Fatalf("expected clone created status, got %d body=%s", cloneRec.Code, cloneRec.Body.String())
+	}
+	clonePayload := decodeJSONMap(t, cloneRec)
+	cloneExec, _ := clonePayload["execution"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(cloneExec["launchReason"])); got != "clone_execution" {
+		t.Fatalf("clone launchReason=%q, want clone_execution", got)
+	}
+	results, _ := cloneExec["results"].([]interface{})
+	if len(results) != 0 {
+		t.Fatalf("clone results len=%d, want 0", len(results))
+	}
+	taskUnits, _ := cloneExec["taskUnits"].([]interface{})
+	if len(taskUnits) != 1 {
+		t.Fatalf("clone taskUnits len=%d, want 1", len(taskUnits))
+	}
+}
+
+func TestHandleOrchestratorExecutionArtifactsListAndDownload(t *testing.T) {
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+	artifactRoot, err := os.MkdirTemp(".", "artifact-root-*")
+	if err != nil {
+		t.Fatalf("mkdir artifact root: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(artifactRoot) })
+	artifactPath := filepath.Join(artifactRoot, "release-notes.txt")
+	if err = os.WriteFile(artifactPath, []byte("draft release notes"), 0o600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	mux := buildRemoteFeatureMuxWithConfigAndDaemonHandlers(t, &GatewayConfig{
+		APIToken:                  "test-gateway-token",
+		MaxCommandBodyBytes:       64 * 1024,
+		RemoteControlPlaneEnabled: true,
+		RemoteChatEnabled:         true,
+		ProviderBindingEnabled:    true,
+		ArtifactRoot:              artifactRoot,
+	}, nil)
+
+	seed, err := upsertOrchestratorExecution(OrchestratorExecution{
+		ID:              "exec-artifacts-1",
+		Goal:            "collect artifacts",
+		ApprovalScope:   "infrastructure_only",
+		Status:          OrchestratorExecutionStatusCompleted,
+		RequiredWorkers: []OrchestratorRequiredWorker{{HostID: orchestratorLocalHostID, AgentID: "zeroclaw", Count: 1}},
+		TaskUnits:       []OrchestratorTaskUnit{{ID: "task-1", Input: "build notes", HostID: orchestratorLocalHostID, AgentID: "zeroclaw"}},
+		Outcome: OrchestratorExecutionOutcome{
+			Summary: "artifact produced",
+			Artifacts: []OrchestratorArtifact{
+				{
+					ID:          "artifact-1",
+					TaskID:      "task-1",
+					Name:        "release-notes.txt",
+					Kind:        "text",
+					ContentType: "text/plain; charset=utf-8",
+					SizeBytes:   int64(len("draft release notes")),
+					Path:        artifactPath,
+					CreatedAt:   nowTimestamp(),
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed execution failed: %v", err)
+	}
+
+	listRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/orchestrator/executions/"+seed.ID+"/artifacts", "")
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("artifact list status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	listPayload := decodeJSONMap(t, listRec)
+	artifacts, _ := listPayload["artifacts"].([]interface{})
+	if len(artifacts) != 1 {
+		t.Fatalf("artifacts len=%d, want 1 payload=%+v", len(artifacts), listPayload)
+	}
+	artifactMap, _ := artifacts[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(artifactMap["id"])); got != "artifact-1" {
+		t.Fatalf("artifact id=%q, want artifact-1", got)
+	}
+
+	downloadReq := httptest.NewRequest(http.MethodGet, "/api/v1/orchestrator/executions/"+seed.ID+"/artifacts/artifact-1", nil)
+	downloadReq.Header.Set("Authorization", "Bearer test-gateway-token")
+	downloadRec := httptest.NewRecorder()
+	mux.ServeHTTP(downloadRec, downloadReq)
+	if downloadRec.Code != http.StatusOK {
+		t.Fatalf("artifact download status=%d body=%s", downloadRec.Code, downloadRec.Body.String())
+	}
+	if got := downloadRec.Header().Get("Content-Type"); !strings.Contains(got, "text/plain") {
+		t.Fatalf("content-type=%q, want text/plain", got)
+	}
+	if got := strings.TrimSpace(downloadRec.Body.String()); got != "draft release notes" {
+		t.Fatalf("download body=%q, want draft release notes", got)
+	}
+}
+
+func TestHandleOrchestratorExecutionArtifactsMissingCases(t *testing.T) {
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+	artifactRoot, err := os.MkdirTemp(".", "artifact-root-*")
+	if err != nil {
+		t.Fatalf("mkdir artifact root: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(artifactRoot) })
+	outsideDir := t.TempDir()
+	outsidePath := filepath.Join(outsideDir, "outside.txt")
+	if err = os.WriteFile(outsidePath, []byte("outside"), 0o600); err != nil {
+		t.Fatalf("write outside artifact: %v", err)
+	}
+
+	mux := buildRemoteFeatureMuxWithConfigAndDaemonHandlers(t, &GatewayConfig{
+		APIToken:                  "test-gateway-token",
+		MaxCommandBodyBytes:       64 * 1024,
+		RemoteControlPlaneEnabled: true,
+		RemoteChatEnabled:         true,
+		ProviderBindingEnabled:    true,
+		ArtifactRoot:              artifactRoot,
+	}, nil)
+
+	seed, err := upsertOrchestratorExecution(OrchestratorExecution{
+		ID:              "exec-artifacts-missing",
+		Goal:            "bad artifact path",
+		ApprovalScope:   "infrastructure_only",
+		Status:          OrchestratorExecutionStatusCompleted,
+		RequiredWorkers: []OrchestratorRequiredWorker{{HostID: orchestratorLocalHostID, AgentID: "zeroclaw", Count: 1}},
+		TaskUnits:       []OrchestratorTaskUnit{{ID: "task-1", Input: "noop", HostID: orchestratorLocalHostID, AgentID: "zeroclaw"}},
+		Outcome: OrchestratorExecutionOutcome{
+			Artifacts: []OrchestratorArtifact{
+				{ID: "artifact-unsafe", Name: "outside.txt", Path: outsidePath},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed execution failed: %v", err)
+	}
+
+	methodRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions/"+seed.ID+"/artifacts", `{}`)
+	if methodRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("artifact list method status=%d body=%s", methodRec.Code, methodRec.Body.String())
+	}
+
+	missingRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/orchestrator/executions/"+seed.ID+"/artifacts/missing", "")
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("missing artifact status=%d body=%s", missingRec.Code, missingRec.Body.String())
+	}
+
+	unsafeReq := httptest.NewRequest(http.MethodGet, "/api/v1/orchestrator/executions/"+seed.ID+"/artifacts/artifact-unsafe", nil)
+	unsafeReq.Header.Set("Authorization", "Bearer test-gateway-token")
+	unsafeRec := httptest.NewRecorder()
+	mux.ServeHTTP(unsafeRec, unsafeReq)
+	if unsafeRec.Code != http.StatusNotFound {
+		t.Fatalf("unsafe artifact status=%d body=%s", unsafeRec.Code, unsafeRec.Body.String())
+	}
+}
+
 func TestHandleOrchestratorExecutionsCreatePersistsPolicySnapshot(t *testing.T) {
 	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
 

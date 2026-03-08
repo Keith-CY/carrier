@@ -2393,6 +2393,18 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 	case "cancel":
 		opts.Action = "cancel"
 		startIdx = 1
+	case "retry":
+		opts.Action = "retry"
+		startIdx = 1
+	case "rerun":
+		opts.Action = "rerun"
+		startIdx = 1
+	case "clone":
+		opts.Action = "clone"
+		startIdx = 1
+	case "artifacts":
+		opts.Action = "artifacts"
+		startIdx = 1
 	case "authorize":
 		opts.Action = "authorize"
 		startIdx = 1
@@ -2431,7 +2443,7 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 			if strings.HasPrefix(raw, "-") {
 				return orchestrateCommandOptions{}, fmt.Errorf("unknown executions option: %s", raw)
 			}
-			if opts.Action != "status" && opts.Action != "cancel" && opts.Action != "authorize" {
+			if opts.Action != "status" && opts.Action != "cancel" && opts.Action != "authorize" && opts.Action != "retry" && opts.Action != "rerun" && opts.Action != "clone" && opts.Action != "artifacts" {
 				return orchestrateCommandOptions{}, fmt.Errorf("unexpected executions argument: %s", raw)
 			}
 			if opts.ExecutionID != "" {
@@ -2441,9 +2453,21 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 		}
 	}
 
-	if (opts.Action == "status" || opts.Action == "cancel" || opts.Action == "authorize") && strings.TrimSpace(opts.ExecutionID) == "" {
+	if (opts.Action == "status" || opts.Action == "cancel" || opts.Action == "authorize" || opts.Action == "retry" || opts.Action == "rerun" || opts.Action == "clone" || opts.Action == "artifacts") && strings.TrimSpace(opts.ExecutionID) == "" {
 		if opts.Action == "cancel" {
 			return orchestrateCommandOptions{}, errors.New("usage: carrier executions cancel <execution_id> [--json]")
+		}
+		if opts.Action == "retry" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions retry <execution_id> [--json]")
+		}
+		if opts.Action == "rerun" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions rerun <execution_id> [--json]")
+		}
+		if opts.Action == "clone" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions clone <execution_id> [--json]")
+		}
+		if opts.Action == "artifacts" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions artifacts <execution_id> [--json]")
 		}
 		if opts.Action == "authorize" {
 			return orchestrateCommandOptions{}, errors.New("usage: carrier executions authorize <execution_id> [--policy-approve] [--json]")
@@ -3341,13 +3365,32 @@ type orchestrateExecutionPayload struct {
 }
 
 type orchestrateTaskResultSnapshot struct {
-	TaskID    string `json:"taskId"`
-	Status    string `json:"status"`
-	HostID    string `json:"hostId,omitempty"`
-	AgentID   string `json:"agentId,omitempty"`
-	Output    string `json:"output,omitempty"`
-	Error     string `json:"error,omitempty"`
-	LatencyMs int64  `json:"latencyMs,omitempty"`
+	TaskID          string `json:"taskId"`
+	Status          string `json:"status"`
+	HostID          string `json:"hostId,omitempty"`
+	AgentID         string `json:"agentId,omitempty"`
+	Summary         string `json:"summary,omitempty"`
+	Output          string `json:"output,omitempty"`
+	Error           string `json:"error,omitempty"`
+	FailureReason   string `json:"failureReason,omitempty"`
+	FailureCategory string `json:"failureCategory,omitempty"`
+	LatencyMs       int64  `json:"latencyMs,omitempty"`
+}
+
+type orchestrateArtifactSnapshot struct {
+	ID          string `json:"id"`
+	TaskID      string `json:"taskId,omitempty"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind,omitempty"`
+	ContentType string `json:"contentType,omitempty"`
+	SizeBytes   int64  `json:"sizeBytes,omitempty"`
+}
+
+type orchestrateExecutionOutcomeSnapshot struct {
+	Summary         string                        `json:"summary,omitempty"`
+	FailureReason   string                        `json:"failureReason,omitempty"`
+	FailureCategory string                        `json:"failureCategory,omitempty"`
+	Artifacts       []orchestrateArtifactSnapshot `json:"artifacts,omitempty"`
 }
 
 type orchestrateToolPolicySnapshot struct {
@@ -3380,16 +3423,20 @@ type orchestrateExecutionPolicySnapshot struct {
 }
 
 type orchestrateExecutionSnapshot struct {
-	ID             string                             `json:"id"`
-	Goal           string                             `json:"goal"`
-	Status         string                             `json:"status"`
-	Error          string                             `json:"error,omitempty"`
-	MaxConcurrency int                                `json:"maxConcurrency,omitempty"`
-	Policy         orchestrateExecutionPolicySnapshot `json:"policy,omitempty"`
-	CreatedAt      string                             `json:"createdAt,omitempty"`
-	UpdatedAt      string                             `json:"updatedAt,omitempty"`
-	TaskUnits      []orchestrateTaskUnit              `json:"taskUnits,omitempty"`
-	Results        []orchestrateTaskResultSnapshot    `json:"results,omitempty"`
+	ID                string                              `json:"id"`
+	Goal              string                              `json:"goal"`
+	ParentExecutionID string                              `json:"parentExecutionId,omitempty"`
+	SourceExecutionID string                              `json:"sourceExecutionId,omitempty"`
+	LaunchReason      string                              `json:"launchReason,omitempty"`
+	Status            string                              `json:"status"`
+	Error             string                              `json:"error,omitempty"`
+	MaxConcurrency    int                                 `json:"maxConcurrency,omitempty"`
+	Policy            orchestrateExecutionPolicySnapshot  `json:"policy,omitempty"`
+	Outcome           orchestrateExecutionOutcomeSnapshot `json:"outcome,omitempty"`
+	CreatedAt         string                              `json:"createdAt,omitempty"`
+	UpdatedAt         string                              `json:"updatedAt,omitempty"`
+	TaskUnits         []orchestrateTaskUnit               `json:"taskUnits,omitempty"`
+	Results           []orchestrateTaskResultSnapshot     `json:"results,omitempty"`
 }
 
 type orchestrateWorkerLeaseSnapshot struct {
@@ -3412,6 +3459,13 @@ type orchestrateExecutionListResponse struct {
 	ErrorCode  string                         `json:"errorCode,omitempty"`
 	Message    string                         `json:"message,omitempty"`
 	Executions []orchestrateExecutionSnapshot `json:"executions"`
+}
+
+type orchestrateExecutionArtifactsResponse struct {
+	Result    string                        `json:"result"`
+	ErrorCode string                        `json:"errorCode,omitempty"`
+	Message   string                        `json:"message,omitempty"`
+	Artifacts []orchestrateArtifactSnapshot `json:"artifacts"`
 }
 
 type orchestratePlanSnapshot = sharedorchestration.Plan
@@ -3438,6 +3492,16 @@ func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error 
 			return err
 		}
 		return runOrchestrateCancel(out, opts.ExecutionID, opts.JSON)
+	case "retry", "rerun", "clone":
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+		return runOrchestrateDerivedExecutionAction(out, opts.Action, opts.ExecutionID, opts.JSON)
+	case "artifacts":
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+		return runOrchestrateArtifacts(out, opts.ExecutionID, opts.JSON)
 	case "authorize":
 		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
 			return err
@@ -3512,6 +3576,48 @@ func runOrchestrateCancel(out io.Writer, executionID string, outputJSON bool) er
 		return writePrettyJSON(out, raw)
 	}
 	_, _ = fmt.Fprintln(out, renderOrchestrateExecution(resp))
+	return nil
+}
+
+func runOrchestrateDerivedExecutionAction(out io.Writer, action, executionID string, outputJSON bool) error {
+	trimmedAction := strings.ToLower(strings.TrimSpace(action))
+	trimmedID := strings.TrimSpace(executionID)
+	if trimmedID == "" {
+		return errors.New("execution id is required")
+	}
+	switch trimmedAction {
+	case "retry", "rerun", "clone":
+	default:
+		return fmt.Errorf("unsupported derived execution action: %s", action)
+	}
+	path := "/api/v1/orchestrator/executions/" + neturl.PathEscape(trimmedID) + "/" + trimmedAction
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, path, map[string]interface{}{}, 45*time.Second)
+	if err != nil {
+		return err
+	}
+	resp, decodeErr := decodeOrchestrateExecutionResponse(raw)
+	if decodeErr != nil {
+		return decodeErr
+	}
+	if outputJSON {
+		return writePrettyJSON(out, raw)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestrateExecution(resp))
+	if nextID := strings.TrimSpace(resp.Execution.ID); nextID != "" {
+		_, _ = fmt.Fprintf(out, "next: carrier executions show %s\n", nextID)
+	}
+	return nil
+}
+
+func runOrchestrateArtifacts(out io.Writer, executionID string, outputJSON bool) error {
+	resp, raw, err := fetchOrchestratorExecutionArtifacts(executionID)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		return writePrettyJSON(out, raw)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestrateExecutionArtifacts(strings.TrimSpace(executionID), resp.Artifacts))
 	return nil
 }
 
@@ -3693,6 +3799,14 @@ func decodeOrchestrateExecutionListResponse(raw []byte) (orchestrateExecutionLis
 	return resp, nil
 }
 
+func decodeOrchestrateExecutionArtifactsResponse(raw []byte) (orchestrateExecutionArtifactsResponse, error) {
+	var resp orchestrateExecutionArtifactsResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return orchestrateExecutionArtifactsResponse{}, fmt.Errorf("decode orchestrator execution artifacts response: %w", err)
+	}
+	return resp, nil
+}
+
 func fetchOrchestratorExecution(executionID string) (orchestrateExecutionResponse, []byte, error) {
 	trimmedID := strings.TrimSpace(executionID)
 	if trimmedID == "" {
@@ -3742,6 +3856,23 @@ func fetchOrchestratorExecutions(limit int) (orchestrateExecutionListResponse, [
 	return resp, raw, nil
 }
 
+func fetchOrchestratorExecutionArtifacts(executionID string) (orchestrateExecutionArtifactsResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(executionID)
+	if trimmedID == "" {
+		return orchestrateExecutionArtifactsResponse{}, nil, errors.New("execution id is required")
+	}
+	path := "/api/v1/orchestrator/executions/" + neturl.PathEscape(trimmedID) + "/artifacts"
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return orchestrateExecutionArtifactsResponse{}, nil, err
+	}
+	resp, decodeErr := decodeOrchestrateExecutionArtifactsResponse(raw)
+	if decodeErr != nil {
+		return orchestrateExecutionArtifactsResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
 func waitForOrchestratorExecution(executionID string, timeout time.Duration) (orchestrateExecutionResponse, []byte, error) {
 	if timeout <= 0 {
 		timeout = defaultOrchestrateWaitTimeout
@@ -3755,7 +3886,7 @@ func waitForOrchestratorExecution(executionID string, timeout time.Duration) (or
 		}
 		status := strings.ToLower(strings.TrimSpace(resp.Execution.Status))
 		lastStatus = status
-		if status == "completed" || status == "failed" || status == "declined" || status == "cancelled" {
+		if status == "completed" || status == "partial_completed" || status == "failed" || status == "retryable_failed" || status == "declined" || status == "cancelled" {
 			return resp, raw, nil
 		}
 		if time.Now().After(deadline) {
@@ -3774,8 +3905,26 @@ func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
 		fmt.Sprintf("goal: %s", strings.TrimSpace(execution.Goal)),
 		fmt.Sprintf("tasks: total=%d completed=%d failed=%d", total, completed, failed),
 	}
+	if parentID := strings.TrimSpace(execution.ParentExecutionID); parentID != "" || strings.TrimSpace(execution.SourceExecutionID) != "" || strings.TrimSpace(execution.LaunchReason) != "" {
+		lines = append(lines, fmt.Sprintf(
+			"lineage: parent=%s source=%s launch=%s",
+			firstNonEmpty(parentID, "n/a"),
+			firstNonEmpty(strings.TrimSpace(execution.SourceExecutionID), "n/a"),
+			firstNonEmpty(strings.TrimSpace(execution.LaunchReason), "n/a"),
+		))
+	}
 	if errText := strings.TrimSpace(execution.Error); errText != "" {
 		lines = append(lines, "error: "+errText)
+	}
+	if summary := strings.TrimSpace(execution.Outcome.Summary); summary != "" {
+		lines = append(lines, "outcome: "+summary)
+	}
+	if failureCategory := strings.TrimSpace(execution.Outcome.FailureCategory); failureCategory != "" || strings.TrimSpace(execution.Outcome.FailureReason) != "" {
+		lines = append(lines, fmt.Sprintf(
+			"failure: %s (%s)",
+			firstNonEmpty(failureCategory, "unknown"),
+			firstNonEmpty(strings.TrimSpace(execution.Outcome.FailureReason), "n/a"),
+		))
 	}
 	if policyDecision := strings.TrimSpace(execution.Policy.Decision); policyDecision != "" {
 		policyParts := []string{"policy: " + policyDecision}
@@ -3823,6 +3972,23 @@ func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
 			lines = append(lines, "allowed tools: "+strings.Join(execution.Policy.ToolPolicy.AllowedTools, ", "))
 		}
 	}
+	if len(execution.Outcome.Artifacts) > 0 {
+		lines = append(lines, "artifacts:")
+		for _, artifact := range execution.Outcome.Artifacts {
+			name := firstNonEmpty(strings.TrimSpace(artifact.Name), strings.TrimSpace(artifact.ID))
+			parts := []string{firstNonEmpty(strings.TrimSpace(artifact.ID), "artifact")}
+			if taskID := strings.TrimSpace(artifact.TaskID); taskID != "" {
+				parts = append(parts, "task="+taskID)
+			}
+			if kind := strings.TrimSpace(artifact.Kind); kind != "" {
+				parts = append(parts, "kind="+kind)
+			}
+			if artifact.SizeBytes > 0 {
+				parts = append(parts, fmt.Sprintf("size=%dB", artifact.SizeBytes))
+			}
+			lines = append(lines, fmt.Sprintf("- %s · %s", name, strings.Join(parts, " · ")))
+		}
+	}
 	if len(execution.Results) > 0 {
 		lines = append(lines, "task results:")
 		for _, result := range execution.Results {
@@ -3833,7 +3999,10 @@ func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
 			if strings.TrimSpace(target) == "" {
 				target = "(unknown target)"
 			}
-			summary := strings.TrimSpace(result.Error)
+			summary := strings.TrimSpace(result.Summary)
+			if summary == "" {
+				summary = strings.TrimSpace(result.Error)
+			}
 			if summary == "" {
 				summary = strings.TrimSpace(result.Output)
 			}
@@ -3860,6 +4029,32 @@ func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
 				firstNonEmpty(strings.TrimSpace(worker.State), "unknown"),
 			))
 		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderOrchestrateExecutionArtifacts(executionID string, artifacts []orchestrateArtifactSnapshot) string {
+	lines := []string{fmt.Sprintf("execution artifacts %s", firstNonEmpty(strings.TrimSpace(executionID), "(unknown)"))}
+	if len(artifacts) == 0 {
+		lines = append(lines, "no artifacts recorded")
+		return strings.Join(lines, "\n")
+	}
+	for _, artifact := range artifacts {
+		name := firstNonEmpty(strings.TrimSpace(artifact.Name), strings.TrimSpace(artifact.ID))
+		parts := []string{firstNonEmpty(strings.TrimSpace(artifact.ID), "artifact")}
+		if taskID := strings.TrimSpace(artifact.TaskID); taskID != "" {
+			parts = append(parts, "task="+taskID)
+		}
+		if kind := strings.TrimSpace(artifact.Kind); kind != "" {
+			parts = append(parts, "kind="+kind)
+		}
+		if contentType := strings.TrimSpace(artifact.ContentType); contentType != "" {
+			parts = append(parts, contentType)
+		}
+		if artifact.SizeBytes > 0 {
+			parts = append(parts, fmt.Sprintf("size=%dB", artifact.SizeBytes))
+		}
+		lines = append(lines, fmt.Sprintf("- %s · %s", name, strings.Join(parts, " · ")))
 	}
 	return strings.Join(lines, "\n")
 }

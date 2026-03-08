@@ -124,6 +124,29 @@
     });
   }
 
+  async function downloadAPI(path, filename) {
+    const opts = { headers: {} as Record<string, string> };
+    if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+    const response = await fetch(path, opts);
+    if (response.status === 401) {
+      clearToken();
+      throw new Error('Unauthorized');
+    }
+    if (!response.ok) {
+      const raw = await response.text();
+      throw new Error(raw || 'Request failed (' + response.status + ')');
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    if (filename) link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   function clearToken() {
     disconnectDelegateEvents();
     stopDashboardExecutionPolling();
@@ -1716,14 +1739,24 @@
 
   function isExecutionTerminalStatus(status) {
     const normalized = String(status || '').trim().toLowerCase();
-    return normalized === 'completed' || normalized === 'failed' || normalized === 'cancelled' || normalized === 'declined';
+    return normalized === 'completed' || normalized === 'partial_completed' || normalized === 'failed' || normalized === 'retryable_failed' || normalized === 'cancelled' || normalized === 'declined';
   }
 
   function executionStatusBadgeClass(status) {
     const normalized = String(status || '').trim().toLowerCase();
     if (normalized === 'completed') return 'badge badge-ok';
-    if (normalized === 'failed' || normalized === 'declined' || normalized === 'cancelled') return 'badge badge-error';
+    if (normalized === 'partial_completed') return 'badge badge-warn';
+    if (normalized === 'failed' || normalized === 'retryable_failed' || normalized === 'declined' || normalized === 'cancelled') return 'badge badge-error';
     return 'badge badge-unknown';
+  }
+
+  function executionHasFailedTasks(execution) {
+    const results = Array.isArray(execution && execution.results) ? execution.results : [];
+    return results.some(item => String(item && item.status ? item.status : '').trim().toLowerCase() === 'failed');
+  }
+
+  function artifactDownloadPath(executionID, artifactID) {
+    return '/api/v1/orchestrator/executions/' + encodeURIComponent(String(executionID || '').trim()) + '/artifacts/' + encodeURIComponent(String(artifactID || '').trim());
   }
 
   function workerStateBadgeClass(state) {
@@ -1869,6 +1902,26 @@
           item.appendChild(body);
         }
 
+        const resultSummary = String(result.summary || '').trim();
+        if (resultSummary) {
+          const summary = document.createElement('div');
+          summary.className = 'execution-result-body';
+          summary.textContent = resultSummary;
+          item.appendChild(summary);
+        }
+
+        const failureReason = String(result.failureReason || '').trim();
+        const failureCategory = String(result.failureCategory || '').trim();
+        if (failureReason || failureCategory) {
+          const failure = document.createElement('div');
+          failure.className = 'execution-result-meta';
+          const parts = [];
+          if (failureReason) parts.push('reason=' + failureReason);
+          if (failureCategory) parts.push('category=' + failureCategory);
+          failure.textContent = parts.join(' · ');
+          item.appendChild(failure);
+        }
+
         const output = String(result.output || result.error || '').trim();
         if (output) {
           const pre = document.createElement('pre');
@@ -1930,9 +1983,9 @@
       case 'active':
         return !isExecutionTerminalStatus(status);
       case 'completed':
-        return status === 'completed';
+        return status === 'completed' || status === 'partial_completed';
       case 'failed':
-        return status === 'failed' || status === 'declined';
+        return status === 'failed' || status === 'retryable_failed' || status === 'declined';
       case 'cancelled':
         return status === 'cancelled';
       default:
@@ -1960,6 +2013,24 @@
     });
     delete dashboardExecutionDetailsByID[id];
     await refreshExecutions();
+  }
+
+  async function createDerivedExecution(executionID, action) {
+    const id = String(executionID || '').trim();
+    const normalizedAction = String(action || '').trim().toLowerCase();
+    if (!id || !normalizedAction) return null;
+    const payload = await api('POST', '/api/v1/orchestrator/executions/' + encodeURIComponent(id) + '/' + encodeURIComponent(normalizedAction));
+    const execution = payload && payload.execution && typeof payload.execution === 'object' ? payload.execution : null;
+    if (!execution || !execution.id) {
+      throw new Error('derived execution was not returned');
+    }
+    dashboardExecutionDetailsByID[String(execution.id).trim()] = {
+      result: 'ok',
+      execution,
+      workers: [],
+    };
+    await refreshExecutions();
+    return execution;
   }
 
   function renderExecutionsDetailPanel(target, payload) {
@@ -1999,6 +2070,113 @@
       summaryCard.appendChild(errorLine);
     }
     target.appendChild(summaryCard);
+
+    const parentExecutionID = String(execution && execution.parentExecutionId ? execution.parentExecutionId : '').trim();
+    const sourceExecutionID = String(execution && execution.sourceExecutionId ? execution.sourceExecutionId : '').trim();
+    const launchReason = String(execution && execution.launchReason ? execution.launchReason : '').trim();
+    if (parentExecutionID || sourceExecutionID || launchReason) {
+      const lineageCard = document.createElement('div');
+      lineageCard.className = 'execution-detail-block';
+      const lineageTitle = document.createElement('div');
+      lineageTitle.className = 'execution-detail-title';
+      lineageTitle.textContent = 'Execution Lineage';
+      lineageCard.appendChild(lineageTitle);
+
+      if (parentExecutionID) {
+        const row = document.createElement('div');
+        row.className = 'execution-detail-line';
+        row.textContent = 'parent: ' + parentExecutionID;
+        lineageCard.appendChild(row);
+      }
+      if (sourceExecutionID) {
+        const row = document.createElement('div');
+        row.className = 'execution-detail-line';
+        row.textContent = 'source: ' + sourceExecutionID;
+        lineageCard.appendChild(row);
+      }
+      if (launchReason) {
+        const row = document.createElement('div');
+        row.className = 'execution-detail-line';
+        row.textContent = 'launch reason: ' + launchReason;
+        lineageCard.appendChild(row);
+      }
+      target.appendChild(lineageCard);
+    }
+
+    const outcome = execution && execution.outcome && typeof execution.outcome === 'object'
+      ? execution.outcome
+      : {};
+    const outcomeSummary = String(outcome && outcome.summary ? outcome.summary : '').trim();
+    const outcomeFailureReason = String(outcome && outcome.failureReason ? outcome.failureReason : '').trim();
+    const outcomeFailureCategory = String(outcome && outcome.failureCategory ? outcome.failureCategory : '').trim();
+    const artifacts = Array.isArray(outcome && outcome.artifacts) ? outcome.artifacts : [];
+    if (outcomeSummary || outcomeFailureReason || outcomeFailureCategory || artifacts.length) {
+      const outcomeCard = document.createElement('div');
+      outcomeCard.className = 'execution-detail-block';
+      const outcomeTitle = document.createElement('div');
+      outcomeTitle.className = 'execution-detail-title';
+      outcomeTitle.textContent = 'Outcome';
+      outcomeCard.appendChild(outcomeTitle);
+
+      if (outcomeSummary) {
+        const row = document.createElement('div');
+        row.className = 'execution-detail-line';
+        row.textContent = 'Summary: ' + outcomeSummary;
+        outcomeCard.appendChild(row);
+      }
+      if (outcomeFailureReason) {
+        const row = document.createElement('div');
+        row.className = 'execution-detail-line';
+        row.textContent = 'Failure reason: ' + outcomeFailureReason;
+        outcomeCard.appendChild(row);
+      }
+      if (outcomeFailureCategory) {
+        const row = document.createElement('div');
+        row.className = 'execution-detail-line';
+        row.textContent = 'Failure category: ' + outcomeFailureCategory;
+        outcomeCard.appendChild(row);
+      }
+      if (artifacts.length) {
+        const artifactTitle = document.createElement('div');
+        artifactTitle.className = 'execution-detail-line';
+        artifactTitle.textContent = 'Artifacts';
+        outcomeCard.appendChild(artifactTitle);
+        artifacts.forEach(item => {
+          const artifactID = String(item && item.id ? item.id : '').trim();
+          if (!artifactID) return;
+          const name = String(item && item.name ? item.name : artifactID).trim();
+          const kind = String(item && item.kind ? item.kind : '').trim();
+          const contentType = String(item && item.contentType ? item.contentType : '').trim();
+          const sizeBytes = Number(item && item.sizeBytes ? item.sizeBytes : 0);
+          const createdAt = String(item && item.createdAt ? item.createdAt : '').trim();
+          const row = document.createElement('div');
+          row.className = 'execution-detail-line';
+          const metaParts = [];
+          if (kind) metaParts.push(kind);
+          if (contentType) metaParts.push(contentType);
+          if (sizeBytes > 0) metaParts.push(String(sizeBytes) + ' bytes');
+          if (createdAt) metaParts.push(formatDateTime(createdAt));
+          row.textContent = name + (metaParts.length ? ' · ' + metaParts.join(' · ') : '');
+          outcomeCard.appendChild(row);
+
+          const downloadLink = document.createElement('a');
+          downloadLink.className = 'btn-sm btn-secondary';
+          downloadLink.href = artifactDownloadPath(execution.id, artifactID);
+          downloadLink.textContent = 'Download ' + name;
+          downloadLink.onclick = async (event) => {
+            event.preventDefault();
+            downloadLink.setAttribute('aria-busy', 'true');
+            try {
+              await downloadAPI(artifactDownloadPath(execution.id, artifactID), name);
+            } finally {
+              downloadLink.removeAttribute('aria-busy');
+            }
+          };
+          outcomeCard.appendChild(downloadLink);
+        });
+      }
+      target.appendChild(outcomeCard);
+    }
 
     const policy = execution && execution.policy && typeof execution.policy === 'object'
       ? execution.policy
@@ -2154,13 +2332,19 @@
     const detail = $('#executions-detail');
     const cancelBtn = $('#executions-cancel');
     const policyApproveBtn = $('#executions-policy-approve');
-    if (!list || !summary || !detail || !cancelBtn || !policyApproveBtn) return;
+    const retryBtn = $('#executions-retry');
+    const rerunBtn = $('#executions-rerun');
+    const cloneBtn = $('#executions-clone');
+    if (!list || !summary || !detail || !cancelBtn || !policyApproveBtn || !retryBtn || !rerunBtn || !cloneBtn) return;
     if (!featureFlags.remoteControlPlaneEnabled) {
       list.textContent = '';
       summary.textContent = 'Remote control plane is disabled.';
       detail.textContent = 'Execution Center is unavailable.';
+      retryBtn.classList.add('hidden');
+      rerunBtn.classList.add('hidden');
+      cloneBtn.classList.add('hidden');
       cancelBtn.classList.add('hidden');
-       policyApproveBtn.classList.add('hidden');
+      policyApproveBtn.classList.add('hidden');
       return;
     }
 
@@ -2232,6 +2416,9 @@
 
     if (!selectedExecutionID) {
       detail.textContent = 'Select an execution to inspect workers and task results.';
+      retryBtn.classList.add('hidden');
+      rerunBtn.classList.add('hidden');
+      cloneBtn.classList.add('hidden');
       cancelBtn.classList.add('hidden');
       policyApproveBtn.classList.add('hidden');
       return;
@@ -2243,10 +2430,14 @@
       renderExecutionsDetailPanel(detail, payload);
       const execution = payload && payload.execution && typeof payload.execution === 'object' ? payload.execution : {};
       const terminal = isExecutionTerminalStatus(execution && execution.status);
+      const hasFailedTasks = executionHasFailedTasks(execution);
       const policy = execution && execution.policy && typeof execution.policy === 'object' ? execution.policy : {};
       const policyAskPending = !terminal &&
         String(policy && policy.decision ? policy.decision : '').trim() === 'ask' &&
         !String(policy && policy.approvedAt ? policy.approvedAt : '').trim();
+      retryBtn.classList.toggle('hidden', !(terminal && hasFailedTasks));
+      rerunBtn.classList.toggle('hidden', !terminal);
+      cloneBtn.classList.toggle('hidden', !terminal);
       cancelBtn.classList.toggle('hidden', terminal);
       cancelBtn.onclick = async () => {
         if (!window.confirm('Cancel execution ' + selectedExecutionID + '?')) return;
@@ -2255,6 +2446,48 @@
           await cancelExecution(selectedExecutionID, 'webui');
         } finally {
           cancelBtn.disabled = false;
+        }
+      };
+      retryBtn.onclick = async () => {
+        retryBtn.disabled = true;
+        try {
+          const derived = await createDerivedExecution(selectedExecutionID, 'retry');
+          if (derived && derived.id) {
+            selectedExecutionID = String(derived.id).trim();
+            location.hash = '#/executions/' + encodeURIComponent(selectedExecutionID);
+          }
+        } catch (e) {
+          summary.textContent = 'Retry failed: ' + e.message;
+        } finally {
+          retryBtn.disabled = false;
+        }
+      };
+      rerunBtn.onclick = async () => {
+        rerunBtn.disabled = true;
+        try {
+          const derived = await createDerivedExecution(selectedExecutionID, 'rerun');
+          if (derived && derived.id) {
+            selectedExecutionID = String(derived.id).trim();
+            location.hash = '#/executions/' + encodeURIComponent(selectedExecutionID);
+          }
+        } catch (e) {
+          summary.textContent = 'Rerun failed: ' + e.message;
+        } finally {
+          rerunBtn.disabled = false;
+        }
+      };
+      cloneBtn.onclick = async () => {
+        cloneBtn.disabled = true;
+        try {
+          const derived = await createDerivedExecution(selectedExecutionID, 'clone');
+          if (derived && derived.id) {
+            selectedExecutionID = String(derived.id).trim();
+            location.hash = '#/executions/' + encodeURIComponent(selectedExecutionID);
+          }
+        } catch (e) {
+          summary.textContent = 'Clone failed: ' + e.message;
+        } finally {
+          cloneBtn.disabled = false;
         }
       };
       policyApproveBtn.classList.toggle('hidden', !policyAskPending);
@@ -2268,6 +2501,9 @@
       };
     } catch (e) {
       detail.textContent = 'Load failed: ' + e.message;
+      retryBtn.classList.add('hidden');
+      rerunBtn.classList.add('hidden');
+      cloneBtn.classList.add('hidden');
       cancelBtn.classList.add('hidden');
       policyApproveBtn.classList.add('hidden');
     }

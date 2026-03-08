@@ -255,6 +255,56 @@ func TestNormalizeOrchestratorExecutionValidationAndDefaults(t *testing.T) {
 	}
 }
 
+func TestNormalizeOrchestratorExecutionForStorePreservesLineageAndOutcome(t *testing.T) {
+	out := normalizeOrchestratorExecutionForStore(OrchestratorExecution{
+		ID:                " exec-1 ",
+		Goal:              "  investigate failure  ",
+		ParentExecutionID: " parent-1 ",
+		SourceExecutionID: " source-1 ",
+		LaunchReason:      " retry_failed_tasks ",
+		Status:            OrchestratorExecutionStatusRetryableFailed,
+		Outcome: OrchestratorExecutionOutcome{
+			Summary:         " retryable failure ",
+			FailureReason:   " provider timeout ",
+			FailureCategory: " provider_failed ",
+		},
+		Results: []OrchestratorTaskResult{
+			{
+				TaskID:          "task-1",
+				Status:          OrchestratorTaskStatusFailed,
+				Summary:         " collect failed ",
+				FailureReason:   " timeout ",
+				FailureCategory: " provider_failed ",
+			},
+		},
+	})
+
+	if out.ID != "exec-1" || out.Goal != "investigate failure" {
+		t.Fatalf("unexpected normalized id/goal: %+v", out)
+	}
+	if out.ParentExecutionID != "parent-1" {
+		t.Fatalf("parentExecutionId = %q, want parent-1", out.ParentExecutionID)
+	}
+	if out.SourceExecutionID != "source-1" {
+		t.Fatalf("sourceExecutionId = %q, want source-1", out.SourceExecutionID)
+	}
+	if out.LaunchReason != "retry_failed_tasks" {
+		t.Fatalf("launchReason = %q, want retry_failed_tasks", out.LaunchReason)
+	}
+	if out.Status != OrchestratorExecutionStatusRetryableFailed {
+		t.Fatalf("status = %q, want retryable_failed", out.Status)
+	}
+	if out.Outcome.Summary != "retryable failure" || out.Outcome.FailureReason != "provider timeout" || out.Outcome.FailureCategory != "provider_failed" {
+		t.Fatalf("unexpected normalized outcome: %+v", out.Outcome)
+	}
+	if len(out.Results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(out.Results))
+	}
+	if out.Results[0].Summary != "collect failed" || out.Results[0].FailureReason != "timeout" || out.Results[0].FailureCategory != "provider_failed" {
+		t.Fatalf("unexpected normalized result: %+v", out.Results[0])
+	}
+}
+
 func TestErrOrchestratorValidationFormatting(t *testing.T) {
 	if got := errOrchestratorValidation("  bad input  ", 3).Error(); got != "item 3: bad input" {
 		t.Fatalf("unexpected indexed error format: %q", got)

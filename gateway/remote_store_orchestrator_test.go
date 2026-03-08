@@ -44,16 +44,33 @@ func TestOrchestratorExecutionStoreLifecycle(t *testing.T) {
 	}
 
 	created, err := upsertOrchestratorExecution(OrchestratorExecution{
-		ID:             " exec-1 ",
-		Goal:           "  plan and run ",
-		IdempotencyKey: " idem-1 ",
-		Status:         OrchestratorExecutionStatusPendingAuthorization,
+		ID:                " exec-1 ",
+		Goal:              "  plan and run ",
+		IdempotencyKey:    " idem-1 ",
+		ParentExecutionID: " parent-0 ",
+		SourceExecutionID: " source-0 ",
+		LaunchReason:      " rerun_execution ",
+		Status:            OrchestratorExecutionStatusPartialCompleted,
+		Outcome: OrchestratorExecutionOutcome{
+			Summary:         "partial completion",
+			FailureReason:   "one task failed",
+			FailureCategory: "worker_failed",
+		},
 	})
 	if err != nil {
 		t.Fatalf("upsertOrchestratorExecution create failed: %v", err)
 	}
 	if created.ID != "exec-1" || created.Goal != "plan and run" || created.IdempotencyKey != "idem-1" {
 		t.Fatalf("unexpected normalized execution: %+v", created)
+	}
+	if created.ParentExecutionID != "parent-0" || created.SourceExecutionID != "source-0" || created.LaunchReason != "rerun_execution" {
+		t.Fatalf("unexpected execution lineage: %+v", created)
+	}
+	if created.Status != OrchestratorExecutionStatusPartialCompleted {
+		t.Fatalf("expected partial_completed status, got %q", created.Status)
+	}
+	if created.Outcome.Summary != "partial completion" || created.Outcome.FailureCategory != "worker_failed" {
+		t.Fatalf("unexpected execution outcome: %+v", created.Outcome)
 	}
 	if created.ApprovalScope != "infrastructure_only" {
 		t.Fatalf("expected default approvalScope, got %q", created.ApprovalScope)
@@ -86,11 +103,19 @@ func TestOrchestratorExecutionStoreLifecycle(t *testing.T) {
 
 	createdAt := created.CreatedAt
 	updated, err := upsertOrchestratorExecution(OrchestratorExecution{
-		ID:             "exec-1",
-		Goal:           "updated goal",
-		IdempotencyKey: "idem-1",
-		Status:         OrchestratorExecutionStatusRunning,
-		CreatedAt:      "should-be-overwritten",
+		ID:                "exec-1",
+		Goal:              "updated goal",
+		IdempotencyKey:    "idem-1",
+		ParentExecutionID: "parent-0",
+		SourceExecutionID: "source-0",
+		LaunchReason:      "retry_failed_tasks",
+		Status:            OrchestratorExecutionStatusRetryableFailed,
+		Outcome: OrchestratorExecutionOutcome{
+			Summary:         "retryable failure",
+			FailureReason:   "provider timeout",
+			FailureCategory: "provider_failed",
+		},
+		CreatedAt: "should-be-overwritten",
 	})
 	if err != nil {
 		t.Fatalf("upsertOrchestratorExecution update failed: %v", err)
@@ -98,8 +123,11 @@ func TestOrchestratorExecutionStoreLifecycle(t *testing.T) {
 	if updated.CreatedAt != createdAt {
 		t.Fatalf("expected createdAt to be preserved, got %q want %q", updated.CreatedAt, createdAt)
 	}
-	if updated.Goal != "updated goal" || updated.Status != OrchestratorExecutionStatusRunning {
+	if updated.Goal != "updated goal" || updated.Status != OrchestratorExecutionStatusRetryableFailed {
 		t.Fatalf("unexpected updated execution: %+v", updated)
+	}
+	if updated.LaunchReason != "retry_failed_tasks" || updated.Outcome.FailureCategory != "provider_failed" {
+		t.Fatalf("unexpected updated execution lineage/outcome: %+v", updated)
 	}
 
 	executions, err = listOrchestratorExecutions()

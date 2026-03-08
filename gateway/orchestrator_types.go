@@ -19,7 +19,9 @@ const (
 	OrchestratorExecutionStatusProvisioning         OrchestratorExecutionStatus = "provisioning"
 	OrchestratorExecutionStatusRunning              OrchestratorExecutionStatus = "running"
 	OrchestratorExecutionStatusCompleted            OrchestratorExecutionStatus = "completed"
+	OrchestratorExecutionStatusPartialCompleted     OrchestratorExecutionStatus = "partial_completed"
 	OrchestratorExecutionStatusFailed               OrchestratorExecutionStatus = "failed"
+	OrchestratorExecutionStatusRetryableFailed      OrchestratorExecutionStatus = "retryable_failed"
 	OrchestratorExecutionStatusCancelled            OrchestratorExecutionStatus = "cancelled"
 	OrchestratorExecutionStatusDeclined             OrchestratorExecutionStatus = "declined"
 )
@@ -98,17 +100,38 @@ type OrchestratorExecutionPolicySnapshot struct {
 }
 
 type OrchestratorTaskResult struct {
-	TaskID      string                 `json:"taskId"`
-	Status      OrchestratorTaskStatus `json:"status"`
-	WorkerID    string                 `json:"workerId,omitempty"`
-	HostID      string                 `json:"hostId,omitempty"`
-	AgentID     string                 `json:"agentId,omitempty"`
-	Attempts    int                    `json:"attempts"`
-	Output      string                 `json:"output,omitempty"`
-	Error       string                 `json:"error,omitempty"`
-	StartedAt   string                 `json:"startedAt,omitempty"`
-	CompletedAt string                 `json:"completedAt,omitempty"`
-	LatencyMs   int64                  `json:"latencyMs,omitempty"`
+	TaskID          string                 `json:"taskId"`
+	Status          OrchestratorTaskStatus `json:"status"`
+	WorkerID        string                 `json:"workerId,omitempty"`
+	HostID          string                 `json:"hostId,omitempty"`
+	AgentID         string                 `json:"agentId,omitempty"`
+	Attempts        int                    `json:"attempts"`
+	Summary         string                 `json:"summary,omitempty"`
+	Output          string                 `json:"output,omitempty"`
+	Error           string                 `json:"error,omitempty"`
+	FailureReason   string                 `json:"failureReason,omitempty"`
+	FailureCategory string                 `json:"failureCategory,omitempty"`
+	StartedAt       string                 `json:"startedAt,omitempty"`
+	CompletedAt     string                 `json:"completedAt,omitempty"`
+	LatencyMs       int64                  `json:"latencyMs,omitempty"`
+}
+
+type OrchestratorArtifact struct {
+	ID          string `json:"id"`
+	TaskID      string `json:"taskId,omitempty"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind,omitempty"`
+	ContentType string `json:"contentType,omitempty"`
+	SizeBytes   int64  `json:"sizeBytes,omitempty"`
+	Path        string `json:"path,omitempty"`
+	CreatedAt   string `json:"createdAt,omitempty"`
+}
+
+type OrchestratorExecutionOutcome struct {
+	Summary         string                 `json:"summary,omitempty"`
+	FailureReason   string                 `json:"failureReason,omitempty"`
+	FailureCategory string                 `json:"failureCategory,omitempty"`
+	Artifacts       []OrchestratorArtifact `json:"artifacts,omitempty"`
 }
 
 type OrchestratorExecution struct {
@@ -116,6 +139,9 @@ type OrchestratorExecution struct {
 	Goal              string                              `json:"goal"`
 	RequestedProvider string                              `json:"requestedProvider,omitempty"`
 	IdempotencyKey    string                              `json:"idempotencyKey,omitempty"`
+	ParentExecutionID string                              `json:"parentExecutionId,omitempty"`
+	SourceExecutionID string                              `json:"sourceExecutionId,omitempty"`
+	LaunchReason      string                              `json:"launchReason,omitempty"`
 	ApprovalScope     string                              `json:"approvalScope"`
 	ToolPolicy        OrchestratorToolPolicy              `json:"toolPolicy,omitempty"`
 	RequiredWorkers   []OrchestratorRequiredWorker        `json:"requiredWorkers"`
@@ -125,6 +151,7 @@ type OrchestratorExecution struct {
 	Authorization     OrchestratorAuthorization           `json:"authorization"`
 	Policy            OrchestratorExecutionPolicySnapshot `json:"policy,omitempty"`
 	Governance        OrchestratorExecutionGovernance     `json:"governance,omitempty"`
+	Outcome           OrchestratorExecutionOutcome        `json:"outcome,omitempty"`
 	Results           []OrchestratorTaskResult            `json:"results,omitempty"`
 	Error             string                              `json:"error,omitempty"`
 	CreatedAt         string                              `json:"createdAt"`
@@ -190,6 +217,9 @@ func normalizeOrchestratorExecutionForStore(in OrchestratorExecution) Orchestrat
 	out.Goal = strings.TrimSpace(out.Goal)
 	out.RequestedProvider = strings.TrimSpace(out.RequestedProvider)
 	out.IdempotencyKey = strings.TrimSpace(out.IdempotencyKey)
+	out.ParentExecutionID = strings.TrimSpace(out.ParentExecutionID)
+	out.SourceExecutionID = strings.TrimSpace(out.SourceExecutionID)
+	out.LaunchReason = strings.TrimSpace(out.LaunchReason)
 	out.ApprovalScope = strings.TrimSpace(out.ApprovalScope)
 	if out.ApprovalScope == "" {
 		out.ApprovalScope = "infrastructure_only"
@@ -201,8 +231,15 @@ func normalizeOrchestratorExecutionForStore(in OrchestratorExecution) Orchestrat
 		out.MaxConcurrency = 64
 	}
 	out.ToolPolicy = normalizeOrchestratorToolPolicy(out.ToolPolicy)
+	out.Outcome = normalizeOrchestratorExecutionOutcome(out.Outcome)
 	if out.Results == nil {
 		out.Results = []OrchestratorTaskResult{}
+	} else {
+		results := make([]OrchestratorTaskResult, len(out.Results))
+		for i := range out.Results {
+			results[i] = normalizeOrchestratorTaskResult(out.Results[i])
+		}
+		out.Results = results
 	}
 	out.Error = strings.TrimSpace(out.Error)
 	out.Policy = buildOrchestratorExecutionPolicySnapshot(out)
@@ -346,6 +383,54 @@ func normalizeOrchestratorToolPolicy(in OrchestratorToolPolicy) OrchestratorTool
 	}
 	sort.Strings(allowed)
 	out.AllowedTools = allowed
+	return out
+}
+
+func normalizeOrchestratorTaskResult(in OrchestratorTaskResult) OrchestratorTaskResult {
+	out := in
+	out.TaskID = strings.TrimSpace(out.TaskID)
+	out.WorkerID = strings.TrimSpace(out.WorkerID)
+	out.HostID = strings.TrimSpace(out.HostID)
+	out.AgentID = strings.TrimSpace(out.AgentID)
+	out.Summary = strings.TrimSpace(out.Summary)
+	out.Output = strings.TrimSpace(out.Output)
+	out.Error = strings.TrimSpace(out.Error)
+	out.FailureReason = strings.TrimSpace(out.FailureReason)
+	out.FailureCategory = strings.TrimSpace(out.FailureCategory)
+	out.StartedAt = strings.TrimSpace(out.StartedAt)
+	out.CompletedAt = strings.TrimSpace(out.CompletedAt)
+	return out
+}
+
+func normalizeOrchestratorArtifact(in OrchestratorArtifact) OrchestratorArtifact {
+	out := in
+	out.ID = strings.TrimSpace(out.ID)
+	out.TaskID = strings.TrimSpace(out.TaskID)
+	out.Name = strings.TrimSpace(out.Name)
+	out.Kind = strings.TrimSpace(out.Kind)
+	out.ContentType = strings.TrimSpace(out.ContentType)
+	out.Path = strings.TrimSpace(out.Path)
+	out.CreatedAt = strings.TrimSpace(out.CreatedAt)
+	if out.SizeBytes < 0 {
+		out.SizeBytes = 0
+	}
+	return out
+}
+
+func normalizeOrchestratorExecutionOutcome(in OrchestratorExecutionOutcome) OrchestratorExecutionOutcome {
+	out := in
+	out.Summary = strings.TrimSpace(out.Summary)
+	out.FailureReason = strings.TrimSpace(out.FailureReason)
+	out.FailureCategory = strings.TrimSpace(out.FailureCategory)
+	if out.Artifacts == nil {
+		out.Artifacts = []OrchestratorArtifact{}
+	} else {
+		artifacts := make([]OrchestratorArtifact, 0, len(out.Artifacts))
+		for _, artifact := range out.Artifacts {
+			artifacts = append(artifacts, normalizeOrchestratorArtifact(artifact))
+		}
+		out.Artifacts = artifacts
+	}
 	return out
 }
 
