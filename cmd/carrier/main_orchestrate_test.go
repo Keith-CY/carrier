@@ -24,6 +24,19 @@ func TestParseCarrierCommandRoutesOrchestrate(t *testing.T) {
 	}
 }
 
+func TestParseCarrierCommandRoutesExecutions(t *testing.T) {
+	cmd, args, err := parseCarrierCommand([]string{"carrier", "executions", "show", "exec-123"})
+	if err != nil {
+		t.Fatalf("parseCarrierCommand(executions) error: %v", err)
+	}
+	if cmd != "executions" {
+		t.Fatalf("command = %q, want executions", cmd)
+	}
+	if len(args) != 2 || args[0] != "show" || args[1] != "exec-123" {
+		t.Fatalf("args = %v, want [show exec-123]", args)
+	}
+}
+
 func TestParseOrchestrateCommandArgs(t *testing.T) {
 	opts, err := parseOrchestrateCommandArgs([]string{
 		"triage", "incidents",
@@ -65,12 +78,46 @@ func TestParseOrchestrateCommandArgs(t *testing.T) {
 		t.Fatalf("async/json flags should be true, got async=%v json=%v", opts.Async, opts.JSON)
 	}
 
+	planOpts, err := parseOrchestrateCommandArgs([]string{"triage", "incidents", "--dry-run", "--json"})
+	if err != nil {
+		t.Fatalf("parseOrchestrateCommandArgs(plan) error: %v", err)
+	}
+	if planOpts.Action != "plan" || planOpts.Goal != "triage incidents" || !planOpts.JSON {
+		t.Fatalf("unexpected plan opts: %+v", planOpts)
+	}
+
 	statusOpts, err := parseOrchestrateCommandArgs([]string{"status", "exec-123", "--json"})
 	if err != nil {
 		t.Fatalf("parseOrchestrateCommandArgs(status) error: %v", err)
 	}
 	if statusOpts.Action != "status" || statusOpts.ExecutionID != "exec-123" || !statusOpts.JSON {
 		t.Fatalf("unexpected status opts: %+v", statusOpts)
+	}
+}
+
+func TestParseExecutionsCommandArgs(t *testing.T) {
+	listOpts, err := parseExecutionsCommandArgs([]string{"list", "--limit", "5", "--json"})
+	if err != nil {
+		t.Fatalf("parseExecutionsCommandArgs(list) error: %v", err)
+	}
+	if listOpts.Action != "list" || listOpts.Limit != 5 || !listOpts.JSON {
+		t.Fatalf("unexpected list opts: %+v", listOpts)
+	}
+
+	showOpts, err := parseExecutionsCommandArgs([]string{"show", "exec-42"})
+	if err != nil {
+		t.Fatalf("parseExecutionsCommandArgs(show) error: %v", err)
+	}
+	if showOpts.Action != "status" || showOpts.ExecutionID != "exec-42" {
+		t.Fatalf("unexpected show opts: %+v", showOpts)
+	}
+
+	implicitShowOpts, err := parseExecutionsCommandArgs([]string{"exec-99", "--json"})
+	if err != nil {
+		t.Fatalf("parseExecutionsCommandArgs(implicit show) error: %v", err)
+	}
+	if implicitShowOpts.Action != "status" || implicitShowOpts.ExecutionID != "exec-99" || !implicitShowOpts.JSON {
+		t.Fatalf("unexpected implicit show opts: %+v", implicitShowOpts)
 	}
 }
 
@@ -183,5 +230,77 @@ func TestRunOrchestrateCommandLocalFallbackAndAgentDefault(t *testing.T) {
 	}
 	if !strings.Contains(output, "local/picoclaw") {
 		t.Fatalf("expected local/picoclaw in output, got %q", output)
+	}
+}
+
+func TestRunOrchestrateCommandDryRunPlan(t *testing.T) {
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/base-agent/decompose":
+			_, _ = w.Write([]byte(`{"tasks":[{"id":"t1","input":"collect diagnostics","agentId":"zeroclaw"},{"id":"t2","input":"summarize diagnostics","agentId":"picoclaw"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer daemon.Close()
+
+	setProbeEnvFromURL(t, "CARRIER_SERVER_HOST", "CARRIER_SERVER_PORT", daemon.URL)
+
+	opts := orchestrateCommandOptions{
+		Action:  "plan",
+		Goal:    "triage issue",
+		Timeout: 2 * time.Second,
+	}
+	var out bytes.Buffer
+	if err := runOrchestrateCommand(&out, opts); err != nil {
+		t.Fatalf("runOrchestrateCommand(plan) error: %v", err)
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "orchestration plan") {
+		t.Fatalf("expected plan header in output, got %q", output)
+	}
+	if !strings.Contains(output, "local/zeroclaw") {
+		t.Fatalf("expected local/zeroclaw in plan output, got %q", output)
+	}
+	if !strings.Contains(output, "local/picoclaw") {
+		t.Fatalf("expected local/picoclaw in plan output, got %q", output)
+	}
+}
+
+func TestRunOrchestrateListCommand(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/orchestrator/executions":
+			_, _ = w.Write([]byte(`{"result":"ok","executions":[{"id":"exec-old","goal":"older goal","status":"completed","updatedAt":"2026-03-08T04:00:00Z","taskUnits":[{"id":"t1"}],"results":[{"taskId":"t1","status":"completed"}]},{"id":"exec-new","goal":"newer goal","status":"running","updatedAt":"2026-03-08T05:00:00Z","taskUnits":[{"id":"t1"},{"id":"t2"}],"results":[{"taskId":"t1","status":"completed"}]}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gateway.Close()
+
+	setProbeEnvFromURL(t, "CARRIER_GATEWAY_HOST", "CARRIER_GATEWAY_PORT", gateway.URL)
+
+	opts := orchestrateCommandOptions{
+		Action: "list",
+		Limit:  1,
+	}
+	var out bytes.Buffer
+	if err := runOrchestrateCommand(&out, opts); err != nil {
+		t.Fatalf("runOrchestrateCommand(list) error: %v", err)
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "exec-new") {
+		t.Fatalf("expected newest execution in output, got %q", output)
+	}
+	if strings.Contains(output, "exec-old") {
+		t.Fatalf("did not expect trimmed older execution in output, got %q", output)
 	}
 }

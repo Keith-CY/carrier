@@ -211,6 +211,7 @@ type orchestrateCommandOptions struct {
 	Provider       string
 	MaxConcurrency int
 	IdempotencyKey string
+	Limit          int
 	Timeout        time.Duration
 	Async          bool
 	JSON           bool
@@ -507,9 +508,13 @@ Usage:
                         Restore remote-control.json store
   carrier orchestrate <goal...> [--host-id <id>]... [--provider <provider-id>]
                         [--max-concurrency <n>] [--idempotency-key <key>]
-                        [--timeout <duration>] [--async] [--json]
+                        [--timeout <duration>] [--async] [--dry-run] [--json]
                         Decompose goal with base agent, then run orchestration
   carrier orchestrate status <execution_id> [--json]
+                        Show orchestration execution status/results
+  carrier executions [list] [--limit <n>] [--json]
+                        List orchestration executions
+  carrier executions show <execution_id> [--json]
                         Show orchestration execution status/results
   carrier --help         Show this help message
 
@@ -747,6 +752,18 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "executions":
+			opts, err := parseExecutionsCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "executions failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runOrchestrateCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "executions failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "onboard":
 			opts, err := parseOnboardCommandArgs(commandArgs)
 			if err != nil {
@@ -878,6 +895,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "remote-store", args[2:], nil
 	case "orchestrate":
 		return "orchestrate", args[2:], nil
+	case "executions":
+		return "executions", args[2:], nil
 	case "--help", "-h", "help":
 		return "help", nil, nil
 	case "version", "--version", "-v", "-V":
@@ -2214,7 +2233,7 @@ func parseRemoteStoreCommandArgs(args []string) (remoteStoreCommandOptions, erro
 
 func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, error) {
 	if len(args) == 0 {
-		return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate <goal...> [--host-id <id>]... [--provider <provider-id>] [--max-concurrency <n>] [--idempotency-key <key>] [--timeout <duration>] [--async] [--json] OR carrier orchestrate status <execution_id> [--json]")
+		return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate <goal...> [--host-id <id>]... [--provider <provider-id>] [--max-concurrency <n>] [--idempotency-key <key>] [--timeout <duration>] [--async] [--dry-run] [--json] OR carrier orchestrate status <execution_id> [--json]")
 	}
 
 	opts := orchestrateCommandOptions{
@@ -2302,6 +2321,8 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 			i = next
 		case "--async":
 			opts.Async = true
+		case "--dry-run":
+			opts.Action = "plan"
 		case "--json":
 			opts.JSON = true
 		default:
@@ -2324,6 +2345,72 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 	opts.Goal = strings.TrimSpace(strings.Join(goalParts, " "))
 	if opts.Goal == "" {
 		return orchestrateCommandOptions{}, errors.New("goal is required")
+	}
+	return opts, nil
+}
+
+func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error) {
+	opts := orchestrateCommandOptions{
+		Action: "list",
+	}
+	if len(args) == 0 {
+		return opts, nil
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(args[0]))
+	startIdx := 0
+	switch mode {
+	case "", "list":
+		opts.Action = "list"
+		startIdx = 1
+	case "show", "status":
+		opts.Action = "status"
+		startIdx = 1
+	default:
+		if strings.HasPrefix(mode, "-") {
+			opts.Action = "list"
+			startIdx = 0
+		} else {
+			opts.Action = "status"
+			opts.ExecutionID = strings.TrimSpace(args[0])
+			startIdx = 1
+		}
+	}
+
+	for i := startIdx; i < len(args); i++ {
+		raw := strings.TrimSpace(args[i])
+		lower := strings.ToLower(raw)
+		switch lower {
+		case "":
+		case "--json":
+			opts.JSON = true
+		case "--limit":
+			value, next, err := parseRequiredFlagValue(args, i, "--limit")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			parsed, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || parsed <= 0 {
+				return orchestrateCommandOptions{}, fmt.Errorf("invalid --limit value: %s", value)
+			}
+			opts.Limit = parsed
+			i = next
+		default:
+			if strings.HasPrefix(raw, "-") {
+				return orchestrateCommandOptions{}, fmt.Errorf("unknown executions option: %s", raw)
+			}
+			if opts.Action != "status" {
+				return orchestrateCommandOptions{}, fmt.Errorf("unexpected executions argument: %s", raw)
+			}
+			if opts.ExecutionID != "" {
+				return orchestrateCommandOptions{}, errors.New("multiple execution ids provided")
+			}
+			opts.ExecutionID = raw
+		}
+	}
+
+	if opts.Action == "status" && strings.TrimSpace(opts.ExecutionID) == "" {
+		return orchestrateCommandOptions{}, errors.New("usage: carrier executions show <execution_id> [--json]")
 	}
 	return opts, nil
 }
@@ -3198,6 +3285,7 @@ func runListInstances(out io.Writer) error {
 }
 
 const orchestratorLocalHostID = "local"
+const defaultOrchestrateMaxConcurrency = 8
 
 type orchestrateDecomposeTask struct {
 	ID      string `json:"id"`
@@ -3240,12 +3328,15 @@ type orchestrateTaskResultSnapshot struct {
 }
 
 type orchestrateExecutionSnapshot struct {
-	ID        string                          `json:"id"`
-	Goal      string                          `json:"goal"`
-	Status    string                          `json:"status"`
-	Error     string                          `json:"error,omitempty"`
-	TaskUnits []orchestrateTaskUnit           `json:"taskUnits,omitempty"`
-	Results   []orchestrateTaskResultSnapshot `json:"results,omitempty"`
+	ID             string                          `json:"id"`
+	Goal           string                          `json:"goal"`
+	Status         string                          `json:"status"`
+	Error          string                          `json:"error,omitempty"`
+	MaxConcurrency int                             `json:"maxConcurrency,omitempty"`
+	CreatedAt      string                          `json:"createdAt,omitempty"`
+	UpdatedAt      string                          `json:"updatedAt,omitempty"`
+	TaskUnits      []orchestrateTaskUnit           `json:"taskUnits,omitempty"`
+	Results        []orchestrateTaskResultSnapshot `json:"results,omitempty"`
 }
 
 type orchestrateWorkerLeaseSnapshot struct {
@@ -3263,22 +3354,76 @@ type orchestrateExecutionResponse struct {
 	Workers   []orchestrateWorkerLeaseSnapshot `json:"workers,omitempty"`
 }
 
-func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error {
-	if _, err := ensureDaemonRunning(out); err != nil {
-		return err
-	}
-	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
-		return err
-	}
+type orchestrateExecutionListResponse struct {
+	Result     string                         `json:"result"`
+	ErrorCode  string                         `json:"errorCode,omitempty"`
+	Message    string                         `json:"message,omitempty"`
+	Executions []orchestrateExecutionSnapshot `json:"executions"`
+}
 
+type orchestratePlanSnapshot struct {
+	Goal            string                      `json:"goal"`
+	Provider        string                      `json:"provider,omitempty"`
+	HostIDs         []string                    `json:"hostIds,omitempty"`
+	ApprovalScope   string                      `json:"approvalScope"`
+	MaxConcurrency  int                         `json:"maxConcurrency"`
+	PlannerTasks    []orchestrateDecomposeTask  `json:"plannerTasks"`
+	RequiredWorkers []orchestrateRequiredWorker `json:"requiredWorkers"`
+	TaskUnits       []orchestrateTaskUnit       `json:"taskUnits"`
+}
+
+func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error {
 	switch opts.Action {
+	case "plan":
+		if _, err := ensureDaemonRunning(out); err != nil {
+			return err
+		}
+		return runOrchestratePlan(out, opts)
+	case "list":
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+		return runOrchestrateList(out, opts.Limit, opts.JSON)
 	case "status":
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
 		return runOrchestrateStatus(out, opts.ExecutionID, opts.JSON)
 	case "run":
+		if _, err := ensureDaemonRunning(out); err != nil {
+			return err
+		}
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
 		return runOrchestrateStart(out, opts)
 	default:
 		return fmt.Errorf("unsupported orchestrate action: %s", opts.Action)
 	}
+}
+
+func runOrchestratePlan(out io.Writer, opts orchestrateCommandOptions) error {
+	plan, err := buildOrchestratePlan(opts)
+	if err != nil {
+		return err
+	}
+	if opts.JSON {
+		return writePrettyJSONValue(out, plan)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestratePlan(plan))
+	return nil
+}
+
+func runOrchestrateList(out io.Writer, limit int, outputJSON bool) error {
+	resp, _, err := fetchOrchestratorExecutions(limit)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		return writePrettyJSONValue(out, resp)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestrateExecutionList(resp.Executions))
+	return nil
 }
 
 func runOrchestrateStatus(out io.Writer, executionID string, outputJSON bool) error {
@@ -3294,24 +3439,18 @@ func runOrchestrateStatus(out io.Writer, executionID string, outputJSON bool) er
 }
 
 func runOrchestrateStart(out io.Writer, opts orchestrateCommandOptions) error {
-	tasks, err := decomposeOrchestrateGoal(opts.Goal, opts.Provider)
+	plan, err := buildOrchestratePlan(opts)
 	if err != nil {
 		return err
 	}
 
-	taskUnits := assignOrchestrateTaskUnits(tasks, opts.HostIDs)
-	requiredWorkers := buildOrchestrateRequiredWorkers(taskUnits)
-	if len(taskUnits) == 0 || len(requiredWorkers) == 0 {
-		return errors.New("failed to build orchestrator task plan")
-	}
-
 	payload := orchestrateExecutionPayload{
-		Goal:            strings.TrimSpace(opts.Goal),
+		Goal:            strings.TrimSpace(plan.Goal),
 		IdempotencyKey:  strings.TrimSpace(opts.IdempotencyKey),
-		ApprovalScope:   "infrastructure_only",
-		RequiredWorkers: requiredWorkers,
-		TaskUnits:       taskUnits,
-		MaxConcurrency:  opts.MaxConcurrency,
+		ApprovalScope:   plan.ApprovalScope,
+		RequiredWorkers: plan.RequiredWorkers,
+		TaskUnits:       plan.TaskUnits,
+		MaxConcurrency:  plan.MaxConcurrency,
 	}
 
 	createRaw, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/orchestrator/executions", payload, 90*time.Second)
@@ -3350,7 +3489,7 @@ func runOrchestrateStart(out io.Writer, opts orchestrateCommandOptions) error {
 		}
 		_, _ = fmt.Fprintf(out, "orchestrator execution accepted: %s\n", executionID)
 		_, _ = fmt.Fprintf(out, "status: %s\n", strings.TrimSpace(authorizeResp.Execution.Status))
-		_, _ = fmt.Fprintf(out, "Use `carrier orchestrate status %s` to check progress.\n", executionID)
+		_, _ = fmt.Fprintf(out, "Use `carrier executions show %s` to check progress.\n", executionID)
 		return nil
 	}
 
@@ -3363,6 +3502,30 @@ func runOrchestrateStart(out io.Writer, opts orchestrateCommandOptions) error {
 	}
 	_, _ = fmt.Fprintln(out, renderOrchestrateExecution(finalResp))
 	return nil
+}
+
+func buildOrchestratePlan(opts orchestrateCommandOptions) (orchestratePlanSnapshot, error) {
+	tasks, err := decomposeOrchestrateGoal(opts.Goal, opts.Provider)
+	if err != nil {
+		return orchestratePlanSnapshot{}, err
+	}
+
+	taskUnits := assignOrchestrateTaskUnits(tasks, opts.HostIDs)
+	requiredWorkers := buildOrchestrateRequiredWorkers(taskUnits)
+	if len(taskUnits) == 0 || len(requiredWorkers) == 0 {
+		return orchestratePlanSnapshot{}, errors.New("failed to build orchestrator task plan")
+	}
+
+	return orchestratePlanSnapshot{
+		Goal:            strings.TrimSpace(opts.Goal),
+		Provider:        strings.TrimSpace(opts.Provider),
+		HostIDs:         dedupeStringSlice(opts.HostIDs),
+		ApprovalScope:   "infrastructure_only",
+		MaxConcurrency:  effectiveOrchestrateMaxConcurrency(len(taskUnits), opts.MaxConcurrency),
+		PlannerTasks:    tasks,
+		RequiredWorkers: requiredWorkers,
+		TaskUnits:       taskUnits,
+	}, nil
 }
 
 func decomposeOrchestrateGoal(goal, provider string) ([]orchestrateDecomposeTask, error) {
@@ -3485,6 +3648,22 @@ func buildOrchestrateRequiredWorkers(taskUnits []orchestrateTaskUnit) []orchestr
 	return workers
 }
 
+func effectiveOrchestrateMaxConcurrency(taskCount, requested int) int {
+	if taskCount <= 0 {
+		return 0
+	}
+	if requested <= 0 {
+		requested = defaultOrchestrateMaxConcurrency
+	}
+	if requested > 64 {
+		requested = 64
+	}
+	if requested > taskCount {
+		requested = taskCount
+	}
+	return requested
+}
+
 func normalizeOrchestrateAgentID(agentID string) string {
 	switch strings.ToLower(strings.TrimSpace(agentID)) {
 	case "picoclaw":
@@ -3504,6 +3683,14 @@ func decodeOrchestrateExecutionResponse(raw []byte) (orchestrateExecutionRespons
 	return resp, nil
 }
 
+func decodeOrchestrateExecutionListResponse(raw []byte) (orchestrateExecutionListResponse, error) {
+	var resp orchestrateExecutionListResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return orchestrateExecutionListResponse{}, fmt.Errorf("decode orchestrator execution list response: %w", err)
+	}
+	return resp, nil
+}
+
 func fetchOrchestratorExecution(executionID string) (orchestrateExecutionResponse, []byte, error) {
 	trimmedID := strings.TrimSpace(executionID)
 	if trimmedID == "" {
@@ -3517,6 +3704,38 @@ func fetchOrchestratorExecution(executionID string) (orchestrateExecutionRespons
 	resp, decodeErr := decodeOrchestrateExecutionResponse(raw)
 	if decodeErr != nil {
 		return orchestrateExecutionResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func fetchOrchestratorExecutions(limit int) (orchestrateExecutionListResponse, []byte, error) {
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, "/api/v1/orchestrator/executions", nil, 45*time.Second)
+	if err != nil {
+		return orchestrateExecutionListResponse{}, nil, err
+	}
+	resp, decodeErr := decodeOrchestrateExecutionListResponse(raw)
+	if decodeErr != nil {
+		return orchestrateExecutionListResponse{}, nil, decodeErr
+	}
+	sort.Slice(resp.Executions, func(i, j int) bool {
+		left, leftOK := parseManagedTimestamp(resp.Executions[i].UpdatedAt)
+		right, rightOK := parseManagedTimestamp(resp.Executions[j].UpdatedAt)
+		switch {
+		case leftOK && rightOK:
+			if left.Equal(right) {
+				return resp.Executions[i].ID > resp.Executions[j].ID
+			}
+			return left.After(right)
+		case leftOK:
+			return true
+		case rightOK:
+			return false
+		default:
+			return resp.Executions[i].ID > resp.Executions[j].ID
+		}
+	})
+	if limit > 0 && len(resp.Executions) > limit {
+		resp.Executions = resp.Executions[:limit]
 	}
 	return resp, raw, nil
 }
@@ -3546,17 +3765,7 @@ func waitForOrchestratorExecution(executionID string, timeout time.Duration) (or
 
 func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
 	execution := resp.Execution
-	total := len(execution.TaskUnits)
-	completed := 0
-	failed := 0
-	for _, result := range execution.Results {
-		switch strings.ToLower(strings.TrimSpace(result.Status)) {
-		case "completed":
-			completed++
-		case "failed":
-			failed++
-		}
-	}
+	total, completed, failed := summarizeOrchestrateExecution(execution)
 	lines := []string{
 		fmt.Sprintf("orchestrator execution %s", strings.TrimSpace(execution.ID)),
 		fmt.Sprintf("status: %s", firstNonEmpty(strings.TrimSpace(execution.Status), "unknown")),
@@ -3607,6 +3816,91 @@ func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
 	return strings.Join(lines, "\n")
 }
 
+func renderOrchestrateExecutionList(executions []orchestrateExecutionSnapshot) string {
+	if len(executions) == 0 {
+		return "No orchestration executions found."
+	}
+	lines := []string{"Orchestration executions:"}
+	for _, execution := range executions {
+		total, completed, failed := summarizeOrchestrateExecution(execution)
+		line := fmt.Sprintf(
+			"- %s status=%s tasks=%d completed=%d failed=%d",
+			firstNonEmpty(strings.TrimSpace(execution.ID), "unknown"),
+			firstNonEmpty(strings.TrimSpace(execution.Status), "unknown"),
+			total,
+			completed,
+			failed,
+		)
+		if updated := strings.TrimSpace(execution.UpdatedAt); updated != "" {
+			line += " updated=" + updated
+		}
+		lines = append(lines, line)
+		if goal := strings.TrimSpace(execution.Goal); goal != "" {
+			lines = append(lines, "  goal: "+truncateOrchestrateText(goal, 120))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderOrchestratePlan(plan orchestratePlanSnapshot) string {
+	lines := []string{
+		"orchestration plan",
+		fmt.Sprintf("goal: %s", strings.TrimSpace(plan.Goal)),
+		fmt.Sprintf("approval: %s", firstNonEmpty(strings.TrimSpace(plan.ApprovalScope), "infrastructure_only")),
+		fmt.Sprintf("tasks: %d", len(plan.TaskUnits)),
+		fmt.Sprintf("max concurrency: %d", plan.MaxConcurrency),
+	}
+	if provider := strings.TrimSpace(plan.Provider); provider != "" {
+		lines = append(lines, "planner provider: "+provider)
+	}
+	if len(plan.TaskUnits) > 0 {
+		lines = append(lines, "task units:")
+		for _, task := range plan.TaskUnits {
+			target := strings.TrimSpace(task.AgentID)
+			if host := strings.TrimSpace(task.HostID); host != "" {
+				target = host + "/" + target
+			}
+			if target == "" {
+				target = "(unassigned)"
+			}
+			lines = append(lines, fmt.Sprintf(
+				"- %s target=%s %s",
+				firstNonEmpty(strings.TrimSpace(task.ID), "task"),
+				target,
+				truncateOrchestrateText(task.Input, 160),
+			))
+		}
+	}
+	if len(plan.RequiredWorkers) > 0 {
+		lines = append(lines, "required workers:")
+		for _, worker := range plan.RequiredWorkers {
+			lines = append(lines, fmt.Sprintf(
+				"- %s/%s x%d",
+				firstNonEmpty(strings.TrimSpace(worker.HostID), orchestratorLocalHostID),
+				firstNonEmpty(strings.TrimSpace(worker.AgentID), "zeroclaw"),
+				maxInt(worker.Count, 1),
+			))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func summarizeOrchestrateExecution(execution orchestrateExecutionSnapshot) (total, completed, failed int) {
+	total = len(execution.TaskUnits)
+	for _, result := range execution.Results {
+		switch strings.ToLower(strings.TrimSpace(result.Status)) {
+		case "completed":
+			completed++
+		case "failed":
+			failed++
+		}
+	}
+	if total == 0 {
+		total = len(execution.Results)
+	}
+	return total, completed, failed
+}
+
 func truncateOrchestrateText(input string, limit int) string {
 	trimmed := strings.TrimSpace(input)
 	if limit <= 0 {
@@ -3626,6 +3920,15 @@ func writePrettyJSON(out io.Writer, raw []byte) error {
 		return writeErr
 	}
 	formatted, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(out, string(formatted))
+	return err
+}
+
+func writePrettyJSONValue(out io.Writer, value interface{}) error {
+	formatted, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}

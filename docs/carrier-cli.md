@@ -5,6 +5,18 @@ All command blocks below assume `carrier` is installed and available in `PATH`.
 
 ## Command Surface
 
+### Orchestration and execution history
+
+- `carrier orchestrate <goal...> [--host-id <id>]... [--provider <provider-id>] [--max-concurrency <n>] [--idempotency-key <key>] [--timeout <duration>] [--async] [--dry-run] [--json]`
+  - Decompose a goal with the base agent, assign task units to worker agents, and optionally execute the plan.
+  - `--dry-run` previews the execution plan without creating an execution.
+- `carrier orchestrate status <execution_id> [--json]`
+  - Show one orchestration execution with task results and worker lease state.
+- `carrier executions [list] [--limit <n>] [--json]`
+  - List orchestration executions from the remote-control store.
+- `carrier executions show <execution_id> [--json]`
+  - Alias for orchestration execution status lookup.
+
 ### Bootstrap and runtime
 
 - `carrier`
@@ -118,31 +130,33 @@ Optional remote alert webhook watchdog:
 ```bash
 carrier
 carrier onboard
-carrier add openclaw
-carrier status openclaw
+carrier add zeroclaw
+carrier add picoclaw
+carrier orchestrate "triage this issue and summarize next actions" --dry-run
+carrier orchestrate "triage this issue and summarize next actions"
 ```
 
 WebUI variant:
 
 ```bash
 carrier onboard --webui
-carrier add openclaw --webui
+carrier add zeroclaw --webui
 ```
 
 WebUI variant with isolation preselected:
 
 ```bash
-carrier add openclaw --webui --isolation
+carrier add zeroclaw --webui --isolation
 ```
 
 ### Install local managed agents
 
 ```bash
-carrier add openclaw
+carrier add zeroclaw
 ```
 
 ```bash
-carrier add openclaw --isolation
+carrier add zeroclaw --isolation
 ```
 
 ```bash
@@ -150,7 +164,25 @@ carrier add picoclaw
 ```
 
 ```bash
-carrier add zeroclaw
+carrier add openclaw
+```
+
+### Preview and run orchestration
+
+```bash
+carrier orchestrate "triage this issue and summarize next actions" --dry-run
+```
+
+```bash
+carrier orchestrate "triage this issue and summarize next actions"
+```
+
+```bash
+carrier executions
+```
+
+```bash
+carrier executions show <execution_id>
 ```
 
 ### Install OpenClaw on VPS
@@ -239,6 +271,22 @@ carrier uninstall <id|name>
 ```
 
 ```bash
+carrier orchestrate "<goal>"
+```
+
+```bash
+carrier orchestrate "<goal>" --dry-run
+```
+
+```bash
+carrier executions
+```
+
+```bash
+carrier executions show <execution_id>
+```
+
+```bash
 carrier stop
 ```
 
@@ -250,6 +298,7 @@ carrier reset
 
 - Gateway default: `http://127.0.0.1:8787`
 - Daemon default: `http://127.0.0.1:9090`
+- `carrier orchestrate` requires the target local worker agents to already be installed (`picoclaw`, `zeroclaw`).
 - Chat `/onboard` is intentionally blocked for credential safety.
 - Chat `/install` is policy-gated; default policy requires explicit host binding (`/install <agent_id> <host_id>`).
 - For newly discovered remote instances, config pull can require explicit confirmation.
