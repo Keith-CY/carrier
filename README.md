@@ -1,9 +1,10 @@
 # Carrier
 
-Carrier is a local control plane for onboarding agent credentials, installing managed agents, and operating remote VPS instances over SSH.
+Carrier is a local-first agent control plane for decomposing goals, dispatching work to managed agents, and operating remote workers over SSH.
 
 ## What Works Today
 
+- Task-first orchestration via `carrier orchestrate` with execution history in `carrier executions`.
 - Local bootstrap/onboarding via CLI/TUI/WebUI.
 - Managed local install lifecycle for `openclaw`, `picoclaw`, `zeroclaw`.
 - Remote host control-plane APIs (host upsert/check/install/list/config/sync).
@@ -82,7 +83,46 @@ Notes:
 - Chat `/onboard` is intentionally blocked for credential safety.
 - Chat `/install` is policy-gated; default policy requires explicit host binding (`/install <agent_id> <host_id>`).
 
-### 3) Install OpenClaw Locally
+### 3) Install Local Workers
+
+```bash
+carrier add zeroclaw
+carrier add picoclaw
+carrier status zeroclaw
+carrier status picoclaw
+```
+
+Notes:
+- `carrier install <agent_id>` is an alias of `carrier add <agent_id>`.
+- `carrier orchestrate` currently expects the target local worker agents to already be installed.
+
+### 4) Run A Task
+
+Preview the plan first:
+
+```bash
+carrier orchestrate "triage this issue and summarize next actions" --dry-run
+```
+
+Run the task and wait for results:
+
+```bash
+carrier orchestrate "triage this issue and summarize next actions"
+```
+
+Inspect execution history:
+
+```bash
+carrier executions
+carrier executions show <execution_id>
+```
+
+Expected result:
+- base agent decomposes the goal into task units
+- tasks are assigned to local `picoclaw` / `zeroclaw` workers
+- the final output shows execution status, task results, and worker targets
+
+### 5) Install OpenClaw Locally (Optional)
 
 ```bash
 carrier add openclaw
@@ -90,9 +130,7 @@ carrier status openclaw
 carrier list
 ```
 
-`carrier install openclaw` is an alias of `carrier add openclaw`.
-
-### 4) Install Agent To VPS (Deterministic)
+### 6) Install Agent To VPS (Deterministic)
 
 Use `carrier remote add` to run a fixed, repeatable sequence:
 
@@ -164,7 +202,7 @@ carrier remote add zeroclaw \
   --key-path ~/.ssh/id_ed25519
 ```
 
-### 5) Full Remote Matrix Validation (Optional)
+### 7) Full Remote Matrix Validation (Optional)
 
 For Docker-VPS style end-to-end validation across OpenClaw + PicoClaw + ZeroClaw + codeagent backends:
 
@@ -194,6 +232,12 @@ carrier stop <id|name>
 carrier status <id|name>
 carrier upgrade <id|name>
 carrier uninstall <id|name>
+
+# orchestration
+carrier orchestrate "<goal>"
+carrier orchestrate "<goal>" --dry-run
+carrier executions
+carrier executions show <execution_id>
 
 # install aliases
 carrier add <agent_id>
