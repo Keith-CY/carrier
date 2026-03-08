@@ -541,6 +541,21 @@ func getRemoteInstanceSyncStatus(hostID, agentID string) (RemoteInstanceSyncStat
 	return status, true, nil
 }
 
+func listRemoteInstanceSyncStatuses() ([]RemoteInstanceSyncStatus, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, _, err := loadRemoteControlState()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RemoteInstanceSyncStatus, 0, len(state.InstanceSyncs))
+	for _, status := range state.InstanceSyncs {
+		out = append(out, status)
+	}
+	return out, nil
+}
+
 func upsertRemoteInstanceSyncStatus(status RemoteInstanceSyncStatus) (RemoteInstanceSyncStatus, error) {
 	remoteControlStoreMu.Lock()
 	defer remoteControlStoreMu.Unlock()

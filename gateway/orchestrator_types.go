@@ -85,22 +85,28 @@ type OrchestratorTaskResult struct {
 }
 
 type OrchestratorExecution struct {
-	ID              string                       `json:"id"`
-	Goal            string                       `json:"goal"`
-	IdempotencyKey  string                       `json:"idempotencyKey,omitempty"`
-	ApprovalScope   string                       `json:"approvalScope"`
-	ToolPolicy      OrchestratorToolPolicy       `json:"toolPolicy,omitempty"`
-	RequiredWorkers []OrchestratorRequiredWorker `json:"requiredWorkers"`
-	TaskUnits       []OrchestratorTaskUnit       `json:"taskUnits"`
-	Status          OrchestratorExecutionStatus  `json:"status"`
-	MaxConcurrency  int                          `json:"maxConcurrency,omitempty"`
-	Authorization   OrchestratorAuthorization    `json:"authorization"`
-	Results         []OrchestratorTaskResult     `json:"results,omitempty"`
-	Error           string                       `json:"error,omitempty"`
-	CreatedAt       string                       `json:"createdAt"`
-	StartedAt       string                       `json:"startedAt,omitempty"`
-	CompletedAt     string                       `json:"completedAt,omitempty"`
-	UpdatedAt       string                       `json:"updatedAt"`
+	ID                string                          `json:"id"`
+	Goal              string                          `json:"goal"`
+	RequestedProvider string                          `json:"requestedProvider,omitempty"`
+	IdempotencyKey    string                          `json:"idempotencyKey,omitempty"`
+	ApprovalScope     string                          `json:"approvalScope"`
+	ToolPolicy        OrchestratorToolPolicy          `json:"toolPolicy,omitempty"`
+	RequiredWorkers   []OrchestratorRequiredWorker    `json:"requiredWorkers"`
+	TaskUnits         []OrchestratorTaskUnit          `json:"taskUnits"`
+	Status            OrchestratorExecutionStatus     `json:"status"`
+	MaxConcurrency    int                             `json:"maxConcurrency,omitempty"`
+	Authorization     OrchestratorAuthorization       `json:"authorization"`
+	Governance        OrchestratorExecutionGovernance `json:"governance,omitempty"`
+	Results           []OrchestratorTaskResult        `json:"results,omitempty"`
+	Error             string                          `json:"error,omitempty"`
+	CreatedAt         string                          `json:"createdAt"`
+	StartedAt         string                          `json:"startedAt,omitempty"`
+	CompletedAt       string                          `json:"completedAt,omitempty"`
+	UpdatedAt         string                          `json:"updatedAt"`
+}
+
+type OrchestratorExecutionGovernance struct {
+	ProviderResolutions []ProviderGovernanceResolution `json:"providerResolutions,omitempty"`
 }
 
 type OrchestratorWorkerLease struct {
@@ -119,10 +125,42 @@ type OrchestratorWorkerLease struct {
 	UpdatedAt      string                  `json:"updatedAt"`
 }
 
+type OrchestratorWorkerInventoryItem struct {
+	ID             string `json:"id"`
+	Source         string `json:"source"`
+	HostID         string `json:"hostId"`
+	HostName       string `json:"hostName,omitempty"`
+	AgentID        string `json:"agentId"`
+	State          string `json:"state"`
+	ExecutionID    string `json:"executionId,omitempty"`
+	TaskCount      int    `json:"taskCount,omitempty"`
+	Ephemeral      bool   `json:"ephemeral,omitempty"`
+	InstalledByRun bool   `json:"installedByRun,omitempty"`
+	RuntimeState   string `json:"runtimeState,omitempty"`
+	RuntimeMode    string `json:"runtimeMode,omitempty"`
+	Health         string `json:"health,omitempty"`
+	DriftState     string `json:"driftState,omitempty"`
+	LastSyncStatus string `json:"lastSyncStatus,omitempty"`
+	LastError      string `json:"lastError,omitempty"`
+	LeaseExpireAt  string `json:"leaseExpireAt,omitempty"`
+	HeartbeatAt    string `json:"heartbeatAt,omitempty"`
+	UpdatedAt      string `json:"updatedAt,omitempty"`
+}
+
+type OrchestratorWorkerInventorySummary struct {
+	Total  int `json:"total"`
+	Active int `json:"active"`
+	Busy   int `json:"busy"`
+	Error  int `json:"error"`
+	Local  int `json:"local"`
+	Remote int `json:"remote"`
+}
+
 func normalizeOrchestratorExecutionForStore(in OrchestratorExecution) OrchestratorExecution {
 	out := in
 	out.ID = strings.TrimSpace(out.ID)
 	out.Goal = strings.TrimSpace(out.Goal)
+	out.RequestedProvider = strings.TrimSpace(out.RequestedProvider)
 	out.IdempotencyKey = strings.TrimSpace(out.IdempotencyKey)
 	out.ApprovalScope = strings.TrimSpace(out.ApprovalScope)
 	if out.ApprovalScope == "" {
@@ -210,6 +248,7 @@ func normalizeOrchestratorTask(in OrchestratorTaskUnit, idx int) (OrchestratorTa
 func normalizeOrchestratorExecution(in OrchestratorExecution) (OrchestratorExecution, error) {
 	out := in
 	out.Goal = strings.TrimSpace(out.Goal)
+	out.RequestedProvider = strings.TrimSpace(out.RequestedProvider)
 	if out.Goal == "" {
 		return OrchestratorExecution{}, errOrchestratorValidation("goal is required", -1)
 	}

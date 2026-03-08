@@ -174,12 +174,28 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			normalized.CreatedAt = now
 			normalized.UpdatedAt = now
 			normalized.Error = ""
+			if effectiveGatewayFeatureFlags(cfg).ProviderBindingEnabled {
+				resolutions, resolveErr := resolveProviderGovernanceForWorkers(normalized.RequiredWorkers)
+				if resolveErr != nil {
+					writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to resolve execution governance", "resolve execution provider governance", resolveErr)
+					return
+				}
+				normalized.Governance = OrchestratorExecutionGovernance{
+					ProviderResolutions: resolutions,
+				}
+			}
 
 			saved, saveErr := upsertOrchestratorExecution(normalized)
 			if saveErr != nil {
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to save orchestrator execution", "upsert orchestrator execution", saveErr)
 				return
 			}
+			emitRemoteAuditEvent(requestID, "orchestrator_execution_create", saved.ID, "success", map[string]interface{}{
+				"goal":              saved.Goal,
+				"requestedProvider": saved.RequestedProvider,
+				"workerCount":       len(saved.RequiredWorkers),
+				"resolutionCount":   len(saved.Governance.ProviderResolutions),
+			})
 			writeJSON(w, http.StatusCreated, map[string]interface{}{
 				"requestId": requestID,
 				"result":    "ok",
@@ -262,6 +278,9 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to update orchestrator execution", "upsert orchestrator execution declined", saveErr)
 				return
 			}
+			emitRemoteAuditEvent(requestID, "orchestrator_execution_authorize", updated.ID, "declined", map[string]interface{}{
+				"actor": actor,
+			})
 			publishOrchestratorExecutionEvent(updated)
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"requestId": requestID,
@@ -304,6 +323,10 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to update orchestrator execution", "upsert orchestrator execution authorize", saveErr)
 			return
 		}
+		emitRemoteAuditEvent(requestID, "orchestrator_execution_authorize", updated.ID, "success", map[string]interface{}{
+			"actor":          actor,
+			"maxConcurrency": updated.MaxConcurrency,
+		})
 		orchestratorLaunchExecutionFn(updated.ID)
 		writeJSON(w, http.StatusAccepted, map[string]interface{}{
 			"requestId": requestID,
@@ -336,6 +359,9 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to cancel orchestrator execution", "cancel orchestrator execution", cancelErr)
 			return
 		}
+		emitRemoteAuditEvent(requestID, "orchestrator_execution_cancel", updated.ID, "success", map[string]interface{}{
+			"actor": strings.TrimSpace(req.Actor),
+		})
 		writeJSON(w, http.StatusAccepted, map[string]interface{}{
 			"requestId": requestID,
 			"result":    "ok",

@@ -25,6 +25,8 @@ test.describe('Execution Center', () => {
     await page.click('#quick-launch-run');
     await expect.poll(() => page.url()).toContain('#/executions/exec-preview-1');
     await expect(page.locator('#executions-detail')).toContainText('Investigate checkout latency');
+    await expect(page.locator('#executions-detail')).toContainText('Provider Governance');
+    await expect(page.locator('#executions-detail')).toContainText('openrouter');
     await expect(page.locator('#executions-detail')).toContainText('task-1');
   });
 
@@ -46,6 +48,8 @@ test.describe('Execution Center', () => {
     await loginWithToken(page, '/#/executions/exec-running');
 
     await expect(page.locator('#executions-detail')).toContainText('Investigate checkout latency');
+    await expect(page.locator('#executions-detail')).toContainText('Approved by');
+    await expect(page.locator('#executions-detail')).toContainText('anthropic');
     page.once('dialog', (dialog) => dialog.accept());
     await page.click('#executions-cancel');
     await expect(page.locator('#executions-detail')).toContainText('cancelled');

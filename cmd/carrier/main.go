@@ -60,8 +60,8 @@ import (
 
 	gatewayruntime "carrier/gateway"
 	"carrier/shared/catalog"
-	sharedorchestration "carrier/shared/orchestration"
 	"carrier/shared/openclawcfg"
+	sharedorchestration "carrier/shared/orchestration"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -3305,12 +3305,13 @@ type orchestrateRequiredWorker = sharedorchestration.RequiredWorker
 type orchestrateTaskUnit = sharedorchestration.TaskUnit
 
 type orchestrateExecutionPayload struct {
-	Goal            string                      `json:"goal"`
-	IdempotencyKey  string                      `json:"idempotencyKey,omitempty"`
-	ApprovalScope   string                      `json:"approvalScope"`
-	RequiredWorkers []orchestrateRequiredWorker `json:"requiredWorkers"`
-	TaskUnits       []orchestrateTaskUnit       `json:"taskUnits"`
-	MaxConcurrency  int                         `json:"maxConcurrency,omitempty"`
+	Goal              string                      `json:"goal"`
+	RequestedProvider string                      `json:"requestedProvider,omitempty"`
+	IdempotencyKey    string                      `json:"idempotencyKey,omitempty"`
+	ApprovalScope     string                      `json:"approvalScope"`
+	RequiredWorkers   []orchestrateRequiredWorker `json:"requiredWorkers"`
+	TaskUnits         []orchestrateTaskUnit       `json:"taskUnits"`
+	MaxConcurrency    int                         `json:"maxConcurrency,omitempty"`
 }
 
 type orchestrateTaskResultSnapshot struct {
@@ -3460,12 +3461,13 @@ func runOrchestrateStart(out io.Writer, opts orchestrateCommandOptions) error {
 	}
 
 	payload := orchestrateExecutionPayload{
-		Goal:            strings.TrimSpace(plan.Goal),
-		IdempotencyKey:  strings.TrimSpace(opts.IdempotencyKey),
-		ApprovalScope:   plan.ApprovalScope,
-		RequiredWorkers: plan.RequiredWorkers,
-		TaskUnits:       plan.TaskUnits,
-		MaxConcurrency:  plan.MaxConcurrency,
+		Goal:              strings.TrimSpace(plan.Goal),
+		RequestedProvider: strings.TrimSpace(plan.Provider),
+		IdempotencyKey:    strings.TrimSpace(opts.IdempotencyKey),
+		ApprovalScope:     plan.ApprovalScope,
+		RequiredWorkers:   plan.RequiredWorkers,
+		TaskUnits:         plan.TaskUnits,
+		MaxConcurrency:    plan.MaxConcurrency,
 	}
 
 	createRaw, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/orchestrator/executions", payload, 90*time.Second)

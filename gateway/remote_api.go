@@ -918,6 +918,11 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
 				return
 			}
+			emitRemoteAuditEvent(requestID, "provider_profile_upsert", profile.ID, "success", map[string]interface{}{
+				"provider": profile.Provider,
+				"model":    profile.Model,
+				"enabled":  profile.Enabled,
+			})
 			writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "profile": profile})
 			return
 		default:
@@ -958,6 +963,11 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
 				return
 			}
+			emitRemoteAuditEvent(requestID, "provider_profile_patch", updated.ID, "success", map[string]interface{}{
+				"provider": updated.Provider,
+				"model":    updated.Model,
+				"enabled":  updated.Enabled,
+			})
 			writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "profile": updated})
 			return
 		case http.MethodDelete:
@@ -970,6 +980,7 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 				writeJSON(w, http.StatusNotFound, gatewayErrBody("E_PROFILE_NOT_FOUND", fmt.Sprintf("profile %s not found", profileID)))
 				return
 			}
+			emitRemoteAuditEvent(requestID, "provider_profile_delete", profileID, "success", nil)
 			writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "deleted": true})
 			return
 		case http.MethodGet:
@@ -1018,6 +1029,11 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 			return
 		}
 		if strings.TrimSpace(req.HostID) == "" {
+			emitRemoteAuditEvent(requestID, "provider_profile_test", profileID, "success", map[string]interface{}{
+				"provider": profile.Provider,
+				"model":    profile.Model,
+				"mode":     "local_validation",
+			})
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"requestId": requestID,
 				"result":    "ok",
@@ -1048,6 +1064,11 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_PROFILE_TEST_FAILED", checkErr.Error()))
 			return
 		}
+		emitRemoteAuditEvent(requestID, "provider_profile_test", profileID, "success", map[string]interface{}{
+			"provider": profile.Provider,
+			"model":    profile.Model,
+			"hostId":   req.HostID,
+		})
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"requestId": requestID,
 			"result":    "ok",
@@ -1087,6 +1108,7 @@ func handleProviderBindings(w http.ResponseWriter, r *http.Request, requestID st
 			writeJSON(w, http.StatusNotFound, gatewayErrBody("E_BINDING_NOT_FOUND", fmt.Sprintf("binding %s not found", trimmed)))
 			return
 		}
+		emitRemoteAuditEvent(requestID, "provider_binding_delete", trimmed, "success", nil)
 		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "deleted": true})
 		return
 	}
@@ -1162,6 +1184,12 @@ func handleProviderBindings(w http.ResponseWriter, r *http.Request, requestID st
 			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
 			return
 		}
+		emitRemoteAuditEvent(requestID, "provider_binding_upsert", binding.ID, "success", map[string]interface{}{
+			"profileId":  binding.ProfileID,
+			"targetType": binding.TargetType,
+			"targetId":   binding.TargetID,
+			"syncMode":   binding.SyncMode,
+		})
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"requestId": requestID,
 			"result":    "ok",

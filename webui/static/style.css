@@ -195,6 +195,12 @@ nav {
   border-color: rgba(46, 134, 83, 0.24);
 }
 
+.badge-warn {
+  color: #8b5300;
+  background: rgba(255, 241, 199, 0.92);
+  border-color: rgba(214, 158, 46, 0.28);
+}
+
 .badge-error {
   color: #a1121a;
   background: rgba(239, 68, 68, 0.11);
@@ -634,6 +640,23 @@ button:disabled,
 
 .execution-details-panel {
   min-height: 220px;
+}
+
+.worker-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.worker-badge-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.worker-meta-grid {
+  display: grid;
+  gap: 6px;
 }
 
 .executions-detail-summary {
