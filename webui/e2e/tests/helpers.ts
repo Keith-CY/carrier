@@ -251,8 +251,15 @@ export const MOCK_WORKERS = [
     hostName: 'prod-host-1',
     agentId: 'picoclaw',
     state: 'busy',
+    leaseState: 'busy',
     executionId: 'exec-running',
     taskCount: 1,
+    queuePosition: 1,
+    stale: true,
+    staleReason: 'heartbeat_timeout',
+    leaseAgeSec: 920,
+    heartbeatAgeSec: 360,
+    lastHeartbeatAt: '2026-03-08T10:59:00Z',
     updatedAt: '2026-03-08T11:04:00Z',
   },
   {
@@ -593,6 +600,16 @@ export async function mockOrchestrationAPIs(page: Page) {
   let nextExecutionID = 1;
   let nextDerivedExecutionID = 1;
 
+  function queueSummary() {
+    return {
+      activeExecutions: executions.filter((item) => ['running', 'provisioning'].includes(String(item.status || '').trim().toLowerCase())).length,
+      queuedTasks: 2,
+      staleLeases: workers.filter((item) => item.source === 'lease' && item.stale).length,
+      reclaimableWorkers: workers.filter((item) => item.source === 'lease' && item.stale).length,
+      updatedAt: '2026-03-08T11:05:00Z',
+    };
+  }
+
   function deriveExecution(source: Record<string, unknown>, action: 'retry' | 'rerun' | 'clone') {
     const nextID = `exec-derived-${nextDerivedExecutionID++}`;
     const sourceExecutionID = String(source.sourceExecutionId || source.id || '').trim();
@@ -921,8 +938,20 @@ export async function mockOrchestrationAPIs(page: Page) {
           error: workers.filter((item) => String(item.state) === 'error').length,
           local: workers.filter((item) => String(item.hostId) === 'local').length,
           remote: workers.filter((item) => String(item.hostId) !== 'local').length,
+          stale: workers.filter((item) => !!item.stale).length,
         },
         warnings: [],
+      }),
+    }),
+  );
+
+  await page.route('**/api/v1/orchestrator/workers/queue', async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        summary: queueSummary(),
       }),
     }),
   );
@@ -931,6 +960,9 @@ export async function mockOrchestrationAPIs(page: Page) {
     for (const worker of workers) {
       if (worker.source === 'lease' && worker.state !== 'reclaimed') {
         worker.state = 'reclaimed';
+        worker.leaseState = 'reclaimed';
+        worker.stale = false;
+        worker.staleReason = '';
       }
     }
     return route.fulfill({
@@ -940,6 +972,32 @@ export async function mockOrchestrationAPIs(page: Page) {
         result: 'ok',
         reclaim: {
           reclaimed: 1,
+          skipped: 0,
+          failed: 0,
+          failures: [],
+        },
+      }),
+    });
+  });
+
+  await page.route('**/api/v1/orchestrator/workers/reclaim-stale', async (route) => {
+    let reclaimed = 0;
+    for (const worker of workers) {
+      if (worker.source === 'lease' && worker.stale) {
+        worker.state = 'reclaimed';
+        worker.leaseState = 'reclaimed';
+        worker.stale = false;
+        worker.staleReason = '';
+        reclaimed += 1;
+      }
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        reclaim: {
+          reclaimed,
           skipped: 0,
           failed: 0,
           failures: [],

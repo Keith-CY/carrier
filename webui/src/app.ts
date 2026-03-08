@@ -69,6 +69,7 @@
   let executionRecordsCache = [];
   let selectedExecutionID = '';
   let workerInventoryCache = [];
+  let workerQueueSummaryCache = null;
   let quickLaunchPlan = null;
   let quickLaunchProviderCatalog = [];
   let workersPollTimer = null;
@@ -295,6 +296,14 @@
     const parsed = new Date(text);
     if (Number.isNaN(parsed.getTime())) return text;
     return parsed.toLocaleString();
+  }
+
+  function formatAgeSeconds(value) {
+    const seconds = Number(value || 0);
+    if (!Number.isFinite(seconds) || seconds <= 0) return 'n/a';
+    if (seconds < 60) return String(Math.round(seconds)) + 's';
+    if (seconds < 3600) return String(Math.round(seconds / 60)) + 'm';
+    return String((seconds / 3600).toFixed(seconds % 3600 === 0 ? 0 : 1)) + 'h';
   }
 
   function isRouteEnabled(route) {
@@ -2667,6 +2676,8 @@
     switch (String(filterValue || 'all').trim().toLowerCase()) {
       case 'active':
         return state === 'busy' || state === 'provisioning' || state === 'reclaiming' || state === 'ready';
+      case 'stale':
+        return !!(worker && worker.stale);
       case 'available':
       case 'managed':
       case 'stopped':
@@ -2676,6 +2687,21 @@
       default:
         return true;
     }
+  }
+
+  function buildWorkerSummaryPayload(workers, queueSummary) {
+    const items = Array.isArray(workers) ? workers : [];
+    const queue = queueSummary && typeof queueSummary === 'object' ? queueSummary : {};
+    return {
+      total: items.length,
+      active: items.filter(item => ['busy', 'provisioning', 'reclaiming', 'ready'].includes(String(item && item.state || '').trim().toLowerCase())).length,
+      busy: items.filter(item => String(item && item.state || '').trim().toLowerCase() === 'busy').length,
+      error: items.filter(item => String(item && item.state || '').trim().toLowerCase() === 'error').length,
+      local: items.filter(item => String(item && item.hostId || '').trim() === 'local').length,
+      remote: items.filter(item => String(item && item.hostId || '').trim() !== 'local').length,
+      stale: items.filter(item => !!(item && item.stale)).length,
+      queueSummary: queue,
+    };
   }
 
   function renderWorkersView(workers, summaryPayload, warnings) {
@@ -2698,8 +2724,12 @@
     const active = Number(summarySource.active || 0) || 0;
     const local = Number(summarySource.local || 0) || 0;
     const remote = Number(summarySource.remote || 0) || 0;
+    const stale = Number(summarySource.stale || 0) || 0;
+    const queueSummary = summarySource.queueSummary && typeof summarySource.queueSummary === 'object' ? summarySource.queueSummary : {};
+    const activeExecutions = Number(queueSummary.activeExecutions || 0) || 0;
+    const queuedTasks = Number(queueSummary.queuedTasks || 0) || 0;
     summary.textContent = total
-      ? 'Total: ' + total + ' · Visible: ' + filtered.length + ' · Active: ' + active + ' · Busy: ' + busy + ' · Local: ' + local + ' · Remote: ' + remote
+      ? 'Total: ' + total + ' · Visible: ' + filtered.length + ' · Active: ' + active + ' · Busy: ' + busy + ' · Stale: ' + stale + ' · Active Executions: ' + activeExecutions + ' · Queued Tasks: ' + queuedTasks + ' · Local: ' + local + ' · Remote: ' + remote
       : 'No workers discovered yet.';
     if (Array.isArray(warnings) && warnings.length) {
       setMsg('#workers-msg', warnings.join(' | '), 'error');
@@ -2737,6 +2767,12 @@
       stateBadge.className = workerStateBadgeClass(worker && worker.state);
       stateBadge.textContent = String(worker && worker.state ? worker.state : 'unknown');
       badgeWrap.appendChild(stateBadge);
+      if (worker && worker.stale) {
+        const staleBadge = document.createElement('span');
+        staleBadge.className = 'badge badge-warn';
+        staleBadge.textContent = 'stale';
+        badgeWrap.appendChild(staleBadge);
+      }
       header.appendChild(titleWrap);
       header.appendChild(badgeWrap);
       card.appendChild(header);
@@ -2749,8 +2785,14 @@
       if (worker && worker.runtimeMode) metaLines.push('runtime mode: ' + String(worker.runtimeMode));
       if (worker && worker.health) metaLines.push('health: ' + String(worker.health));
       if (worker && worker.taskCount) metaLines.push('tasks: ' + String(worker.taskCount));
+      if (worker && worker.queuePosition) metaLines.push('queue position: ' + String(worker.queuePosition));
       if (worker && worker.lastSyncStatus) metaLines.push('sync: ' + String(worker.lastSyncStatus));
       if (worker && worker.driftState) metaLines.push('drift: ' + String(worker.driftState));
+      if (worker && worker.leaseState) metaLines.push('lease state: ' + String(worker.leaseState));
+      if (worker && worker.staleReason) metaLines.push('stale reason: ' + String(worker.staleReason));
+      if (worker && worker.leaseAgeSec) metaLines.push('lease age: ' + formatAgeSeconds(worker.leaseAgeSec));
+      if (worker && worker.heartbeatAgeSec) metaLines.push('heartbeat age: ' + formatAgeSeconds(worker.heartbeatAgeSec));
+      if (worker && worker.lastHeartbeatAt) metaLines.push('last heartbeat: ' + formatDateTime(worker.lastHeartbeatAt));
       if (worker && worker.heartbeatAt) metaLines.push('heartbeat: ' + formatDateTime(worker.heartbeatAt));
       if (worker && worker.updatedAt) metaLines.push('updated: ' + formatDateTime(worker.updatedAt));
       if (!metaLines.length) metaLines.push('host: ' + String(worker && worker.hostId ? worker.hostId : 'unknown'));
@@ -2777,13 +2819,20 @@
     const list = $('#workers-list');
     if (list && !list.childElementCount) list.textContent = 'Loading…';
     if (!featureFlags.remoteControlPlaneEnabled) {
-      renderWorkersView([], {}, []);
+      renderWorkersView([], buildWorkerSummaryPayload([], null), []);
       return;
     }
     try {
-      const payload = await api('GET', '/api/v1/orchestrator/workers');
+      const [payload, queuePayload] = await Promise.all([
+        api('GET', '/api/v1/orchestrator/workers'),
+        api('GET', '/api/v1/orchestrator/workers/queue'),
+      ]);
       workerInventoryCache = Array.isArray(payload && payload.workers) ? payload.workers : [];
-      renderWorkersView(workerInventoryCache, payload && payload.summary, payload && payload.warnings);
+      workerQueueSummaryCache = queuePayload && queuePayload.summary ? queuePayload.summary : null;
+      renderWorkersView(workerInventoryCache, {
+        ...(payload && payload.summary ? payload.summary : {}),
+        queueSummary: workerQueueSummaryCache,
+      }, payload && payload.warnings);
     } catch (e) {
       if (list) list.textContent = 'Error: ' + e.message;
       const summary = $('#workers-summary');
@@ -2813,6 +2862,27 @@
     }
   }
 
+  async function reclaimStaleWorkers() {
+    const button = $('#workers-reclaim-stale');
+    if (button) button.disabled = true;
+    try {
+      const payload = await api('POST', '/api/v1/orchestrator/workers/reclaim-stale', {});
+      const reclaim = payload && payload.reclaim ? payload.reclaim : {};
+      await refreshWorkers();
+      setMsg(
+        '#workers-msg',
+        'Stale reclaim finished: reclaimed=' + String(Number(reclaim.reclaimed || 0) || 0) +
+        ', skipped=' + String(Number(reclaim.skipped || 0) || 0) +
+        ', failed=' + String(Number(reclaim.failed || 0) || 0),
+        'info',
+      );
+    } catch (e) {
+      setMsg('#workers-msg', 'Stale reclaim failed: ' + e.message, 'error');
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
   async function initWorkers() {
     resetAddMode();
     showView('workers');
@@ -2820,26 +2890,14 @@
 
     const refreshBtn = $('#workers-refresh');
     const reclaimBtn = $('#workers-reclaim-idle');
+    const reclaimStaleBtn = $('#workers-reclaim-stale');
     const searchInput = $('#workers-search');
     const stateFilter = $('#workers-state-filter');
     if (refreshBtn) refreshBtn.onclick = refreshWorkers;
     if (reclaimBtn) reclaimBtn.onclick = reclaimIdleWorkers;
-    if (searchInput) searchInput.oninput = () => renderWorkersView(workerInventoryCache, {
-      total: workerInventoryCache.length,
-      active: workerInventoryCache.filter(item => ['busy', 'provisioning', 'reclaiming', 'ready'].includes(String(item && item.state || '').trim().toLowerCase())).length,
-      busy: workerInventoryCache.filter(item => String(item && item.state || '').trim().toLowerCase() === 'busy').length,
-      error: workerInventoryCache.filter(item => String(item && item.state || '').trim().toLowerCase() === 'error').length,
-      local: workerInventoryCache.filter(item => String(item && item.hostId || '').trim() === 'local').length,
-      remote: workerInventoryCache.filter(item => String(item && item.hostId || '').trim() !== 'local').length,
-    }, []);
-    if (stateFilter) stateFilter.onchange = () => renderWorkersView(workerInventoryCache, {
-      total: workerInventoryCache.length,
-      active: workerInventoryCache.filter(item => ['busy', 'provisioning', 'reclaiming', 'ready'].includes(String(item && item.state || '').trim().toLowerCase())).length,
-      busy: workerInventoryCache.filter(item => String(item && item.state || '').trim().toLowerCase() === 'busy').length,
-      error: workerInventoryCache.filter(item => String(item && item.state || '').trim().toLowerCase() === 'error').length,
-      local: workerInventoryCache.filter(item => String(item && item.hostId || '').trim() === 'local').length,
-      remote: workerInventoryCache.filter(item => String(item && item.hostId || '').trim() !== 'local').length,
-    }, []);
+    if (reclaimStaleBtn) reclaimStaleBtn.onclick = reclaimStaleWorkers;
+    if (searchInput) searchInput.oninput = () => renderWorkersView(workerInventoryCache, buildWorkerSummaryPayload(workerInventoryCache, workerQueueSummaryCache), []);
+    if (stateFilter) stateFilter.onchange = () => renderWorkersView(workerInventoryCache, buildWorkerSummaryPayload(workerInventoryCache, workerQueueSummaryCache), []);
 
     await refreshWorkers();
     startWorkersPolling();

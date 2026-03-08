@@ -39,7 +39,9 @@ type GatewayConfig struct {
 	TelegramAPIBaseURL      string // CARRIER_TELEGRAM_API_BASE_URL
 
 	// Limits
-	MaxCommandBodyBytes int // CARRIER_MAX_COMMAND_BODY_BYTES (default 64KB)
+	MaxCommandBodyBytes    int           // CARRIER_MAX_COMMAND_BODY_BYTES (default 64KB)
+	WorkerLeaseStaleAfter  time.Duration // CARRIER_WORKER_LEASE_STALE_AFTER_SEC (default 10m)
+	WorkerHeartbeatTimeout time.Duration // CARRIER_WORKER_HEARTBEAT_TIMEOUT_SEC (default 2m)
 
 	// Rate limits
 	RateLimitPerSession int           // CARRIER_RATE_LIMIT_PER_SESSION (default 30)
@@ -79,6 +81,8 @@ func LoadGatewayConfigFromEnv() *GatewayConfig {
 		TelegramPollingTimeout:  parseEnvInt("CARRIER_TELEGRAM_POLLING_TIMEOUT_SEC", 30),
 		TelegramAPIBaseURL:      strings.TrimSpace(envOrDefault("CARRIER_TELEGRAM_API_BASE_URL", "https://api.telegram.org")),
 		MaxCommandBodyBytes:     parseEnvInt("CARRIER_MAX_COMMAND_BODY_BYTES", defaultMaxCommandBodyBytes),
+		WorkerLeaseStaleAfter:   time.Duration(parseEnvInt("CARRIER_WORKER_LEASE_STALE_AFTER_SEC", 600)) * time.Second,
+		WorkerHeartbeatTimeout:  time.Duration(parseEnvInt("CARRIER_WORKER_HEARTBEAT_TIMEOUT_SEC", 120)) * time.Second,
 		RateLimitPerSession:     parseEnvInt("CARRIER_RATE_LIMIT_PER_SESSION", 30),
 		RateLimitGlobal:         parseEnvInt("CARRIER_RATE_LIMIT_GLOBAL", 200),
 		RateLimitWindow:         time.Duration(parseEnvInt("CARRIER_RATE_LIMIT_WINDOW_MS", 60000)) * time.Millisecond,

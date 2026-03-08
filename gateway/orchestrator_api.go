@@ -824,14 +824,16 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 		key := strings.ToLower(strings.TrimSpace(resolvedHostID) + ":" + strings.TrimSpace(resolvedReq.AgentID))
 		for i := 0; i < resolvedReq.Count; i++ {
 			lease := OrchestratorWorkerLease{
-				ID:          uuid.NewString(),
-				ExecutionID: execution.ID,
-				HostID:      resolvedHostID,
-				AgentID:     resolvedReq.AgentID,
-				State:       OrchestratorWorkerStateProvisioning,
-				CreatedAt:   nowTimestamp(),
-				UpdatedAt:   nowTimestamp(),
-				HeartbeatAt: nowTimestamp(),
+				ID:              uuid.NewString(),
+				ExecutionID:     execution.ID,
+				HostID:          resolvedHostID,
+				AgentID:         resolvedReq.AgentID,
+				State:           OrchestratorWorkerStateProvisioning,
+				LeaseState:      string(OrchestratorWorkerStateProvisioning),
+				CreatedAt:       nowTimestamp(),
+				UpdatedAt:       nowTimestamp(),
+				HeartbeatAt:     nowTimestamp(),
+				LastHeartbeatAt: nowTimestamp(),
 				LeaseExpireAt: time.Now().UTC().Add(defaultOrchestratorWorkerIdleTTL).
 					Format(time.RFC3339Nano),
 			}
@@ -842,6 +844,7 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 			exists, existsErr := remoteAgentConfigExists(ctx, host, resolvedReq.AgentID)
 			if existsErr != nil {
 				lease.State = OrchestratorWorkerStateError
+				lease.LeaseState = string(OrchestratorWorkerStateError)
 				lease.LastError = existsErr.Error()
 				lease.UpdatedAt = nowTimestamp()
 				if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
@@ -855,6 +858,7 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 				installResult, installErr := orchestratorInstallAgent(ctx, host, resolvedHostID, resolvedReq.AgentID, false)
 				if installErr != nil {
 					lease.State = OrchestratorWorkerStateError
+					lease.LeaseState = string(OrchestratorWorkerStateError)
 					lease.LastError = installErr.Error()
 					lease.UpdatedAt = nowTimestamp()
 					if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
@@ -872,8 +876,12 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 			lease.Ephemeral = ephemeral
 			lease.InstalledByRun = installedByRun[key]
 			lease.State = OrchestratorWorkerStateReady
+			lease.LeaseState = string(OrchestratorWorkerStateReady)
 			lease.LastError = ""
 			lease.HeartbeatAt = nowTimestamp()
+			lease.LastHeartbeatAt = lease.HeartbeatAt
+			lease.Stale = false
+			lease.StaleReason = ""
 			lease.UpdatedAt = nowTimestamp()
 			savedLease, saveErr := upsertOrchestratorWorkerLease(lease)
 			if saveErr != nil {
@@ -905,16 +913,18 @@ func provisionOrchestratorLocalWorkers(ctx context.Context, execution Orchestrat
 	leases := make([]OrchestratorWorkerLease, 0, req.Count)
 	for i := 0; i < req.Count; i++ {
 		lease := OrchestratorWorkerLease{
-			ID:             uuid.NewString(),
-			ExecutionID:    execution.ID,
-			HostID:         orchestratorLocalHostID,
-			AgentID:        agentID,
-			State:          OrchestratorWorkerStateReady,
-			Ephemeral:      false,
-			InstalledByRun: false,
-			CreatedAt:      nowTimestamp(),
-			UpdatedAt:      nowTimestamp(),
-			HeartbeatAt:    nowTimestamp(),
+			ID:              uuid.NewString(),
+			ExecutionID:     execution.ID,
+			HostID:          orchestratorLocalHostID,
+			AgentID:         agentID,
+			State:           OrchestratorWorkerStateReady,
+			LeaseState:      string(OrchestratorWorkerStateReady),
+			Ephemeral:       false,
+			InstalledByRun:  false,
+			CreatedAt:       nowTimestamp(),
+			UpdatedAt:       nowTimestamp(),
+			HeartbeatAt:     nowTimestamp(),
+			LastHeartbeatAt: nowTimestamp(),
 			LeaseExpireAt: time.Now().UTC().Add(defaultOrchestratorWorkerIdleTTL).
 				Format(time.RFC3339Nano),
 		}
@@ -1075,7 +1085,11 @@ func runTaskWithRetries(
 		}
 
 		lease.State = OrchestratorWorkerStateBusy
+		lease.LeaseState = string(OrchestratorWorkerStateBusy)
 		lease.HeartbeatAt = nowTimestamp()
+		lease.LastHeartbeatAt = lease.HeartbeatAt
+		lease.Stale = false
+		lease.StaleReason = ""
 		lease.UpdatedAt = nowTimestamp()
 		if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
 			logOrchestratorPersistError("upsert orchestrator worker lease busy", err)
@@ -1084,10 +1098,14 @@ func runTaskWithRetries(
 		start := time.Now()
 		result, execErr := runOrchestratorTaskAttempt(ctx, execution, task, lease, attempt)
 		lease.HeartbeatAt = nowTimestamp()
+		lease.LastHeartbeatAt = lease.HeartbeatAt
 		lease.UpdatedAt = nowTimestamp()
 		if execErr != nil {
 			lease.State = OrchestratorWorkerStateReady
+			lease.LeaseState = string(OrchestratorWorkerStateReady)
 			lease.LastError = execErr.Error()
+			lease.Stale = false
+			lease.StaleReason = ""
 			if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
 				logOrchestratorPersistError("upsert orchestrator worker lease ready-on-error", err)
 			}
@@ -1103,8 +1121,11 @@ func runTaskWithRetries(
 		}
 
 		lease.State = OrchestratorWorkerStateReady
+		lease.LeaseState = string(OrchestratorWorkerStateReady)
 		lease.LastError = ""
 		lease.TaskCount++
+		lease.Stale = false
+		lease.StaleReason = ""
 		if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
 			logOrchestratorPersistError("upsert orchestrator worker lease ready", err)
 		}
@@ -1500,7 +1521,11 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 			continue
 		}
 		if !force && idleTTL > 0 {
-			heartbeat := parseRFC3339OrNow(lease.HeartbeatAt)
+			heartbeatRaw := strings.TrimSpace(lease.LastHeartbeatAt)
+			if heartbeatRaw == "" {
+				heartbeatRaw = strings.TrimSpace(lease.HeartbeatAt)
+			}
+			heartbeat := parseRFC3339OrNow(heartbeatRaw)
 			if now.Sub(heartbeat) < idleTTL {
 				skipped++
 				continue
@@ -1512,6 +1537,7 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 		}
 
 		lease.State = OrchestratorWorkerStateReclaiming
+		lease.LeaseState = string(OrchestratorWorkerStateReclaiming)
 		lease.UpdatedAt = nowTimestamp()
 		if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
 			recordPersistFailure(lease.ID, "reclaiming", err)
@@ -1523,6 +1549,7 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 				failed++
 				failures = append(failures, fmt.Sprintf("%s: %v", lease.ID, hostErr))
 				lease.State = OrchestratorWorkerStateError
+				lease.LeaseState = string(OrchestratorWorkerStateError)
 				lease.LastError = hostErr.Error()
 				lease.UpdatedAt = nowTimestamp()
 				if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
@@ -1536,6 +1563,7 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 					failed++
 					failures = append(failures, fmt.Sprintf("%s: %v", lease.ID, uninstallErr))
 					lease.State = OrchestratorWorkerStateError
+					lease.LeaseState = string(OrchestratorWorkerStateError)
 					lease.LastError = uninstallErr.Error()
 					lease.UpdatedAt = nowTimestamp()
 					if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
@@ -1547,8 +1575,12 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 		}
 
 		lease.State = OrchestratorWorkerStateReclaimed
+		lease.LeaseState = string(OrchestratorWorkerStateReclaimed)
 		lease.LastError = ""
 		lease.HeartbeatAt = nowTimestamp()
+		lease.LastHeartbeatAt = lease.HeartbeatAt
+		lease.Stale = false
+		lease.StaleReason = ""
 		lease.UpdatedAt = nowTimestamp()
 		if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
 			recordPersistFailure(lease.ID, "reclaimed", err)

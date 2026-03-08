@@ -7,7 +7,7 @@ All command blocks below assume `carrier` is installed and available in `PATH`.
 
 ### Orchestration and execution history
 
-- `carrier orchestrate <goal...> [--host-id <id>]... [--provider <provider-id>] [--max-concurrency <n>] [--idempotency-key <key>] [--timeout <duration>] [--async] [--dry-run] [--json]`
+- `carrier orchestrate <goal...> [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--idempotency-key <key>] [--timeout <duration>] [--async] [--dry-run] [--json]`
   - Decompose a goal with the base agent, assign task units to worker agents, and optionally execute the plan.
   - `--dry-run` previews the execution plan without creating an execution.
 - `carrier orchestrate status <execution_id> [--json]`
@@ -20,6 +20,14 @@ All command blocks below assume `carrier` is installed and available in `PATH`.
   - Alias for orchestration execution status lookup.
 - `carrier executions cancel <execution_id> [--json]`
   - Cancel one orchestration execution.
+- `carrier executions retry <execution_id> [--json]`
+  - Create a derived execution containing only failed tasks from the source execution.
+- `carrier executions rerun <execution_id> [--json]`
+  - Create a new execution from the full original plan.
+- `carrier executions clone <execution_id> [--json]`
+  - Clone the original execution plan into a fresh `pending_authorization` execution.
+- `carrier executions artifacts <execution_id> [--json]`
+  - List execution artifact metadata.
 
 ### Bootstrap and runtime
 
@@ -187,6 +195,22 @@ carrier executions
 
 ```bash
 carrier executions show <execution_id>
+```
+
+```bash
+carrier executions artifacts <execution_id>
+```
+
+```bash
+carrier executions retry <execution_id>
+```
+
+```bash
+carrier executions rerun <execution_id>
+```
+
+```bash
+carrier executions clone <execution_id>
 ```
 
 ### Install OpenClaw on VPS

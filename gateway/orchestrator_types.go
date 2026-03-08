@@ -165,41 +165,53 @@ type OrchestratorExecutionGovernance struct {
 }
 
 type OrchestratorWorkerLease struct {
-	ID             string                  `json:"id"`
-	ExecutionID    string                  `json:"executionId"`
-	HostID         string                  `json:"hostId"`
-	AgentID        string                  `json:"agentId"`
-	State          OrchestratorWorkerState `json:"state"`
-	Ephemeral      bool                    `json:"ephemeral"`
-	InstalledByRun bool                    `json:"installedByRun"`
-	TaskCount      int                     `json:"taskCount"`
-	LastError      string                  `json:"lastError,omitempty"`
-	LeaseExpireAt  string                  `json:"leaseExpireAt,omitempty"`
-	HeartbeatAt    string                  `json:"heartbeatAt,omitempty"`
-	CreatedAt      string                  `json:"createdAt"`
-	UpdatedAt      string                  `json:"updatedAt"`
+	ID              string                  `json:"id"`
+	ExecutionID     string                  `json:"executionId"`
+	HostID          string                  `json:"hostId"`
+	AgentID         string                  `json:"agentId"`
+	State           OrchestratorWorkerState `json:"state"`
+	LeaseState      string                  `json:"leaseState,omitempty"`
+	Ephemeral       bool                    `json:"ephemeral"`
+	InstalledByRun  bool                    `json:"installedByRun"`
+	TaskCount       int                     `json:"taskCount"`
+	QueuePosition   int                     `json:"queuePosition,omitempty"`
+	Stale           bool                    `json:"stale,omitempty"`
+	StaleReason     string                  `json:"staleReason,omitempty"`
+	LastError       string                  `json:"lastError,omitempty"`
+	LeaseExpireAt   string                  `json:"leaseExpireAt,omitempty"`
+	LastHeartbeatAt string                  `json:"lastHeartbeatAt,omitempty"`
+	HeartbeatAt     string                  `json:"heartbeatAt,omitempty"`
+	CreatedAt       string                  `json:"createdAt"`
+	UpdatedAt       string                  `json:"updatedAt"`
 }
 
 type OrchestratorWorkerInventoryItem struct {
-	ID             string `json:"id"`
-	Source         string `json:"source"`
-	HostID         string `json:"hostId"`
-	HostName       string `json:"hostName,omitempty"`
-	AgentID        string `json:"agentId"`
-	State          string `json:"state"`
-	ExecutionID    string `json:"executionId,omitempty"`
-	TaskCount      int    `json:"taskCount,omitempty"`
-	Ephemeral      bool   `json:"ephemeral,omitempty"`
-	InstalledByRun bool   `json:"installedByRun,omitempty"`
-	RuntimeState   string `json:"runtimeState,omitempty"`
-	RuntimeMode    string `json:"runtimeMode,omitempty"`
-	Health         string `json:"health,omitempty"`
-	DriftState     string `json:"driftState,omitempty"`
-	LastSyncStatus string `json:"lastSyncStatus,omitempty"`
-	LastError      string `json:"lastError,omitempty"`
-	LeaseExpireAt  string `json:"leaseExpireAt,omitempty"`
-	HeartbeatAt    string `json:"heartbeatAt,omitempty"`
-	UpdatedAt      string `json:"updatedAt,omitempty"`
+	ID              string `json:"id"`
+	Source          string `json:"source"`
+	HostID          string `json:"hostId"`
+	HostName        string `json:"hostName,omitempty"`
+	AgentID         string `json:"agentId"`
+	State           string `json:"state"`
+	ExecutionID     string `json:"executionId,omitempty"`
+	TaskCount       int    `json:"taskCount,omitempty"`
+	QueuePosition   int    `json:"queuePosition,omitempty"`
+	Ephemeral       bool   `json:"ephemeral,omitempty"`
+	InstalledByRun  bool   `json:"installedByRun,omitempty"`
+	RuntimeState    string `json:"runtimeState,omitempty"`
+	RuntimeMode     string `json:"runtimeMode,omitempty"`
+	Health          string `json:"health,omitempty"`
+	DriftState      string `json:"driftState,omitempty"`
+	LastSyncStatus  string `json:"lastSyncStatus,omitempty"`
+	LastError       string `json:"lastError,omitempty"`
+	LeaseState      string `json:"leaseState,omitempty"`
+	Stale           bool   `json:"stale,omitempty"`
+	StaleReason     string `json:"staleReason,omitempty"`
+	LeaseAgeSec     int64  `json:"leaseAgeSec,omitempty"`
+	HeartbeatAgeSec int64  `json:"heartbeatAgeSec,omitempty"`
+	LeaseExpireAt   string `json:"leaseExpireAt,omitempty"`
+	LastHeartbeatAt string `json:"lastHeartbeatAt,omitempty"`
+	HeartbeatAt     string `json:"heartbeatAt,omitempty"`
+	UpdatedAt       string `json:"updatedAt,omitempty"`
 }
 
 type OrchestratorWorkerInventorySummary struct {
@@ -209,6 +221,15 @@ type OrchestratorWorkerInventorySummary struct {
 	Error  int `json:"error"`
 	Local  int `json:"local"`
 	Remote int `json:"remote"`
+	Stale  int `json:"stale,omitempty"`
+}
+
+type OrchestratorWorkerQueueSummary struct {
+	ActiveExecutions   int    `json:"activeExecutions"`
+	QueuedTasks        int    `json:"queuedTasks"`
+	StaleLeases        int    `json:"staleLeases"`
+	ReclaimableWorkers int    `json:"reclaimableWorkers"`
+	UpdatedAt          string `json:"updatedAt,omitempty"`
 }
 
 func normalizeOrchestratorExecutionForStore(in OrchestratorExecution) OrchestratorExecution {
@@ -252,9 +273,21 @@ func normalizeOrchestratorWorkerLeaseForStore(in OrchestratorWorkerLease) Orches
 	out.ExecutionID = strings.TrimSpace(out.ExecutionID)
 	out.HostID = strings.TrimSpace(out.HostID)
 	out.AgentID = strings.TrimSpace(out.AgentID)
+	out.LeaseState = strings.TrimSpace(out.LeaseState)
 	out.LastError = strings.TrimSpace(out.LastError)
+	out.StaleReason = strings.TrimSpace(out.StaleReason)
+	out.LastHeartbeatAt = strings.TrimSpace(out.LastHeartbeatAt)
+	if out.QueuePosition < 0 {
+		out.QueuePosition = 0
+	}
 	if out.State == "" {
 		out.State = OrchestratorWorkerStateProvisioning
+	}
+	if out.LeaseState == "" {
+		out.LeaseState = string(out.State)
+	}
+	if out.LastHeartbeatAt == "" {
+		out.LastHeartbeatAt = strings.TrimSpace(out.HeartbeatAt)
 	}
 	return out
 }

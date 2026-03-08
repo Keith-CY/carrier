@@ -3,6 +3,7 @@ package gateway
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizeOrchestratorRequiredWorkerDefaultsAndValidation(t *testing.T) {
@@ -390,5 +391,150 @@ func TestNormalizeOrchestratorStoreHelpers(t *testing.T) {
 	}
 	if lease.State != OrchestratorWorkerStateProvisioning {
 		t.Fatalf("expected default lease state provisioning, got %q", lease.State)
+	}
+	if lease.LeaseState != string(OrchestratorWorkerStateProvisioning) {
+		t.Fatalf("expected leaseState to mirror state, got %q", lease.LeaseState)
+	}
+	if lease.QueuePosition != 0 {
+		t.Fatalf("expected default queuePosition=0, got %d", lease.QueuePosition)
+	}
+}
+
+func TestIsWorkerLeaseStale(t *testing.T) {
+	now := time.Date(2026, time.March, 9, 12, 0, 0, 0, time.UTC)
+	cfg := &GatewayConfig{
+		WorkerLeaseStaleAfter:     5 * time.Minute,
+		WorkerHeartbeatTimeout:    2 * time.Minute,
+		RemoteControlPlaneEnabled: true,
+		RemoteChatEnabled:         true,
+		ProviderBindingEnabled:    true,
+		MaxCommandBodyBytes:       64 * 1024,
+	}
+
+	tests := []struct {
+		name       string
+		lease      OrchestratorWorkerLease
+		executions map[string]OrchestratorExecution
+		wantStale  bool
+		wantReason string
+	}{
+		{
+			name: "lease expired",
+			lease: OrchestratorWorkerLease{
+				ID:            "lease-1",
+				ExecutionID:   "exec-1",
+				HostID:        "host-1",
+				AgentID:       "zeroclaw",
+				State:         OrchestratorWorkerStateReady,
+				LeaseExpireAt: now.Add(-time.Minute).Format(time.RFC3339),
+				HeartbeatAt:   now.Add(-30 * time.Second).Format(time.RFC3339),
+			},
+			wantStale:  true,
+			wantReason: "lease_expired",
+		},
+		{
+			name: "heartbeat timeout",
+			lease: OrchestratorWorkerLease{
+				ID:          "lease-2",
+				ExecutionID: "exec-2",
+				HostID:      "host-1",
+				AgentID:     "zeroclaw",
+				State:       OrchestratorWorkerStateBusy,
+				HeartbeatAt: now.Add(-3 * time.Minute).Format(time.RFC3339),
+			},
+			wantStale:  true,
+			wantReason: "heartbeat_timeout",
+		},
+		{
+			name: "terminal execution left busy",
+			lease: OrchestratorWorkerLease{
+				ID:          "lease-3",
+				ExecutionID: "exec-3",
+				HostID:      "host-1",
+				AgentID:     "zeroclaw",
+				State:       OrchestratorWorkerStateBusy,
+				HeartbeatAt: now.Add(-30 * time.Second).Format(time.RFC3339),
+			},
+			executions: map[string]OrchestratorExecution{
+				"exec-3": {
+					ID:     "exec-3",
+					Status: OrchestratorExecutionStatusCompleted,
+				},
+			},
+			wantStale:  true,
+			wantReason: "execution_terminal",
+		},
+		{
+			name: "healthy busy lease",
+			lease: OrchestratorWorkerLease{
+				ID:            "lease-4",
+				ExecutionID:   "exec-4",
+				HostID:        "host-1",
+				AgentID:       "zeroclaw",
+				State:         OrchestratorWorkerStateBusy,
+				HeartbeatAt:   now.Add(-30 * time.Second).Format(time.RFC3339),
+				LeaseExpireAt: now.Add(4 * time.Minute).Format(time.RFC3339),
+			},
+			executions: map[string]OrchestratorExecution{
+				"exec-4": {
+					ID:     "exec-4",
+					Status: OrchestratorExecutionStatusRunning,
+				},
+			},
+			wantStale: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotStale, gotReason := isWorkerLeaseStale(tc.lease, tc.executions, now, cfg)
+			if gotStale != tc.wantStale || gotReason != tc.wantReason {
+				t.Fatalf("isWorkerLeaseStale(%s) = stale=%v reason=%q, want stale=%v reason=%q", tc.name, gotStale, gotReason, tc.wantStale, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestMarkStaleWorkerLeases(t *testing.T) {
+	now := time.Date(2026, time.March, 9, 12, 0, 0, 0, time.UTC)
+	cfg := &GatewayConfig{
+		WorkerLeaseStaleAfter:     5 * time.Minute,
+		WorkerHeartbeatTimeout:    2 * time.Minute,
+		RemoteControlPlaneEnabled: true,
+	}
+	leases := []OrchestratorWorkerLease{
+		{
+			ID:            "lease-expired",
+			ExecutionID:   "exec-1",
+			HostID:        "host-1",
+			AgentID:       "zeroclaw",
+			State:         OrchestratorWorkerStateReady,
+			LeaseExpireAt: now.Add(-time.Minute).Format(time.RFC3339),
+			HeartbeatAt:   now.Add(-time.Minute).Format(time.RFC3339),
+		},
+		{
+			ID:          "lease-healthy",
+			ExecutionID: "exec-2",
+			HostID:      "host-1",
+			AgentID:     "picoclaw",
+			State:       OrchestratorWorkerStateBusy,
+			HeartbeatAt: now.Add(-time.Minute).Format(time.RFC3339),
+		},
+	}
+
+	marked := markStaleWorkerLeases(leases, map[string]OrchestratorExecution{
+		"exec-2": {ID: "exec-2", Status: OrchestratorExecutionStatusRunning},
+	}, now, cfg)
+	if !marked[0].Stale || marked[0].StaleReason != "lease_expired" {
+		t.Fatalf("expected first lease stale lease_expired, got %+v", marked[0])
+	}
+	if marked[0].LeaseState != string(OrchestratorWorkerStateReady) {
+		t.Fatalf("expected first leaseState ready, got %+v", marked[0])
+	}
+	if marked[0].LastHeartbeatAt == "" {
+		t.Fatalf("expected first lastHeartbeatAt populated, got %+v", marked[0])
+	}
+	if marked[1].Stale || marked[1].StaleReason != "" {
+		t.Fatalf("expected second lease healthy, got %+v", marked[1])
 	}
 }

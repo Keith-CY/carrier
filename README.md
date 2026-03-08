@@ -5,6 +5,8 @@ Carrier is a local-first agent control plane for decomposing goals, dispatching 
 ## What Works Today
 
 - Task-first orchestration via `carrier orchestrate` with execution history in `carrier executions`.
+- Execution detail includes lineage, derived retries/reruns/clones, and execution artifacts.
+- Workers inventory includes stale lease detection, queue summary, and stale/idle reclaim actions.
 - Local bootstrap/onboarding via CLI/TUI/WebUI.
 - Managed local install lifecycle for `openclaw`, `picoclaw`, `zeroclaw`.
 - Remote host control-plane APIs (host upsert/check/install/list/config/sync).
@@ -116,12 +118,16 @@ Inspect execution history:
 carrier executions
 carrier executions show <execution_id>
 carrier executions cancel <execution_id>
+carrier executions artifacts <execution_id>
+carrier executions retry <execution_id>
+carrier executions rerun <execution_id>
+carrier executions clone <execution_id>
 ```
 
 Expected result:
 - base agent decomposes the goal into task units
 - tasks are assigned to local `picoclaw` / `zeroclaw` workers
-- the final output shows execution status, task results, and worker targets
+- the final output shows execution status, task results, worker targets, lineage, and artifacts
 
 ### 5) Install OpenClaw Locally (Optional)
 
@@ -239,6 +245,10 @@ carrier orchestrate "<goal>"
 carrier orchestrate "<goal>" --dry-run
 carrier executions
 carrier executions show <execution_id>
+carrier executions artifacts <execution_id>
+carrier executions retry <execution_id>
+carrier executions rerun <execution_id>
+carrier executions clone <execution_id>
 
 # install aliases
 carrier add <agent_id>

@@ -299,6 +299,14 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		}
 		handleOrchestratorWorkers(w, r, requestID, cfg, daemon)
 	})
+	mux.HandleFunc("/api/v1/orchestrator/workers/queue", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleOrchestratorWorkersQueue(w, r, requestID, cfg)
+	})
 	mux.HandleFunc("/api/v1/orchestrator/workers/reclaim", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
 		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
@@ -306,6 +314,14 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			return
 		}
 		handleOrchestratorWorkersReclaim(w, r, requestID, cfg)
+	})
+	mux.HandleFunc("/api/v1/orchestrator/workers/reclaim-stale", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleOrchestratorWorkersReclaimStale(w, r, requestID, cfg)
 	})
 	mux.HandleFunc("/api/v1/provider-profiles", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())

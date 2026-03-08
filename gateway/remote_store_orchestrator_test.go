@@ -172,11 +172,16 @@ func TestOrchestratorWorkerLeaseStoreLifecycle(t *testing.T) {
 	}
 
 	created, err := upsertOrchestratorWorkerLease(OrchestratorWorkerLease{
-		ID:          " lease-1 ",
-		ExecutionID: " exec-1 ",
-		HostID:      " host-1 ",
-		AgentID:     " zeroclaw ",
-		LastError:   "  boom  ",
+		ID:              " lease-1 ",
+		ExecutionID:     " exec-1 ",
+		HostID:          " host-1 ",
+		AgentID:         " zeroclaw ",
+		LastError:       "  boom  ",
+		QueuePosition:   2,
+		LeaseState:      " busy ",
+		LastHeartbeatAt: " 2026-03-09T12:00:00Z ",
+		Stale:           true,
+		StaleReason:     " heartbeat_timeout ",
 	})
 	if err != nil {
 		t.Fatalf("upsertOrchestratorWorkerLease create failed: %v", err)
@@ -192,6 +197,9 @@ func TestOrchestratorWorkerLeaseStoreLifecycle(t *testing.T) {
 	}
 	if created.LastError != "boom" {
 		t.Fatalf("expected trimmed lastError, got %q", created.LastError)
+	}
+	if created.QueuePosition != 2 || created.LeaseState != "busy" || created.LastHeartbeatAt != "2026-03-09T12:00:00Z" || !created.Stale || created.StaleReason != "heartbeat_timeout" {
+		t.Fatalf("expected runtime fields to round-trip, got %+v", created)
 	}
 
 	leases, err = listOrchestratorWorkerLeasesByExecution("EXEC-1")
@@ -209,12 +217,15 @@ func TestOrchestratorWorkerLeaseStoreLifecycle(t *testing.T) {
 
 	createdAt := created.CreatedAt
 	updated, err := upsertOrchestratorWorkerLease(OrchestratorWorkerLease{
-		ID:          "lease-1",
-		ExecutionID: "exec-1",
-		HostID:      "host-1",
-		AgentID:     "zeroclaw",
-		State:       OrchestratorWorkerStateReady,
-		TaskCount:   3,
+		ID:              "lease-1",
+		ExecutionID:     "exec-1",
+		HostID:          "host-1",
+		AgentID:         "zeroclaw",
+		State:           OrchestratorWorkerStateReady,
+		TaskCount:       3,
+		QueuePosition:   0,
+		LeaseState:      "ready",
+		LastHeartbeatAt: "2026-03-09T12:01:00Z",
 	})
 	if err != nil {
 		t.Fatalf("upsertOrchestratorWorkerLease update failed: %v", err)
