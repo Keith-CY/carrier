@@ -260,6 +260,220 @@ func TestOrchestratorWorkersReclaimEndpointNegativeCases(t *testing.T) {
 	}
 }
 
+func TestHandleOrchestratorWorkersInventory(t *testing.T) {
+	mux := buildRemoteFeatureMuxWithDaemonHandlers(t, map[string]http.HandlerFunc{
+		"GET /api/v1/agents": func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"agents":[
+				{"id":"zeroclaw","installState":"installed","runtimeState":"running","health":"healthy","updatedAt":"2026-03-08T12:00:00Z"},
+				{"id":"picoclaw","installState":"installed","runtimeState":"stopped","health":"healthy","updatedAt":"2026-03-08T11:58:00Z"},
+				{"id":"openclaw","installState":"not_installed","runtimeState":"stopped","health":"unknown","updatedAt":"2026-03-08T11:50:00Z"}
+			]}`))
+		},
+	})
+	hostID := createRemoteHostForTests(t, mux)
+
+	if _, err := patchRemoteHost(hostID, RemoteHost{
+		Name:        "prod-host-1",
+		RuntimeMode: RemoteRuntimeModeManagedGateway,
+		LastHealth:  RemoteHealthHealthy,
+	}); err != nil {
+		t.Fatalf("patchRemoteHost failed: %v", err)
+	}
+	if _, err := upsertRemoteInstanceSyncStatus(RemoteInstanceSyncStatus{
+		HostID:         hostID,
+		AgentID:        "picoclaw",
+		SyncMode:       providerBindingSyncModeAlwaysPush,
+		DriftState:     "in_sync",
+		LastSyncStatus: "success",
+		UpdatedAt:      "2026-03-08T12:01:00Z",
+	}); err != nil {
+		t.Fatalf("upsertRemoteInstanceSyncStatus failed: %v", err)
+	}
+	if _, err := upsertOrchestratorWorkerLease(OrchestratorWorkerLease{
+		ID:             "lease-remote-1",
+		ExecutionID:    "exec-1",
+		HostID:         hostID,
+		AgentID:        "zeroclaw",
+		State:          OrchestratorWorkerStateBusy,
+		Ephemeral:      true,
+		InstalledByRun: true,
+		TaskCount:      2,
+		HeartbeatAt:    "2026-03-08T12:02:00Z",
+		LeaseExpireAt:  "2026-03-08T12:10:00Z",
+		CreatedAt:      "2026-03-08T12:02:00Z",
+		UpdatedAt:      "2026-03-08T12:02:00Z",
+	}); err != nil {
+		t.Fatalf("upsertOrchestratorWorkerLease failed: %v", err)
+	}
+
+	rec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/orchestrator/workers", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected workers status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	workers, _ := payload["workers"].([]interface{})
+	if len(workers) != 4 {
+		t.Fatalf("workers = %d, want 4 payload=%+v", len(workers), payload)
+	}
+	summary, _ := payload["summary"].(map[string]interface{})
+	if got := int(anyToFloat(summary["total"])); got != 4 {
+		t.Fatalf("summary.total=%d want 4 summary=%+v", got, summary)
+	}
+	if got := int(anyToFloat(summary["busy"])); got != 1 {
+		t.Fatalf("summary.busy=%d want 1 summary=%+v", got, summary)
+	}
+	if got := int(anyToFloat(summary["local"])); got != 2 {
+		t.Fatalf("summary.local=%d want 2 summary=%+v", got, summary)
+	}
+	if got := int(anyToFloat(summary["remote"])); got != 2 {
+		t.Fatalf("summary.remote=%d want 2 summary=%+v", got, summary)
+	}
+
+	var foundLocalRunning bool
+	var foundRemoteManaged bool
+	var foundBusyLease bool
+	for _, raw := range workers {
+		item, _ := raw.(map[string]interface{})
+		source := strings.TrimSpace(anyToString(item["source"]))
+		host := strings.TrimSpace(anyToString(item["hostId"]))
+		agent := strings.TrimSpace(anyToString(item["agentId"]))
+		state := strings.TrimSpace(anyToString(item["state"]))
+		if source == "local" && host == orchestratorLocalHostID && agent == "zeroclaw" && state == "available" {
+			foundLocalRunning = true
+		}
+		if source == "remote_sync" && host == hostID && agent == "picoclaw" && state == "managed" {
+			foundRemoteManaged = true
+		}
+		if source == "lease" && host == hostID && agent == "zeroclaw" && state == string(OrchestratorWorkerStateBusy) {
+			foundBusyLease = true
+		}
+	}
+	if !foundLocalRunning {
+		t.Fatalf("expected local running worker in payload=%+v", payload)
+	}
+	if !foundRemoteManaged {
+		t.Fatalf("expected remote managed worker in payload=%+v", payload)
+	}
+	if !foundBusyLease {
+		t.Fatalf("expected busy leased worker in payload=%+v", payload)
+	}
+}
+
+func TestHandleOrchestratorWorkersInventoryNegativeCases(t *testing.T) {
+	disabledMux := buildRemoteFeatureMuxWithConfigAndDaemonHandlers(t, &GatewayConfig{
+		APIToken:                  "test-gateway-token",
+		MaxCommandBodyBytes:       64 * 1024,
+		RemoteControlPlaneEnabled: false,
+		RemoteChatEnabled:         true,
+		ProviderBindingEnabled:    true,
+	}, nil)
+	disabledRec := runJSONRequest(t, disabledMux, http.MethodGet, "/api/v1/orchestrator/workers", "")
+	if disabledRec.Code != http.StatusNotFound {
+		t.Fatalf("expected disabled workers status 404, got %d body=%s", disabledRec.Code, disabledRec.Body.String())
+	}
+
+	mux := buildRemoteFeatureMux(t)
+	methodRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/workers", `{}`)
+	if methodRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected workers method not allowed, got %d body=%s", methodRec.Code, methodRec.Body.String())
+	}
+}
+
+func TestOrchestratorExecutionCapturesGovernanceAndAudit(t *testing.T) {
+	auditPath := filepath.Join(t.TempDir(), "gateway-audit.jsonl")
+	t.Setenv("CARRIER_GATEWAY_AUDIT_LOG", auditPath)
+
+	mux := buildRemoteFeatureMuxWithDaemonHandlers(t, map[string]http.HandlerFunc{
+		"POST /api/v1/base-agent/authorize": func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"approved":true}`))
+		},
+		"POST /api/v1/agents/status": func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"statuses":[{"id":"zeroclaw","installState":"installed","runtimeState":"running"}]}`))
+		},
+	})
+	hostID := createRemoteHostForTests(t, mux)
+
+	if _, err := upsertProviderProfile(ProviderProfile{
+		ID:       "profile-instance",
+		Name:     "openrouter-instance",
+		Provider: "openrouter",
+		Model:    "openai/gpt-4o-mini",
+		AuthRef:  "env:OPENROUTER_API_KEY",
+		Enabled:  true,
+	}); err != nil {
+		t.Fatalf("upsertProviderProfile failed: %v", err)
+	}
+	if _, err := upsertProviderBinding(ProviderBinding{
+		ID:         "binding-instance",
+		ProfileID:  "profile-instance",
+		TargetType: "instance",
+		TargetID:   hostID + ":zeroclaw",
+		SyncMode:   providerBindingSyncModeManual,
+	}); err != nil {
+		t.Fatalf("upsertProviderBinding failed: %v", err)
+	}
+
+	createRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions", `{
+		"goal":"governance audit",
+		"idempotencyKey":"gov-audit-1",
+		"approvalScope":"infrastructure_only",
+		"requestedProvider":"openrouter",
+		"requiredWorkers":[{"hostId":"`+hostID+`","agentId":"zeroclaw","count":1}],
+		"taskUnits":[{"id":"t1","input":"hello","hostId":"`+hostID+`","agentId":"zeroclaw"}]
+	}`)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create execution status=%d body=%s", createRec.Code, createRec.Body.String())
+	}
+	createPayload := decodeJSONMap(t, createRec)
+	execMap, _ := createPayload["execution"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(execMap["requestedProvider"])); got != "openrouter" {
+		t.Fatalf("expected requestedProvider=openrouter, got %q payload=%+v", got, createPayload)
+	}
+	governance, _ := execMap["governance"].(map[string]interface{})
+	resolutions, _ := governance["providerResolutions"].([]interface{})
+	if len(resolutions) != 1 {
+		t.Fatalf("expected 1 provider resolution, got %d governance=%+v", len(resolutions), governance)
+	}
+	resolution, _ := resolutions[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(resolution["source"])); got != "instance" {
+		t.Fatalf("expected governance source instance, got %q resolution=%+v", got, resolution)
+	}
+	if got := strings.TrimSpace(anyToString(resolution["profileId"])); got != "profile-instance" {
+		t.Fatalf("expected governance profile-instance, got %q resolution=%+v", got, resolution)
+	}
+
+	executionID := strings.TrimSpace(anyToString(execMap["id"]))
+	if executionID == "" {
+		t.Fatalf("missing execution id payload=%+v", createPayload)
+	}
+
+	authRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions/"+executionID+"/authorize", `{"approved":true,"actor":"auditor"}`)
+	if authRec.Code != http.StatusAccepted {
+		t.Fatalf("authorize status=%d body=%s", authRec.Code, authRec.Body.String())
+	}
+
+	cancelRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions/"+executionID+"/cancel", `{"actor":"auditor"}`)
+	if cancelRec.Code != http.StatusAccepted {
+		t.Fatalf("cancel status=%d body=%s", cancelRec.Code, cancelRec.Body.String())
+	}
+
+	rawAudit, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit log failed: %v", err)
+	}
+	text := string(rawAudit)
+	if !strings.Contains(text, `"action":"orchestrator_execution_create"`) {
+		t.Fatalf("expected orchestrator_execution_create audit entry, audit=%s", text)
+	}
+	if !strings.Contains(text, `"action":"orchestrator_execution_authorize"`) {
+		t.Fatalf("expected orchestrator_execution_authorize audit entry, audit=%s", text)
+	}
+	if !strings.Contains(text, `"action":"orchestrator_execution_cancel"`) {
+		t.Fatalf("expected orchestrator_execution_cancel audit entry, audit=%s", text)
+	}
+}
+
 func TestRunOrchestratorExecutionFailureAndMarkFailed(t *testing.T) {
 	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
 

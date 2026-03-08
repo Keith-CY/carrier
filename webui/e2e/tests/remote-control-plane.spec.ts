@@ -71,6 +71,7 @@ test.describe('Remote Control Plane Views', () => {
 
     await expect.poll(() => page.url()).toContain('#/dashboard');
     await expect(page.locator('#view-dashboard')).toBeVisible();
+    await expect(page.locator('.nav-link[data-route="workers"]')).toBeHidden();
     await expect(page.locator('.nav-link[data-route="servers"]')).toBeHidden();
     await expect(page.locator('.nav-link[data-route="profiles"]')).toBeHidden();
     await expect(page.locator('.nav-link[data-route="remote-chat"]')).toBeHidden();
@@ -701,6 +702,7 @@ test.describe('Remote Control Plane Views', () => {
     let bindingSaveCalls = 0;
     let lastBindingBody: Record<string, unknown> | null = null;
     let bindingDeleteCalls = 0;
+    let governanceResolveCalls = 0;
     let profilePatchCalls = 0;
     let lastProfilePatchBody: Record<string, unknown> | null = null;
     let profileTestCalls = 0;
@@ -820,6 +822,29 @@ test.describe('Remote Control Plane Views', () => {
         body: JSON.stringify({ result: 'ok', deleted: true }),
       });
     });
+    await page.route('**/api/v1/provider-governance/resolve*', async (route) => {
+      governanceResolveCalls += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          result: 'ok',
+          resolution: {
+            source: 'host',
+            hostId: 'host-1',
+            agentId: 'zeroclaw',
+            bindingId: 'binding-host-1',
+            bindingTargetType: 'host',
+            bindingTargetId: 'host-1',
+            profileId: 'profile-1',
+            profileName: 'openai-gpt5',
+            provider: 'openai',
+            model: 'gpt-5-mini',
+            syncMode: 'always_push',
+          },
+        }),
+      });
+    });
 
     await loginWithToken(page, '/#/profiles');
 
@@ -861,6 +886,13 @@ test.describe('Remote Control Plane Views', () => {
     await expect.poll(() => profileTestCalls).toBe(1);
     expect(lastProfileTestBody?.hostId).toBe('host-2');
     await expect(page.locator('#profiles-msg')).toContainText('Profile test succeeded');
+
+    await page.selectOption('#governance-preview-host', 'host-1');
+    await page.fill('#governance-preview-agent', 'zeroclaw');
+    await page.click('#governance-preview-resolve');
+    await expect.poll(() => governanceResolveCalls).toBe(1);
+    await expect(page.locator('#governance-preview-out')).toContainText('openai/gpt-5-mini');
+    await expect(page.locator('#governance-preview-out')).toContainText('source=host');
   });
 
   test('remote chat page supports remote and local target streaming', async ({ page }) => {

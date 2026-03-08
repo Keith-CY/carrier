@@ -63,8 +63,10 @@
   let dashboardExpandedExecutionIDs = new Set;
   let executionRecordsCache = [];
   let selectedExecutionID = "";
+  let workerInventoryCache = [];
   let quickLaunchPlan = null;
   let quickLaunchProviderCatalog = [];
+  let workersPollTimer = null;
   const DEFAULT_FEATURE_FLAGS = {
     remoteControlPlaneEnabled: false,
     remoteChatEnabled: false,
@@ -182,6 +184,9 @@
         if (routeName === "dashboard" || routeName === "executions") {
           refreshExecutions();
         }
+        if (routeName === "workers") {
+          refreshWorkers();
+        }
       };
       es.onerror = () => {
         if (delegateEventSource !== es)
@@ -261,7 +266,7 @@
     return parsed.toLocaleString();
   }
   function isRouteEnabled(route) {
-    if (route === "executions" || route === "servers" || route === "profiles" || route === "remote-observability") {
+    if (route === "executions" || route === "workers" || route === "servers" || route === "profiles" || route === "remote-observability") {
       return !!featureFlags.remoteControlPlaneEnabled;
     }
     if (route === "remote-chat") {
@@ -273,6 +278,7 @@
     const remoteControlVisible = !!featureFlags.remoteControlPlaneEnabled;
     const remoteChatVisible = remoteControlVisible && !!featureFlags.remoteChatEnabled;
     setNavRouteVisible("executions", remoteControlVisible);
+    setNavRouteVisible("workers", remoteControlVisible);
     setNavRouteVisible("servers", remoteControlVisible);
     setNavRouteVisible("profiles", remoteControlVisible);
     setNavRouteVisible("remote-chat", remoteChatVisible);
@@ -415,6 +421,7 @@
     "complete",
     "dashboard",
     "executions",
+    "workers",
     "agent-detail",
     "logs",
     "chat",
@@ -432,6 +439,8 @@
     });
     if (name !== "dashboard" && name !== "executions")
       stopDashboardExecutionPolling();
+    if (name !== "workers")
+      stopWorkersPolling();
     $$(".nav-link").forEach((a) => {
       a.classList.toggle("active", a.dataset.route === name);
     });
@@ -461,7 +470,7 @@
     if (routeName !== "dashboard") {
       closeAddAgentModal();
     }
-    const mgmtRoutes = ["dashboard", "executions", "logs", "chat", "settings", "servers", "profiles", "remote-chat", "remote-observability"];
+    const mgmtRoutes = ["dashboard", "executions", "workers", "logs", "chat", "settings", "servers", "profiles", "remote-chat", "remote-observability"];
     if (mgmtRoutes.includes(routeName)) {
       $("#nav").classList.remove("hidden");
     }
@@ -496,6 +505,9 @@
         break;
       case "executions":
         initExecutions(routeInfo.segments[1] || "");
+        break;
+      case "workers":
+        initWorkers();
         break;
       case "logs":
         initLogs();
@@ -1513,6 +1525,7 @@
     try {
       const createPayload = {
         goal: String(quickLaunchPlan.goal || "").trim(),
+        requestedProvider: String(quickLaunchPlan.provider || "").trim(),
         approvalScope: String(quickLaunchPlan.approvalScope || "infrastructure_only").trim(),
         requiredWorkers: Array.isArray(quickLaunchPlan.requiredWorkers) ? quickLaunchPlan.requiredWorkers : [],
         taskUnits: Array.isArray(quickLaunchPlan.taskUnits) ? quickLaunchPlan.taskUnits : [],
@@ -1699,6 +1712,16 @@
       return "badge badge-error";
     return "badge badge-unknown";
   }
+  function workerStateBadgeClass(state) {
+    const normalized = String(state || "").trim().toLowerCase();
+    if (normalized === "available" || normalized === "managed")
+      return "badge badge-ok";
+    if (normalized === "busy" || normalized === "provisioning" || normalized === "reclaiming")
+      return "badge badge-warn";
+    if (normalized === "error")
+      return "badge badge-error";
+    return "badge badge-unknown";
+  }
   function stopDashboardExecutionPolling() {
     if (dashboardExecutionPollTimer) {
       clearInterval(dashboardExecutionPollTimer);
@@ -1716,6 +1739,24 @@
         return;
       }
       refreshExecutions();
+    }, 5000);
+  }
+  function stopWorkersPolling() {
+    if (workersPollTimer) {
+      clearInterval(workersPollTimer);
+      workersPollTimer = null;
+    }
+  }
+  function startWorkersPolling() {
+    stopWorkersPolling();
+    if (!featureFlags.remoteControlPlaneEnabled)
+      return;
+    workersPollTimer = setInterval(() => {
+      if (currentRouteName() !== "workers") {
+        stopWorkersPolling();
+        return;
+      }
+      refreshWorkers();
     }, 5000);
   }
   async function fetchExecutionDetails(executionID, force) {
@@ -1919,6 +1960,63 @@
       summaryCard.appendChild(errorLine);
     }
     target.appendChild(summaryCard);
+    const governanceCard = document.createElement("div");
+    governanceCard.className = "execution-detail-block";
+    const governanceTitle = document.createElement("div");
+    governanceTitle.className = "execution-detail-title";
+    governanceTitle.textContent = "Approval & Governance";
+    governanceCard.appendChild(governanceTitle);
+    const authorization = execution && execution.authorization && typeof execution.authorization === "object" ? execution.authorization : {};
+    const approvedBy = String(authorization && authorization.approvedBy ? authorization.approvedBy : "").trim();
+    const approvedAt = String(authorization && authorization.approvedAt ? authorization.approvedAt : "").trim();
+    const infraApproved = !!(authorization && authorization.infrastructureApproved);
+    const requestedProvider = String(execution && execution.requestedProvider ? execution.requestedProvider : "").trim();
+    const providerResolutions = execution && execution.governance && Array.isArray(execution.governance.providerResolutions) ? execution.governance.providerResolutions : [];
+    const governanceLines = [];
+    governanceLines.push("Approved by: " + (approvedBy || "n/a"));
+    governanceLines.push("Approved at: " + (approvedAt ? formatDateTime(approvedAt) : "n/a"));
+    governanceLines.push("Infrastructure approved: " + (infraApproved ? "yes" : "no"));
+    if (requestedProvider)
+      governanceLines.push("Requested provider: " + requestedProvider);
+    governanceLines.forEach((line) => {
+      const row = document.createElement("div");
+      row.className = "execution-detail-line";
+      row.textContent = line;
+      governanceCard.appendChild(row);
+    });
+    if (!providerResolutions.length) {
+      const empty = document.createElement("div");
+      empty.className = "execution-detail-line";
+      empty.textContent = "Provider Governance: no binding resolution recorded.";
+      governanceCard.appendChild(empty);
+    } else {
+      const resolutionTitle = document.createElement("div");
+      resolutionTitle.className = "execution-detail-line";
+      resolutionTitle.textContent = "Provider Governance";
+      governanceCard.appendChild(resolutionTitle);
+      providerResolutions.forEach((item) => {
+        const host = String(item && item.hostId ? item.hostId : "").trim() || "local";
+        const agent = String(item && item.agentId ? item.agentId : "").trim() || "unknown";
+        const source = String(item && item.source ? item.source : "none").trim();
+        const provider = String(item && item.provider ? item.provider : "").trim();
+        const model = String(item && item.model ? item.model : "").trim();
+        const profileName = String(item && item.profileName ? item.profileName : item && item.profileId ? item.profileId : "").trim();
+        const status = String(item && item.status ? item.status : "").trim();
+        const syncMode = String(item && item.syncMode ? item.syncMode : "").trim();
+        const message = String(item && item.message ? item.message : "").trim();
+        const row = document.createElement("div");
+        row.className = "execution-detail-line";
+        row.textContent = host + "/" + agent + " \xB7 source=" + source + (profileName ? " \xB7 profile=" + profileName : "") + (provider || model ? " \xB7 " + [provider, model].filter(Boolean).join("/") : "") + (status ? " \xB7 status=" + status : "") + (syncMode ? " \xB7 sync=" + syncMode : "");
+        governanceCard.appendChild(row);
+        if (message) {
+          const msg = document.createElement("div");
+          msg.className = "execution-detail-line";
+          msg.textContent = message;
+          governanceCard.appendChild(msg);
+        }
+      });
+    }
+    target.appendChild(governanceCard);
     const blocks = document.createElement("div");
     renderExecutionDetails(blocks, payload);
     target.appendChild(blocks);
@@ -2156,6 +2254,198 @@
           detail.textContent = "Execution details unavailable.";
       }
     }
+  }
+  function workerMatchesFilter(worker, filterValue, query) {
+    const normalizedQuery = String(query || "").trim().toLowerCase();
+    const haystack = [
+      worker && worker.id,
+      worker && worker.hostId,
+      worker && worker.hostName,
+      worker && worker.agentId,
+      worker && worker.source,
+      worker && worker.executionId
+    ].map((value) => String(value || "").trim().toLowerCase()).join(" ");
+    if (normalizedQuery && !haystack.includes(normalizedQuery)) {
+      return false;
+    }
+    const state = String(worker && worker.state ? worker.state : "").trim().toLowerCase();
+    switch (String(filterValue || "all").trim().toLowerCase()) {
+      case "active":
+        return state === "busy" || state === "provisioning" || state === "reclaiming" || state === "ready";
+      case "available":
+      case "managed":
+      case "stopped":
+      case "error":
+      case "reclaimed":
+        return state === String(filterValue).trim().toLowerCase();
+      default:
+        return true;
+    }
+  }
+  function renderWorkersView(workers, summaryPayload, warnings) {
+    const list = $("#workers-list");
+    const summary = $("#workers-summary");
+    if (!list || !summary)
+      return;
+    if (!featureFlags.remoteControlPlaneEnabled) {
+      list.textContent = "";
+      summary.textContent = "Remote control plane is disabled.";
+      setMsg("#workers-msg", "", "info");
+      return;
+    }
+    const searchValue = String(($("#workers-search") || {}).value || "").trim();
+    const stateFilter = String(($("#workers-state-filter") || {}).value || "all").trim().toLowerCase();
+    const filtered = (Array.isArray(workers) ? workers : []).filter((worker) => workerMatchesFilter(worker, stateFilter, searchValue));
+    const summarySource = summaryPayload && typeof summaryPayload === "object" ? summaryPayload : {};
+    const total = Number(summarySource.total || 0) || (Array.isArray(workers) ? workers.length : 0);
+    const busy = Number(summarySource.busy || 0) || 0;
+    const active = Number(summarySource.active || 0) || 0;
+    const local = Number(summarySource.local || 0) || 0;
+    const remote = Number(summarySource.remote || 0) || 0;
+    summary.textContent = total ? "Total: " + total + " \xB7 Visible: " + filtered.length + " \xB7 Active: " + active + " \xB7 Busy: " + busy + " \xB7 Local: " + local + " \xB7 Remote: " + remote : "No workers discovered yet.";
+    if (Array.isArray(warnings) && warnings.length) {
+      setMsg("#workers-msg", warnings.join(" | "), "error");
+    } else {
+      setMsg("#workers-msg", "", "info");
+    }
+    list.textContent = "";
+    if (!filtered.length) {
+      const empty = document.createElement("div");
+      empty.className = "card";
+      empty.textContent = "No workers match the current filter.";
+      list.appendChild(empty);
+      return;
+    }
+    filtered.forEach((worker) => {
+      const card = document.createElement("div");
+      card.className = "agent-card worker-card";
+      const header = document.createElement("div");
+      header.className = "section-head";
+      const titleWrap = document.createElement("div");
+      const title = document.createElement("h4");
+      title.textContent = String(worker && worker.hostName ? worker.hostName : worker.hostId || "unknown") + " / " + String(worker && worker.agentId ? worker.agentId : "unknown");
+      const sub = document.createElement("div");
+      sub.className = "instance-meta";
+      sub.textContent = "source: " + String(worker && worker.source ? worker.source : "unknown") + " \xB7 id: " + String(worker && worker.id ? worker.id : "n/a");
+      titleWrap.appendChild(title);
+      titleWrap.appendChild(sub);
+      const badgeWrap = document.createElement("div");
+      badgeWrap.className = "worker-badge-row";
+      const stateBadge = document.createElement("span");
+      stateBadge.className = workerStateBadgeClass(worker && worker.state);
+      stateBadge.textContent = String(worker && worker.state ? worker.state : "unknown");
+      badgeWrap.appendChild(stateBadge);
+      header.appendChild(titleWrap);
+      header.appendChild(badgeWrap);
+      card.appendChild(header);
+      const meta = document.createElement("div");
+      meta.className = "worker-meta-grid";
+      const metaLines = [];
+      if (worker && worker.executionId)
+        metaLines.push("execution: " + String(worker.executionId));
+      if (worker && worker.runtimeState)
+        metaLines.push("runtime: " + String(worker.runtimeState));
+      if (worker && worker.runtimeMode)
+        metaLines.push("runtime mode: " + String(worker.runtimeMode));
+      if (worker && worker.health)
+        metaLines.push("health: " + String(worker.health));
+      if (worker && worker.taskCount)
+        metaLines.push("tasks: " + String(worker.taskCount));
+      if (worker && worker.lastSyncStatus)
+        metaLines.push("sync: " + String(worker.lastSyncStatus));
+      if (worker && worker.driftState)
+        metaLines.push("drift: " + String(worker.driftState));
+      if (worker && worker.heartbeatAt)
+        metaLines.push("heartbeat: " + formatDateTime(worker.heartbeatAt));
+      if (worker && worker.updatedAt)
+        metaLines.push("updated: " + formatDateTime(worker.updatedAt));
+      if (!metaLines.length)
+        metaLines.push("host: " + String(worker && worker.hostId ? worker.hostId : "unknown"));
+      metaLines.forEach((line) => {
+        const row = document.createElement("div");
+        row.className = "execution-detail-line";
+        row.textContent = line;
+        meta.appendChild(row);
+      });
+      card.appendChild(meta);
+      if (worker && worker.lastError) {
+        const error = document.createElement("pre");
+        error.className = "code-block execution-result-output";
+        error.textContent = String(worker.lastError);
+        card.appendChild(error);
+      }
+      list.appendChild(card);
+    });
+  }
+  async function refreshWorkers() {
+    const list = $("#workers-list");
+    if (list && !list.childElementCount)
+      list.textContent = "Loading\u2026";
+    if (!featureFlags.remoteControlPlaneEnabled) {
+      renderWorkersView([], {}, []);
+      return;
+    }
+    try {
+      const payload = await api("GET", "/api/v1/orchestrator/workers");
+      workerInventoryCache = Array.isArray(payload && payload.workers) ? payload.workers : [];
+      renderWorkersView(workerInventoryCache, payload && payload.summary, payload && payload.warnings);
+    } catch (e) {
+      if (list)
+        list.textContent = "Error: " + e.message;
+      const summary = $("#workers-summary");
+      if (summary)
+        summary.textContent = "Worker inventory unavailable.";
+      setMsg("#workers-msg", "Load failed: " + e.message, "error");
+    }
+  }
+  async function reclaimIdleWorkers() {
+    const button = $("#workers-reclaim-idle");
+    if (button)
+      button.disabled = true;
+    try {
+      const payload = await api("POST", "/api/v1/orchestrator/workers/reclaim", {});
+      const reclaim = payload && payload.reclaim ? payload.reclaim : {};
+      await refreshWorkers();
+      setMsg("#workers-msg", "Idle reclaim finished: reclaimed=" + String(Number(reclaim.reclaimed || 0) || 0) + ", skipped=" + String(Number(reclaim.skipped || 0) || 0) + ", failed=" + String(Number(reclaim.failed || 0) || 0), "info");
+    } catch (e) {
+      setMsg("#workers-msg", "Reclaim failed: " + e.message, "error");
+    } finally {
+      if (button)
+        button.disabled = false;
+    }
+  }
+  async function initWorkers() {
+    resetAddMode();
+    showView("workers");
+    $("#nav").classList.remove("hidden");
+    const refreshBtn = $("#workers-refresh");
+    const reclaimBtn = $("#workers-reclaim-idle");
+    const searchInput = $("#workers-search");
+    const stateFilter = $("#workers-state-filter");
+    if (refreshBtn)
+      refreshBtn.onclick = refreshWorkers;
+    if (reclaimBtn)
+      reclaimBtn.onclick = reclaimIdleWorkers;
+    if (searchInput)
+      searchInput.oninput = () => renderWorkersView(workerInventoryCache, {
+        total: workerInventoryCache.length,
+        active: workerInventoryCache.filter((item) => ["busy", "provisioning", "reclaiming", "ready"].includes(String(item && item.state || "").trim().toLowerCase())).length,
+        busy: workerInventoryCache.filter((item) => String(item && item.state || "").trim().toLowerCase() === "busy").length,
+        error: workerInventoryCache.filter((item) => String(item && item.state || "").trim().toLowerCase() === "error").length,
+        local: workerInventoryCache.filter((item) => String(item && item.hostId || "").trim() === "local").length,
+        remote: workerInventoryCache.filter((item) => String(item && item.hostId || "").trim() !== "local").length
+      }, []);
+    if (stateFilter)
+      stateFilter.onchange = () => renderWorkersView(workerInventoryCache, {
+        total: workerInventoryCache.length,
+        active: workerInventoryCache.filter((item) => ["busy", "provisioning", "reclaiming", "ready"].includes(String(item && item.state || "").trim().toLowerCase())).length,
+        busy: workerInventoryCache.filter((item) => String(item && item.state || "").trim().toLowerCase() === "busy").length,
+        error: workerInventoryCache.filter((item) => String(item && item.state || "").trim().toLowerCase() === "error").length,
+        local: workerInventoryCache.filter((item) => String(item && item.hostId || "").trim() === "local").length,
+        remote: workerInventoryCache.filter((item) => String(item && item.hostId || "").trim() !== "local").length
+      }, []);
+    await refreshWorkers();
+    startWorkersPolling();
   }
   async function instanceAction(instanceID, action) {
     if (action === "uninstall") {
@@ -5083,6 +5373,28 @@
       bindingsWrap.appendChild(card);
     });
   }
+  function renderGovernancePreviewResolution(payload) {
+    const out = $("#governance-preview-out");
+    if (!out)
+      return;
+    const resolution = payload && payload.resolution && typeof payload.resolution === "object" ? payload.resolution : {};
+    const lines = [];
+    lines.push("source=" + String(resolution.source || "none"));
+    lines.push("status=" + String(resolution.status || "unbound"));
+    if (resolution.profileName || resolution.profileId) {
+      lines.push("profile=" + String(resolution.profileName || resolution.profileId));
+    }
+    if (resolution.provider || resolution.model) {
+      lines.push([String(resolution.provider || ""), String(resolution.model || "")].filter(Boolean).join("/"));
+    }
+    if (resolution.syncMode) {
+      lines.push("sync=" + String(resolution.syncMode));
+    }
+    if (resolution.message) {
+      lines.push(String(resolution.message));
+    }
+    out.textContent = lines.join("\n");
+  }
   async function initProfiles() {
     showView("profiles");
     $("#nav").classList.remove("hidden");
@@ -5094,12 +5406,21 @@
     const bindingTargetType = $("#binding-target-type");
     const bindingTargetID = $("#binding-target-id");
     const profileTestHostSelect = $("#profile-test-host");
+    const governancePreviewHost = $("#governance-preview-host");
+    const governancePreviewAgent = $("#governance-preview-agent");
+    const governancePreviewResolve = $("#governance-preview-resolve");
     function syncBindingControls() {
       const enabled = !!featureFlags.providerBindingEnabled;
       profileSelect.disabled = !enabled;
       bindingTargetType.disabled = !enabled;
       bindingTargetID.disabled = !enabled;
       saveBindingBtn.disabled = !enabled;
+      if (governancePreviewHost)
+        governancePreviewHost.disabled = !enabled;
+      if (governancePreviewAgent)
+        governancePreviewAgent.disabled = !enabled;
+      if (governancePreviewResolve)
+        governancePreviewResolve.disabled = !enabled;
       if (!enabled) {
         setMsg("#profiles-msg", "Provider binding is disabled by feature flag.", "info");
       }
@@ -5130,6 +5451,15 @@
         remoteHostsCache = hosts;
         pruneServerHostOperationCache(hosts);
         syncProfileTestHostOptions(hosts);
+        if (governancePreviewHost) {
+          governancePreviewHost.textContent = "";
+          hosts.forEach((host) => {
+            const opt = document.createElement("option");
+            opt.value = host.id;
+            opt.textContent = host.name || host.id;
+            governancePreviewHost.appendChild(opt);
+          });
+        }
         renderProfilesAndBindings(profiles, bindings);
         syncProfileEditSelection(profiles);
         profileSelect.textContent = "";
@@ -5203,6 +5533,32 @@
         saveBindingBtn.disabled = false;
       }
     };
+    if (governancePreviewResolve) {
+      governancePreviewResolve.onclick = async () => {
+        if (!featureFlags.providerBindingEnabled) {
+          setMsg("#profiles-msg", "Provider binding is disabled by feature flag.", "error");
+          return;
+        }
+        const hostID = String(governancePreviewHost && governancePreviewHost.value || "").trim();
+        const agentID = String(governancePreviewAgent && governancePreviewAgent.value || "").trim();
+        if (!hostID) {
+          setMsg("#profiles-msg", "preview host is required.", "error");
+          return;
+        }
+        try {
+          governancePreviewResolve.disabled = true;
+          const query = "/api/v1/provider-governance/resolve?hostId=" + encodeURIComponent(hostID) + (agentID ? "&agentId=" + encodeURIComponent(agentID) : "");
+          const payload = await api("GET", query);
+          renderGovernancePreviewResolution(payload);
+          setMsg("#profiles-msg", "Governance resolution loaded.", "success");
+        } catch (e) {
+          renderGovernancePreviewResolution(null);
+          setMsg("#profiles-msg", "Governance resolution failed: " + e.message, "error");
+        } finally {
+          governancePreviewResolve.disabled = false;
+        }
+      };
+    }
     if (cancelEditBtn) {
       cancelEditBtn.onclick = () => {
         resetProfileEditor(true);
@@ -5215,6 +5571,7 @@
       opt.textContent = "auto (first host)";
       profileTestHostSelect.appendChild(opt);
     }
+    renderGovernancePreviewResolution(null);
     updateProfileEditorUI();
     syncBindingControls();
     refreshAll();

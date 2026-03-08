@@ -195,9 +195,10 @@ func TestRunOrchestrateCommandLocalFallbackAndAgentDefault(t *testing.T) {
 	setProbeEnvFromURL(t, "CARRIER_GATEWAY_HOST", "CARRIER_GATEWAY_PORT", gateway.URL)
 
 	opts := orchestrateCommandOptions{
-		Action:  "run",
-		Goal:    "triage issue",
-		Timeout: 2 * time.Second,
+		Action:   "run",
+		Goal:     "triage issue",
+		Provider: "openrouter",
+		Timeout:  2 * time.Second,
 	}
 	var out bytes.Buffer
 	if err := runOrchestrateCommand(&out, opts); err != nil {
@@ -208,7 +209,8 @@ func TestRunOrchestrateCommandLocalFallbackAndAgentDefault(t *testing.T) {
 		t.Fatal("expected create request body")
 	}
 	var createPayload struct {
-		RequiredWorkers []struct {
+		RequestedProvider string `json:"requestedProvider"`
+		RequiredWorkers   []struct {
 			HostID  string `json:"hostId"`
 			AgentID string `json:"agentId"`
 		} `json:"requiredWorkers"`
@@ -223,6 +225,9 @@ func TestRunOrchestrateCommandLocalFallbackAndAgentDefault(t *testing.T) {
 	}
 	if len(createPayload.TaskUnits) != 2 {
 		t.Fatalf("task units = %d, want 2", len(createPayload.TaskUnits))
+	}
+	if createPayload.RequestedProvider != "openrouter" {
+		t.Fatalf("requestedProvider = %q, want openrouter", createPayload.RequestedProvider)
 	}
 	if createPayload.TaskUnits[0].HostID != "local" || createPayload.TaskUnits[0].AgentID != "zeroclaw" {
 		t.Fatalf("task1 target = %+v, want host=local agent=zeroclaw", createPayload.TaskUnits[0])

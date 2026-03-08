@@ -83,6 +83,25 @@ type ProviderBinding struct {
 	UpdatedAt  string `json:"updatedAt"`
 }
 
+type ProviderGovernanceResolution struct {
+	Source            string `json:"source"`
+	Status            string `json:"status"`
+	HostID            string `json:"hostId"`
+	AgentID           string `json:"agentId,omitempty"`
+	BindingID         string `json:"bindingId,omitempty"`
+	BindingTargetType string `json:"bindingTargetType,omitempty"`
+	BindingTargetID   string `json:"bindingTargetId,omitempty"`
+	ProfileID         string `json:"profileId,omitempty"`
+	ProfileName       string `json:"profileName,omitempty"`
+	Provider          string `json:"provider,omitempty"`
+	Model             string `json:"model,omitempty"`
+	BaseURL           string `json:"baseUrl,omitempty"`
+	AuthRef           string `json:"authRef,omitempty"`
+	SyncMode          string `json:"syncMode,omitempty"`
+	Enabled           bool   `json:"enabled"`
+	Message           string `json:"message,omitempty"`
+}
+
 type RemoteSessionEntry struct {
 	SessionID  string `json:"sessionId"`
 	Kind       string `json:"kind"`

@@ -31,6 +31,10 @@
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 4h10"></path><path d="M7 9h10"></path><path d="M7 14h6"></path><path d="M7 19h10"></path><circle cx="17.5" cy="14" r="2.5"></circle></svg></span>
           <span class="nav-text">Executions</span>
         </a>
+        <a href="#/workers" class="nav-link" data-route="workers">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="6" height="6" rx="1"></rect><rect x="14" y="5" width="6" height="6" rx="1"></rect><path d="M7 11v4"></path><path d="M17 11v4"></path><path d="M7 15h10"></path><path d="M12 15v4"></path></svg></span>
+          <span class="nav-text">Workers</span>
+        </a>
         <a href="#/servers" class="nav-link" data-route="servers">
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1.5"></rect><rect x="3" y="10" width="18" height="5" rx="1.5"></rect><rect x="3" y="16" width="18" height="5" rx="1.5"></rect></svg></span>
           <span class="nav-text">Servers</span>
@@ -313,6 +317,39 @@
           <div id="executions-detail" class="execution-details-panel">Select an execution to inspect workers and task results.</div>
         </div>
       </div>
+    </section>
+
+    <section id="view-workers" class="view hidden">
+      <div class="section-head">
+        <h2>Workers</h2>
+        <div class="section-actions">
+          <button id="workers-reclaim-idle" class="btn-sm btn-secondary" type="button">Reclaim Idle</button>
+          <button id="workers-refresh" class="btn-sm btn-secondary" type="button">Refresh</button>
+        </div>
+      </div>
+      <div class="card executions-toolbar">
+        <div class="form-grid">
+          <div>
+            <label for="workers-search">Search</label>
+            <input id="workers-search" type="text" placeholder="Search by host, agent, source, or execution">
+          </div>
+          <div>
+            <label for="workers-state-filter">State</label>
+            <select id="workers-state-filter">
+              <option value="all">All</option>
+              <option value="active">Active</option>
+              <option value="available">Available</option>
+              <option value="managed">Managed</option>
+              <option value="stopped">Stopped</option>
+              <option value="error">Error</option>
+              <option value="reclaimed">Reclaimed</option>
+            </select>
+          </div>
+        </div>
+        <p id="workers-summary" class="text-dim"></p>
+        <div id="workers-msg"></div>
+      </div>
+      <div id="workers-list" class="executions-list"></div>
     </section>
 
     <section id="view-agent-detail" class="view hidden">
@@ -634,6 +671,24 @@
           <button id="binding-save">Bind</button>
         </div>
         <div id="profiles-msg"></div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <h3>Resolution Preview</h3>
+        <div class="form-grid">
+          <div>
+            <label for="governance-preview-host">Host</label>
+            <select id="governance-preview-host"></select>
+          </div>
+          <div>
+            <label for="governance-preview-agent">Agent</label>
+            <input id="governance-preview-agent" type="text" placeholder="zeroclaw">
+          </div>
+        </div>
+        <div class="btn-row">
+          <button id="governance-preview-resolve" class="btn-sm btn-secondary">Resolve</button>
+        </div>
+        <div id="governance-preview-out" class="instance-meta" style="white-space:pre-line; margin-top:12px"></div>
       </div>
 
       <div id="profiles-list" class="agent-grid" style="margin-top:12px"></div>

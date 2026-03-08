@@ -26,8 +26,29 @@ export const MOCK_EXECUTIONS = [
   {
     id: 'exec-running',
     goal: 'Investigate checkout latency',
+    requestedProvider: 'anthropic',
     status: 'running',
     updatedAt: '2026-03-08T11:05:00Z',
+    authorization: {
+      infrastructureApproved: true,
+      approvedBy: 'carrier-cli',
+      approvedAt: '2026-03-08T11:01:00Z',
+    },
+    governance: {
+      providerResolutions: [
+        {
+          source: 'instance',
+          status: 'resolved',
+          hostId: 'host-1',
+          agentId: 'picoclaw',
+          profileId: 'profile-anthropic',
+          profileName: 'anthropic-prod',
+          provider: 'anthropic',
+          model: 'claude-3-7-sonnet',
+          syncMode: 'manual',
+        },
+      ],
+    },
     taskUnits: [
       { id: 'task-1', input: 'collect traces', hostId: 'local', agentId: 'zeroclaw' },
       { id: 'task-2', input: 'summarize traces', hostId: 'host-1', agentId: 'picoclaw' },
@@ -39,14 +60,71 @@ export const MOCK_EXECUTIONS = [
   {
     id: 'exec-complete',
     goal: 'Prepare release notes',
+    requestedProvider: 'openrouter',
     status: 'completed',
     updatedAt: '2026-03-08T10:30:00Z',
+    authorization: {
+      infrastructureApproved: true,
+      approvedBy: 'webui',
+      approvedAt: '2026-03-08T10:20:00Z',
+    },
+    governance: {
+      providerResolutions: [
+        {
+          source: 'host',
+          status: 'resolved',
+          hostId: 'local',
+          agentId: 'zeroclaw',
+          profileId: 'profile-openrouter',
+          profileName: 'openrouter-default',
+          provider: 'openrouter',
+          model: 'openai/gpt-4o-mini',
+          syncMode: 'always_push',
+        },
+      ],
+    },
     taskUnits: [
       { id: 'task-1', input: 'collect merged PRs', hostId: 'local', agentId: 'zeroclaw' },
     ],
     results: [
       { taskId: 'task-1', status: 'completed', hostId: 'local', agentId: 'zeroclaw', output: 'release notes draft ready', attempts: 1, latencyMs: 18 },
     ],
+  },
+];
+
+export const MOCK_WORKERS = [
+  {
+    id: 'local-zeroclaw',
+    source: 'local',
+    hostId: 'local',
+    hostName: 'Local',
+    agentId: 'zeroclaw',
+    state: 'available',
+    runtimeState: 'running',
+    health: 'healthy',
+    updatedAt: '2026-03-08T11:05:00Z',
+  },
+  {
+    id: 'lease-host-1-pico',
+    source: 'lease',
+    hostId: 'host-1',
+    hostName: 'prod-host-1',
+    agentId: 'picoclaw',
+    state: 'busy',
+    executionId: 'exec-running',
+    taskCount: 1,
+    updatedAt: '2026-03-08T11:04:00Z',
+  },
+  {
+    id: 'sync-host-1-zero',
+    source: 'remote_sync',
+    hostId: 'host-1',
+    hostName: 'prod-host-1',
+    agentId: 'zeroclaw',
+    state: 'managed',
+    runtimeMode: 'managed_gateway',
+    health: 'healthy',
+    updatedAt: '2026-03-08T11:03:00Z',
   },
 ];
 
@@ -164,6 +242,27 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
     }),
   );
 
+  await page.route('**/api/v1/provider-governance/resolve*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        resolution: {
+          source: 'host',
+          status: 'resolved',
+          hostId: 'host-1',
+          agentId: 'zeroclaw',
+          profileId: 'profile-openrouter',
+          profileName: 'openrouter-default',
+          provider: 'openrouter',
+          model: 'openai/gpt-4o-mini',
+          syncMode: 'always_push',
+        },
+      }),
+    }),
+  );
+
   await page.route('**/api/v1/orchestrator/plans', (route) =>
     route.fulfill({
       status: 200,
@@ -258,6 +357,42 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
     }),
   );
 
+  await page.route('**/api/v1/orchestrator/workers', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        workers: cloneJSON(MOCK_WORKERS),
+        summary: {
+          total: MOCK_WORKERS.length,
+          active: 1,
+          busy: 1,
+          error: 0,
+          local: 1,
+          remote: 2,
+        },
+        warnings: [],
+      }),
+    }),
+  );
+
+  await page.route('**/api/v1/orchestrator/workers/reclaim', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        reclaim: {
+          reclaimed: 1,
+          skipped: 1,
+          failed: 0,
+          failures: [],
+        },
+      }),
+    }),
+  );
+
   await page.route('**/api/v1/features', (route) =>
     route.fulfill({
       status: 200,
@@ -303,6 +438,7 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
 
 export async function mockOrchestrationAPIs(page: Page) {
   const executions = cloneJSON(MOCK_EXECUTIONS);
+  const workers = cloneJSON(MOCK_WORKERS);
   let nextExecutionID = 1;
 
   await page.route('**/api/v1/orchestrator/plans', async (route) => {
@@ -352,8 +488,27 @@ export async function mockOrchestrationAPIs(page: Page) {
     const execution = {
       id: `exec-preview-${nextExecutionID++}`,
       goal: String(body.goal || '').trim(),
+      requestedProvider: String(body.requestedProvider || '').trim(),
       status: 'pending_authorization',
       updatedAt: '2026-03-08T12:00:00Z',
+      authorization: {
+        infrastructureApproved: false,
+      },
+      governance: {
+        providerResolutions: [
+          {
+            source: 'host',
+            status: 'resolved',
+            hostId: 'local',
+            agentId: 'zeroclaw',
+            profileId: 'profile-openrouter',
+            profileName: 'openrouter-default',
+            provider: 'openrouter',
+            model: 'openai/gpt-4o-mini',
+            syncMode: 'always_push',
+          },
+        ],
+      },
       taskUnits: cloneJSON((body.taskUnits as Array<Record<string, unknown>>) || []),
       results: [],
     };
@@ -374,6 +529,11 @@ export async function mockOrchestrationAPIs(page: Page) {
     }
     execution.status = 'running';
     execution.updatedAt = '2026-03-08T12:01:00Z';
+    execution.authorization = {
+      infrastructureApproved: true,
+      approvedBy: 'webui',
+      approvedAt: '2026-03-08T12:01:00Z',
+    };
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -419,6 +579,47 @@ export async function mockOrchestrationAPIs(page: Page) {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ result: 'ok', execution, workers }),
+    });
+  });
+
+  await page.route('**/api/v1/orchestrator/workers', async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        workers,
+        summary: {
+          total: workers.length,
+          active: workers.filter((item) => ['busy', 'provisioning', 'reclaiming'].includes(String(item.state))).length,
+          busy: workers.filter((item) => String(item.state) === 'busy').length,
+          error: workers.filter((item) => String(item.state) === 'error').length,
+          local: workers.filter((item) => String(item.hostId) === 'local').length,
+          remote: workers.filter((item) => String(item.hostId) !== 'local').length,
+        },
+        warnings: [],
+      }),
+    }),
+  );
+
+  await page.route('**/api/v1/orchestrator/workers/reclaim', async (route) => {
+    for (const worker of workers) {
+      if (worker.source === 'lease' && worker.state !== 'reclaimed') {
+        worker.state = 'reclaimed';
+      }
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        reclaim: {
+          reclaimed: 1,
+          skipped: 0,
+          failed: 0,
+          failures: [],
+        },
+      }),
     });
   });
 }

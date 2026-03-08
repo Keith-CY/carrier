@@ -275,6 +275,14 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		}
 		handleOrchestratorExecutions(w, r, requestID, cfg)
 	})
+	mux.HandleFunc("/api/v1/orchestrator/workers", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleOrchestratorWorkers(w, r, requestID, cfg, daemon)
+	})
 	mux.HandleFunc("/api/v1/orchestrator/workers/reclaim", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
 		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
@@ -314,6 +322,14 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			return
 		}
 		handleProviderBindings(w, r, requestID, cfg)
+	})
+	mux.HandleFunc("/api/v1/provider-governance/resolve", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleProviderGovernanceResolve(w, r, requestID, cfg)
 	})
 	mux.HandleFunc("/api/v1/remote/chat/stream", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
