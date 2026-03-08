@@ -72,6 +72,11 @@ func TestOrchestratorExecutionEndpointNegativeCases(t *testing.T) {
 		t.Fatalf("expected authorize method not allowed, got %d body=%s", authMethod.Code, authMethod.Body.String())
 	}
 
+	cancelMethod := runJSONRequest(t, mux, http.MethodGet, "/api/v1/orchestrator/executions/"+execID+"/cancel", "")
+	if cancelMethod.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected cancel method not allowed, got %d body=%s", cancelMethod.Code, cancelMethod.Body.String())
+	}
+
 	authBadJSON := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions/"+execID+"/authorize", "{")
 	if authBadJSON.Code != http.StatusBadRequest {
 		t.Fatalf("expected authorize bad json status 400, got %d body=%s", authBadJSON.Code, authBadJSON.Body.String())
@@ -94,6 +99,58 @@ func TestOrchestratorExecutionEndpointNegativeCases(t *testing.T) {
 	terminalApprove := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions/"+execID+"/authorize", `{"approved":true,"actor":"tester"}`)
 	if terminalApprove.Code != http.StatusOK {
 		t.Fatalf("expected terminal authorize status 200, got %d body=%s", terminalApprove.Code, terminalApprove.Body.String())
+	}
+}
+
+func TestHandleOrchestratorExecutionsCancel(t *testing.T) {
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+
+	cfg := &GatewayConfig{
+		RemoteControlPlaneEnabled: true,
+	}
+	seed, err := upsertOrchestratorExecution(OrchestratorExecution{
+		ID:            "exec-cancel-1",
+		Goal:          "cancel me",
+		ApprovalScope: "infrastructure_only",
+		Status:        OrchestratorExecutionStatusRunning,
+		Authorization: OrchestratorAuthorization{
+			InfrastructureApproved: true,
+			ApprovedBy:             "tester",
+			ApprovedAt:             nowTimestamp(),
+		},
+		RequiredWorkers: []OrchestratorRequiredWorker{{HostID: orchestratorLocalHostID, AgentID: "zeroclaw", Count: 1}},
+		TaskUnits:       []OrchestratorTaskUnit{{ID: "task-1", Input: "noop"}},
+		StartedAt:       nowTimestamp(),
+	})
+	if err != nil {
+		t.Fatalf("seed execution failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/orchestrator/executions/"+seed.ID+"/cancel", strings.NewReader(`{"actor":"operator-ui"}`))
+	rec := httptest.NewRecorder()
+	handleOrchestratorExecutions(rec, req, "req-cancel-1", cfg)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected cancel accepted status, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	execMap, _ := payload["execution"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(execMap["status"])); got != string(OrchestratorExecutionStatusCancelled) {
+		t.Fatalf("expected cancelled status, got %q payload=%+v", got, payload)
+	}
+
+	updated, found, err := getOrchestratorExecution(seed.ID)
+	if err != nil || !found {
+		t.Fatalf("get cancelled execution failed found=%v err=%v", found, err)
+	}
+	if updated.Status != OrchestratorExecutionStatusCancelled {
+		t.Fatalf("expected persisted cancelled status, got %+v", updated)
+	}
+	if updated.CompletedAt == "" {
+		t.Fatalf("expected cancelled execution to set completedAt, got %+v", updated)
+	}
+	if !strings.Contains(updated.Error, "operator-ui") {
+		t.Fatalf("expected cancellation reason to include actor, got %+v", updated)
 	}
 }
 
@@ -918,6 +975,39 @@ func TestRunOrchestratorExecutionAdditionalBranches(t *testing.T) {
 			t.Fatalf("expected failed task results to be persisted, got %+v", got.Results)
 		}
 	})
+}
+
+func TestAcquireWorkerForTaskMatchesAgentWithoutPinnedHost(t *testing.T) {
+	picoclawPool := orchestratorWorkerPool{
+		key: workerPoolKey(orchestratorLocalHostID, "picoclaw"),
+		ch:  make(chan OrchestratorWorkerLease, 1),
+	}
+	zeroclawPool := orchestratorWorkerPool{
+		key: workerPoolKey("host-z", "zeroclaw"),
+		ch:  make(chan OrchestratorWorkerLease, 1),
+	}
+	picoclawPool.ch <- OrchestratorWorkerLease{ID: "lease-p", HostID: orchestratorLocalHostID, AgentID: "picoclaw"}
+	zeroclawPool.ch <- OrchestratorWorkerLease{ID: "lease-z", HostID: "host-z", AgentID: "zeroclaw"}
+
+	pools := map[string]orchestratorWorkerPool{
+		picoclawPool.key: picoclawPool,
+		zeroclawPool.key: zeroclawPool,
+	}
+
+	lease, key, err := acquireWorkerForTask(context.Background(), OrchestratorTaskUnit{
+		ID:      "task-1",
+		Input:   "collect logs",
+		AgentID: "zeroclaw",
+	}, pools, picoclawPool.key)
+	if err != nil {
+		t.Fatalf("acquireWorkerForTask returned error: %v", err)
+	}
+	if key != zeroclawPool.key {
+		t.Fatalf("expected zeroclaw pool key, got %q", key)
+	}
+	if lease.ID != "lease-z" || lease.AgentID != "zeroclaw" {
+		t.Fatalf("expected zeroclaw lease, got %+v", lease)
+	}
 }
 
 func TestProvisionOrchestratorWorkersErrorBranches(t *testing.T) {

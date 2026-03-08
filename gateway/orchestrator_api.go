@@ -3,10 +3,13 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,7 +35,15 @@ var (
 	orchestratorListLeasesByExecution = listOrchestratorWorkerLeasesByExecution
 	orchestratorInstallAgent          = remoteInstallAgent
 	orchestratorLocalDaemonClientFn   = newOrchestratorLocalDaemonClientFromEnv
+	orchestratorLaunchExecutionFn     = startOrchestratorExecutionAsync
 )
+
+var orchestratorExecutionCancelState = struct {
+	mu      sync.Mutex
+	cancels map[string]context.CancelFunc
+}{
+	cancels: map[string]context.CancelFunc{},
+}
 
 func newOrchestratorLocalDaemonClientFromEnv() *DaemonClient {
 	baseURL := strings.TrimSpace(os.Getenv("CARRIER_DAEMON_BASE_URL"))
@@ -59,6 +70,52 @@ func logOrchestratorPersistError(context string, err error) {
 type orchestratorWorkerPool struct {
 	key string
 	ch  chan OrchestratorWorkerLease
+}
+
+func isOrchestratorExecutionTerminal(status OrchestratorExecutionStatus) bool {
+	switch status {
+	case OrchestratorExecutionStatusCompleted,
+		OrchestratorExecutionStatusFailed,
+		OrchestratorExecutionStatusCancelled,
+		OrchestratorExecutionStatusDeclined:
+		return true
+	default:
+		return false
+	}
+}
+
+func registerOrchestratorExecutionCancel(executionID string, cancel context.CancelFunc) {
+	id := strings.TrimSpace(executionID)
+	if id == "" || cancel == nil {
+		return
+	}
+	orchestratorExecutionCancelState.mu.Lock()
+	defer orchestratorExecutionCancelState.mu.Unlock()
+	orchestratorExecutionCancelState.cancels[id] = cancel
+}
+
+func unregisterOrchestratorExecutionCancel(executionID string) {
+	id := strings.TrimSpace(executionID)
+	if id == "" {
+		return
+	}
+	orchestratorExecutionCancelState.mu.Lock()
+	defer orchestratorExecutionCancelState.mu.Unlock()
+	delete(orchestratorExecutionCancelState.cancels, id)
+}
+
+func cancelOrchestratorExecutionRun(executionID string) bool {
+	id := strings.TrimSpace(executionID)
+	if id == "" {
+		return false
+	}
+	orchestratorExecutionCancelState.mu.Lock()
+	cancel, ok := orchestratorExecutionCancelState.cancels[id]
+	orchestratorExecutionCancelState.mu.Unlock()
+	if ok && cancel != nil {
+		cancel()
+	}
+	return ok
 }
 
 func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, requestID string, cfg *GatewayConfig) {
@@ -205,6 +262,7 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to update orchestrator execution", "upsert orchestrator execution declined", saveErr)
 				return
 			}
+			publishOrchestratorExecutionEvent(updated)
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"requestId": requestID,
 				"result":    "ok",
@@ -222,9 +280,7 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 		if execution.MaxConcurrency > 64 {
 			execution.MaxConcurrency = 64
 		}
-		if execution.Status == OrchestratorExecutionStatusCompleted ||
-			execution.Status == OrchestratorExecutionStatusFailed ||
-			execution.Status == OrchestratorExecutionStatusDeclined {
+		if isOrchestratorExecutionTerminal(execution.Status) {
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"requestId": requestID,
 				"result":    "ok",
@@ -248,7 +304,38 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to update orchestrator execution", "upsert orchestrator execution authorize", saveErr)
 			return
 		}
-		startOrchestratorExecutionAsync(updated.ID)
+		orchestratorLaunchExecutionFn(updated.ID)
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{
+			"requestId": requestID,
+			"result":    "ok",
+			"execution": updated,
+		})
+		return
+	case "cancel":
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		var req struct {
+			Actor string `json:"actor"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
+			return
+		}
+		if isOrchestratorExecutionTerminal(execution.Status) {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"requestId": requestID,
+				"result":    "ok",
+				"execution": execution,
+			})
+			return
+		}
+		updated, cancelErr := cancelOrchestratorExecution(execution.ID, req.Actor)
+		if cancelErr != nil {
+			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to cancel orchestrator execution", "cancel orchestrator execution", cancelErr)
+			return
+		}
 		writeJSON(w, http.StatusAccepted, map[string]interface{}{
 			"requestId": requestID,
 			"result":    "ok",
@@ -318,6 +405,44 @@ func startOrchestratorExecutionAsync(executionID string) {
 	}()
 }
 
+func cancelOrchestratorExecution(executionID string, actor string) (OrchestratorExecution, error) {
+	execution, ok, err := getOrchestratorExecution(executionID)
+	if err != nil {
+		return OrchestratorExecution{}, err
+	}
+	if !ok {
+		return OrchestratorExecution{}, fmt.Errorf("orchestrator execution %s not found", strings.TrimSpace(executionID))
+	}
+	if isOrchestratorExecutionTerminal(execution.Status) {
+		return execution, nil
+	}
+
+	cancelActor := strings.TrimSpace(actor)
+	if cancelActor == "" {
+		cancelActor = "operator"
+	}
+	cancelOrchestratorExecutionRun(execution.ID)
+
+	execution.Status = OrchestratorExecutionStatusCancelled
+	if execution.StartedAt == "" {
+		execution.StartedAt = nowTimestamp()
+	}
+	if execution.CompletedAt == "" {
+		execution.CompletedAt = nowTimestamp()
+	}
+	execution.UpdatedAt = nowTimestamp()
+	execution.Error = "execution cancelled by " + cancelActor
+	updated, err := upsertOrchestratorExecution(execution)
+	if err != nil {
+		return OrchestratorExecution{}, err
+	}
+	publishOrchestratorExecutionEvent(updated)
+	if _, reclaimErr := reclaimExecutionLeases(context.Background(), updated.ID, true); reclaimErr != nil {
+		logOrchestratorPersistError("reclaim execution leases on cancel", reclaimErr)
+	}
+	return updated, nil
+}
+
 func runOrchestratorExecution(executionID string) {
 	execution, ok, err := getOrchestratorExecution(executionID)
 	if err != nil || !ok {
@@ -326,9 +451,14 @@ func runOrchestratorExecution(executionID string) {
 	if !execution.Authorization.InfrastructureApproved {
 		return
 	}
+	if isOrchestratorExecutionTerminal(execution.Status) {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	registerOrchestratorExecutionCancel(execution.ID, cancel)
 	defer cancel()
+	defer unregisterOrchestratorExecutionCancel(execution.ID)
 
 	leases, provisionErr := provisionOrchestratorWorkers(ctx, execution)
 	if provisionErr != nil {
@@ -356,6 +486,17 @@ func runOrchestratorExecution(executionID string) {
 	if _, err := reclaimExecutionLeases(context.Background(), updated.ID, true); err != nil {
 		logOrchestratorPersistError("reclaim execution leases on success", err)
 	}
+	latest, found, latestErr := getOrchestratorExecution(updated.ID)
+	if latestErr == nil && found && latest.Status == OrchestratorExecutionStatusCancelled {
+		if len(results) > 0 {
+			latest.Results = results
+			latest.UpdatedAt = nowTimestamp()
+			if _, err := upsertOrchestratorExecution(latest); err != nil {
+				logOrchestratorPersistError("upsert orchestrator execution cancelled results", err)
+			}
+		}
+		return
+	}
 	updated.Results = results
 	updated.Status = OrchestratorExecutionStatusCompleted
 	updated.CompletedAt = nowTimestamp()
@@ -364,9 +505,32 @@ func runOrchestratorExecution(executionID string) {
 	if _, err := upsertOrchestratorExecution(updated); err != nil {
 		logOrchestratorPersistError("upsert orchestrator execution completed", err)
 	}
+	publishOrchestratorExecutionEvent(updated)
 }
 
 func markOrchestratorExecutionFailed(execution OrchestratorExecution, runErr error, results []OrchestratorTaskResult) {
+	latest, found, err := getOrchestratorExecution(execution.ID)
+	if err == nil && found {
+		execution = latest
+	}
+	if results != nil {
+		execution.Results = results
+	}
+	if execution.Status == OrchestratorExecutionStatusCancelled || errors.Is(runErr, context.Canceled) {
+		execution.Status = OrchestratorExecutionStatusCancelled
+		if execution.Error == "" {
+			execution.Error = "execution cancelled"
+		}
+		if execution.CompletedAt == "" {
+			execution.CompletedAt = nowTimestamp()
+		}
+		execution.UpdatedAt = nowTimestamp()
+		if _, err := upsertOrchestratorExecution(execution); err != nil {
+			logOrchestratorPersistError("upsert orchestrator execution cancelled", err)
+		}
+		publishOrchestratorExecutionEvent(execution)
+		return
+	}
 	execution.Status = OrchestratorExecutionStatusFailed
 	execution.Error = strings.TrimSpace(runErr.Error())
 	execution.UpdatedAt = nowTimestamp()
@@ -377,6 +541,7 @@ func markOrchestratorExecutionFailed(execution OrchestratorExecution, runErr err
 	if _, err := upsertOrchestratorExecution(execution); err != nil {
 		logOrchestratorPersistError("upsert orchestrator execution failed", err)
 	}
+	publishOrchestratorExecutionEvent(execution)
 }
 
 func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExecution) ([]OrchestratorWorkerLease, error) {
@@ -879,9 +1044,47 @@ func acquireWorkerForTask(
 			agentID = "zeroclaw"
 		}
 		key = workerPoolKey(hostID, agentID)
-	} else {
-		key = firstPoolKey
+		pool, ok := pools[key]
+		if !ok {
+			return OrchestratorWorkerLease{}, "", fmt.Errorf("no worker pool available for key %s", key)
+		}
+		select {
+		case <-ctx.Done():
+			return OrchestratorWorkerLease{}, "", ctx.Err()
+		case lease := <-pool.ch:
+			return lease, key, nil
+		}
 	}
+
+	if agentID != "" {
+		matching := matchingOrchestratorWorkerPools(agentID, pools)
+		if len(matching) > 0 {
+			cases := make([]reflect.SelectCase, 0, len(matching)+1)
+			poolKeys := make([]string, 0, len(matching))
+			cases = append(cases, reflect.SelectCase{
+				Dir:  reflect.SelectRecv,
+				Chan: reflect.ValueOf(ctx.Done()),
+			})
+			for _, pool := range matching {
+				cases = append(cases, reflect.SelectCase{
+					Dir:  reflect.SelectRecv,
+					Chan: reflect.ValueOf(pool.ch),
+				})
+				poolKeys = append(poolKeys, pool.key)
+			}
+			chosen, recv, recvOK := reflect.Select(cases)
+			if chosen == 0 {
+				return OrchestratorWorkerLease{}, "", ctx.Err()
+			}
+			if !recvOK {
+				return OrchestratorWorkerLease{}, "", fmt.Errorf("worker pool closed for key %s", poolKeys[chosen-1])
+			}
+			lease, _ := recv.Interface().(OrchestratorWorkerLease)
+			return lease, poolKeys[chosen-1], nil
+		}
+	}
+
+	key = firstPoolKey
 	pool, ok := pools[key]
 	if !ok {
 		return OrchestratorWorkerLease{}, "", fmt.Errorf("no worker pool available for key %s", key)
@@ -892,6 +1095,30 @@ func acquireWorkerForTask(
 	case lease := <-pool.ch:
 		return lease, key, nil
 	}
+}
+
+func matchingOrchestratorWorkerPools(agentID string, pools map[string]orchestratorWorkerPool) []orchestratorWorkerPool {
+	normalized := strings.ToLower(strings.TrimSpace(agentID))
+	if normalized == "" {
+		return nil
+	}
+	keys := make([]string, 0, len(pools))
+	for key, pool := range pools {
+		poolAgentID := pool.key
+		if idx := strings.LastIndex(poolAgentID, ":"); idx >= 0 && idx+1 < len(poolAgentID) {
+			poolAgentID = poolAgentID[idx+1:]
+		}
+		if !strings.EqualFold(strings.TrimSpace(poolAgentID), normalized) {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	matching := make([]orchestratorWorkerPool, 0, len(keys))
+	for _, key := range keys {
+		matching = append(matching, pools[key])
+	}
+	return matching
 }
 
 func releaseWorkerToPool(lease OrchestratorWorkerLease, pool orchestratorWorkerPool) {

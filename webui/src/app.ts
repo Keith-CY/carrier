@@ -62,6 +62,9 @@
   let remoteChatTargetsLoadSeq = 0;
   let remoteChatInstancesLoadSeq = 0;
   let remoteObservabilityData = null;
+  let dashboardExecutionPollTimer = null;
+  let dashboardExecutionDetailsByID = {};
+  let dashboardExpandedExecutionIDs = new Set();
   const DEFAULT_FEATURE_FLAGS = {
     remoteControlPlaneEnabled: false,
     remoteChatEnabled: false,
@@ -113,6 +116,7 @@
 
   function clearToken() {
     disconnectDelegateEvents();
+    stopDashboardExecutionPolling();
     token = '';
     localStorage.removeItem('carrier_token');
     showLogin();
@@ -167,10 +171,18 @@
         const executionId = String(payload.executionId || '').trim();
         const status = String(payload.status || '').trim();
         const error = String(payload.error || '').trim();
-        const msg = status === 'completed'
-          ? 'Delegate completed: ' + executionId
-          : 'Delegate failed: ' + executionId + (error ? ' (' + error + ')' : '');
+        let msg = 'Execution updated: ' + executionId;
+        if (status === 'completed') {
+          msg = 'Execution completed: ' + executionId;
+        } else if (status === 'cancelled') {
+          msg = 'Execution cancelled: ' + executionId + (error ? ' (' + error + ')' : '');
+        } else if (status) {
+          msg = 'Execution ' + status + ': ' + executionId + (error ? ' (' + error + ')' : '');
+        }
         showDelegateNotification(msg, status);
+        if (currentRouteName() === 'dashboard') {
+          refreshExecutions();
+        }
       };
       es.onerror = () => {
         if (delegateEventSource !== es) return;
@@ -223,6 +235,19 @@
     link.classList.toggle('hidden', !visible);
   }
 
+  function currentRouteName() {
+    const hash = location.hash || '#/welcome';
+    return hash.replace('#/', '');
+  }
+
+  function formatDateTime(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return 'n/a';
+    const parsed = new Date(text);
+    if (Number.isNaN(parsed.getTime())) return text;
+    return parsed.toLocaleString();
+  }
+
   function isRouteEnabled(route) {
     if (route === 'servers' || route === 'profiles' || route === 'remote-observability') {
       return !!featureFlags.remoteControlPlaneEnabled;
@@ -240,6 +265,8 @@
     setNavRouteVisible('profiles', remoteControlVisible);
     setNavRouteVisible('remote-chat', remoteChatVisible);
     setNavRouteVisible('remote-observability', remoteControlVisible);
+    const executionSection = $('#dashboard-executions-section');
+    if (executionSection) executionSection.classList.toggle('hidden', !remoteControlVisible);
   }
 
   async function refreshFeatureFlags() {
@@ -378,6 +405,7 @@
       const el = $('#view-' + r);
       if (el) el.classList.toggle('hidden', r !== name);
     });
+    if (name !== 'dashboard') stopDashboardExecutionPolling();
     // Update nav active state
     $$('.nav-link').forEach(a => {
       a.classList.toggle('active', a.dataset.route === name);
@@ -1302,7 +1330,11 @@
     showView('dashboard');
     $('#nav').classList.remove('hidden');
     await refreshInstances();
+    await refreshExecutions();
+    startDashboardExecutionPolling();
     $('#refresh-instances').onclick = refreshInstances;
+    const refreshExecutionsBtn = $('#refresh-executions');
+    if (refreshExecutionsBtn) refreshExecutionsBtn.onclick = refreshExecutions;
     $('#dashboard-add-agent').onclick = openAddAgentModal;
     $('#add-agent-cancel').onclick = closeAddAgentModal;
   }
@@ -1381,6 +1413,275 @@
       });
     } catch (e) {
       el.textContent = 'Error: ' + e.message;
+    }
+  }
+
+  function isExecutionTerminalStatus(status) {
+    const normalized = String(status || '').trim().toLowerCase();
+    return normalized === 'completed' || normalized === 'failed' || normalized === 'cancelled' || normalized === 'declined';
+  }
+
+  function executionStatusBadgeClass(status) {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (normalized === 'completed') return 'badge badge-ok';
+    if (normalized === 'failed' || normalized === 'declined' || normalized === 'cancelled') return 'badge badge-error';
+    return 'badge badge-unknown';
+  }
+
+  function stopDashboardExecutionPolling() {
+    if (dashboardExecutionPollTimer) {
+      clearInterval(dashboardExecutionPollTimer);
+      dashboardExecutionPollTimer = null;
+    }
+  }
+
+  function startDashboardExecutionPolling() {
+    stopDashboardExecutionPolling();
+    if (!featureFlags.remoteControlPlaneEnabled) return;
+    dashboardExecutionPollTimer = setInterval(() => {
+      if (currentRouteName() !== 'dashboard') {
+        stopDashboardExecutionPolling();
+        return;
+      }
+      refreshExecutions();
+    }, 5000);
+  }
+
+  async function loadExecutionDetails(executionID, target, force) {
+    const id = String(executionID || '').trim();
+    if (!id || !target) return;
+    if (!force && dashboardExecutionDetailsByID[id]) {
+      renderExecutionDetails(target, dashboardExecutionDetailsByID[id]);
+      return;
+    }
+    target.textContent = 'Loading details…';
+    try {
+      const payload = await api('GET', '/api/v1/orchestrator/executions/' + encodeURIComponent(id));
+      dashboardExecutionDetailsByID[id] = payload;
+      renderExecutionDetails(target, payload);
+    } catch (e) {
+      target.textContent = 'Load failed: ' + e.message;
+    }
+  }
+
+  function renderExecutionDetails(target, payload) {
+    target.textContent = '';
+    const execution = payload && payload.execution && typeof payload.execution === 'object' ? payload.execution : {};
+    const workers = payload && Array.isArray(payload.workers) ? payload.workers : [];
+    const taskUnits = Array.isArray(execution.taskUnits) ? execution.taskUnits : [];
+    const results = Array.isArray(execution.results) ? execution.results : [];
+    const resultByTaskId = new Map();
+    results.forEach(item => {
+      const key = String(item && item.taskId ? item.taskId : '').trim();
+      if (key) resultByTaskId.set(key, item);
+    });
+
+    const workerWrap = document.createElement('div');
+    workerWrap.className = 'execution-detail-block';
+    const workerTitle = document.createElement('div');
+    workerTitle.className = 'execution-detail-title';
+    workerTitle.textContent = 'Workers';
+    workerWrap.appendChild(workerTitle);
+    if (!workers.length) {
+      const empty = document.createElement('div');
+      empty.className = 'text-dim';
+      empty.textContent = 'No worker leases recorded.';
+      workerWrap.appendChild(empty);
+    } else {
+      workers.forEach(worker => {
+        const line = document.createElement('div');
+        line.className = 'execution-detail-line';
+        const host = String(worker && worker.hostId ? worker.hostId : '').trim() || 'local';
+        const agent = String(worker && worker.agentId ? worker.agentId : '').trim() || 'unknown';
+        const state = String(worker && worker.state ? worker.state : '').trim() || 'unknown';
+        line.textContent = host + '/' + agent + ' · state=' + state;
+        workerWrap.appendChild(line);
+      });
+    }
+    target.appendChild(workerWrap);
+
+    const resultsWrap = document.createElement('div');
+    resultsWrap.className = 'execution-detail-block';
+    const resultTitle = document.createElement('div');
+    resultTitle.className = 'execution-detail-title';
+    resultTitle.textContent = 'Task Results';
+    resultsWrap.appendChild(resultTitle);
+    if (!taskUnits.length) {
+      const empty = document.createElement('div');
+      empty.className = 'text-dim';
+      empty.textContent = 'No task units recorded.';
+      resultsWrap.appendChild(empty);
+    } else {
+      taskUnits.forEach((task, index) => {
+        const taskID = String(task && task.id ? task.id : 'task-' + String(index + 1)).trim();
+        const taskInput = String(task && task.input ? task.input : '').trim();
+        const result = resultByTaskId.get(taskID) || {};
+        const item = document.createElement('div');
+        item.className = 'execution-result-item';
+
+        const header = document.createElement('div');
+        header.className = 'execution-result-header';
+        const title = document.createElement('strong');
+        title.textContent = taskID;
+        const status = document.createElement('span');
+        status.className = executionStatusBadgeClass(result.status || execution.status);
+        status.textContent = String(result.status || execution.status || 'pending').trim();
+        header.appendChild(title);
+        header.appendChild(status);
+        item.appendChild(header);
+
+        if (taskInput) {
+          const body = document.createElement('div');
+          body.className = 'execution-result-body';
+          body.textContent = taskInput;
+          item.appendChild(body);
+        }
+
+        const output = String(result.output || result.error || '').trim();
+        if (output) {
+          const pre = document.createElement('pre');
+          pre.className = 'code-block execution-result-output';
+          pre.textContent = output;
+          item.appendChild(pre);
+        }
+
+        const meta = document.createElement('div');
+        meta.className = 'execution-result-meta';
+        const host = String(result.hostId || '').trim();
+        const agent = String(result.agentId || '').trim();
+        const attempts = Number(result.attempts || 0);
+        const latency = Number(result.latencyMs || 0);
+        const parts = [];
+        if (host || agent) parts.push((host || 'local') + '/' + (agent || 'unknown'));
+        if (attempts) parts.push('attempts=' + String(attempts));
+        if (latency) parts.push('latency=' + String(Math.round(latency)) + 'ms');
+        meta.textContent = parts.join(' · ');
+        if (meta.textContent) item.appendChild(meta);
+
+        resultsWrap.appendChild(item);
+      });
+    }
+    target.appendChild(resultsWrap);
+  }
+
+  async function refreshExecutions() {
+    const section = $('#dashboard-executions-section');
+    const list = $('#execution-list');
+    const summary = $('#execution-summary');
+    if (!section || !list || !summary) return;
+    if (!featureFlags.remoteControlPlaneEnabled) {
+      section.classList.add('hidden');
+      return;
+    }
+    section.classList.remove('hidden');
+
+    if (!list.childElementCount) list.textContent = 'Loading…';
+    try {
+      const payload = await api('GET', '/api/v1/orchestrator/executions');
+      const executions = payload && Array.isArray(payload.executions) ? payload.executions.slice() : [];
+      executions.sort((a, b) => {
+        const left = new Date(String(a && a.updatedAt ? a.updatedAt : '')).getTime() || 0;
+        const right = new Date(String(b && b.updatedAt ? b.updatedAt : '')).getTime() || 0;
+        return right - left;
+      });
+      const recent = executions.slice(0, 8);
+      const active = recent.filter(item => !isExecutionTerminalStatus(item && item.status)).length;
+      summary.textContent = recent.length
+        ? 'Recent: ' + recent.length + ' · Active: ' + active
+        : 'No executions recorded yet.';
+
+      list.textContent = '';
+      dashboardExecutionDetailsByID = {};
+      if (!recent.length) return;
+
+      recent.forEach(execution => {
+        const executionID = String(execution && execution.id ? execution.id : '').trim();
+        const statusText = String(execution && execution.status ? execution.status : 'unknown').trim();
+        const taskUnits = Array.isArray(execution && execution.taskUnits) ? execution.taskUnits : [];
+        const results = Array.isArray(execution && execution.results) ? execution.results : [];
+        const completed = results.filter(item => String(item && item.status ? item.status : '').trim() === 'completed').length;
+        const failed = results.filter(item => String(item && item.status ? item.status : '').trim() === 'failed').length;
+
+        const card = document.createElement('div');
+        card.className = 'agent-card execution-card';
+
+        const header = document.createElement('div');
+        header.className = 'section-head';
+        const title = document.createElement('h4');
+        title.textContent = executionID || 'execution';
+        const badge = document.createElement('span');
+        badge.className = executionStatusBadgeClass(statusText);
+        badge.textContent = statusText || 'unknown';
+        header.appendChild(title);
+        header.appendChild(badge);
+        card.appendChild(header);
+
+        const goal = document.createElement('div');
+        goal.className = 'execution-goal';
+        goal.textContent = String(execution && execution.goal ? execution.goal : '').trim() || '(no goal)';
+        card.appendChild(goal);
+
+        const meta = document.createElement('div');
+        meta.className = 'instance-meta';
+        meta.textContent = 'Tasks: ' + String(taskUnits.length) + ' · Completed: ' + String(completed) + ' · Failed: ' + String(failed) + ' · Updated: ' + formatDateTime(execution && execution.updatedAt);
+        card.appendChild(meta);
+
+        const actions = document.createElement('div');
+        actions.className = 'btn-row';
+
+        const detailToggle = document.createElement('button');
+        detailToggle.className = 'btn-sm btn-secondary';
+        detailToggle.textContent = dashboardExpandedExecutionIDs.has(executionID) ? 'Hide Details' : 'View Details';
+        actions.appendChild(detailToggle);
+
+        if (!isExecutionTerminalStatus(statusText)) {
+          const cancelBtn = document.createElement('button');
+          cancelBtn.className = 'btn-sm btn-danger';
+          cancelBtn.textContent = 'Cancel';
+          cancelBtn.onclick = async () => {
+            cancelBtn.disabled = true;
+            try {
+              await api('POST', '/api/v1/orchestrator/executions/' + encodeURIComponent(executionID) + '/cancel', { actor: 'webui' });
+              summary.textContent = 'Execution cancelled: ' + executionID;
+              await refreshExecutions();
+            } catch (e) {
+              summary.textContent = 'Cancel failed: ' + e.message;
+            } finally {
+              cancelBtn.disabled = false;
+            }
+          };
+          actions.appendChild(cancelBtn);
+        }
+        card.appendChild(actions);
+
+        const details = document.createElement('div');
+        details.className = 'execution-details hidden';
+        card.appendChild(details);
+
+        detailToggle.onclick = async () => {
+          if (!executionID) return;
+          const open = details.classList.toggle('hidden');
+          if (open) {
+            dashboardExpandedExecutionIDs.delete(executionID);
+            detailToggle.textContent = 'View Details';
+            return;
+          }
+          dashboardExpandedExecutionIDs.add(executionID);
+          detailToggle.textContent = 'Hide Details';
+          await loadExecutionDetails(executionID, details, true);
+        };
+
+        if (dashboardExpandedExecutionIDs.has(executionID)) {
+          details.classList.remove('hidden');
+          detailToggle.textContent = 'Hide Details';
+          void loadExecutionDetails(executionID, details, true);
+        }
+
+        list.appendChild(card);
+      });
+    } catch (e) {
+      list.textContent = 'Error: ' + e.message;
+      summary.textContent = 'Execution history unavailable.';
     }
   }
 
