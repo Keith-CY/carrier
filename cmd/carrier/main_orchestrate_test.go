@@ -93,6 +93,14 @@ func TestParseOrchestrateCommandArgs(t *testing.T) {
 	if statusOpts.Action != "status" || statusOpts.ExecutionID != "exec-123" || !statusOpts.JSON {
 		t.Fatalf("unexpected status opts: %+v", statusOpts)
 	}
+
+	cancelOpts, err := parseOrchestrateCommandArgs([]string{"cancel", "exec-456", "--json"})
+	if err != nil {
+		t.Fatalf("parseOrchestrateCommandArgs(cancel) error: %v", err)
+	}
+	if cancelOpts.Action != "cancel" || cancelOpts.ExecutionID != "exec-456" || !cancelOpts.JSON {
+		t.Fatalf("unexpected cancel opts: %+v", cancelOpts)
+	}
 }
 
 func TestParseExecutionsCommandArgs(t *testing.T) {
@@ -118,6 +126,14 @@ func TestParseExecutionsCommandArgs(t *testing.T) {
 	}
 	if implicitShowOpts.Action != "status" || implicitShowOpts.ExecutionID != "exec-99" || !implicitShowOpts.JSON {
 		t.Fatalf("unexpected implicit show opts: %+v", implicitShowOpts)
+	}
+
+	cancelOpts, err := parseExecutionsCommandArgs([]string{"cancel", "exec-55", "--json"})
+	if err != nil {
+		t.Fatalf("parseExecutionsCommandArgs(cancel) error: %v", err)
+	}
+	if cancelOpts.Action != "cancel" || cancelOpts.ExecutionID != "exec-55" || !cancelOpts.JSON {
+		t.Fatalf("unexpected cancel opts: %+v", cancelOpts)
 	}
 }
 
@@ -302,5 +318,50 @@ func TestRunOrchestrateListCommand(t *testing.T) {
 	}
 	if strings.Contains(output, "exec-old") {
 		t.Fatalf("did not expect trimmed older execution in output, got %q", output)
+	}
+}
+
+func TestRunOrchestrateCancelCommand(t *testing.T) {
+	var cancelBody string
+
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/orchestrator/executions/exec-cancel/cancel":
+			if r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			raw, _ := io.ReadAll(r.Body)
+			cancelBody = strings.TrimSpace(string(raw))
+			_, _ = w.Write([]byte(`{"result":"ok","execution":{"id":"exec-cancel","goal":"triage issue","status":"cancelled","error":"execution cancelled by carrier-cli","taskUnits":[{"id":"t1","hostId":"local","agentId":"zeroclaw"}],"results":[{"taskId":"t1","status":"failed","hostId":"local","agentId":"zeroclaw","error":"cancelled","latencyMs":5}]}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gateway.Close()
+
+	setProbeEnvFromURL(t, "CARRIER_GATEWAY_HOST", "CARRIER_GATEWAY_PORT", gateway.URL)
+
+	opts := orchestrateCommandOptions{
+		Action:      "cancel",
+		ExecutionID: "exec-cancel",
+	}
+	var out bytes.Buffer
+	if err := runOrchestrateCommand(&out, opts); err != nil {
+		t.Fatalf("runOrchestrateCommand(cancel) error: %v", err)
+	}
+
+	if !strings.Contains(cancelBody, `"actor":"carrier-cli"`) {
+		t.Fatalf("cancel body = %q, want actor=carrier-cli", cancelBody)
+	}
+	output := out.String()
+	if !strings.Contains(output, "status: cancelled") {
+		t.Fatalf("expected cancelled status in output, got %q", output)
+	}
+	if !strings.Contains(output, "execution cancelled by carrier-cli") {
+		t.Fatalf("expected cancel reason in output, got %q", output)
 	}
 }

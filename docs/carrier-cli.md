@@ -12,10 +12,14 @@ All command blocks below assume `carrier` is installed and available in `PATH`.
   - `--dry-run` previews the execution plan without creating an execution.
 - `carrier orchestrate status <execution_id> [--json]`
   - Show one orchestration execution with task results and worker lease state.
+- `carrier orchestrate cancel <execution_id> [--json]`
+  - Cancel one orchestration execution.
 - `carrier executions [list] [--limit <n>] [--json]`
   - List orchestration executions from the remote-control store.
 - `carrier executions show <execution_id> [--json]`
   - Alias for orchestration execution status lookup.
+- `carrier executions cancel <execution_id> [--json]`
+  - Cancel one orchestration execution.
 
 ### Bootstrap and runtime
 
