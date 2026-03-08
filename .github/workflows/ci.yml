@@ -179,6 +179,148 @@ jobs:
         shell: bash
         run: bash scripts/isolation-fixed-flow-check.sh
 
+  openclaw-provider-matrix:
+    name: OpenClaw Provider Matrix (${{ matrix.provider }})
+    needs: classify-scope
+    if: github.event_name != 'pull_request' || needs.classify-scope.outputs.ci_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [anthropic, openai, openai-codex, openrouter, openai-compatible]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+
+      - name: Run managed OpenClaw provider e2e flow
+        env:
+          CARRIER_TEST_OPENCLAW_PROVIDER: ${{ matrix.provider }}
+        run: go test ./cmd/carrier -run TestE2ECarrierBinaryAddOpenClawIsolationProviderMatrixChatAndUninstall -count=1
+
+  openclaw-provider-live-smoke:
+    name: OpenClaw Provider Live Smoke (${{ matrix.provider }})
+    needs: classify-scope
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: live_smoke
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [anthropic, openai, openai-codex, openrouter, openai-compatible]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve provider inputs
+        id: resolve
+        shell: bash
+        env:
+          LIVE_PROVIDER: ${{ matrix.provider }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_CODEX_TOKEN: ${{ secrets.OPENAI_CODEX_TOKEN }}
+          OPENAI_COMPATIBLE_API_KEY: ${{ secrets.OPENAI_COMPATIBLE_API_KEY }}
+          OPENAI_COMPATIBLE_BASE_URL: ${{ secrets.OPENAI_COMPATIBLE_BASE_URL }}
+          OPENAI_COMPATIBLE_MODEL: ${{ secrets.OPENAI_COMPATIBLE_MODEL }}
+          CARRIER_LIVE_MODEL_OPENAI: ${{ vars.CARRIER_LIVE_MODEL_OPENAI }}
+          CARRIER_LIVE_MODEL_OPENAI_CODEX: ${{ vars.CARRIER_LIVE_MODEL_OPENAI_CODEX }}
+          CARRIER_LIVE_MODEL_OPENROUTER: ${{ vars.CARRIER_LIVE_MODEL_OPENROUTER }}
+          CARRIER_LIVE_MODEL_ANTHROPIC: ${{ vars.CARRIER_LIVE_MODEL_ANTHROPIC }}
+        run: |
+          set -euo pipefail
+
+          provider="${LIVE_PROVIDER}"
+          key=""
+          model=""
+          base_url=""
+
+          case "$provider" in
+            openai)
+              key="${OPENAI_API_KEY:-}"
+              model="${CARRIER_LIVE_MODEL_OPENAI:-gpt-4o-mini}"
+              ;;
+            openai-codex)
+              key="${OPENAI_CODEX_TOKEN:-}"
+              model="${CARRIER_LIVE_MODEL_OPENAI_CODEX:-gpt-5.3-codex}"
+              ;;
+            openrouter)
+              key="${OPENROUTER_API_KEY:-}"
+              model="${CARRIER_LIVE_MODEL_OPENROUTER:-openai/gpt-4o-mini}"
+              ;;
+            anthropic)
+              key="${ANTHROPIC_API_KEY:-}"
+              model="${CARRIER_LIVE_MODEL_ANTHROPIC:-claude-3-5-haiku-latest}"
+              ;;
+            openai-compatible)
+              key="${OPENAI_COMPATIBLE_API_KEY:-}"
+              model="${OPENAI_COMPATIBLE_MODEL:-}"
+              base_url="${OPENAI_COMPATIBLE_BASE_URL:-}"
+              ;;
+            *)
+              echo "unsupported provider: $provider" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ -z "${key}" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=missing_api_key_secret" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Live Provider Smoke"
+              echo "- provider: \`${provider}\`"
+              echo "- status: skipped (missing API key secret)"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [[ "$provider" == "openai-compatible" ]] && ([[ -z "${model}" ]] || [[ -z "${base_url}" ]]); then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=missing_openai_compatible_base_or_model" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Live Provider Smoke"
+              echo "- provider: \`${provider}\`"
+              echo "- status: skipped (missing OPENAI_COMPATIBLE_BASE_URL or OPENAI_COMPATIBLE_MODEL secret)"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=" >> "$GITHUB_OUTPUT"
+          printf 'CARRIER_LIVE_PROVIDER=%s\n' "$provider" >> "$GITHUB_ENV"
+          printf 'CARRIER_LIVE_MODEL=%s\n' "$model" >> "$GITHUB_ENV"
+          printf 'CARRIER_LIVE_BASE_URL=%s\n' "$base_url" >> "$GITHUB_ENV"
+          printf 'CARRIER_LIVE_API_KEY=%s\n' "$key" >> "$GITHUB_ENV"
+
+      - name: Run live provider smoke
+        if: steps.resolve.outputs.enabled == 'true'
+        run: go test ./cmd/carrier -run TestLiveProviderSmoke -count=1 -v
+
+      - name: Emit skipped summary
+        if: steps.resolve.outputs.enabled != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### Live Provider Smoke"
+            echo "- provider: \`${{ matrix.provider }}\`"
+            echo "- status: skipped"
+            echo "- reason: \`${{ steps.resolve.outputs.skip_reason }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   webui-build:
     name: WebUI Build
     needs: classify-scope

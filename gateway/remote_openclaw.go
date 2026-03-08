@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -1538,9 +1539,8 @@ func runRemoteRsync(ctx context.Context, host RemoteHost, localPath, remotePath 
 
 	localPath = filepath.Clean(strings.TrimSpace(localPath))
 	remotePath = strings.TrimSpace(remotePath)
-	// Use $(dirname ...) on the remote side to properly expand $HOME before computing parent dir.
-	// shellSingleQuote prevents injection while allowing shell expansion outside the quotes.
-	rsyncPath := fmt.Sprintf("mkdir -p \"$(dirname %s)\" && rsync", shellSingleQuote(remotePath))
+	rsyncRemotePath := normalizeRemoteRsyncPath(remotePath)
+	rsyncPath := remoteRsyncPathWithMkdir(rsyncRemotePath)
 	// Note: remotePath is NOT quoted because it may contain $HOME which needs
 	// shell expansion on the remote side. The path comes from our constant
 	// (remoteOpenClawCarrierSecretsPath), not user input, so injection is not a concern.
@@ -1550,13 +1550,33 @@ func runRemoteRsync(ctx context.Context, host RemoteHost, localPath, remotePath 
 		"-e", sshCommand,
 		"--rsync-path", rsyncPath,
 		localPath,
-		target + ":" + remotePath,
+		target + ":" + rsyncRemotePath,
 	}
 	result, runErr := remoteRsyncRunner(ctx, args)
 	if strings.TrimSpace(result.Command) == "" {
 		result.Command = "rsync " + strings.Join(args, " ")
 	}
 	return result, runErr
+}
+
+func normalizeRemoteRsyncPath(remotePath string) string {
+	trimmed := strings.TrimSpace(remotePath)
+	if strings.HasPrefix(trimmed, "$HOME/") {
+		return "~/" + strings.TrimPrefix(trimmed, "$HOME/")
+	}
+	return trimmed
+}
+
+func remoteRsyncPathWithMkdir(remotePath string) string {
+	parent := strings.TrimSpace(path.Dir(strings.TrimSpace(remotePath)))
+	switch {
+	case parent == "~":
+		return "mkdir -p \"$HOME\" && rsync"
+	case strings.HasPrefix(parent, "~/"):
+		return fmt.Sprintf("mkdir -p \"$HOME/%s\" && rsync", strings.TrimPrefix(parent, "~/"))
+	default:
+		return fmt.Sprintf("mkdir -p %s && rsync", shellSingleQuote(parent))
+	}
 }
 
 func remotePatchPicoClawConfig(ctx context.Context, host RemoteHost, patch map[string]interface{}) (map[string]interface{}, string, []remoteExecResult, error) {
@@ -1863,7 +1883,7 @@ func remoteChatViaOpenClaw(ctx context.Context, host RemoteHost, agentID, messag
 		return nil, nil, fmt.Errorf("message is required")
 	}
 	contract := buildRemoteMemoryRuntimeContract(agentID)
-	cmd := fmt.Sprintf("openclaw agent --local --agent %s --message %s --json --no-color", shellSingleQuote(agentID), shellSingleQuote(strings.TrimSpace(message)))
+	cmd := fmt.Sprintf("mkdir -p \"$HOME/.openclaw/workspace\" && cd \"$HOME/.openclaw/workspace\" && openclaw agent --local --agent %s --message %s --json --no-color", shellSingleQuote(agentID), shellSingleQuote(strings.TrimSpace(message)))
 	if strings.TrimSpace(sessionID) != "" {
 		cmd += " --session-id " + shellSingleQuote(strings.TrimSpace(sessionID))
 	}

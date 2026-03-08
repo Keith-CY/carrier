@@ -512,6 +512,50 @@ func TestDecodeBody_TooLargeActual(t *testing.T) {
 	}
 }
 
+func TestParseInstallOptionsFromRequest(t *testing.T) {
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/agents/openclaw/install",
+		strings.NewReader(`{"instance_name":"dev-a","multi_instance":true,"isolation":true}`),
+	)
+
+	opts, instanceName, multiInstance, err := parseInstallOptionsFromRequest(req)
+	if err != nil {
+		t.Fatalf("parseInstallOptionsFromRequest returned error: %v", err)
+	}
+	if !opts.Isolation {
+		t.Fatalf("expected isolation=true, got %+v", opts)
+	}
+	if instanceName != "dev-a" {
+		t.Fatalf("expected instance name dev-a, got %q", instanceName)
+	}
+	if !multiInstance {
+		t.Fatalf("expected multi_instance=true, got false")
+	}
+}
+
+func TestParseInstallOptionsFromRequestRejectsInvalidJSON(t *testing.T) {
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/agents/openclaw/install",
+		strings.NewReader(`{invalid`),
+	)
+	if _, _, _, err := parseInstallOptionsFromRequest(req); err == nil {
+		t.Fatal("expected invalid JSON error")
+	}
+}
+
+func TestV1AgentInstallRejectsInvalidJSONBody(t *testing.T) {
+	mux := newTestMuxWithAgent(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/install", strings.NewReader(`{invalid`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestRemoteIP(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "192.168.1.1:12345"

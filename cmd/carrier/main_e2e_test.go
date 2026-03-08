@@ -13,11 +13,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"carrier/configv2"
+	"carrier/shared/catalog"
 )
 
 func TestE2ECarrierBinaryOnboardOpenAIAPIKey(t *testing.T) {
@@ -430,6 +433,265 @@ func TestE2ECarrierBinaryAddManagedAgentsIsolationSendsInstallAndStartIsolationP
 	}
 }
 
+func TestE2ECarrierBinaryAddOpenClawIsolationOpenRouterChatAndUninstall(t *testing.T) {
+	runOpenClawIsolationProviderFlow(t, "openrouter")
+}
+
+func TestE2ECarrierBinaryAddOpenClawIsolationProviderMatrixChatAndUninstall(t *testing.T) {
+	providerID := strings.TrimSpace(os.Getenv("CARRIER_TEST_OPENCLAW_PROVIDER"))
+	if providerID == "" {
+		t.Skip("set CARRIER_TEST_OPENCLAW_PROVIDER to run provider matrix flow")
+	}
+	runOpenClawIsolationProviderFlow(t, providerID)
+}
+
+func runOpenClawIsolationProviderFlow(t *testing.T, providerID string) {
+	t.Helper()
+	providerID = catalog.NormalizeProviderID(providerID)
+	providerSpec := catalog.GetProvider(providerID)
+	if providerSpec == nil {
+		t.Fatalf("unsupported provider %q", providerID)
+	}
+
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+
+	t.Setenv("HOME", home)
+	t.Setenv("CARRIER_CONFIG", filepath.Join(tmp, "config.v2.json"))
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	t.Setenv("CARRIER_TELEGRAM_BOT_TOKEN", "")
+	t.Setenv("CARRIER_DISCORD_BOT_TOKEN", "")
+	t.Setenv("CARRIER_DISCORD_PUBLIC_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_CODEX_TOKEN", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("OPENAI_COMPATIBLE_API_KEY", "")
+
+	providerToken := fmt.Sprintf("test-token-%s", strings.ReplaceAll(providerID, "-", "_"))
+	if _, err := saveProviderCredential(providerID, providerToken); err != nil {
+		t.Fatalf("saveProviderCredential(%s): %v", providerID, err)
+	}
+
+	var mu sync.Mutex
+	var installBody string
+	var startBody string
+	var chatBody string
+	stopCalls := 0
+	uninstallCalls := 0
+
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/healthz":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case r.URL.Path == "/api/v1/agents/openclaw/logs" && r.Method == http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"lines":[]}`))
+		case r.URL.Path == "/api/v1/agents/openclaw/install" && r.Method == http.MethodPost:
+			raw, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			installBody = strings.TrimSpace(string(raw))
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case r.URL.Path == "/api/v1/agents/openclaw/start" && r.Method == http.MethodPost:
+			raw, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			startBody = strings.TrimSpace(string(raw))
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case r.URL.Path == "/api/v1/agents/openclaw/chat" && r.Method == http.MethodPost:
+			raw, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			chatBody = strings.TrimSpace(string(raw))
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"agentId":"openclaw","sessionId":"sess-weather-1","message":"Tokyo weather: sunny, 21C"}`))
+		case r.URL.Path == "/api/v1/agents/openclaw/stop" && r.Method == http.MethodPost:
+			mu.Lock()
+			stopCalls++
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case r.URL.Path == "/api/v1/agents/openclaw/uninstall" && r.Method == http.MethodPost:
+			mu.Lock()
+			uninstallCalls++
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer daemon.Close()
+	setProbeEnvFromURL(t, "CARRIER_SERVER_HOST", "CARRIER_SERVER_PORT", daemon.URL)
+
+	bin := buildCarrierBinary(t)
+	stdout, stderr, err := runCarrierBinary(t, bin, "telegram\n\n\n", "add", "openclaw", "--isolation")
+	if err != nil {
+		t.Fatalf("carrier add openclaw --isolation failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+
+	mu.Lock()
+	gotInstallBody := installBody
+	gotStartBody := startBody
+	mu.Unlock()
+	if !strings.Contains(gotInstallBody, `"isolation":true`) {
+		t.Fatalf("expected install payload to include isolation=true, got %q", gotInstallBody)
+	}
+	if !strings.Contains(gotStartBody, `"isolation":true`) {
+		t.Fatalf("expected start payload to include isolation=true, got %q", gotStartBody)
+	}
+
+	instances, _, err := loadManagedInstances()
+	if err != nil {
+		t.Fatalf("loadManagedInstances: %v", err)
+	}
+	if len(instances) != 1 {
+		t.Fatalf("instances size = %d, want 1", len(instances))
+	}
+	managed := instances[0]
+	if managed.Provider != providerID {
+		t.Fatalf("provider = %q, want %q", managed.Provider, providerID)
+	}
+	if !managed.Isolation {
+		t.Fatal("instance isolation should be true")
+	}
+	if strings.TrimSpace(managed.ConfigPath) == "" {
+		t.Fatal("config path should not be empty")
+	}
+
+	rawConfig, err := os.ReadFile(managed.ConfigPath)
+	if err != nil {
+		t.Fatalf("read openclaw config: %v", err)
+	}
+	var cfgPayload map[string]interface{}
+	if err := json.Unmarshal(rawConfig, &cfgPayload); err != nil {
+		t.Fatalf("parse openclaw config: %v", err)
+	}
+	models, _ := cfgPayload["models"].(map[string]interface{})
+	providers, _ := models["providers"].(map[string]interface{})
+	providerKey := mapCarrierProviderToManagedProvider(providerID)
+	if providerKey == "" {
+		providerKey = providerID
+	}
+	configProvider, _ := providers[providerKey].(map[string]interface{})
+	expectedBaseURL := expectedManagedProviderBaseURL(providerID, providerKey)
+	if got := strings.TrimSpace(anyToString(configProvider["baseUrl"])); got != expectedBaseURL {
+		t.Fatalf("models.providers.%s.baseUrl = %q, want %q", providerKey, got, expectedBaseURL)
+	}
+
+	secretsPath := filepath.Join(home, ".openclaw", "carrier-secrets.json")
+	secretsRaw, err := os.ReadFile(secretsPath)
+	if err != nil {
+		t.Fatalf("read openclaw carrier secrets: %v", err)
+	}
+	var secretsPayload map[string]interface{}
+	if err := json.Unmarshal(secretsRaw, &secretsPayload); err != nil {
+		t.Fatalf("parse openclaw carrier secrets: %v", err)
+	}
+	secretProviders, _ := secretsPayload["providers"].(map[string]interface{})
+	secretProvider, _ := secretProviders[providerKey].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(secretProvider["apiKey"])); got != providerToken {
+		t.Fatalf("carrier secrets providers.%s.apiKey = %q, want %q", providerKey, got, providerToken)
+	}
+
+	gatewayPort := acquireFreeTCPPort(t)
+	t.Setenv("CARRIER_GATEWAY_PORT", strconv.Itoa(gatewayPort))
+	t.Setenv("CARRIER_DAEMON_BASE_URL", daemon.URL)
+	gatewayURL := fmt.Sprintf("http://127.0.0.1:%d", gatewayPort)
+	gatewayHealthURL := gatewayURL + "/healthz"
+
+	gatewayCmd := exec.Command(bin, "gateway")
+	gatewayCmd.Env = os.Environ()
+	var gatewayStdout bytes.Buffer
+	var gatewayStderr bytes.Buffer
+	gatewayCmd.Stdout = &gatewayStdout
+	gatewayCmd.Stderr = &gatewayStderr
+	if err := gatewayCmd.Start(); err != nil {
+		t.Fatalf("start carrier gateway: %v", err)
+	}
+	defer func() {
+		if gatewayCmd.Process != nil {
+			_ = gatewayCmd.Process.Kill()
+		}
+		_ = gatewayCmd.Wait()
+	}()
+	if err := waitForHTTP200(gatewayHealthURL, 10*time.Second); err != nil {
+		t.Fatalf("wait for gateway health failed: %v\nstdout:\n%s\nstderr:\n%s", err, gatewayStdout.String(), gatewayStderr.String())
+	}
+
+	chatRequest := `{"target":"local","agentId":"openclaw","message":"What is the weather in Tokyo?","sessionId":"sess-weather-1"}`
+	resp, err := http.Post(gatewayURL+"/api/v1/chat/stream", "application/json", strings.NewReader(chatRequest))
+	if err != nil {
+		t.Fatalf("gateway chat stream request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	streamRaw, _ := io.ReadAll(resp.Body)
+	streamBody := string(streamRaw)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("gateway chat stream status=%d body=%s", resp.StatusCode, streamBody)
+	}
+	if !strings.Contains(streamBody, `"type":"text-delta"`) {
+		t.Fatalf("expected text-delta event in stream body: %s", streamBody)
+	}
+	if !strings.Contains(streamBody, `"type":"session"`) {
+		t.Fatalf("expected session event in stream body: %s", streamBody)
+	}
+	if !strings.Contains(streamBody, `"type":"finish"`) {
+		t.Fatalf("expected finish event in stream body: %s", streamBody)
+	}
+	if !strings.Contains(streamBody, "Tokyo weather: sunny, 21C") {
+		t.Fatalf("expected weather response in stream body: %s", streamBody)
+	}
+
+	mu.Lock()
+	gotChatBody := chatBody
+	mu.Unlock()
+	if !strings.Contains(gotChatBody, `"message":"What is the weather in Tokyo?"`) {
+		t.Fatalf("expected daemon chat payload to include weather prompt, got %q", gotChatBody)
+	}
+
+	if !strings.Contains(stdout, "Using provider: "+providerSpec.Name+" ("+providerID+")") {
+		t.Fatalf("stdout missing selected provider message for %s: %q", providerID, stdout)
+	}
+
+	stdout, stderr, err = runCarrierBinary(t, bin, "", "uninstall", "openclaw")
+	if err != nil {
+		t.Fatalf("carrier uninstall openclaw failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+
+	mu.Lock()
+	gotStopCalls := stopCalls
+	gotUninstallCalls := uninstallCalls
+	mu.Unlock()
+	if gotStopCalls == 0 {
+		t.Fatal("expected daemon stop action to be called during uninstall")
+	}
+	if gotUninstallCalls == 0 {
+		t.Fatal("expected daemon uninstall action to be called during uninstall")
+	}
+
+	instancesAfter, _, err := loadManagedInstances()
+	if err != nil {
+		t.Fatalf("loadManagedInstances after uninstall: %v", err)
+	}
+	if len(instancesAfter) != 0 {
+		t.Fatalf("expected no managed instances after uninstall, got %d", len(instancesAfter))
+	}
+}
+
+func expectedManagedProviderBaseURL(providerID, providerKey string) string {
+	return catalog.ResolveProviderBaseURL(providerID, providerKey, "https://api.openai.com/v1")
+}
+
 func buildCarrierBinary(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "carrier-e2e")
@@ -530,4 +792,43 @@ func setProbeEnvFromURL(t *testing.T, hostKey, portKey, rawURL string) {
 	}
 	t.Setenv(hostKey, host)
 	t.Setenv(portKey, port)
+}
+
+func acquireFreeTCPPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for free tcp port: %v", err)
+	}
+	defer listener.Close()
+
+	addr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok || addr.Port <= 0 {
+		t.Fatalf("unexpected listener address: %v", listener.Addr())
+	}
+	return addr.Port
+}
+
+func waitForHTTP200(url string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	client := &http.Client{Timeout: 2 * time.Second}
+	lastErr := error(nil)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+			lastErr = fmt.Errorf("unexpected status %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("timeout after %s", timeout)
+	}
+	return lastErr
 }

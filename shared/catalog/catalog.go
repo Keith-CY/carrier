@@ -73,7 +73,7 @@ var providerCatalog = []ProviderSpec{
 		Name:         "OpenRouter",
 		AuthMode:     AuthModeAPIKey,
 		EnvVar:       "OPENROUTER_API_KEY",
-		ExampleModel: "openrouter/anthropic/claude-sonnet-4-6",
+		ExampleModel: "openrouter/arcee-ai/trinity-mini:free",
 		Category:     "compatible",
 		Description:  "OpenRouter multi-model proxy (OpenAI-compatible)",
 		BaseURLEnv:   "OPENROUTER_BASE_URL",
@@ -265,5 +265,40 @@ func MapToManagedProvider(providerID string) string {
 		return "ollama"
 	default:
 		return normalized
+	}
+}
+
+// ResolveProviderBaseURL returns a canonical API base URL for a provider.
+// Resolution order:
+//  1. providerID canonical default
+//  2. providerKey canonical default
+//  3. fallback value
+func ResolveProviderBaseURL(providerID, providerKey, fallback string) string {
+	if base := resolveProviderBaseURLByID(providerID); base != "" {
+		return base
+	}
+	if base := resolveProviderBaseURLByID(providerKey); base != "" {
+		return base
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func resolveProviderBaseURLByID(id string) string {
+	normalized := NormalizeProviderID(id)
+	if normalized == "" {
+		return ""
+	}
+	if spec := GetProvider(normalized); spec != nil {
+		if base := strings.TrimSpace(spec.DefaultBase); base != "" {
+			return base
+		}
+	}
+	switch normalized {
+	case "openai", "openai-codex", "openai-compatible":
+		return "https://api.openai.com/v1"
+	case "anthropic":
+		return "https://api.anthropic.com/v1"
+	default:
+		return ""
 	}
 }

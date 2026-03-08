@@ -28,7 +28,18 @@ func TestChannelTokenFieldTelegramUsesBotToken(t *testing.T) {
 }
 
 func TestBuildProviderEntryIncludesFileSecretPointerWhenRequested(t *testing.T) {
-	got := BuildProviderEntry("openai", "openai-main", true)
+	got := BuildProviderEntry("openai", "openai-main", "", "openai/gpt-5.2", true)
+	if got["baseUrl"] != "https://api.openai.com/v1" {
+		t.Fatalf("baseUrl=%#v, want https://api.openai.com/v1", got["baseUrl"])
+	}
+	models, ok := got["models"].([]interface{})
+	if !ok || len(models) != 1 {
+		t.Fatalf("models=%#v, want single model definition", got["models"])
+	}
+	model0, _ := models[0].(map[string]interface{})
+	if model0["id"] != "gpt-5.2" || model0["name"] != "gpt-5.2" {
+		t.Fatalf("model=%#v, want id/name gpt-5.2", model0)
+	}
 	apiKey, ok := got["apiKey"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("expected apiKey object, got %#v", got["apiKey"])
@@ -45,12 +56,44 @@ func TestBuildProviderEntryIncludesFileSecretPointerWhenRequested(t *testing.T) 
 }
 
 func TestBuildProviderEntryCodexSetsOAuth(t *testing.T) {
-	got := BuildProviderEntry("openai-codex", "openai", false)
+	got := BuildProviderEntry("openai-codex", "openai", "", "openai/gpt-5.3-codex", false)
 	if got["auth"] != "oauth" {
 		t.Fatalf("auth=%#v, want oauth", got["auth"])
 	}
 	if _, hasAPIKey := got["apiKey"]; hasAPIKey {
 		t.Fatalf("unexpected apiKey in codex provider entry: %#v", got["apiKey"])
+	}
+}
+
+func TestBuildProviderEntryUsesExplicitBaseURLAndDefaultModel(t *testing.T) {
+	got := BuildProviderEntry("custom-provider", "custom-provider", "https://example.invalid/v1", "", false)
+	if got["baseUrl"] != "https://example.invalid/v1" {
+		t.Fatalf("baseUrl=%#v, want https://example.invalid/v1", got["baseUrl"])
+	}
+	if _, hasAPIKey := got["apiKey"]; hasAPIKey {
+		t.Fatalf("unexpected apiKey in provider entry: %#v", got["apiKey"])
+	}
+	models, ok := got["models"].([]interface{})
+	if !ok || len(models) != 1 {
+		t.Fatalf("models=%#v, want single model definition", got["models"])
+	}
+	model0, _ := models[0].(map[string]interface{})
+	if model0["id"] != "default" || model0["name"] != "default" {
+		t.Fatalf("model=%#v, want id/name default", model0)
+	}
+}
+
+func TestBuildProviderEntryFallsBackBaseURLFromProviderKey(t *testing.T) {
+	got := BuildProviderEntry("custom-provider", "anthropic", "", "claude-3-5-haiku", false)
+	if got["baseUrl"] != "https://api.anthropic.com/v1" {
+		t.Fatalf("baseUrl=%#v, want https://api.anthropic.com/v1", got["baseUrl"])
+	}
+}
+
+func TestBuildProviderEntryFallsBackBaseURLToOpenAI(t *testing.T) {
+	got := BuildProviderEntry("custom-provider", "custom-provider", "", "model-x", false)
+	if got["baseUrl"] != "https://api.openai.com/v1" {
+		t.Fatalf("baseUrl=%#v, want https://api.openai.com/v1", got["baseUrl"])
 	}
 }
 
@@ -78,12 +121,31 @@ func TestBuildManagedConfigPayloadHandlesPendingAndAllowFrom(t *testing.T) {
 	if model["primary"] != "gpt-5" {
 		t.Fatalf("model.primary=%#v, want gpt-5", model["primary"])
 	}
+	if _, exists := defaults["maxTokens"]; exists {
+		t.Fatalf("did not expect deprecated agents.defaults.maxTokens")
+	}
+	if _, exists := defaults["maxToolIterations"]; exists {
+		t.Fatalf("did not expect deprecated agents.defaults.maxToolIterations")
+	}
+	if _, exists := defaults["restrictToWorkspace"]; exists {
+		t.Fatalf("did not expect deprecated agents.defaults.restrictToWorkspace")
+	}
+	if _, exists := defaults["temperature"]; exists {
+		t.Fatalf("did not expect deprecated agents.defaults.temperature")
+	}
 
 	models := payload["models"].(map[string]interface{})
 	providers := models["providers"].(map[string]interface{})
 	provider := providers["openai"].(map[string]interface{})
 	if provider["auth"] != "oauth" {
 		t.Fatalf("provider.auth=%#v, want oauth", provider["auth"])
+	}
+	if provider["baseUrl"] != "https://api.openai.com/v1" {
+		t.Fatalf("provider.baseUrl=%#v, want https://api.openai.com/v1", provider["baseUrl"])
+	}
+	providerModels, ok := provider["models"].([]interface{})
+	if !ok || len(providerModels) != 1 {
+		t.Fatalf("provider.models=%#v, want single model definition", provider["models"])
 	}
 
 	channels := payload["channels"].(map[string]interface{})
