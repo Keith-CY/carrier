@@ -243,6 +243,7 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 		providerKey = strings.TrimSpace(vendor)
 	}
 	providerKey = mapCarrierProviderToManagedProvider(providerKey)
+	providerBaseURL := resolveManagedProviderBaseURL(provider, providerKey)
 	providerToken := pickProviderToken(provider, sess.EnvVars)
 	if catalog.IsOpenAICodexProviderID(provider.ID) && strings.EqualFold(cfg.ID, "picoclaw") {
 		accountID := extractOpenAIAccountID(providerToken)
@@ -266,6 +267,7 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 		allowFrom,
 		provider,
 		providerKey,
+		providerBaseURL,
 		providerToken,
 		modelID,
 		modelName,
@@ -352,7 +354,7 @@ func renderManagedConfigBytes(
 	channelSetupPending bool,
 	allowFrom []string,
 	provider *LLMProvider,
-	providerKey, providerToken, modelID, modelName, workspacePath string,
+	providerKey, providerBaseURL, providerToken, modelID, modelName, workspacePath string,
 ) ([]byte, error) {
 	switch strings.ToLower(strings.TrimSpace(renderer.ConfigFormat)) {
 	case "toml":
@@ -363,7 +365,7 @@ func renderManagedConfigBytes(
 	case "json":
 		var payload map[string]interface{}
 		if strings.EqualFold(cfg.ID, "openclaw") {
-			payload = buildManagedOpenClawJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerToken, modelID, workspacePath)
+			payload = buildManagedOpenClawJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerBaseURL, providerToken, modelID, workspacePath)
 		} else {
 			payload = buildManagedPicoClawJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerToken, modelID, modelName, workspacePath)
 		}
@@ -438,7 +440,7 @@ func buildManagedOpenClawJSONConfigPayload(
 	channelSetupPending bool,
 	allowFrom []string,
 	provider *LLMProvider,
-	providerKey, providerToken, modelID, workspacePath string,
+	providerKey, providerBaseURL, providerToken, modelID, workspacePath string,
 ) map[string]interface{} {
 	return openclawcfg.BuildManagedConfigPayload(openclawcfg.ManagedPayloadParams{
 		ChannelID:           channelID,
@@ -447,6 +449,7 @@ func buildManagedOpenClawJSONConfigPayload(
 		AllowFrom:           allowFrom,
 		ProviderID:          provider.ID,
 		ProviderKey:         providerKey,
+		ProviderBaseURL:     providerBaseURL,
 		IncludeAPIKeyRef:    strings.TrimSpace(providerToken) != "",
 		ModelID:             modelID,
 		WorkspacePath:       workspacePath,
@@ -522,4 +525,37 @@ func renderZeroClawConfigTOML(
 
 func mapCarrierProviderToManagedProvider(providerID string) string {
 	return catalog.MapToManagedProvider(providerID)
+}
+
+func resolveManagedProviderBaseURL(provider *LLMProvider, providerKey string) string {
+	if provider == nil {
+		return ""
+	}
+	if base := strings.TrimSpace(provider.DefaultBase); base != "" {
+		return base
+	}
+
+	switch catalog.NormalizeProviderID(provider.ID) {
+	case "openai", "openai-codex", "openai-compatible":
+		return "https://api.openai.com/v1"
+	case "anthropic":
+		return "https://api.anthropic.com/v1"
+	case "openrouter":
+		return "https://openrouter.ai/api/v1"
+	case "ollama":
+		return "http://localhost:11434/v1"
+	}
+
+	switch strings.ToLower(strings.TrimSpace(providerKey)) {
+	case "openai":
+		return "https://api.openai.com/v1"
+	case "anthropic":
+		return "https://api.anthropic.com/v1"
+	case "openrouter":
+		return "https://openrouter.ai/api/v1"
+	case "ollama":
+		return "http://localhost:11434/v1"
+	default:
+		return ""
+	}
 }

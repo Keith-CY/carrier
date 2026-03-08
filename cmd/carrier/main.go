@@ -15,11 +15,11 @@
 //	carrier onboard [--tui|--cli]
 //	                       Interactive terminal onboarding (channel/provider -> keep gateway running in background)
 //	carrier onboard --webui Launch WebUI onboarding (start/reuse daemon+gateway)
-//	carrier add <agent_id> [--isolation] [--tui|--cli]
+//	carrier add <agent_id> [--isolation|--no-isolation] [--tui|--cli]
 //	                       Add/install an agent via terminal flow
-//	carrier add <agent_id> [--isolation] --webui
+//	carrier add <agent_id> [--isolation|--no-isolation] --webui
 //	                       Add/install an agent via WebUI flow
-//	carrier install <agent_id> [--isolation] [--tui|--cli|--webui]
+//	carrier install <agent_id> [--isolation|--no-isolation] [--tui|--cli|--webui]
 //	                       Alias for `carrier add <agent_id>`
 //	carrier --help          Show usage
 package main
@@ -203,6 +203,19 @@ type remoteStoreCommandOptions struct {
 	FromPath   string
 }
 
+type orchestrateCommandOptions struct {
+	Action         string
+	Goal           string
+	ExecutionID    string
+	HostIDs        []string
+	Provider       string
+	MaxConcurrency int
+	IdempotencyKey string
+	Timeout        time.Duration
+	Async          bool
+	JSON           bool
+}
+
 type versionInfo struct {
 	Version   string `json:"version"`
 	Commit    string `json:"commit"`
@@ -365,6 +378,7 @@ const (
 	daemonBootPollInterval        = 250 * time.Millisecond
 	defaultPairCodeTTLSeconds     = 300
 	defaultUpdateTimeout          = 120 * time.Second
+	defaultOrchestrateWaitTimeout = 30 * time.Minute
 )
 
 var runOpenAICodexDeviceCodeFlow = performOpenAICodexDeviceCodeFlow
@@ -401,6 +415,7 @@ var execGitCommand = func(ctx context.Context, workingDir string, args ...string
 var procFSRoot = "/proc"
 var daemonActionLogPollInterval = 2 * time.Second
 var daemonActionHeartbeatInterval = 15 * time.Second
+var orchestratePollInterval = 2 * time.Second
 
 const usage = `Carrier — unified agent platform binary
 
@@ -428,9 +443,10 @@ Usage:
                         Interactive terminal onboarding (channel/provider -> keep gateway running in background)
   carrier onboard --webui
                         Launch WebUI onboarding (start/reuse daemon+gateway)
-  carrier add <agent_id> [--isolation] [--tui|--cli|--webui] [-q|--quiet]
+  carrier add <agent_id> [--isolation|--no-isolation] [--tui|--cli|--webui] [-q|--quiet]
                         Add/install an agent (default: terminal flow; use -q for quiet mode)
-  carrier install <agent_id> [--isolation] [--tui|--cli|--webui] [-q|--quiet]
+                        managed agents default to isolation unless --no-isolation is set
+  carrier install <agent_id> [--isolation|--no-isolation] [--tui|--cli|--webui] [-q|--quiet]
                         Alias for carrier add <agent_id>
   carrier logs <id|name> [--since <rfc3339|unix>] [--level <level>] [--grep <text>] [--export <path>]
                         Query and optionally export agent logs
@@ -460,7 +476,8 @@ Usage:
                           [--ssh-config-host <alias>]
                           [--key-ref <uploaded-key-ref>]
                           [--runtime-mode <on_demand|managed_gateway>]
-                          [--isolation]
+                          [--isolation|--no-isolation]
+                          (default: isolation enabled)
                           [--sync-channel <telegram|discord|feishu>]...
                           [--sync-provider <provider-id>]...
                           [--telegram-allow-from <id>]...
@@ -488,6 +505,12 @@ Usage:
                         Backup remote-control.json store
   carrier remote-store restore --from <path>
                         Restore remote-control.json store
+  carrier orchestrate <goal...> [--host-id <id>]... [--provider <provider-id>]
+                        [--max-concurrency <n>] [--idempotency-key <key>]
+                        [--timeout <duration>] [--async] [--json]
+                        Decompose goal with base agent, then run orchestration
+  carrier orchestrate status <execution_id> [--json]
+                        Show orchestration execution status/results
   carrier --help         Show this help message
 
 Notes:
@@ -712,6 +735,18 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "orchestrate":
+			opts, err := parseOrchestrateCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "orchestrate failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runOrchestrateCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "orchestrate failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "onboard":
 			opts, err := parseOnboardCommandArgs(commandArgs)
 			if err != nil {
@@ -841,6 +876,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "remote", args[2:], nil
 	case "remote-store":
 		return "remote-store", args[2:], nil
+	case "orchestrate":
+		return "orchestrate", args[2:], nil
 	case "--help", "-h", "help":
 		return "help", nil, nil
 	case "version", "--version", "-v", "-V":
@@ -854,10 +891,11 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 
 func parseAddCommandArgs(args []string) (addCommandOptions, error) {
 	if len(args) == 0 {
-		return addCommandOptions{}, errors.New("usage: carrier add <agent_id> [--isolation] [--tui|--cli|--webui] [-q|--quiet] (alias: carrier install <agent_id>)")
+		return addCommandOptions{}, errors.New("usage: carrier add <agent_id> [--isolation|--no-isolation] [--tui|--cli|--webui] [-q|--quiet] (alias: carrier install <agent_id>)")
 	}
 
 	opts := addCommandOptions{}
+	isolationExplicit := false
 	for _, raw := range args {
 		arg := strings.ToLower(strings.TrimSpace(raw))
 		switch arg {
@@ -865,6 +903,10 @@ func parseAddCommandArgs(args []string) (addCommandOptions, error) {
 			opts.WebUI = true
 		case "--isolation":
 			opts.Isolation = true
+			isolationExplicit = true
+		case "--no-isolation":
+			opts.Isolation = false
+			isolationExplicit = true
 		case "--cli", "cli":
 			opts.CLI = true
 		case "--tui", "tui":
@@ -896,6 +938,9 @@ func parseAddCommandArgs(args []string) (addCommandOptions, error) {
 	}
 	if !opts.WebUI && !terminalModeRequested {
 		opts.TUI = true
+	}
+	if !isolationExplicit && isManagedAgent(opts.AgentID) {
+		opts.Isolation = true
 	}
 	return opts, nil
 }
@@ -1739,6 +1784,7 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 		DiscordAllowFrom:   []string{},
 		Concurrency:        5,
 	}
+	isolationExplicit := false
 	switch action {
 	case "add":
 		if len(args) < 2 {
@@ -1909,6 +1955,10 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 			i = next
 		case "--isolation":
 			opts.Isolation = true
+			isolationExplicit = true
+		case "--no-isolation":
+			opts.Isolation = false
+			isolationExplicit = true
 		case "--sync-channel":
 			value, next, err := parseRequiredFlagValue(args, i, "--sync-channel")
 			if err != nil {
@@ -2028,6 +2078,12 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 				return remoteCommandOptions{}, fmt.Errorf("unknown remote status option: %s", raw)
 			}
 			return remoteCommandOptions{}, fmt.Errorf("unknown remote option: %s", raw)
+		}
+	}
+	if !isolationExplicit && (opts.Action == "add" || opts.Action == "install") {
+		switch opts.AgentID {
+		case "openclaw", "picoclaw", "zeroclaw":
+			opts.Isolation = true
 		}
 	}
 	if opts.Action == "install" {
@@ -2154,6 +2210,139 @@ func parseRemoteStoreCommandArgs(args []string) (remoteStoreCommandOptions, erro
 		return remoteStoreCommandOptions{}, fmt.Errorf("unsupported remote-store action: %s", opts.Action)
 	}
 	return opts, nil
+}
+
+func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, error) {
+	if len(args) == 0 {
+		return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate <goal...> [--host-id <id>]... [--provider <provider-id>] [--max-concurrency <n>] [--idempotency-key <key>] [--timeout <duration>] [--async] [--json] OR carrier orchestrate status <execution_id> [--json]")
+	}
+
+	opts := orchestrateCommandOptions{
+		Action:  "run",
+		Timeout: defaultOrchestrateWaitTimeout,
+	}
+
+	if strings.EqualFold(strings.TrimSpace(args[0]), "status") {
+		opts.Action = "status"
+		for i := 1; i < len(args); i++ {
+			raw := strings.TrimSpace(args[i])
+			lower := strings.ToLower(raw)
+			switch lower {
+			case "":
+			case "--json":
+				opts.JSON = true
+			default:
+				if strings.HasPrefix(raw, "-") {
+					return orchestrateCommandOptions{}, fmt.Errorf("unknown orchestrate status option: %s", raw)
+				}
+				if opts.ExecutionID != "" {
+					return orchestrateCommandOptions{}, errors.New("multiple execution ids provided")
+				}
+				opts.ExecutionID = raw
+			}
+		}
+		if strings.TrimSpace(opts.ExecutionID) == "" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate status <execution_id> [--json]")
+		}
+		return opts, nil
+	}
+
+	goalParts := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		raw := strings.TrimSpace(args[i])
+		lower := strings.ToLower(raw)
+		switch lower {
+		case "":
+		case "--host-id":
+			value, next, err := parseRequiredFlagValue(args, i, "--host-id")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			hostID := strings.TrimSpace(value)
+			if hostID == "" {
+				return orchestrateCommandOptions{}, errors.New("--host-id cannot be empty")
+			}
+			opts.HostIDs = append(opts.HostIDs, hostID)
+			i = next
+		case "--provider":
+			value, next, err := parseRequiredFlagValue(args, i, "--provider")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			opts.Provider = strings.TrimSpace(value)
+			i = next
+		case "--max-concurrency":
+			value, next, err := parseRequiredFlagValue(args, i, "--max-concurrency")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			parsed, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || parsed <= 0 {
+				return orchestrateCommandOptions{}, fmt.Errorf("invalid --max-concurrency value: %s", value)
+			}
+			opts.MaxConcurrency = parsed
+			i = next
+		case "--idempotency-key":
+			value, next, err := parseRequiredFlagValue(args, i, "--idempotency-key")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			opts.IdempotencyKey = strings.TrimSpace(value)
+			i = next
+		case "--timeout":
+			value, next, err := parseRequiredFlagValue(args, i, "--timeout")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			timeout, convErr := time.ParseDuration(strings.TrimSpace(value))
+			if convErr != nil || timeout <= 0 {
+				return orchestrateCommandOptions{}, fmt.Errorf("invalid --timeout value: %s", value)
+			}
+			opts.Timeout = timeout
+			i = next
+		case "--async":
+			opts.Async = true
+		case "--json":
+			opts.JSON = true
+		default:
+			if strings.HasPrefix(raw, "-") {
+				return orchestrateCommandOptions{}, fmt.Errorf("unknown orchestrate option: %s", raw)
+			}
+			goalParts = append(goalParts, raw)
+		}
+	}
+
+	opts.Provider = strings.ToLower(strings.TrimSpace(opts.Provider))
+	opts.IdempotencyKey = strings.TrimSpace(opts.IdempotencyKey)
+	opts.HostIDs = dedupeStringSlice(opts.HostIDs)
+	if opts.MaxConcurrency > 64 {
+		opts.MaxConcurrency = 64
+	}
+	if len(goalParts) == 0 {
+		return orchestrateCommandOptions{}, errors.New("goal is required")
+	}
+	opts.Goal = strings.TrimSpace(strings.Join(goalParts, " "))
+	if opts.Goal == "" {
+		return orchestrateCommandOptions{}, errors.New("goal is required")
+	}
+	return opts, nil
+}
+
+func dedupeStringSlice(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func runKeysGenerate(out io.Writer, alias string) error {
@@ -3005,6 +3194,437 @@ func runListInstances(out io.Writer) error {
 			strings.TrimSpace(inst.GatewayURL),
 		)
 	}
+	return nil
+}
+
+const orchestratorLocalHostID = "local"
+
+type orchestrateDecomposeTask struct {
+	ID      string `json:"id"`
+	Input   string `json:"input"`
+	AgentID string `json:"agentId,omitempty"`
+}
+
+type orchestrateRequiredWorker struct {
+	HostID  string `json:"hostId"`
+	AgentID string `json:"agentId"`
+	Count   int    `json:"count"`
+}
+
+type orchestrateTaskUnit struct {
+	ID          string `json:"id"`
+	Input       string `json:"input"`
+	TimeoutMs   int    `json:"timeoutMs,omitempty"`
+	RetryBudget int    `json:"retryBudget,omitempty"`
+	HostID      string `json:"hostId,omitempty"`
+	AgentID     string `json:"agentId,omitempty"`
+}
+
+type orchestrateExecutionPayload struct {
+	Goal            string                      `json:"goal"`
+	IdempotencyKey  string                      `json:"idempotencyKey,omitempty"`
+	ApprovalScope   string                      `json:"approvalScope"`
+	RequiredWorkers []orchestrateRequiredWorker `json:"requiredWorkers"`
+	TaskUnits       []orchestrateTaskUnit       `json:"taskUnits"`
+	MaxConcurrency  int                         `json:"maxConcurrency,omitempty"`
+}
+
+type orchestrateTaskResultSnapshot struct {
+	TaskID    string `json:"taskId"`
+	Status    string `json:"status"`
+	HostID    string `json:"hostId,omitempty"`
+	AgentID   string `json:"agentId,omitempty"`
+	Output    string `json:"output,omitempty"`
+	Error     string `json:"error,omitempty"`
+	LatencyMs int64  `json:"latencyMs,omitempty"`
+}
+
+type orchestrateExecutionSnapshot struct {
+	ID        string                          `json:"id"`
+	Goal      string                          `json:"goal"`
+	Status    string                          `json:"status"`
+	Error     string                          `json:"error,omitempty"`
+	TaskUnits []orchestrateTaskUnit           `json:"taskUnits,omitempty"`
+	Results   []orchestrateTaskResultSnapshot `json:"results,omitempty"`
+}
+
+type orchestrateWorkerLeaseSnapshot struct {
+	ID      string `json:"id"`
+	HostID  string `json:"hostId"`
+	AgentID string `json:"agentId"`
+	State   string `json:"state"`
+}
+
+type orchestrateExecutionResponse struct {
+	Result    string                           `json:"result"`
+	ErrorCode string                           `json:"errorCode,omitempty"`
+	Message   string                           `json:"message,omitempty"`
+	Execution orchestrateExecutionSnapshot     `json:"execution"`
+	Workers   []orchestrateWorkerLeaseSnapshot `json:"workers,omitempty"`
+}
+
+func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error {
+	if _, err := ensureDaemonRunning(out); err != nil {
+		return err
+	}
+	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+
+	switch opts.Action {
+	case "status":
+		return runOrchestrateStatus(out, opts.ExecutionID, opts.JSON)
+	case "run":
+		return runOrchestrateStart(out, opts)
+	default:
+		return fmt.Errorf("unsupported orchestrate action: %s", opts.Action)
+	}
+}
+
+func runOrchestrateStatus(out io.Writer, executionID string, outputJSON bool) error {
+	resp, raw, err := fetchOrchestratorExecution(executionID)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		return writePrettyJSON(out, raw)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestrateExecution(resp))
+	return nil
+}
+
+func runOrchestrateStart(out io.Writer, opts orchestrateCommandOptions) error {
+	tasks, err := decomposeOrchestrateGoal(opts.Goal, opts.Provider)
+	if err != nil {
+		return err
+	}
+
+	taskUnits := assignOrchestrateTaskUnits(tasks, opts.HostIDs)
+	requiredWorkers := buildOrchestrateRequiredWorkers(taskUnits)
+	if len(taskUnits) == 0 || len(requiredWorkers) == 0 {
+		return errors.New("failed to build orchestrator task plan")
+	}
+
+	payload := orchestrateExecutionPayload{
+		Goal:            strings.TrimSpace(opts.Goal),
+		IdempotencyKey:  strings.TrimSpace(opts.IdempotencyKey),
+		ApprovalScope:   "infrastructure_only",
+		RequiredWorkers: requiredWorkers,
+		TaskUnits:       taskUnits,
+		MaxConcurrency:  opts.MaxConcurrency,
+	}
+
+	createRaw, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/orchestrator/executions", payload, 90*time.Second)
+	if err != nil {
+		return err
+	}
+	createResp, err := decodeOrchestrateExecutionResponse(createRaw)
+	if err != nil {
+		return err
+	}
+	executionID := strings.TrimSpace(createResp.Execution.ID)
+	if executionID == "" {
+		return errors.New("orchestrator create response missing execution id")
+	}
+
+	authorizeBody := map[string]interface{}{
+		"approved": true,
+		"actor":    "carrier-cli",
+	}
+	if opts.MaxConcurrency > 0 {
+		authorizeBody["maxConcurrency"] = opts.MaxConcurrency
+	}
+	authorizePath := "/api/v1/orchestrator/executions/" + neturl.PathEscape(executionID) + "/authorize"
+	authorizeRaw, _, err := gatewayRequestWithTimeout(http.MethodPost, authorizePath, authorizeBody, 90*time.Second)
+	if err != nil {
+		return err
+	}
+	authorizeResp, err := decodeOrchestrateExecutionResponse(authorizeRaw)
+	if err != nil {
+		return err
+	}
+
+	if opts.Async {
+		if opts.JSON {
+			return writePrettyJSON(out, authorizeRaw)
+		}
+		_, _ = fmt.Fprintf(out, "orchestrator execution accepted: %s\n", executionID)
+		_, _ = fmt.Fprintf(out, "status: %s\n", strings.TrimSpace(authorizeResp.Execution.Status))
+		_, _ = fmt.Fprintf(out, "Use `carrier orchestrate status %s` to check progress.\n", executionID)
+		return nil
+	}
+
+	finalResp, finalRaw, err := waitForOrchestratorExecution(executionID, opts.Timeout)
+	if err != nil {
+		return err
+	}
+	if opts.JSON {
+		return writePrettyJSON(out, finalRaw)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestrateExecution(finalResp))
+	return nil
+}
+
+func decomposeOrchestrateGoal(goal, provider string) ([]orchestrateDecomposeTask, error) {
+	trimmedGoal := strings.TrimSpace(goal)
+	if trimmedGoal == "" {
+		return nil, errors.New("goal is required")
+	}
+	body := map[string]interface{}{
+		"goal": trimmedGoal,
+	}
+	if providerID := strings.TrimSpace(provider); providerID != "" {
+		body["provider"] = providerID
+	}
+	raw, _, err := daemonRequestWithTimeout(http.MethodPost, "/api/v1/base-agent/decompose", body, 90*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		Tasks []orchestrateDecomposeTask `json:"tasks"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, fmt.Errorf("decode base-agent decompose response: %w", err)
+	}
+	if len(payload.Tasks) == 0 {
+		return []orchestrateDecomposeTask{{ID: "task-1", Input: trimmedGoal, AgentID: "zeroclaw"}}, nil
+	}
+	out := make([]orchestrateDecomposeTask, 0, len(payload.Tasks))
+	seen := map[string]struct{}{}
+	for idx, task := range payload.Tasks {
+		input := strings.TrimSpace(task.Input)
+		if input == "" {
+			continue
+		}
+		taskID := strings.TrimSpace(task.ID)
+		if taskID == "" {
+			taskID = fmt.Sprintf("task-%d", idx+1)
+		}
+		if _, exists := seen[taskID]; exists {
+			taskID = fmt.Sprintf("%s-%d", taskID, idx+1)
+		}
+		seen[taskID] = struct{}{}
+		agentID := normalizeOrchestrateAgentID(task.AgentID)
+		out = append(out, orchestrateDecomposeTask{
+			ID:      taskID,
+			Input:   input,
+			AgentID: agentID,
+		})
+	}
+	if len(out) == 0 {
+		return []orchestrateDecomposeTask{{ID: "task-1", Input: trimmedGoal, AgentID: "zeroclaw"}}, nil
+	}
+	return out, nil
+}
+
+func assignOrchestrateTaskUnits(tasks []orchestrateDecomposeTask, hostIDs []string) []orchestrateTaskUnit {
+	trimmedHosts := dedupeStringSlice(hostIDs)
+	if len(trimmedHosts) == 0 {
+		trimmedHosts = []string{orchestratorLocalHostID}
+	}
+
+	agentOffsets := map[string]int{}
+	out := make([]orchestrateTaskUnit, 0, len(tasks))
+	for idx, task := range tasks {
+		agentID := normalizeOrchestrateAgentID(task.AgentID)
+		offset := agentOffsets[agentID]
+		hostID := trimmedHosts[offset%len(trimmedHosts)]
+		agentOffsets[agentID] = offset + 1
+
+		taskID := strings.TrimSpace(task.ID)
+		if taskID == "" {
+			taskID = fmt.Sprintf("task-%d", idx+1)
+		}
+		out = append(out, orchestrateTaskUnit{
+			ID:          taskID,
+			Input:       strings.TrimSpace(task.Input),
+			TimeoutMs:   60_000,
+			RetryBudget: 0,
+			HostID:      hostID,
+			AgentID:     agentID,
+		})
+	}
+	return out
+}
+
+func buildOrchestrateRequiredWorkers(taskUnits []orchestrateTaskUnit) []orchestrateRequiredWorker {
+	type workerKey struct {
+		hostID  string
+		agentID string
+	}
+	seen := map[workerKey]struct{}{}
+	workers := make([]orchestrateRequiredWorker, 0, len(taskUnits))
+	for _, task := range taskUnits {
+		hostID := strings.TrimSpace(task.HostID)
+		if hostID == "" {
+			hostID = orchestratorLocalHostID
+		}
+		agentID := normalizeOrchestrateAgentID(task.AgentID)
+		key := workerKey{hostID: hostID, agentID: agentID}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		workers = append(workers, orchestrateRequiredWorker{
+			HostID:  hostID,
+			AgentID: agentID,
+			Count:   1,
+		})
+	}
+	sort.Slice(workers, func(i, j int) bool {
+		if workers[i].HostID == workers[j].HostID {
+			return workers[i].AgentID < workers[j].AgentID
+		}
+		return workers[i].HostID < workers[j].HostID
+	})
+	return workers
+}
+
+func normalizeOrchestrateAgentID(agentID string) string {
+	switch strings.ToLower(strings.TrimSpace(agentID)) {
+	case "picoclaw":
+		return "picoclaw"
+	case "zeroclaw":
+		return "zeroclaw"
+	default:
+		return "zeroclaw"
+	}
+}
+
+func decodeOrchestrateExecutionResponse(raw []byte) (orchestrateExecutionResponse, error) {
+	var resp orchestrateExecutionResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return orchestrateExecutionResponse{}, fmt.Errorf("decode orchestrator response: %w", err)
+	}
+	return resp, nil
+}
+
+func fetchOrchestratorExecution(executionID string) (orchestrateExecutionResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(executionID)
+	if trimmedID == "" {
+		return orchestrateExecutionResponse{}, nil, errors.New("execution id is required")
+	}
+	path := "/api/v1/orchestrator/executions/" + neturl.PathEscape(trimmedID)
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return orchestrateExecutionResponse{}, nil, err
+	}
+	resp, decodeErr := decodeOrchestrateExecutionResponse(raw)
+	if decodeErr != nil {
+		return orchestrateExecutionResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func waitForOrchestratorExecution(executionID string, timeout time.Duration) (orchestrateExecutionResponse, []byte, error) {
+	if timeout <= 0 {
+		timeout = defaultOrchestrateWaitTimeout
+	}
+	deadline := time.Now().Add(timeout)
+	var lastStatus string
+	for {
+		resp, raw, err := fetchOrchestratorExecution(executionID)
+		if err != nil {
+			return orchestrateExecutionResponse{}, nil, err
+		}
+		status := strings.ToLower(strings.TrimSpace(resp.Execution.Status))
+		lastStatus = status
+		if status == "completed" || status == "failed" || status == "declined" {
+			return resp, raw, nil
+		}
+		if time.Now().After(deadline) {
+			return orchestrateExecutionResponse{}, nil, fmt.Errorf("wait orchestrator execution timed out after %s (last status: %s)", timeout, firstNonEmpty(lastStatus, "unknown"))
+		}
+		time.Sleep(orchestratePollInterval)
+	}
+}
+
+func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
+	execution := resp.Execution
+	total := len(execution.TaskUnits)
+	completed := 0
+	failed := 0
+	for _, result := range execution.Results {
+		switch strings.ToLower(strings.TrimSpace(result.Status)) {
+		case "completed":
+			completed++
+		case "failed":
+			failed++
+		}
+	}
+	lines := []string{
+		fmt.Sprintf("orchestrator execution %s", strings.TrimSpace(execution.ID)),
+		fmt.Sprintf("status: %s", firstNonEmpty(strings.TrimSpace(execution.Status), "unknown")),
+		fmt.Sprintf("goal: %s", strings.TrimSpace(execution.Goal)),
+		fmt.Sprintf("tasks: total=%d completed=%d failed=%d", total, completed, failed),
+	}
+	if errText := strings.TrimSpace(execution.Error); errText != "" {
+		lines = append(lines, "error: "+errText)
+	}
+	if len(execution.Results) > 0 {
+		lines = append(lines, "task results:")
+		for _, result := range execution.Results {
+			target := strings.TrimSpace(result.AgentID)
+			if host := strings.TrimSpace(result.HostID); host != "" {
+				target = host + "/" + target
+			}
+			if strings.TrimSpace(target) == "" {
+				target = "(unknown target)"
+			}
+			summary := strings.TrimSpace(result.Error)
+			if summary == "" {
+				summary = strings.TrimSpace(result.Output)
+			}
+			if summary == "" {
+				summary = "(no output)"
+			}
+			lines = append(lines, fmt.Sprintf(
+				"- %s [%s] target=%s latency=%dms %s",
+				firstNonEmpty(strings.TrimSpace(result.TaskID), "task"),
+				firstNonEmpty(strings.TrimSpace(result.Status), "unknown"),
+				target,
+				result.LatencyMs,
+				truncateOrchestrateText(summary, 160),
+			))
+		}
+	}
+	if len(resp.Workers) > 0 {
+		lines = append(lines, "workers:")
+		for _, worker := range resp.Workers {
+			lines = append(lines, fmt.Sprintf(
+				"- %s/%s state=%s",
+				firstNonEmpty(strings.TrimSpace(worker.HostID), "unknown"),
+				firstNonEmpty(strings.TrimSpace(worker.AgentID), "unknown"),
+				firstNonEmpty(strings.TrimSpace(worker.State), "unknown"),
+			))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func truncateOrchestrateText(input string, limit int) string {
+	trimmed := strings.TrimSpace(input)
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= limit {
+		return trimmed
+	}
+	return string(runes[:limit]) + "..."
+}
+
+func writePrettyJSON(out io.Writer, raw []byte) error {
+	var payload interface{}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		_, _ = fmt.Fprintln(out, strings.TrimSpace(string(raw)))
+		return nil
+	}
+	formatted, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintln(out, string(formatted))
 	return nil
 }
 
@@ -4345,16 +4965,17 @@ func buildOpenClawProviderEntry(model configv2.Model) (providerKey, modelName, m
 	}
 	secretValue = strings.TrimSpace(token)
 
-	providerItem = map[string]interface{}{
-		"apiKey": map[string]interface{}{
-			"source":   "file",
-			"provider": openclawcfg.CarrierFileSecretProviderAlias,
-			"id":       openclawcfg.ProviderSecretPointer(providerKey),
-		},
+	providerBaseURL := ""
+	if providerSpec := catalog.GetProvider(model.ProviderID); providerSpec != nil {
+		providerBaseURL = strings.TrimSpace(providerSpec.DefaultBase)
 	}
-	if catalog.IsOpenAICodexProviderID(model.ProviderID) {
-		providerItem["auth"] = "oauth"
-	}
+	providerItem = openclawcfg.BuildProviderEntry(
+		model.ProviderID,
+		providerKey,
+		providerBaseURL,
+		modelID,
+		true,
+	)
 	return providerKey, modelName, modelID, providerItem, secretValue, nil
 }
 

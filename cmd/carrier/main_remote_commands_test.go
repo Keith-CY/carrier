@@ -112,6 +112,9 @@ func TestParseRemoteCommandArgsAddDefaultsAndValidation(t *testing.T) {
 	if picoOpts.InstallAgentID != "picoclaw" {
 		t.Fatalf("install_agent_id = %q, want picoclaw", picoOpts.InstallAgentID)
 	}
+	if !picoOpts.Isolation {
+		t.Fatalf("expected picoclaw remote add to default isolation=true, got %+v", picoOpts)
+	}
 	if _, err := parseRemoteCommandArgs([]string{
 		"add", "openclaw",
 		"--host-id", "h2",
@@ -149,6 +152,24 @@ func TestParseRemoteCommandArgsAddDefaultsAndValidation(t *testing.T) {
 	}
 	if sshConfigOpts.AuthMode != "ssh_config" {
 		t.Fatalf("auth_mode = %q, want ssh_config", sshConfigOpts.AuthMode)
+	}
+	if !sshConfigOpts.Isolation {
+		t.Fatalf("expected openclaw remote add to default isolation=true, got %+v", sshConfigOpts)
+	}
+
+	noIsolationOpts, err := parseRemoteCommandArgs([]string{
+		"add", "openclaw",
+		"--host-id", "h3",
+		"--host", "127.0.0.1",
+		"--user", "carrier",
+		"--key-path", "/tmp/id",
+		"--no-isolation",
+	})
+	if err != nil {
+		t.Fatalf("parseRemoteCommandArgs(--no-isolation) error: %v", err)
+	}
+	if noIsolationOpts.Isolation {
+		t.Fatalf("expected isolation=false with --no-isolation, got %+v", noIsolationOpts)
 	}
 
 	logsOpts, err := parseRemoteCommandArgs([]string{"logs", "host-1", "main", "--tail", "50"})

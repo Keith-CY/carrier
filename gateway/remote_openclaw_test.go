@@ -195,7 +195,8 @@ func TestRunRemoteRsyncBuildsSSHTransportForPrivateKeyHost(t *testing.T) {
 	if !strings.Contains(joined, "--rsync-path") || !strings.Contains(joined, "mkdir -p") {
 		t.Fatalf("expected --rsync-path mkdir command in rsync args, got %q", joined)
 	}
-	if !strings.Contains(joined, "ubuntu@198.51.100.10:"+remoteOpenClawCarrierSecretsPath) {
+	expectedRemotePath := normalizeRemoteRsyncPath(remoteOpenClawCarrierSecretsPath)
+	if !strings.Contains(joined, "ubuntu@198.51.100.10:"+expectedRemotePath) {
 		t.Fatalf("expected destination target in rsync args, got %q", joined)
 	}
 	if !strings.Contains(joined, "IdentitiesOnly=yes") || !strings.Contains(joined, "id_ed25519") {
@@ -252,13 +253,24 @@ func TestRemoteWriteOpenClawCarrierSecretsUsesRsyncPayload(t *testing.T) {
 		t.Fatal("expected rsync invocation")
 	}
 	dest := capturedArgs[len(capturedArgs)-1]
-	if !strings.HasSuffix(dest, ":"+remoteOpenClawCarrierSecretsPath) {
+	if !strings.HasSuffix(dest, ":"+normalizeRemoteRsyncPath(remoteOpenClawCarrierSecretsPath)) {
 		t.Fatalf("unexpected rsync destination: %q", dest)
 	}
 	providers, _ := payload["providers"].(map[string]interface{})
 	openai, _ := providers["openai"].(map[string]interface{})
 	if strings.TrimSpace(anyToString(openai["apiKey"])) != "sk-openai-rsync" {
 		t.Fatalf("unexpected secrets payload: %+v", payload)
+	}
+}
+
+func TestNormalizeRemoteRsyncPathConvertsHomePrefix(t *testing.T) {
+	t.Parallel()
+
+	if got := normalizeRemoteRsyncPath("$HOME/.openclaw/workspace/carrier-secrets.json"); got != "~/.openclaw/workspace/carrier-secrets.json" {
+		t.Fatalf("normalizeRemoteRsyncPath()=%q, want ~/.openclaw/workspace/carrier-secrets.json", got)
+	}
+	if got := normalizeRemoteRsyncPath("/var/lib/carrier-secrets.json"); got != "/var/lib/carrier-secrets.json" {
+		t.Fatalf("normalizeRemoteRsyncPath()=%q, want /var/lib/carrier-secrets.json", got)
 	}
 }
 

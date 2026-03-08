@@ -427,22 +427,22 @@ func TestParseAddCommandArgsSupportsQuietOptions(t *testing.T) {
 		{
 			name: "quiet short flag after agent",
 			args: []string{"openclaw", "-q"},
-			want: addCommandOptions{AgentID: "openclaw", Quiet: true, TUI: true},
+			want: addCommandOptions{AgentID: "openclaw", Quiet: true, TUI: true, Isolation: true},
 		},
 		{
 			name: "quiet long flag before agent",
 			args: []string{"--quiet", "picoclaw"},
-			want: addCommandOptions{AgentID: "picoclaw", Quiet: true, TUI: true},
+			want: addCommandOptions{AgentID: "picoclaw", Quiet: true, TUI: true, Isolation: true},
 		},
 		{
 			name: "quiet typo alias supported",
 			args: []string{"zeroclaw", "--quite"},
-			want: addCommandOptions{AgentID: "zeroclaw", Quiet: true, TUI: true},
+			want: addCommandOptions{AgentID: "zeroclaw", Quiet: true, TUI: true, Isolation: true},
 		},
 		{
 			name: "combined webui and quiet flags",
 			args: []string{"-q", "openclaw", "--webui"},
-			want: addCommandOptions{AgentID: "openclaw", Quiet: true, WebUI: true},
+			want: addCommandOptions{AgentID: "openclaw", Quiet: true, WebUI: true, Isolation: true},
 		},
 	}
 
@@ -469,17 +469,17 @@ func TestParseAddCommandArgsSupportsTerminalModeFlags(t *testing.T) {
 		{
 			name: "explicit cli mode",
 			args: []string{"openclaw", "--cli"},
-			want: addCommandOptions{AgentID: "openclaw", CLI: true, TUI: true},
+			want: addCommandOptions{AgentID: "openclaw", CLI: true, TUI: true, Isolation: true},
 		},
 		{
 			name: "explicit tui mode",
 			args: []string{"openclaw", "--tui"},
-			want: addCommandOptions{AgentID: "openclaw", TUI: true},
+			want: addCommandOptions{AgentID: "openclaw", TUI: true, Isolation: true},
 		},
 		{
 			name: "default terminal mode",
 			args: []string{"openclaw"},
-			want: addCommandOptions{AgentID: "openclaw", TUI: true},
+			want: addCommandOptions{AgentID: "openclaw", TUI: true, Isolation: true},
 		},
 	}
 
@@ -511,6 +511,14 @@ func TestParseAddCommandArgsSupportsIsolationFlag(t *testing.T) {
 	}
 	if !opts.TUI {
 		t.Fatalf("expected default tui mode, got %+v", opts)
+	}
+
+	noIsolation, err := parseAddCommandArgs([]string{"openclaw", "--no-isolation"})
+	if err != nil {
+		t.Fatalf("parseAddCommandArgs(--no-isolation) error: %v", err)
+	}
+	if noIsolation.Isolation {
+		t.Fatalf("expected isolation=false with --no-isolation, got %+v", noIsolation)
 	}
 }
 

@@ -1235,20 +1235,18 @@ func handleInstall(svc *lifecycle.Service, agentID string, w http.ResponseWriter
 		return
 	}
 
+	opts := lifecycle.InstallOptions{}
 	var instanceName string
 	var wantsMultiInstance bool
-	if r.Body != nil && r.ContentLength != 0 {
-		var body struct {
-			AgentID       string `json:"agentId"`
-			InstanceName  string `json:"instance_name"`
-			MultiInstance bool   `json:"multi_instance"`
+	if strings.HasPrefix(strings.TrimSpace(r.URL.Path), "/api/v1/agents/") {
+		parsedOpts, parsedInstanceName, parsedMultiInstance, parseErr := parseInstallOptionsFromRequest(r)
+		if parseErr != nil {
+			writeJSONError(w, http.StatusBadRequest, parseErr.Error())
+			return
 		}
-		bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
-		if len(bodyBytes) > 0 {
-			_ = json.Unmarshal(bodyBytes, &body)
-			instanceName = body.InstanceName
-			wantsMultiInstance = body.MultiInstance
-		}
+		opts = parsedOpts
+		instanceName = parsedInstanceName
+		wantsMultiInstance = parsedMultiInstance
 	}
 
 	if instanceName != "" || wantsMultiInstance {
@@ -1257,7 +1255,7 @@ func handleInstall(svc *lifecycle.Service, agentID string, w http.ResponseWriter
 			writeServiceError(w, err)
 			return
 		}
-		if err := svc.Install(r.Context(), instID); err != nil {
+		if err := svc.InstallWithOptions(r.Context(), instID, opts); err != nil {
 			writeServiceError(w, err)
 			return
 		}
@@ -1265,7 +1263,7 @@ func handleInstall(svc *lifecycle.Service, agentID string, w http.ResponseWriter
 		return
 	}
 
-	if err := svc.Install(r.Context(), agentID); err != nil {
+	if err := svc.InstallWithOptions(r.Context(), agentID, opts); err != nil {
 		writeServiceError(w, err)
 		return
 	}
@@ -1464,6 +1462,34 @@ func parseStartOptionsFromRequest(r *http.Request) (lifecycle.StartOptions, erro
 		return lifecycle.StartOptions{}, fmt.Errorf("invalid request body: %w", err)
 	}
 	return lifecycle.StartOptions{Isolation: payload.Isolation}, nil
+}
+
+func parseInstallOptionsFromRequest(r *http.Request) (lifecycle.InstallOptions, string, bool, error) {
+	if r == nil || r.Body == nil {
+		return lifecycle.InstallOptions{}, "", false, nil
+	}
+	limited := io.LimitReader(r.Body, maxBodySize+1)
+	defer r.Body.Close()
+	raw, err := io.ReadAll(limited)
+	if err != nil {
+		return lifecycle.InstallOptions{}, "", false, fmt.Errorf("invalid request body: %w", err)
+	}
+	if len(raw) > maxBodySize {
+		return lifecycle.InstallOptions{}, "", false, fmt.Errorf("request body too large: max %d bytes", maxBodySize)
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return lifecycle.InstallOptions{}, "", false, nil
+	}
+
+	var payload struct {
+		InstanceName  string `json:"instance_name"`
+		MultiInstance bool   `json:"multi_instance"`
+		Isolation     bool   `json:"isolation,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return lifecycle.InstallOptions{}, "", false, fmt.Errorf("invalid request body: %w", err)
+	}
+	return lifecycle.InstallOptions{Isolation: payload.Isolation}, payload.InstanceName, payload.MultiInstance, nil
 }
 
 func validateAgentID(id string) error {

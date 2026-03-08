@@ -8,8 +8,8 @@ const (
 	// CarrierFileSecretsPath is relative to OpenClaw's working directory (its workspace).
 	// This is intentional - carrier-secrets.json is rsync'd to the instance's workspace directory,
 	// and OpenClaw is started from there. Do not change to absolute path.
-	CarrierFileSecretsPath     = "./carrier-secrets.json"
-	CarrierSecretFilePatchKey  = "_carrier_openclaw_secret_file"
+	CarrierFileSecretsPath    = "./carrier-secrets.json"
+	CarrierSecretFilePatchKey = "_carrier_openclaw_secret_file"
 )
 
 type ManagedPayloadParams struct {
@@ -19,13 +19,20 @@ type ManagedPayloadParams struct {
 	AllowFrom           []string
 	ProviderID          string
 	ProviderKey         string
+	ProviderBaseURL     string
 	IncludeAPIKeyRef    bool
 	ModelID             string
 	WorkspacePath       string
 }
 
 func BuildManagedConfigPayload(params ManagedPayloadParams) map[string]interface{} {
-	providerItem := BuildProviderEntry(params.ProviderID, params.ProviderKey, params.IncludeAPIKeyRef)
+	providerItem := BuildProviderEntry(
+		params.ProviderID,
+		params.ProviderKey,
+		params.ProviderBaseURL,
+		params.ModelID,
+		params.IncludeAPIKeyRef,
+	)
 
 	channels := map[string]interface{}{}
 	if channelID := strings.TrimSpace(params.ChannelID); channelID != "" {
@@ -47,12 +54,8 @@ func BuildManagedConfigPayload(params ManagedPayloadParams) map[string]interface
 	return map[string]interface{}{
 		"agents": map[string]interface{}{
 			"defaults": map[string]interface{}{
-				"workspace":           strings.TrimSpace(params.WorkspacePath),
-				"model":               map[string]interface{}{"primary": strings.TrimSpace(params.ModelID)},
-				"maxTokens":           8192,
-				"temperature":         0.7,
-				"maxToolIterations":   20,
-				"restrictToWorkspace": true,
+				"workspace": strings.TrimSpace(params.WorkspacePath),
+				"model":     map[string]interface{}{"primary": strings.TrimSpace(params.ModelID)},
 			},
 		},
 		"models": map[string]interface{}{
@@ -76,8 +79,28 @@ func BuildManagedConfigPayload(params ManagedPayloadParams) map[string]interface
 	}
 }
 
-func BuildProviderEntry(providerID, providerKey string, includeAPIKeyRef bool) map[string]interface{} {
-	providerItem := map[string]interface{}{}
+func BuildProviderEntry(providerID, providerKey, providerBaseURL, modelID string, includeAPIKeyRef bool) map[string]interface{} {
+	baseURL := strings.TrimSpace(providerBaseURL)
+	if baseURL == "" {
+		baseURL = defaultProviderBaseURL(providerID, providerKey)
+	}
+	modelName := strings.TrimSpace(modelID)
+	if _, name, ok := strings.Cut(modelName, "/"); ok && strings.TrimSpace(name) != "" {
+		modelName = strings.TrimSpace(name)
+	}
+	if modelName == "" {
+		modelName = "default"
+	}
+
+	providerItem := map[string]interface{}{
+		"baseUrl": baseURL,
+		"models": []interface{}{
+			map[string]interface{}{
+				"id":   modelName,
+				"name": modelName,
+			},
+		},
+	}
 	if includeAPIKeyRef {
 		providerItem["apiKey"] = map[string]interface{}{
 			"source":   "file",
@@ -89,6 +112,33 @@ func BuildProviderEntry(providerID, providerKey string, includeAPIKeyRef bool) m
 		providerItem["auth"] = "oauth"
 	}
 	return providerItem
+}
+
+func defaultProviderBaseURL(providerID, providerKey string) string {
+	normalizedID := catalog.NormalizeProviderID(providerID)
+	switch normalizedID {
+	case "openai", "openai-codex", "openai-compatible":
+		return "https://api.openai.com/v1"
+	case "anthropic":
+		return "https://api.anthropic.com/v1"
+	case "openrouter":
+		return "https://openrouter.ai/api/v1"
+	case "ollama":
+		return "http://localhost:11434/v1"
+	}
+
+	switch strings.ToLower(strings.TrimSpace(providerKey)) {
+	case "openai":
+		return "https://api.openai.com/v1"
+	case "anthropic":
+		return "https://api.anthropic.com/v1"
+	case "openrouter":
+		return "https://openrouter.ai/api/v1"
+	case "ollama":
+		return "http://localhost:11434/v1"
+	default:
+		return "https://api.openai.com/v1"
+	}
 }
 
 func ProviderSecretPointer(providerKey string) string {

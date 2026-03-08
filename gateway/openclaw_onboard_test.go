@@ -62,6 +62,18 @@ func TestPrepareOpenclawManagedOnboard_WritesConfigAndRecord(t *testing.T) {
 	if defaults["workspace"] != result.WorkspacePath {
 		t.Fatalf("workspace mismatch: got %v want %s", defaults["workspace"], result.WorkspacePath)
 	}
+	if _, exists := defaults["maxTokens"]; exists {
+		t.Fatalf("did not expect deprecated agents.defaults.maxTokens")
+	}
+	if _, exists := defaults["maxToolIterations"]; exists {
+		t.Fatalf("did not expect deprecated agents.defaults.maxToolIterations")
+	}
+	if _, exists := defaults["restrictToWorkspace"]; exists {
+		t.Fatalf("did not expect deprecated agents.defaults.restrictToWorkspace")
+	}
+	if _, exists := defaults["temperature"]; exists {
+		t.Fatalf("did not expect deprecated agents.defaults.temperature")
+	}
 	channels, ok := cfg["channels"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("expected channels object, got %#v", cfg["channels"])
@@ -87,6 +99,17 @@ func TestPrepareOpenclawManagedOnboard_WritesConfigAndRecord(t *testing.T) {
 	models, _ := cfg["models"].(map[string]interface{})
 	modelProviders, _ := models["providers"].(map[string]interface{})
 	openaiProvider, _ := modelProviders["openai"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(openaiProvider["baseUrl"])); got != "https://api.openai.com/v1" {
+		t.Fatalf("expected models.providers.openai.baseUrl=https://api.openai.com/v1, got %q", got)
+	}
+	providerModels, ok := openaiProvider["models"].([]interface{})
+	if !ok || len(providerModels) != 1 {
+		t.Fatalf("expected one models.providers.openai.models entry, got %#v", openaiProvider["models"])
+	}
+	providerModel0, _ := providerModels[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(providerModel0["id"])); got != "gpt-5.2" {
+		t.Fatalf("expected models.providers.openai.models[0].id=gpt-5.2, got %q", got)
+	}
 	apiKeyRef, _ := openaiProvider["apiKey"].(map[string]interface{})
 	if got := strings.TrimSpace(anyToString(apiKeyRef["provider"])); got != "carrier_file" {
 		t.Fatalf("expected models.providers.openai.apiKey.provider=carrier_file, got %q", got)

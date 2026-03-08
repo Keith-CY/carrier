@@ -73,7 +73,7 @@ var providerCatalog = []ProviderSpec{
 		Name:         "OpenRouter",
 		AuthMode:     AuthModeAPIKey,
 		EnvVar:       "OPENROUTER_API_KEY",
-		ExampleModel: "openrouter/anthropic/claude-sonnet-4-6",
+		ExampleModel: "openrouter/arcee-ai/trinity-mini:free",
 		Category:     "compatible",
 		Description:  "OpenRouter multi-model proxy (OpenAI-compatible)",
 		BaseURLEnv:   "OPENROUTER_BASE_URL",

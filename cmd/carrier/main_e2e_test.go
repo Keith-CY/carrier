@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"carrier/configv2"
+	"carrier/shared/catalog"
 )
 
 func TestE2ECarrierBinaryOnboardOpenAIAPIKey(t *testing.T) {
@@ -433,6 +434,25 @@ func TestE2ECarrierBinaryAddManagedAgentsIsolationSendsInstallAndStartIsolationP
 }
 
 func TestE2ECarrierBinaryAddOpenClawIsolationOpenRouterChatAndUninstall(t *testing.T) {
+	runOpenClawIsolationProviderFlow(t, "openrouter")
+}
+
+func TestE2ECarrierBinaryAddOpenClawIsolationProviderMatrixChatAndUninstall(t *testing.T) {
+	providerID := strings.TrimSpace(os.Getenv("CARRIER_TEST_OPENCLAW_PROVIDER"))
+	if providerID == "" {
+		t.Skip("set CARRIER_TEST_OPENCLAW_PROVIDER to run provider matrix flow")
+	}
+	runOpenClawIsolationProviderFlow(t, providerID)
+}
+
+func runOpenClawIsolationProviderFlow(t *testing.T, providerID string) {
+	t.Helper()
+	providerID = catalog.NormalizeProviderID(providerID)
+	providerSpec := catalog.GetProvider(providerID)
+	if providerSpec == nil {
+		t.Fatalf("unsupported provider %q", providerID)
+	}
+
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, "home")
 	if err := os.MkdirAll(home, 0o700); err != nil {
@@ -451,10 +471,11 @@ func TestE2ECarrierBinaryAddOpenClawIsolationOpenRouterChatAndUninstall(t *testi
 	t.Setenv("OPENAI_CODEX_TOKEN", "")
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("OPENAI_COMPATIBLE_API_KEY", "")
 
-	const openrouterToken = "sk-or-test-openrouter-e2e"
-	if _, err := saveProviderCredential("openrouter", openrouterToken); err != nil {
-		t.Fatalf("saveProviderCredential(openrouter): %v", err)
+	providerToken := fmt.Sprintf("test-token-%s", strings.ReplaceAll(providerID, "-", "_"))
+	if _, err := saveProviderCredential(providerID, providerToken); err != nil {
+		t.Fatalf("saveProviderCredential(%s): %v", providerID, err)
 	}
 
 	var mu sync.Mutex
@@ -537,8 +558,8 @@ func TestE2ECarrierBinaryAddOpenClawIsolationOpenRouterChatAndUninstall(t *testi
 		t.Fatalf("instances size = %d, want 1", len(instances))
 	}
 	managed := instances[0]
-	if managed.Provider != "openrouter" {
-		t.Fatalf("provider = %q, want %q", managed.Provider, "openrouter")
+	if managed.Provider != providerID {
+		t.Fatalf("provider = %q, want %q", managed.Provider, providerID)
 	}
 	if !managed.Isolation {
 		t.Fatal("instance isolation should be true")
@@ -557,9 +578,14 @@ func TestE2ECarrierBinaryAddOpenClawIsolationOpenRouterChatAndUninstall(t *testi
 	}
 	models, _ := cfgPayload["models"].(map[string]interface{})
 	providers, _ := models["providers"].(map[string]interface{})
-	openrouterProvider, _ := providers["openrouter"].(map[string]interface{})
-	if got := strings.TrimSpace(anyToString(openrouterProvider["baseUrl"])); got != "https://openrouter.ai/api/v1" {
-		t.Fatalf("models.providers.openrouter.baseUrl = %q, want %q", got, "https://openrouter.ai/api/v1")
+	providerKey := mapCarrierProviderToManagedProvider(providerID)
+	if providerKey == "" {
+		providerKey = providerID
+	}
+	configProvider, _ := providers[providerKey].(map[string]interface{})
+	expectedBaseURL := expectedManagedProviderBaseURL(providerID, providerKey)
+	if got := strings.TrimSpace(anyToString(configProvider["baseUrl"])); got != expectedBaseURL {
+		t.Fatalf("models.providers.%s.baseUrl = %q, want %q", providerKey, got, expectedBaseURL)
 	}
 
 	secretsPath := filepath.Join(home, ".openclaw", "carrier-secrets.json")
@@ -572,9 +598,9 @@ func TestE2ECarrierBinaryAddOpenClawIsolationOpenRouterChatAndUninstall(t *testi
 		t.Fatalf("parse openclaw carrier secrets: %v", err)
 	}
 	secretProviders, _ := secretsPayload["providers"].(map[string]interface{})
-	secretOpenRouter, _ := secretProviders["openrouter"].(map[string]interface{})
-	if got := strings.TrimSpace(anyToString(secretOpenRouter["apiKey"])); got != openrouterToken {
-		t.Fatalf("carrier secrets providers.openrouter.apiKey = %q, want %q", got, openrouterToken)
+	secretProvider, _ := secretProviders[providerKey].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(secretProvider["apiKey"])); got != providerToken {
+		t.Fatalf("carrier secrets providers.%s.apiKey = %q, want %q", providerKey, got, providerToken)
 	}
 
 	gatewayPort := acquireFreeTCPPort(t)
@@ -633,6 +659,10 @@ func TestE2ECarrierBinaryAddOpenClawIsolationOpenRouterChatAndUninstall(t *testi
 		t.Fatalf("expected daemon chat payload to include weather prompt, got %q", gotChatBody)
 	}
 
+	if !strings.Contains(stdout, "Using provider: "+providerSpec.Name+" ("+providerID+")") {
+		t.Fatalf("stdout missing selected provider message for %s: %q", providerID, stdout)
+	}
+
 	stdout, stderr, err = runCarrierBinary(t, bin, "", "uninstall", "openclaw")
 	if err != nil {
 		t.Fatalf("carrier uninstall openclaw failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
@@ -655,6 +685,29 @@ func TestE2ECarrierBinaryAddOpenClawIsolationOpenRouterChatAndUninstall(t *testi
 	}
 	if len(instancesAfter) != 0 {
 		t.Fatalf("expected no managed instances after uninstall, got %d", len(instancesAfter))
+	}
+}
+
+func expectedManagedProviderBaseURL(providerID, providerKey string) string {
+	switch catalog.NormalizeProviderID(providerID) {
+	case "anthropic":
+		return "https://api.anthropic.com/v1"
+	case "openrouter":
+		return "https://openrouter.ai/api/v1"
+	case "ollama":
+		return "http://localhost:11434/v1"
+	default:
+		normalizedKey := strings.ToLower(strings.TrimSpace(providerKey))
+		switch normalizedKey {
+		case "anthropic":
+			return "https://api.anthropic.com/v1"
+		case "openrouter":
+			return "https://openrouter.ai/api/v1"
+		case "ollama":
+			return "http://localhost:11434/v1"
+		default:
+			return "https://api.openai.com/v1"
+		}
 	}
 }
 

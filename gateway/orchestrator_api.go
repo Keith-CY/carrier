@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +18,7 @@ import (
 const (
 	defaultOrchestratorWorkerIdleTTL  = 10 * time.Minute
 	defaultOrchestratorMaxConcurrency = 8
+	orchestratorLocalHostID           = "local"
 )
 
 var orchestratorExecutionRunState = struct {
@@ -28,7 +31,23 @@ var orchestratorExecutionRunState = struct {
 var (
 	orchestratorListLeasesByExecution = listOrchestratorWorkerLeasesByExecution
 	orchestratorInstallAgent          = remoteInstallAgent
+	orchestratorLocalDaemonClientFn   = newOrchestratorLocalDaemonClientFromEnv
 )
+
+func newOrchestratorLocalDaemonClientFromEnv() *DaemonClient {
+	baseURL := strings.TrimSpace(os.Getenv("CARRIER_DAEMON_BASE_URL"))
+	if baseURL == "" {
+		baseURL = defaultDaemonBaseURL
+	}
+	token := strings.TrimSpace(os.Getenv("CARRIER_SERVER_API_TOKEN"))
+	timeout := defaultDaemonTimeout
+	if raw := strings.TrimSpace(os.Getenv("CARRIER_DAEMON_TIMEOUT_MS")); raw != "" {
+		if millis, err := strconv.Atoi(raw); err == nil && millis > 0 {
+			timeout = time.Duration(millis) * time.Millisecond
+		}
+	}
+	return NewDaemonClient(baseURL, token, timeout)
+}
 
 func logOrchestratorPersistError(context string, err error) {
 	if err == nil {
@@ -365,6 +384,14 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 	installedByRun := map[string]bool{}
 
 	for _, req := range execution.RequiredWorkers {
+		if strings.EqualFold(strings.TrimSpace(req.HostID), orchestratorLocalHostID) {
+			localLeases, localErr := provisionOrchestratorLocalWorkers(ctx, execution, req)
+			if localErr != nil {
+				return nil, localErr
+			}
+			leases = append(leases, localLeases...)
+			continue
+		}
 		host, found, err := getRemoteHost(req.HostID)
 		if err != nil {
 			return nil, err
@@ -434,6 +461,94 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 		}
 	}
 	return leases, nil
+}
+
+func provisionOrchestratorLocalWorkers(ctx context.Context, execution OrchestratorExecution, req OrchestratorRequiredWorker) ([]OrchestratorWorkerLease, error) {
+	daemon := orchestratorLocalDaemonClientFn
+	if daemon == nil {
+		return nil, fmt.Errorf("local daemon client factory is not configured")
+	}
+	client := daemon()
+	if client == nil {
+		return nil, fmt.Errorf("local daemon client is not available")
+	}
+	agentID := strings.ToLower(strings.TrimSpace(req.AgentID))
+	if agentID == "" {
+		agentID = "zeroclaw"
+	}
+	if err := ensureOrchestratorLocalAgentReady(ctx, client, execution.ID, agentID); err != nil {
+		return nil, err
+	}
+
+	leases := make([]OrchestratorWorkerLease, 0, req.Count)
+	for i := 0; i < req.Count; i++ {
+		lease := OrchestratorWorkerLease{
+			ID:             uuid.NewString(),
+			ExecutionID:    execution.ID,
+			HostID:         orchestratorLocalHostID,
+			AgentID:        agentID,
+			State:          OrchestratorWorkerStateReady,
+			Ephemeral:      false,
+			InstalledByRun: false,
+			CreatedAt:      nowTimestamp(),
+			UpdatedAt:      nowTimestamp(),
+			HeartbeatAt:    nowTimestamp(),
+			LeaseExpireAt: time.Now().UTC().Add(defaultOrchestratorWorkerIdleTTL).
+				Format(time.RFC3339Nano),
+		}
+		saved, err := upsertOrchestratorWorkerLease(lease)
+		if err != nil {
+			return nil, err
+		}
+		leases = append(leases, saved)
+	}
+	return leases, nil
+}
+
+func ensureOrchestratorLocalAgentReady(ctx context.Context, daemon *DaemonClient, executionID, agentID string) error {
+	if daemon == nil {
+		return fmt.Errorf("daemon client is not configured")
+	}
+	actor := "gateway:orchestrator:local"
+	requestID := "orchestrator-local-" + strings.TrimSpace(executionID)
+	agents, err := daemon.ListAgents(ctx, actor, requestID)
+	if err != nil {
+		return fmt.Errorf("list local agents failed: %w", err)
+	}
+	var matched *AgentState
+	for idx := range agents {
+		if strings.EqualFold(strings.TrimSpace(agents[idx].ID), agentID) {
+			matched = &agents[idx]
+			break
+		}
+	}
+	if matched == nil {
+		return fmt.Errorf("local worker agent %s not found", agentID)
+	}
+	if !strings.EqualFold(strings.TrimSpace(matched.InstallState), "installed") {
+		return fmt.Errorf("local worker agent %s is not installed", agentID)
+	}
+	if strings.EqualFold(strings.TrimSpace(matched.Runtime), "running") {
+		return nil
+	}
+	if err := daemon.StartAgent(ctx, agentID, actor, requestID); err != nil {
+		return fmt.Errorf("start local worker agent %s failed: %w", agentID, err)
+	}
+	statuses, err := daemon.GetStatus(ctx, agentID, actor, requestID)
+	if err != nil {
+		return fmt.Errorf("verify local worker agent %s status failed: %w", agentID, err)
+	}
+	if len(statuses) == 0 {
+		return fmt.Errorf("local worker agent %s status is unavailable", agentID)
+	}
+	runtimeState := strings.ToLower(strings.TrimSpace(statuses[0].Runtime))
+	if runtimeState != "running" && runtimeState != "starting" {
+		if runtimeState == "" {
+			runtimeState = "unknown"
+		}
+		return fmt.Errorf("local worker agent %s runtime state is %s", agentID, runtimeState)
+	}
+	return nil
 }
 
 func runOrchestratorTasks(ctx context.Context, execution OrchestratorExecution, leases []OrchestratorWorkerLease) ([]OrchestratorTaskResult, error) {
@@ -591,6 +706,91 @@ func runOrchestratorTaskAttempt(
 	lease OrchestratorWorkerLease,
 	attempt int,
 ) (OrchestratorTaskResult, error) {
+	if strings.EqualFold(strings.TrimSpace(lease.HostID), orchestratorLocalHostID) {
+		clientFactory := orchestratorLocalDaemonClientFn
+		if clientFactory == nil {
+			runErr := fmt.Errorf("local daemon client factory is not configured")
+			return OrchestratorTaskResult{
+				TaskID:   task.ID,
+				Status:   OrchestratorTaskStatusFailed,
+				WorkerID: lease.ID,
+				HostID:   lease.HostID,
+				AgentID:  lease.AgentID,
+				Attempts: attempt,
+				Error:    runErr.Error(),
+			}, runErr
+		}
+		client := clientFactory()
+		if client == nil {
+			runErr := fmt.Errorf("local daemon client is not available")
+			return OrchestratorTaskResult{
+				TaskID:   task.ID,
+				Status:   OrchestratorTaskStatusFailed,
+				WorkerID: lease.ID,
+				HostID:   lease.HostID,
+				AgentID:  lease.AgentID,
+				Attempts: attempt,
+				Error:    runErr.Error(),
+			}, runErr
+		}
+
+		timeout := time.Duration(task.TimeoutMs) * time.Millisecond
+		if timeout <= 0 {
+			timeout = 60 * time.Second
+		}
+		if timeout > 5*time.Minute {
+			timeout = 5 * time.Minute
+		}
+		runCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		sessionID := strings.TrimSpace(task.SessionID)
+		if sessionID == "" {
+			sessionID = fmt.Sprintf("%s-%s-%d", execution.ID, task.ID, attempt)
+		}
+
+		start := time.Now()
+		requestID := "orchestrator-" + strings.TrimSpace(execution.ID)
+		chatResult, runErr := client.ChatAgent(
+			runCtx,
+			strings.TrimSpace(lease.AgentID),
+			strings.TrimSpace(task.Input),
+			sessionID,
+			"gateway:orchestrator:local",
+			requestID,
+		)
+		if runErr != nil {
+			return OrchestratorTaskResult{
+				TaskID:      task.ID,
+				Status:      OrchestratorTaskStatusFailed,
+				WorkerID:    lease.ID,
+				HostID:      lease.HostID,
+				AgentID:     lease.AgentID,
+				Attempts:    attempt,
+				Error:       runErr.Error(),
+				StartedAt:   start.UTC().Format(time.RFC3339Nano),
+				CompletedAt: time.Now().UTC().Format(time.RFC3339Nano),
+				LatencyMs:   time.Since(start).Milliseconds(),
+			}, runErr
+		}
+		output := ""
+		if chatResult != nil {
+			output = strings.TrimSpace(chatResult.Message)
+		}
+		return OrchestratorTaskResult{
+			TaskID:      task.ID,
+			Status:      OrchestratorTaskStatusCompleted,
+			WorkerID:    lease.ID,
+			HostID:      lease.HostID,
+			AgentID:     lease.AgentID,
+			Attempts:    attempt,
+			Output:      output,
+			StartedAt:   start.UTC().Format(time.RFC3339Nano),
+			CompletedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			LatencyMs:   time.Since(start).Milliseconds(),
+		}, nil
+	}
+
 	host, found, err := getRemoteHost(lease.HostID)
 	if err != nil {
 		return OrchestratorTaskResult{
