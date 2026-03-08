@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mockAPIs, mockOrchestrationAPIs, loginWithToken, MOCK_INSTANCES } from './helpers';
+import { mockAPIs, mockOrchestrationAPIs, loginWithToken, MOCK_EXECUTIONS, MOCK_INSTANCES } from './helpers';
 
 const MOBILE = { width: 375, height: 667 };
 const TABLET = { width: 768, height: 1024 };
@@ -73,7 +73,7 @@ for (const [label, viewport] of [['Mobile', MOBILE], ['Tablet', TABLET]] as cons
       await loginWithToken(page, '/#/executions');
       await expect(page.locator('#executions-search')).toBeVisible();
       await expect(page.locator('#executions-status-filter')).toBeVisible();
-      await expect(page.locator('#executions-list .execution-card')).toHaveCount(3);
+      await expect(page.locator('#executions-list .execution-card')).toHaveCount(MOCK_EXECUTIONS.length);
     });
   });
 }

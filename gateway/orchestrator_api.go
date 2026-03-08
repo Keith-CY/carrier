@@ -75,7 +75,9 @@ type orchestratorWorkerPool struct {
 func isOrchestratorExecutionTerminal(status OrchestratorExecutionStatus) bool {
 	switch status {
 	case OrchestratorExecutionStatusCompleted,
+		OrchestratorExecutionStatusPartialCompleted,
 		OrchestratorExecutionStatusFailed,
+		OrchestratorExecutionStatusRetryableFailed,
 		OrchestratorExecutionStatusCancelled,
 		OrchestratorExecutionStatusDeclined:
 		return true
@@ -277,6 +279,10 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 	}
 
 	action := strings.ToLower(strings.TrimSpace(parts[1]))
+	if action == "artifacts" {
+		handleOrchestratorExecutionArtifacts(w, r, requestID, cfg, execution, parts)
+		return
+	}
 	switch action {
 	case "authorize":
 		if r.Method != http.MethodPost {
@@ -433,6 +439,66 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			"execution": updated,
 		})
 		return
+	case "retry", "rerun", "clone":
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		var (
+			derived  OrchestratorExecution
+			buildErr error
+		)
+		switch action {
+		case "retry":
+			derived, buildErr = buildRetryExecution(execution)
+		case "rerun":
+			derived = buildRerunExecution(execution)
+		default:
+			derived = buildCloneExecution(execution)
+		}
+		if buildErr != nil {
+			writeJSON(w, http.StatusConflict, map[string]interface{}{
+				"requestId": requestID,
+				"result":    "error",
+				"error": map[string]interface{}{
+					"code":    "E_ORCHESTRATOR_RETRY_NOTHING",
+					"message": buildErr.Error(),
+				},
+			})
+			return
+		}
+		normalized, err := normalizeOrchestratorExecution(derived)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
+			return
+		}
+		now := nowTimestamp()
+		normalized.ID = uuid.NewString()
+		normalized.Status = OrchestratorExecutionStatusPendingAuthorization
+		normalized.Authorization = OrchestratorAuthorization{}
+		normalized.Results = []OrchestratorTaskResult{}
+		normalized.Outcome = OrchestratorExecutionOutcome{}
+		normalized.CreatedAt = now
+		normalized.StartedAt = ""
+		normalized.CompletedAt = ""
+		normalized.UpdatedAt = now
+		normalized.Error = ""
+		saved, saveErr := upsertOrchestratorExecution(normalized)
+		if saveErr != nil {
+			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to save derived orchestrator execution", "upsert derived orchestrator execution", saveErr)
+			return
+		}
+		emitRemoteAuditEvent(requestID, "orchestrator_execution_"+action, saved.ID, "success", map[string]interface{}{
+			"sourceExecutionId": execution.ID,
+			"launchReason":      saved.LaunchReason,
+			"taskCount":         len(saved.TaskUnits),
+		})
+		writeJSON(w, http.StatusCreated, map[string]interface{}{
+			"requestId": requestID,
+			"result":    "ok",
+			"execution": saved,
+		})
+		return
 	default:
 		writeJSON(w, http.StatusNotFound, gatewayErrBody("E_USAGE", "unsupported orchestrator execution action"))
 		return
@@ -532,6 +598,96 @@ func cancelOrchestratorExecution(executionID string, actor string) (Orchestrator
 		logOrchestratorPersistError("reclaim execution leases on cancel", reclaimErr)
 	}
 	return updated, nil
+}
+
+func buildRetryExecution(source OrchestratorExecution) (OrchestratorExecution, error) {
+	failedTaskIDs := map[string]struct{}{}
+	for _, result := range source.Results {
+		if result.Status == OrchestratorTaskStatusFailed {
+			failedTaskIDs[strings.TrimSpace(result.TaskID)] = struct{}{}
+		}
+	}
+	if len(failedTaskIDs) == 0 {
+		return OrchestratorExecution{}, fmt.Errorf("execution has no failed tasks to retry")
+	}
+	tasks := make([]OrchestratorTaskUnit, 0, len(source.TaskUnits))
+	for _, task := range source.TaskUnits {
+		if _, ok := failedTaskIDs[strings.TrimSpace(task.ID)]; ok {
+			tasks = append(tasks, task)
+		}
+	}
+	if len(tasks) == 0 {
+		return OrchestratorExecution{}, fmt.Errorf("execution has no failed task units to retry")
+	}
+	derived := buildDerivedExecution(source, "retry_failed_tasks")
+	derived.TaskUnits = tasks
+	derived.RequiredWorkers = selectRequiredWorkersForTasks(source.RequiredWorkers, tasks)
+	return derived, nil
+}
+
+func buildRerunExecution(source OrchestratorExecution) OrchestratorExecution {
+	return buildDerivedExecution(source, "rerun_execution")
+}
+
+func buildCloneExecution(source OrchestratorExecution) OrchestratorExecution {
+	return buildDerivedExecution(source, "clone_execution")
+}
+
+func buildDerivedExecution(source OrchestratorExecution, launchReason string) OrchestratorExecution {
+	derived := source
+	derived.ID = ""
+	derived.IdempotencyKey = ""
+	derived.ParentExecutionID = strings.TrimSpace(source.ID)
+	derived.SourceExecutionID = sourceExecutionID(source)
+	derived.LaunchReason = strings.TrimSpace(launchReason)
+	derived.Authorization = OrchestratorAuthorization{}
+	derived.Policy = resetDerivedExecutionPolicyApproval(source.Policy)
+	derived.Results = []OrchestratorTaskResult{}
+	derived.Outcome = OrchestratorExecutionOutcome{}
+	derived.Error = ""
+	derived.Status = OrchestratorExecutionStatusPendingAuthorization
+	derived.CreatedAt = ""
+	derived.StartedAt = ""
+	derived.CompletedAt = ""
+	derived.UpdatedAt = ""
+	derived.RequiredWorkers = append([]OrchestratorRequiredWorker(nil), source.RequiredWorkers...)
+	derived.TaskUnits = append([]OrchestratorTaskUnit(nil), source.TaskUnits...)
+	return derived
+}
+
+func sourceExecutionID(source OrchestratorExecution) string {
+	if existing := strings.TrimSpace(source.SourceExecutionID); existing != "" {
+		return existing
+	}
+	return strings.TrimSpace(source.ID)
+}
+
+func resetDerivedExecutionPolicyApproval(policy OrchestratorExecutionPolicySnapshot) OrchestratorExecutionPolicySnapshot {
+	out := policy
+	out.ApprovedBy = ""
+	out.ApprovedAt = ""
+	return out
+}
+
+func selectRequiredWorkersForTasks(workers []OrchestratorRequiredWorker, tasks []OrchestratorTaskUnit) []OrchestratorRequiredWorker {
+	targets := make(map[string]struct{}, len(tasks))
+	for _, task := range tasks {
+		targets[orchestratorTargetKey(task.HostID, task.HostLabels, task.AgentID)] = struct{}{}
+	}
+	selected := make([]OrchestratorRequiredWorker, 0, len(workers))
+	for _, worker := range workers {
+		if _, ok := targets[orchestratorTargetKey(worker.HostID, worker.HostLabels, worker.AgentID)]; ok {
+			selected = append(selected, worker)
+		}
+	}
+	if len(selected) == 0 {
+		return append([]OrchestratorRequiredWorker(nil), workers...)
+	}
+	return selected
+}
+
+func orchestratorTargetKey(hostID string, hostLabels []string, agentID string) string {
+	return strings.ToLower(strings.TrimSpace(hostID) + "|" + strings.Join(normalizeStringSelectorList(hostLabels, true), ",") + "|" + strings.TrimSpace(agentID))
 }
 
 func runOrchestratorExecution(executionID string) {
