@@ -307,7 +307,7 @@
         <div class="form-grid">
           <div>
             <label for="executions-search">Search</label>
-            <input id="executions-search" type="text" placeholder="Search by execution id or goal">
+            <input id="executions-search" type="text" placeholder="Search by id, goal, team, project, template, or trigger">
           </div>
           <div>
             <label for="executions-status-filter">Status</label>
@@ -317,6 +317,18 @@
               <option value="completed">Completed</option>
               <option value="failed">Failed</option>
               <option value="cancelled">Cancelled</option>
+            </select>
+          </div>
+          <div>
+            <label for="executions-template-filter">Template</label>
+            <select id="executions-template-filter">
+              <option value="all">All</option>
+            </select>
+          </div>
+          <div>
+            <label for="executions-trigger-filter">Trigger</label>
+            <select id="executions-trigger-filter">
+              <option value="all">All</option>
             </select>
           </div>
         </div>

@@ -65,12 +65,27 @@ test.describe('Execution Center', () => {
     await loginWithToken(page, '/#/executions');
 
     await expect(page.locator('#executions-list .execution-card')).toHaveCount(4);
+    await expect(page.locator('#executions-list')).toContainText('platform');
+    await expect(page.locator('#executions-list')).toContainText('carrier');
+    await expect(page.locator('#executions-list')).toContainText('pr-triage');
+    await expect(page.locator('#executions-list')).toContainText('github:trigger-gh-1');
+
     await page.selectOption('#executions-status-filter', 'completed');
     await expect(page.locator('#executions-list')).toContainText('Prepare release notes');
     await expect(page.locator('#executions-list')).not.toContainText('Investigate checkout latency');
 
     await page.selectOption('#executions-status-filter', 'all');
     await page.fill('#executions-search', 'checkout');
+    await expect(page.locator('#executions-list')).toContainText('Investigate checkout latency');
+    await expect(page.locator('#executions-list')).not.toContainText('Prepare release notes');
+
+    await page.fill('#executions-search', '');
+    await page.selectOption('#executions-template-filter', 'pr-triage');
+    await expect(page.locator('#executions-list')).toContainText('Prepare release notes');
+    await expect(page.locator('#executions-list')).not.toContainText('Investigate checkout latency');
+
+    await page.selectOption('#executions-template-filter', 'all');
+    await page.selectOption('#executions-trigger-filter', 'schedule');
     await expect(page.locator('#executions-list')).toContainText('Investigate checkout latency');
     await expect(page.locator('#executions-list')).not.toContainText('Prepare release notes');
   });

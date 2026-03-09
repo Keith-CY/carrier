@@ -72,6 +72,9 @@ export const MOCK_EXECUTIONS = [
   {
     id: 'exec-ask',
     goal: 'Run picoclaw remediation on prod host',
+    team: 'sre',
+    project: 'checkout',
+    templateId: 'incident-diagnosis',
     requestedProvider: 'openrouter',
     status: 'pending_authorization',
     updatedAt: '2026-03-09T11:40:00Z',
@@ -104,6 +107,11 @@ export const MOCK_EXECUTIONS = [
   {
     id: 'exec-running',
     goal: 'Investigate checkout latency',
+    team: 'platform',
+    project: 'carrier',
+    templateId: 'incident-diagnosis',
+    triggerSource: 'schedule',
+    triggerId: 'trigger-nightly',
     requestedProvider: 'anthropic',
     status: 'running',
     updatedAt: '2026-03-08T11:05:00Z',
@@ -177,6 +185,11 @@ export const MOCK_EXECUTIONS = [
   {
     id: 'exec-retryable',
     goal: 'Collect failing deployment evidence',
+    team: 'sre',
+    project: 'checkout',
+    templateId: 'incident-diagnosis',
+    triggerSource: 'webhook',
+    triggerId: 'trigger-manual',
     requestedProvider: 'openrouter',
     status: 'retryable_failed',
     updatedAt: '2026-03-08T10:45:00Z',
@@ -234,6 +247,9 @@ export const MOCK_EXECUTIONS = [
   {
     id: 'exec-complete',
     goal: 'Prepare release notes',
+    team: 'platform',
+    project: 'carrier',
+    templateId: 'pr-triage',
     requestedProvider: 'openrouter',
     triggerSource: 'github',
     triggerId: 'trigger-gh-1',
