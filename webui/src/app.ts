@@ -1841,9 +1841,13 @@
     const refreshBtn = $('#executions-refresh');
     const searchInput = $('#executions-search');
     const statusFilter = $('#executions-status-filter');
+    const templateFilter = $('#executions-template-filter');
+    const triggerFilter = $('#executions-trigger-filter');
     if (refreshBtn) refreshBtn.onclick = refreshExecutions;
     if (searchInput) searchInput.oninput = () => { void renderExecutionsView(executionRecordsCache, false); };
     if (statusFilter) statusFilter.onchange = () => { void renderExecutionsView(executionRecordsCache, false); };
+    if (templateFilter) templateFilter.onchange = () => { void renderExecutionsView(executionRecordsCache, false); };
+    if (triggerFilter) triggerFilter.onchange = () => { void renderExecutionsView(executionRecordsCache, false); };
 
     await refreshExecutions();
     startDashboardExecutionPolling();
@@ -2164,12 +2168,90 @@
     };
   }
 
-  function executionMatchesFilter(execution, filterValue, query) {
+  function executionTemplateValue(execution) {
+    return String(execution && execution.templateId ? execution.templateId : '').trim();
+  }
+
+  function executionTriggerValue(execution) {
+    return String(execution && execution.triggerSource ? execution.triggerSource : '').trim().toLowerCase();
+  }
+
+  function executionTriggerLabel(execution) {
+    const source = String(execution && execution.triggerSource ? execution.triggerSource : '').trim();
+    const triggerID = String(execution && execution.triggerId ? execution.triggerId : '').trim();
+    if (source && triggerID) return source + ':' + triggerID;
+    return source || triggerID;
+  }
+
+  function executionSearchText(execution) {
+    return [
+      String(execution && execution.id ? execution.id : ''),
+      String(execution && execution.goal ? execution.goal : ''),
+      String(execution && execution.team ? execution.team : ''),
+      String(execution && execution.project ? execution.project : ''),
+      String(execution && execution.environment ? execution.environment : ''),
+      executionTemplateValue(execution),
+      String(execution && execution.triggerSource ? execution.triggerSource : ''),
+      String(execution && execution.triggerId ? execution.triggerId : ''),
+      executionTriggerLabel(execution),
+      String(execution && execution.initiator ? execution.initiator : ''),
+    ].join(' ').trim().toLowerCase();
+  }
+
+  function executionAttributionParts(execution) {
+    const parts = [];
+    const team = String(execution && execution.team ? execution.team : '').trim();
+    const project = String(execution && execution.project ? execution.project : '').trim();
+    const environment = String(execution && execution.environment ? execution.environment : '').trim();
+    const templateID = executionTemplateValue(execution);
+    const trigger = executionTriggerLabel(execution);
+    if (team) parts.push('Team: ' + team);
+    if (project) parts.push('Project: ' + project);
+    if (environment) parts.push('Env: ' + environment);
+    if (templateID) parts.push('Template: ' + templateID);
+    if (trigger) parts.push('Trigger: ' + trigger);
+    return parts;
+  }
+
+  function syncExecutionFilterOptions(executions) {
+    const templateFilter = $('#executions-template-filter');
+    const triggerFilter = $('#executions-trigger-filter');
+    if (templateFilter) {
+      const current = String(templateFilter.value || 'all').trim() || 'all';
+      const templates = [...new Set((Array.isArray(executions) ? executions : [])
+        .map(item => executionTemplateValue(item))
+        .filter(Boolean))]
+        .sort((left, right) => left.localeCompare(right));
+      templateFilter.innerHTML = '<option value="all">All</option>' + templates.map(value => (
+        '<option value="' + escapeHtml(value) + '">' + escapeHtml(value) + '</option>'
+      )).join('');
+      templateFilter.value = templates.includes(current) ? current : 'all';
+    }
+    if (triggerFilter) {
+      const current = String(triggerFilter.value || 'all').trim().toLowerCase() || 'all';
+      const triggers = [...new Set((Array.isArray(executions) ? executions : [])
+        .map(item => executionTriggerValue(item))
+        .filter(Boolean))]
+        .sort((left, right) => left.localeCompare(right));
+      triggerFilter.innerHTML = '<option value="all">All</option>' + triggers.map(value => (
+        '<option value="' + escapeHtml(value) + '">' + escapeHtml(value) + '</option>'
+      )).join('');
+      triggerFilter.value = triggers.includes(current) ? current : 'all';
+    }
+  }
+
+  function executionMatchesFilter(execution, filterValue, query, templateFilterValue, triggerFilterValue) {
     const status = String(execution && execution.status ? execution.status : '').trim().toLowerCase();
-    const id = String(execution && execution.id ? execution.id : '').trim().toLowerCase();
-    const goal = String(execution && execution.goal ? execution.goal : '').trim().toLowerCase();
     const normalizedQuery = String(query || '').trim().toLowerCase();
-    if (normalizedQuery && !id.includes(normalizedQuery) && !goal.includes(normalizedQuery)) {
+    const normalizedTemplate = String(templateFilterValue || 'all').trim();
+    const normalizedTrigger = String(triggerFilterValue || 'all').trim().toLowerCase();
+    if (normalizedQuery && !executionSearchText(execution).includes(normalizedQuery)) {
+      return false;
+    }
+    if (normalizedTemplate && normalizedTemplate !== 'all' && executionTemplateValue(execution) !== normalizedTemplate) {
+      return false;
+    }
+    if (normalizedTrigger && normalizedTrigger !== 'all' && executionTriggerValue(execution) !== normalizedTrigger) {
       return false;
     }
     switch (String(filterValue || 'all').trim().toLowerCase()) {
@@ -2612,17 +2694,20 @@
       return;
     }
 
+    syncExecutionFilterOptions(executions);
     const searchValue = String(($('#executions-search') || {}).value || '').trim();
     const statusFilter = String(($('#executions-status-filter') || {}).value || 'all').trim().toLowerCase();
-    const filtered = executions.filter(execution => executionMatchesFilter(execution, statusFilter, searchValue));
+    const templateFilter = String(($('#executions-template-filter') || {}).value || 'all').trim();
+    const triggerFilter = String(($('#executions-trigger-filter') || {}).value || 'all').trim().toLowerCase();
+    const filtered = executions.filter(execution => executionMatchesFilter(execution, statusFilter, searchValue, templateFilter, triggerFilter));
     const routeInfo = parseRoute(location.hash);
     const routeExecutionID = routeInfo.name === 'executions' ? String(routeInfo.segments[1] || '').trim() : '';
     if (routeExecutionID) selectedExecutionID = routeExecutionID;
     if (!selectedExecutionID && filtered.length) {
       selectedExecutionID = String(filtered[0] && filtered[0].id ? filtered[0].id : '').trim();
     }
-    if (selectedExecutionID && !executions.some(item => String(item && item.id ? item.id : '').trim() === selectedExecutionID) && filtered.length) {
-      selectedExecutionID = String(filtered[0] && filtered[0].id ? filtered[0].id : '').trim();
+    if (selectedExecutionID && !filtered.some(item => String(item && item.id ? item.id : '').trim() === selectedExecutionID)) {
+      selectedExecutionID = filtered.length ? String(filtered[0] && filtered[0].id ? filtered[0].id : '').trim() : '';
     }
 
     summary.textContent = executions.length
@@ -2664,6 +2749,14 @@
         meta.className = 'instance-meta';
         meta.textContent = 'Tasks: ' + String(counts.taskUnits.length) + ' · Completed: ' + String(counts.completed) + ' · Failed: ' + String(counts.failed) + ' · Updated: ' + formatDateTime(execution && execution.updatedAt);
         card.appendChild(meta);
+
+        const attributionParts = executionAttributionParts(execution);
+        if (attributionParts.length) {
+          const attribution = document.createElement('div');
+          attribution.className = 'instance-meta';
+          attribution.textContent = attributionParts.join(' · ');
+          card.appendChild(attribution);
+        }
 
         card.onclick = () => {
           selectedExecutionID = executionID;
@@ -2852,6 +2945,14 @@
         meta.className = 'instance-meta';
         meta.textContent = 'Tasks: ' + String(counts.taskUnits.length) + ' · Completed: ' + String(counts.completed) + ' · Failed: ' + String(counts.failed) + ' · Updated: ' + formatDateTime(execution && execution.updatedAt);
         card.appendChild(meta);
+
+        const attributionParts = executionAttributionParts(execution);
+        if (attributionParts.length) {
+          const attribution = document.createElement('div');
+          attribution.className = 'instance-meta';
+          attribution.textContent = attributionParts.join(' · ');
+          card.appendChild(attribution);
+        }
 
         const actions = document.createElement('div');
         actions.className = 'btn-row';

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -38,18 +39,31 @@ type OrchestratorEvidenceResultSummary struct {
 	Failed    int `json:"failed"`
 }
 
+type OrchestratorEvidenceProviderAttribution struct {
+	Team                  string                                       `json:"team,omitempty"`
+	Project               string                                       `json:"project,omitempty"`
+	Environment           string                                       `json:"environment,omitempty"`
+	TemplateID            string                                       `json:"templateId,omitempty"`
+	Trigger               string                                       `json:"trigger,omitempty"`
+	Initiator             string                                       `json:"initiator,omitempty"`
+	TotalEstimatedCostUSD float64                                      `json:"totalEstimatedCostUsd,omitempty"`
+	Providers             []orchestratorProviderAggregateSnapshot      `json:"providers,omitempty"`
+	Models                []orchestratorProviderModelAggregateSnapshot `json:"models,omitempty"`
+}
+
 type OrchestratorEvidenceBundle struct {
-	GeneratedAt      string                              `json:"generatedAt"`
-	Execution        OrchestratorExecution               `json:"execution"`
-	Plan             OrchestratorEvidencePlanSnapshot    `json:"plan"`
-	Policy           OrchestratorExecutionPolicySnapshot `json:"policy,omitempty"`
-	Governance       OrchestratorExecutionGovernance     `json:"governance,omitempty"`
-	Authorization    OrchestratorAuthorization           `json:"authorization,omitempty"`
-	WorkerLeases     []OrchestratorWorkerLease           `json:"workerLeases,omitempty"`
-	Results          []OrchestratorTaskResult            `json:"results,omitempty"`
-	ResultSummary    OrchestratorEvidenceResultSummary   `json:"resultSummary"`
-	ArtifactManifest []OrchestratorArtifact              `json:"artifactManifest,omitempty"`
-	Audit            []gatewayAuditEvent                 `json:"audit,omitempty"`
+	GeneratedAt         string                                  `json:"generatedAt"`
+	Execution           OrchestratorExecution                   `json:"execution"`
+	Plan                OrchestratorEvidencePlanSnapshot        `json:"plan"`
+	Policy              OrchestratorExecutionPolicySnapshot     `json:"policy,omitempty"`
+	Governance          OrchestratorExecutionGovernance         `json:"governance,omitempty"`
+	ProviderAttribution OrchestratorEvidenceProviderAttribution `json:"providerAttribution,omitempty"`
+	Authorization       OrchestratorAuthorization               `json:"authorization,omitempty"`
+	WorkerLeases        []OrchestratorWorkerLease               `json:"workerLeases,omitempty"`
+	Results             []OrchestratorTaskResult                `json:"results,omitempty"`
+	ResultSummary       OrchestratorEvidenceResultSummary       `json:"resultSummary"`
+	ArtifactManifest    []OrchestratorArtifact                  `json:"artifactManifest,omitempty"`
+	Audit               []gatewayAuditEvent                     `json:"audit,omitempty"`
 }
 
 func handleOrchestratorExecutionEvidence(w http.ResponseWriter, r *http.Request, requestID string, cfg *GatewayConfig, execution OrchestratorExecution, parts []string) {
@@ -141,6 +155,9 @@ func handleGatewayAuditExport(w http.ResponseWriter, r *http.Request, requestID 
 }
 
 func buildOrchestratorEvidenceBundle(execution OrchestratorExecution) (OrchestratorEvidenceBundle, error) {
+	executionWithUsage := execution
+	executionWithUsage.Governance = hydrateProviderGovernanceUsage(executionWithUsage)
+
 	leases, err := orchestratorListLeasesByExecution(execution.ID)
 	if err != nil {
 		return OrchestratorEvidenceBundle{}, err
@@ -150,17 +167,18 @@ func buildOrchestratorEvidenceBundle(execution OrchestratorExecution) (Orchestra
 		return OrchestratorEvidenceBundle{}, err
 	}
 	return OrchestratorEvidenceBundle{
-		GeneratedAt:      nowTimestamp(),
-		Execution:        execution,
-		Plan:             buildEvidencePlanSnapshot(execution),
-		Policy:           execution.Policy,
-		Governance:       execution.Governance,
-		Authorization:    execution.Authorization,
-		WorkerLeases:     leases,
-		Results:          execution.Results,
-		ResultSummary:    summarizeOrchestratorEvidenceResults(execution.Results),
-		ArtifactManifest: execution.Outcome.Artifacts,
-		Audit:            auditEvents,
+		GeneratedAt:         nowTimestamp(),
+		Execution:           executionWithUsage,
+		Plan:                buildEvidencePlanSnapshot(executionWithUsage),
+		Policy:              executionWithUsage.Policy,
+		Governance:          executionWithUsage.Governance,
+		ProviderAttribution: buildOrchestratorEvidenceProviderAttribution(executionWithUsage),
+		Authorization:       executionWithUsage.Authorization,
+		WorkerLeases:        leases,
+		Results:             executionWithUsage.Results,
+		ResultSummary:       summarizeOrchestratorEvidenceResults(executionWithUsage.Results),
+		ArtifactManifest:    executionWithUsage.Outcome.Artifacts,
+		Audit:               auditEvents,
 	}, nil
 }
 
@@ -232,6 +250,9 @@ func buildOrchestratorEvidenceArchive(bundle OrchestratorEvidenceBundle, cfg *Ga
 	if err := addJSON("governance.json", bundle.Governance); err != nil {
 		return nil, err
 	}
+	if err := addJSON("provider-attribution.json", bundle.ProviderAttribution); err != nil {
+		return nil, err
+	}
 	if err := addJSON("authorization.json", bundle.Authorization); err != nil {
 		return nil, err
 	}
@@ -297,4 +318,104 @@ func evidenceArchiveArtifactEntryName(filename, artifactID string, used map[stri
 	}
 	used[entry]++
 	return "artifacts/" + trimmedID + "-" + strconv.Itoa(used[entry]) + "-" + base
+}
+
+func buildOrchestratorEvidenceProviderAttribution(execution OrchestratorExecution) OrchestratorEvidenceProviderAttribution {
+	triggerLabel, _ := executionTriggerAttributionKey(execution)
+	out := OrchestratorEvidenceProviderAttribution{
+		Team:        strings.TrimSpace(execution.Team),
+		Project:     strings.TrimSpace(execution.Project),
+		Environment: strings.TrimSpace(execution.Environment),
+		TemplateID:  strings.TrimSpace(execution.TemplateID),
+		Trigger:     strings.TrimSpace(triggerLabel),
+		Initiator:   strings.TrimSpace(execution.Initiator),
+	}
+	if len(execution.Governance.ProviderResolutions) == 0 {
+		return out
+	}
+
+	providerAggregates := map[string]*orchestratorProviderAggregateSnapshot{}
+	providerLatencyTotals := map[string]int64{}
+	providerLatencyCounts := map[string]int64{}
+	modelAggregates := map[string]*orchestratorProviderModelAggregateSnapshot{}
+	modelLatencyTotals := map[string]int64{}
+	modelLatencyCounts := map[string]int64{}
+	var totalEstimatedCostUSD float64
+
+	for _, resolution := range execution.Governance.ProviderResolutions {
+		provider := strings.ToLower(strings.TrimSpace(resolution.Provider))
+		if provider == "" {
+			continue
+		}
+		aggregate := providerAggregates[provider]
+		if aggregate == nil {
+			aggregate = &orchestratorProviderAggregateSnapshot{Provider: provider}
+			providerAggregates[provider] = aggregate
+		}
+		aggregate.Successes += resolution.SuccessfulTasks
+		aggregate.Failures += resolution.FailedTasks
+		aggregate.EstimatedCostUSD += resolution.EstimatedCostUSD
+		totalEstimatedCostUSD += resolution.EstimatedCostUSD
+
+		taskCount := int64(resolution.SuccessfulTasks + resolution.FailedTasks)
+		if resolution.AvgLatencyMs > 0 && taskCount > 0 {
+			providerLatencyTotals[provider] += resolution.AvgLatencyMs * taskCount
+			providerLatencyCounts[provider] += taskCount
+		}
+
+		model := strings.TrimSpace(resolution.Model)
+		if model == "" {
+			continue
+		}
+		modelKey := provider + "\x00" + strings.ToLower(model)
+		modelAggregate := modelAggregates[modelKey]
+		if modelAggregate == nil {
+			modelAggregate = &orchestratorProviderModelAggregateSnapshot{
+				Provider: provider,
+				Model:    model,
+			}
+			modelAggregates[modelKey] = modelAggregate
+		}
+		modelAggregate.Successes += resolution.SuccessfulTasks
+		modelAggregate.Failures += resolution.FailedTasks
+		modelAggregate.EstimatedCostUSD += resolution.EstimatedCostUSD
+		if resolution.AvgLatencyMs > 0 && taskCount > 0 {
+			modelLatencyTotals[modelKey] += resolution.AvgLatencyMs * taskCount
+			modelLatencyCounts[modelKey] += taskCount
+		}
+	}
+
+	for provider, aggregate := range providerAggregates {
+		if count := providerLatencyCounts[provider]; count > 0 {
+			aggregate.AvgLatencyMs = providerLatencyTotals[provider] / count
+		}
+		aggregate.EstimatedCostUSD = roundProviderAggregateCost(aggregate.EstimatedCostUSD)
+		out.Providers = append(out.Providers, *aggregate)
+	}
+	sort.SliceStable(out.Providers, func(i, j int) bool {
+		if out.Providers[i].EstimatedCostUSD != out.Providers[j].EstimatedCostUSD {
+			return out.Providers[i].EstimatedCostUSD > out.Providers[j].EstimatedCostUSD
+		}
+		return out.Providers[i].Provider < out.Providers[j].Provider
+	})
+
+	for modelKey, aggregate := range modelAggregates {
+		if count := modelLatencyCounts[modelKey]; count > 0 {
+			aggregate.AvgLatencyMs = modelLatencyTotals[modelKey] / count
+		}
+		aggregate.EstimatedCostUSD = roundProviderAggregateCost(aggregate.EstimatedCostUSD)
+		out.Models = append(out.Models, *aggregate)
+	}
+	sort.SliceStable(out.Models, func(i, j int) bool {
+		if out.Models[i].EstimatedCostUSD != out.Models[j].EstimatedCostUSD {
+			return out.Models[i].EstimatedCostUSD > out.Models[j].EstimatedCostUSD
+		}
+		if out.Models[i].Provider != out.Models[j].Provider {
+			return out.Models[i].Provider < out.Models[j].Provider
+		}
+		return out.Models[i].Model < out.Models[j].Model
+	})
+
+	out.TotalEstimatedCostUSD = roundProviderAggregateCost(totalEstimatedCostUSD)
+	return out
 }

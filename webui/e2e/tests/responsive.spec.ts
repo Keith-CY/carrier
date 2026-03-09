@@ -73,6 +73,8 @@ for (const [label, viewport] of [['Mobile', MOBILE], ['Tablet', TABLET]] as cons
       await loginWithToken(page, '/#/executions');
       await expect(page.locator('#executions-search')).toBeVisible();
       await expect(page.locator('#executions-status-filter')).toBeVisible();
+      await expect(page.locator('#executions-template-filter')).toBeVisible();
+      await expect(page.locator('#executions-trigger-filter')).toBeVisible();
       await expect(page.locator('#executions-list .execution-card')).toHaveCount(MOCK_EXECUTIONS.length);
     });
   });

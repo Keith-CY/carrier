@@ -166,6 +166,14 @@ func TestHandleOrchestratorExecutionEvidenceJSONAndAuditExport(t *testing.T) {
 	if len(resolutions) != 1 {
 		t.Fatalf("providerResolutions len=%d want 1 governance=%+v", len(resolutions), governance)
 	}
+	providerAttribution, _ := evidence["providerAttribution"].(map[string]interface{})
+	if got := anyToFloat(providerAttribution["totalEstimatedCostUsd"]); got <= 0 {
+		t.Fatalf("providerAttribution.totalEstimatedCostUsd=%f want > 0 attribution=%+v", got, providerAttribution)
+	}
+	providerUsage, _ := providerAttribution["providers"].([]interface{})
+	if len(providerUsage) != 1 {
+		t.Fatalf("providerAttribution.providers len=%d want 1 attribution=%+v", len(providerUsage), providerAttribution)
+	}
 	leases, _ := evidence["workerLeases"].([]interface{})
 	if len(leases) != 1 {
 		t.Fatalf("workerLeases len=%d want 1 evidence=%+v", len(leases), evidence)
@@ -308,6 +316,7 @@ func TestHandleOrchestratorExecutionEvidenceZipAndNegativeCases(t *testing.T) {
 		"worker-leases.json",
 		"results.json",
 		"result-summary.json",
+		"provider-attribution.json",
 		"artifact-manifest.json",
 		"audit.json",
 		"artifacts/summary.json",
