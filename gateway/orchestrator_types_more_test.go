@@ -306,6 +306,62 @@ func TestNormalizeOrchestratorExecutionForStorePreservesLineageAndOutcome(t *tes
 	}
 }
 
+func TestNormalizeOrchestratorExecutionForStoreHydratesProviderUsage(t *testing.T) {
+	out := normalizeOrchestratorExecutionForStore(OrchestratorExecution{
+		ID:                "exec-provider-usage",
+		Goal:              "collect provider usage",
+		RequestedProvider: "openrouter",
+		RequiredWorkers: []OrchestratorRequiredWorker{
+			{HostID: "host-1", AgentID: "zeroclaw", Count: 1},
+		},
+		TaskUnits: []OrchestratorTaskUnit{
+			{ID: "task-1", Input: "collect deployment diagnostics for checkout", HostID: "host-1", AgentID: "zeroclaw"},
+		},
+		Results: []OrchestratorTaskResult{
+			{
+				TaskID:    "task-1",
+				Status:    OrchestratorTaskStatusCompleted,
+				HostID:    "host-1",
+				AgentID:   "zeroclaw",
+				Summary:   "diagnostics summarized for checkout rollback",
+				LatencyMs: 1800,
+			},
+		},
+		Governance: OrchestratorExecutionGovernance{
+			ProviderResolutions: []ProviderGovernanceResolution{{
+				HostID:   "host-1",
+				AgentID:  "zeroclaw",
+				Source:   "instance",
+				Provider: "openrouter",
+				Model:    "anthropic/claude-3.7-sonnet",
+			}},
+		},
+	})
+
+	if len(out.Governance.ProviderResolutions) != 1 {
+		t.Fatalf("expected one provider resolution, got %+v", out.Governance.ProviderResolutions)
+	}
+	resolution := out.Governance.ProviderResolutions[0]
+	if resolution.EstimatedInputTokens <= 0 {
+		t.Fatalf("expected estimated input tokens, got %+v", resolution)
+	}
+	if resolution.EstimatedOutputTokens <= 0 {
+		t.Fatalf("expected estimated output tokens, got %+v", resolution)
+	}
+	if resolution.EstimatedTotalTokens != resolution.EstimatedInputTokens+resolution.EstimatedOutputTokens {
+		t.Fatalf("expected total tokens to match input+output, got %+v", resolution)
+	}
+	if resolution.EstimatedCostUSD <= 0 {
+		t.Fatalf("expected estimated cost usd, got %+v", resolution)
+	}
+	if resolution.SuccessfulTasks != 1 || resolution.FailedTasks != 0 {
+		t.Fatalf("expected successful task accounting, got %+v", resolution)
+	}
+	if resolution.AvgLatencyMs != 1800 {
+		t.Fatalf("expected avg latency 1800, got %+v", resolution)
+	}
+}
+
 func TestErrOrchestratorValidationFormatting(t *testing.T) {
 	if got := errOrchestratorValidation("  bad input  ", 3).Error(); got != "item 3: bad input" {
 		t.Fatalf("unexpected indexed error format: %q", got)

@@ -116,6 +116,8 @@ test.describe('Execution Center', () => {
     await expect(page.locator('#executions-detail')).toContainText('Outcome');
     await expect(page.locator('#executions-detail')).toContainText('Release notes draft compiled and attached.');
     await expect(page.locator('#executions-detail')).toContainText('Artifacts');
+    await expect(page.locator('#executions-detail')).toContainText('tokens=68');
+    await expect(page.locator('#executions-detail')).toContainText('cost=$0.0004');
     const artifactLink = page.locator('#executions-detail a[href*="/api/v1/orchestrator/executions/exec-complete/artifacts/artifact-release-notes"]');
     await expect(artifactLink).toBeVisible();
     await expect(page.locator('#executions-export-evidence')).toBeVisible();

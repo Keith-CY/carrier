@@ -590,10 +590,30 @@ func TestRenderOrchestrateExecutionIncludesLineageAndArtifacts(t *testing.T) {
 			"triggerId":"trigger-gh-1",
 			"triggerEvent":"issue_comment",
 			"initiator":"github:alice",
+			"requestedProvider":"openrouter",
 			"parentExecutionId":"exec-source-1",
 			"sourceExecutionId":"exec-source-1",
 			"launchReason":"retry_failed_tasks",
 			"status":"retryable_failed",
+			"governance":{
+				"providerResolutions":[
+					{
+						"hostId":"local",
+						"agentId":"zeroclaw",
+						"source":"instance",
+						"profileName":"openrouter-prod",
+						"provider":"openrouter",
+						"model":"anthropic/claude-3.7-sonnet",
+						"estimatedInputTokens":32,
+						"estimatedOutputTokens":18,
+						"estimatedTotalTokens":50,
+						"estimatedCostUsd":0.0015,
+						"successfulTasks":0,
+						"failedTasks":1,
+						"avgLatencyMs":18
+					}
+				]
+			},
 			"outcome":{
 				"summary":"one task failed and can be retried",
 				"failureReason":"provider timeout",
@@ -621,6 +641,12 @@ func TestRenderOrchestrateExecutionIncludesLineageAndArtifacts(t *testing.T) {
 	}
 	if !strings.Contains(out, "trigger: source=github id=trigger-gh-1 event=issue_comment initiator=github:alice") {
 		t.Fatalf("expected trigger metadata in output, got %q", out)
+	}
+	if !strings.Contains(out, "requested provider: openrouter") {
+		t.Fatalf("expected requested provider in output, got %q", out)
+	}
+	if !strings.Contains(out, "provider trace:") || !strings.Contains(out, "openrouter/anthropic/claude-3.7-sonnet") || !strings.Contains(out, "cost=$0.0015") {
+		t.Fatalf("expected provider trace in output, got %q", out)
 	}
 	if !strings.Contains(out, "outcome: one task failed and can be retried") {
 		t.Fatalf("expected outcome summary in output, got %q", out)

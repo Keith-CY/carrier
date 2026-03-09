@@ -3883,27 +3883,53 @@ type orchestrateExecutionPolicySnapshot struct {
 	Targets                        []orchestrateExecutionPolicyTargetSnapshot `json:"targets,omitempty"`
 }
 
+type orchestrateProviderGovernanceResolutionSnapshot struct {
+	HostID                string  `json:"hostId,omitempty"`
+	AgentID               string  `json:"agentId,omitempty"`
+	Source                string  `json:"source,omitempty"`
+	ProfileID             string  `json:"profileId,omitempty"`
+	ProfileName           string  `json:"profileName,omitempty"`
+	Provider              string  `json:"provider,omitempty"`
+	Model                 string  `json:"model,omitempty"`
+	Status                string  `json:"status,omitempty"`
+	SyncMode              string  `json:"syncMode,omitempty"`
+	EstimatedInputTokens  int     `json:"estimatedInputTokens,omitempty"`
+	EstimatedOutputTokens int     `json:"estimatedOutputTokens,omitempty"`
+	EstimatedTotalTokens  int     `json:"estimatedTotalTokens,omitempty"`
+	EstimatedCostUSD      float64 `json:"estimatedCostUsd,omitempty"`
+	SuccessfulTasks       int     `json:"successfulTasks,omitempty"`
+	FailedTasks           int     `json:"failedTasks,omitempty"`
+	AvgLatencyMs          int64   `json:"avgLatencyMs,omitempty"`
+	Message               string  `json:"message,omitempty"`
+}
+
+type orchestrateExecutionGovernanceSnapshot struct {
+	ProviderResolutions []orchestrateProviderGovernanceResolutionSnapshot `json:"providerResolutions,omitempty"`
+}
+
 type orchestrateExecutionSnapshot struct {
-	ID                   string                              `json:"id"`
-	Goal                 string                              `json:"goal"`
-	TemplateID           string                              `json:"templateId,omitempty"`
-	TriggerSource        string                              `json:"triggerSource,omitempty"`
-	TriggerID            string                              `json:"triggerId,omitempty"`
-	TriggerEvent         string                              `json:"triggerEvent,omitempty"`
-	TriggerPayloadDigest string                              `json:"triggerPayloadDigest,omitempty"`
-	Initiator            string                              `json:"initiator,omitempty"`
-	ParentExecutionID    string                              `json:"parentExecutionId,omitempty"`
-	SourceExecutionID    string                              `json:"sourceExecutionId,omitempty"`
-	LaunchReason         string                              `json:"launchReason,omitempty"`
-	Status               string                              `json:"status"`
-	Error                string                              `json:"error,omitempty"`
-	MaxConcurrency       int                                 `json:"maxConcurrency,omitempty"`
-	Policy               orchestrateExecutionPolicySnapshot  `json:"policy,omitempty"`
-	Outcome              orchestrateExecutionOutcomeSnapshot `json:"outcome,omitempty"`
-	CreatedAt            string                              `json:"createdAt,omitempty"`
-	UpdatedAt            string                              `json:"updatedAt,omitempty"`
-	TaskUnits            []orchestrateTaskUnit               `json:"taskUnits,omitempty"`
-	Results              []orchestrateTaskResultSnapshot     `json:"results,omitempty"`
+	ID                   string                                 `json:"id"`
+	Goal                 string                                 `json:"goal"`
+	TemplateID           string                                 `json:"templateId,omitempty"`
+	TriggerSource        string                                 `json:"triggerSource,omitempty"`
+	TriggerID            string                                 `json:"triggerId,omitempty"`
+	TriggerEvent         string                                 `json:"triggerEvent,omitempty"`
+	TriggerPayloadDigest string                                 `json:"triggerPayloadDigest,omitempty"`
+	Initiator            string                                 `json:"initiator,omitempty"`
+	RequestedProvider    string                                 `json:"requestedProvider,omitempty"`
+	ParentExecutionID    string                                 `json:"parentExecutionId,omitempty"`
+	SourceExecutionID    string                                 `json:"sourceExecutionId,omitempty"`
+	LaunchReason         string                                 `json:"launchReason,omitempty"`
+	Status               string                                 `json:"status"`
+	Error                string                                 `json:"error,omitempty"`
+	MaxConcurrency       int                                    `json:"maxConcurrency,omitempty"`
+	Policy               orchestrateExecutionPolicySnapshot     `json:"policy,omitempty"`
+	Governance           orchestrateExecutionGovernanceSnapshot `json:"governance,omitempty"`
+	Outcome              orchestrateExecutionOutcomeSnapshot    `json:"outcome,omitempty"`
+	CreatedAt            string                                 `json:"createdAt,omitempty"`
+	UpdatedAt            string                                 `json:"updatedAt,omitempty"`
+	TaskUnits            []orchestrateTaskUnit                  `json:"taskUnits,omitempty"`
+	Results              []orchestrateTaskResultSnapshot        `json:"results,omitempty"`
 }
 
 type orchestrateWorkerLeaseSnapshot struct {
@@ -5122,6 +5148,44 @@ func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
 			firstNonEmpty(strings.TrimSpace(execution.Initiator), "n/a"),
 		))
 	}
+	if requestedProvider := strings.TrimSpace(execution.RequestedProvider); requestedProvider != "" {
+		lines = append(lines, "requested provider: "+requestedProvider)
+	}
+	if len(execution.Governance.ProviderResolutions) > 0 {
+		lines = append(lines, "provider trace:")
+		for _, resolution := range execution.Governance.ProviderResolutions {
+			hostTarget := firstNonEmpty(strings.TrimSpace(resolution.HostID), "local")
+			agentTarget := firstNonEmpty(strings.TrimSpace(resolution.AgentID), "unknown")
+			providerModel := strings.Join(filterEmptyStrings([]string{
+				strings.TrimSpace(resolution.Provider),
+				strings.TrimSpace(resolution.Model),
+			}), "/")
+			if providerModel == "" {
+				providerModel = "unbound"
+			}
+			parts := []string{
+				fmt.Sprintf("%s/%s", hostTarget, agentTarget),
+				"source=" + firstNonEmpty(strings.TrimSpace(resolution.Source), "none"),
+			}
+			if profileName := firstNonEmpty(strings.TrimSpace(resolution.ProfileName), strings.TrimSpace(resolution.ProfileID)); profileName != "" {
+				parts = append(parts, "profile="+profileName)
+			}
+			parts = append(parts, providerModel)
+			if resolution.SuccessfulTasks > 0 || resolution.FailedTasks > 0 {
+				parts = append(parts, fmt.Sprintf("tasks=%d/%d", resolution.SuccessfulTasks, resolution.FailedTasks))
+			}
+			if resolution.AvgLatencyMs > 0 {
+				parts = append(parts, fmt.Sprintf("latency=%dms", resolution.AvgLatencyMs))
+			}
+			if resolution.EstimatedTotalTokens > 0 {
+				parts = append(parts, fmt.Sprintf("tokens=%d", resolution.EstimatedTotalTokens))
+			}
+			if resolution.EstimatedCostUSD > 0 {
+				parts = append(parts, fmt.Sprintf("cost=$%.4f", resolution.EstimatedCostUSD))
+			}
+			lines = append(lines, "- "+strings.Join(parts, " · "))
+		}
+	}
 	if parentID := strings.TrimSpace(execution.ParentExecutionID); parentID != "" || strings.TrimSpace(execution.SourceExecutionID) != "" || strings.TrimSpace(execution.LaunchReason) != "" {
 		lines = append(lines, fmt.Sprintf(
 			"lineage: parent=%s source=%s launch=%s",
@@ -5274,6 +5338,18 @@ func renderOrchestrateExecutionArtifacts(executionID string, artifacts []orchest
 		lines = append(lines, fmt.Sprintf("- %s · %s", name, strings.Join(parts, " · ")))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func filterEmptyStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func renderOrchestrateExecutionEvidence(executionID string, evidence orchestrateEvidenceBundleSnapshot) string {
