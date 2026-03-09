@@ -130,6 +130,9 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 	if trimmed == "" {
 		switch r.Method {
 		case http.MethodGet:
+			if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_EXECUTION_VIEW", "role cannot view orchestrator executions"); !ok {
+				return
+			}
 			executions, err := listOrchestratorExecutions()
 			if err != nil {
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to list orchestrator executions", "list orchestrator executions", err)
@@ -142,6 +145,9 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			})
 			return
 		case http.MethodPost:
+			if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot launch orchestrator executions"); !ok {
+				return
+			}
 			var req OrchestratorExecution
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
@@ -264,6 +270,9 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
+		if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_EXECUTION_VIEW", "role cannot view orchestrator executions"); !ok {
+			return
+		}
 		leases, leaseErr := orchestratorListLeasesByExecution(executionID)
 		if leaseErr != nil {
 			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load orchestrator worker leases", "list orchestrator worker leases by execution", leaseErr)
@@ -280,11 +289,17 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 
 	action := strings.ToLower(strings.TrimSpace(parts[1]))
 	if action == "artifacts" {
+		if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_EXECUTION_VIEW", "role cannot view orchestrator execution artifacts"); !ok {
+			return
+		}
 		handleOrchestratorExecutionArtifacts(w, r, requestID, cfg, execution, parts)
 		return
 	}
 	switch action {
 	case "authorize":
+		if _, ok := requireGatewayPermission(w, r, cfg, canApproveExecutions, "E_RBAC_EXECUTION_APPROVE", "role cannot approve orchestrator executions"); !ok {
+			return
+		}
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
@@ -406,6 +421,9 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 		})
 		return
 	case "cancel":
+		if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot cancel orchestrator executions"); !ok {
+			return
+		}
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
@@ -440,6 +458,9 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 		})
 		return
 	case "retry", "rerun", "clone":
+		if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot relaunch orchestrator executions"); !ok {
+			return
+		}
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
@@ -513,6 +534,9 @@ func handleOrchestratorWorkersReclaim(w http.ResponseWriter, r *http.Request, re
 	}
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+		return
+	}
+	if _, ok := requireGatewayPermission(w, r, cfg, canManageHosts, "E_RBAC_HOST_MANAGE", "role cannot reclaim orchestrator workers"); !ok {
 		return
 	}
 	var req struct {

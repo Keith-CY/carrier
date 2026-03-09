@@ -25,6 +25,9 @@ func handleOrchestratorPlans(w http.ResponseWriter, r *http.Request, requestID s
 		writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 		return
 	}
+	if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot preview orchestrator execution plans"); !ok {
+		return
+	}
 
 	var req orchestratorPlanRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

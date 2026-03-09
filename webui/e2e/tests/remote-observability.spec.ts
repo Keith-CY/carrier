@@ -6,6 +6,7 @@ test.describe('Remote Observability', () => {
     await mockAPIs(page);
 
     let metricCalls = 0;
+    let orchestratorMetricCalls = 0;
     await page.route('**/api/v1/remote/metrics', async (route) => {
       metricCalls += 1;
       const second = metricCalls >= 2;
@@ -52,14 +53,63 @@ test.describe('Remote Observability', () => {
         }),
       });
     });
+    await page.route('**/api/v1/orchestrator/metrics', async (route) => {
+      orchestratorMetricCalls += 1;
+      const second = orchestratorMetricCalls >= 2;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          result: 'ok',
+          metrics: {
+            timestamp: second ? '2026-02-25T09:00:00Z' : '2026-02-25T08:00:00Z',
+            executions: {
+              total: second ? 5 : 4,
+              running: second ? 0 : 1,
+              completed: second ? 3 : 2,
+              failed: 1,
+              cancelled: 1,
+              retryableFailed: second ? 0 : 1,
+              retryCount: second ? 1 : 3,
+              avgLatencyMs: second ? 61000 : 90000,
+            },
+            workers: {
+              total: 3,
+              busy: second ? 0 : 1,
+              ready: 1,
+              error: 1,
+              stale: second ? 0 : 1,
+            },
+            providers: {
+              requestedFailures: second ? {} : { anthropic: 1 },
+              resolvedFailures: second ? {} : { anthropic: 1 },
+            },
+            policies: {
+              deny: 1,
+              ask: second ? 0 : 1,
+              allow: second ? 4 : 2,
+            },
+          },
+        }),
+      });
+    });
 
     await loginWithToken(page, '/#/remote-observability');
 
     await expect(page.locator('#view-remote-observability')).toBeVisible();
     await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Operations' })).toBeVisible();
     await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Rollout' })).toBeVisible();
+    await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Executions' })).toBeVisible();
+    await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Workers' })).toBeVisible();
+    await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Provider Failures' })).toBeVisible();
+    await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Policy Blocks' })).toBeVisible();
     await expect(page.locator('#remote-observability-summary')).toContainText('success rate: 67%');
     await expect(page.locator('#remote-observability-summary')).toContainText('state: canary');
+    await expect(page.locator('#remote-observability-summary')).toContainText('running: 1');
+    await expect(page.locator('#remote-observability-summary')).toContainText('retry count: 3');
+    await expect(page.locator('#remote-observability-summary')).toContainText('stale: 1');
+    await expect(page.locator('#remote-observability-summary')).toContainText('requested: anthropic=1');
+    await expect(page.locator('#remote-observability-summary')).toContainText('ask: 1');
     await expect(page.locator('#remote-observability-group')).toContainText('instances');
     await expect(page.locator('#remote-observability-group')).toContainText('provider');
     await expect(page.locator('#remote-observability-ops-body')).toContainText('instances_install');
@@ -87,8 +137,14 @@ test.describe('Remote Observability', () => {
 
     await page.click('#remote-observability-refresh');
     await expect.poll(() => metricCalls).toBe(2);
+    await expect.poll(() => orchestratorMetricCalls).toBe(2);
     await expect(page.locator('#remote-observability-summary')).toContainText('success rate: 83%');
     await expect(page.locator('#remote-observability-summary')).toContainText('state: healthy');
+    await expect(page.locator('#remote-observability-summary')).toContainText('running: 0');
+    await expect(page.locator('#remote-observability-summary')).toContainText('retry count: 1');
+    await expect(page.locator('#remote-observability-summary')).toContainText('stale: 0');
+    await expect(page.locator('#remote-observability-summary')).toContainText('requested: none');
+    await expect(page.locator('#remote-observability-summary')).toContainText('ask: 0');
     await expect(page.locator('#remote-observability-status')).toContainText('Updated at 2026-02-25T09:00:00Z');
     await expect(page.locator('#remote-observability-status')).toContainText('rollout=healthy');
   });

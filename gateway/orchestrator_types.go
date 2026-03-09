@@ -137,6 +137,10 @@ type OrchestratorExecutionOutcome struct {
 type OrchestratorExecution struct {
 	ID                string                              `json:"id"`
 	Goal              string                              `json:"goal"`
+	Team              string                              `json:"team,omitempty"`
+	Project           string                              `json:"project,omitempty"`
+	Environment       string                              `json:"environment,omitempty"`
+	TemplateID        string                              `json:"templateId,omitempty"`
 	RequestedProvider string                              `json:"requestedProvider,omitempty"`
 	IdempotencyKey    string                              `json:"idempotencyKey,omitempty"`
 	ParentExecutionID string                              `json:"parentExecutionId,omitempty"`
@@ -350,6 +354,10 @@ func normalizeOrchestratorTask(in OrchestratorTaskUnit, idx int) (OrchestratorTa
 func normalizeOrchestratorExecution(in OrchestratorExecution) (OrchestratorExecution, error) {
 	out := in
 	out.Goal = strings.TrimSpace(out.Goal)
+	out.Team = strings.TrimSpace(out.Team)
+	out.Project = strings.TrimSpace(out.Project)
+	out.Environment = strings.TrimSpace(out.Environment)
+	out.TemplateID = strings.TrimSpace(out.TemplateID)
 	out.RequestedProvider = strings.TrimSpace(out.RequestedProvider)
 	if out.Goal == "" {
 		return OrchestratorExecution{}, errOrchestratorValidation("goal is required", -1)

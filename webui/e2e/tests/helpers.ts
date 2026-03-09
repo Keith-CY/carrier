@@ -1,6 +1,17 @@
 import { Page } from '@playwright/test';
 
 export const TEST_TOKEN = 'test-token-valid';
+export const ADMIN_AUTHZ = {
+  role: 'admin',
+  permissions: {
+    viewExecutions: true,
+    launchExecutions: true,
+    approveExecutions: true,
+    managePolicies: true,
+    manageProviders: true,
+    manageHosts: true,
+  },
+};
 export const MOCK_LOG_STREAM_LINES = [
   '{"time":"2026-02-22T10:00:00.000Z","level":"INFO","message":"agent started"}',
   '[DEBUG] worker heartbeat',
@@ -384,7 +395,37 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
       contentType: 'application/json',
       body: JSON.stringify({
         result: 'ok',
-        hosts: [{ id: 'host-1', name: 'prod-host-1' }],
+        hosts: [{ id: 'host-1', name: 'prod-host-1', labels: ['prod', 'gpu'] }],
+      }),
+    }),
+  );
+
+  await page.route('**/api/v1/provider-profiles', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        profiles: [
+          {
+            id: 'profile-openrouter',
+            name: 'openrouter-default',
+            provider: 'openrouter',
+            model: 'openai/gpt-4o-mini',
+            enabled: true,
+          },
+        ],
+      }),
+    }),
+  );
+
+  await page.route('**/api/v1/provider-bindings', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        bindings: [],
       }),
     }),
   );
@@ -562,6 +603,7 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
           remoteChatEnabled: true,
           providerBindingEnabled: true,
         },
+        authz: cloneJSON(ADMIN_AUTHZ),
       }),
     }),
   );

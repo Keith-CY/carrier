@@ -1,4 +1,4 @@
-// webui/src/remote-chat-island.ts
+// ../src/remote-chat-island.ts
 (function() {
   const React = window.React;
   const ReactDOM = window.ReactDOM;

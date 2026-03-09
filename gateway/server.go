@@ -48,7 +48,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		}
 		requestID := requestIDFromCtx(r.Context())
 
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -78,7 +78,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	// Provider setup
 	mux.HandleFunc("/api/v1/setup", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -97,7 +97,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -109,7 +109,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -121,7 +121,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -133,7 +133,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -145,7 +145,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -157,7 +157,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -165,7 +165,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/agents", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -173,7 +173,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/agents/", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -181,7 +181,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/instances", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -189,7 +189,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/instances/", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -197,7 +197,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/features", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -205,7 +205,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/webui/delegate/events", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -213,7 +213,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/remote/hosts", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -221,7 +221,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/remote/keys", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -229,7 +229,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/remote/hosts/", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -237,7 +237,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/remote/metrics", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -245,7 +245,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/remote/ssh-config-hosts", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -253,7 +253,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/orchestrator/executions", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -261,7 +261,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/orchestrator/plans", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -269,7 +269,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/orchestrator/policies", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -277,15 +277,23 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/orchestrator/policies/", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
 		handleOrchestratorPolicies(w, r, requestID, cfg)
 	})
+	mux.HandleFunc("/api/v1/policies/evaluate", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handlePolicyEvaluation(w, r, requestID, cfg)
+	})
 	mux.HandleFunc("/api/v1/orchestrator/executions/", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -293,15 +301,23 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/orchestrator/workers", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
 		handleOrchestratorWorkers(w, r, requestID, cfg, daemon)
 	})
+	mux.HandleFunc("/api/v1/orchestrator/metrics", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleOrchestratorMetrics(w, r, requestID, cfg)
+	})
 	mux.HandleFunc("/api/v1/orchestrator/workers/queue", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -309,7 +325,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/orchestrator/workers/reclaim", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -317,7 +333,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/orchestrator/workers/reclaim-stale", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -325,7 +341,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/provider-profiles", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -333,7 +349,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/provider-profiles/", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -341,7 +357,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/provider-bindings", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -349,7 +365,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/provider-bindings/", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -357,7 +373,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/provider-governance/resolve", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -365,7 +381,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/remote/chat/stream", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -373,7 +389,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/chat/stream", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -423,7 +439,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -479,7 +495,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
