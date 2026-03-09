@@ -83,6 +83,7 @@ test.describe('Remote Observability', () => {
             providers: {
               requestedFailures: second ? {} : { anthropic: 1 },
               resolvedFailures: second ? {} : { anthropic: 1 },
+              driftStates: second ? { in_sync: 5 } : { override: 1, in_sync: 3 },
               totalEstimatedCostUsd: second ? 0.0029 : 0.0041,
               aggregates: second
                 ? [
@@ -132,6 +133,7 @@ test.describe('Remote Observability', () => {
     await expect(page.locator('#remote-observability-summary')).toContainText('estimated cost: $0.0041');
     await expect(page.locator('#remote-observability-summary')).toContainText('top provider: anthropic');
     await expect(page.locator('#remote-observability-summary')).toContainText('top model: claude-3-7-sonnet');
+    await expect(page.locator('#remote-observability-summary')).toContainText('drift: in_sync=3, override=1');
     await expect(page.locator('#remote-observability-summary')).toContainText('ask: 1');
     await expect(page.locator('#remote-observability-group')).toContainText('instances');
     await expect(page.locator('#remote-observability-group')).toContainText('provider');
@@ -170,6 +172,7 @@ test.describe('Remote Observability', () => {
     await expect(page.locator('#remote-observability-summary')).toContainText('estimated cost: $0.0029');
     await expect(page.locator('#remote-observability-summary')).toContainText('top provider: openrouter');
     await expect(page.locator('#remote-observability-summary')).toContainText('top model: openai/gpt-4o-mini');
+    await expect(page.locator('#remote-observability-summary')).toContainText('drift: in_sync=5');
     await expect(page.locator('#remote-observability-summary')).toContainText('ask: 0');
     await expect(page.locator('#remote-observability-status')).toContainText('Updated at 2026-02-25T09:00:00Z');
     await expect(page.locator('#remote-observability-status')).toContainText('rollout=healthy');

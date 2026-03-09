@@ -86,7 +86,16 @@ func normalizeProviderGovernanceResolution(in ProviderGovernanceResolution) Prov
 	out.BaseURL = strings.TrimSpace(out.BaseURL)
 	out.AuthRef = strings.TrimSpace(out.AuthRef)
 	out.SyncMode = strings.TrimSpace(out.SyncMode)
+	out.DriftState = strings.TrimSpace(out.DriftState)
+	out.DriftReason = strings.TrimSpace(out.DriftReason)
 	out.Message = strings.TrimSpace(out.Message)
+	if len(out.Trace) > 0 {
+		trace := make([]ProviderGovernanceTraceEntry, 0, len(out.Trace))
+		for _, item := range out.Trace {
+			trace = append(trace, normalizeProviderGovernanceTraceEntry(item))
+		}
+		out.Trace = trace
+	}
 	if out.EstimatedInputTokens < 0 {
 		out.EstimatedInputTokens = 0
 	}
@@ -108,6 +117,22 @@ func normalizeProviderGovernanceResolution(in ProviderGovernanceResolution) Prov
 	if out.AvgLatencyMs < 0 {
 		out.AvgLatencyMs = 0
 	}
+	return out
+}
+
+func normalizeProviderGovernanceTraceEntry(in ProviderGovernanceTraceEntry) ProviderGovernanceTraceEntry {
+	out := in
+	out.Source = strings.TrimSpace(out.Source)
+	out.Status = strings.TrimSpace(out.Status)
+	out.BindingID = strings.TrimSpace(out.BindingID)
+	out.BindingTargetType = strings.TrimSpace(out.BindingTargetType)
+	out.BindingTargetID = strings.TrimSpace(out.BindingTargetID)
+	out.ProfileID = strings.TrimSpace(out.ProfileID)
+	out.ProfileName = strings.TrimSpace(out.ProfileName)
+	out.Provider = strings.TrimSpace(out.Provider)
+	out.Model = strings.TrimSpace(out.Model)
+	out.SyncMode = strings.TrimSpace(out.SyncMode)
+	out.Message = strings.TrimSpace(out.Message)
 	return out
 }
 

@@ -2536,6 +2536,9 @@
         const successCount = toFiniteNumber(item && item.successfulTasks, 0);
         const failureCount = toFiniteNumber(item && item.failedTasks, 0);
         const avgLatencyMs = toFiniteNumber(item && item.avgLatencyMs, 0);
+        const driftState = String(item && item.driftState ? item.driftState : '').trim();
+        const driftReason = String(item && item.driftReason ? item.driftReason : '').trim();
+        const trace = Array.isArray(item && item.trace) ? item.trace : [];
 
         const row = document.createElement('div');
         row.className = 'execution-detail-line';
@@ -2549,8 +2552,27 @@
           (estimatedTokens > 0 ? ' · tokens=' + String(estimatedTokens) : '') +
           (estimatedCostUSD > 0 ? ' · cost=' + formatUSD(estimatedCostUSD) : '') +
           ((successCount > 0 || failureCount > 0) ? ' · tasks=' + String(successCount) + '/' + String(failureCount) : '') +
+          (driftState ? ' · drift=' + driftState : '') +
           (avgLatencyMs > 0 ? ' · latency=' + formatMilliseconds(avgLatencyMs) : '');
         governanceCard.appendChild(row);
+        if (driftReason) {
+          const drift = document.createElement('div');
+          drift.className = 'execution-detail-line';
+          drift.textContent = driftReason;
+          governanceCard.appendChild(drift);
+        }
+        trace.forEach(traceItem => {
+          const traceRow = document.createElement('div');
+          traceRow.className = 'execution-detail-line';
+          const traceSource = String(traceItem && traceItem.source ? traceItem.source : 'unknown').trim() || 'unknown';
+          const traceStatus = String(traceItem && traceItem.status ? traceItem.status : 'unknown').trim() || 'unknown';
+          const traceSelected = !!(traceItem && traceItem.selected);
+          const traceProviderModel = [String(traceItem && traceItem.provider ? traceItem.provider : ''), String(traceItem && traceItem.model ? traceItem.model : '')]
+            .filter(Boolean)
+            .join('/');
+          traceRow.textContent = traceSource + ' [' + traceStatus + (traceSelected ? ', selected' : '') + ']' + (traceProviderModel ? ' ' + traceProviderModel : '');
+          governanceCard.appendChild(traceRow);
+        });
         if (message) {
           const msg = document.createElement('div');
           msg.className = 'execution-detail-line';
@@ -6449,9 +6471,13 @@
     const resolution = payload && payload.resolution && typeof payload.resolution === 'object'
       ? payload.resolution
       : {};
+    const trace = Array.isArray(resolution.trace) ? resolution.trace : [];
     const lines = [];
     lines.push('source=' + String(resolution.source || 'none'));
     lines.push('status=' + String(resolution.status || 'unbound'));
+    if (resolution.driftState) {
+      lines.push('drift=' + String(resolution.driftState));
+    }
     if (resolution.profileName || resolution.profileId) {
       lines.push('profile=' + String(resolution.profileName || resolution.profileId));
     }
@@ -6464,6 +6490,19 @@
     if (resolution.message) {
       lines.push(String(resolution.message));
     }
+    if (resolution.driftReason) {
+      lines.push(String(resolution.driftReason));
+    }
+    trace.forEach(item => {
+      const source = String(item && item.source ? item.source : 'unknown').trim() || 'unknown';
+      const status = String(item && item.status ? item.status : 'unknown').trim() || 'unknown';
+      const selected = !!(item && item.selected);
+      const providerModel = [String(item && item.provider ? item.provider : ''), String(item && item.model ? item.model : '')]
+        .filter(Boolean)
+        .join('/');
+      const label = source + ' [' + status + (selected ? ', selected' : '') + ']';
+      lines.push(label + (providerModel ? ' ' + providerModel : ''));
+    });
     out.textContent = lines.join('\n');
   }
 
@@ -7326,6 +7365,7 @@
       providers: {
         requestedFailures: providers.requestedFailures && typeof providers.requestedFailures === 'object' ? providers.requestedFailures : {},
         resolvedFailures: providers.resolvedFailures && typeof providers.resolvedFailures === 'object' ? providers.resolvedFailures : {},
+        driftStates: providers.driftStates && typeof providers.driftStates === 'object' ? providers.driftStates : {},
         totalEstimatedCostUsd: toFiniteNumber(providers.totalEstimatedCostUsd, 0),
         aggregates: Array.isArray(providers.aggregates) ? providers.aggregates : [],
         models: Array.isArray(providers.models) ? providers.models : [],
@@ -7535,6 +7575,7 @@
           'estimated cost: ' + formatUSD(providerMetrics.totalEstimatedCostUsd),
           'top provider: ' + (topProviderUsage(providerMetrics) || 'none'),
           'top model: ' + (topModelUsage(providerMetrics) || 'none'),
+          'drift: ' + formatMetricsBreakdown(providerMetrics.driftStates),
         ],
       },
       {

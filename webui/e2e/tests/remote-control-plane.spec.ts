@@ -911,17 +911,40 @@ test.describe('Remote Control Plane Views', () => {
         body: JSON.stringify({
           result: 'ok',
           resolution: {
-            source: 'host',
+            source: 'instance',
+            status: 'resolved',
             hostId: 'host-1',
             agentId: 'zeroclaw',
-            bindingId: 'binding-host-1',
-            bindingTargetType: 'host',
-            bindingTargetId: 'host-1',
-            profileId: 'profile-1',
-            profileName: 'openai-gpt5',
-            provider: 'openai',
-            model: 'gpt-5-mini',
-            syncMode: 'always_push',
+            bindingId: 'binding-instance-1',
+            bindingTargetType: 'instance',
+            bindingTargetId: 'host-1:zeroclaw',
+            profileId: 'profile-instance',
+            profileName: 'anthropic-prod',
+            provider: 'anthropic',
+            model: 'claude-3-7-sonnet',
+            syncMode: 'manual',
+            driftState: 'override',
+            driftReason: 'instance binding overrides host binding',
+            trace: [
+              {
+                source: 'instance',
+                status: 'resolved',
+                selected: true,
+                profileId: 'profile-instance',
+                profileName: 'anthropic-prod',
+                provider: 'anthropic',
+                model: 'claude-3-7-sonnet',
+              },
+              {
+                source: 'host',
+                status: 'shadowed',
+                selected: false,
+                profileId: 'profile-1',
+                profileName: 'openai-gpt5',
+                provider: 'openai',
+                model: 'gpt-5-mini',
+              },
+            ],
           },
         }),
       });
@@ -972,8 +995,11 @@ test.describe('Remote Control Plane Views', () => {
     await page.fill('#governance-preview-agent', 'zeroclaw');
     await page.click('#governance-preview-resolve');
     await expect.poll(() => governanceResolveCalls).toBe(1);
-    await expect(page.locator('#governance-preview-out')).toContainText('openai/gpt-5-mini');
-    await expect(page.locator('#governance-preview-out')).toContainText('source=host');
+    await expect(page.locator('#governance-preview-out')).toContainText('anthropic/claude-3-7-sonnet');
+    await expect(page.locator('#governance-preview-out')).toContainText('source=instance');
+    await expect(page.locator('#governance-preview-out')).toContainText('drift=override');
+    await expect(page.locator('#governance-preview-out')).toContainText('instance [resolved, selected] anthropic/claude-3-7-sonnet');
+    await expect(page.locator('#governance-preview-out')).toContainText('host [shadowed] openai/gpt-5-mini');
   });
 
   test('remote chat page supports remote and local target streaming', async ({ page }) => {

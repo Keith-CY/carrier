@@ -37,6 +37,7 @@ type orchestratorWorkerMetricsSnapshot struct {
 type orchestratorProviderMetricsSnapshot struct {
 	RequestedFailures     map[string]int                               `json:"requestedFailures"`
 	ResolvedFailures      map[string]int                               `json:"resolvedFailures"`
+	DriftStates           map[string]int                               `json:"driftStates,omitempty"`
 	Aggregates            []orchestratorProviderAggregateSnapshot      `json:"aggregates,omitempty"`
 	Models                []orchestratorProviderModelAggregateSnapshot `json:"models,omitempty"`
 	TotalEstimatedCostUSD float64                                      `json:"totalEstimatedCostUsd,omitempty"`
@@ -117,6 +118,7 @@ func buildOrchestratorMetricsSnapshot(executions []OrchestratorExecution, leases
 	providerMetrics := orchestratorProviderMetricsSnapshot{
 		RequestedFailures: map[string]int{},
 		ResolvedFailures:  map[string]int{},
+		DriftStates:       map[string]int{},
 	}
 	providerAggregates := map[string]*orchestratorProviderAggregateSnapshot{}
 	providerLatencyTotals := map[string]int64{}
@@ -173,6 +175,10 @@ func buildOrchestratorMetricsSnapshot(executions []OrchestratorExecution, leases
 
 		for _, resolution := range execution.Governance.ProviderResolutions {
 			provider := strings.ToLower(strings.TrimSpace(resolution.Provider))
+			driftState := strings.ToLower(strings.TrimSpace(resolution.DriftState))
+			if driftState != "" {
+				providerMetrics.DriftStates[driftState]++
+			}
 			if provider == "" {
 				continue
 			}
