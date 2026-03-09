@@ -2504,6 +2504,9 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 	case "evidence":
 		opts.Action = "evidence"
 		startIdx = 1
+	case "audit":
+		opts.Action = "audit"
+		startIdx = 1
 	case "authorize":
 		opts.Action = "authorize"
 		startIdx = 1
@@ -2560,7 +2563,7 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 			if strings.HasPrefix(raw, "-") {
 				return orchestrateCommandOptions{}, fmt.Errorf("unknown executions option: %s", raw)
 			}
-			if opts.Action != "status" && opts.Action != "cancel" && opts.Action != "authorize" && opts.Action != "retry" && opts.Action != "rerun" && opts.Action != "clone" && opts.Action != "artifacts" && opts.Action != "evidence" {
+			if opts.Action != "status" && opts.Action != "cancel" && opts.Action != "authorize" && opts.Action != "retry" && opts.Action != "rerun" && opts.Action != "clone" && opts.Action != "artifacts" && opts.Action != "evidence" && opts.Action != "audit" {
 				return orchestrateCommandOptions{}, fmt.Errorf("unexpected executions argument: %s", raw)
 			}
 			if opts.ExecutionID != "" {
@@ -2570,7 +2573,7 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 		}
 	}
 
-	if (opts.Action == "status" || opts.Action == "cancel" || opts.Action == "authorize" || opts.Action == "retry" || opts.Action == "rerun" || opts.Action == "clone" || opts.Action == "artifacts" || opts.Action == "evidence") && strings.TrimSpace(opts.ExecutionID) == "" {
+	if (opts.Action == "status" || opts.Action == "cancel" || opts.Action == "authorize" || opts.Action == "retry" || opts.Action == "rerun" || opts.Action == "clone" || opts.Action == "artifacts" || opts.Action == "evidence" || opts.Action == "audit") && strings.TrimSpace(opts.ExecutionID) == "" {
 		if opts.Action == "cancel" {
 			return orchestrateCommandOptions{}, errors.New("usage: carrier executions cancel <execution_id> [--json]")
 		}
@@ -2588,6 +2591,9 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 		}
 		if opts.Action == "evidence" {
 			return orchestrateCommandOptions{}, errors.New("usage: carrier executions evidence <execution_id> [--format json|zip] [--output <path>] [--json]")
+		}
+		if opts.Action == "audit" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions audit <execution_id> [--output <path>] [--json]")
 		}
 		if opts.Action == "authorize" {
 			return orchestrateCommandOptions{}, errors.New("usage: carrier executions authorize <execution_id> [--policy-approve] [--json]")
@@ -3961,6 +3967,14 @@ type orchestrateExecutionArtifactsResponse struct {
 	Artifacts []orchestrateArtifactSnapshot `json:"artifacts"`
 }
 
+type orchestrateAuditExportResponse struct {
+	Result      string                          `json:"result"`
+	ErrorCode   string                          `json:"errorCode,omitempty"`
+	Message     string                          `json:"message,omitempty"`
+	ExecutionID string                          `json:"executionId,omitempty"`
+	Events      []orchestrateAuditEventSnapshot `json:"events,omitempty"`
+}
+
 type orchestrateAuditEventSnapshot struct {
 	Action string `json:"action"`
 	Target string `json:"target,omitempty"`
@@ -4228,6 +4242,11 @@ func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error 
 			return err
 		}
 		return runOrchestrateEvidence(out, opts.ExecutionID, opts.Format, opts.OutputPath, opts.JSON)
+	case "audit":
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+		return runOrchestrateAudit(out, opts.ExecutionID, opts.OutputPath, opts.JSON)
 	case "authorize":
 		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
 			return err
@@ -4387,6 +4406,29 @@ func runOrchestrateEvidence(out io.Writer, executionID, format, outputPath strin
 		return writePrettyJSON(out, raw)
 	}
 	_, _ = fmt.Fprintln(out, renderOrchestrateExecutionEvidence(strings.TrimSpace(executionID), resp.Evidence))
+	return nil
+}
+
+func runOrchestrateAudit(out io.Writer, executionID, outputPath string, outputJSON bool) error {
+	resp, raw, err := fetchOrchestratorExecutionAudit(executionID)
+	if err != nil {
+		return err
+	}
+	if destination := strings.TrimSpace(outputPath); destination != "" {
+		var pretty bytes.Buffer
+		if err := writePrettyJSON(&pretty, raw); err != nil {
+			return err
+		}
+		if err := os.WriteFile(destination, pretty.Bytes(), 0o600); err != nil {
+			return fmt.Errorf("write audit json: %w", err)
+		}
+		_, _ = fmt.Fprintf(out, "execution audit written: %s\n", destination)
+		return nil
+	}
+	if outputJSON {
+		return writePrettyJSON(out, raw)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestrateExecutionAudit(strings.TrimSpace(executionID), resp))
 	return nil
 }
 
@@ -4625,6 +4667,14 @@ func decodeOrchestrateExecutionArtifactsResponse(raw []byte) (orchestrateExecuti
 	return resp, nil
 }
 
+func decodeOrchestrateAuditExportResponse(raw []byte) (orchestrateAuditExportResponse, error) {
+	var resp orchestrateAuditExportResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return orchestrateAuditExportResponse{}, fmt.Errorf("decode orchestrator audit export response: %w", err)
+	}
+	return resp, nil
+}
+
 func decodeOrchestrateEvidenceBundleResponse(raw []byte) (orchestrateEvidenceBundleResponse, error) {
 	var resp orchestrateEvidenceBundleResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -4727,6 +4777,23 @@ func fetchOrchestratorExecutionEvidenceArchive(executionID string) ([]byte, erro
 		return nil, err
 	}
 	return raw, nil
+}
+
+func fetchOrchestratorExecutionAudit(executionID string) (orchestrateAuditExportResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(executionID)
+	if trimmedID == "" {
+		return orchestrateAuditExportResponse{}, nil, errors.New("execution id is required")
+	}
+	path := "/api/v1/audit/export?executionId=" + neturl.QueryEscape(trimmedID)
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return orchestrateAuditExportResponse{}, nil, err
+	}
+	resp, decodeErr := decodeOrchestrateAuditExportResponse(raw)
+	if decodeErr != nil {
+		return orchestrateAuditExportResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
 }
 
 func fetchExecutionTemplates() (executionTemplateListResponse, []byte, error) {
@@ -5364,6 +5431,24 @@ func renderOrchestrateExecutionEvidence(executionID string, evidence orchestrate
 	}
 	lines = append(lines, fmt.Sprintf("artifacts: %d", len(evidence.ArtifactManifest)))
 	lines = append(lines, fmt.Sprintf("audit events: %d", len(evidence.Audit)))
+	return strings.Join(lines, "\n")
+}
+
+func renderOrchestrateExecutionAudit(executionID string, audit orchestrateAuditExportResponse) string {
+	id := firstNonEmpty(strings.TrimSpace(audit.ExecutionID), strings.TrimSpace(executionID), "(unknown)")
+	lines := []string{fmt.Sprintf("execution audit %s", id)}
+	lines = append(lines, fmt.Sprintf("events: %d", len(audit.Events)))
+	for _, event := range audit.Events {
+		action := firstNonEmpty(strings.TrimSpace(event.Action), "unknown")
+		line := "- " + action
+		if target := strings.TrimSpace(event.Target); target != "" {
+			line += " target=" + target
+		}
+		if result := strings.TrimSpace(event.Result); result != "" {
+			line += " result=" + result
+		}
+		lines = append(lines, line)
+	}
 	return strings.Join(lines, "\n")
 }
 
