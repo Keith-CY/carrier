@@ -54,6 +54,19 @@ async function mockFeaturesRole(page, role: 'viewer' | 'operator' | 'approver' |
   );
 }
 
+async function navigateHash(page, hash: string) {
+  await page.evaluate((nextHash: string) => {
+    window.location.hash = nextHash;
+  }, hash);
+}
+
+async function openExecutionFromList(page, executionId: string) {
+  await navigateHash(page, '#/executions');
+  const card = page.locator('#executions-list .execution-list-card').filter({ hasText: executionId }).first();
+  await expect(card).toBeVisible();
+  await card.click();
+}
+
 test.describe('RBAC UI', () => {
   test('viewer sees execution details but not mutating actions', async ({ page }) => {
     await mockAPIs(page);
@@ -64,13 +77,13 @@ test.describe('RBAC UI', () => {
 
     await expect(page.locator('#dashboard-quick-launch-section')).toBeHidden();
 
-    await page.goto('/#/executions/exec-running');
+    await openExecutionFromList(page, 'exec-running');
     await expect(page.locator('#executions-detail')).toContainText('Investigate checkout latency');
     await expect(page.locator('#executions-cancel')).toBeHidden();
     await expect(page.locator('#executions-rerun')).toBeHidden();
     await expect(page.locator('#executions-clone')).toBeHidden();
 
-    await page.goto('/#/executions/exec-ask');
+    await openExecutionFromList(page, 'exec-ask');
     await expect(page.locator('#executions-policy-approve')).toBeHidden();
   });
 
@@ -83,11 +96,11 @@ test.describe('RBAC UI', () => {
 
     await expect(page.locator('#dashboard-quick-launch-section')).toBeVisible();
 
-    await page.goto('/#/executions/exec-running');
+    await openExecutionFromList(page, 'exec-running');
     await expect(page.locator('#executions-cancel')).toBeVisible();
     await expect(page.locator('#executions-policy-approve')).toBeHidden();
 
-    await page.goto('/#/profiles');
+    await navigateHash(page, '#/profiles');
     await expect(page.locator('#profiles-msg')).toContainText('read-only access');
     await expect(page.locator('#profile-save')).toBeDisabled();
     await expect(page.locator('#binding-save')).toBeDisabled();
@@ -106,16 +119,16 @@ test.describe('RBAC UI', () => {
 
     await expect(page.locator('#dashboard-quick-launch-section')).toBeHidden();
 
-    await page.goto('/#/executions/exec-ask');
+    await openExecutionFromList(page, 'exec-ask');
     await expect(page.locator('#executions-policy-approve')).toBeVisible();
     await expect(page.locator('#executions-cancel')).toBeHidden();
 
-    await page.goto('/#/servers');
+    await navigateHash(page, '#/servers');
     await expect(page.locator('#server-save')).toBeDisabled();
     await expect(page.locator('#servers-msg')).toContainText('cannot modify remote hosts');
     await expect(page.locator('#servers-list')).not.toContainText('Delete');
 
-    await page.goto('/#/profiles');
+    await navigateHash(page, '#/profiles');
     await expect(page.locator('#profile-save')).toBeDisabled();
     await expect(page.locator('#execution-policy-save')).toBeDisabled();
   });
@@ -132,7 +145,7 @@ test.describe('RBAC UI', () => {
     await expect(page.locator('#execution-policy-save')).toBeEnabled();
     await expect(page.locator('#profiles-list')).toContainText('Delete');
 
-    await page.goto('/#/servers');
+    await navigateHash(page, '#/servers');
     await expect(page.locator('#server-save')).toBeEnabled();
     await expect(page.locator('#servers-list')).toContainText('Delete');
   });

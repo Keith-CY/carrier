@@ -2,12 +2,19 @@
 
 ## Overview
 
-Carrier is an agent lifecycle management system split into dedicated top-level modules:
+Carrier is split into four layers with two product cores:
+
+- **Execution Plane**: goal decomposition, templates, triggers, executions, artifacts, evidence, observability
+- **Knowledge Plane**: memory packages, attachments, curated search, instance distill, base-agent promotion inputs
+- **Runtime Substrate**: local agent lifecycle, remote hosts, instances, workers, isolation
+- **Transport Adapters**: CLI, WebUI, chat/webhook entrypoints
+
+The top-level modules map onto those layers:
 
 - **webui**: local visual operations UI
-- **gateway**: ingress/message bus and API aggregation
-- **daemon**: host lifecycle/runtime scheduler
-- **baseagent**: reusable base-agent policies/runtime
+- **gateway**: control-plane ingress and API aggregation
+- **daemon**: host lifecycle, memory backend, runtime scheduler
+- **baseagent**: reusable base-agent policies, decomposition, distill authority
 - **shared**: cross-module shared data/logic (`config`, `redact`)
 
 Dependency direction:
@@ -19,15 +26,15 @@ webui -> gateway -> baseagent -> shared
 
 ```
 ┌─────────────┐         HTTP           ┌─────────────┐        HTTP         ┌──────────┐
-│ Chat/Webhook │ ───────────────────► │   Gateway    │ ─────────────────► │  Daemon   │
-│   Clients    │   (commands/events)   │    (Go)      │   (JSON over API)  │ (carrier daemon) │
+│ CLI / WebUI / │ ───────────────────► │   Gateway    │ ─────────────────► │  Daemon   │
+│ Chat / Hooks  │   (control-plane)     │    (Go)      │   (JSON over API)  │ (carrier daemon) │
 └─────────────┘                        └─────────────┘                     └──────────┘
                                                                                 │
-                                                                          ┌─────┴─────┐
-                                                                          │  Agents    │
-                                                                          │ (managed   │
-                                                                          │ processes) │
-                                                                          └───────────┘
+                                                                          ┌─────┴──────┐
+                                                                          │ Workers +   │
+                                                                          │ Memory      │
+                                                                          │ Backend     │
+                                                                          └────────────┘
 ```
 
 ## Components
@@ -42,7 +49,7 @@ The daemon (`carrier daemon`) is the host-side process responsible for:
 - **Health Checks** (`internal/health/`) — HTTP health endpoint exposing agent status
 - **Logging** (`internal/logging/`) — Structured logging with context propagation (agent name, request ID, operation)
 - **Manifest** (`internal/manifest/`) — Agent manifest schema (TOML) for declaring agent requirements
-- **Memory** (`internal/memory/`) — Per-agent and shared memory store with state transitions
+- **Memory** (`internal/memory/`) — Knowledge-plane backend for packages, attachments, curated search, grants, audit, import/export, and distillation
 - **Runtime Checks** (`internal/runtimecheck/`) — Pre-flight validation (env vars, ports, dependencies)
 
 ### Gateway (`gateway/`)
@@ -53,6 +60,7 @@ The gateway is a top-level Go module that:
 - Manages **sessions** (`session.go`) with authentication
 - Issues **download tokens** (`downloads.go`) for artifact retrieval
 - Enforces **rate limiting** (`ratelimit.go`)
+- Hosts the public control-plane APIs for executions, templates, triggers, governance, workers, and gateway-facing memory operations (`/api/v1/memory/*`)
 - Translates between the client protocol and daemon API
 
 ### Base Agent (`baseagent/`)
@@ -62,6 +70,7 @@ Base-agent logic is isolated from daemon runtime specifics:
 - Chat action dispatch (`runtime.go`)
 - LLM-based failure triage (`triager_llm.go`)
 - Repair policy controls (`policy.go`)
+- Distillation authority for promoting execution learnings back into long-lived knowledge
 - Shared-model configuration/redaction consumption via `shared/`
 
 ### Shared (`shared/`)
@@ -81,15 +90,16 @@ Canonical endpoint/method matrix and error-envelope mapping for daemon HTTP APIs
 
 ## Data Flow
 
-1. Client sends command/webhook payload to gateway over HTTP
-2. Client sends a command (e.g., `/install agent-name`)
-3. Gateway validates session, applies rate limits, and forwards to daemon
-4. Daemon executes the operation (install agent, run pre-flight checks, etc.)
-5. Response flows back through gateway to client
+1. Client launches an execution or memory action through CLI/WebUI/chat/webhook
+2. Gateway validates authz, policy, provider bindings, and memory intent
+3. Gateway forwards runtime work to daemon and records execution / audit / evidence metadata
+4. Daemon executes worker lifecycle or memory backend operations
+5. Execution results and distill outputs flow back through gateway to the base agent and user-facing surfaces
 
 ## Key Design Decisions
 
-- **Separation of concerns**: Gateway handles transport/session/auth; daemon handles host operations
+- **Dual control plane**: execution and knowledge are both first-class product objects
+- **Separation of concerns**: Gateway handles control-plane ingress/governance; daemon handles host runtime and memory backend work
 - **Crash-loop protection**: Daemon tracks restart frequency and applies exponential cooldown
 - **Audit trail**: All lifecycle operations are logged with bounded audit buffers
 - **Redaction by default**: Sensitive environment variables and patterns are automatically redacted in diagnostics

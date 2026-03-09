@@ -496,6 +496,91 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
     }),
   );
 
+  await page.route('**/api/v1/memory?*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        subject: 'agent-a',
+        entries: [
+          { id: 'public.team.v1', type: 'public' },
+          { id: 'agent-a.private.v1', type: 'per_agent' },
+        ],
+        attachments: [
+          { agent_id: 'agent-a', memory_id: 'public.team.v1' },
+          { agent_id: 'agent-a', memory_id: 'agent-a.private.v1' },
+        ],
+        grants: [
+          { id: 'grant-1', subject: 'agent-a', scope: 'shared:profile' },
+        ],
+        audit: [],
+      }),
+    }),
+  );
+
+  await page.route('**/api/v1/memory', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        subject: '',
+        entries: [
+          { id: 'public.team.v1', type: 'public' },
+          { id: 'agent-a.private.v1', type: 'per_agent' },
+        ],
+        attachments: [],
+        grants: [],
+        audit: [],
+      }),
+    }),
+  );
+
+  await page.route('**/api/v1/memory/search', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        results: [
+          { id: 'rec-1', scope: 'agent:agent-a', score: 0.97, snippet: 'fusion memory' },
+        ],
+      }),
+    }),
+  );
+
+  await page.route('**/api/v1/memory/instance/attach', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ result: 'ok', status: 'attached' }),
+    }),
+  );
+
+  await page.route('**/api/v1/memory/instance/detach', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ result: 'ok', status: 'detached' }),
+    }),
+  );
+
+  await page.route('**/api/v1/memory/instance/distill', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: {
+          runId: 'distill-1',
+          instanceId: 'picoclaw-main',
+          status: 'dry_run',
+          dryRun: true,
+        },
+      }),
+    }),
+  );
+
   await page.route('**/api/v1/remote/hosts', (route) =>
     route.fulfill({
       status: 200,
@@ -1254,9 +1339,18 @@ export async function mockOrchestrationAPIs(page: Page) {
 }
 
 /** Login by setting token in localStorage and navigating. */
-export async function loginWithToken(page: Page, url = '/') {
+export async function loginWithToken(page: Page, url = '/', waitUntil: 'load' | 'domcontentloaded' | 'commit' = 'commit') {
   await page.addInitScript((token: string) => {
     localStorage.setItem('carrier_token', token);
   }, TEST_TOKEN);
-  await page.goto(url);
+  const hashIndex = url.indexOf('#');
+  const path = hashIndex >= 0 ? (url.slice(0, hashIndex) || '/') : url;
+  const hash = hashIndex >= 0 ? url.slice(hashIndex) : '';
+  await page.goto(path || '/', { waitUntil });
+  await page.locator('#logout-btn').waitFor({ state: 'visible' });
+  if (hash) {
+    await page.evaluate((nextHash: string) => {
+      window.location.hash = nextHash;
+    }, hash);
+  }
 }

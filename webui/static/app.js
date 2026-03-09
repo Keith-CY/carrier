@@ -70,6 +70,8 @@
   let selectedExecutionID = "";
   let workerInventoryCache = [];
   let workerQueueSummaryCache = null;
+  let memoryListCache = null;
+  let memorySearchResultsCache = [];
   let quickLaunchPlan = null;
   let quickLaunchProviderCatalog = [];
   let quickLaunchTemplates = [];
@@ -524,6 +526,7 @@
     "complete",
     "dashboard",
     "executions",
+    "memory",
     "workers",
     "agent-detail",
     "logs",
@@ -573,7 +576,7 @@
     if (routeName !== "dashboard") {
       closeAddAgentModal();
     }
-    const mgmtRoutes = ["dashboard", "executions", "workers", "logs", "chat", "settings", "servers", "profiles", "remote-chat", "remote-observability"];
+    const mgmtRoutes = ["dashboard", "executions", "memory", "workers", "logs", "chat", "settings", "servers", "profiles", "remote-chat", "remote-observability"];
     if (mgmtRoutes.includes(routeName)) {
       $("#nav").classList.remove("hidden");
     }
@@ -608,6 +611,9 @@
         break;
       case "executions":
         initExecutions(routeInfo.segments[1] || "");
+        break;
+      case "memory":
+        initMemory();
         break;
       case "workers":
         initWorkers();
@@ -3284,6 +3290,232 @@
       stateFilter.onchange = () => renderWorkersView(workerInventoryCache, buildWorkerSummaryPayload(workerInventoryCache, workerQueueSummaryCache), []);
     await refreshWorkers();
     startWorkersPolling();
+  }
+  function renderMemorySnapshot(payload) {
+    memoryListCache = payload && typeof payload === "object" ? payload : {};
+    const list = $("#memory-entry-list");
+    const summary = $("#memory-summary");
+    if (!list || !summary)
+      return;
+    const entries = Array.isArray(memoryListCache.entries) ? memoryListCache.entries : [];
+    const attachments = Array.isArray(memoryListCache.attachments) ? memoryListCache.attachments : [];
+    const grants = Array.isArray(memoryListCache.grants) ? memoryListCache.grants : [];
+    const audit = Array.isArray(memoryListCache.audit) ? memoryListCache.audit : [];
+    const subject = String(memoryListCache.subject || $("#memory-subject") && $("#memory-subject").value || "").trim();
+    summary.textContent = "subject=" + (subject || "all") + " \xB7 entries=" + entries.length + " \xB7 attachments=" + attachments.length + " \xB7 grants=" + grants.length + " \xB7 audit=" + audit.length;
+    list.textContent = "";
+    const sections = [
+      {
+        title: "Entries",
+        empty: "No memory packages found.",
+        items: entries.map((entry) => ({
+          title: String(entry && entry.id ? entry.id : "unknown"),
+          meta: ["type: " + String(entry && entry.type ? entry.type : "unknown")]
+        }))
+      },
+      {
+        title: "Attachments",
+        empty: "No attachments for this subject.",
+        items: attachments.map((attachment) => ({
+          title: String(attachment && attachment.memory_id ? attachment.memory_id : "unknown"),
+          meta: ["agent: " + String(attachment && attachment.agent_id ? attachment.agent_id : "unknown")]
+        }))
+      },
+      {
+        title: "Grants",
+        empty: "No grants for this subject.",
+        items: grants.map((grant) => ({
+          title: String(grant && grant.scope ? grant.scope : "unknown"),
+          meta: ["subject: " + String(grant && grant.subject ? grant.subject : "unknown")]
+        }))
+      }
+    ];
+    sections.forEach((section) => {
+      const wrap = document.createElement("div");
+      wrap.className = "memory-section";
+      const heading = document.createElement("h4");
+      heading.textContent = section.title;
+      wrap.appendChild(heading);
+      if (!section.items.length) {
+        const empty = document.createElement("div");
+        empty.className = "text-dim";
+        empty.textContent = section.empty;
+        wrap.appendChild(empty);
+      } else {
+        section.items.forEach((item) => {
+          const card = document.createElement("div");
+          card.className = "agent-card memory-card";
+          const title = document.createElement("strong");
+          title.textContent = item.title;
+          card.appendChild(title);
+          item.meta.forEach((line) => {
+            const row = document.createElement("div");
+            row.className = "execution-detail-line";
+            row.textContent = line;
+            card.appendChild(row);
+          });
+          wrap.appendChild(card);
+        });
+      }
+      list.appendChild(wrap);
+    });
+  }
+  function renderMemorySearchResultsView(results) {
+    memorySearchResultsCache = Array.isArray(results) ? results : [];
+    const list = $("#memory-search-results");
+    if (!list)
+      return;
+    list.textContent = "";
+    if (!memorySearchResultsCache.length) {
+      const empty = document.createElement("div");
+      empty.className = "text-dim";
+      empty.textContent = "No search results yet.";
+      list.appendChild(empty);
+      return;
+    }
+    memorySearchResultsCache.forEach((result) => {
+      const card = document.createElement("div");
+      card.className = "agent-card memory-card";
+      const title = document.createElement("strong");
+      title.textContent = String(result && result.id ? result.id : "unknown");
+      card.appendChild(title);
+      const meta = document.createElement("div");
+      meta.className = "execution-detail-line";
+      meta.textContent = "scope=" + String(result && result.scope ? result.scope : "unknown") + " \xB7 score=" + Number(result && result.score || 0).toFixed(2);
+      card.appendChild(meta);
+      const snippet = document.createElement("div");
+      snippet.className = "text-dim";
+      snippet.textContent = String(result && result.snippet ? result.snippet : "");
+      card.appendChild(snippet);
+      list.appendChild(card);
+    });
+  }
+  async function refreshMemoryView() {
+    const list = $("#memory-entry-list");
+    if (list && !list.childElementCount)
+      list.textContent = "Loading\u2026";
+    const subject = String(($("#memory-subject") || {}).value || "").trim();
+    const path = subject ? "/api/v1/memory?subject=" + encodeURIComponent(subject) : "/api/v1/memory";
+    try {
+      const payload = await api("GET", path);
+      renderMemorySnapshot(payload);
+      setMsg("#memory-msg", "", "info");
+    } catch (e) {
+      if (list)
+        list.textContent = "Error: " + e.message;
+      const summary = $("#memory-summary");
+      if (summary)
+        summary.textContent = "Memory unavailable.";
+      setMsg("#memory-msg", "Load failed: " + e.message, "error");
+    }
+  }
+  async function runMemorySearch() {
+    const subject = String(($("#memory-subject") || {}).value || "").trim();
+    const query = String(($("#memory-search-query") || {}).value || "").trim();
+    const limit = parseInt(String(($("#memory-search-limit") || {}).value || "10").trim(), 10) || 10;
+    const minScore = parseFloat(String(($("#memory-search-min-score") || {}).value || "0").trim()) || 0;
+    if (!query) {
+      setMsg("#memory-msg", "Search query is required.", "error");
+      return;
+    }
+    try {
+      const payload = await api("POST", "/api/v1/memory/search", {
+        subject,
+        query,
+        maxResults: Math.max(1, limit),
+        minScore: Math.max(0, minScore)
+      });
+      renderMemorySearchResultsView(payload && Array.isArray(payload.results) ? payload.results : []);
+      setMsg("#memory-msg", "Search completed.", "success");
+    } catch (e) {
+      renderMemorySearchResultsView([]);
+      setMsg("#memory-msg", "Search failed: " + e.message, "error");
+    }
+  }
+  async function runMemoryInstanceAction(action) {
+    const instanceId = String(($("#memory-instance-id") || {}).value || "").trim();
+    const scope = String(($("#memory-instance-scope") || {}).value || "").trim();
+    const reason = String(($("#memory-distill-reason") || {}).value || "").trim();
+    const dryRun = !!($("#memory-distill-dry-run") || {}).checked;
+    if (!instanceId) {
+      setMsg("#memory-action-msg", "Instance ID is required.", "error");
+      return;
+    }
+    if ((action === "attach" || action === "detach") && !scope) {
+      setMsg("#memory-action-msg", "Scope is required for attach/detach.", "error");
+      return;
+    }
+    const payload = { instanceId };
+    let path = "";
+    if (action === "attach") {
+      path = "/api/v1/memory/instance/attach";
+      payload.scope = scope;
+    } else if (action === "detach") {
+      path = "/api/v1/memory/instance/detach";
+      payload.scope = scope;
+    } else {
+      path = "/api/v1/memory/instance/distill";
+      if (scope)
+        payload.scope = scope;
+      if (reason)
+        payload.reason = reason;
+      if (dryRun)
+        payload.dryRun = true;
+    }
+    try {
+      const result = await api("POST", path, payload);
+      if (action === "distill") {
+        const run = result && result.result && typeof result.result === "object" ? result.result : {};
+        setMsg("#memory-action-msg", "distill " + String(run.runId || "unknown") + " \xB7 " + String(run.instanceId || instanceId) + " \xB7 " + String(run.status || "unknown"), "success");
+      } else {
+        setMsg("#memory-action-msg", String(result && result.status ? result.status : action), "success");
+      }
+      await refreshMemoryView();
+    } catch (e) {
+      setMsg("#memory-action-msg", "Memory action failed: " + e.message, "error");
+    }
+  }
+  async function initMemory() {
+    resetAddMode();
+    showView("memory");
+    $("#nav").classList.remove("hidden");
+    const refreshBtn = $("#memory-refresh");
+    const searchBtn = $("#memory-search-run");
+    const attachBtn = $("#memory-attach");
+    const detachBtn = $("#memory-detach");
+    const distillBtn = $("#memory-distill");
+    const subjectInput = $("#memory-subject");
+    const queryInput = $("#memory-search-query");
+    const readOnly = !canViewExecutionsUI();
+    const canMutate = canLaunchExecutionsUI();
+    if (refreshBtn)
+      refreshBtn.onclick = refreshMemoryView;
+    if (searchBtn)
+      searchBtn.onclick = runMemorySearch;
+    if (attachBtn) {
+      attachBtn.disabled = !canMutate;
+      attachBtn.onclick = () => runMemoryInstanceAction("attach");
+    }
+    if (detachBtn) {
+      detachBtn.disabled = !canMutate;
+      detachBtn.onclick = () => runMemoryInstanceAction("detach");
+    }
+    if (distillBtn) {
+      distillBtn.disabled = !canMutate;
+      distillBtn.onclick = () => runMemoryInstanceAction("distill");
+    }
+    if (subjectInput)
+      subjectInput.onchange = refreshMemoryView;
+    if (queryInput)
+      queryInput.onkeydown = (event) => {
+        if (event.key === "Enter")
+          runMemorySearch();
+      };
+    if (readOnly) {
+      setMsg("#memory-msg", "Current role has read-only memory access.", "info");
+    }
+    renderMemorySearchResultsView(memorySearchResultsCache);
+    await refreshMemoryView();
   }
   async function instanceAction(instanceID, action) {
     if (action === "uninstall") {

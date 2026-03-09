@@ -261,6 +261,20 @@ type triggersCommandOptions struct {
 	Inputs           map[string]string
 }
 
+type memoryCommandOptions struct {
+	Action     string
+	Subject    string
+	Query      string
+	Limit      int
+	MinScore   float64
+	InstanceID string
+	Scope      string
+	DryRun     bool
+	Force      bool
+	Reason     string
+	JSON       bool
+}
+
 type versionInfo struct {
 	Version   string `json:"version"`
 	Commit    string `json:"commit"`
@@ -583,6 +597,16 @@ Usage:
                         Show orchestration execution status/results
   carrier executions cancel <execution_id> [--json]
                         Cancel orchestration execution
+  carrier memory [list] [--subject <subject>] [--json]
+                        List memory packages, attachments, grants, and audit snapshot
+  carrier memory search --subject <subject> --query <query> [--limit <n>] [--min-score <f>] [--json]
+                        Search curated memory records through the gateway knowledge facade
+  carrier memory attach --instance <id> --scope <scope> [--json]
+                        Attach one memory scope to an instance
+  carrier memory detach --instance <id> --scope <scope> [--json]
+                        Detach one memory scope from an instance
+  carrier memory distill --instance <id> [--scope <scope>] [--dry-run] [--force] [--reason <text>] [--json]
+                        Distill instance learnings back into the base memory plane
   carrier templates [list] [--json]
                         List built-in execution templates
   carrier templates show <template_id> [--json]
@@ -883,6 +907,18 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "memory":
+			opts, err := parseMemoryCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "memory failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runMemoryCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "memory failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "onboard":
 			opts, err := parseOnboardCommandArgs(commandArgs)
 			if err != nil {
@@ -1020,6 +1056,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "templates", args[2:], nil
 	case "triggers":
 		return "triggers", args[2:], nil
+	case "memory":
+		return "memory", args[2:], nil
 	case "--help", "-h", "help":
 		return "help", nil, nil
 	case "version", "--version", "-v", "-V":
@@ -2968,6 +3006,133 @@ func parseTriggersCommandArgs(args []string) (triggersCommandOptions, error) {
 	return opts, nil
 }
 
+func parseMemoryCommandArgs(args []string) (memoryCommandOptions, error) {
+	opts := memoryCommandOptions{
+		Action:   "list",
+		Limit:    10,
+		MinScore: 0,
+	}
+	if len(args) == 0 {
+		return opts, nil
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(args[0]))
+	startIdx := 0
+	switch mode {
+	case "", "list":
+		opts.Action = "list"
+		startIdx = 1
+	case "search":
+		opts.Action = "search"
+		startIdx = 1
+	case "attach":
+		opts.Action = "attach"
+		startIdx = 1
+	case "detach":
+		opts.Action = "detach"
+		startIdx = 1
+	case "distill":
+		opts.Action = "distill"
+		startIdx = 1
+	default:
+		if strings.HasPrefix(mode, "-") {
+			opts.Action = "list"
+			startIdx = 0
+		} else {
+			return memoryCommandOptions{}, fmt.Errorf("unknown memory action: %s", args[0])
+		}
+	}
+
+	for i := startIdx; i < len(args); i++ {
+		raw := strings.TrimSpace(args[i])
+		switch strings.ToLower(raw) {
+		case "":
+		case "--json":
+			opts.JSON = true
+		case "--dry-run":
+			opts.DryRun = true
+		case "--force":
+			opts.Force = true
+		case "--subject":
+			value, next, err := parseRequiredFlagValue(args, i, "--subject")
+			if err != nil {
+				return memoryCommandOptions{}, err
+			}
+			opts.Subject = strings.TrimSpace(value)
+			i = next
+		case "--query":
+			value, next, err := parseRequiredFlagValue(args, i, "--query")
+			if err != nil {
+				return memoryCommandOptions{}, err
+			}
+			opts.Query = strings.TrimSpace(value)
+			i = next
+		case "--limit":
+			value, next, err := parseRequiredFlagValue(args, i, "--limit")
+			if err != nil {
+				return memoryCommandOptions{}, err
+			}
+			parsed, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || parsed <= 0 {
+				return memoryCommandOptions{}, fmt.Errorf("invalid --limit value: %s", value)
+			}
+			opts.Limit = parsed
+			i = next
+		case "--min-score":
+			value, next, err := parseRequiredFlagValue(args, i, "--min-score")
+			if err != nil {
+				return memoryCommandOptions{}, err
+			}
+			parsed, convErr := strconv.ParseFloat(strings.TrimSpace(value), 64)
+			if convErr != nil || parsed < 0 {
+				return memoryCommandOptions{}, fmt.Errorf("invalid --min-score value: %s", value)
+			}
+			opts.MinScore = parsed
+			i = next
+		case "--instance":
+			value, next, err := parseRequiredFlagValue(args, i, "--instance")
+			if err != nil {
+				return memoryCommandOptions{}, err
+			}
+			opts.InstanceID = strings.TrimSpace(value)
+			i = next
+		case "--scope":
+			value, next, err := parseRequiredFlagValue(args, i, "--scope")
+			if err != nil {
+				return memoryCommandOptions{}, err
+			}
+			opts.Scope = strings.TrimSpace(value)
+			i = next
+		case "--reason":
+			value, next, err := parseRequiredFlagValue(args, i, "--reason")
+			if err != nil {
+				return memoryCommandOptions{}, err
+			}
+			opts.Reason = strings.TrimSpace(value)
+			i = next
+		default:
+			return memoryCommandOptions{}, fmt.Errorf("unknown memory option: %s", raw)
+		}
+	}
+
+	switch opts.Action {
+	case "search":
+		if opts.Query == "" {
+			return memoryCommandOptions{}, errors.New("usage: carrier memory search --subject <subject> --query <query> [--limit <n>] [--min-score <f>] [--json]")
+		}
+	case "attach", "detach":
+		if opts.InstanceID == "" || opts.Scope == "" {
+			return memoryCommandOptions{}, fmt.Errorf("usage: carrier memory %s --instance <id> --scope <scope> [--json]", opts.Action)
+		}
+	case "distill":
+		if opts.InstanceID == "" {
+			return memoryCommandOptions{}, errors.New("usage: carrier memory distill --instance <id> [--scope <scope>] [--dry-run] [--force] [--reason <text>] [--json]")
+		}
+	}
+
+	return opts, nil
+}
+
 func dedupeStringSlice(values []string) []string {
 	out := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
@@ -4121,6 +4286,140 @@ type executionTriggerDeleteResponse struct {
 	Deleted   bool   `json:"deleted"`
 }
 
+type memoryEntrySnapshot struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+}
+
+type memoryAttachmentSnapshot struct {
+	AgentID  string `json:"agent_id"`
+	MemoryID string `json:"memory_id"`
+}
+
+type memoryGrantSnapshot struct {
+	ID      string `json:"id"`
+	Subject string `json:"subject"`
+	Scope   string `json:"scope"`
+}
+
+type memoryAuditSnapshot struct {
+	Action string `json:"action"`
+	Target string `json:"target"`
+	Result string `json:"result"`
+}
+
+type memoryListResponse struct {
+	Result      string                     `json:"result"`
+	ErrorCode   string                     `json:"errorCode,omitempty"`
+	Message     string                     `json:"message,omitempty"`
+	Subject     string                     `json:"subject,omitempty"`
+	Entries     []memoryEntrySnapshot      `json:"entries"`
+	Attachments []memoryAttachmentSnapshot `json:"attachments"`
+	Grants      []memoryGrantSnapshot      `json:"grants"`
+	Audit       []memoryAuditSnapshot      `json:"audit"`
+}
+
+type memorySearchHitSnapshot struct {
+	ID      string  `json:"id"`
+	Scope   string  `json:"scope"`
+	Score   float64 `json:"score"`
+	Snippet string  `json:"snippet"`
+}
+
+type memorySearchResponse struct {
+	Result    string                    `json:"result"`
+	ErrorCode string                    `json:"errorCode,omitempty"`
+	Message   string                    `json:"message,omitempty"`
+	Results   []memorySearchHitSnapshot `json:"results"`
+}
+
+type memoryStatusResponse struct {
+	Result    string `json:"result"`
+	ErrorCode string `json:"errorCode,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Status    string `json:"status,omitempty"`
+}
+
+type memoryDistillRunSnapshot struct {
+	RunID      string `json:"runId"`
+	InstanceID string `json:"instanceId"`
+	Status     string `json:"status"`
+	DryRun     bool   `json:"dryRun"`
+}
+
+type memoryDistillResponse struct {
+	Result    string                   `json:"-"`
+	ErrorCode string                   `json:"errorCode,omitempty"`
+	Message   string                   `json:"message,omitempty"`
+	Run       memoryDistillRunSnapshot `json:"-"`
+}
+
+func runMemoryCommand(out io.Writer, opts memoryCommandOptions) error {
+	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+	switch opts.Action {
+	case "list":
+		resp, raw, err := fetchMemoryList(opts.Subject)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderMemoryList(resp))
+		return nil
+	case "search":
+		resp, raw, err := searchMemory(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderMemorySearchResults(resp))
+		return nil
+	case "attach":
+		resp, raw, err := runMemoryInstanceAction("/api/v1/memory/instance/attach", opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		if strings.TrimSpace(resp.Status) == "" {
+			return fmt.Errorf("attach %s to %s did not report a status", opts.Scope, opts.InstanceID)
+		}
+		_, _ = fmt.Fprintf(out, "%s %s to %s\n", strings.TrimSpace(resp.Status), strings.TrimSpace(opts.Scope), strings.TrimSpace(opts.InstanceID))
+		return nil
+	case "detach":
+		resp, raw, err := runMemoryInstanceAction("/api/v1/memory/instance/detach", opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		if strings.TrimSpace(resp.Status) == "" {
+			return fmt.Errorf("detach %s from %s did not report a status", opts.Scope, opts.InstanceID)
+		}
+		_, _ = fmt.Fprintf(out, "%s %s from %s\n", strings.TrimSpace(resp.Status), strings.TrimSpace(opts.Scope), strings.TrimSpace(opts.InstanceID))
+		return nil
+	case "distill":
+		resp, raw, err := distillMemory(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderMemoryDistill(resp.Run))
+		return nil
+	default:
+		return fmt.Errorf("unsupported memory action: %s", opts.Action)
+	}
+}
+
 func runTemplatesCommand(out io.Writer, opts templatesCommandOptions) error {
 	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
 		return err
@@ -4705,6 +5004,53 @@ func decodeExecutionTriggerDeleteResponse(raw []byte) (executionTriggerDeleteRes
 	return resp, nil
 }
 
+func decodeMemoryListResponse(raw []byte) (memoryListResponse, error) {
+	var resp memoryListResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return memoryListResponse{}, fmt.Errorf("decode memory list response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeMemorySearchResponse(raw []byte) (memorySearchResponse, error) {
+	var resp memorySearchResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return memorySearchResponse{}, fmt.Errorf("decode memory search response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeMemoryStatusResponse(raw []byte) (memoryStatusResponse, error) {
+	var resp memoryStatusResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return memoryStatusResponse{}, fmt.Errorf("decode memory status response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeMemoryDistillResponse(raw []byte) (memoryDistillResponse, error) {
+	var payload struct {
+		Result    json.RawMessage `json:"result"`
+		ErrorCode string          `json:"errorCode,omitempty"`
+		Message   string          `json:"message,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return memoryDistillResponse{}, fmt.Errorf("decode memory distill response: %w", err)
+	}
+	var run memoryDistillRunSnapshot
+	if len(payload.Result) > 0 && string(payload.Result) != "null" {
+		if err := json.Unmarshal(payload.Result, &run); err != nil {
+			return memoryDistillResponse{}, fmt.Errorf("decode memory distill run: %w", err)
+		}
+	}
+	return memoryDistillResponse{
+		Result:    "ok",
+		ErrorCode: payload.ErrorCode,
+		Message:   payload.Message,
+		Run:       run,
+	}, nil
+}
+
 func decodeOrchestrateExecutionArtifactsResponse(raw []byte) (orchestrateExecutionArtifactsResponse, error) {
 	var resp orchestrateExecutionArtifactsResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -4774,6 +5120,77 @@ func fetchOrchestratorExecutions(limit int) (orchestrateExecutionListResponse, [
 	})
 	if limit > 0 && len(resp.Executions) > limit {
 		resp.Executions = resp.Executions[:limit]
+	}
+	return resp, raw, nil
+}
+
+func fetchMemoryList(subject string) (memoryListResponse, []byte, error) {
+	path := "/api/v1/memory"
+	if trimmed := strings.TrimSpace(subject); trimmed != "" {
+		path += "?subject=" + neturl.QueryEscape(trimmed)
+	}
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return memoryListResponse{}, nil, err
+	}
+	resp, decodeErr := decodeMemoryListResponse(raw)
+	if decodeErr != nil {
+		return memoryListResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func searchMemory(opts memoryCommandOptions) (memorySearchResponse, []byte, error) {
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/memory/search", map[string]interface{}{
+		"subject":    strings.TrimSpace(opts.Subject),
+		"query":      strings.TrimSpace(opts.Query),
+		"maxResults": opts.Limit,
+		"minScore":   opts.MinScore,
+	}, 45*time.Second)
+	if err != nil {
+		return memorySearchResponse{}, nil, err
+	}
+	resp, decodeErr := decodeMemorySearchResponse(raw)
+	if decodeErr != nil {
+		return memorySearchResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func runMemoryInstanceAction(path string, opts memoryCommandOptions) (memoryStatusResponse, []byte, error) {
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, path, map[string]interface{}{
+		"instanceId": strings.TrimSpace(opts.InstanceID),
+		"scope":      strings.TrimSpace(opts.Scope),
+	}, 60*time.Second)
+	if err != nil {
+		return memoryStatusResponse{}, nil, err
+	}
+	resp, decodeErr := decodeMemoryStatusResponse(raw)
+	if decodeErr != nil {
+		return memoryStatusResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func distillMemory(opts memoryCommandOptions) (memoryDistillResponse, []byte, error) {
+	body := map[string]interface{}{
+		"instanceId": strings.TrimSpace(opts.InstanceID),
+		"dryRun":     opts.DryRun,
+		"force":      opts.Force,
+	}
+	if scope := strings.TrimSpace(opts.Scope); scope != "" {
+		body["scope"] = scope
+	}
+	if reason := strings.TrimSpace(opts.Reason); reason != "" {
+		body["reason"] = reason
+	}
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/memory/instance/distill", body, 90*time.Second)
+	if err != nil {
+		return memoryDistillResponse{}, nil, err
+	}
+	resp, decodeErr := decodeMemoryDistillResponse(raw)
+	if decodeErr != nil {
+		return memoryDistillResponse{}, nil, decodeErr
 	}
 	return resp, raw, nil
 }
@@ -5520,6 +5937,62 @@ func renderOrchestrateExecutionList(executions []orchestrateExecutionSnapshot) s
 		if goal := strings.TrimSpace(execution.Goal); goal != "" {
 			lines = append(lines, "  goal: "+truncateOrchestrateText(goal, 120))
 		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderMemoryList(resp memoryListResponse) string {
+	lines := []string{"memory list"}
+	if subject := strings.TrimSpace(resp.Subject); subject != "" {
+		lines[0] = "memory list " + subject
+	}
+	lines = append(lines, fmt.Sprintf("entries: %d", len(resp.Entries)))
+	for _, entry := range resp.Entries {
+		lines = append(lines, fmt.Sprintf("- %s · %s", firstNonEmpty(strings.TrimSpace(entry.ID), "unknown"), firstNonEmpty(strings.TrimSpace(entry.Type), "unknown")))
+	}
+	if len(resp.Attachments) > 0 {
+		lines = append(lines, "attachments:")
+		for _, attachment := range resp.Attachments {
+			lines = append(lines, fmt.Sprintf("- %s -> %s", firstNonEmpty(strings.TrimSpace(attachment.AgentID), "unknown"), firstNonEmpty(strings.TrimSpace(attachment.MemoryID), "unknown")))
+		}
+	}
+	if len(resp.Grants) > 0 {
+		lines = append(lines, "grants:")
+		for _, grant := range resp.Grants {
+			lines = append(lines, fmt.Sprintf("- %s · %s", firstNonEmpty(strings.TrimSpace(grant.Subject), "unknown"), firstNonEmpty(strings.TrimSpace(grant.Scope), "unknown")))
+		}
+	}
+	if len(resp.Audit) > 0 {
+		lines = append(lines, fmt.Sprintf("audit events: %d", len(resp.Audit)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderMemorySearchResults(resp memorySearchResponse) string {
+	if len(resp.Results) == 0 {
+		return "No memory search results."
+	}
+	lines := []string{"memory search results:"}
+	for _, result := range resp.Results {
+		lines = append(lines, fmt.Sprintf(
+			"- %s · scope=%s · score=%.2f · %s",
+			firstNonEmpty(strings.TrimSpace(result.ID), "unknown"),
+			firstNonEmpty(strings.TrimSpace(result.Scope), "unknown"),
+			result.Score,
+			firstNonEmpty(strings.TrimSpace(result.Snippet), "(no snippet)"),
+		))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderMemoryDistill(run memoryDistillRunSnapshot) string {
+	lines := []string{
+		fmt.Sprintf("memory distill %s", firstNonEmpty(strings.TrimSpace(run.RunID), "unknown")),
+		fmt.Sprintf("instance: %s", firstNonEmpty(strings.TrimSpace(run.InstanceID), "unknown")),
+		fmt.Sprintf("status: %s", firstNonEmpty(strings.TrimSpace(run.Status), "unknown")),
+	}
+	if run.DryRun {
+		lines = append(lines, "dry run: true")
 	}
 	return strings.Join(lines, "\n")
 }
