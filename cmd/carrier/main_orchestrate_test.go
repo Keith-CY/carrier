@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -184,6 +186,14 @@ func TestParseExecutionsCommandArgs(t *testing.T) {
 	}
 	if artifactsOpts.Action != "artifacts" || artifactsOpts.ExecutionID != "exec-100" || !artifactsOpts.JSON {
 		t.Fatalf("unexpected artifacts opts: %+v", artifactsOpts)
+	}
+
+	evidenceOpts, err := parseExecutionsCommandArgs([]string{"evidence", "exec-101", "--format", "zip", "--output", "bundle.zip"})
+	if err != nil {
+		t.Fatalf("parseExecutionsCommandArgs(evidence) error: %v", err)
+	}
+	if evidenceOpts.Action != "evidence" || evidenceOpts.ExecutionID != "exec-101" || evidenceOpts.Format != "zip" || evidenceOpts.OutputPath != "bundle.zip" {
+		t.Fatalf("unexpected evidence opts: %+v", evidenceOpts)
 	}
 
 	authorizeOpts, err := parseExecutionsCommandArgs([]string{"authorize", "exec-66", "--policy-approve", "--json"})
@@ -649,5 +659,59 @@ func TestRunExecutionArtifactsCommand(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "artifact-1") || !strings.Contains(out.String(), "release-notes.txt") || !strings.Contains(out.String(), "summary.json") {
 		t.Fatalf("unexpected artifacts output: %q", out.String())
+	}
+}
+
+func TestRunExecutionEvidenceCommand(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/orchestrator/executions/exec-evidence/evidence":
+			if strings.Contains(r.URL.RawQuery, "format=zip") {
+				w.Header().Set("Content-Type", "application/zip")
+				_, _ = w.Write([]byte("PK\x03\x04mock-zip"))
+				return
+			}
+			_, _ = w.Write([]byte(`{"result":"ok","evidence":{"execution":{"id":"exec-evidence","goal":"collect evidence"},"artifactManifest":[{"id":"artifact-1","name":"summary.json"}],"audit":[{"action":"orchestrator_execution_create","target":"exec-evidence","result":"ok"}]}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gateway.Close()
+
+	setProbeEnvFromURL(t, "CARRIER_GATEWAY_HOST", "CARRIER_GATEWAY_PORT", gateway.URL)
+
+	var out bytes.Buffer
+	if err := runOrchestrateCommand(&out, orchestrateCommandOptions{
+		Action:      "evidence",
+		ExecutionID: "exec-evidence",
+	}); err != nil {
+		t.Fatalf("runOrchestrateCommand(evidence json) error: %v", err)
+	}
+	if !strings.Contains(out.String(), "execution evidence exec-evidence") || !strings.Contains(out.String(), "artifacts: 1") || !strings.Contains(out.String(), "audit events: 1") {
+		t.Fatalf("unexpected evidence output: %q", out.String())
+	}
+
+	outputPath := filepath.Join(t.TempDir(), "exec-evidence.zip")
+	out.Reset()
+	if err := runOrchestrateCommand(&out, orchestrateCommandOptions{
+		Action:      "evidence",
+		ExecutionID: "exec-evidence",
+		Format:      "zip",
+		OutputPath:  outputPath,
+	}); err != nil {
+		t.Fatalf("runOrchestrateCommand(evidence zip) error: %v", err)
+	}
+	if got := strings.TrimSpace(out.String()); !strings.Contains(got, outputPath) {
+		t.Fatalf("expected output path in zip export output, got %q", got)
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read evidence zip output: %v", err)
+	}
+	if got := string(data); got != "PK\x03\x04mock-zip" {
+		t.Fatalf("unexpected evidence zip bytes: %q", got)
 	}
 }

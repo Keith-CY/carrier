@@ -1045,6 +1045,20 @@ export async function mockOrchestrationAPIs(page: Page) {
     });
   });
 
+  await page.route('**/api/v1/orchestrator/executions/*/evidence?format=zip', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const executionID = path.split('/')[5];
+    const execution = executions.find((item) => item.id === executionID);
+    if (!execution) {
+      return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ result: 'error', message: 'not found' }) });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/zip',
+      body: 'PK\x03\x04mock-evidence-' + executionID,
+    });
+  });
+
   await page.route('**/api/v1/orchestrator/executions/*', async (route) => {
     const path = new URL(route.request().url()).pathname;
     const executionID = path.split('/')[5];

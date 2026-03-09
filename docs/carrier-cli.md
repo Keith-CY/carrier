@@ -34,6 +34,8 @@ All command blocks below assume `carrier` is installed and available in `PATH`.
   - Clone the original execution plan into a fresh `pending_authorization` execution.
 - `carrier executions artifacts <execution_id> [--json]`
   - List execution artifact metadata.
+- `carrier executions evidence <execution_id> [--format json|zip] [--output <path>] [--json]`
+  - Export an execution evidence bundle as JSON or download a ZIP archive.
 
 ### Bootstrap and runtime
 
@@ -222,6 +224,14 @@ carrier executions show <execution_id>
 
 ```bash
 carrier executions artifacts <execution_id>
+```
+
+```bash
+carrier executions evidence <execution_id>
+```
+
+```bash
+carrier executions evidence <execution_id> --format zip --output evidence.zip
 ```
 
 ```bash

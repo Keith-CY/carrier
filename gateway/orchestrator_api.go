@@ -295,6 +295,13 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 		handleOrchestratorExecutionArtifacts(w, r, requestID, cfg, execution, parts)
 		return
 	}
+	if action == "evidence" {
+		if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_EXECUTION_VIEW", "role cannot export orchestrator execution evidence"); !ok {
+			return
+		}
+		handleOrchestratorExecutionEvidence(w, r, requestID, cfg, execution, parts)
+		return
+	}
 	switch action {
 	case "authorize":
 		if _, ok := requireGatewayPermission(w, r, cfg, canApproveExecutions, "E_RBAC_EXECUTION_APPROVE", "role cannot approve orchestrator executions"); !ok {

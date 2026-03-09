@@ -1952,6 +1952,9 @@
   function artifactDownloadPath(executionID, artifactID) {
     return "/api/v1/orchestrator/executions/" + encodeURIComponent(String(executionID || "").trim()) + "/artifacts/" + encodeURIComponent(String(artifactID || "").trim());
   }
+  function evidenceDownloadPath(executionID) {
+    return "/api/v1/orchestrator/executions/" + encodeURIComponent(String(executionID || "").trim()) + "/evidence?format=zip";
+  }
   function workerStateBadgeClass(state) {
     const normalized = String(state || "").trim().toLowerCase();
     if (normalized === "available" || normalized === "managed")
@@ -2535,15 +2538,17 @@
     const detail = $("#executions-detail");
     const cancelBtn = $("#executions-cancel");
     const policyApproveBtn = $("#executions-policy-approve");
+    const exportEvidenceBtn = $("#executions-export-evidence");
     const retryBtn = $("#executions-retry");
     const rerunBtn = $("#executions-rerun");
     const cloneBtn = $("#executions-clone");
-    if (!list || !summary || !detail || !cancelBtn || !policyApproveBtn || !retryBtn || !rerunBtn || !cloneBtn)
+    if (!list || !summary || !detail || !cancelBtn || !policyApproveBtn || !exportEvidenceBtn || !retryBtn || !rerunBtn || !cloneBtn)
       return;
     if (!featureFlags.remoteControlPlaneEnabled || !canViewExecutionsUI()) {
       list.textContent = "";
       summary.textContent = featureFlags.remoteControlPlaneEnabled ? "Execution access is restricted for current role." : "Remote control plane is disabled.";
       detail.textContent = "Execution Center is unavailable.";
+      exportEvidenceBtn.classList.add("hidden");
       retryBtn.classList.add("hidden");
       rerunBtn.classList.add("hidden");
       cloneBtn.classList.add("hidden");
@@ -2613,6 +2618,7 @@
     }
     if (!selectedExecutionID) {
       detail.textContent = "Select an execution to inspect workers and task results.";
+      exportEvidenceBtn.classList.add("hidden");
       retryBtn.classList.add("hidden");
       rerunBtn.classList.add("hidden");
       cloneBtn.classList.add("hidden");
@@ -2627,6 +2633,7 @@
     const launchAllowed = canLaunchExecutionsUI();
     const approveAllowed = canApproveExecutionsUI();
     const selectedPolicyAskPending = !selectedTerminal && String(selectedPolicy && selectedPolicy.decision ? selectedPolicy.decision : "").trim() === "ask" && !String(selectedPolicy && selectedPolicy.approvedAt ? selectedPolicy.approvedAt : "").trim();
+    exportEvidenceBtn.classList.toggle("hidden", false);
     retryBtn.classList.toggle("hidden", !(launchAllowed && selectedTerminal && selectedHasFailedTasks));
     rerunBtn.classList.toggle("hidden", !(launchAllowed && selectedTerminal));
     cloneBtn.classList.toggle("hidden", !(launchAllowed && selectedTerminal));
@@ -2641,10 +2648,21 @@
       const hasFailedTasks = executionHasFailedTasks(execution);
       const policy = execution && execution.policy && typeof execution.policy === "object" ? execution.policy : {};
       const policyAskPending = !terminal && String(policy && policy.decision ? policy.decision : "").trim() === "ask" && !String(policy && policy.approvedAt ? policy.approvedAt : "").trim();
+      exportEvidenceBtn.classList.toggle("hidden", false);
       retryBtn.classList.toggle("hidden", !(launchAllowed && terminal && hasFailedTasks));
       rerunBtn.classList.toggle("hidden", !(launchAllowed && terminal));
       cloneBtn.classList.toggle("hidden", !(launchAllowed && terminal));
       cancelBtn.classList.toggle("hidden", !(launchAllowed && !terminal));
+      exportEvidenceBtn.onclick = async () => {
+        exportEvidenceBtn.disabled = true;
+        try {
+          await downloadAPI(evidenceDownloadPath(selectedExecutionID), String(selectedExecutionID || "").trim() + "-evidence.zip");
+        } catch (e) {
+          summary.textContent = "Evidence export failed: " + e.message;
+        } finally {
+          exportEvidenceBtn.disabled = false;
+        }
+      };
       cancelBtn.onclick = async () => {
         if (!window.confirm("Cancel execution " + selectedExecutionID + "?"))
           return;
@@ -2708,6 +2726,7 @@
       };
     } catch (e) {
       detail.textContent = "Load failed: " + e.message;
+      exportEvidenceBtn.classList.add("hidden");
       retryBtn.classList.add("hidden");
       rerunBtn.classList.add("hidden");
       cloneBtn.classList.add("hidden");

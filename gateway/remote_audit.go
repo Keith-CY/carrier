@@ -1,8 +1,10 @@
 package gateway
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,4 +91,94 @@ func sanitizeAuditDetails(details map[string]interface{}) map[string]interface{}
 		}
 	}
 	return out
+}
+
+func listGatewayAuditEventsForExecution(executionID string) ([]gatewayAuditEvent, error) {
+	id := strings.TrimSpace(executionID)
+	if id == "" {
+		return nil, nil
+	}
+	path, err := gatewayAuditLogPath()
+	if err != nil {
+		return nil, err
+	}
+	events, err := loadGatewayAuditEvents(path)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]gatewayAuditEvent, 0, len(events))
+	for _, event := range events {
+		if gatewayAuditEventMatchesExecution(event, id) {
+			out = append(out, event)
+		}
+	}
+	return out, nil
+}
+
+func loadGatewayAuditEvents(path string) ([]gatewayAuditEvent, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return nil, nil
+	}
+	file, err := os.Open(trimmed)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+
+	reader := bufio.NewReader(file)
+	events := make([]gatewayAuditEvent, 0)
+	for {
+		line, readErr := reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if line != "" {
+			var event gatewayAuditEvent
+			if err := json.Unmarshal([]byte(line), &event); err == nil {
+				events = append(events, event)
+			}
+		}
+		if readErr == nil {
+			continue
+		}
+		if readErr == io.EOF {
+			break
+		}
+		return nil, readErr
+	}
+	return events, nil
+}
+
+func gatewayAuditEventMatchesExecution(event gatewayAuditEvent, executionID string) bool {
+	id := strings.TrimSpace(executionID)
+	if id == "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(event.Target), id) {
+		return true
+	}
+	for _, key := range []string{"executionId", "sourceExecutionId", "parentExecutionId"} {
+		if strings.EqualFold(auditDetailString(event.Details, key), id) {
+			return true
+		}
+	}
+	return false
+}
+
+func auditDetailString(details map[string]interface{}, key string) string {
+	if len(details) == 0 {
+		return ""
+	}
+	value, ok := details[key]
+	if !ok {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
+	}
 }
