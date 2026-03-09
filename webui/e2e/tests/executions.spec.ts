@@ -100,6 +100,12 @@ test.describe('Execution Center', () => {
 
   test('execution detail shows lineage, artifacts, and derived execution actions', async ({ page }) => {
     await loginWithToken(page, '/#/executions/exec-complete');
+    let evidenceRequests = 0;
+    page.on('request', (request) => {
+      if (request.url().includes('/api/v1/orchestrator/executions/exec-complete/evidence?format=zip')) {
+        evidenceRequests += 1;
+      }
+    });
 
     await expect(page.locator('#executions-detail')).toContainText('Trigger');
     await expect(page.locator('#executions-detail')).toContainText('source: github');
@@ -112,8 +118,11 @@ test.describe('Execution Center', () => {
     await expect(page.locator('#executions-detail')).toContainText('Artifacts');
     const artifactLink = page.locator('#executions-detail a[href*="/api/v1/orchestrator/executions/exec-complete/artifacts/artifact-release-notes"]');
     await expect(artifactLink).toBeVisible();
+    await expect(page.locator('#executions-export-evidence')).toBeVisible();
     await expect(page.locator('#executions-rerun')).toBeVisible();
     await expect(page.locator('#executions-clone')).toBeVisible();
+    await page.click('#executions-export-evidence');
+    await expect.poll(() => evidenceRequests).toBe(1);
 
     await page.click('#executions-clone');
     await expect.poll(() => page.url()).toContain('#/executions/exec-derived-1');

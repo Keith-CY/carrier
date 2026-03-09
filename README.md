@@ -6,7 +6,7 @@ Carrier is a local-first agent control plane for decomposing goals, dispatching 
 
 - Task-first orchestration via `carrier orchestrate` with execution history in `carrier executions`.
 - Built-in execution templates via `carrier templates` for repeatable triage and diagnosis flows.
-- Execution detail includes lineage, derived retries/reruns/clones, and execution artifacts.
+- Execution detail includes lineage, derived retries/reruns/clones, execution artifacts, and evidence export.
 - Workers inventory includes stale lease detection, queue summary, and stale/idle reclaim actions.
 - Local bootstrap/onboarding via CLI/TUI/WebUI.
 - Managed local install lifecycle for `openclaw`, `picoclaw`, `zeroclaw`.
@@ -131,6 +131,7 @@ carrier executions
 carrier executions show <execution_id>
 carrier executions cancel <execution_id>
 carrier executions artifacts <execution_id>
+carrier executions evidence <execution_id>
 carrier executions retry <execution_id>
 carrier executions rerun <execution_id>
 carrier executions clone <execution_id>
@@ -261,6 +262,7 @@ carrier templates run <template_id> --input key=value
 carrier executions
 carrier executions show <execution_id>
 carrier executions artifacts <execution_id>
+carrier executions evidence <execution_id>
 carrier executions retry <execution_id>
 carrier executions rerun <execution_id>
 carrier executions clone <execution_id>

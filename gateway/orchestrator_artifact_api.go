@@ -52,23 +52,35 @@ func findExecutionArtifact(artifacts []OrchestratorArtifact, artifactID string) 
 }
 
 func serveExecutionArtifact(w http.ResponseWriter, cfg *GatewayConfig, artifact OrchestratorArtifact) error {
+	data, filename, contentType, err := loadExecutionArtifact(cfg, artifact)
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", BuildContentDisposition(filename))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+	return nil
+}
+
+func loadExecutionArtifact(cfg *GatewayConfig, artifact OrchestratorArtifact) ([]byte, string, string, error) {
 	path := strings.TrimSpace(artifact.Path)
 	if path == "" {
-		return os.ErrNotExist
+		return nil, "", "", os.ErrNotExist
 	}
 	resolvedPath, err := filepath.Abs(path)
 	if err != nil {
-		return err
+		return nil, "", "", err
 	}
 	if cfg != nil && strings.TrimSpace(cfg.ArtifactRoot) != "" {
 		resolvedRoot, rootErr := ValidateArtifactRoot(cfg.ArtifactRoot)
 		if rootErr != nil || !IsPathUnderRoot(resolvedPath, resolvedRoot) {
-			return os.ErrNotExist
+			return nil, "", "", os.ErrNotExist
 		}
 	}
 	data, err := os.ReadFile(resolvedPath)
 	if err != nil {
-		return err
+		return nil, "", "", err
 	}
 	contentType := strings.TrimSpace(artifact.ContentType)
 	if contentType == "" {
@@ -78,9 +90,5 @@ func serveExecutionArtifact(w http.ResponseWriter, cfg *GatewayConfig, artifact 
 	if filename == "" {
 		filename = filepath.Base(resolvedPath)
 	}
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Disposition", BuildContentDisposition(filename))
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
-	return nil
+	return data, filename, contentType, nil
 }

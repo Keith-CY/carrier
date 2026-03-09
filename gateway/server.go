@@ -347,6 +347,14 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		}
 		handleOrchestratorMetrics(w, r, requestID, cfg)
 	})
+	mux.HandleFunc("/api/v1/audit/export", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleGatewayAuditExport(w, r, requestID, cfg)
+	})
 	mux.HandleFunc("/api/v1/orchestrator/workers/queue", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
 		if err := checkGatewayAccess(r, cfg); err != nil {

@@ -25,6 +25,8 @@ func TestGatewayMux_MethodAndAuthGuards(t *testing.T) {
 		{name: "agents unauthorized", method: http.MethodGet, path: "/api/v1/agents", auth: false, want: http.StatusUnauthorized},
 		{name: "instances unauthorized", method: http.MethodGet, path: "/api/v1/instances", auth: false, want: http.StatusUnauthorized},
 		{name: "orchestrator metrics unauthorized", method: http.MethodGet, path: "/api/v1/orchestrator/metrics", auth: false, want: http.StatusUnauthorized},
+		{name: "execution evidence unauthorized", method: http.MethodGet, path: "/api/v1/orchestrator/executions/exec-1/evidence", auth: false, want: http.StatusUnauthorized},
+		{name: "audit export unauthorized", method: http.MethodGet, path: "/api/v1/audit/export?executionId=exec-1", auth: false, want: http.StatusUnauthorized},
 		{name: "triggers unauthorized", method: http.MethodGet, path: "/api/v1/triggers", auth: false, want: http.StatusUnauthorized},
 		{name: "worker queue unauthorized", method: http.MethodGet, path: "/api/v1/orchestrator/workers/queue", auth: false, want: http.StatusUnauthorized},
 		{name: "worker reclaim stale unauthorized", method: http.MethodPost, path: "/api/v1/orchestrator/workers/reclaim-stale", auth: false, want: http.StatusUnauthorized},
@@ -34,6 +36,8 @@ func TestGatewayMux_MethodAndAuthGuards(t *testing.T) {
 		{name: "pairing sessions method guard", method: http.MethodPost, path: "/api/v1/pairing/sessions", auth: true, want: http.StatusMethodNotAllowed},
 		{name: "trigger webhook disabled when feature off", method: http.MethodGet, path: "/api/v1/triggers/webhook/test-trigger", auth: false, want: http.StatusNotFound},
 		{name: "orchestrator metrics disabled when feature off", method: http.MethodPost, path: "/api/v1/orchestrator/metrics", auth: true, want: http.StatusNotFound},
+		{name: "execution evidence disabled when feature off", method: http.MethodGet, path: "/api/v1/orchestrator/executions/exec-1/evidence", auth: true, want: http.StatusNotFound},
+		{name: "audit export disabled when feature off", method: http.MethodGet, path: "/api/v1/audit/export?executionId=exec-1", auth: true, want: http.StatusNotFound},
 		{name: "worker queue disabled when feature off", method: http.MethodPost, path: "/api/v1/orchestrator/workers/queue", auth: true, want: http.StatusNotFound},
 		{name: "worker reclaim stale disabled when feature off", method: http.MethodGet, path: "/api/v1/orchestrator/workers/reclaim-stale", auth: true, want: http.StatusNotFound},
 	}

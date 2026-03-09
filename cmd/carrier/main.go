@@ -212,10 +212,12 @@ type orchestrateCommandOptions struct {
 	HostIDs        []string
 	HostLabels     []string
 	Provider       string
+	Format         string
 	MaxConcurrency int
 	PolicyApprove  bool
 	IdempotencyKey string
 	Limit          int
+	OutputPath     string
 	Timeout        time.Duration
 	Async          bool
 	JSON           bool
@@ -235,27 +237,27 @@ type templatesCommandOptions struct {
 }
 
 type triggersCommandOptions struct {
-	Action         string
-	TriggerID      string
-	Type           string
-	TemplateID     string
-	Name           string
-	CreatedBy      string
-	HostIDs        []string
-	HostLabels     []string
-	Provider       string
-	MaxConcurrency int
-	PolicyApprove  bool
-	WebhookSecret  string
-	GitHubCommand  string
-	GitHubLabel    string
+	Action           string
+	TriggerID        string
+	Type             string
+	TemplateID       string
+	Name             string
+	CreatedBy        string
+	HostIDs          []string
+	HostLabels       []string
+	Provider         string
+	MaxConcurrency   int
+	PolicyApprove    bool
+	WebhookSecret    string
+	GitHubCommand    string
+	GitHubLabel      string
 	GitHubRepository string
-	Cron           string
-	Timezone       string
-	Enable         bool
-	Disable        bool
-	JSON           bool
-	Inputs         map[string]string
+	Cron             string
+	Timezone         string
+	Enable           bool
+	Disable          bool
+	JSON             bool
+	Inputs           map[string]string
 }
 
 type versionInfo struct {
@@ -2499,6 +2501,9 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 	case "artifacts":
 		opts.Action = "artifacts"
 		startIdx = 1
+	case "evidence":
+		opts.Action = "evidence"
+		startIdx = 1
 	case "authorize":
 		opts.Action = "authorize"
 		startIdx = 1
@@ -2522,6 +2527,24 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 			opts.JSON = true
 		case "--policy-approve":
 			opts.PolicyApprove = true
+		case "--output":
+			value, next, err := parseRequiredFlagValue(args, i, "--output")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			opts.OutputPath = strings.TrimSpace(value)
+			i = next
+		case "--format":
+			value, next, err := parseRequiredFlagValue(args, i, "--format")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			normalized := strings.ToLower(strings.TrimSpace(value))
+			if normalized != "json" && normalized != "zip" {
+				return orchestrateCommandOptions{}, fmt.Errorf("invalid --format value: %s", value)
+			}
+			opts.Format = normalized
+			i = next
 		case "--limit":
 			value, next, err := parseRequiredFlagValue(args, i, "--limit")
 			if err != nil {
@@ -2537,7 +2560,7 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 			if strings.HasPrefix(raw, "-") {
 				return orchestrateCommandOptions{}, fmt.Errorf("unknown executions option: %s", raw)
 			}
-			if opts.Action != "status" && opts.Action != "cancel" && opts.Action != "authorize" && opts.Action != "retry" && opts.Action != "rerun" && opts.Action != "clone" && opts.Action != "artifacts" {
+			if opts.Action != "status" && opts.Action != "cancel" && opts.Action != "authorize" && opts.Action != "retry" && opts.Action != "rerun" && opts.Action != "clone" && opts.Action != "artifacts" && opts.Action != "evidence" {
 				return orchestrateCommandOptions{}, fmt.Errorf("unexpected executions argument: %s", raw)
 			}
 			if opts.ExecutionID != "" {
@@ -2547,7 +2570,7 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 		}
 	}
 
-	if (opts.Action == "status" || opts.Action == "cancel" || opts.Action == "authorize" || opts.Action == "retry" || opts.Action == "rerun" || opts.Action == "clone" || opts.Action == "artifacts") && strings.TrimSpace(opts.ExecutionID) == "" {
+	if (opts.Action == "status" || opts.Action == "cancel" || opts.Action == "authorize" || opts.Action == "retry" || opts.Action == "rerun" || opts.Action == "clone" || opts.Action == "artifacts" || opts.Action == "evidence") && strings.TrimSpace(opts.ExecutionID) == "" {
 		if opts.Action == "cancel" {
 			return orchestrateCommandOptions{}, errors.New("usage: carrier executions cancel <execution_id> [--json]")
 		}
@@ -2563,10 +2586,21 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 		if opts.Action == "artifacts" {
 			return orchestrateCommandOptions{}, errors.New("usage: carrier executions artifacts <execution_id> [--json]")
 		}
+		if opts.Action == "evidence" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions evidence <execution_id> [--format json|zip] [--output <path>] [--json]")
+		}
 		if opts.Action == "authorize" {
 			return orchestrateCommandOptions{}, errors.New("usage: carrier executions authorize <execution_id> [--policy-approve] [--json]")
 		}
 		return orchestrateCommandOptions{}, errors.New("usage: carrier executions show <execution_id> [--json]")
+	}
+	if opts.Action == "evidence" {
+		if opts.Format == "" {
+			opts.Format = "json"
+		}
+		if opts.Format == "zip" && opts.JSON {
+			return orchestrateCommandOptions{}, errors.New("--json cannot be used with --format zip")
+		}
 	}
 	return opts, nil
 }
@@ -3850,26 +3884,26 @@ type orchestrateExecutionPolicySnapshot struct {
 }
 
 type orchestrateExecutionSnapshot struct {
-	ID                string                              `json:"id"`
-	Goal              string                              `json:"goal"`
-	TemplateID        string                              `json:"templateId,omitempty"`
-	TriggerSource     string                              `json:"triggerSource,omitempty"`
-	TriggerID         string                              `json:"triggerId,omitempty"`
-	TriggerEvent      string                              `json:"triggerEvent,omitempty"`
-	TriggerPayloadDigest string                           `json:"triggerPayloadDigest,omitempty"`
-	Initiator         string                              `json:"initiator,omitempty"`
-	ParentExecutionID string                              `json:"parentExecutionId,omitempty"`
-	SourceExecutionID string                              `json:"sourceExecutionId,omitempty"`
-	LaunchReason      string                              `json:"launchReason,omitempty"`
-	Status            string                              `json:"status"`
-	Error             string                              `json:"error,omitempty"`
-	MaxConcurrency    int                                 `json:"maxConcurrency,omitempty"`
-	Policy            orchestrateExecutionPolicySnapshot  `json:"policy,omitempty"`
-	Outcome           orchestrateExecutionOutcomeSnapshot `json:"outcome,omitempty"`
-	CreatedAt         string                              `json:"createdAt,omitempty"`
-	UpdatedAt         string                              `json:"updatedAt,omitempty"`
-	TaskUnits         []orchestrateTaskUnit               `json:"taskUnits,omitempty"`
-	Results           []orchestrateTaskResultSnapshot     `json:"results,omitempty"`
+	ID                   string                              `json:"id"`
+	Goal                 string                              `json:"goal"`
+	TemplateID           string                              `json:"templateId,omitempty"`
+	TriggerSource        string                              `json:"triggerSource,omitempty"`
+	TriggerID            string                              `json:"triggerId,omitempty"`
+	TriggerEvent         string                              `json:"triggerEvent,omitempty"`
+	TriggerPayloadDigest string                              `json:"triggerPayloadDigest,omitempty"`
+	Initiator            string                              `json:"initiator,omitempty"`
+	ParentExecutionID    string                              `json:"parentExecutionId,omitempty"`
+	SourceExecutionID    string                              `json:"sourceExecutionId,omitempty"`
+	LaunchReason         string                              `json:"launchReason,omitempty"`
+	Status               string                              `json:"status"`
+	Error                string                              `json:"error,omitempty"`
+	MaxConcurrency       int                                 `json:"maxConcurrency,omitempty"`
+	Policy               orchestrateExecutionPolicySnapshot  `json:"policy,omitempty"`
+	Outcome              orchestrateExecutionOutcomeSnapshot `json:"outcome,omitempty"`
+	CreatedAt            string                              `json:"createdAt,omitempty"`
+	UpdatedAt            string                              `json:"updatedAt,omitempty"`
+	TaskUnits            []orchestrateTaskUnit               `json:"taskUnits,omitempty"`
+	Results              []orchestrateTaskResultSnapshot     `json:"results,omitempty"`
 }
 
 type orchestrateWorkerLeaseSnapshot struct {
@@ -3901,6 +3935,26 @@ type orchestrateExecutionArtifactsResponse struct {
 	Artifacts []orchestrateArtifactSnapshot `json:"artifacts"`
 }
 
+type orchestrateAuditEventSnapshot struct {
+	Action string `json:"action"`
+	Target string `json:"target,omitempty"`
+	Result string `json:"result,omitempty"`
+}
+
+type orchestrateEvidenceBundleSnapshot struct {
+	GeneratedAt      string                          `json:"generatedAt,omitempty"`
+	Execution        orchestrateExecutionSnapshot    `json:"execution"`
+	ArtifactManifest []orchestrateArtifactSnapshot   `json:"artifactManifest,omitempty"`
+	Audit            []orchestrateAuditEventSnapshot `json:"audit,omitempty"`
+}
+
+type orchestrateEvidenceBundleResponse struct {
+	Result    string                            `json:"result"`
+	ErrorCode string                            `json:"errorCode,omitempty"`
+	Message   string                            `json:"message,omitempty"`
+	Evidence  orchestrateEvidenceBundleSnapshot `json:"evidence"`
+}
+
 type orchestratePlanSnapshot = sharedorchestration.Plan
 
 type executionTemplateInputFieldSnapshot struct {
@@ -3919,18 +3973,18 @@ type executionTemplateTaskSnapshot struct {
 }
 
 type executionTemplateSnapshot struct {
-	ID                  string                               `json:"id"`
-	Name                string                               `json:"name"`
-	Description         string                               `json:"description,omitempty"`
-	DefaultGoalTemplate string                               `json:"defaultGoalTemplate,omitempty"`
+	ID                  string                                `json:"id"`
+	Name                string                                `json:"name"`
+	Description         string                                `json:"description,omitempty"`
+	DefaultGoalTemplate string                                `json:"defaultGoalTemplate,omitempty"`
 	InputSchema         []executionTemplateInputFieldSnapshot `json:"inputSchema,omitempty"`
-	PlannerTasks        []executionTemplateTaskSnapshot      `json:"plannerTasks,omitempty"`
+	PlannerTasks        []executionTemplateTaskSnapshot       `json:"plannerTasks,omitempty"`
 }
 
 type executionTemplateListResponse struct {
-	Result    string                     `json:"result"`
-	ErrorCode string                     `json:"errorCode,omitempty"`
-	Message   string                     `json:"message,omitempty"`
+	Result    string                      `json:"result"`
+	ErrorCode string                      `json:"errorCode,omitempty"`
+	Message   string                      `json:"message,omitempty"`
 	Templates []executionTemplateSnapshot `json:"templates"`
 }
 
@@ -3942,10 +3996,10 @@ type executionTemplateResponse struct {
 }
 
 type executionTemplateLaunchResponse struct {
-	Result    string                     `json:"result"`
-	ErrorCode string                     `json:"errorCode,omitempty"`
-	Message   string                     `json:"message,omitempty"`
-	Template  executionTemplateSnapshot  `json:"template"`
+	Result    string                       `json:"result"`
+	ErrorCode string                       `json:"errorCode,omitempty"`
+	Message   string                       `json:"message,omitempty"`
+	Template  executionTemplateSnapshot    `json:"template"`
 	Execution orchestrateExecutionSnapshot `json:"execution"`
 }
 
@@ -4143,6 +4197,11 @@ func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error 
 			return err
 		}
 		return runOrchestrateArtifacts(out, opts.ExecutionID, opts.JSON)
+	case "evidence":
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+		return runOrchestrateEvidence(out, opts.ExecutionID, opts.Format, opts.OutputPath, opts.JSON)
 	case "authorize":
 		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
 			return err
@@ -4259,6 +4318,49 @@ func runOrchestrateArtifacts(out io.Writer, executionID string, outputJSON bool)
 		return writePrettyJSON(out, raw)
 	}
 	_, _ = fmt.Fprintln(out, renderOrchestrateExecutionArtifacts(strings.TrimSpace(executionID), resp.Artifacts))
+	return nil
+}
+
+func runOrchestrateEvidence(out io.Writer, executionID, format, outputPath string, outputJSON bool) error {
+	normalizedFormat := strings.ToLower(strings.TrimSpace(format))
+	if normalizedFormat == "" {
+		normalizedFormat = "json"
+	}
+	if normalizedFormat == "zip" {
+		raw, err := fetchOrchestratorExecutionEvidenceArchive(executionID)
+		if err != nil {
+			return err
+		}
+		destination := strings.TrimSpace(outputPath)
+		if destination == "" {
+			destination = strings.TrimSpace(executionID) + "-evidence.zip"
+		}
+		if err := os.WriteFile(destination, raw, 0o600); err != nil {
+			return fmt.Errorf("write evidence archive: %w", err)
+		}
+		_, _ = fmt.Fprintf(out, "execution evidence written: %s\n", destination)
+		return nil
+	}
+
+	resp, raw, err := fetchOrchestratorExecutionEvidence(executionID)
+	if err != nil {
+		return err
+	}
+	if destination := strings.TrimSpace(outputPath); destination != "" {
+		var pretty bytes.Buffer
+		if err := writePrettyJSON(&pretty, raw); err != nil {
+			return err
+		}
+		if err := os.WriteFile(destination, pretty.Bytes(), 0o600); err != nil {
+			return fmt.Errorf("write evidence json: %w", err)
+		}
+		_, _ = fmt.Fprintf(out, "execution evidence written: %s\n", destination)
+		return nil
+	}
+	if outputJSON {
+		return writePrettyJSON(out, raw)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestrateExecutionEvidence(strings.TrimSpace(executionID), resp.Evidence))
 	return nil
 }
 
@@ -4497,6 +4599,14 @@ func decodeOrchestrateExecutionArtifactsResponse(raw []byte) (orchestrateExecuti
 	return resp, nil
 }
 
+func decodeOrchestrateEvidenceBundleResponse(raw []byte) (orchestrateEvidenceBundleResponse, error) {
+	var resp orchestrateEvidenceBundleResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return orchestrateEvidenceBundleResponse{}, fmt.Errorf("decode orchestrator evidence response: %w", err)
+	}
+	return resp, nil
+}
+
 func fetchOrchestratorExecution(executionID string) (orchestrateExecutionResponse, []byte, error) {
 	trimmedID := strings.TrimSpace(executionID)
 	if trimmedID == "" {
@@ -4561,6 +4671,36 @@ func fetchOrchestratorExecutionArtifacts(executionID string) (orchestrateExecuti
 		return orchestrateExecutionArtifactsResponse{}, nil, decodeErr
 	}
 	return resp, raw, nil
+}
+
+func fetchOrchestratorExecutionEvidence(executionID string) (orchestrateEvidenceBundleResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(executionID)
+	if trimmedID == "" {
+		return orchestrateEvidenceBundleResponse{}, nil, errors.New("execution id is required")
+	}
+	path := "/api/v1/orchestrator/executions/" + neturl.PathEscape(trimmedID) + "/evidence?format=json"
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return orchestrateEvidenceBundleResponse{}, nil, err
+	}
+	resp, decodeErr := decodeOrchestrateEvidenceBundleResponse(raw)
+	if decodeErr != nil {
+		return orchestrateEvidenceBundleResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func fetchOrchestratorExecutionEvidenceArchive(executionID string) ([]byte, error) {
+	trimmedID := strings.TrimSpace(executionID)
+	if trimmedID == "" {
+		return nil, errors.New("execution id is required")
+	}
+	path := "/api/v1/orchestrator/executions/" + neturl.PathEscape(trimmedID) + "/evidence?format=zip"
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 func fetchExecutionTemplates() (executionTemplateListResponse, []byte, error) {
@@ -4646,15 +4786,15 @@ func createExecutionTrigger(opts triggersCommandOptions) (executionTriggerRespon
 		"createdBy":  strings.TrimSpace(firstNonEmpty(opts.CreatedBy, "carrier-cli")),
 		"enabled":    !opts.Disable,
 		"config": map[string]interface{}{
-			"inputs":         opts.Inputs,
-			"provider":       strings.TrimSpace(opts.Provider),
-			"hostIds":        opts.HostIDs,
-			"hostLabels":     opts.HostLabels,
-			"maxConcurrency": opts.MaxConcurrency,
-			"policyApprove":  opts.PolicyApprove,
-			"webhookSecret":  strings.TrimSpace(opts.WebhookSecret),
-			"githubCommand":  strings.TrimSpace(opts.GitHubCommand),
-			"githubLabel":    strings.TrimSpace(opts.GitHubLabel),
+			"inputs":           opts.Inputs,
+			"provider":         strings.TrimSpace(opts.Provider),
+			"hostIds":          opts.HostIDs,
+			"hostLabels":       opts.HostLabels,
+			"maxConcurrency":   opts.MaxConcurrency,
+			"policyApprove":    opts.PolicyApprove,
+			"webhookSecret":    strings.TrimSpace(opts.WebhookSecret),
+			"githubCommand":    strings.TrimSpace(opts.GitHubCommand),
+			"githubLabel":      strings.TrimSpace(opts.GitHubLabel),
 			"githubRepository": strings.TrimSpace(opts.GitHubRepository),
 			"cron":             strings.TrimSpace(opts.Cron),
 			"timezone":         firstNonEmpty(strings.TrimSpace(opts.Timezone), "UTC"),
@@ -5133,6 +5273,21 @@ func renderOrchestrateExecutionArtifacts(executionID string, artifacts []orchest
 		}
 		lines = append(lines, fmt.Sprintf("- %s · %s", name, strings.Join(parts, " · ")))
 	}
+	return strings.Join(lines, "\n")
+}
+
+func renderOrchestrateExecutionEvidence(executionID string, evidence orchestrateEvidenceBundleSnapshot) string {
+	execution := evidence.Execution
+	id := firstNonEmpty(strings.TrimSpace(execution.ID), strings.TrimSpace(executionID), "(unknown)")
+	lines := []string{fmt.Sprintf("execution evidence %s", id)}
+	if goal := strings.TrimSpace(execution.Goal); goal != "" {
+		lines = append(lines, "goal: "+goal)
+	}
+	if generatedAt := strings.TrimSpace(evidence.GeneratedAt); generatedAt != "" {
+		lines = append(lines, "generated: "+generatedAt)
+	}
+	lines = append(lines, fmt.Sprintf("artifacts: %d", len(evidence.ArtifactManifest)))
+	lines = append(lines, fmt.Sprintf("audit events: %d", len(evidence.Audit)))
 	return strings.Join(lines, "\n")
 }
 
