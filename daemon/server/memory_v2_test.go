@@ -50,6 +50,53 @@ func TestMemoryV2SearchEndpoint(t *testing.T) {
 	}
 }
 
+func TestMemoryV2ListEndpoint(t *testing.T) {
+	root := t.TempDir()
+	memStore := memory.NewStore(memory.WithRootDir(root))
+	if _, err := memStore.Create("public.team.v1", "Team Public Memory", "v1", memory.TypePublic, ""); err != nil {
+		t.Fatalf("create public memory: %v", err)
+	}
+	if _, err := memStore.Create("agent-a.private.v1", "Agent A Private Memory", "v1", memory.TypePerAgent, "agent-a"); err != nil {
+		t.Fatalf("create private memory: %v", err)
+	}
+	if err := memStore.SetAttachmentsFromLinks("agent-a", []string{"public.team.v1", "agent-a.private.v1"}); err != nil {
+		t.Fatalf("set attachments: %v", err)
+	}
+	if _, err := memStore.GrantScope("agent-a", memory.Scope("shared:profile"), "tester", "allow shared profile"); err != nil {
+		t.Fatalf("grant scope: %v", err)
+	}
+
+	svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithMemoryStore(memStore))
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	mux := buildHTTPMuxWithBaseAgent(svc, nil, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/memory?subject=agent-a", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var payload struct {
+		Entries     []memory.Entry      `json:"entries"`
+		Attachments []memory.Attachment `json:"attachments"`
+		Grants      []memory.Grant      `json:"grants"`
+		Audit       []memory.AuditEvent `json:"audit"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload.Entries) != 2 {
+		t.Fatalf("entries=%d want 2", len(payload.Entries))
+	}
+	if len(payload.Attachments) != 2 {
+		t.Fatalf("attachments=%d want 2", len(payload.Attachments))
+	}
+	if len(payload.Grants) != 1 {
+		t.Fatalf("grants=%d want 1", len(payload.Grants))
+	}
+}
+
 func TestMemoryV2UpsertGetGrantRevokeAndInstanceAttach(t *testing.T) {
 	root := t.TempDir()
 	memStore := memory.NewStore(memory.WithRootDir(root))

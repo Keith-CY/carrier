@@ -38,6 +38,29 @@ All command blocks below assume `carrier` is installed and available in `PATH`.
   - Export an execution evidence bundle as JSON or download a ZIP archive.
 - `carrier executions audit <execution_id> [--output <path>] [--open] [--json]`
   - Export execution-scoped gateway audit events as JSON.
+- `carrier triggers [list] [--json]`
+  - List execution triggers.
+- `carrier triggers show <trigger_id> [--json]`
+  - Show one execution trigger.
+- `carrier triggers create --type <webhook|github|schedule> --template-id <template_id> [--name <name>] [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--webhook-secret <secret>] [--github-command <cmd>] [--github-label <label>] [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC] [--input key=value]... [--json]`
+  - Create one execution trigger.
+- `carrier triggers update <trigger_id> [--name <name>] [--template-id <template_id>] [--enable|--disable] [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--webhook-secret <secret>] [--github-command <cmd>] [--github-label <label>] [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC] [--input key=value]... [--json]`
+  - Update one execution trigger.
+- `carrier triggers delete <trigger_id> [--json]`
+  - Delete one execution trigger.
+
+### Knowledge plane
+
+- `carrier memory [list] [--subject <subject>] [--json]`
+  - List memory packages, attachments, grants, and audit state through the gateway memory facade.
+- `carrier memory search --subject <subject> --query <query> [--limit <n>] [--min-score <f>] [--json]`
+  - Search curated memory records for one subject.
+- `carrier memory attach --instance <id> --scope <scope> [--json]`
+  - Attach one memory scope to an instance before execution.
+- `carrier memory detach --instance <id> --scope <scope> [--json]`
+  - Detach one memory scope from an instance.
+- `carrier memory distill --instance <id> [--scope <scope>] [--dry-run] [--force] [--reason <text>] [--json]`
+  - Distill instance learnings back into the base knowledge plane.
 
 ### Bootstrap and runtime
 
@@ -258,6 +281,46 @@ carrier executions rerun <execution_id>
 
 ```bash
 carrier executions clone <execution_id>
+```
+
+### Manage triggers
+
+```bash
+carrier triggers
+```
+
+```bash
+carrier triggers show <trigger_id>
+```
+
+```bash
+carrier triggers create --type webhook --template-id incident-diagnosis --name incident-webhook --webhook-secret secret
+```
+
+```bash
+carrier triggers update <trigger_id> --enable
+```
+
+```bash
+carrier triggers delete <trigger_id>
+```
+
+### Inspect memory and distill learnings
+
+```bash
+carrier memory list --subject agent-a
+```
+
+```bash
+carrier memory search --subject agent-a --query "fusion"
+```
+
+```bash
+carrier memory attach --instance picoclaw-main --scope shared:profile
+```
+
+```bash
+carrier memory distill --instance picoclaw-main --dry-run --reason "promote learnings"
 ```
 
 ### Install OpenClaw on VPS

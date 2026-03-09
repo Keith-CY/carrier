@@ -468,6 +468,31 @@ func buildHTTPMuxWithBaseAgent(
 		writeJSON(w, http.StatusOK, map[string]interface{}{"results": results})
 	})
 
+	register("/api/v2/memory", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		subject := strings.TrimSpace(r.URL.Query().Get("subject"))
+		payload := map[string]interface{}{
+			"subject":     subject,
+			"entries":     memStore.List(),
+			"attachments": []memory.Attachment{},
+			"grants":      []memory.Grant{},
+			"audit":       memStore.AuditLogs(),
+		}
+		if subject != "" {
+			payload["attachments"] = memStore.ListAttachments(subject)
+			payload["grants"] = memStore.ListGrants(subject)
+			payload["instanceScopes"] = memStore.InstanceScopes(subject)
+		}
+		writeJSON(w, http.StatusOK, payload)
+	})
+
 	register("/api/v2/memory/get", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")

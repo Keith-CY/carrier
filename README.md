@@ -1,10 +1,11 @@
 # Carrier
 
-Carrier is a local-first agent control plane for decomposing goals, dispatching work to managed agents, and operating remote workers over SSH.
+Carrier is a local-first execution and knowledge control plane for decomposing goals, dispatching work to managed agents, attaching memory to those workers, and distilling learnings back into the base agent.
 
 ## What Works Today
 
 - Task-first orchestration via `carrier orchestrate` with execution history in `carrier executions`.
+- Knowledge-plane operations via `carrier memory` and the WebUI `Memory` view for listing memory packages, searching curated records, attaching scopes, and distilling instance learnings.
 - Built-in execution templates via `carrier templates` for repeatable triage and diagnosis flows.
 - Execution detail includes lineage, derived retries/reruns/clones, execution artifacts, and evidence export.
 - Workers inventory includes stale lease detection, queue summary, and stale/idle reclaim actions.
@@ -145,7 +146,22 @@ Expected result:
 - tasks are assigned to local `picoclaw` / `zeroclaw` workers
 - the final output shows execution status, task results, worker targets, lineage, and artifacts
 
-### 5) Install OpenClaw Locally (Optional)
+### 5) Inspect And Manage Memory
+
+```bash
+carrier memory list --subject agent-a
+carrier memory search --subject agent-a --query "fusion"
+carrier memory attach --instance picoclaw-main --scope shared:profile
+carrier memory distill --instance picoclaw-main --dry-run --reason "promote learnings"
+```
+
+Expected result:
+- memory packages, attachments, and grants are visible through the gateway
+- curated memory hits can be searched by subject
+- worker instances can receive prescribed memory scopes
+- distill runs produce a run id that can be promoted back into the base knowledge plane
+
+### 6) Install OpenClaw Locally (Optional)
 
 ```bash
 carrier add openclaw
@@ -153,7 +169,7 @@ carrier status openclaw
 carrier list
 ```
 
-### 6) Install Agent To VPS (Deterministic)
+### 7) Install Agent To VPS (Deterministic)
 
 Use `carrier remote add` to run a fixed, repeatable sequence:
 

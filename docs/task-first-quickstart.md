@@ -88,7 +88,22 @@ Expected result:
 - task units are assigned to local `picoclaw` / `zeroclaw`
 - the final execution output includes task results, worker targets, and any attached artifacts
 
-## Task 5: Install OpenClaw Locally (Optional)
+## Task 5: Inspect Memory And Attach A Scope
+
+```bash
+carrier memory list --subject agent-a
+carrier memory search --subject agent-a --query "fusion"
+carrier memory attach --instance picoclaw-main --scope shared:profile
+carrier memory distill --instance picoclaw-main --dry-run --reason "promote learnings"
+```
+
+Expected result:
+- the gateway returns a visible memory package list
+- curated search results are returned for the subject
+- the target instance accepts the requested memory scope
+- distill returns a run id for base-agent promotion or later execution evidence
+
+## Task 6: Install OpenClaw Locally (Optional)
 
 ```bash
 carrier add openclaw
@@ -100,7 +115,7 @@ Expected result:
 - `openclaw` exists in managed instance list
 - status is reachable and not in install-pending failure
 
-## Task 6: Install OpenClaw To VPS
+## Task 7: Install OpenClaw To VPS
 
 Prerequisites:
 - SSH host/user/key ready

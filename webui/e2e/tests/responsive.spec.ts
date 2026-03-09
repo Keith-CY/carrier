@@ -70,7 +70,9 @@ for (const [label, viewport] of [['Mobile', MOBILE], ['Tablet', TABLET]] as cons
     test('executions page is usable', async ({ page }) => {
       await mockAPIs(page);
       await mockOrchestrationAPIs(page);
-      await loginWithToken(page, '/#/executions');
+      await loginWithToken(page, '/#/dashboard');
+      await page.locator('#nav .nav-link[data-route="executions"]').click();
+      await expect(page.locator('#view-executions')).toBeVisible();
       await expect(page.locator('#executions-search')).toBeVisible();
       await expect(page.locator('#executions-status-filter')).toBeVisible();
       await expect(page.locator('#executions-template-filter')).toBeVisible();

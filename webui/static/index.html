@@ -31,6 +31,10 @@
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 4h10"></path><path d="M7 9h10"></path><path d="M7 14h6"></path><path d="M7 19h10"></path><circle cx="17.5" cy="14" r="2.5"></circle></svg></span>
           <span class="nav-text">Executions</span>
         </a>
+        <a href="#/memory" class="nav-link" data-route="memory">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v9A2.5 2.5 0 0 1 16.5 19h-9A2.5 2.5 0 0 1 5 16.5z"></path><path d="M9 9h6"></path><path d="M9 12h6"></path><path d="M9 15h4"></path></svg></span>
+          <span class="nav-text">Memory</span>
+        </a>
         <a href="#/workers" class="nav-link" data-route="workers">
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="6" height="6" rx="1"></rect><rect x="14" y="5" width="6" height="6" rx="1"></rect><path d="M7 11v4"></path><path d="M17 11v4"></path><path d="M7 15h10"></path><path d="M12 15v4"></path></svg></span>
           <span class="nav-text">Workers</span>
@@ -293,6 +297,96 @@
         </div>
         <p id="execution-summary" class="text-dim"></p>
         <div id="execution-list" class="agent-grid"></div>
+      </div>
+    </section>
+
+    <section id="view-memory" class="view hidden">
+      <div class="card dashboard-stack">
+        <div class="section-head">
+          <div>
+            <h2>Memory</h2>
+            <p class="text-dim">Inspect packages, search curated records, and manage instance memory actions.</p>
+          </div>
+          <div class="section-actions">
+            <button id="memory-refresh" class="btn-sm btn-secondary">Refresh</button>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div>
+            <label for="memory-subject">Subject</label>
+            <input id="memory-subject" type="text" placeholder="agent-a" value="agent-a">
+          </div>
+          <div>
+            <label for="memory-search-query">Search Query</label>
+            <input id="memory-search-query" type="text" placeholder="fusion">
+          </div>
+          <div>
+            <label for="memory-search-limit">Limit</label>
+            <input id="memory-search-limit" type="number" min="1" max="50" value="10">
+          </div>
+          <div>
+            <label for="memory-search-min-score">Min Score</label>
+            <input id="memory-search-min-score" type="number" min="0" max="1" step="0.05" value="0">
+          </div>
+        </div>
+        <div class="btn-row">
+          <button id="memory-search-run" class="btn-sm">Search</button>
+        </div>
+        <p id="memory-summary" class="text-dim">Loading memory…</p>
+        <div id="memory-msg"></div>
+      </div>
+
+      <div class="card dashboard-stack">
+        <div class="section-head">
+          <div>
+            <h3>Instance Actions</h3>
+            <p class="text-dim">Attach or detach a scope, then distill learnings back into base memory.</p>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div>
+            <label for="memory-instance-id">Instance ID</label>
+            <input id="memory-instance-id" type="text" placeholder="picoclaw-main">
+          </div>
+          <div>
+            <label for="memory-instance-scope">Scope</label>
+            <input id="memory-instance-scope" type="text" placeholder="shared:profile">
+          </div>
+          <div>
+            <label for="memory-distill-reason">Distill Reason</label>
+            <input id="memory-distill-reason" type="text" placeholder="promote learnings">
+          </div>
+          <div>
+            <label for="memory-distill-dry-run">Distill Dry Run</label>
+            <input id="memory-distill-dry-run" type="checkbox">
+          </div>
+        </div>
+        <div class="btn-row">
+          <button id="memory-attach" class="btn-sm">Attach</button>
+          <button id="memory-detach" class="btn-sm btn-secondary">Detach</button>
+          <button id="memory-distill" class="btn-sm">Distill</button>
+        </div>
+        <div id="memory-action-msg"></div>
+      </div>
+
+      <div class="card dashboard-stack">
+        <div class="section-head">
+          <div>
+            <h3>Packages</h3>
+            <p class="text-dim">Current packages, attachments, and grants for the selected subject.</p>
+          </div>
+        </div>
+        <div id="memory-entry-list"></div>
+      </div>
+
+      <div class="card dashboard-stack">
+        <div class="section-head">
+          <div>
+            <h3>Search Results</h3>
+            <p class="text-dim">Curated hits that the base agent can later distill and promote.</p>
+          </div>
+        </div>
+        <div id="memory-search-results"></div>
       </div>
     </section>
 
