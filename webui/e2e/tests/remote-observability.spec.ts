@@ -85,6 +85,43 @@ test.describe('Remote Observability', () => {
               resolvedFailures: second ? {} : { anthropic: 1 },
               driftStates: second ? { in_sync: 5 } : { override: 1, in_sync: 3 },
               totalEstimatedCostUsd: second ? 0.0029 : 0.0041,
+              attribution: second
+                ? {
+                    teams: [
+                      { label: 'platform', executions: 2, successes: 3, failures: 0, avgLatencyMs: 220, estimatedCostUsd: 0.0017 },
+                      { label: 'sre', executions: 1, successes: 1, failures: 0, avgLatencyMs: 180, estimatedCostUsd: 0.0012 },
+                    ],
+                    projects: [
+                      { label: 'carrier', executions: 2, successes: 3, failures: 0, avgLatencyMs: 220, estimatedCostUsd: 0.0017 },
+                      { label: 'checkout', executions: 1, successes: 1, failures: 0, avgLatencyMs: 180, estimatedCostUsd: 0.0012 },
+                    ],
+                    templates: [
+                      { label: 'pr-triage', executions: 2, successes: 3, failures: 0, avgLatencyMs: 220, estimatedCostUsd: 0.0017 },
+                      { label: 'incident-diagnosis', executions: 1, successes: 1, failures: 0, avgLatencyMs: 180, estimatedCostUsd: 0.0012 },
+                    ],
+                    triggers: [
+                      { label: 'schedule:trigger-nightly', executions: 2, successes: 2, failures: 0, avgLatencyMs: 230, estimatedCostUsd: 0.0018 },
+                      { label: 'github:trigger-gh-1', executions: 1, successes: 2, failures: 0, avgLatencyMs: 170, estimatedCostUsd: 0.0011 },
+                    ],
+                  }
+                : {
+                    teams: [
+                      { label: 'platform', executions: 2, successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0026 },
+                      { label: 'sre', executions: 1, successes: 1, failures: 1, avgLatencyMs: 510, estimatedCostUsd: 0.0015 },
+                    ],
+                    projects: [
+                      { label: 'carrier', executions: 2, successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0026 },
+                      { label: 'checkout', executions: 1, successes: 1, failures: 1, avgLatencyMs: 510, estimatedCostUsd: 0.0015 },
+                    ],
+                    templates: [
+                      { label: 'pr-triage', executions: 2, successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0026 },
+                      { label: 'incident-diagnosis', executions: 1, successes: 1, failures: 1, avgLatencyMs: 510, estimatedCostUsd: 0.0015 },
+                    ],
+                    triggers: [
+                      { label: 'github:trigger-gh-1', executions: 2, successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0026 },
+                      { label: 'schedule:trigger-nightly', executions: 1, successes: 1, failures: 1, avgLatencyMs: 510, estimatedCostUsd: 0.0015 },
+                    ],
+                  },
               aggregates: second
                 ? [
                     { provider: 'anthropic', successes: 2, failures: 0, avgLatencyMs: 320, estimatedCostUsd: 0.0011 },
@@ -123,6 +160,7 @@ test.describe('Remote Observability', () => {
     await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Workers' })).toBeVisible();
     await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Provider Failures' })).toBeVisible();
     await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Provider Usage' })).toBeVisible();
+    await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Cost Attribution' })).toBeVisible();
     await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Policy Blocks' })).toBeVisible();
     await expect(page.locator('#remote-observability-summary')).toContainText('success rate: 67%');
     await expect(page.locator('#remote-observability-summary')).toContainText('state: canary');
@@ -134,6 +172,10 @@ test.describe('Remote Observability', () => {
     await expect(page.locator('#remote-observability-summary')).toContainText('top provider: anthropic');
     await expect(page.locator('#remote-observability-summary')).toContainText('top model: claude-3-7-sonnet');
     await expect(page.locator('#remote-observability-summary')).toContainText('drift: in_sync=3, override=1');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top team: platform');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top project: carrier');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top template: pr-triage');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top trigger: github:trigger-gh-1');
     await expect(page.locator('#remote-observability-summary')).toContainText('ask: 1');
     await expect(page.locator('#remote-observability-group')).toContainText('instances');
     await expect(page.locator('#remote-observability-group')).toContainText('provider');
@@ -173,6 +215,10 @@ test.describe('Remote Observability', () => {
     await expect(page.locator('#remote-observability-summary')).toContainText('top provider: openrouter');
     await expect(page.locator('#remote-observability-summary')).toContainText('top model: openai/gpt-4o-mini');
     await expect(page.locator('#remote-observability-summary')).toContainText('drift: in_sync=5');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top team: platform');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top project: carrier');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top template: pr-triage');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top trigger: schedule:trigger-nightly');
     await expect(page.locator('#remote-observability-summary')).toContainText('ask: 0');
     await expect(page.locator('#remote-observability-status')).toContainText('Updated at 2026-02-25T09:00:00Z');
     await expect(page.locator('#remote-observability-status')).toContainText('rollout=healthy');

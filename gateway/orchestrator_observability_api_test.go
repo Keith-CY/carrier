@@ -22,6 +22,11 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 	if _, err := upsertOrchestratorExecution(OrchestratorExecution{
 		ID:                "exec-complete",
 		Goal:              "prepare summary",
+		Team:              "platform",
+		Project:           "carrier",
+		TemplateID:        "pr-triage",
+		TriggerSource:     "github",
+		TriggerID:         "trigger-gh-1",
 		RequestedProvider: "openrouter",
 		Status:            OrchestratorExecutionStatusCompleted,
 		RequiredWorkers: []OrchestratorRequiredWorker{{
@@ -67,6 +72,11 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 	if _, err := upsertOrchestratorExecution(OrchestratorExecution{
 		ID:                "exec-failed-provider",
 		Goal:              "diagnose provider issue",
+		Team:              "sre",
+		Project:           "checkout",
+		TemplateID:        "incident-diagnosis",
+		TriggerSource:     "schedule",
+		TriggerID:         "trigger-nightly",
 		RequestedProvider: "anthropic",
 		Status:            OrchestratorExecutionStatusFailed,
 		RequiredWorkers: []OrchestratorRequiredWorker{{
@@ -272,6 +282,39 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 	}
 	if got := int(anyToFloat(anthropicModel["failures"])); got != 1 {
 		t.Fatalf("anthropic model failures=%d want 1 aggregate=%+v", got, anthropicModel)
+	}
+	attribution, _ := providers["attribution"].(map[string]interface{})
+	teams, _ := attribution["teams"].([]interface{})
+	if len(teams) != 2 {
+		t.Fatalf("providers.attribution.teams len=%d want 2 providers=%+v", len(teams), providers)
+	}
+	team0, _ := teams[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(team0["label"])); got != "platform" {
+		t.Fatalf("top team label=%q want platform teams=%+v", got, teams)
+	}
+	projects, _ := attribution["projects"].([]interface{})
+	if len(projects) != 2 {
+		t.Fatalf("providers.attribution.projects len=%d want 2 providers=%+v", len(projects), providers)
+	}
+	project0, _ := projects[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(project0["label"])); got != "carrier" {
+		t.Fatalf("top project label=%q want carrier projects=%+v", got, projects)
+	}
+	templates, _ := attribution["templates"].([]interface{})
+	if len(templates) != 2 {
+		t.Fatalf("providers.attribution.templates len=%d want 2 providers=%+v", len(templates), providers)
+	}
+	template0, _ := templates[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(template0["label"])); got != "pr-triage" {
+		t.Fatalf("top template label=%q want pr-triage templates=%+v", got, templates)
+	}
+	triggers, _ := attribution["triggers"].([]interface{})
+	if len(triggers) != 2 {
+		t.Fatalf("providers.attribution.triggers len=%d want 2 providers=%+v", len(triggers), providers)
+	}
+	trigger0, _ := triggers[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(trigger0["label"])); got != "github:trigger-gh-1" {
+		t.Fatalf("top trigger label=%q want github:trigger-gh-1 triggers=%+v", got, triggers)
 	}
 
 	policies, _ := metrics["policies"].(map[string]interface{})
