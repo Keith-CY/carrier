@@ -14,6 +14,8 @@ type executionTemplateLaunchRequest struct {
 	Provider       string            `json:"provider,omitempty"`
 	HostIDs        []string          `json:"hostIds,omitempty"`
 	HostLabels     []string          `json:"hostLabels,omitempty"`
+	RequiredMemory []string          `json:"requiredMemory,omitempty"`
+	DistillOutputs []string          `json:"distillOutputs,omitempty"`
 	MaxConcurrency int               `json:"maxConcurrency,omitempty"`
 	PolicyApprove  bool              `json:"policyApprove,omitempty"`
 	IdempotencyKey string            `json:"idempotencyKey,omitempty"`
@@ -21,11 +23,11 @@ type executionTemplateLaunchRequest struct {
 }
 
 type executionLaunchMetadata struct {
-	TriggerSource       string
-	TriggerID           string
-	TriggerEvent        string
+	TriggerSource        string
+	TriggerID            string
+	TriggerEvent         string
 	TriggerPayloadDigest string
-	Initiator           string
+	Initiator            string
 }
 
 type executionTemplateLaunchOptions struct {
@@ -34,6 +36,8 @@ type executionTemplateLaunchOptions struct {
 	Provider       string
 	HostIDs        []string
 	HostLabels     []string
+	RequiredMemory []string
+	DistillOutputs []string
 	MaxConcurrency int
 	PolicyApprove  bool
 	IdempotencyKey string
@@ -120,6 +124,8 @@ func handleExecutionTemplates(w http.ResponseWriter, r *http.Request, requestID 
 		Provider:       req.Provider,
 		HostIDs:        req.HostIDs,
 		HostLabels:     req.HostLabels,
+		RequiredMemory: req.RequiredMemory,
+		DistillOutputs: req.DistillOutputs,
 		MaxConcurrency: req.MaxConcurrency,
 		PolicyApprove:  req.PolicyApprove,
 		IdempotencyKey: req.IdempotencyKey,
@@ -163,6 +169,8 @@ func launchExecutionTemplate(requestID string, cfg *GatewayConfig, opts executio
 		Provider:       strings.TrimSpace(opts.Provider),
 		HostIDs:        opts.HostIDs,
 		HostLabels:     opts.HostLabels,
+		RequiredMemory: opts.RequiredMemory,
+		DistillOutputs: opts.DistillOutputs,
 		MaxConcurrency: opts.MaxConcurrency,
 		Tasks:          resolved.Tasks,
 	})
@@ -178,19 +186,23 @@ func launchExecutionTemplate(requestID string, cfg *GatewayConfig, opts executio
 
 func createTemplateExecutionRecord(requestID string, cfg *GatewayConfig, plan orchestration.Plan, idempotencyKey string, metadata executionLaunchMetadata) (OrchestratorExecution, *gatewayAPIResponseError) {
 	req := OrchestratorExecution{
-		Goal:                strings.TrimSpace(plan.Goal),
-		TemplateID:          strings.TrimSpace(plan.TemplateID),
-		TriggerSource:       strings.TrimSpace(metadata.TriggerSource),
-		TriggerID:           strings.TrimSpace(metadata.TriggerID),
-		TriggerEvent:        strings.TrimSpace(metadata.TriggerEvent),
+		Goal:                 strings.TrimSpace(plan.Goal),
+		TemplateID:           strings.TrimSpace(plan.TemplateID),
+		TriggerSource:        strings.TrimSpace(metadata.TriggerSource),
+		TriggerID:            strings.TrimSpace(metadata.TriggerID),
+		TriggerEvent:         strings.TrimSpace(metadata.TriggerEvent),
 		TriggerPayloadDigest: strings.TrimSpace(metadata.TriggerPayloadDigest),
-		Initiator:           strings.TrimSpace(metadata.Initiator),
-		RequestedProvider:   strings.TrimSpace(plan.Provider),
-		IdempotencyKey:      strings.TrimSpace(idempotencyKey),
-		ApprovalScope:       strings.TrimSpace(plan.ApprovalScope),
-		RequiredWorkers:     make([]OrchestratorRequiredWorker, 0, len(plan.RequiredWorkers)),
-		TaskUnits:           make([]OrchestratorTaskUnit, 0, len(plan.TaskUnits)),
-		MaxConcurrency:      plan.MaxConcurrency,
+		Initiator:            strings.TrimSpace(metadata.Initiator),
+		RequestedProvider:    strings.TrimSpace(plan.Provider),
+		RequiredMemory:       append([]string(nil), plan.RequiredMemory...),
+		MemoryContractDigest: buildMemoryContractDigest(plan.RequiredMemory),
+		MemoryProvenance:     append([]string(nil), plan.RequiredMemory...),
+		DistillOutputs:       append([]string(nil), plan.DistillOutputs...),
+		IdempotencyKey:       strings.TrimSpace(idempotencyKey),
+		ApprovalScope:        strings.TrimSpace(plan.ApprovalScope),
+		RequiredWorkers:      make([]OrchestratorRequiredWorker, 0, len(plan.RequiredWorkers)),
+		TaskUnits:            make([]OrchestratorTaskUnit, 0, len(plan.TaskUnits)),
+		MaxConcurrency:       plan.MaxConcurrency,
 	}
 	for _, worker := range plan.RequiredWorkers {
 		req.RequiredWorkers = append(req.RequiredWorkers, OrchestratorRequiredWorker{

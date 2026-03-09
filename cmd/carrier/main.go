@@ -30,6 +30,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -211,6 +212,8 @@ type orchestrateCommandOptions struct {
 	TemplateID     string
 	HostIDs        []string
 	HostLabels     []string
+	RequiredMemory []string
+	DistillOutputs []string
 	Provider       string
 	Format         string
 	MaxConcurrency int
@@ -230,6 +233,8 @@ type templatesCommandOptions struct {
 	TemplateID     string
 	HostIDs        []string
 	HostLabels     []string
+	RequiredMemory []string
+	DistillOutputs []string
 	Provider       string
 	MaxConcurrency int
 	PolicyApprove  bool
@@ -246,6 +251,8 @@ type triggersCommandOptions struct {
 	CreatedBy        string
 	HostIDs          []string
 	HostLabels       []string
+	RequiredMemory   []string
+	DistillOutputs   []string
 	Provider         string
 	MaxConcurrency   int
 	PolicyApprove    bool
@@ -495,7 +502,33 @@ var daemonActionLogPollInterval = 2 * time.Second
 var daemonActionHeartbeatInterval = 15 * time.Second
 var orchestratePollInterval = 2 * time.Second
 
-const usage = `Carrier — unified agent platform binary
+const usage = `Carrier — execution and knowledge control plane binary
+
+Core workflows:
+  carrier orchestrate <goal...> [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]...
+                        [--distill-scope <scope>]... [--provider <provider-id>]
+                        [--max-concurrency <n>] [--idempotency-key <key>]
+                        [--timeout <duration>] [--async] [--dry-run] [--json]
+                        Decompose goal with base agent, then run orchestration
+  carrier executions [list] [--limit <n>] [--json]
+                        List orchestration executions
+  carrier memory [list] [--subject <subject>] [--json]
+                        List memory packages, attachments, grants, and audit snapshot
+  carrier templates [list] [--json]
+                        List built-in execution templates
+  carrier triggers [list] [--json]
+                        List execution triggers
+
+Runtime ops:
+  carrier daemon         Start daemon HTTP API server (foreground)
+  carrier gateway        Start gateway HTTP server
+  carrier stop           Stop background daemon and gateway
+  carrier stop <id|name> Stop a managed agent instance
+  carrier start <id|name> Start a managed agent instance
+  carrier status <id|name> Show status for a managed agent instance
+  carrier upgrade <id|name> Upgrade a managed agent instance
+  carrier uninstall <id|name> Uninstall and remove a managed agent instance
+  carrier list           List managed agent instances
 
 Usage:
   carrier                Bootstrap Carrier (onboard if needed, keep daemon+gateway running, then exit)
@@ -503,20 +536,11 @@ Usage:
   carrier --version      Print version metadata
   carrier -v             Print version metadata
   carrier -V             Print version metadata
-  carrier daemon         Start daemon HTTP API server (foreground)
   carrier update         Update to a newer git ref
   carrier update --check  Show current and target without applying changes
   Common update options:
     --check, --yes, --dry-run, --force, --channel <stable|beta|dev>, --tag <dist-tag|version>, --timeout <seconds>, --json, --no-restart
-  carrier gateway        Start gateway HTTP server
-  carrier stop           Stop background daemon and gateway
   carrier reset          Stop Carrier services and remove local Carrier-generated data
-  carrier stop <id|name> Stop a managed agent instance
-  carrier start <id|name> Start a managed agent instance
-  carrier status <id|name> Show status for a managed agent instance
-  carrier upgrade <id|name> Upgrade a managed agent instance
-  carrier uninstall <id|name> Uninstall and remove a managed agent instance
-  carrier list           List managed agent instances
   carrier onboard [--tui|--cli]
                         Interactive terminal onboarding (channel/provider -> keep gateway running in background)
   carrier onboard --webui
@@ -583,7 +607,8 @@ Usage:
                         Backup remote-control.json store
   carrier remote-store restore --from <path>
                         Restore remote-control.json store
-  carrier orchestrate <goal...> [--host-id <id>]... [--provider <provider-id>]
+  carrier orchestrate <goal...> [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]...
+                        [--distill-scope <scope>]... [--provider <provider-id>]
                         [--max-concurrency <n>] [--idempotency-key <key>]
                         [--timeout <duration>] [--async] [--dry-run] [--json]
                         Decompose goal with base agent, then run orchestration
@@ -591,14 +616,10 @@ Usage:
                         Show orchestration execution status/results
   carrier orchestrate cancel <execution_id> [--json]
                         Cancel orchestration execution
-  carrier executions [list] [--limit <n>] [--json]
-                        List orchestration executions
   carrier executions show <execution_id> [--json]
                         Show orchestration execution status/results
   carrier executions cancel <execution_id> [--json]
                         Cancel orchestration execution
-  carrier memory [list] [--subject <subject>] [--json]
-                        List memory packages, attachments, grants, and audit snapshot
   carrier memory search --subject <subject> --query <query> [--limit <n>] [--min-score <f>] [--json]
                         Search curated memory records through the gateway knowledge facade
   carrier memory attach --instance <id> --scope <scope> [--json]
@@ -607,20 +628,18 @@ Usage:
                         Detach one memory scope from an instance
   carrier memory distill --instance <id> [--scope <scope>] [--dry-run] [--force] [--reason <text>] [--json]
                         Distill instance learnings back into the base memory plane
-  carrier templates [list] [--json]
-                        List built-in execution templates
   carrier templates show <template_id> [--json]
                         Show one execution template
   carrier templates run <template_id> --input key=value [--input key=value]...
-                        [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>]
+                        [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]...
+                        [--distill-scope <scope>]... [--provider <provider-id>]
                         [--max-concurrency <n>] [--policy-approve] [--json]
                         Launch a built-in execution template through the gateway
-  carrier triggers [list] [--json]
-                        List execution triggers
   carrier triggers show <trigger_id> [--json]
                         Show one execution trigger
   carrier triggers create --type <webhook|github|schedule> --template-id <template_id>
                         [--name <name>] [--host-id <id>]... [--host-label <label>]...
+                        [--memory-scope <scope>]... [--distill-scope <scope>]...
                         [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve]
                         [--webhook-secret <secret>] [--github-command <cmd>] [--github-label <label>]
                         [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC]
@@ -628,6 +647,7 @@ Usage:
                         Create one execution trigger
   carrier triggers update <trigger_id> [--name <name>] [--template-id <template_id>]
                         [--enable|--disable] [--host-id <id>]... [--host-label <label>]...
+                        [--memory-scope <scope>]... [--distill-scope <scope>]...
                         [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve]
                         [--webhook-secret <secret>] [--github-command <cmd>] [--github-label <label>]
                         [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC]
@@ -2394,7 +2414,7 @@ func parseRemoteStoreCommandArgs(args []string) (remoteStoreCommandOptions, erro
 
 func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, error) {
 	if len(args) == 0 {
-		return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate <goal...> [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--idempotency-key <key>] [--timeout <duration>] [--async] [--dry-run] [--json] OR carrier orchestrate <status|cancel|authorize> <execution_id> [--policy-approve] [--json]")
+		return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate <goal...> [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]... [--distill-scope <scope>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--idempotency-key <key>] [--timeout <duration>] [--async] [--dry-run] [--json] OR carrier orchestrate <status|cancel|authorize> <execution_id> [--policy-approve] [--json]")
 	}
 
 	opts := orchestrateCommandOptions{
@@ -2458,6 +2478,28 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 			}
 			opts.HostLabels = append(opts.HostLabels, hostLabel)
 			i = next
+		case "--memory-scope":
+			value, next, err := parseRequiredFlagValue(args, i, "--memory-scope")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			scope := strings.TrimSpace(value)
+			if scope == "" {
+				return orchestrateCommandOptions{}, errors.New("--memory-scope cannot be empty")
+			}
+			opts.RequiredMemory = append(opts.RequiredMemory, scope)
+			i = next
+		case "--distill-scope":
+			value, next, err := parseRequiredFlagValue(args, i, "--distill-scope")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			scope := strings.TrimSpace(value)
+			if scope == "" {
+				return orchestrateCommandOptions{}, errors.New("--distill-scope cannot be empty")
+			}
+			opts.DistillOutputs = append(opts.DistillOutputs, scope)
+			i = next
 		case "--provider":
 			value, next, err := parseRequiredFlagValue(args, i, "--provider")
 			if err != nil {
@@ -2514,6 +2556,8 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 	opts.IdempotencyKey = strings.TrimSpace(opts.IdempotencyKey)
 	opts.HostIDs = dedupeStringSlice(opts.HostIDs)
 	opts.HostLabels = normalizeStringSelectorSlice(opts.HostLabels)
+	opts.RequiredMemory = normalizeMemoryScopeSlice(opts.RequiredMemory)
+	opts.DistillOutputs = normalizeMemoryScopeSlice(opts.DistillOutputs)
 	if opts.MaxConcurrency > 64 {
 		opts.MaxConcurrency = 64
 	}
@@ -2734,6 +2778,26 @@ func parseTemplatesCommandArgs(args []string) (templatesCommandOptions, error) {
 			}
 			opts.HostLabels = append(opts.HostLabels, value)
 			i = next
+		case "--memory-scope":
+			value, next, err := parseRequiredFlagValue(args, i, "--memory-scope")
+			if err != nil {
+				return templatesCommandOptions{}, err
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				return templatesCommandOptions{}, errors.New("--memory-scope cannot be empty")
+			}
+			opts.RequiredMemory = append(opts.RequiredMemory, value)
+			i = next
+		case "--distill-scope":
+			value, next, err := parseRequiredFlagValue(args, i, "--distill-scope")
+			if err != nil {
+				return templatesCommandOptions{}, err
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				return templatesCommandOptions{}, errors.New("--distill-scope cannot be empty")
+			}
+			opts.DistillOutputs = append(opts.DistillOutputs, value)
+			i = next
 		case "--provider":
 			value, next, err := parseRequiredFlagValue(args, i, "--provider")
 			if err != nil {
@@ -2779,13 +2843,15 @@ func parseTemplatesCommandArgs(args []string) (templatesCommandOptions, error) {
 	opts.Provider = strings.ToLower(strings.TrimSpace(opts.Provider))
 	opts.HostIDs = dedupeStringSlice(opts.HostIDs)
 	opts.HostLabels = normalizeStringSelectorSlice(opts.HostLabels)
+	opts.RequiredMemory = normalizeMemoryScopeSlice(opts.RequiredMemory)
+	opts.DistillOutputs = normalizeMemoryScopeSlice(opts.DistillOutputs)
 	if opts.MaxConcurrency > 64 {
 		opts.MaxConcurrency = 64
 	}
 
 	if (opts.Action == "show" || opts.Action == "run") && strings.TrimSpace(opts.TemplateID) == "" {
 		if opts.Action == "run" {
-			return templatesCommandOptions{}, errors.New("usage: carrier templates run <template_id> --input key=value [--input key=value]... [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--json]")
+			return templatesCommandOptions{}, errors.New("usage: carrier templates run <template_id> --input key=value [--input key=value]... [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]... [--distill-scope <scope>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--json]")
 		}
 		return templatesCommandOptions{}, errors.New("usage: carrier templates show <template_id> [--json]")
 	}
@@ -2891,6 +2957,26 @@ func parseTriggersCommandArgs(args []string) (triggersCommandOptions, error) {
 			}
 			opts.HostLabels = append(opts.HostLabels, value)
 			i = next
+		case "--memory-scope":
+			value, next, err := parseRequiredFlagValue(args, i, "--memory-scope")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				return triggersCommandOptions{}, errors.New("--memory-scope cannot be empty")
+			}
+			opts.RequiredMemory = append(opts.RequiredMemory, value)
+			i = next
+		case "--distill-scope":
+			value, next, err := parseRequiredFlagValue(args, i, "--distill-scope")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				return triggersCommandOptions{}, errors.New("--distill-scope cannot be empty")
+			}
+			opts.DistillOutputs = append(opts.DistillOutputs, value)
+			i = next
 		case "--provider":
 			value, next, err := parseRequiredFlagValue(args, i, "--provider")
 			if err != nil {
@@ -2981,6 +3067,8 @@ func parseTriggersCommandArgs(args []string) (triggersCommandOptions, error) {
 	}
 	opts.HostIDs = dedupeStringSlice(opts.HostIDs)
 	opts.HostLabels = normalizeStringSelectorSlice(opts.HostLabels)
+	opts.RequiredMemory = normalizeMemoryScopeSlice(opts.RequiredMemory)
+	opts.DistillOutputs = normalizeMemoryScopeSlice(opts.DistillOutputs)
 	if opts.MaxConcurrency > 64 {
 		opts.MaxConcurrency = 64
 	}
@@ -2992,11 +3080,11 @@ func parseTriggersCommandArgs(args []string) (triggersCommandOptions, error) {
 		}
 	case "create":
 		if strings.TrimSpace(opts.Type) == "" || strings.TrimSpace(opts.TemplateID) == "" {
-			return triggersCommandOptions{}, errors.New("usage: carrier triggers create --type <webhook|github|schedule> --template-id <template_id> [--name <name>] [--created-by <actor>] [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--webhook-secret <secret>] [--github-command <command>] [--github-label <label>] [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC] [--input key=value]... [--json]")
+			return triggersCommandOptions{}, errors.New("usage: carrier triggers create --type <webhook|github|schedule> --template-id <template_id> [--name <name>] [--created-by <actor>] [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]... [--distill-scope <scope>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--webhook-secret <secret>] [--github-command <command>] [--github-label <label>] [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC] [--input key=value]... [--json]")
 		}
 	case "update":
 		if strings.TrimSpace(opts.TriggerID) == "" {
-			return triggersCommandOptions{}, errors.New("usage: carrier triggers update <trigger_id> [--name <name>] [--template-id <template_id>] [--enable|--disable] [--created-by <actor>] [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--webhook-secret <secret>] [--github-command <command>] [--github-label <label>] [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC] [--input key=value]... [--json]")
+			return triggersCommandOptions{}, errors.New("usage: carrier triggers update <trigger_id> [--name <name>] [--template-id <template_id>] [--enable|--disable] [--created-by <actor>] [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]... [--distill-scope <scope>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--webhook-secret <secret>] [--github-command <command>] [--github-label <label>] [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC] [--input key=value]... [--json]")
 		}
 	case "delete":
 		if strings.TrimSpace(opts.TriggerID) == "" {
@@ -3148,6 +3236,19 @@ func dedupeStringSlice(values []string) []string {
 		out = append(out, trimmed)
 	}
 	return out
+}
+
+func normalizeMemoryScopeSlice(values []string) []string {
+	return normalizeStringSelectorSlice(values)
+}
+
+func buildMemoryContractDigestCLI(scopes []string) string {
+	normalized := normalizeMemoryScopeSlice(scopes)
+	if len(normalized) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(strings.Join(normalized, "\n")))
+	return "mem-" + hex.EncodeToString(sum[:])[:12]
 }
 
 func runKeysGenerate(out io.Writer, alias string) error {
@@ -4011,14 +4112,18 @@ type orchestrateRequiredWorker = sharedorchestration.RequiredWorker
 type orchestrateTaskUnit = sharedorchestration.TaskUnit
 
 type orchestrateExecutionPayload struct {
-	Goal              string                      `json:"goal"`
-	TemplateID        string                      `json:"templateId,omitempty"`
-	RequestedProvider string                      `json:"requestedProvider,omitempty"`
-	IdempotencyKey    string                      `json:"idempotencyKey,omitempty"`
-	ApprovalScope     string                      `json:"approvalScope"`
-	RequiredWorkers   []orchestrateRequiredWorker `json:"requiredWorkers"`
-	TaskUnits         []orchestrateTaskUnit       `json:"taskUnits"`
-	MaxConcurrency    int                         `json:"maxConcurrency,omitempty"`
+	Goal                 string                      `json:"goal"`
+	TemplateID           string                      `json:"templateId,omitempty"`
+	RequestedProvider    string                      `json:"requestedProvider,omitempty"`
+	RequiredMemory       []string                    `json:"requiredMemory,omitempty"`
+	MemoryContractDigest string                      `json:"memoryContractDigest,omitempty"`
+	MemoryProvenance     []string                    `json:"memoryProvenance,omitempty"`
+	DistillOutputs       []string                    `json:"distillOutputs,omitempty"`
+	IdempotencyKey       string                      `json:"idempotencyKey,omitempty"`
+	ApprovalScope        string                      `json:"approvalScope"`
+	RequiredWorkers      []orchestrateRequiredWorker `json:"requiredWorkers"`
+	TaskUnits            []orchestrateTaskUnit       `json:"taskUnits"`
+	MaxConcurrency       int                         `json:"maxConcurrency,omitempty"`
 }
 
 type orchestrateTaskResultSnapshot struct {
@@ -4113,6 +4218,10 @@ type orchestrateExecutionSnapshot struct {
 	TriggerPayloadDigest string                                 `json:"triggerPayloadDigest,omitempty"`
 	Initiator            string                                 `json:"initiator,omitempty"`
 	RequestedProvider    string                                 `json:"requestedProvider,omitempty"`
+	RequiredMemory       []string                               `json:"requiredMemory,omitempty"`
+	MemoryContractDigest string                                 `json:"memoryContractDigest,omitempty"`
+	MemoryProvenance     []string                               `json:"memoryProvenance,omitempty"`
+	DistillOutputs       []string                               `json:"distillOutputs,omitempty"`
 	ParentExecutionID    string                                 `json:"parentExecutionId,omitempty"`
 	SourceExecutionID    string                                 `json:"sourceExecutionId,omitempty"`
 	LaunchReason         string                                 `json:"launchReason,omitempty"`
@@ -4207,6 +4316,8 @@ type executionTemplateSnapshot struct {
 	Name                string                                `json:"name"`
 	Description         string                                `json:"description,omitempty"`
 	DefaultGoalTemplate string                                `json:"defaultGoalTemplate,omitempty"`
+	RequiredMemory      []string                              `json:"requiredMemory,omitempty"`
+	DistillOutputs      []string                              `json:"distillOutputs,omitempty"`
 	InputSchema         []executionTemplateInputFieldSnapshot `json:"inputSchema,omitempty"`
 	PlannerTasks        []executionTemplateTaskSnapshot       `json:"plannerTasks,omitempty"`
 }
@@ -4238,6 +4349,8 @@ type executionTriggerConfigSnapshot struct {
 	Provider                string            `json:"provider,omitempty"`
 	HostIDs                 []string          `json:"hostIds,omitempty"`
 	HostLabels              []string          `json:"hostLabels,omitempty"`
+	RequiredMemory          []string          `json:"requiredMemory,omitempty"`
+	DistillOutputs          []string          `json:"distillOutputs,omitempty"`
 	MaxConcurrency          int               `json:"maxConcurrency,omitempty"`
 	PolicyApprove           bool              `json:"policyApprove,omitempty"`
 	WebhookSecretConfigured bool              `json:"webhookSecretConfigured,omitempty"`
@@ -4812,14 +4925,18 @@ func runOrchestrateStart(out io.Writer, opts orchestrateCommandOptions) error {
 	}
 
 	payload := orchestrateExecutionPayload{
-		Goal:              strings.TrimSpace(plan.Goal),
-		TemplateID:        strings.TrimSpace(plan.TemplateID),
-		RequestedProvider: strings.TrimSpace(plan.Provider),
-		IdempotencyKey:    strings.TrimSpace(opts.IdempotencyKey),
-		ApprovalScope:     plan.ApprovalScope,
-		RequiredWorkers:   plan.RequiredWorkers,
-		TaskUnits:         plan.TaskUnits,
-		MaxConcurrency:    plan.MaxConcurrency,
+		Goal:                 strings.TrimSpace(plan.Goal),
+		TemplateID:           strings.TrimSpace(plan.TemplateID),
+		RequestedProvider:    strings.TrimSpace(plan.Provider),
+		RequiredMemory:       append([]string(nil), plan.RequiredMemory...),
+		MemoryContractDigest: buildMemoryContractDigestCLI(plan.RequiredMemory),
+		MemoryProvenance:     append([]string(nil), plan.RequiredMemory...),
+		DistillOutputs:       append([]string(nil), plan.DistillOutputs...),
+		IdempotencyKey:       strings.TrimSpace(opts.IdempotencyKey),
+		ApprovalScope:        plan.ApprovalScope,
+		RequiredWorkers:      plan.RequiredWorkers,
+		TaskUnits:            plan.TaskUnits,
+		MaxConcurrency:       plan.MaxConcurrency,
 	}
 
 	createRaw, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/orchestrator/executions", payload, 90*time.Second)
@@ -4886,6 +5003,8 @@ func buildOrchestratePlan(opts orchestrateCommandOptions) (orchestratePlanSnapsh
 		Provider:       strings.TrimSpace(opts.Provider),
 		HostIDs:        opts.HostIDs,
 		HostLabels:     opts.HostLabels,
+		RequiredMemory: opts.RequiredMemory,
+		DistillOutputs: opts.DistillOutputs,
 		MaxConcurrency: opts.MaxConcurrency,
 		Tasks:          tasks,
 	})
@@ -5346,6 +5465,8 @@ func createExecutionTrigger(opts triggersCommandOptions) (executionTriggerRespon
 			"provider":         strings.TrimSpace(opts.Provider),
 			"hostIds":          opts.HostIDs,
 			"hostLabels":       opts.HostLabels,
+			"requiredMemory":   opts.RequiredMemory,
+			"distillOutputs":   opts.DistillOutputs,
 			"maxConcurrency":   opts.MaxConcurrency,
 			"policyApprove":    opts.PolicyApprove,
 			"webhookSecret":    strings.TrimSpace(opts.WebhookSecret),
@@ -5397,6 +5518,12 @@ func updateExecutionTrigger(opts triggersCommandOptions) (executionTriggerRespon
 	}
 	if len(opts.HostLabels) > 0 {
 		config["hostLabels"] = opts.HostLabels
+	}
+	if len(opts.RequiredMemory) > 0 {
+		config["requiredMemory"] = opts.RequiredMemory
+	}
+	if len(opts.DistillOutputs) > 0 {
+		config["distillOutputs"] = opts.DistillOutputs
 	}
 	if opts.MaxConcurrency > 0 {
 		config["maxConcurrency"] = opts.MaxConcurrency
@@ -5464,6 +5591,8 @@ func launchExecutionTemplate(opts templatesCommandOptions) (executionTemplateLau
 		"provider":       strings.TrimSpace(opts.Provider),
 		"hostIds":        opts.HostIDs,
 		"hostLabels":     opts.HostLabels,
+		"requiredMemory": opts.RequiredMemory,
+		"distillOutputs": opts.DistillOutputs,
 		"maxConcurrency": opts.MaxConcurrency,
 		"policyApprove":  opts.PolicyApprove,
 		"actor":          "carrier-cli",
@@ -5528,6 +5657,12 @@ func renderExecutionTemplate(template executionTemplateSnapshot) string {
 	}
 	if goalTemplate := strings.TrimSpace(template.DefaultGoalTemplate); goalTemplate != "" {
 		lines = append(lines, "goal template: "+goalTemplate)
+	}
+	if len(template.RequiredMemory) > 0 {
+		lines = append(lines, "required memory: "+strings.Join(template.RequiredMemory, ", "))
+	}
+	if len(template.DistillOutputs) > 0 {
+		lines = append(lines, "distill outputs: "+strings.Join(template.DistillOutputs, ", "))
 	}
 	if len(template.InputSchema) > 0 {
 		lines = append(lines, "inputs:")
@@ -5619,6 +5754,12 @@ func renderExecutionTrigger(trigger executionTriggerSnapshot) string {
 	if len(config.HostLabels) > 0 {
 		lines = append(lines, "host labels: "+strings.Join(config.HostLabels, ", "))
 	}
+	if len(config.RequiredMemory) > 0 {
+		lines = append(lines, "required memory: "+strings.Join(config.RequiredMemory, ", "))
+	}
+	if len(config.DistillOutputs) > 0 {
+		lines = append(lines, "distill outputs: "+strings.Join(config.DistillOutputs, ", "))
+	}
 	if config.MaxConcurrency > 0 {
 		lines = append(lines, fmt.Sprintf("max concurrency: %d", config.MaxConcurrency))
 	}
@@ -5680,6 +5821,20 @@ func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
 	}
 	if requestedProvider := strings.TrimSpace(execution.RequestedProvider); requestedProvider != "" {
 		lines = append(lines, "requested provider: "+requestedProvider)
+	}
+	requiredMemoryScopes := normalizeMemoryScopeSlice(execution.RequiredMemory)
+	if digest := strings.TrimSpace(execution.MemoryContractDigest); digest != "" || len(execution.RequiredMemory) > 0 || len(execution.MemoryProvenance) > 0 || len(execution.DistillOutputs) > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"memory contract: digest=%s scopes=%s",
+			firstNonEmpty(digest, "n/a"),
+			firstNonEmpty(strings.Join(requiredMemoryScopes, ", "), "none"),
+		))
+		if len(execution.MemoryProvenance) > 0 {
+			lines = append(lines, "memory provenance: "+strings.Join(execution.MemoryProvenance, ", "))
+		}
+		if len(execution.DistillOutputs) > 0 {
+			lines = append(lines, "distill outputs: "+strings.Join(execution.DistillOutputs, ", "))
+		}
 	}
 	if len(execution.Governance.ProviderResolutions) > 0 {
 		lines = append(lines, "provider trace:")

@@ -48,6 +48,10 @@ func TestParseOrchestrateCommandArgs(t *testing.T) {
 		"--host-label", "gpu",
 		"--host-label", "prod",
 		"--host-label", "gpu",
+		"--memory-scope", "shared:incident",
+		"--memory-scope", "shared:incident",
+		"--memory-scope", "private:checkout",
+		"--distill-scope", "shared:distill",
 		"--provider", "openrouter",
 		"--max-concurrency", "9",
 		"--idempotency-key", "idem-1",
@@ -70,6 +74,12 @@ func TestParseOrchestrateCommandArgs(t *testing.T) {
 	}
 	if len(opts.HostLabels) != 2 || opts.HostLabels[0] != "gpu" || opts.HostLabels[1] != "prod" {
 		t.Fatalf("host_labels = %v, want [gpu prod]", opts.HostLabels)
+	}
+	if len(opts.RequiredMemory) != 2 || opts.RequiredMemory[0] != "private:checkout" || opts.RequiredMemory[1] != "shared:incident" {
+		t.Fatalf("required_memory = %v, want [private:checkout shared:incident]", opts.RequiredMemory)
+	}
+	if len(opts.DistillOutputs) != 1 || opts.DistillOutputs[0] != "shared:distill" {
+		t.Fatalf("distill_outputs = %v, want [shared:distill]", opts.DistillOutputs)
 	}
 	if opts.Provider != "openrouter" {
 		t.Fatalf("provider = %q, want openrouter", opts.Provider)
@@ -613,6 +623,10 @@ func TestRenderOrchestrateExecutionIncludesLineageAndArtifacts(t *testing.T) {
 			"triggerEvent":"issue_comment",
 			"initiator":"github:alice",
 			"requestedProvider":"openrouter",
+			"requiredMemory":["shared:incident","private:checkout"],
+			"memoryContractDigest":"mem-abc123",
+			"memoryProvenance":["private:checkout","shared:incident"],
+			"distillOutputs":["shared:distill"],
 			"parentExecutionId":"exec-source-1",
 			"sourceExecutionId":"exec-source-1",
 			"launchReason":"retry_failed_tasks",
@@ -667,6 +681,15 @@ func TestRenderOrchestrateExecutionIncludesLineageAndArtifacts(t *testing.T) {
 	if !strings.Contains(out, "requested provider: openrouter") {
 		t.Fatalf("expected requested provider in output, got %q", out)
 	}
+	if !strings.Contains(out, "memory contract: digest=mem-abc123 scopes=private:checkout, shared:incident") {
+		t.Fatalf("expected memory contract in output, got %q", out)
+	}
+	if !strings.Contains(out, "memory provenance: private:checkout, shared:incident") {
+		t.Fatalf("expected memory provenance in output, got %q", out)
+	}
+	if !strings.Contains(out, "distill outputs: shared:distill") {
+		t.Fatalf("expected distill outputs in output, got %q", out)
+	}
 	if !strings.Contains(out, "provider trace:") || !strings.Contains(out, "openrouter/anthropic/claude-3.7-sonnet") || !strings.Contains(out, "cost=$0.0015") {
 		t.Fatalf("expected provider trace in output, got %q", out)
 	}
@@ -678,6 +701,21 @@ func TestRenderOrchestrateExecutionIncludesLineageAndArtifacts(t *testing.T) {
 	}
 	if !strings.Contains(out, "artifacts:") || !strings.Contains(out, "release-notes.txt") {
 		t.Fatalf("expected artifacts in output, got %q", out)
+	}
+}
+
+func TestCarrierUsageHighlightsControlPlaneSurfaces(t *testing.T) {
+	if !strings.Contains(usage, "Carrier — execution and knowledge control plane binary") {
+		t.Fatalf("expected updated usage banner, got %q", usage)
+	}
+	if !strings.Contains(usage, "Core workflows:") {
+		t.Fatalf("expected grouped core workflows section, got %q", usage)
+	}
+	if !strings.Contains(usage, "Runtime ops:") {
+		t.Fatalf("expected grouped runtime ops section, got %q", usage)
+	}
+	if !strings.Contains(usage, "carrier memory") || !strings.Contains(usage, "carrier executions") {
+		t.Fatalf("expected execution and memory surfaces in usage, got %q", usage)
 	}
 }
 

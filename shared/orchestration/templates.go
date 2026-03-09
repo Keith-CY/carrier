@@ -28,15 +28,17 @@ type TemplateTask struct {
 }
 
 type ExecutionTemplate struct {
-	ID                 string                 `json:"id"`
-	Name               string                 `json:"name"`
-	Description        string                 `json:"description,omitempty"`
-	InputSchema        []TemplateInputField   `json:"inputSchema,omitempty"`
-	DefaultGoalTemplate string                `json:"defaultGoalTemplate"`
-	DefaultPolicyHints []string               `json:"defaultPolicyHints,omitempty"`
-	DefaultWorkerHints []TemplateWorkerHint   `json:"defaultWorkerHints,omitempty"`
+	ID                  string                 `json:"id"`
+	Name                string                 `json:"name"`
+	Description         string                 `json:"description,omitempty"`
+	InputSchema         []TemplateInputField   `json:"inputSchema,omitempty"`
+	DefaultGoalTemplate string                 `json:"defaultGoalTemplate"`
+	DefaultPolicyHints  []string               `json:"defaultPolicyHints,omitempty"`
+	DefaultWorkerHints  []TemplateWorkerHint   `json:"defaultWorkerHints,omitempty"`
 	DefaultOutputSchema map[string]interface{} `json:"defaultOutputSchema,omitempty"`
-	PlannerTasks       []TemplateTask         `json:"plannerTasks,omitempty"`
+	RequiredMemory      []string               `json:"requiredMemory,omitempty"`
+	DistillOutputs      []string               `json:"distillOutputs,omitempty"`
+	PlannerTasks        []TemplateTask         `json:"plannerTasks,omitempty"`
 }
 
 type ResolvedExecutionTemplate struct {
@@ -140,6 +142,8 @@ func cloneExecutionTemplate(template ExecutionTemplate) ExecutionTemplate {
 	out.InputSchema = append([]TemplateInputField(nil), template.InputSchema...)
 	out.DefaultPolicyHints = append([]string(nil), template.DefaultPolicyHints...)
 	out.DefaultWorkerHints = append([]TemplateWorkerHint(nil), template.DefaultWorkerHints...)
+	out.RequiredMemory = append([]string(nil), template.RequiredMemory...)
+	out.DistillOutputs = append([]string(nil), template.DistillOutputs...)
 	out.PlannerTasks = append([]TemplateTask(nil), template.PlannerTasks...)
 	if template.DefaultOutputSchema != nil {
 		out.DefaultOutputSchema = cloneTemplateMap(template.DefaultOutputSchema)
@@ -188,6 +192,8 @@ var builtinExecutionTemplates = map[string]ExecutionTemplate{
 			{AgentID: "zeroclaw", Description: "Collect context and summarize findings."},
 			{AgentID: "picoclaw", Description: "Inspect changed files and risk hotspots."},
 		},
+		RequiredMemory: []string{"shared:code-review", "shared:pull-requests"},
+		DistillOutputs: []string{"shared:pr-lessons"},
 		DefaultOutputSchema: map[string]interface{}{
 			"summary":     "string",
 			"risks":       []interface{}{"string"},
@@ -216,9 +222,11 @@ var builtinExecutionTemplates = map[string]ExecutionTemplate{
 			{AgentID: "zeroclaw", Description: "Gather issue context and summarize the outcome."},
 			{AgentID: "picoclaw", Description: "Trace likely code paths and regressions."},
 		},
+		RequiredMemory: []string{"shared:issue-triage", "shared:repository-context"},
+		DistillOutputs: []string{"shared:issue-lessons"},
 		DefaultOutputSchema: map[string]interface{}{
-			"summary":      "string",
-			"rootCauses":   []interface{}{"string"},
+			"summary":         "string",
+			"rootCauses":      []interface{}{"string"},
 			"recommendations": []interface{}{"string"},
 		},
 		PlannerTasks: []TemplateTask{
@@ -244,10 +252,12 @@ var builtinExecutionTemplates = map[string]ExecutionTemplate{
 			{AgentID: "zeroclaw", Description: "Collect incident context and summarize output."},
 			{AgentID: "picoclaw", Description: "Perform deeper failure-path analysis."},
 		},
+		RequiredMemory: []string{"shared:incident-response", "shared:service-catalog"},
+		DistillOutputs: []string{"shared:incident-lessons"},
 		DefaultOutputSchema: map[string]interface{}{
-			"summary":      "string",
-			"findings":     []interface{}{"string"},
-			"nextActions":  []interface{}{"string"},
+			"summary":     "string",
+			"findings":    []interface{}{"string"},
+			"nextActions": []interface{}{"string"},
 		},
 		PlannerTasks: []TemplateTask{
 			{ID: "task-1", AgentID: "zeroclaw", InputTemplate: "Collect incident context for {{service}} in {{environment}}."},
@@ -272,9 +282,11 @@ var builtinExecutionTemplates = map[string]ExecutionTemplate{
 			{AgentID: "zeroclaw", Description: "Collect rollout signals and summarize outcome."},
 			{AgentID: "picoclaw", Description: "Inspect anomalies and regression clues."},
 		},
+		RequiredMemory: []string{"shared:release-runbook", "shared:service-catalog"},
+		DistillOutputs: []string{"shared:rollout-lessons"},
 		DefaultOutputSchema: map[string]interface{}{
-			"summary":      "string",
-			"checks":       []interface{}{"string"},
+			"summary":       "string",
+			"checks":        []interface{}{"string"},
 			"promotionRisk": "string",
 		},
 		PlannerTasks: []TemplateTask{

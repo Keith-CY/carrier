@@ -21,6 +21,8 @@ type ExecutionTriggerConfig struct {
 	Provider                string            `json:"provider,omitempty"`
 	HostIDs                 []string          `json:"hostIds,omitempty"`
 	HostLabels              []string          `json:"hostLabels,omitempty"`
+	RequiredMemory          []string          `json:"requiredMemory,omitempty"`
+	DistillOutputs          []string          `json:"distillOutputs,omitempty"`
 	MaxConcurrency          int               `json:"maxConcurrency,omitempty"`
 	PolicyApprove           bool              `json:"policyApprove,omitempty"`
 	WebhookSecret           string            `json:"webhookSecret,omitempty"`
@@ -33,20 +35,20 @@ type ExecutionTriggerConfig struct {
 }
 
 type ExecutionTrigger struct {
-	ID              string               `json:"id"`
-	Name            string               `json:"name"`
-	Type            ExecutionTriggerType `json:"type"`
-	TemplateID      string               `json:"templateId"`
-	Enabled         bool                 `json:"enabled"`
-	CreatedBy       string               `json:"createdBy,omitempty"`
+	ID              string                 `json:"id"`
+	Name            string                 `json:"name"`
+	Type            ExecutionTriggerType   `json:"type"`
+	TemplateID      string                 `json:"templateId"`
+	Enabled         bool                   `json:"enabled"`
+	CreatedBy       string                 `json:"createdBy,omitempty"`
 	Config          ExecutionTriggerConfig `json:"config,omitempty"`
-	LastTriggeredAt string               `json:"lastTriggeredAt,omitempty"`
-	LastExecutionID string               `json:"lastExecutionId,omitempty"`
-	LastError       string               `json:"lastError,omitempty"`
-	TriggeredCount  int64                `json:"triggeredCount,omitempty"`
-	NextRunAt       string               `json:"nextRunAt,omitempty"`
-	CreatedAt       string               `json:"createdAt,omitempty"`
-	UpdatedAt       string               `json:"updatedAt,omitempty"`
+	LastTriggeredAt string                 `json:"lastTriggeredAt,omitempty"`
+	LastExecutionID string                 `json:"lastExecutionId,omitempty"`
+	LastError       string                 `json:"lastError,omitempty"`
+	TriggeredCount  int64                  `json:"triggeredCount,omitempty"`
+	NextRunAt       string                 `json:"nextRunAt,omitempty"`
+	CreatedAt       string                 `json:"createdAt,omitempty"`
+	UpdatedAt       string                 `json:"updatedAt,omitempty"`
 }
 
 func normalizeExecutionTriggerType(raw string) ExecutionTriggerType {
@@ -66,6 +68,8 @@ func normalizeExecutionTriggerConfig(in ExecutionTriggerConfig) ExecutionTrigger
 	out := in
 	out.Provider = strings.TrimSpace(out.Provider)
 	out.HostLabels = normalizeStringSelectorList(out.HostLabels, true)
+	out.RequiredMemory = normalizeStringSelectorList(out.RequiredMemory, true)
+	out.DistillOutputs = normalizeStringSelectorList(out.DistillOutputs, true)
 	hostIDs := make([]string, 0, len(out.HostIDs))
 	seenHostIDs := map[string]struct{}{}
 	for _, hostID := range out.HostIDs {

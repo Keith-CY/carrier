@@ -45,6 +45,8 @@ func TestParseTemplatesCommandArgs(t *testing.T) {
 		"--input", "focus=rollback risk",
 		"--host-id", "host-a",
 		"--host-label", "prod",
+		"--memory-scope", "shared:code-review",
+		"--distill-scope", "shared:pr-lessons",
 		"--provider", "openrouter",
 		"--max-concurrency", "3",
 		"--policy-approve",
@@ -64,6 +66,12 @@ func TestParseTemplatesCommandArgs(t *testing.T) {
 	}
 	if len(runOpts.HostLabels) != 1 || runOpts.HostLabels[0] != "prod" {
 		t.Fatalf("hostLabels=%v, want [prod]", runOpts.HostLabels)
+	}
+	if len(runOpts.RequiredMemory) != 1 || runOpts.RequiredMemory[0] != "shared:code-review" {
+		t.Fatalf("requiredMemory=%v, want [shared:code-review]", runOpts.RequiredMemory)
+	}
+	if len(runOpts.DistillOutputs) != 1 || runOpts.DistillOutputs[0] != "shared:pr-lessons" {
+		t.Fatalf("distillOutputs=%v, want [shared:pr-lessons]", runOpts.DistillOutputs)
 	}
 }
 

@@ -491,7 +491,7 @@ func carrierTelegramDefaultCommands() []telegramBotCommand {
 	return []telegramBotCommand{
 		{Command: "pair", Description: "Link this chat with Carrier (/pair <code>)"},
 		{Command: "chat", Description: "Chat with base agent (/chat <message>)"},
-		{Command: "delegate", Description: "Decompose and delegate tasks (/delegate <goal>)"},
+		{Command: "delegate", Description: "Create an execution from a goal (/delegate <goal>)"},
 		{Command: "agents", Description: "List managed agents"},
 		{Command: "status", Description: "Show agent status (/status [agent_id])"},
 		{Command: "logs", Description: "Show logs (/logs [agent_id] [tail])"},

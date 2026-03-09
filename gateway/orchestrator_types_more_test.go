@@ -206,6 +206,8 @@ func TestNormalizeOrchestratorExecutionValidationAndDefaults(t *testing.T) {
 
 	out, err := normalizeOrchestratorExecution(OrchestratorExecution{
 		Goal:           "  orchestrate ",
+		RequiredMemory: []string{" shared:incident ", "private:checkout", "shared:incident"},
+		DistillOutputs: []string{"shared:distill", " shared:distill "},
 		MaxConcurrency: 999,
 		RequiredWorkers: []OrchestratorRequiredWorker{
 			{HostID: " host-1 ", AgentID: "", Count: 0},
@@ -238,6 +240,12 @@ func TestNormalizeOrchestratorExecutionValidationAndDefaults(t *testing.T) {
 	if out.ToolPolicy.Mode != "restricted" {
 		t.Fatalf("expected default tool policy mode restricted, got %q", out.ToolPolicy.Mode)
 	}
+	if strings.Join(out.RequiredMemory, ",") != "private:checkout,shared:incident" {
+		t.Fatalf("expected normalized requiredMemory, got %v", out.RequiredMemory)
+	}
+	if strings.Join(out.DistillOutputs, ",") != "shared:distill" {
+		t.Fatalf("expected normalized distillOutputs, got %v", out.DistillOutputs)
+	}
 
 	defaultConcurrency, err := normalizeOrchestratorExecution(OrchestratorExecution{
 		Goal: "g",
@@ -260,6 +268,8 @@ func TestNormalizeOrchestratorExecutionForStorePreservesLineageAndOutcome(t *tes
 	out := normalizeOrchestratorExecutionForStore(OrchestratorExecution{
 		ID:                " exec-1 ",
 		Goal:              "  investigate failure  ",
+		RequiredMemory:    []string{"shared:incident", "private:checkout"},
+		DistillOutputs:    []string{"shared:distill"},
 		ParentExecutionID: " parent-1 ",
 		SourceExecutionID: " source-1 ",
 		LaunchReason:      " retry_failed_tasks ",
@@ -291,6 +301,15 @@ func TestNormalizeOrchestratorExecutionForStorePreservesLineageAndOutcome(t *tes
 	}
 	if out.LaunchReason != "retry_failed_tasks" {
 		t.Fatalf("launchReason = %q, want retry_failed_tasks", out.LaunchReason)
+	}
+	if out.MemoryContractDigest == "" {
+		t.Fatalf("expected memoryContractDigest to be hydrated, got %+v", out)
+	}
+	if strings.Join(out.MemoryProvenance, ",") != "private:checkout,shared:incident" {
+		t.Fatalf("memoryProvenance = %v, want [private:checkout shared:incident]", out.MemoryProvenance)
+	}
+	if strings.Join(out.DistillOutputs, ",") != "shared:distill" {
+		t.Fatalf("distillOutputs = %v, want [shared:distill]", out.DistillOutputs)
 	}
 	if out.Status != OrchestratorExecutionStatusRetryableFailed {
 		t.Fatalf("status = %q, want retryable_failed", out.Status)

@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { loginWithToken, mockAPIs } from './helpers';
 
 test.describe('Remote Control Plane Views', () => {
-  test('profiles binding controls are disabled when provider binding feature is off', async ({ page }) => {
+  test('providers binding controls are disabled when provider binding feature is off', async ({ page }) => {
     await mockAPIs(page);
     await page.route('**/api/v1/features', async (route) =>
       route.fulfill({
@@ -43,14 +43,14 @@ test.describe('Remote Control Plane Views', () => {
       }),
     );
 
-    await loginWithToken(page, '/#/profiles');
+    await loginWithToken(page, '/#/providers');
 
     await expect(page.locator('#binding-save')).toBeDisabled();
     await expect(page.locator('#binding-profile-id')).toBeDisabled();
     await expect(page.locator('#profiles-msg')).toContainText('Provider binding is disabled by feature flag.');
   });
 
-  test('profiles page supports execution policy create and delete', async ({ page }) => {
+  test('policies page supports execution policy create and delete', async ({ page }) => {
     await mockAPIs(page);
 
     const policies: Array<Record<string, unknown>> = [];
@@ -93,7 +93,7 @@ test.describe('Remote Control Plane Views', () => {
       });
     });
 
-    await loginWithToken(page, '/#/profiles');
+    await loginWithToken(page, '/#/policies');
 
     await page.fill('#execution-policy-name', 'review picoclaw production runs');
     await page.selectOption('#execution-policy-action', 'ask');
@@ -144,13 +144,14 @@ test.describe('Remote Control Plane Views', () => {
       }),
     );
 
-    await loginWithToken(page, '/#/servers');
+    await loginWithToken(page, '/#/hosts');
 
     await expect.poll(() => page.url()).toContain('#/dashboard');
     await expect(page.locator('#view-dashboard')).toBeVisible();
     await expect(page.locator('.nav-link[data-route="workers"]')).toBeHidden();
-    await expect(page.locator('.nav-link[data-route="servers"]')).toBeHidden();
-    await expect(page.locator('.nav-link[data-route="profiles"]')).toBeHidden();
+    await expect(page.locator('.nav-link[data-route="hosts"]')).toBeHidden();
+    await expect(page.locator('.nav-link[data-route="providers"]')).toBeHidden();
+    await expect(page.locator('.nav-link[data-route="policies"]')).toBeHidden();
     await expect(page.locator('.nav-link[data-route="remote-chat"]')).toBeHidden();
     await expect(page.locator('.nav-link[data-route="remote-observability"]')).toBeHidden();
 
@@ -158,7 +159,7 @@ test.describe('Remote Control Plane Views', () => {
     await expect.poll(() => page.url()).toContain('#/dashboard');
   });
 
-  test('servers page supports create/check/delete flow', async ({ page }) => {
+  test('hosts page supports create/check/delete flow', async ({ page }) => {
     await mockAPIs(page);
 
     const hosts: Array<Record<string, unknown>> = [];
@@ -253,7 +254,7 @@ test.describe('Remote Control Plane Views', () => {
       });
     });
 
-    await loginWithToken(page, '/#/servers');
+    await loginWithToken(page, '/#/hosts');
 
     await page.fill('#server-name', 'prod-eu-1');
     await page.fill('#server-host', '10.0.0.12');
@@ -296,7 +297,7 @@ test.describe('Remote Control Plane Views', () => {
     await expect(page.locator('#servers-list .card')).toContainText('No remote servers configured.');
   });
 
-  test('servers page supports config, sessions, and memory management actions', async ({ page }) => {
+  test('hosts page supports config, sessions, and memory management actions', async ({ page }) => {
     await mockAPIs(page);
 
     const hosts = [{ id: 'host-1', name: 'prod-host-1', host: '10.0.0.9', user: 'ubuntu', authMode: 'private_key', runtimeMode: 'on_demand' }];
@@ -669,7 +670,7 @@ test.describe('Remote Control Plane Views', () => {
       }),
     );
 
-    await loginWithToken(page, '/#/servers');
+    await loginWithToken(page, '/#/hosts');
 
     await expect(page.locator('#servers-list .agent-card h4', { hasText: 'prod-host-1' })).toBeVisible();
     await page.locator('#servers-list .agent-card').first().locator('button', { hasText: 'Manage' }).click();
@@ -774,7 +775,7 @@ test.describe('Remote Control Plane Views', () => {
     await expect(page.locator('#server-manage-memory')).toContainText('facts/system.md');
   });
 
-  test('profiles page supports profile + binding flow', async ({ page }) => {
+  test('providers page supports profile + binding flow', async ({ page }) => {
     await mockAPIs(page);
 
     const hosts = [{ id: 'host-1', name: 'prod-host-1' }, { id: 'host-2', name: 'staging-host-2' }];
@@ -950,7 +951,7 @@ test.describe('Remote Control Plane Views', () => {
       });
     });
 
-    await loginWithToken(page, '/#/profiles');
+    await loginWithToken(page, '/#/providers');
 
     await page.fill('#profile-name', 'openai-gpt5');
     await page.fill('#profile-provider', 'openai');

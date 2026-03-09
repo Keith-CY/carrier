@@ -1348,9 +1348,17 @@ export async function loginWithToken(page: Page, url = '/', waitUntil: 'load' | 
   const hash = hashIndex >= 0 ? url.slice(hashIndex) : '';
   await page.goto(path || '/', { waitUntil });
   await page.locator('#logout-btn').waitFor({ state: 'visible' });
+  await page.waitForFunction(() => {
+    const nav = document.querySelector('#nav');
+    return window.location.hash.length > 0 || (!!nav && !nav.classList.contains('hidden'));
+  });
   if (hash) {
     await page.evaluate((nextHash: string) => {
       window.location.hash = nextHash;
+    }, hash);
+    await page.waitForFunction((expectedHash: string) => {
+      const current = window.location.hash;
+      return current === expectedHash || current === '#/dashboard' || current === '#/welcome';
     }, hash);
   }
 }

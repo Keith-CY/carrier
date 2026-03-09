@@ -23,6 +23,10 @@ type OrchestratorEvidencePlanSnapshot struct {
 	TriggerPayloadDigest string                       `json:"triggerPayloadDigest,omitempty"`
 	Initiator            string                       `json:"initiator,omitempty"`
 	RequestedProvider    string                       `json:"requestedProvider,omitempty"`
+	RequiredMemory       []string                     `json:"requiredMemory,omitempty"`
+	MemoryContractDigest string                       `json:"memoryContractDigest,omitempty"`
+	MemoryProvenance     []string                     `json:"memoryProvenance,omitempty"`
+	DistillOutputs       []string                     `json:"distillOutputs,omitempty"`
 	ParentExecutionID    string                       `json:"parentExecutionId,omitempty"`
 	SourceExecutionID    string                       `json:"sourceExecutionId,omitempty"`
 	LaunchReason         string                       `json:"launchReason,omitempty"`
@@ -206,6 +210,10 @@ func buildEvidencePlanSnapshot(execution OrchestratorExecution) OrchestratorEvid
 		TriggerPayloadDigest: strings.TrimSpace(execution.TriggerPayloadDigest),
 		Initiator:            strings.TrimSpace(execution.Initiator),
 		RequestedProvider:    strings.TrimSpace(execution.RequestedProvider),
+		RequiredMemory:       append([]string(nil), execution.RequiredMemory...),
+		MemoryContractDigest: strings.TrimSpace(execution.MemoryContractDigest),
+		MemoryProvenance:     append([]string(nil), execution.MemoryProvenance...),
+		DistillOutputs:       append([]string(nil), execution.DistillOutputs...),
 		ParentExecutionID:    strings.TrimSpace(execution.ParentExecutionID),
 		SourceExecutionID:    strings.TrimSpace(execution.SourceExecutionID),
 		LaunchReason:         strings.TrimSpace(execution.LaunchReason),

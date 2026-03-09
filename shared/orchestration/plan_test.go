@@ -7,6 +7,8 @@ func TestBuildPlanAssignsWorkersByAgentAcrossHosts(t *testing.T) {
 		Goal:           "triage incident",
 		Provider:       "openrouter",
 		HostIDs:        []string{"host-a", "host-a", "host-b"},
+		RequiredMemory: []string{" shared:incident ", "private:checkout", "shared:incident"},
+		DistillOutputs: []string{"shared:distill", " shared:distill "},
 		MaxConcurrency: 9,
 		Tasks: []DecomposeTask{
 			{ID: "task-1", Input: "collect logs", AgentID: "zeroclaw"},
@@ -23,6 +25,12 @@ func TestBuildPlanAssignsWorkersByAgentAcrossHosts(t *testing.T) {
 	}
 	if plan.Provider != "openrouter" {
 		t.Fatalf("provider = %q, want openrouter", plan.Provider)
+	}
+	if len(plan.RequiredMemory) != 2 || plan.RequiredMemory[0] != "private:checkout" || plan.RequiredMemory[1] != "shared:incident" {
+		t.Fatalf("requiredMemory = %v, want [private:checkout shared:incident]", plan.RequiredMemory)
+	}
+	if len(plan.DistillOutputs) != 1 || plan.DistillOutputs[0] != "shared:distill" {
+		t.Fatalf("distillOutputs = %v, want [shared:distill]", plan.DistillOutputs)
 	}
 	if len(plan.HostIDs) != 2 || plan.HostIDs[0] != "host-a" || plan.HostIDs[1] != "host-b" {
 		t.Fatalf("hostIDs = %v, want [host-a host-b]", plan.HostIDs)

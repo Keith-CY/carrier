@@ -79,6 +79,7 @@
   let quickLaunchPlan = null;
   let quickLaunchProviderCatalog = [];
   let quickLaunchTemplates = [];
+  let currentProfilesMode = 'providers';
   let workersPollTimer = null;
   const DEFAULT_FEATURE_FLAGS = {
     remoteControlPlaneEnabled: false,
@@ -329,9 +330,32 @@
   }
 
   function setNavRouteVisible(route, visible) {
-    const link = $('.nav-link[data-route="' + route + '"]');
+    const link = $('.nav-link[data-route="' + canonicalRouteName(route) + '"]');
     if (!link) return;
     link.classList.toggle('hidden', !visible);
+  }
+
+  function canonicalRouteName(route) {
+    switch (String(route || '').trim()) {
+      case 'servers':
+        return 'hosts';
+      case 'profiles':
+        return 'providers';
+      default:
+        return String(route || '').trim();
+    }
+  }
+
+  function routeViewName(route) {
+    switch (canonicalRouteName(route)) {
+      case 'hosts':
+        return 'servers';
+      case 'providers':
+      case 'policies':
+        return 'profiles';
+      default:
+        return String(route || '').trim();
+    }
   }
 
   function parseRoute(hash) {
@@ -359,7 +383,7 @@
   }
 
   function currentRouteName() {
-    return parseRoute(location.hash).name;
+    return canonicalRouteName(parseRoute(location.hash).name);
   }
 
   function formatDateTime(raw) {
@@ -379,10 +403,11 @@
   }
 
   function isRouteEnabled(route) {
-    if (route === 'executions' || route === 'workers' || route === 'servers' || route === 'profiles' || route === 'remote-observability') {
+    const normalized = canonicalRouteName(route);
+    if (normalized === 'executions' || normalized === 'workers' || normalized === 'hosts' || normalized === 'providers' || normalized === 'policies' || normalized === 'remote-observability') {
       return !!featureFlags.remoteControlPlaneEnabled;
     }
-    if (route === 'remote-chat') {
+    if (normalized === 'remote-chat') {
       return !!featureFlags.remoteControlPlaneEnabled && !!featureFlags.remoteChatEnabled;
     }
     return true;
@@ -393,8 +418,9 @@
     const remoteChatVisible = remoteControlVisible && !!featureFlags.remoteChatEnabled;
     setNavRouteVisible('executions', remoteControlVisible);
     setNavRouteVisible('workers', remoteControlVisible);
-    setNavRouteVisible('servers', remoteControlVisible);
-    setNavRouteVisible('profiles', remoteControlVisible);
+    setNavRouteVisible('hosts', remoteControlVisible);
+    setNavRouteVisible('providers', remoteControlVisible);
+    setNavRouteVisible('policies', remoteControlVisible);
     setNavRouteVisible('remote-chat', remoteChatVisible);
     setNavRouteVisible('remote-observability', remoteControlVisible);
     const executionSection = $('#dashboard-executions-section');
@@ -538,22 +564,23 @@
   ];
 
   function showView(name) {
+    const viewName = routeViewName(name);
     routes.forEach(r => {
       const el = $('#view-' + r);
-      if (el) el.classList.toggle('hidden', r !== name);
+      if (el) el.classList.toggle('hidden', r !== viewName);
     });
-    if (name !== 'dashboard' && name !== 'executions') stopDashboardExecutionPolling();
-    if (name !== 'workers') stopWorkersPolling();
+    if (viewName !== 'dashboard' && viewName !== 'executions') stopDashboardExecutionPolling();
+    if (viewName !== 'workers') stopWorkersPolling();
     // Update nav active state
     $$('.nav-link').forEach(a => {
-      a.classList.toggle('active', a.dataset.route === name);
+      a.classList.toggle('active', a.dataset.route === canonicalRouteName(name));
     });
   }
 
   function navigate(hash) {
     const routeInfo = parseRoute(hash);
     const route = routeInfo.path;
-    const routeName = routeInfo.name;
+    const routeName = canonicalRouteName(routeInfo.name);
 
     if (routeName === 'add') {
       const agent = decodeURIComponent(routeInfo.segments[1] || '').trim().toLowerCase();
@@ -579,7 +606,7 @@
     }
 
     // Management views require auth
-    const mgmtRoutes = ['dashboard', 'executions', 'memory', 'workers', 'logs', 'chat', 'settings', 'servers', 'profiles', 'remote-chat', 'remote-observability'];
+    const mgmtRoutes = ['dashboard', 'executions', 'memory', 'workers', 'logs', 'chat', 'settings', 'hosts', 'providers', 'policies', 'remote-chat', 'remote-observability'];
     if (mgmtRoutes.includes(routeName)) {
       $('#nav').classList.remove('hidden');
     }
@@ -604,8 +631,9 @@
       case 'logs': initLogs(); break;
       case 'chat': initChat(); break;
       case 'settings': initSettings(); break;
-      case 'servers': initServers(); break;
-      case 'profiles': initProfiles(); break;
+      case 'hosts': initServers(); break;
+      case 'providers': initProfiles('providers'); break;
+      case 'policies': initProfiles('policies'); break;
       case 'remote-chat': initRemoteChat(); break;
       case 'remote-observability': initRemoteObservability(); break;
       default:
@@ -2619,6 +2647,10 @@
     const approvedAt = String(authorization && authorization.approvedAt ? authorization.approvedAt : '').trim();
     const infraApproved = !!(authorization && authorization.infrastructureApproved);
     const requestedProvider = String(execution && execution.requestedProvider ? execution.requestedProvider : '').trim();
+    const requiredMemory = Array.isArray(execution && execution.requiredMemory) ? execution.requiredMemory.map(item => String(item || '').trim()).filter(Boolean) : [];
+    const memoryContractDigest = String(execution && execution.memoryContractDigest ? execution.memoryContractDigest : '').trim();
+    const memoryProvenance = Array.isArray(execution && execution.memoryProvenance) ? execution.memoryProvenance.map(item => String(item || '').trim()).filter(Boolean) : [];
+    const distillOutputs = Array.isArray(execution && execution.distillOutputs) ? execution.distillOutputs.map(item => String(item || '').trim()).filter(Boolean) : [];
     const providerResolutions = execution && execution.governance && Array.isArray(execution.governance.providerResolutions)
       ? execution.governance.providerResolutions
       : [];
@@ -2628,6 +2660,11 @@
     governanceLines.push('Approved at: ' + (approvedAt ? formatDateTime(approvedAt) : 'n/a'));
     governanceLines.push('Infrastructure approved: ' + (infraApproved ? 'yes' : 'no'));
     if (requestedProvider) governanceLines.push('Requested provider: ' + requestedProvider);
+    if (memoryContractDigest || requiredMemory.length || memoryProvenance.length || distillOutputs.length) {
+      governanceLines.push('Memory contract: ' + (memoryContractDigest || 'n/a') + ' · scopes=' + (requiredMemory.length ? requiredMemory.join(', ') : 'none'));
+    }
+    if (memoryProvenance.length) governanceLines.push('Memory provenance: ' + memoryProvenance.join(', '));
+    if (distillOutputs.length) governanceLines.push('Distill outputs: ' + distillOutputs.join(', '));
     governanceLines.forEach(line => {
       const row = document.createElement('div');
       row.className = 'execution-detail-line';
@@ -6248,7 +6285,7 @@
     if (!hosts.length) {
       const empty = document.createElement('div');
       empty.className = 'card';
-      empty.textContent = 'No remote servers configured.';
+      empty.textContent = 'No hosts configured.';
       wrap.appendChild(empty);
       return;
     }
@@ -6312,7 +6349,7 @@
   }
 
   async function initServers() {
-    showView('servers');
+    showView('hosts');
     $('#nav').classList.remove('hidden');
 
     const authMode = $('#server-auth-mode');
@@ -6902,9 +6939,19 @@
     out.textContent = lines.join('\n');
   }
 
-  async function initProfiles() {
-    showView('profiles');
+  async function initProfiles(mode) {
+    const selectedMode = mode === 'policies'
+      ? 'policies'
+      : (mode === 'providers' ? 'providers' : (currentRouteName() === 'policies' ? 'policies' : currentProfilesMode));
+    currentProfilesMode = selectedMode;
+    showView(selectedMode);
     $('#nav').classList.remove('hidden');
+    const providersShell = $('#providers-shell');
+    const policiesShell = $('#policies-shell');
+    const profilesTitle = $('#profiles-title');
+    if (providersShell) providersShell.classList.toggle('hidden', selectedMode !== 'providers');
+    if (policiesShell) policiesShell.classList.toggle('hidden', selectedMode !== 'policies');
+    if (profilesTitle) profilesTitle.textContent = selectedMode === 'policies' ? 'Policies' : 'Providers';
 
     const refreshBtn = $('#profiles-refresh');
     const saveProfileBtn = $('#profile-save');
