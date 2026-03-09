@@ -218,6 +218,7 @@ type orchestrateCommandOptions struct {
 	IdempotencyKey string
 	Limit          int
 	OutputPath     string
+	Open           bool
 	Timeout        time.Duration
 	Async          bool
 	JSON           bool
@@ -265,6 +266,25 @@ type versionInfo struct {
 	Commit    string `json:"commit"`
 	BuildDate string `json:"buildDate"`
 	GoVersion string `json:"goVersion"`
+}
+
+var openPathWithDefaultApp = defaultOpenPathWithDefaultApp
+
+func defaultOpenPathWithDefaultApp(path string) error {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return errors.New("path is required")
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", trimmed)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", trimmed)
+	default:
+		cmd = exec.Command("xdg-open", trimmed)
+	}
+	return cmd.Start()
 }
 
 type picoclawChannel struct {
@@ -2528,6 +2548,8 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 		case "":
 		case "--json":
 			opts.JSON = true
+		case "--open":
+			opts.Open = true
 		case "--policy-approve":
 			opts.PolicyApprove = true
 		case "--output":
@@ -2590,10 +2612,10 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 			return orchestrateCommandOptions{}, errors.New("usage: carrier executions artifacts <execution_id> [--json]")
 		}
 		if opts.Action == "evidence" {
-			return orchestrateCommandOptions{}, errors.New("usage: carrier executions evidence <execution_id> [--format json|zip] [--output <path>] [--json]")
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions evidence <execution_id> [--format json|zip] [--output <path>] [--open] [--json]")
 		}
 		if opts.Action == "audit" {
-			return orchestrateCommandOptions{}, errors.New("usage: carrier executions audit <execution_id> [--output <path>] [--json]")
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions audit <execution_id> [--output <path>] [--open] [--json]")
 		}
 		if opts.Action == "authorize" {
 			return orchestrateCommandOptions{}, errors.New("usage: carrier executions authorize <execution_id> [--policy-approve] [--json]")
@@ -2607,6 +2629,9 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 		if opts.Format == "zip" && opts.JSON {
 			return orchestrateCommandOptions{}, errors.New("--json cannot be used with --format zip")
 		}
+	}
+	if opts.Open && opts.JSON && strings.TrimSpace(opts.OutputPath) == "" && (opts.Action == "evidence" || opts.Action == "audit") {
+		return orchestrateCommandOptions{}, errors.New("--open requires --output or non-stdout export mode")
 	}
 	return opts, nil
 }
@@ -4241,12 +4266,12 @@ func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error 
 		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
 			return err
 		}
-		return runOrchestrateEvidence(out, opts.ExecutionID, opts.Format, opts.OutputPath, opts.JSON)
+		return runOrchestrateEvidence(out, opts.ExecutionID, opts.Format, opts.OutputPath, opts.Open, opts.JSON)
 	case "audit":
 		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
 			return err
 		}
-		return runOrchestrateAudit(out, opts.ExecutionID, opts.OutputPath, opts.JSON)
+		return runOrchestrateAudit(out, opts.ExecutionID, opts.OutputPath, opts.Open, opts.JSON)
 	case "authorize":
 		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
 			return err
@@ -4366,7 +4391,7 @@ func runOrchestrateArtifacts(out io.Writer, executionID string, outputJSON bool)
 	return nil
 }
 
-func runOrchestrateEvidence(out io.Writer, executionID, format, outputPath string, outputJSON bool) error {
+func runOrchestrateEvidence(out io.Writer, executionID, format, outputPath string, openAfterWrite bool, outputJSON bool) error {
 	normalizedFormat := strings.ToLower(strings.TrimSpace(format))
 	if normalizedFormat == "" {
 		normalizedFormat = "json"
@@ -4383,6 +4408,11 @@ func runOrchestrateEvidence(out io.Writer, executionID, format, outputPath strin
 		if err := os.WriteFile(destination, raw, 0o600); err != nil {
 			return fmt.Errorf("write evidence archive: %w", err)
 		}
+		if openAfterWrite {
+			if err := openPathWithDefaultApp(destination); err != nil {
+				return fmt.Errorf("open evidence archive: %w", err)
+			}
+		}
 		_, _ = fmt.Fprintf(out, "execution evidence written: %s\n", destination)
 		return nil
 	}
@@ -4391,13 +4421,21 @@ func runOrchestrateEvidence(out io.Writer, executionID, format, outputPath strin
 	if err != nil {
 		return err
 	}
-	if destination := strings.TrimSpace(outputPath); destination != "" {
+	if destination := strings.TrimSpace(outputPath); destination != "" || openAfterWrite {
+		if destination == "" {
+			destination = strings.TrimSpace(executionID) + "-evidence.json"
+		}
 		var pretty bytes.Buffer
 		if err := writePrettyJSON(&pretty, raw); err != nil {
 			return err
 		}
 		if err := os.WriteFile(destination, pretty.Bytes(), 0o600); err != nil {
 			return fmt.Errorf("write evidence json: %w", err)
+		}
+		if openAfterWrite {
+			if err := openPathWithDefaultApp(destination); err != nil {
+				return fmt.Errorf("open evidence json: %w", err)
+			}
 		}
 		_, _ = fmt.Fprintf(out, "execution evidence written: %s\n", destination)
 		return nil
@@ -4409,18 +4447,26 @@ func runOrchestrateEvidence(out io.Writer, executionID, format, outputPath strin
 	return nil
 }
 
-func runOrchestrateAudit(out io.Writer, executionID, outputPath string, outputJSON bool) error {
+func runOrchestrateAudit(out io.Writer, executionID, outputPath string, openAfterWrite bool, outputJSON bool) error {
 	resp, raw, err := fetchOrchestratorExecutionAudit(executionID)
 	if err != nil {
 		return err
 	}
-	if destination := strings.TrimSpace(outputPath); destination != "" {
+	if destination := strings.TrimSpace(outputPath); destination != "" || openAfterWrite {
+		if destination == "" {
+			destination = strings.TrimSpace(executionID) + "-audit.json"
+		}
 		var pretty bytes.Buffer
 		if err := writePrettyJSON(&pretty, raw); err != nil {
 			return err
 		}
 		if err := os.WriteFile(destination, pretty.Bytes(), 0o600); err != nil {
 			return fmt.Errorf("write audit json: %w", err)
+		}
+		if openAfterWrite {
+			if err := openPathWithDefaultApp(destination); err != nil {
+				return fmt.Errorf("open audit json: %w", err)
+			}
 		}
 		_, _ = fmt.Fprintf(out, "execution audit written: %s\n", destination)
 		return nil

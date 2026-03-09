@@ -335,13 +335,24 @@
   function parseRoute(hash) {
     let normalized = String(hash || '#/welcome').trim();
     if (!normalized || normalized === '#' || normalized === '#/') normalized = '#/welcome';
-    let path = normalized.replace(/^#\/?/, '').replace(/^\/+/, '').replace(/\/+$/, '');
+    let path = normalized.replace(/^#\/?/, '').replace(/^\/+/, '');
+    let query = {};
+    const queryIndex = path.indexOf('?');
+    if (queryIndex >= 0) {
+      const params = new URLSearchParams(path.slice(queryIndex + 1));
+      path = path.slice(0, queryIndex);
+      params.forEach((value, key) => {
+        query[key] = value;
+      });
+    }
+    path = path.replace(/\/+$/, '');
     if (!path) path = 'welcome';
     const segments = path.split('/').filter(Boolean);
     return {
       path,
       name: segments[0] || 'welcome',
       segments,
+      query,
     };
   }
 
@@ -1837,6 +1848,7 @@
     showView('executions');
     $('#nav').classList.remove('hidden');
     selectedExecutionID = String(executionID || '').trim();
+    applyExecutionRouteFilters(parseRoute(location.hash));
 
     const refreshBtn = $('#executions-refresh');
     const searchInput = $('#executions-search');
@@ -1958,6 +1970,29 @@
 
   function auditExportDownloadPath(executionID) {
     return '/api/v1/audit/export?executionId=' + encodeURIComponent(String(executionID || '').trim());
+  }
+
+  function buildExecutionsHash(params) {
+    const searchParams = new URLSearchParams();
+    Object.entries(params || {}).forEach(([key, value]) => {
+      const text = String(value || '').trim();
+      if (!text) return;
+      searchParams.set(key, text);
+    });
+    const suffix = searchParams.toString();
+    return '#/executions' + (suffix ? ('?' + suffix) : '');
+  }
+
+  function applyExecutionRouteFilters(routeInfo) {
+    const query = routeInfo && routeInfo.query && typeof routeInfo.query === 'object' ? routeInfo.query : {};
+    const searchInput = $('#executions-search');
+    const statusFilter = $('#executions-status-filter');
+    const templateFilter = $('#executions-template-filter');
+    const triggerFilter = $('#executions-trigger-filter');
+    if (searchInput && typeof query.search === 'string') searchInput.value = query.search;
+    if (statusFilter && typeof query.status === 'string') statusFilter.value = query.status;
+    if (templateFilter && typeof query.template === 'string') templateFilter.value = query.template;
+    if (triggerFilter && typeof query.trigger === 'string') triggerFilter.value = query.trigger;
   }
 
   function workerStateBadgeClass(state) {
@@ -7563,6 +7598,29 @@
     return ordered[0].label;
   }
 
+  function buildRemoteObservabilityExecutionLinkLine(label, value, href) {
+    const text = label + ': ' + (value || 'none');
+    if (!value || !href) return text;
+    return {
+      text: text,
+      href: href,
+    };
+  }
+
+  function buildExecutionTriggerRouteParams(label) {
+    const value = String(label || '').trim();
+    if (!value) return {};
+    const separator = value.indexOf(':');
+    if (separator <= 0) {
+      return { trigger: value.toLowerCase(), search: value };
+    }
+    const source = value.slice(0, separator).trim().toLowerCase();
+    return {
+      trigger: source,
+      search: value,
+    };
+  }
+
   function classifyRemoteOperationGroup(operationName) {
     const name = String(operationName || '').trim().toLowerCase();
     if (name.startsWith('host_')) return 'host';
@@ -7644,6 +7702,10 @@
     const queueMetrics = orchestrator && orchestrator.queue ? orchestrator.queue : {};
     const rolloutState = String(rollout.state || 'unknown').trim().toLowerCase() || 'unknown';
     const rolloutReasons = Array.isArray(rollout.reasons) ? rollout.reasons : [];
+    const topTeam = topUsageAttribution(providerMetrics, 'teams');
+    const topProject = topUsageAttribution(providerMetrics, 'projects');
+    const topTemplate = topUsageAttribution(providerMetrics, 'templates');
+    const topTrigger = topUsageAttribution(providerMetrics, 'triggers');
     const cards = [
       {
         title: 'Operations',
@@ -7728,10 +7790,10 @@
       {
         title: 'Cost Attribution',
         lines: [
-          'top team: ' + (topUsageAttribution(providerMetrics, 'teams') || 'none'),
-          'top project: ' + (topUsageAttribution(providerMetrics, 'projects') || 'none'),
-          'top template: ' + (topUsageAttribution(providerMetrics, 'templates') || 'none'),
-          'top trigger: ' + (topUsageAttribution(providerMetrics, 'triggers') || 'none'),
+          buildRemoteObservabilityExecutionLinkLine('top team', topTeam, topTeam ? buildExecutionsHash({ search: topTeam }) : ''),
+          buildRemoteObservabilityExecutionLinkLine('top project', topProject, topProject ? buildExecutionsHash({ search: topProject }) : ''),
+          buildRemoteObservabilityExecutionLinkLine('top template', topTemplate, topTemplate ? buildExecutionsHash({ template: topTemplate }) : ''),
+          buildRemoteObservabilityExecutionLinkLine('top trigger', topTrigger, topTrigger ? buildExecutionsHash(buildExecutionTriggerRouteParams(topTrigger)) : ''),
         ],
       },
       {
@@ -7757,9 +7819,17 @@
       h4.textContent = title;
       card.appendChild(h4);
       lines.forEach(line => {
-        const row = document.createElement('div');
+        const row = document.createElement(line && typeof line === 'object' && line.href ? 'a' : 'div');
         row.className = 'instance-meta';
-        row.textContent = line;
+        if (line && typeof line === 'object') {
+          row.textContent = String(line.text || '');
+          if (line.href) {
+            row.classList.add('summary-link');
+            row.href = String(line.href);
+          }
+        } else {
+          row.textContent = line;
+        }
         card.appendChild(row);
       });
       wrap.appendChild(card);

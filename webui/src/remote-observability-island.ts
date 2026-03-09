@@ -28,11 +28,17 @@
         h('h4', { key: 'title' }, String(card.title || '')),
       ];
       lines.forEach((line, lineIndex) => {
+        const lineText = line && typeof line === 'object' ? String(line.text || '') : String(line || '');
+        const lineHref = line && typeof line === 'object' ? String(line.href || '') : '';
         cardChildren.push(
           h(
-            'div',
-            { className: 'instance-meta', key: 'line-' + String(lineIndex) },
-            String(line || ''),
+            lineHref ? 'a' : 'div',
+            {
+              className: 'instance-meta' + (lineHref ? ' summary-link' : ''),
+              key: 'line-' + String(lineIndex),
+              href: lineHref || undefined,
+            },
+            lineText,
           ),
         );
       });
