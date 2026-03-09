@@ -41,11 +41,13 @@ func handleProviderGovernanceResolve(w http.ResponseWriter, r *http.Request, req
 		return
 	}
 	emitRemoteAuditEvent(requestID, "provider_governance_resolve", hostID+":"+agentID, "success", map[string]interface{}{
-		"source":    resolution.Source,
-		"status":    resolution.Status,
-		"profileId": resolution.ProfileID,
-		"provider":  resolution.Provider,
-		"model":     resolution.Model,
+		"source":      resolution.Source,
+		"status":      resolution.Status,
+		"profileId":   resolution.ProfileID,
+		"provider":    resolution.Provider,
+		"model":       resolution.Model,
+		"driftState":  resolution.DriftState,
+		"driftReason": resolution.DriftReason,
 	})
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"requestId":  requestID,
@@ -88,60 +90,67 @@ func resolveProviderGovernanceForWorkers(workers []OrchestratorRequiredWorker) (
 			hostID = orchestratorLocalHostID
 		}
 		resolution := ProviderGovernanceResolution{
-			Source:  "none",
-			Status:  "unbound",
-			HostID:  hostID,
-			AgentID: agentID,
-			Message: "no provider binding matched",
+			Source:     "none",
+			Status:     "unbound",
+			HostID:     hostID,
+			AgentID:    agentID,
+			DriftState: "unbound",
+			Message:    "no provider binding matched",
 		}
 		if hostID == orchestratorLocalHostID {
 			out = append(out, resolution)
 			continue
 		}
 
-		binding, source, found := selectEffectiveProviderBinding(bindings, hostID, agentID)
-		if !found {
+		candidates := collectProviderGovernanceBindingCandidates(bindings, hostID, agentID)
+		if len(candidates) == 0 {
 			out = append(out, resolution)
 			continue
 		}
 
-		resolution.Source = source
-		resolution.BindingID = strings.TrimSpace(binding.ID)
-		resolution.BindingTargetType = strings.TrimSpace(binding.TargetType)
-		resolution.BindingTargetID = strings.TrimSpace(binding.TargetID)
-		resolution.SyncMode = strings.TrimSpace(binding.SyncMode)
-		resolution.ProfileID = strings.TrimSpace(binding.ProfileID)
-
-		profile, profileFound, profileErr := getProviderProfile(binding.ProfileID)
-		if profileErr != nil {
-			return nil, profileErr
+		trace := make([]ProviderGovernanceTraceEntry, 0, len(candidates))
+		for idx, candidate := range candidates {
+			entry, profile, profileFound, profileErr := buildProviderGovernanceTraceEntry(candidate.Binding, candidate.Source)
+			if profileErr != nil {
+				return nil, profileErr
+			}
+			if idx == 0 {
+				entry.Selected = true
+				resolution.Source = entry.Source
+				resolution.Status = entry.Status
+				resolution.BindingID = entry.BindingID
+				resolution.BindingTargetType = entry.BindingTargetType
+				resolution.BindingTargetID = entry.BindingTargetID
+				resolution.ProfileID = entry.ProfileID
+				resolution.ProfileName = entry.ProfileName
+				resolution.Provider = entry.Provider
+				resolution.Model = entry.Model
+				resolution.SyncMode = entry.SyncMode
+				resolution.Enabled = entry.Enabled
+				resolution.Message = entry.Message
+				if profileFound {
+					resolution.BaseURL = strings.TrimSpace(profile.BaseURL)
+					resolution.AuthRef = strings.TrimSpace(profile.AuthRef)
+				}
+			} else if entry.Status == "resolved" {
+				entry.Status = "shadowed"
+				entry.Message = "shadowed by higher precedence binding"
+			}
+			trace = append(trace, entry)
 		}
-		if !profileFound {
-			resolution.Status = "broken_profile"
-			resolution.Message = fmt.Sprintf("profile %s not found", strings.TrimSpace(binding.ProfileID))
-			out = append(out, resolution)
-			continue
-		}
-
-		resolution.Status = "resolved"
-		resolution.ProfileName = strings.TrimSpace(profile.Name)
-		resolution.Provider = strings.TrimSpace(profile.Provider)
-		resolution.Model = strings.TrimSpace(profile.Model)
-		resolution.BaseURL = strings.TrimSpace(profile.BaseURL)
-		resolution.AuthRef = strings.TrimSpace(profile.AuthRef)
-		resolution.Enabled = profile.Enabled
-		if !profile.Enabled {
-			resolution.Status = "disabled_profile"
-			resolution.Message = "bound profile is disabled"
-		} else {
-			resolution.Message = ""
-		}
+		resolution.Trace = trace
+		resolution.DriftState, resolution.DriftReason = deriveProviderGovernanceDriftState(trace)
 		out = append(out, resolution)
 	}
 	return out, nil
 }
 
-func selectEffectiveProviderBinding(bindings []ProviderBinding, hostID, agentID string) (ProviderBinding, string, bool) {
+type providerGovernanceBindingCandidate struct {
+	Binding ProviderBinding
+	Source  string
+}
+
+func collectProviderGovernanceBindingCandidates(bindings []ProviderBinding, hostID, agentID string) []providerGovernanceBindingCandidate {
 	trimmedHostID := strings.TrimSpace(hostID)
 	trimmedAgentID := strings.ToLower(strings.TrimSpace(agentID))
 	instanceMatches := make([]ProviderBinding, 0)
@@ -163,14 +172,96 @@ func selectEffectiveProviderBinding(bindings []ProviderBinding, hostID, agentID 
 		}
 	}
 	sortProviderBindingsByRecency(instanceMatches)
-	if len(instanceMatches) > 0 {
-		return instanceMatches[0], "instance", true
-	}
 	sortProviderBindingsByRecency(hostMatches)
-	if len(hostMatches) > 0 {
-		return hostMatches[0], "host", true
+	out := make([]providerGovernanceBindingCandidate, 0, 2)
+	if len(instanceMatches) > 0 {
+		out = append(out, providerGovernanceBindingCandidate{Binding: instanceMatches[0], Source: "instance"})
 	}
-	return ProviderBinding{}, "", false
+	if len(hostMatches) > 0 {
+		out = append(out, providerGovernanceBindingCandidate{Binding: hostMatches[0], Source: "host"})
+	}
+	return out
+}
+
+func buildProviderGovernanceTraceEntry(binding ProviderBinding, source string) (ProviderGovernanceTraceEntry, ProviderProfile, bool, error) {
+	entry := ProviderGovernanceTraceEntry{
+		Source:            strings.TrimSpace(source),
+		Status:            "resolved",
+		BindingID:         strings.TrimSpace(binding.ID),
+		BindingTargetType: strings.TrimSpace(binding.TargetType),
+		BindingTargetID:   strings.TrimSpace(binding.TargetID),
+		ProfileID:         strings.TrimSpace(binding.ProfileID),
+		SyncMode:          strings.TrimSpace(binding.SyncMode),
+	}
+	profile, found, err := getProviderProfile(binding.ProfileID)
+	if err != nil {
+		return ProviderGovernanceTraceEntry{}, ProviderProfile{}, false, err
+	}
+	if !found {
+		entry.Status = "broken_profile"
+		entry.Message = fmt.Sprintf("profile %s not found", strings.TrimSpace(binding.ProfileID))
+		return entry, ProviderProfile{}, false, nil
+	}
+	entry.ProfileName = strings.TrimSpace(profile.Name)
+	entry.Provider = strings.TrimSpace(profile.Provider)
+	entry.Model = strings.TrimSpace(profile.Model)
+	entry.Enabled = profile.Enabled
+	if !profile.Enabled {
+		entry.Status = "disabled_profile"
+		entry.Message = "bound profile is disabled"
+	}
+	return entry, profile, true, nil
+}
+
+func deriveProviderGovernanceDriftState(trace []ProviderGovernanceTraceEntry) (string, string) {
+	if len(trace) == 0 {
+		return "unbound", ""
+	}
+	selected := trace[0]
+	switch selected.Status {
+	case "broken_profile", "disabled_profile":
+		return selected.Status, strings.TrimSpace(selected.Message)
+	case "resolved":
+		if selected.Source == "instance" {
+			for _, candidate := range trace[1:] {
+				if candidate.Source != "host" {
+					continue
+				}
+				if bindingResolutionsDiffer(selected, candidate) {
+					reason := "instance binding overrides host binding"
+					if candidate.ProfileName != "" || candidate.ProfileID != "" {
+						reason += " (" + strings.TrimSpace(firstNonEmpty(candidate.ProfileName, candidate.ProfileID)) + ")"
+					}
+					return "override", reason
+				}
+			}
+		}
+		return "in_sync", ""
+	default:
+		return strings.TrimSpace(selected.Status), strings.TrimSpace(selected.Message)
+	}
+}
+
+func bindingResolutionsDiffer(selected, fallback ProviderGovernanceTraceEntry) bool {
+	if !strings.EqualFold(strings.TrimSpace(selected.ProfileID), strings.TrimSpace(fallback.ProfileID)) {
+		return true
+	}
+	if !strings.EqualFold(strings.TrimSpace(selected.Provider), strings.TrimSpace(fallback.Provider)) {
+		return true
+	}
+	if !strings.EqualFold(strings.TrimSpace(selected.Model), strings.TrimSpace(fallback.Model)) {
+		return true
+	}
+	return !strings.EqualFold(strings.TrimSpace(selected.SyncMode), strings.TrimSpace(fallback.SyncMode))
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func sortProviderBindingsByRecency(bindings []ProviderBinding) {

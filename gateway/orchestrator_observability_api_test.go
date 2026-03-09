@@ -40,10 +40,11 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 		},
 		Governance: OrchestratorExecutionGovernance{
 			ProviderResolutions: []ProviderGovernanceResolution{{
-				HostID:   hostID,
-				AgentID:  "zeroclaw",
-				Provider: "openrouter",
-				Model:    "anthropic/claude-3.7-sonnet",
+				HostID:     hostID,
+				AgentID:    "zeroclaw",
+				Provider:   "openrouter",
+				Model:      "anthropic/claude-3.7-sonnet",
+				DriftState: "in_sync",
 			}},
 		},
 		Results: []OrchestratorTaskResult{{
@@ -84,10 +85,11 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 		},
 		Governance: OrchestratorExecutionGovernance{
 			ProviderResolutions: []ProviderGovernanceResolution{{
-				HostID:   hostID,
-				AgentID:  "picoclaw",
-				Provider: "anthropic",
-				Model:    "claude-3-7-sonnet",
+				HostID:     hostID,
+				AgentID:    "picoclaw",
+				Provider:   "anthropic",
+				Model:      "claude-3-7-sonnet",
+				DriftState: "override",
 			}},
 		},
 		Outcome: OrchestratorExecutionOutcome{
@@ -221,6 +223,13 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 	resolved, _ := providers["resolvedFailures"].(map[string]interface{})
 	if got := int(anyToFloat(resolved["anthropic"])); got != 1 {
 		t.Fatalf("providers.resolvedFailures[anthropic]=%d want 1 providers=%+v", got, providers)
+	}
+	driftStates, _ := providers["driftStates"].(map[string]interface{})
+	if got := int(anyToFloat(driftStates["override"])); got != 1 {
+		t.Fatalf("providers.driftStates[override]=%d want 1 providers=%+v", got, providers)
+	}
+	if got := int(anyToFloat(driftStates["in_sync"])); got != 1 {
+		t.Fatalf("providers.driftStates[in_sync]=%d want 1 providers=%+v", got, providers)
 	}
 	if got := anyToFloat(providers["totalEstimatedCostUsd"]); got <= 0 {
 		t.Fatalf("providers.totalEstimatedCostUsd=%f want > 0 providers=%+v", got, providers)

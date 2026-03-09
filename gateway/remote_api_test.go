@@ -1523,6 +1523,30 @@ func TestProviderGovernanceResolveAndAudit(t *testing.T) {
 	if got := strings.TrimSpace(anyToString(resolution["syncMode"])); got != "manual" {
 		t.Fatalf("expected manual sync mode, got %q payload=%+v", got, resolvePayload)
 	}
+	if got := strings.TrimSpace(anyToString(resolution["driftState"])); got != "override" {
+		t.Fatalf("expected driftState=override, got %q payload=%+v", got, resolvePayload)
+	}
+	if got := strings.TrimSpace(anyToString(resolution["driftReason"])); got == "" {
+		t.Fatalf("expected driftReason in payload=%+v", resolvePayload)
+	}
+	traceEntries, _ := resolution["trace"].([]interface{})
+	if len(traceEntries) != 2 {
+		t.Fatalf("expected 2 trace entries, got %d payload=%+v", len(traceEntries), resolvePayload)
+	}
+	trace0, _ := traceEntries[0].(map[string]interface{})
+	trace1, _ := traceEntries[1].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(trace0["source"])); got != "instance" {
+		t.Fatalf("expected first trace source=instance, got %q trace=%+v", got, trace0)
+	}
+	if selected, _ := trace0["selected"].(bool); !selected {
+		t.Fatalf("expected first trace selected=true trace=%+v", trace0)
+	}
+	if got := strings.TrimSpace(anyToString(trace1["source"])); got != "host" {
+		t.Fatalf("expected second trace source=host, got %q trace=%+v", got, trace1)
+	}
+	if got := strings.TrimSpace(anyToString(trace1["status"])); got != "shadowed" {
+		t.Fatalf("expected second trace status=shadowed, got %q trace=%+v", got, trace1)
+	}
 
 	rawAudit, err := os.ReadFile(auditPath)
 	if err != nil {
