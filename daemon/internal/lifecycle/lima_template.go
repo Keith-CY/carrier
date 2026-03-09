@@ -20,6 +20,13 @@ var (
 	isolationUserHomeDir            = os.UserHomeDir
 	isolationRandReader   io.Reader = rand.Reader
 	isolationEvalSymlinks           = filepath.EvalSymlinks
+	isolationReadFile               = os.ReadFile
+	isolationLimaImageTemplateCandidates = func() []string {
+		return []string{
+			"/opt/homebrew/share/lima/templates/_images/ubuntu-lts.yaml",
+			"/usr/local/share/lima/templates/_images/ubuntu-lts.yaml",
+		}
+	}
 )
 
 type limaTemplate struct {
@@ -35,6 +42,8 @@ type limaTemplate struct {
 
 type limaImage struct {
 	Location string `yaml:"location"`
+	Arch     string `yaml:"arch,omitempty"`
+	Digest   string `yaml:"digest,omitempty"`
 }
 
 type limaMount struct {
@@ -222,10 +231,16 @@ func generateLimaTemplate(instanceName, workspacePath string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	images := []limaImage{
+		{Location: "ubuntu-lts"},
+	}
+	if strings.EqualFold(strings.TrimSpace(isolationRuntimeGOOS), "darwin") {
+		if explicit := resolveDarwinLimaUbuntuLTSImages(); len(explicit) > 0 {
+			images = explicit
+		}
+	}
 	template := limaTemplate{
-		Images: []limaImage{
-			{Location: "ubuntu-lts"},
-		},
+		Images: images,
 		Mounts: []limaMount{
 			{Location: resolvedPath, Writable: true},
 		},
@@ -251,6 +266,41 @@ apt-get install -y -qq bubblewrap git curl tar bash
 	}
 	header := []byte("# Managed by Carrier - do not edit manually\n")
 	return append(header, body...), nil
+}
+
+func resolveDarwinLimaUbuntuLTSImages() []limaImage {
+	for _, candidate := range isolationLimaImageTemplateCandidates() {
+		path := strings.TrimSpace(candidate)
+		if path == "" {
+			continue
+		}
+		raw, err := isolationReadFile(path)
+		if err != nil {
+			continue
+		}
+		var parsed struct {
+			Images []limaImage `yaml:"images"`
+		}
+		if err := yaml.Unmarshal(raw, &parsed); err != nil {
+			continue
+		}
+		images := make([]limaImage, 0, len(parsed.Images))
+		for _, image := range parsed.Images {
+			location := strings.TrimSpace(image.Location)
+			if location == "" {
+				continue
+			}
+			images = append(images, limaImage{
+				Location: location,
+				Arch:     strings.TrimSpace(image.Arch),
+				Digest:   strings.TrimSpace(image.Digest),
+			})
+		}
+		if len(images) > 0 {
+			return images
+		}
+	}
+	return nil
 }
 
 func writeLimaTemplate(instanceName, workspacePath string) (string, error) {

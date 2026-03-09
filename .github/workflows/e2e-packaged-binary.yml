@@ -541,6 +541,8 @@ jobs:
     needs: [build-packages, binary-smoke]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    environment:
+      name: live_smoke
     timeout-minutes: 90
     steps:
       - name: Checkout
@@ -554,6 +556,10 @@ jobs:
 
       - name: Run remote VPS agent suite via packaged binary
         shell: bash
+        env:
+          CARRIER_LIVE_PROVIDER: openrouter
+          CARRIER_LIVE_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CARRIER_LIVE_MODEL: ${{ vars.CARRIER_LIVE_MODEL_OPENROUTER }}
         run: |
           set -euo pipefail
 
@@ -649,3 +655,5 @@ jobs:
             ${{ runner.temp }}/carrier-gateway.log
             ${{ runner.temp }}/remote-vps-suite.log
             ${{ runner.temp }}/remote-vps-container.log
+            ${{ runner.temp }}/carrier-remote-vps-suite.*
+            /tmp/carrier-remote-vps-suite.*

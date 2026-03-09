@@ -231,6 +231,12 @@ func (c *DaemonClient) GetStatus(ctx context.Context, agentID, actor, requestID 
 	if wrapped.Statuses != nil {
 		return wrapped.Statuses, nil
 	}
+	var single AgentState
+	if err := json.Unmarshal(raw, &single); err == nil {
+		if strings.TrimSpace(single.ID) != "" {
+			return []AgentState{single}, nil
+		}
+	}
 	var arr []AgentState
 	if err := json.Unmarshal(raw, &arr); err == nil {
 		return arr, nil

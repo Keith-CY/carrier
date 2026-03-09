@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -53,6 +54,35 @@ func TestHandleOrchestratorPlans(t *testing.T) {
 	taskUnits, _ := plan["taskUnits"].([]interface{})
 	if len(taskUnits) != 2 {
 		t.Fatalf("taskUnits = %d, want 2", len(taskUnits))
+	}
+}
+
+func TestEnsureOrchestratorLocalAgentReadyUsesIsolationStartOptions(t *testing.T) {
+	var startIsolation any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/agents":
+			_, _ = w.Write([]byte(`{"agents":[{"id":"zeroclaw","installState":"installed","runtimeState":"stopped","isolated":true}]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/zeroclaw/start":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err == nil {
+				startIsolation = payload["isolation"]
+			}
+			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/agents/zeroclaw/status":
+			_, _ = w.Write([]byte(`{"statuses":[{"id":"zeroclaw","runtimeState":"running"}]}`))
+		default:
+			t.Fatalf("unexpected daemon request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewDaemonClient(server.URL, "", time.Second)
+	if err := ensureOrchestratorLocalAgentReady(context.Background(), client, "exec-1", "zeroclaw"); err != nil {
+		t.Fatalf("ensureOrchestratorLocalAgentReady returned error: %v", err)
+	}
+	if startIsolation != true {
+		t.Fatalf("expected isolated local worker start to forward isolation=true, got %#v", startIsolation)
 	}
 }
 
