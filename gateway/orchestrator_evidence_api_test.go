@@ -349,6 +349,87 @@ func TestHandleOrchestratorExecutionEvidenceZipAndNegativeCases(t *testing.T) {
 	}
 }
 
+func TestHandleGatewayAuditExportSupportsMetadataFilters(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("CARRIER_GATEWAY_AUDIT_LOG", filepath.Join(tmp, "gateway-audit.jsonl"))
+
+	mux := buildRemoteFeatureMuxWithConfigAndDaemonHandlers(t, &GatewayConfig{
+		APIToken:                  "test-gateway-token",
+		MaxCommandBodyBytes:       64 * 1024,
+		RemoteControlPlaneEnabled: true,
+		RemoteChatEnabled:         true,
+		ProviderBindingEnabled:    true,
+	}, nil)
+
+	for _, execution := range []OrchestratorExecution{
+		{
+			ID:            "exec-audit-platform",
+			Goal:          "release note prep",
+			Team:          "platform",
+			Project:       "carrier",
+			TemplateID:    "pr-triage",
+			TriggerSource: "github",
+			TriggerID:     "trigger-gh-1",
+			ApprovalScope: "infrastructure_only",
+			Status:        OrchestratorExecutionStatusCompleted,
+			CreatedAt:     nowTimestamp(),
+			UpdatedAt:     nowTimestamp(),
+		},
+		{
+			ID:            "exec-audit-sre",
+			Goal:          "incident diagnosis",
+			Team:          "sre",
+			Project:       "checkout",
+			TemplateID:    "incident-diagnosis",
+			TriggerSource: "schedule",
+			TriggerID:     "trigger-nightly",
+			ApprovalScope: "infrastructure_only",
+			Status:        OrchestratorExecutionStatusFailed,
+			CreatedAt:     nowTimestamp(),
+			UpdatedAt:     nowTimestamp(),
+		},
+	} {
+		if _, err := upsertOrchestratorExecution(execution); err != nil {
+			t.Fatalf("upsertOrchestratorExecution(%s) failed: %v", execution.ID, err)
+		}
+	}
+
+	emitRemoteAuditEvent("req-1", "orchestrator_execution_create", "exec-audit-platform", "ok", map[string]interface{}{
+		"executionId": "exec-audit-platform",
+	})
+	emitRemoteAuditEvent("req-2", "orchestrator_execution_create", "exec-audit-sre", "ok", map[string]interface{}{
+		"executionId": "exec-audit-sre",
+	})
+
+	platformRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/audit/export?team=platform&templateId=pr-triage", "")
+	if platformRec.Code != http.StatusOK {
+		t.Fatalf("expected filtered audit export status 200, got %d body=%s", platformRec.Code, platformRec.Body.String())
+	}
+	platformPayload := decodeJSONMap(t, platformRec)
+	platformEvents, _ := platformPayload["events"].([]interface{})
+	if len(platformEvents) != 1 {
+		t.Fatalf("filtered platform events len=%d want 1 payload=%+v", len(platformEvents), platformPayload)
+	}
+	platformEvent, _ := platformEvents[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(platformEvent["target"])); got != "exec-audit-platform" {
+		t.Fatalf("filtered platform target=%q want exec-audit-platform event=%+v", got, platformEvent)
+	}
+
+	triggerRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/audit/export?trigger=schedule:trigger-nightly", "")
+	if triggerRec.Code != http.StatusOK {
+		t.Fatalf("expected trigger audit export status 200, got %d body=%s", triggerRec.Code, triggerRec.Body.String())
+	}
+	triggerPayload := decodeJSONMap(t, triggerRec)
+	triggerEvents, _ := triggerPayload["events"].([]interface{})
+	if len(triggerEvents) != 1 {
+		t.Fatalf("filtered trigger events len=%d want 1 payload=%+v", len(triggerEvents), triggerPayload)
+	}
+	triggerEvent, _ := triggerEvents[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(triggerEvent["target"])); got != "exec-audit-sre" {
+		t.Fatalf("filtered trigger target=%q want exec-audit-sre event=%+v", got, triggerEvent)
+	}
+}
+
 func keysOfStringMap(values map[string]string) []string {
 	keys := make([]string, 0, len(values))
 	for key := range values {

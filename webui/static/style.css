@@ -711,6 +711,17 @@ button:disabled,
   line-height: 1.35;
 }
 
+.summary-link {
+  display: block;
+  color: var(--text-dim);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.summary-link:hover {
+  color: var(--text);
+}
+
 .agent-select-list {
   list-style: none;
   margin-top: 10px;

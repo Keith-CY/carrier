@@ -195,6 +195,13 @@ func TestParseExecutionsCommandArgs(t *testing.T) {
 	if evidenceOpts.Action != "evidence" || evidenceOpts.ExecutionID != "exec-101" || evidenceOpts.Format != "zip" || evidenceOpts.OutputPath != "bundle.zip" {
 		t.Fatalf("unexpected evidence opts: %+v", evidenceOpts)
 	}
+	evidenceOpenOpts, err := parseExecutionsCommandArgs([]string{"evidence", "exec-101", "--open"})
+	if err != nil {
+		t.Fatalf("parseExecutionsCommandArgs(evidence --open) error: %v", err)
+	}
+	if !evidenceOpenOpts.Open {
+		t.Fatalf("expected evidence open flag, got %+v", evidenceOpenOpts)
+	}
 
 	auditOpts, err := parseExecutionsCommandArgs([]string{"audit", "exec-102", "--output", "audit.json"})
 	if err != nil {
@@ -202,6 +209,13 @@ func TestParseExecutionsCommandArgs(t *testing.T) {
 	}
 	if auditOpts.Action != "audit" || auditOpts.ExecutionID != "exec-102" || auditOpts.OutputPath != "audit.json" {
 		t.Fatalf("unexpected audit opts: %+v", auditOpts)
+	}
+	auditOpenOpts, err := parseExecutionsCommandArgs([]string{"audit", "exec-102", "--open"})
+	if err != nil {
+		t.Fatalf("parseExecutionsCommandArgs(audit --open) error: %v", err)
+	}
+	if !auditOpenOpts.Open {
+		t.Fatalf("expected audit open flag, got %+v", auditOpenOpts)
 	}
 
 	authorizeOpts, err := parseExecutionsCommandArgs([]string{"authorize", "exec-66", "--policy-approve", "--json"})
@@ -697,6 +711,14 @@ func TestRunExecutionArtifactsCommand(t *testing.T) {
 }
 
 func TestRunExecutionEvidenceCommand(t *testing.T) {
+	originalOpen := openPathWithDefaultApp
+	t.Cleanup(func() { openPathWithDefaultApp = originalOpen })
+	var openedPaths []string
+	openPathWithDefaultApp = func(path string) error {
+		openedPaths = append(openedPaths, path)
+		return nil
+	}
+
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/healthz":
@@ -748,9 +770,32 @@ func TestRunExecutionEvidenceCommand(t *testing.T) {
 	if got := string(data); got != "PK\x03\x04mock-zip" {
 		t.Fatalf("unexpected evidence zip bytes: %q", got)
 	}
+
+	autoOpenPath := filepath.Join(t.TempDir(), "auto-open-evidence.zip")
+	out.Reset()
+	if err := runOrchestrateCommand(&out, orchestrateCommandOptions{
+		Action:      "evidence",
+		ExecutionID: "exec-evidence",
+		Format:      "zip",
+		OutputPath:  autoOpenPath,
+		Open:        true,
+	}); err != nil {
+		t.Fatalf("runOrchestrateCommand(evidence open) error: %v", err)
+	}
+	if len(openedPaths) != 1 || openedPaths[0] != autoOpenPath {
+		t.Fatalf("unexpected opened paths: %+v", openedPaths)
+	}
 }
 
 func TestRunExecutionAuditCommand(t *testing.T) {
+	originalOpen := openPathWithDefaultApp
+	t.Cleanup(func() { openPathWithDefaultApp = originalOpen })
+	var openedPaths []string
+	openPathWithDefaultApp = func(path string) error {
+		openedPaths = append(openedPaths, path)
+		return nil
+	}
+
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/healthz":
@@ -799,5 +844,19 @@ func TestRunExecutionAuditCommand(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"executionId": "exec-audit"`) {
 		t.Fatalf("unexpected audit json: %q", string(data))
+	}
+
+	autoOpenPath := filepath.Join(t.TempDir(), "exec-audit-open.json")
+	out.Reset()
+	if err := runOrchestrateCommand(&out, orchestrateCommandOptions{
+		Action:      "audit",
+		ExecutionID: "exec-audit",
+		OutputPath:  autoOpenPath,
+		Open:        true,
+	}); err != nil {
+		t.Fatalf("runOrchestrateCommand(audit open) error: %v", err)
+	}
+	if len(openedPaths) != 1 || openedPaths[0] != autoOpenPath {
+		t.Fatalf("unexpected opened paths: %+v", openedPaths)
 	}
 }

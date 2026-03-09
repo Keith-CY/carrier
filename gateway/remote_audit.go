@@ -22,6 +22,14 @@ type gatewayAuditEvent struct {
 	Details   map[string]interface{} `json:"details,omitempty"`
 }
 
+type gatewayAuditExecutionFilter struct {
+	ExecutionID string
+	Team        string
+	Project     string
+	TemplateID  string
+	Trigger     string
+}
+
 var gatewayAuditMu sync.Mutex
 
 func gatewayAuditLogPath() (string, error) {
@@ -94,8 +102,12 @@ func sanitizeAuditDetails(details map[string]interface{}) map[string]interface{}
 }
 
 func listGatewayAuditEventsForExecution(executionID string) ([]gatewayAuditEvent, error) {
-	id := strings.TrimSpace(executionID)
-	if id == "" {
+	return listGatewayAuditEventsForFilter(gatewayAuditExecutionFilter{ExecutionID: executionID})
+}
+
+func listGatewayAuditEventsForFilter(filter gatewayAuditExecutionFilter) ([]gatewayAuditEvent, error) {
+	normalized := normalizeGatewayAuditExecutionFilter(filter)
+	if gatewayAuditExecutionFilterIsEmpty(normalized) {
 		return nil, nil
 	}
 	path, err := gatewayAuditLogPath()
@@ -106,9 +118,13 @@ func listGatewayAuditEventsForExecution(executionID string) ([]gatewayAuditEvent
 	if err != nil {
 		return nil, err
 	}
+	executionIDs, err := resolveGatewayAuditExecutionFilterIDs(normalized)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]gatewayAuditEvent, 0, len(events))
 	for _, event := range events {
-		if gatewayAuditEventMatchesExecution(event, id) {
+		if gatewayAuditEventMatchesAnyExecution(event, executionIDs) {
 			out = append(out, event)
 		}
 	}
@@ -156,15 +172,83 @@ func gatewayAuditEventMatchesExecution(event gatewayAuditEvent, executionID stri
 	if id == "" {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(event.Target), id) {
+	return gatewayAuditEventMatchesAnyExecution(event, map[string]struct{}{id: {}})
+}
+
+func gatewayAuditEventMatchesAnyExecution(event gatewayAuditEvent, executionIDs map[string]struct{}) bool {
+	if len(executionIDs) == 0 {
+		return false
+	}
+	if _, ok := executionIDs[strings.TrimSpace(event.Target)]; ok {
 		return true
 	}
 	for _, key := range []string{"executionId", "sourceExecutionId", "parentExecutionId"} {
-		if strings.EqualFold(auditDetailString(event.Details, key), id) {
+		if _, ok := executionIDs[auditDetailString(event.Details, key)]; ok {
 			return true
 		}
 	}
 	return false
+}
+
+func normalizeGatewayAuditExecutionFilter(in gatewayAuditExecutionFilter) gatewayAuditExecutionFilter {
+	return gatewayAuditExecutionFilter{
+		ExecutionID: strings.TrimSpace(in.ExecutionID),
+		Team:        strings.TrimSpace(in.Team),
+		Project:     strings.TrimSpace(in.Project),
+		TemplateID:  strings.TrimSpace(in.TemplateID),
+		Trigger:     strings.TrimSpace(in.Trigger),
+	}
+}
+
+func gatewayAuditExecutionFilterIsEmpty(filter gatewayAuditExecutionFilter) bool {
+	return filter.ExecutionID == "" &&
+		filter.Team == "" &&
+		filter.Project == "" &&
+		filter.TemplateID == "" &&
+		filter.Trigger == ""
+}
+
+func resolveGatewayAuditExecutionFilterIDs(filter gatewayAuditExecutionFilter) (map[string]struct{}, error) {
+	executions, err := listOrchestratorExecutions()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]struct{}{}
+	for _, execution := range executions {
+		if !gatewayAuditExecutionMatchesFilter(execution, filter) {
+			continue
+		}
+		id := strings.TrimSpace(execution.ID)
+		if id != "" {
+			out[id] = struct{}{}
+		}
+	}
+	return out, nil
+}
+
+func gatewayAuditExecutionMatchesFilter(execution OrchestratorExecution, filter gatewayAuditExecutionFilter) bool {
+	if filter.ExecutionID != "" && !strings.EqualFold(strings.TrimSpace(execution.ID), filter.ExecutionID) {
+		return false
+	}
+	if filter.Team != "" && !strings.EqualFold(strings.TrimSpace(execution.Team), filter.Team) {
+		return false
+	}
+	if filter.Project != "" && !strings.EqualFold(strings.TrimSpace(execution.Project), filter.Project) {
+		return false
+	}
+	if filter.TemplateID != "" && !strings.EqualFold(strings.TrimSpace(execution.TemplateID), filter.TemplateID) {
+		return false
+	}
+	if filter.Trigger != "" {
+		triggerFilter := strings.ToLower(strings.TrimSpace(filter.Trigger))
+		source := strings.ToLower(strings.TrimSpace(execution.TriggerSource))
+		triggerID := strings.ToLower(strings.TrimSpace(execution.TriggerID))
+		label, _ := executionTriggerAttributionKey(execution)
+		if triggerFilter != source && triggerFilter != triggerID && triggerFilter != strings.ToLower(strings.TrimSpace(label)) {
+			return false
+		}
+	}
+	return true
 }
 
 func auditDetailString(details map[string]interface{}, key string) string {

@@ -25,7 +25,13 @@
         h("h4", { key: "title" }, String(card.title || ""))
       ];
       lines.forEach((line, lineIndex) => {
-        cardChildren.push(h("div", { className: "instance-meta", key: "line-" + String(lineIndex) }, String(line || "")));
+        const lineText = line && typeof line === "object" ? String(line.text || "") : String(line || "");
+        const lineHref = line && typeof line === "object" ? String(line.href || "") : "";
+        cardChildren.push(h(lineHref ? "a" : "div", {
+          className: "instance-meta" + (lineHref ? " summary-link" : ""),
+          key: "line-" + String(lineIndex),
+          href: lineHref || undefined
+        }, lineText));
       });
       return h("div", { className: "agent-card", key: "card-" + String(cardIndex) }, cardChildren);
     });

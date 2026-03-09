@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test';
-import { loginWithToken, mockAPIs } from './helpers';
+import { loginWithToken, mockAPIs, mockOrchestrationAPIs } from './helpers';
 
 test.describe('Remote Observability', () => {
   test('supports operation-group filtering, anomaly-only mode, and failure-first sorting', async ({ page }) => {
     await mockAPIs(page);
+    await mockOrchestrationAPIs(page);
 
     let metricCalls = 0;
     let orchestratorMetricCalls = 0;
@@ -222,5 +223,64 @@ test.describe('Remote Observability', () => {
     await expect(page.locator('#remote-observability-summary')).toContainText('ask: 0');
     await expect(page.locator('#remote-observability-status')).toContainText('Updated at 2026-02-25T09:00:00Z');
     await expect(page.locator('#remote-observability-status')).toContainText('rollout=healthy');
+  });
+
+  test('cost attribution cards drill down into filtered executions', async ({ page }) => {
+    await mockAPIs(page);
+    await mockOrchestrationAPIs(page);
+
+    await page.route('**/api/v1/remote/metrics', async (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          result: 'ok',
+          metrics: {
+            timestamp: '2026-02-25T08:00:00Z',
+            totals: { total: 1, success: 1, failure: 0, successRate: 1, avgLatencyMs: 100, minLatencyMs: 100, maxLatencyMs: 100 },
+            repair: {},
+            chatStream: {},
+            rollout: { state: 'healthy', canPromote: true, reasons: [] },
+            operations: {},
+          },
+        }),
+      });
+    });
+    await page.route('**/api/v1/orchestrator/metrics', async (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          result: 'ok',
+          metrics: {
+            timestamp: '2026-02-25T08:00:00Z',
+            executions: { total: 4, running: 1, completed: 2, failed: 1, retryCount: 3 },
+            workers: { total: 2, busy: 1, ready: 1, error: 0, stale: 0 },
+            providers: {
+              requestedFailures: {},
+              resolvedFailures: {},
+              driftStates: { in_sync: 3 },
+              totalEstimatedCostUsd: 0.0041,
+              attribution: {
+                teams: [{ label: 'platform', executions: 2, successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0026 }],
+                projects: [{ label: 'carrier', executions: 2, successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0026 }],
+                templates: [{ label: 'pr-triage', executions: 2, successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0026 }],
+                triggers: [{ label: 'github:trigger-gh-1', executions: 2, successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0026 }],
+              },
+              aggregates: [],
+              models: [],
+            },
+            policies: { allow: 2, ask: 1, deny: 0 },
+            queue: { queuedTasks: 0 },
+          },
+        }),
+      });
+    });
+
+    await loginWithToken(page, '/#/remote-observability');
+    await page.click('#remote-observability-summary .agent-card:has(h4:text("Cost Attribution")) .summary-link:has-text("top team: platform")');
+    await expect.poll(() => page.url()).toContain('#/executions?search=platform');
+    await expect(page.locator('#executions-list')).toContainText('platform');
+    await expect(page.locator('#executions-list')).not.toContainText('sre');
   });
 });

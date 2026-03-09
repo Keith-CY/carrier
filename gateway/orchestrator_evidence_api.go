@@ -134,17 +134,28 @@ func handleGatewayAuditExport(w http.ResponseWriter, r *http.Request, requestID 
 	}
 
 	executionID := strings.TrimSpace(r.URL.Query().Get("executionId"))
-	if executionID == "" {
-		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "executionId is required"))
+	filter := gatewayAuditExecutionFilter{
+		ExecutionID: executionID,
+		Team:        strings.TrimSpace(r.URL.Query().Get("team")),
+		Project:     strings.TrimSpace(r.URL.Query().Get("project")),
+		TemplateID:  strings.TrimSpace(r.URL.Query().Get("templateId")),
+		Trigger:     strings.TrimSpace(r.URL.Query().Get("trigger")),
+	}
+	if gatewayAuditExecutionFilterIsEmpty(normalizeGatewayAuditExecutionFilter(filter)) {
+		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "executionId, team, project, templateId, or trigger is required"))
 		return
 	}
-	events, err := listGatewayAuditEventsForExecution(executionID)
+	events, err := listGatewayAuditEventsForFilter(filter)
 	if err != nil {
 		writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load gateway audit events", "list gateway audit events for execution", err)
 		return
 	}
 	emitRemoteAuditEvent(requestID, "gateway_audit_export", executionID, "ok", map[string]interface{}{
-		"count": len(events),
+		"count":      len(events),
+		"team":       filter.Team,
+		"project":    filter.Project,
+		"templateId": filter.TemplateID,
+		"trigger":    filter.Trigger,
 	})
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"requestId":   requestID,
