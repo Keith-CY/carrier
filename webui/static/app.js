@@ -7199,6 +7199,7 @@
         requestedFailures: providers.requestedFailures && typeof providers.requestedFailures === "object" ? providers.requestedFailures : {},
         resolvedFailures: providers.resolvedFailures && typeof providers.resolvedFailures === "object" ? providers.resolvedFailures : {},
         driftStates: providers.driftStates && typeof providers.driftStates === "object" ? providers.driftStates : {},
+        attribution: providers.attribution && typeof providers.attribution === "object" ? providers.attribution : {},
         totalEstimatedCostUsd: toFiniteNumber(providers.totalEstimatedCostUsd, 0),
         aggregates: Array.isArray(providers.aggregates) ? providers.aggregates : [],
         models: Array.isArray(providers.models) ? providers.models : []
@@ -7249,6 +7250,27 @@
       return left.localeCompare(right);
     });
     return ordered[0].model;
+  }
+  function topUsageAttribution(providerMetrics, key) {
+    const attribution = providerMetrics && providerMetrics.attribution && typeof providerMetrics.attribution === "object" ? providerMetrics.attribution : {};
+    const items = Array.isArray(attribution[key]) ? attribution[key] : [];
+    if (!items.length)
+      return "";
+    const ordered = items.map((item) => ({
+      label: String(item && item.label ? item.label : "").trim(),
+      estimatedCostUsd: toFiniteNumber(item && item.estimatedCostUsd, 0),
+      executions: toFiniteNumber(item && item.executions, 0)
+    })).filter((item) => item.label);
+    if (!ordered.length)
+      return "";
+    ordered.sort((a, b) => {
+      if (b.estimatedCostUsd !== a.estimatedCostUsd)
+        return b.estimatedCostUsd - a.estimatedCostUsd;
+      if (b.executions !== a.executions)
+        return b.executions - a.executions;
+      return a.label.localeCompare(b.label);
+    });
+    return ordered[0].label;
   }
   function classifyRemoteOperationGroup(operationName) {
     const name = String(operationName || "").trim().toLowerCase();
@@ -7418,6 +7440,15 @@
           "top provider: " + (topProviderUsage(providerMetrics) || "none"),
           "top model: " + (topModelUsage(providerMetrics) || "none"),
           "drift: " + formatMetricsBreakdown(providerMetrics.driftStates)
+        ]
+      },
+      {
+        title: "Cost Attribution",
+        lines: [
+          "top team: " + (topUsageAttribution(providerMetrics, "teams") || "none"),
+          "top project: " + (topUsageAttribution(providerMetrics, "projects") || "none"),
+          "top template: " + (topUsageAttribution(providerMetrics, "templates") || "none"),
+          "top trigger: " + (topUsageAttribution(providerMetrics, "triggers") || "none")
         ]
       },
       {

@@ -38,9 +38,27 @@ type orchestratorProviderMetricsSnapshot struct {
 	RequestedFailures     map[string]int                               `json:"requestedFailures"`
 	ResolvedFailures      map[string]int                               `json:"resolvedFailures"`
 	DriftStates           map[string]int                               `json:"driftStates,omitempty"`
+	Attribution           orchestratorProviderAttributionSnapshot      `json:"attribution,omitempty"`
 	Aggregates            []orchestratorProviderAggregateSnapshot      `json:"aggregates,omitempty"`
 	Models                []orchestratorProviderModelAggregateSnapshot `json:"models,omitempty"`
 	TotalEstimatedCostUSD float64                                      `json:"totalEstimatedCostUsd,omitempty"`
+}
+
+type orchestratorProviderAttributionSnapshot struct {
+	Teams     []orchestratorUsageAttributionAggregateSnapshot `json:"teams,omitempty"`
+	Projects  []orchestratorUsageAttributionAggregateSnapshot `json:"projects,omitempty"`
+	Templates []orchestratorUsageAttributionAggregateSnapshot `json:"templates,omitempty"`
+	Triggers  []orchestratorUsageAttributionAggregateSnapshot `json:"triggers,omitempty"`
+}
+
+type orchestratorUsageAttributionAggregateSnapshot struct {
+	Key              string  `json:"key"`
+	Label            string  `json:"label"`
+	Executions       int     `json:"executions"`
+	Successes        int     `json:"successes"`
+	Failures         int     `json:"failures"`
+	AvgLatencyMs     int64   `json:"avgLatencyMs,omitempty"`
+	EstimatedCostUSD float64 `json:"estimatedCostUsd,omitempty"`
 }
 
 type orchestratorProviderAggregateSnapshot struct {
@@ -126,6 +144,18 @@ func buildOrchestratorMetricsSnapshot(executions []OrchestratorExecution, leases
 	modelAggregates := map[string]*orchestratorProviderModelAggregateSnapshot{}
 	modelLatencyTotals := map[string]int64{}
 	modelLatencyCounts := map[string]int64{}
+	teamAttributions := map[string]*orchestratorUsageAttributionAggregateSnapshot{}
+	teamLatencyTotals := map[string]int64{}
+	teamLatencyCounts := map[string]int64{}
+	projectAttributions := map[string]*orchestratorUsageAttributionAggregateSnapshot{}
+	projectLatencyTotals := map[string]int64{}
+	projectLatencyCounts := map[string]int64{}
+	templateAttributions := map[string]*orchestratorUsageAttributionAggregateSnapshot{}
+	templateLatencyTotals := map[string]int64{}
+	templateLatencyCounts := map[string]int64{}
+	triggerAttributions := map[string]*orchestratorUsageAttributionAggregateSnapshot{}
+	triggerLatencyTotals := map[string]int64{}
+	triggerLatencyCounts := map[string]int64{}
 	policyMetrics := orchestratorPolicyMetricsSnapshot{}
 
 	var latencyTotal int64
@@ -216,6 +246,12 @@ func buildOrchestratorMetricsSnapshot(executions []OrchestratorExecution, leases
 					modelLatencyCounts[modelKey] += taskCount
 				}
 			}
+
+			accumulateUsageAttribution(teamAttributions, teamLatencyTotals, teamLatencyCounts, execution.Team, execution.Team, resolution)
+			accumulateUsageAttribution(projectAttributions, projectLatencyTotals, projectLatencyCounts, execution.Project, execution.Project, resolution)
+			accumulateUsageAttribution(templateAttributions, templateLatencyTotals, templateLatencyCounts, execution.TemplateID, execution.TemplateID, resolution)
+			triggerKey, triggerLabel := executionTriggerAttributionKey(execution)
+			accumulateUsageAttribution(triggerAttributions, triggerLatencyTotals, triggerLatencyCounts, triggerKey, triggerLabel, resolution)
 		}
 
 		if !executionHasProviderFailure(execution) {
@@ -273,6 +309,12 @@ func buildOrchestratorMetricsSnapshot(executions []OrchestratorExecution, leases
 		return providerMetrics.Models[i].EstimatedCostUSD > providerMetrics.Models[j].EstimatedCostUSD
 	})
 	providerMetrics.TotalEstimatedCostUSD = roundProviderAggregateCost(providerMetrics.TotalEstimatedCostUSD)
+	providerMetrics.Attribution = orchestratorProviderAttributionSnapshot{
+		Teams:     flattenUsageAttributionAggregates(teamAttributions, teamLatencyTotals, teamLatencyCounts),
+		Projects:  flattenUsageAttributionAggregates(projectAttributions, projectLatencyTotals, projectLatencyCounts),
+		Templates: flattenUsageAttributionAggregates(templateAttributions, templateLatencyTotals, templateLatencyCounts),
+		Triggers:  flattenUsageAttributionAggregates(triggerAttributions, triggerLatencyTotals, triggerLatencyCounts),
+	}
 
 	for _, lease := range markedLeases {
 		workerMetrics.Total++
@@ -310,6 +352,83 @@ func roundProviderAggregateCost(value float64) float64 {
 		return 0
 	}
 	return math.Round(value*1_000_000) / 1_000_000
+}
+
+func accumulateUsageAttribution(
+	target map[string]*orchestratorUsageAttributionAggregateSnapshot,
+	latencyTotals map[string]int64,
+	latencyCounts map[string]int64,
+	key string,
+	label string,
+	resolution ProviderGovernanceResolution,
+) {
+	trimmedKey := strings.TrimSpace(key)
+	trimmedLabel := strings.TrimSpace(label)
+	if trimmedKey == "" || trimmedLabel == "" {
+		return
+	}
+	item := target[trimmedKey]
+	if item == nil {
+		item = &orchestratorUsageAttributionAggregateSnapshot{
+			Key:   trimmedKey,
+			Label: trimmedLabel,
+		}
+		target[trimmedKey] = item
+	}
+	item.Executions++
+	item.Successes += resolution.SuccessfulTasks
+	item.Failures += resolution.FailedTasks
+	item.EstimatedCostUSD += resolution.EstimatedCostUSD
+	taskCount := int64(resolution.SuccessfulTasks + resolution.FailedTasks)
+	if resolution.AvgLatencyMs > 0 && taskCount > 0 {
+		latencyTotals[trimmedKey] += resolution.AvgLatencyMs * taskCount
+		latencyCounts[trimmedKey] += taskCount
+	}
+}
+
+func executionTriggerAttributionKey(execution OrchestratorExecution) (string, string) {
+	source := strings.TrimSpace(execution.TriggerSource)
+	triggerID := strings.TrimSpace(execution.TriggerID)
+	switch {
+	case source != "" && triggerID != "":
+		label := source + ":" + triggerID
+		return label, label
+	case source != "":
+		return source, source
+	case triggerID != "":
+		return triggerID, triggerID
+	default:
+		return "", ""
+	}
+}
+
+func flattenUsageAttributionAggregates(
+	input map[string]*orchestratorUsageAttributionAggregateSnapshot,
+	latencyTotals map[string]int64,
+	latencyCounts map[string]int64,
+) []orchestratorUsageAttributionAggregateSnapshot {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make([]orchestratorUsageAttributionAggregateSnapshot, 0, len(input))
+	for key, aggregate := range input {
+		item := *aggregate
+		if latencyCounts[key] > 0 {
+			item.AvgLatencyMs = latencyTotals[key] / latencyCounts[key]
+		}
+		item.EstimatedCostUSD = roundProviderAggregateCost(item.EstimatedCostUSD)
+		out = append(out, item)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].EstimatedCostUSD != out[j].EstimatedCostUSD {
+			return out[i].EstimatedCostUSD > out[j].EstimatedCostUSD
+		}
+		if out[i].Executions != out[j].Executions {
+			return out[i].Executions > out[j].Executions
+		}
+		return out[i].Label < out[j].Label
+	})
+	return out
 }
 
 func isActiveOrchestratorWorkerState(state OrchestratorWorkerState) bool {
