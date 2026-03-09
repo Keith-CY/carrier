@@ -35,6 +35,32 @@ test.describe('Execution Center', () => {
     await expect(page.locator('#executions-detail')).toContainText('task-1');
   });
 
+  test('dashboard quick launch supports template mode', async ({ page }) => {
+    await loginWithToken(page, '/#/dashboard');
+
+    await page.selectOption('#quick-launch-mode', 'template');
+    await expect(page.locator('#quick-launch-template')).toBeVisible();
+    await page.selectOption('#quick-launch-template', 'incident-diagnosis');
+    await expect(page.locator('#quick-launch-template-inputs')).toContainText('Service');
+    await expect(page.locator('#quick-launch-template-inputs')).toContainText('Environment');
+    await expect(page.locator('#quick-launch-template-inputs')).toContainText('Incident Summary');
+
+    await page.fill('#quick-launch-template-input-service', 'checkout');
+    await page.fill('#quick-launch-template-input-environment', 'prod');
+    await page.fill('#quick-launch-template-input-incidentSummary', 'latency regression after deploy');
+    await page.click('#quick-launch-advanced-toggle');
+    await page.fill('#quick-launch-host-labels', 'prod');
+
+    await page.click('#quick-launch-preview');
+    await expect(page.locator('#quick-launch-preview-card')).toBeVisible();
+    await expect(page.locator('#quick-launch-preview-card')).toContainText('incident-diagnosis');
+    await expect(page.locator('#quick-launch-preview-card')).toContainText('Analyze probable failure paths');
+
+    await page.click('#quick-launch-run');
+    await expect.poll(() => page.url()).toContain('#/executions/exec-preview-1');
+    await expect(page.locator('#executions-detail')).toContainText('Diagnose incident for service checkout');
+  });
+
   test('executions page filters and searches', async ({ page }) => {
     await loginWithToken(page, '/#/executions');
 

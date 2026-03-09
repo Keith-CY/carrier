@@ -214,8 +214,22 @@
             <button id="quick-launch-advanced-toggle" class="btn-sm btn-secondary" type="button">Advanced</button>
           </div>
         </div>
-        <label for="quick-launch-goal">Goal</label>
-        <textarea id="quick-launch-goal" rows="4" placeholder="Describe the task for the base agent to decompose and dispatch."></textarea>
+        <div>
+          <label for="quick-launch-mode">Mode</label>
+          <select id="quick-launch-mode">
+            <option value="goal">Goal</option>
+            <option value="template">Template</option>
+          </select>
+        </div>
+        <div id="quick-launch-goal-field">
+          <label for="quick-launch-goal">Goal</label>
+          <textarea id="quick-launch-goal" rows="4" placeholder="Describe the task for the base agent to decompose and dispatch."></textarea>
+        </div>
+        <div id="quick-launch-template-field" class="hidden">
+          <label for="quick-launch-template">Template</label>
+          <select id="quick-launch-template"></select>
+          <div id="quick-launch-template-inputs" class="form-grid" style="margin-top:12px;"></div>
+        </div>
         <div id="quick-launch-advanced" class="quick-launch-advanced hidden">
           <div class="form-grid">
             <div>

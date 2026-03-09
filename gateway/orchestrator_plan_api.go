@@ -2,17 +2,21 @@ package gateway
 
 import (
 	"carrier/shared/orchestration"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 )
 
 type orchestratorPlanRequest struct {
-	Goal           string   `json:"goal"`
-	Provider       string   `json:"provider,omitempty"`
-	HostIDs        []string `json:"hostIds,omitempty"`
-	HostLabels     []string `json:"hostLabels,omitempty"`
-	MaxConcurrency int      `json:"maxConcurrency,omitempty"`
+	Goal           string            `json:"goal"`
+	TemplateID     string            `json:"templateId,omitempty"`
+	Inputs         map[string]string `json:"inputs,omitempty"`
+	Provider       string            `json:"provider,omitempty"`
+	HostIDs        []string          `json:"hostIds,omitempty"`
+	HostLabels     []string          `json:"hostLabels,omitempty"`
+	MaxConcurrency int               `json:"maxConcurrency,omitempty"`
 }
 
 func handleOrchestratorPlans(w http.ResponseWriter, r *http.Request, requestID string, cfg *GatewayConfig, daemon *DaemonClient) {
@@ -34,34 +38,22 @@ func handleOrchestratorPlans(w http.ResponseWriter, r *http.Request, requestID s
 		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
 		return
 	}
-	req.Goal = strings.TrimSpace(req.Goal)
+	req.TemplateID = strings.TrimSpace(req.TemplateID)
 	req.Provider = strings.TrimSpace(req.Provider)
-	if req.Goal == "" {
-		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "goal is required"))
-		return
-	}
-	if daemon == nil {
-		writeInternalGatewayError(w, http.StatusBadGateway, "E_UPSTREAM", "daemon client unavailable", "create daemon client for orchestration planning", nil)
-		return
-	}
-
-	tasks, err := daemon.DecomposeBaseAgentWithProvider(r.Context(), req.Goal, req.Provider, "webui", requestID)
+	req.Goal = strings.TrimSpace(req.Goal)
+	plannerTasks, goal, err := buildPlannerTasksForPlanRequest(r.Context(), daemon, req.Goal, req.TemplateID, req.Inputs, req.Provider, requestID)
 	if err != nil {
+		if req.TemplateID != "" || strings.TrimSpace(req.Goal) == "" {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
+			return
+		}
 		writeInternalGatewayError(w, http.StatusBadGateway, "E_UPSTREAM", "failed to decompose goal", "decompose base agent goal", err)
 		return
 	}
 
-	plannerTasks := make([]orchestration.DecomposeTask, 0, len(tasks))
-	for _, task := range tasks {
-		plannerTasks = append(plannerTasks, orchestration.DecomposeTask{
-			ID:      task.ID,
-			Input:   task.Input,
-			AgentID: task.AgentID,
-		})
-	}
-
 	plan, err := orchestration.BuildPlan(orchestration.BuildPlanInput{
-		Goal:           req.Goal,
+		Goal:           goal,
+		TemplateID:     req.TemplateID,
 		Provider:       req.Provider,
 		HostIDs:        req.HostIDs,
 		HostLabels:     req.HostLabels,
@@ -78,4 +70,35 @@ func handleOrchestratorPlans(w http.ResponseWriter, r *http.Request, requestID s
 		"result":    "ok",
 		"plan":      plan,
 	})
+}
+
+func buildPlannerTasksForPlanRequest(ctx context.Context, daemon *DaemonClient, goal, templateID string, inputs map[string]string, provider, requestID string) ([]orchestration.DecomposeTask, string, error) {
+	trimmedTemplateID := strings.TrimSpace(templateID)
+	if trimmedTemplateID != "" {
+		resolved, err := orchestration.ResolveExecutionTemplate(trimmedTemplateID, inputs)
+		if err != nil {
+			return nil, "", err
+		}
+		return resolved.Tasks, resolved.Goal, nil
+	}
+	trimmedGoal := strings.TrimSpace(goal)
+	if trimmedGoal == "" {
+		return nil, "", errors.New("goal is required")
+	}
+	if daemon == nil {
+		return nil, "", errors.New("daemon client unavailable")
+	}
+	tasks, err := daemon.DecomposeBaseAgentWithProvider(ctx, trimmedGoal, provider, "webui", requestID)
+	if err != nil {
+		return nil, "", err
+	}
+	plannerTasks := make([]orchestration.DecomposeTask, 0, len(tasks))
+	for _, task := range tasks {
+		plannerTasks = append(plannerTasks, orchestration.DecomposeTask{
+			ID:      task.ID,
+			Input:   task.Input,
+			AgentID: task.AgentID,
+		})
+	}
+	return plannerTasks, trimmedGoal, nil
 }

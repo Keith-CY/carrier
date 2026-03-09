@@ -208,6 +208,7 @@ type orchestrateCommandOptions struct {
 	Action         string
 	Goal           string
 	ExecutionID    string
+	TemplateID     string
 	HostIDs        []string
 	HostLabels     []string
 	Provider       string
@@ -218,6 +219,19 @@ type orchestrateCommandOptions struct {
 	Timeout        time.Duration
 	Async          bool
 	JSON           bool
+	Inputs         map[string]string
+}
+
+type templatesCommandOptions struct {
+	Action         string
+	TemplateID     string
+	HostIDs        []string
+	HostLabels     []string
+	Provider       string
+	MaxConcurrency int
+	PolicyApprove  bool
+	JSON           bool
+	Inputs         map[string]string
 }
 
 type versionInfo struct {
@@ -523,6 +537,14 @@ Usage:
                         Show orchestration execution status/results
   carrier executions cancel <execution_id> [--json]
                         Cancel orchestration execution
+  carrier templates [list] [--json]
+                        List built-in execution templates
+  carrier templates show <template_id> [--json]
+                        Show one execution template
+  carrier templates run <template_id> --input key=value [--input key=value]...
+                        [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>]
+                        [--max-concurrency <n>] [--policy-approve] [--json]
+                        Launch a built-in execution template through the gateway
   carrier --help         Show this help message
 
 Notes:
@@ -771,6 +793,18 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "templates":
+			opts, err := parseTemplatesCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "templates failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runTemplatesCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "templates failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "onboard":
 			opts, err := parseOnboardCommandArgs(commandArgs)
 			if err != nil {
@@ -904,6 +938,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "orchestrate", args[2:], nil
 	case "executions":
 		return "executions", args[2:], nil
+	case "templates":
+		return "templates", args[2:], nil
 	case "--help", "-h", "help":
 		return "help", nil, nil
 	case "version", "--version", "-v", "-V":
@@ -2477,6 +2513,124 @@ func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error
 	return opts, nil
 }
 
+func parseTemplatesCommandArgs(args []string) (templatesCommandOptions, error) {
+	opts := templatesCommandOptions{
+		Action: "list",
+		Inputs: map[string]string{},
+	}
+	if len(args) == 0 {
+		return opts, nil
+	}
+	mode := strings.ToLower(strings.TrimSpace(args[0]))
+	startIdx := 0
+	switch mode {
+	case "", "list":
+		opts.Action = "list"
+		startIdx = 1
+	case "show":
+		opts.Action = "show"
+		startIdx = 1
+	case "run":
+		opts.Action = "run"
+		startIdx = 1
+	default:
+		if strings.HasPrefix(mode, "-") {
+			opts.Action = "list"
+			startIdx = 0
+		} else {
+			opts.Action = "show"
+			opts.TemplateID = strings.TrimSpace(args[0])
+			startIdx = 1
+		}
+	}
+
+	for i := startIdx; i < len(args); i++ {
+		raw := strings.TrimSpace(args[i])
+		lower := strings.ToLower(raw)
+		switch lower {
+		case "":
+		case "--json":
+			opts.JSON = true
+		case "--policy-approve":
+			opts.PolicyApprove = true
+		case "--host-id":
+			value, next, err := parseRequiredFlagValue(args, i, "--host-id")
+			if err != nil {
+				return templatesCommandOptions{}, err
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				return templatesCommandOptions{}, errors.New("--host-id cannot be empty")
+			}
+			opts.HostIDs = append(opts.HostIDs, value)
+			i = next
+		case "--host-label":
+			value, next, err := parseRequiredFlagValue(args, i, "--host-label")
+			if err != nil {
+				return templatesCommandOptions{}, err
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				return templatesCommandOptions{}, errors.New("--host-label cannot be empty")
+			}
+			opts.HostLabels = append(opts.HostLabels, value)
+			i = next
+		case "--provider":
+			value, next, err := parseRequiredFlagValue(args, i, "--provider")
+			if err != nil {
+				return templatesCommandOptions{}, err
+			}
+			opts.Provider = strings.TrimSpace(value)
+			i = next
+		case "--max-concurrency":
+			value, next, err := parseRequiredFlagValue(args, i, "--max-concurrency")
+			if err != nil {
+				return templatesCommandOptions{}, err
+			}
+			parsed, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || parsed <= 0 {
+				return templatesCommandOptions{}, fmt.Errorf("invalid --max-concurrency value: %s", value)
+			}
+			opts.MaxConcurrency = parsed
+			i = next
+		case "--input":
+			value, next, err := parseRequiredFlagValue(args, i, "--input")
+			if err != nil {
+				return templatesCommandOptions{}, err
+			}
+			key, inputValue, ok := strings.Cut(strings.TrimSpace(value), "=")
+			key = strings.TrimSpace(key)
+			inputValue = strings.TrimSpace(inputValue)
+			if !ok || key == "" {
+				return templatesCommandOptions{}, fmt.Errorf("invalid --input value: %s", value)
+			}
+			opts.Inputs[key] = inputValue
+			i = next
+		default:
+			if strings.HasPrefix(raw, "-") {
+				return templatesCommandOptions{}, fmt.Errorf("unknown templates option: %s", raw)
+			}
+			if opts.TemplateID != "" {
+				return templatesCommandOptions{}, errors.New("multiple template ids provided")
+			}
+			opts.TemplateID = raw
+		}
+	}
+
+	opts.Provider = strings.ToLower(strings.TrimSpace(opts.Provider))
+	opts.HostIDs = dedupeStringSlice(opts.HostIDs)
+	opts.HostLabels = normalizeStringSelectorSlice(opts.HostLabels)
+	if opts.MaxConcurrency > 64 {
+		opts.MaxConcurrency = 64
+	}
+
+	if (opts.Action == "show" || opts.Action == "run") && strings.TrimSpace(opts.TemplateID) == "" {
+		if opts.Action == "run" {
+			return templatesCommandOptions{}, errors.New("usage: carrier templates run <template_id> --input key=value [--input key=value]... [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--json]")
+		}
+		return templatesCommandOptions{}, errors.New("usage: carrier templates show <template_id> [--json]")
+	}
+	return opts, nil
+}
+
 func dedupeStringSlice(values []string) []string {
 	out := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
@@ -3356,6 +3510,7 @@ type orchestrateTaskUnit = sharedorchestration.TaskUnit
 
 type orchestrateExecutionPayload struct {
 	Goal              string                      `json:"goal"`
+	TemplateID        string                      `json:"templateId,omitempty"`
 	RequestedProvider string                      `json:"requestedProvider,omitempty"`
 	IdempotencyKey    string                      `json:"idempotencyKey,omitempty"`
 	ApprovalScope     string                      `json:"approvalScope"`
@@ -3425,6 +3580,7 @@ type orchestrateExecutionPolicySnapshot struct {
 type orchestrateExecutionSnapshot struct {
 	ID                string                              `json:"id"`
 	Goal              string                              `json:"goal"`
+	TemplateID        string                              `json:"templateId,omitempty"`
 	ParentExecutionID string                              `json:"parentExecutionId,omitempty"`
 	SourceExecutionID string                              `json:"sourceExecutionId,omitempty"`
 	LaunchReason      string                              `json:"launchReason,omitempty"`
@@ -3469,6 +3625,98 @@ type orchestrateExecutionArtifactsResponse struct {
 }
 
 type orchestratePlanSnapshot = sharedorchestration.Plan
+
+type executionTemplateInputFieldSnapshot struct {
+	ID           string `json:"id"`
+	Label        string `json:"label"`
+	Description  string `json:"description,omitempty"`
+	Placeholder  string `json:"placeholder,omitempty"`
+	Required     bool   `json:"required,omitempty"`
+	DefaultValue string `json:"defaultValue,omitempty"`
+}
+
+type executionTemplateTaskSnapshot struct {
+	ID            string `json:"id"`
+	AgentID       string `json:"agentId,omitempty"`
+	InputTemplate string `json:"inputTemplate,omitempty"`
+}
+
+type executionTemplateSnapshot struct {
+	ID                  string                               `json:"id"`
+	Name                string                               `json:"name"`
+	Description         string                               `json:"description,omitempty"`
+	DefaultGoalTemplate string                               `json:"defaultGoalTemplate,omitempty"`
+	InputSchema         []executionTemplateInputFieldSnapshot `json:"inputSchema,omitempty"`
+	PlannerTasks        []executionTemplateTaskSnapshot      `json:"plannerTasks,omitempty"`
+}
+
+type executionTemplateListResponse struct {
+	Result    string                     `json:"result"`
+	ErrorCode string                     `json:"errorCode,omitempty"`
+	Message   string                     `json:"message,omitempty"`
+	Templates []executionTemplateSnapshot `json:"templates"`
+}
+
+type executionTemplateResponse struct {
+	Result    string                    `json:"result"`
+	ErrorCode string                    `json:"errorCode,omitempty"`
+	Message   string                    `json:"message,omitempty"`
+	Template  executionTemplateSnapshot `json:"template"`
+}
+
+type executionTemplateLaunchResponse struct {
+	Result    string                     `json:"result"`
+	ErrorCode string                     `json:"errorCode,omitempty"`
+	Message   string                     `json:"message,omitempty"`
+	Template  executionTemplateSnapshot  `json:"template"`
+	Execution orchestrateExecutionSnapshot `json:"execution"`
+}
+
+func runTemplatesCommand(out io.Writer, opts templatesCommandOptions) error {
+	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+	switch opts.Action {
+	case "list":
+		resp, raw, err := fetchExecutionTemplates()
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderExecutionTemplateList(resp.Templates))
+		return nil
+	case "show":
+		resp, raw, err := fetchExecutionTemplate(opts.TemplateID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderExecutionTemplate(resp.Template))
+		return nil
+	case "run":
+		resp, raw, err := launchExecutionTemplate(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		executionID := strings.TrimSpace(resp.Execution.ID)
+		_, _ = fmt.Fprintf(out, "template launch accepted: %s\n", executionID)
+		_, _ = fmt.Fprintf(out, "template: %s\n", strings.TrimSpace(resp.Template.ID))
+		_, _ = fmt.Fprintf(out, "status: %s\n", strings.TrimSpace(resp.Execution.Status))
+		if executionID != "" {
+			_, _ = fmt.Fprintf(out, "next: carrier executions show %s\n", executionID)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported templates action: %s", opts.Action)
+	}
+}
 
 func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error {
 	switch opts.Action {
@@ -3657,6 +3905,7 @@ func runOrchestrateStart(out io.Writer, opts orchestrateCommandOptions) error {
 
 	payload := orchestrateExecutionPayload{
 		Goal:              strings.TrimSpace(plan.Goal),
+		TemplateID:        strings.TrimSpace(plan.TemplateID),
 		RequestedProvider: strings.TrimSpace(plan.Provider),
 		IdempotencyKey:    strings.TrimSpace(opts.IdempotencyKey),
 		ApprovalScope:     plan.ApprovalScope,
@@ -3799,6 +4048,30 @@ func decodeOrchestrateExecutionListResponse(raw []byte) (orchestrateExecutionLis
 	return resp, nil
 }
 
+func decodeExecutionTemplateListResponse(raw []byte) (executionTemplateListResponse, error) {
+	var resp executionTemplateListResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return executionTemplateListResponse{}, fmt.Errorf("decode execution template list response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeExecutionTemplateResponse(raw []byte) (executionTemplateResponse, error) {
+	var resp executionTemplateResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return executionTemplateResponse{}, fmt.Errorf("decode execution template response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeExecutionTemplateLaunchResponse(raw []byte) (executionTemplateLaunchResponse, error) {
+	var resp executionTemplateLaunchResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return executionTemplateLaunchResponse{}, fmt.Errorf("decode execution template launch response: %w", err)
+	}
+	return resp, nil
+}
+
 func decodeOrchestrateExecutionArtifactsResponse(raw []byte) (orchestrateExecutionArtifactsResponse, error) {
 	var resp orchestrateExecutionArtifactsResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -3873,6 +4146,61 @@ func fetchOrchestratorExecutionArtifacts(executionID string) (orchestrateExecuti
 	return resp, raw, nil
 }
 
+func fetchExecutionTemplates() (executionTemplateListResponse, []byte, error) {
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, "/api/v1/templates", nil, 45*time.Second)
+	if err != nil {
+		return executionTemplateListResponse{}, nil, err
+	}
+	resp, decodeErr := decodeExecutionTemplateListResponse(raw)
+	if decodeErr != nil {
+		return executionTemplateListResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func fetchExecutionTemplate(templateID string) (executionTemplateResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(templateID)
+	if trimmedID == "" {
+		return executionTemplateResponse{}, nil, errors.New("template id is required")
+	}
+	path := "/api/v1/templates/" + neturl.PathEscape(trimmedID)
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return executionTemplateResponse{}, nil, err
+	}
+	resp, decodeErr := decodeExecutionTemplateResponse(raw)
+	if decodeErr != nil {
+		return executionTemplateResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func launchExecutionTemplate(opts templatesCommandOptions) (executionTemplateLaunchResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(opts.TemplateID)
+	if trimmedID == "" {
+		return executionTemplateLaunchResponse{}, nil, errors.New("template id is required")
+	}
+	body := map[string]interface{}{
+		"inputs":         opts.Inputs,
+		"provider":       strings.TrimSpace(opts.Provider),
+		"hostIds":        opts.HostIDs,
+		"hostLabels":     opts.HostLabels,
+		"maxConcurrency": opts.MaxConcurrency,
+		"policyApprove":  opts.PolicyApprove,
+		"actor":          "carrier-cli",
+	}
+	path := "/api/v1/templates/" + neturl.PathEscape(trimmedID) + "/launch"
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, path, body, 90*time.Second)
+	if err != nil {
+		return executionTemplateLaunchResponse{}, nil, err
+	}
+	resp, decodeErr := decodeExecutionTemplateLaunchResponse(raw)
+	if decodeErr != nil {
+		return executionTemplateLaunchResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
 func waitForOrchestratorExecution(executionID string, timeout time.Duration) (orchestrateExecutionResponse, []byte, error) {
 	if timeout <= 0 {
 		timeout = defaultOrchestrateWaitTimeout
@@ -3896,6 +4224,62 @@ func waitForOrchestratorExecution(executionID string, timeout time.Duration) (or
 	}
 }
 
+func renderExecutionTemplateList(templates []executionTemplateSnapshot) string {
+	if len(templates) == 0 {
+		return "No execution templates found."
+	}
+	lines := []string{"Execution templates:"}
+	for _, template := range templates {
+		line := fmt.Sprintf("- %s · %s", firstNonEmpty(strings.TrimSpace(template.ID), "unknown"), firstNonEmpty(strings.TrimSpace(template.Name), "(unnamed)"))
+		if description := strings.TrimSpace(template.Description); description != "" {
+			line += " · " + truncateOrchestrateText(description, 96)
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderExecutionTemplate(template executionTemplateSnapshot) string {
+	lines := []string{
+		fmt.Sprintf("execution template %s", firstNonEmpty(strings.TrimSpace(template.ID), "unknown")),
+		fmt.Sprintf("name: %s", firstNonEmpty(strings.TrimSpace(template.Name), "(unnamed)")),
+	}
+	if description := strings.TrimSpace(template.Description); description != "" {
+		lines = append(lines, "description: "+description)
+	}
+	if goalTemplate := strings.TrimSpace(template.DefaultGoalTemplate); goalTemplate != "" {
+		lines = append(lines, "goal template: "+goalTemplate)
+	}
+	if len(template.InputSchema) > 0 {
+		lines = append(lines, "inputs:")
+		for _, field := range template.InputSchema {
+			parts := []string{firstNonEmpty(strings.TrimSpace(field.ID), "input")}
+			if label := strings.TrimSpace(field.Label); label != "" {
+				parts = append(parts, label)
+			}
+			if field.Required {
+				parts = append(parts, "required")
+			}
+			if defaultValue := strings.TrimSpace(field.DefaultValue); defaultValue != "" {
+				parts = append(parts, "default="+defaultValue)
+			}
+			lines = append(lines, "- "+strings.Join(parts, " · "))
+		}
+	}
+	if len(template.PlannerTasks) > 0 {
+		lines = append(lines, "planner tasks:")
+		for _, task := range template.PlannerTasks {
+			lines = append(lines, fmt.Sprintf(
+				"- %s · %s · %s",
+				firstNonEmpty(strings.TrimSpace(task.ID), "task"),
+				firstNonEmpty(strings.TrimSpace(task.AgentID), "zeroclaw"),
+				firstNonEmpty(strings.TrimSpace(task.InputTemplate), "(no input template)"),
+			))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
 	execution := resp.Execution
 	total, completed, failed := summarizeOrchestrateExecution(execution)
@@ -3904,6 +4288,9 @@ func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
 		fmt.Sprintf("status: %s", firstNonEmpty(strings.TrimSpace(execution.Status), "unknown")),
 		fmt.Sprintf("goal: %s", strings.TrimSpace(execution.Goal)),
 		fmt.Sprintf("tasks: total=%d completed=%d failed=%d", total, completed, failed),
+	}
+	if templateID := strings.TrimSpace(execution.TemplateID); templateID != "" {
+		lines = append(lines, "template: "+templateID)
 	}
 	if parentID := strings.TrimSpace(execution.ParentExecutionID); parentID != "" || strings.TrimSpace(execution.SourceExecutionID) != "" || strings.TrimSpace(execution.LaunchReason) != "" {
 		lines = append(lines, fmt.Sprintf(

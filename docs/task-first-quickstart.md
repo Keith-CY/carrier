@@ -60,6 +60,17 @@ Run the task:
 carrier orchestrate "triage this issue and summarize next actions"
 ```
 
+Or launch a built-in template:
+
+```bash
+carrier templates
+carrier templates show incident-diagnosis
+carrier templates run incident-diagnosis \
+  --input service=checkout \
+  --input environment=prod \
+  --input incidentSummary="Checkout API returns 502s after deploy"
+```
+
 Inspect execution history:
 
 ```bash

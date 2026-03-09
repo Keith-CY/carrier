@@ -38,6 +38,7 @@ type TaskUnit struct {
 
 type Plan struct {
 	Goal            string           `json:"goal"`
+	TemplateID      string           `json:"templateId,omitempty"`
 	Provider        string           `json:"provider,omitempty"`
 	HostIDs         []string         `json:"hostIds,omitempty"`
 	HostLabels      []string         `json:"hostLabels,omitempty"`
@@ -50,6 +51,7 @@ type Plan struct {
 
 type BuildPlanInput struct {
 	Goal           string
+	TemplateID     string
 	Provider       string
 	HostIDs        []string
 	HostLabels     []string
@@ -77,6 +79,7 @@ func BuildPlan(input BuildPlanInput) (Plan, error) {
 
 	return Plan{
 		Goal:            goal,
+		TemplateID:      strings.TrimSpace(input.TemplateID),
 		Provider:        strings.TrimSpace(input.Provider),
 		HostIDs:         hostIDs,
 		HostLabels:      hostLabels,
