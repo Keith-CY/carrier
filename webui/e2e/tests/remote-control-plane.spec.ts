@@ -98,6 +98,10 @@ test.describe('Remote Control Plane Views', () => {
     await page.fill('#execution-policy-name', 'review picoclaw production runs');
     await page.selectOption('#execution-policy-action', 'ask');
     await page.fill('#execution-policy-reason', 'picoclaw on prod hosts needs review');
+    await page.fill('#execution-policy-teams', 'platform, infra');
+    await page.fill('#execution-policy-projects', 'carrier');
+    await page.fill('#execution-policy-environments', 'prod');
+    await page.fill('#execution-policy-template-ids', 'incident-triage');
     await page.fill('#execution-policy-host-labels', 'prod, gpu');
     await page.fill('#execution-policy-host-ids', 'host-1');
     await page.fill('#execution-policy-agent-ids', 'picoclaw');
@@ -109,6 +113,10 @@ test.describe('Remote Control Plane Views', () => {
     await expect(page.locator('#profiles-msg')).toContainText('Execution policy saved.');
     await expect(page.locator('#execution-policies-list')).toContainText('review picoclaw production runs');
     await expect(page.locator('#execution-policies-list')).toContainText('ask');
+    await expect(page.locator('#execution-policies-list')).toContainText('teams: infra, platform');
+    await expect(page.locator('#execution-policies-list')).toContainText('projects: carrier');
+    await expect(page.locator('#execution-policies-list')).toContainText('environments: prod');
+    await expect(page.locator('#execution-policies-list')).toContainText('templates: incident-triage');
     await expect(page.locator('#execution-policies-list')).toContainText('host labels: gpu, prod');
     await expect(page.locator('#execution-policies-list')).toContainText('allowed tools: grep, shell');
     await expect(page.locator('#execution-policies-list')).toContainText('max timeout: 45000ms');

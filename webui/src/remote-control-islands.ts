@@ -90,6 +90,7 @@
     const onManage = typeof props.onManage === 'function' ? props.onManage : function () {};
     const onEdit = typeof props.onEdit === 'function' ? props.onEdit : function () {};
     const hostOperations = props && props.hostOperations && typeof props.hostOperations === 'object' ? props.hostOperations : {};
+    const canManageHosts = !!(props && props.permissions && props.permissions.canManageHosts);
 
     return h(
       React.Fragment,
@@ -103,7 +104,7 @@
           [
             h('h4', { key: 'title' }, String(host && (host.name || host.id) ? (host.name || host.id) : hostID)),
             h('div', { className: 'instance-meta', style: { whiteSpace: 'pre-line' }, key: 'meta' }, hostMetaText(host, hostOperation)),
-            h(
+            canManageHosts ? h(
               'div',
               { className: 'btn-row', key: 'actions' },
               [
@@ -152,7 +153,7 @@
                   'Delete',
                 ),
               ],
-            ),
+            ) : null,
           ],
         );
       }),
@@ -164,6 +165,7 @@
     const onTestProfile = typeof props.onTestProfile === 'function' ? props.onTestProfile : function () {};
     const onDeleteProfile = typeof props.onDeleteProfile === 'function' ? props.onDeleteProfile : function () {};
     const onEditProfile = typeof props.onEditProfile === 'function' ? props.onEditProfile : function () {};
+    const canManageProviders = !!(props && props.permissions && props.permissions.canManageProviders);
 
     if (!profiles.length) {
       return h('div', { className: 'card' }, 'No provider profiles configured.');
@@ -180,7 +182,7 @@
           [
             h('h4', { key: 'title' }, String(profile && (profile.name || profile.id) ? (profile.name || profile.id) : profileID)),
             h('div', { className: 'instance-meta', style: { whiteSpace: 'pre-line' }, key: 'meta' }, profileMetaText(profile)),
-            h(
+            canManageProviders ? h(
               'div',
               { className: 'btn-row', key: 'actions' },
               [
@@ -218,7 +220,7 @@
                   'Delete',
                 ),
               ],
-            ),
+            ) : null,
           ],
         );
       }),
@@ -228,6 +230,7 @@
   function BindingsList(props) {
     const bindings = Array.isArray(props.bindings) ? props.bindings : [];
     const onDeleteBinding = typeof props.onDeleteBinding === 'function' ? props.onDeleteBinding : function () {};
+    const canManageProviders = !!(props && props.permissions && props.permissions.canManageProviders);
     if (!bindings.length) {
       return h('div', { className: 'card' }, 'No provider bindings configured.');
     }
@@ -243,7 +246,7 @@
           [
             h('h4', { key: 'title' }, String(binding && binding.targetType ? binding.targetType : '-') + ': ' + String(binding && binding.targetId ? binding.targetId : '-')),
             h('div', { className: 'instance-meta', style: { whiteSpace: 'pre-line' }, key: 'meta' }, bindingMetaText(binding)),
-            h(
+            canManageProviders ? h(
               'div',
               { className: 'btn-row', key: 'actions' },
               [
@@ -259,14 +262,14 @@
                   'Delete',
                 ),
               ],
-            ),
+            ) : null,
           ],
         );
       }),
     );
   }
 
-  function renderServersList(container, hosts, actions, hostOperations) {
+  function renderServersList(container, hosts, actions, hostOperations, permissions) {
     const root = getRoot(container);
     if (!root) return false;
     root.render(
@@ -277,12 +280,13 @@
         onManage: actions && actions.onManage,
         onEdit: actions && actions.onEdit,
         onDelete: actions && actions.onDelete,
+        permissions: permissions,
       }),
     );
     return true;
   }
 
-  function renderProfilesAndBindings(profilesContainer, bindingsContainer, profiles, bindings, actions) {
+  function renderProfilesAndBindings(profilesContainer, bindingsContainer, profiles, bindings, actions, permissions) {
     const profilesRoot = getRoot(profilesContainer);
     const bindingsRoot = getRoot(bindingsContainer);
     if (!profilesRoot || !bindingsRoot) return false;
@@ -293,12 +297,14 @@
         onTestProfile: actions && actions.onTestProfile,
         onEditProfile: actions && actions.onEditProfile,
         onDeleteProfile: actions && actions.onDeleteProfile,
+        permissions: permissions,
       }),
     );
     bindingsRoot.render(
       h(BindingsList, {
         bindings: bindings,
         onDeleteBinding: actions && actions.onDeleteBinding,
+        permissions: permissions,
       }),
     );
     return true;

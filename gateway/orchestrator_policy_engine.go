@@ -19,6 +19,10 @@ type OrchestratorPolicyRule struct {
 	Priority           int      `json:"priority,omitempty"`
 	Action             string   `json:"action"`
 	Reason             string   `json:"reason,omitempty"`
+	Teams              []string `json:"teams,omitempty"`
+	Projects           []string `json:"projects,omitempty"`
+	Environments       []string `json:"environments,omitempty"`
+	TemplateIDs        []string `json:"templateIds,omitempty"`
 	RequestedProviders []string `json:"requestedProviders,omitempty"`
 	HostIDs            []string `json:"hostIds,omitempty"`
 	HostLabels         []string `json:"hostLabels,omitempty"`
@@ -36,6 +40,10 @@ func normalizeOrchestratorPolicyRule(in OrchestratorPolicyRule) OrchestratorPoli
 	out.Name = strings.TrimSpace(out.Name)
 	out.Action = strings.ToLower(strings.TrimSpace(out.Action))
 	out.Reason = strings.TrimSpace(out.Reason)
+	out.Teams = normalizeStringSelectorList(out.Teams, true)
+	out.Projects = normalizeStringSelectorList(out.Projects, true)
+	out.Environments = normalizeStringSelectorList(out.Environments, true)
+	out.TemplateIDs = normalizeStringSelectorList(out.TemplateIDs, true)
 	out.RequestedProviders = normalizeStringSelectorList(out.RequestedProviders, true)
 	out.HostIDs = normalizeStringSelectorList(out.HostIDs, false)
 	out.HostLabels = normalizeStringSelectorList(out.HostLabels, true)
@@ -231,10 +239,34 @@ func sortOrchestratorPolicyRules(rules []OrchestratorPolicyRule) []OrchestratorP
 }
 
 func orchestratorPolicyRuleMatchesExecution(rule OrchestratorPolicyRule, execution OrchestratorExecution, hostIndex map[string]RemoteHost) bool {
+	team := strings.ToLower(strings.TrimSpace(execution.Team))
+	project := strings.ToLower(strings.TrimSpace(execution.Project))
+	environment := strings.ToLower(strings.TrimSpace(execution.Environment))
+	templateID := strings.ToLower(strings.TrimSpace(execution.TemplateID))
 	requestedProvider := strings.ToLower(strings.TrimSpace(execution.RequestedProvider))
 	targetHosts := executionPolicyTargetHosts(execution)
 	targetAgents := executionPolicyTargetAgents(execution)
 
+	if len(rule.Teams) > 0 {
+		if team == "" || !stringSliceContainsFold(rule.Teams, team) {
+			return false
+		}
+	}
+	if len(rule.Projects) > 0 {
+		if project == "" || !stringSliceContainsFold(rule.Projects, project) {
+			return false
+		}
+	}
+	if len(rule.Environments) > 0 {
+		if environment == "" || !stringSliceContainsFold(rule.Environments, environment) {
+			return false
+		}
+	}
+	if len(rule.TemplateIDs) > 0 {
+		if templateID == "" || !stringSliceContainsFold(rule.TemplateIDs, templateID) {
+			return false
+		}
+	}
 	if len(rule.RequestedProviders) > 0 {
 		if requestedProvider == "" || !stringSliceContainsFold(rule.RequestedProviders, requestedProvider) {
 			return false

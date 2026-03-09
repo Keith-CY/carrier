@@ -1,4 +1,4 @@
-// webui/src/remote-observability-island.ts
+// ../src/remote-observability-island.ts
 (function() {
   const React = window.React;
   const ReactDOM = window.ReactDOM;

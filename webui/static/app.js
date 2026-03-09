@@ -1,4 +1,4 @@
-// webui/src/app.ts
+// ../src/app.ts
 (function() {
   const $ = (s, p) => (p || document).querySelector(s);
   const $$ = (s, p) => [...(p || document).querySelectorAll(s)];
@@ -59,6 +59,7 @@
   let remoteChatTargetsLoadSeq = 0;
   let remoteChatInstancesLoadSeq = 0;
   let remoteObservabilityData = null;
+  let orchestratorObservabilityData = null;
   let dashboardExecutionPollTimer = null;
   let dashboardExecutionDetailsByID = {};
   let dashboardExpandedExecutionIDs = new Set;
@@ -74,7 +75,19 @@
     remoteChatEnabled: false,
     providerBindingEnabled: false
   };
+  const DEFAULT_AUTHZ = {
+    role: "viewer",
+    permissions: {
+      viewExecutions: false,
+      launchExecutions: false,
+      approveExecutions: false,
+      managePolicies: false,
+      manageProviders: false,
+      manageHosts: false
+    }
+  };
   let featureFlags = { ...DEFAULT_FEATURE_FLAGS };
+  let authzState = JSON.parse(JSON.stringify(DEFAULT_AUTHZ));
   function escapeHtml(s) {
     const d = document.createElement("div");
     d.textContent = s;
@@ -262,6 +275,39 @@
       providerBindingEnabled: toFeatureBool(source && source.providerBindingEnabled, DEFAULT_FEATURE_FLAGS.providerBindingEnabled)
     };
   }
+  function normalizeAuthz(payload) {
+    const source = payload && typeof payload === "object" && payload.authz && typeof payload.authz === "object" ? payload.authz : {};
+    const permissions = source.permissions && typeof source.permissions === "object" ? source.permissions : {};
+    return {
+      role: String(source.role || DEFAULT_AUTHZ.role).trim().toLowerCase() || DEFAULT_AUTHZ.role,
+      permissions: {
+        viewExecutions: toFeatureBool(permissions.viewExecutions, DEFAULT_AUTHZ.permissions.viewExecutions),
+        launchExecutions: toFeatureBool(permissions.launchExecutions, DEFAULT_AUTHZ.permissions.launchExecutions),
+        approveExecutions: toFeatureBool(permissions.approveExecutions, DEFAULT_AUTHZ.permissions.approveExecutions),
+        managePolicies: toFeatureBool(permissions.managePolicies, DEFAULT_AUTHZ.permissions.managePolicies),
+        manageProviders: toFeatureBool(permissions.manageProviders, DEFAULT_AUTHZ.permissions.manageProviders),
+        manageHosts: toFeatureBool(permissions.manageHosts, DEFAULT_AUTHZ.permissions.manageHosts)
+      }
+    };
+  }
+  function canViewExecutionsUI() {
+    return !!(authzState && authzState.permissions && authzState.permissions.viewExecutions);
+  }
+  function canLaunchExecutionsUI() {
+    return !!(authzState && authzState.permissions && authzState.permissions.launchExecutions);
+  }
+  function canApproveExecutionsUI() {
+    return !!(authzState && authzState.permissions && authzState.permissions.approveExecutions);
+  }
+  function canManagePoliciesUI() {
+    return !!(authzState && authzState.permissions && authzState.permissions.managePolicies);
+  }
+  function canManageProvidersUI() {
+    return !!(authzState && authzState.permissions && authzState.permissions.manageProviders);
+  }
+  function canManageHostsUI() {
+    return !!(authzState && authzState.permissions && authzState.permissions.manageHosts);
+  }
   function setNavRouteVisible(route, visible) {
     const link = $('.nav-link[data-route="' + route + '"]');
     if (!link)
@@ -324,18 +370,21 @@
     setNavRouteVisible("remote-observability", remoteControlVisible);
     const executionSection = $("#dashboard-executions-section");
     if (executionSection)
-      executionSection.classList.toggle("hidden", !remoteControlVisible);
+      executionSection.classList.toggle("hidden", !(remoteControlVisible && canViewExecutionsUI()));
     const quickLaunchSection = $("#dashboard-quick-launch-section");
     if (quickLaunchSection)
-      quickLaunchSection.classList.toggle("hidden", !remoteControlVisible);
+      quickLaunchSection.classList.toggle("hidden", !(remoteControlVisible && canLaunchExecutionsUI()));
   }
   async function refreshFeatureFlags() {
     const previous = { ...featureFlags };
+    const previousAuthz = JSON.parse(JSON.stringify(authzState));
     try {
       const payload = await api("GET", "/api/v1/features");
       featureFlags = normalizeFeatureFlags(payload);
+      authzState = normalizeAuthz(payload);
     } catch (_e) {
       featureFlags = previous;
+      authzState = previousAuthz;
     }
     applyFeatureFlags();
     return featureFlags;
@@ -1611,8 +1660,9 @@
     const section = $("#dashboard-quick-launch-section");
     if (!section)
       return;
-    section.classList.toggle("hidden", !featureFlags.remoteControlPlaneEnabled);
-    if (!featureFlags.remoteControlPlaneEnabled)
+    const quickLaunchEnabled = featureFlags.remoteControlPlaneEnabled && canLaunchExecutionsUI();
+    section.classList.toggle("hidden", !quickLaunchEnabled);
+    if (!quickLaunchEnabled)
       return;
     const previewBtn = $("#quick-launch-preview");
     const resetBtn = $("#quick-launch-reset");
@@ -2329,9 +2379,9 @@
     const cloneBtn = $("#executions-clone");
     if (!list || !summary || !detail || !cancelBtn || !policyApproveBtn || !retryBtn || !rerunBtn || !cloneBtn)
       return;
-    if (!featureFlags.remoteControlPlaneEnabled) {
+    if (!featureFlags.remoteControlPlaneEnabled || !canViewExecutionsUI()) {
       list.textContent = "";
-      summary.textContent = "Remote control plane is disabled.";
+      summary.textContent = featureFlags.remoteControlPlaneEnabled ? "Execution access is restricted for current role." : "Remote control plane is disabled.";
       detail.textContent = "Execution Center is unavailable.";
       retryBtn.classList.add("hidden");
       rerunBtn.classList.add("hidden");
@@ -2417,11 +2467,13 @@
       const terminal = isExecutionTerminalStatus(execution && execution.status);
       const hasFailedTasks = executionHasFailedTasks(execution);
       const policy = execution && execution.policy && typeof execution.policy === "object" ? execution.policy : {};
+      const launchAllowed = canLaunchExecutionsUI();
+      const approveAllowed = canApproveExecutionsUI();
       const policyAskPending = !terminal && String(policy && policy.decision ? policy.decision : "").trim() === "ask" && !String(policy && policy.approvedAt ? policy.approvedAt : "").trim();
-      retryBtn.classList.toggle("hidden", !(terminal && hasFailedTasks));
-      rerunBtn.classList.toggle("hidden", !terminal);
-      cloneBtn.classList.toggle("hidden", !terminal);
-      cancelBtn.classList.toggle("hidden", terminal);
+      retryBtn.classList.toggle("hidden", !(launchAllowed && terminal && hasFailedTasks));
+      rerunBtn.classList.toggle("hidden", !(launchAllowed && terminal));
+      cloneBtn.classList.toggle("hidden", !(launchAllowed && terminal));
+      cancelBtn.classList.toggle("hidden", !(launchAllowed && !terminal));
       cancelBtn.onclick = async () => {
         if (!window.confirm("Cancel execution " + selectedExecutionID + "?"))
           return;
@@ -2474,7 +2526,7 @@
           cloneBtn.disabled = false;
         }
       };
-      policyApproveBtn.classList.toggle("hidden", !policyAskPending);
+      policyApproveBtn.classList.toggle("hidden", !(approveAllowed && policyAskPending));
       policyApproveBtn.onclick = async () => {
         policyApproveBtn.disabled = true;
         try {
@@ -2498,7 +2550,7 @@
     const summary = $("#execution-summary");
     if (!section || !list || !summary)
       return;
-    if (!featureFlags.remoteControlPlaneEnabled) {
+    if (!featureFlags.remoteControlPlaneEnabled || !canViewExecutionsUI()) {
       section.classList.add("hidden");
       return;
     }
@@ -2548,7 +2600,7 @@
       detailToggle.className = "btn-sm btn-secondary";
       detailToggle.textContent = dashboardExpandedExecutionIDs.has(executionID) ? "Hide Details" : "View Details";
       actions.appendChild(detailToggle);
-      if (!isExecutionTerminalStatus(statusText)) {
+      if (canLaunchExecutionsUI() && !isExecutionTerminalStatus(statusText)) {
         const cancelBtn = document.createElement("button");
         cancelBtn.className = "btn-sm btn-danger";
         cancelBtn.textContent = "Cancel";
@@ -2595,7 +2647,7 @@
     const dashboardSummary = $("#execution-summary");
     if (dashboardList && !dashboardList.childElementCount)
       dashboardList.textContent = "Loading\u2026";
-    if (!featureFlags.remoteControlPlaneEnabled) {
+    if (!featureFlags.remoteControlPlaneEnabled || !canViewExecutionsUI()) {
       renderDashboardExecutions([]);
       await renderExecutionsView([], false);
       return;
@@ -5306,7 +5358,9 @@
       onManage: handleManage,
       onEdit: handleEdit,
       onDelete: handleDelete
-    }, hostOperations)) {
+    }, hostOperations, {
+      canManageHosts: canManageHostsUI()
+    })) {
       return;
     }
     wrap.textContent = "";
@@ -5336,35 +5390,37 @@
       lines.push(...formatServerHostOperationMetaLines(host.id));
       meta.textContent = lines.join("\n");
       meta.style.whiteSpace = "pre-line";
-      const actions = document.createElement("div");
-      actions.className = "btn-row";
-      const checkBtn = document.createElement("button");
-      checkBtn.className = "btn-sm btn-secondary";
-      checkBtn.textContent = "Check";
-      checkBtn.onclick = async () => {
-        checkBtn.disabled = true;
-        await handleCheck(host.id);
-        checkBtn.disabled = false;
-      };
-      const deleteBtn = document.createElement("button");
-      deleteBtn.className = "btn-sm btn-danger";
-      deleteBtn.textContent = "Delete";
-      deleteBtn.onclick = () => handleDelete(host.id);
-      const manageBtn = document.createElement("button");
-      manageBtn.className = "btn-sm";
-      manageBtn.textContent = "Manage";
-      manageBtn.onclick = () => handleManage(host.id);
-      const editBtn = document.createElement("button");
-      editBtn.className = "btn-sm btn-secondary";
-      editBtn.textContent = "Edit";
-      editBtn.onclick = () => handleEdit(host.id);
-      actions.appendChild(checkBtn);
-      actions.appendChild(manageBtn);
-      actions.appendChild(editBtn);
-      actions.appendChild(deleteBtn);
       card.appendChild(title);
       card.appendChild(meta);
-      card.appendChild(actions);
+      if (canManageHostsUI()) {
+        const actions = document.createElement("div");
+        actions.className = "btn-row";
+        const checkBtn = document.createElement("button");
+        checkBtn.className = "btn-sm btn-secondary";
+        checkBtn.textContent = "Check";
+        checkBtn.onclick = async () => {
+          checkBtn.disabled = true;
+          await handleCheck(host.id);
+          checkBtn.disabled = false;
+        };
+        const deleteBtn = document.createElement("button");
+        deleteBtn.className = "btn-sm btn-danger";
+        deleteBtn.textContent = "Delete";
+        deleteBtn.onclick = () => handleDelete(host.id);
+        const manageBtn = document.createElement("button");
+        manageBtn.className = "btn-sm";
+        manageBtn.textContent = "Manage";
+        manageBtn.onclick = () => handleManage(host.id);
+        const editBtn = document.createElement("button");
+        editBtn.className = "btn-sm btn-secondary";
+        editBtn.textContent = "Edit";
+        editBtn.onclick = () => handleEdit(host.id);
+        actions.appendChild(checkBtn);
+        actions.appendChild(manageBtn);
+        actions.appendChild(editBtn);
+        actions.appendChild(deleteBtn);
+        card.appendChild(actions);
+      }
       wrap.appendChild(card);
     });
   }
@@ -5420,6 +5476,12 @@
       }
     }
     function syncManageSelection(hosts) {
+      if (!canManageHostsUI()) {
+        serverManageHostID = "";
+        if (manageCard)
+          manageCard.classList.add("hidden");
+        return;
+      }
       const list = Array.isArray(hosts) ? hosts : [];
       const current = getServerManageHostID();
       if (!current) {
@@ -5470,7 +5532,7 @@
     }
     syncServerAuthModeInputs();
     updateServerEditorUI();
-    setServerManageControlsDisabled(false);
+    setServerManageControlsDisabled(!canManageHostsUI());
     renderServerManageChatMessages();
     updateServerManageChatStatus("Ready to chat with selected SSG agent.", "info");
     if (loadInstancesBtn)
@@ -5618,7 +5680,18 @@
         syncServerEditSelection([]);
       }
     };
+    if (saveBtn)
+      saveBtn.disabled = !canManageHostsUI();
+    if (cancelEditBtn)
+      cancelEditBtn.disabled = !canManageHostsUI();
+    if (!canManageHostsUI()) {
+      setMsg("#servers-msg", "Current role cannot modify remote hosts.", "info");
+    }
     saveBtn.onclick = async () => {
+      if (!canManageHostsUI()) {
+        setMsg("#servers-msg", "Current role cannot modify remote hosts.", "error");
+        return;
+      }
       const mode = (authMode.value || "").trim().toLowerCase();
       const payload = {
         name: ($("#server-name").value || "").trim(),
@@ -5743,6 +5816,8 @@
       onEditProfile: handleEditProfile,
       onDeleteProfile: handleDeleteProfile,
       onDeleteBinding: handleDeleteBinding
+    }, {
+      canManageProviders: canManageProvidersUI()
     }));
     policiesWrap.textContent = "";
     if (!renderedByIsland) {
@@ -5763,26 +5838,28 @@
           meta.className = "instance-meta";
           meta.textContent = "id: " + (profile.id || "-") + "\nprovider/model: " + (profile.provider || "-") + "/" + (profile.model || "-") + "\nenabled: " + String(profile.enabled);
           meta.style.whiteSpace = "pre-line";
-          const actions = document.createElement("div");
-          actions.className = "btn-row";
-          const testBtn = document.createElement("button");
-          testBtn.className = "btn-sm btn-secondary";
-          testBtn.textContent = "Test";
-          testBtn.onclick = () => handleTestProfile(profile.id);
-          const editBtn = document.createElement("button");
-          editBtn.className = "btn-sm btn-secondary";
-          editBtn.textContent = "Edit";
-          editBtn.onclick = () => handleEditProfile(profile.id);
-          const deleteBtn = document.createElement("button");
-          deleteBtn.className = "btn-sm btn-danger";
-          deleteBtn.textContent = "Delete";
-          deleteBtn.onclick = () => handleDeleteProfile(profile.id);
-          actions.appendChild(testBtn);
-          actions.appendChild(editBtn);
-          actions.appendChild(deleteBtn);
           card.appendChild(title);
           card.appendChild(meta);
-          card.appendChild(actions);
+          if (canManageProvidersUI()) {
+            const actions = document.createElement("div");
+            actions.className = "btn-row";
+            const testBtn = document.createElement("button");
+            testBtn.className = "btn-sm btn-secondary";
+            testBtn.textContent = "Test";
+            testBtn.onclick = () => handleTestProfile(profile.id);
+            const editBtn = document.createElement("button");
+            editBtn.className = "btn-sm btn-secondary";
+            editBtn.textContent = "Edit";
+            editBtn.onclick = () => handleEditProfile(profile.id);
+            const deleteBtn = document.createElement("button");
+            deleteBtn.className = "btn-sm btn-danger";
+            deleteBtn.textContent = "Delete";
+            deleteBtn.onclick = () => handleDeleteProfile(profile.id);
+            actions.appendChild(testBtn);
+            actions.appendChild(editBtn);
+            actions.appendChild(deleteBtn);
+            card.appendChild(actions);
+          }
           profilesWrap.appendChild(card);
         });
       }
@@ -5801,16 +5878,18 @@
           meta.className = "instance-meta";
           meta.textContent = "id: " + (binding.id || "-") + "\nprofileId: " + (binding.profileId || "-") + "\nsyncMode: " + (binding.syncMode || "always_push");
           meta.style.whiteSpace = "pre-line";
-          const actions = document.createElement("div");
-          actions.className = "btn-row";
-          const deleteBtn = document.createElement("button");
-          deleteBtn.className = "btn-sm btn-danger";
-          deleteBtn.textContent = "Delete";
-          deleteBtn.onclick = () => handleDeleteBinding(binding.id);
           card.appendChild(title);
           card.appendChild(meta);
-          card.appendChild(actions);
-          actions.appendChild(deleteBtn);
+          if (canManageProvidersUI()) {
+            const actions = document.createElement("div");
+            actions.className = "btn-row";
+            const deleteBtn = document.createElement("button");
+            deleteBtn.className = "btn-sm btn-danger";
+            deleteBtn.textContent = "Delete";
+            deleteBtn.onclick = () => handleDeleteBinding(binding.id);
+            card.appendChild(actions);
+            actions.appendChild(deleteBtn);
+          }
           bindingsWrap.appendChild(card);
         });
       }
@@ -5828,18 +5907,20 @@
         title.textContent = policy.name || policy.id;
         const meta = document.createElement("div");
         meta.className = "instance-meta";
-        meta.textContent = "action: " + (policy.action || "allow") + "\nenabled: " + String(policy.enabled !== false) + "\npriority: " + String(policy.priority || 0) + (policy.reason ? "\nreason: " + policy.reason : "") + (policy.requestedProviders && policy.requestedProviders.length ? "\nproviders: " + policy.requestedProviders.join(", ") : "") + (policy.hostIds && policy.hostIds.length ? "\nhosts: " + policy.hostIds.join(", ") : "") + (policy.hostLabels && policy.hostLabels.length ? "\nhost labels: " + policy.hostLabels.join(", ") : "") + (policy.agentIds && policy.agentIds.length ? "\nagents: " + policy.agentIds.join(", ") : "") + (policy.allowedTools && policy.allowedTools.length ? "\nallowed tools: " + policy.allowedTools.join(", ") : "") + (typeof policy.maxTaskTimeoutMs === "number" ? "\nmax timeout: " + String(policy.maxTaskTimeoutMs) + "ms" : "") + (typeof policy.maxRetryBudget === "number" ? "\nmax retry: " + String(policy.maxRetryBudget) : "");
+        meta.textContent = "action: " + (policy.action || "allow") + "\nenabled: " + String(policy.enabled !== false) + "\npriority: " + String(policy.priority || 0) + (policy.reason ? "\nreason: " + policy.reason : "") + (policy.teams && policy.teams.length ? "\nteams: " + policy.teams.join(", ") : "") + (policy.projects && policy.projects.length ? "\nprojects: " + policy.projects.join(", ") : "") + (policy.environments && policy.environments.length ? "\nenvironments: " + policy.environments.join(", ") : "") + (policy.templateIds && policy.templateIds.length ? "\ntemplates: " + policy.templateIds.join(", ") : "") + (policy.requestedProviders && policy.requestedProviders.length ? "\nproviders: " + policy.requestedProviders.join(", ") : "") + (policy.hostIds && policy.hostIds.length ? "\nhosts: " + policy.hostIds.join(", ") : "") + (policy.hostLabels && policy.hostLabels.length ? "\nhost labels: " + policy.hostLabels.join(", ") : "") + (policy.agentIds && policy.agentIds.length ? "\nagents: " + policy.agentIds.join(", ") : "") + (policy.allowedTools && policy.allowedTools.length ? "\nallowed tools: " + policy.allowedTools.join(", ") : "") + (typeof policy.maxTaskTimeoutMs === "number" ? "\nmax timeout: " + String(policy.maxTaskTimeoutMs) + "ms" : "") + (typeof policy.maxRetryBudget === "number" ? "\nmax retry: " + String(policy.maxRetryBudget) : "");
         meta.style.whiteSpace = "pre-line";
-        const actions = document.createElement("div");
-        actions.className = "btn-row";
-        const deleteBtn = document.createElement("button");
-        deleteBtn.className = "btn-sm btn-danger";
-        deleteBtn.textContent = "Delete";
-        deleteBtn.onclick = () => handleDeletePolicy(policy.id);
-        actions.appendChild(deleteBtn);
         card.appendChild(title);
         card.appendChild(meta);
-        card.appendChild(actions);
+        if (canManagePoliciesUI()) {
+          const actions = document.createElement("div");
+          actions.className = "btn-row";
+          const deleteBtn = document.createElement("button");
+          deleteBtn.className = "btn-sm btn-danger";
+          deleteBtn.textContent = "Delete";
+          deleteBtn.onclick = () => handleDeletePolicy(policy.id);
+          actions.appendChild(deleteBtn);
+          card.appendChild(actions);
+        }
         policiesWrap.appendChild(card);
       });
     }
@@ -5885,19 +5966,22 @@
     const governancePreviewAgent = $("#governance-preview-agent");
     const governancePreviewResolve = $("#governance-preview-resolve");
     function syncBindingControls() {
-      const enabled = !!featureFlags.providerBindingEnabled;
-      profileSelect.disabled = !enabled;
-      bindingTargetType.disabled = !enabled;
-      bindingTargetID.disabled = !enabled;
-      saveBindingBtn.disabled = !enabled;
+      const bindingEnabled = !!featureFlags.providerBindingEnabled;
+      const canManageProviders = canManageProvidersUI();
+      profileSelect.disabled = !(bindingEnabled && canManageProviders);
+      bindingTargetType.disabled = !(bindingEnabled && canManageProviders);
+      bindingTargetID.disabled = !(bindingEnabled && canManageProviders);
+      saveBindingBtn.disabled = !(bindingEnabled && canManageProviders);
       if (governancePreviewHost)
-        governancePreviewHost.disabled = !enabled;
+        governancePreviewHost.disabled = !bindingEnabled;
       if (governancePreviewAgent)
-        governancePreviewAgent.disabled = !enabled;
+        governancePreviewAgent.disabled = !bindingEnabled;
       if (governancePreviewResolve)
-        governancePreviewResolve.disabled = !enabled;
-      if (!enabled) {
+        governancePreviewResolve.disabled = !bindingEnabled;
+      if (!bindingEnabled) {
         setMsg("#profiles-msg", "Provider binding is disabled by feature flag.", "info");
+      } else if (!canManageProviders || !canManagePoliciesUI()) {
+        setMsg("#profiles-msg", "Current role has read-only access to provider and policy settings.", "info");
       }
     }
     function syncProfileEditSelection(profiles) {
@@ -5956,6 +6040,10 @@
     }
     refreshBtn.onclick = refreshAll;
     saveProfileBtn.onclick = async () => {
+      if (!canManageProvidersUI()) {
+        setMsg("#profiles-msg", "Current role cannot modify provider profiles.", "error");
+        return;
+      }
       const payload = {
         name: ($("#profile-name").value || "").trim(),
         provider: ($("#profile-provider").value || "").trim(),
@@ -5985,6 +6073,10 @@
     saveBindingBtn.onclick = async () => {
       if (!featureFlags.providerBindingEnabled) {
         setMsg("#profiles-msg", "Provider binding is disabled by feature flag.", "error");
+        return;
+      }
+      if (!canManageProvidersUI()) {
+        setMsg("#profiles-msg", "Current role cannot modify provider bindings.", "error");
         return;
       }
       const profileID = ($("#binding-profile-id").value || "").trim();
@@ -6018,6 +6110,10 @@
           action: ($("#execution-policy-action").value || "ask").trim(),
           priority: parseInt(($("#execution-policy-priority").value || "0").trim(), 10) || 0,
           reason: ($("#execution-policy-reason").value || "").trim(),
+          teams: parseCommaSeparatedValues(($("#execution-policy-teams").value || "").trim()).sort((a, b) => a.localeCompare(b)),
+          projects: parseCommaSeparatedValues(($("#execution-policy-projects").value || "").trim()).sort((a, b) => a.localeCompare(b)),
+          environments: parseCommaSeparatedValues(($("#execution-policy-environments").value || "").trim()).sort((a, b) => a.localeCompare(b)),
+          templateIds: parseCommaSeparatedValues(($("#execution-policy-template-ids").value || "").trim()).sort((a, b) => a.localeCompare(b)),
           requestedProviders: parseCommaSeparatedValues(($("#execution-policy-providers").value || "").trim()).sort((a, b) => a.localeCompare(b)),
           hostIds: parseCommaSeparatedValues(($("#execution-policy-host-ids").value || "").trim()).sort((a, b) => a.localeCompare(b)),
           hostLabels: parseCommaSeparatedValues(($("#execution-policy-host-labels").value || "").trim()).sort((a, b) => a.localeCompare(b)),
@@ -6037,6 +6133,10 @@
           setMsg("#profiles-msg", "execution policy name is required.", "error");
           return;
         }
+        if (!canManagePoliciesUI()) {
+          setMsg("#profiles-msg", "Current role cannot modify execution policies.", "error");
+          return;
+        }
         try {
           saveExecutionPolicyBtn.disabled = true;
           await api("POST", "/api/v1/orchestrator/policies", payload);
@@ -6044,6 +6144,10 @@
           $("#execution-policy-action").value = "ask";
           $("#execution-policy-priority").value = "0";
           $("#execution-policy-reason").value = "";
+          $("#execution-policy-teams").value = "";
+          $("#execution-policy-projects").value = "";
+          $("#execution-policy-environments").value = "";
+          $("#execution-policy-template-ids").value = "";
           $("#execution-policy-providers").value = "";
           $("#execution-policy-host-ids").value = "";
           $("#execution-policy-host-labels").value = "";
@@ -6093,6 +6197,12 @@
         setMsg("#profiles-msg", "Profile edit cancelled.", "info");
       };
     }
+    if (saveProfileBtn)
+      saveProfileBtn.disabled = !canManageProvidersUI();
+    if (saveBindingBtn)
+      saveBindingBtn.disabled = !featureFlags.providerBindingEnabled || !canManageProvidersUI();
+    if (saveExecutionPolicyBtn)
+      saveExecutionPolicyBtn.disabled = !canManagePoliciesUI();
     if (profileTestHostSelect && !profileTestHostSelect.options.length) {
       const opt = document.createElement("option");
       opt.value = "";
@@ -6488,6 +6598,18 @@
   function formatMilliseconds(value) {
     return Math.round(toFiniteNumber(value, 0)) + "ms";
   }
+  function formatMetricsBreakdown(value) {
+    const input = value && typeof value === "object" ? value : {};
+    const entries = Object.entries(input).map(([key, count]) => [String(key || "").trim(), toFiniteNumber(count, 0)]).filter(([key, count]) => key && count > 0);
+    if (!entries.length)
+      return "none";
+    entries.sort((a, b) => {
+      if (b[1] !== a[1])
+        return b[1] - a[1];
+      return a[0].localeCompare(b[0]);
+    });
+    return entries.map(([key, count]) => key + "=" + count).join(", ");
+  }
   function normalizeRemoteMetricsPayload(payload) {
     const metrics = payload && payload.metrics && typeof payload.metrics === "object" ? payload.metrics : {};
     const totals = metrics.totals && typeof metrics.totals === "object" ? metrics.totals : {};
@@ -6508,6 +6630,25 @@
       chatStream: chat,
       operations,
       rollout
+    };
+  }
+  function normalizeOrchestratorMetricsPayload(payload) {
+    const metrics = payload && payload.metrics && typeof payload.metrics === "object" ? payload.metrics : {};
+    const executions = metrics.executions && typeof metrics.executions === "object" ? metrics.executions : {};
+    const workers = metrics.workers && typeof metrics.workers === "object" ? metrics.workers : {};
+    const providers = metrics.providers && typeof metrics.providers === "object" ? metrics.providers : {};
+    const policies = metrics.policies && typeof metrics.policies === "object" ? metrics.policies : {};
+    const queue = metrics.queue && typeof metrics.queue === "object" ? metrics.queue : {};
+    return {
+      timestamp: String(metrics.timestamp || ""),
+      executions,
+      workers,
+      providers: {
+        requestedFailures: providers.requestedFailures && typeof providers.requestedFailures === "object" ? providers.requestedFailures : {},
+        resolvedFailures: providers.resolvedFailures && typeof providers.resolvedFailures === "object" ? providers.resolvedFailures : {}
+      },
+      policies,
+      queue
     };
   }
   function classifyRemoteOperationGroup(operationName) {
@@ -6584,7 +6725,7 @@
       anomaliesOnly
     };
   }
-  function renderRemoteObservabilitySummary(normalized) {
+  function renderRemoteObservabilitySummary(normalized, orchestrator) {
     const wrap = $("#remote-observability-summary");
     if (!wrap)
       return;
@@ -6592,6 +6733,11 @@
     const repair = normalized.repair || {};
     const chat = normalized.chatStream || {};
     const rollout = normalized.rollout || {};
+    const executionMetrics = orchestrator && orchestrator.executions ? orchestrator.executions : {};
+    const workerMetrics = orchestrator && orchestrator.workers ? orchestrator.workers : {};
+    const providerMetrics = orchestrator && orchestrator.providers ? orchestrator.providers : {};
+    const policyMetrics = orchestrator && orchestrator.policies ? orchestrator.policies : {};
+    const queueMetrics = orchestrator && orchestrator.queue ? orchestrator.queue : {};
     const rolloutState = String(rollout.state || "unknown").trim().toLowerCase() || "unknown";
     const rolloutReasons = Array.isArray(rollout.reasons) ? rollout.reasons : [];
     const cards = [
@@ -6635,6 +6781,43 @@
           "state: " + rolloutState,
           "can promote: " + (toFeatureBool(rollout.canPromote, false) ? "yes" : "no"),
           "reasons: " + (rolloutReasons.length ? rolloutReasons.join("; ") : "none")
+        ]
+      },
+      {
+        title: "Executions",
+        lines: [
+          "total: " + toFiniteNumber(executionMetrics.total, 0),
+          "running: " + toFiniteNumber(executionMetrics.running, 0),
+          "completed: " + toFiniteNumber(executionMetrics.completed, 0),
+          "failed: " + toFiniteNumber(executionMetrics.failed, 0),
+          "retry count: " + toFiniteNumber(executionMetrics.retryCount, 0),
+          "avg latency: " + formatMilliseconds(executionMetrics.avgLatencyMs)
+        ]
+      },
+      {
+        title: "Workers",
+        lines: [
+          "total: " + toFiniteNumber(workerMetrics.total, 0),
+          "busy: " + toFiniteNumber(workerMetrics.busy, 0),
+          "ready: " + toFiniteNumber(workerMetrics.ready, 0),
+          "error: " + toFiniteNumber(workerMetrics.error, 0),
+          "stale: " + toFiniteNumber(workerMetrics.stale, 0),
+          "queued tasks: " + toFiniteNumber(queueMetrics.queuedTasks, 0)
+        ]
+      },
+      {
+        title: "Provider Failures",
+        lines: [
+          "requested: " + formatMetricsBreakdown(providerMetrics.requestedFailures),
+          "resolved: " + formatMetricsBreakdown(providerMetrics.resolvedFailures)
+        ]
+      },
+      {
+        title: "Policy Blocks",
+        lines: [
+          "allow: " + toFiniteNumber(policyMetrics.allow, 0),
+          "ask: " + toFiniteNumber(policyMetrics.ask, 0),
+          "deny: " + toFiniteNumber(policyMetrics.deny, 0)
         ]
       }
     ];
@@ -6747,7 +6930,7 @@
     function renderFromCache() {
       if (!remoteObservabilityData)
         return;
-      renderRemoteObservabilitySummary(remoteObservabilityData);
+      renderRemoteObservabilitySummary(remoteObservabilityData, orchestratorObservabilityData);
       const filtered = renderRemoteObservabilityOperations(remoteObservabilityData) || {
         visibleCount: 0,
         totalCount: 0,
@@ -6770,18 +6953,38 @@
       if (rolloutState) {
         parts.push("rollout=" + rolloutState);
       }
+      const executions = orchestratorObservabilityData && orchestratorObservabilityData.executions ? orchestratorObservabilityData.executions : {};
+      const workers = orchestratorObservabilityData && orchestratorObservabilityData.workers ? orchestratorObservabilityData.workers : {};
+      if (toFiniteNumber(executions.total, 0) > 0) {
+        parts.push("executions=" + toFiniteNumber(executions.total, 0));
+      }
+      if (toFiniteNumber(workers.stale, 0) > 0) {
+        parts.push("stale_workers=" + toFiniteNumber(workers.stale, 0));
+      }
       status.textContent = parts.join(" \xB7 ");
     }
     async function refreshMetrics() {
       status.textContent = "Loading remote metrics...";
-      try {
-        const payload = await api("GET", "/api/v1/remote/metrics");
-        remoteObservabilityData = normalizeRemoteMetricsPayload(payload);
-        renderFromCache();
-      } catch (e) {
+      const results = await Promise.allSettled([
+        api("GET", "/api/v1/remote/metrics"),
+        api("GET", "/api/v1/orchestrator/metrics")
+      ]);
+      const errors = [];
+      if (results[0].status === "fulfilled") {
+        remoteObservabilityData = normalizeRemoteMetricsPayload(results[0].value);
+      } else {
         remoteObservabilityData = normalizeRemoteMetricsPayload({});
-        renderFromCache();
-        status.textContent = "Load remote metrics failed: " + e.message;
+        errors.push("remote=" + results[0].reason.message);
+      }
+      if (results[1].status === "fulfilled") {
+        orchestratorObservabilityData = normalizeOrchestratorMetricsPayload(results[1].value);
+      } else {
+        orchestratorObservabilityData = normalizeOrchestratorMetricsPayload({});
+        errors.push("orchestrator=" + results[1].reason.message);
+      }
+      renderFromCache();
+      if (errors.length) {
+        status.textContent += " \xB7 warnings=" + errors.join("; ");
       }
     }
     refreshBtn.onclick = refreshMetrics;

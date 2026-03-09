@@ -14,9 +14,15 @@ func handleFeatureFlags(w http.ResponseWriter, r *http.Request, requestID string
 		return
 	}
 	flags := effectiveGatewayFeatureFlags(cfg)
+	role, err := resolveGatewayRoleFromRequest(r, cfg)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"requestId": requestID,
 		"result":    "ok",
 		"features":  flags,
+		"authz":     gatewayAuthzForRole(role),
 	})
 }

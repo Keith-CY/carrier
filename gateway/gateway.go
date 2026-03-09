@@ -21,7 +21,8 @@ type GatewayConfig struct {
 	Hostname string
 
 	// Auth
-	APIToken string // CARRIER_GATEWAY_API_TOKEN
+	APIToken   string                   // CARRIER_GATEWAY_API_TOKEN
+	RoleTokens map[string]GatewayRole   // CARRIER_GATEWAY_ROLE_TOKENS (role:token,role:token)
 
 	// Daemon connection
 	DaemonBaseURL string // CARRIER_DAEMON_BASE_URL (default http://127.0.0.1:9090)
@@ -69,6 +70,7 @@ func LoadGatewayConfigFromEnv() *GatewayConfig {
 		Port:                    parseEnvInt("CARRIER_GATEWAY_PORT", 8787),
 		Hostname:                envOrDefault("CARRIER_GATEWAY_HOST", "127.0.0.1"),
 		APIToken:                strings.TrimSpace(os.Getenv("CARRIER_GATEWAY_API_TOKEN")),
+		RoleTokens:              parseGatewayRoleTokens(strings.TrimSpace(os.Getenv("CARRIER_GATEWAY_ROLE_TOKENS"))),
 		DaemonBaseURL:           strings.TrimRight(strings.TrimSpace(envOrDefault("CARRIER_DAEMON_BASE_URL", "http://127.0.0.1:9090")), "/"),
 		DaemonToken:             strings.TrimSpace(os.Getenv("CARRIER_SERVER_API_TOKEN")),
 		DaemonTimeout:           time.Duration(parseEnvInt("CARRIER_DAEMON_TIMEOUT_MS", int(defaultDaemonTimeout/time.Millisecond))) * time.Millisecond,
@@ -225,6 +227,33 @@ func parseEnvBool(key string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+func parseGatewayRoleTokens(raw string) map[string]GatewayRole {
+	out := map[string]GatewayRole{}
+	for _, entry := range strings.Split(strings.TrimSpace(raw), ",") {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+		var roleRaw, token string
+		if left, right, ok := strings.Cut(trimmed, ":"); ok {
+			roleRaw = left
+			token = right
+		} else if left, right, ok := strings.Cut(trimmed, "="); ok {
+			roleRaw = left
+			token = right
+		} else {
+			continue
+		}
+		role := normalizeGatewayRole(roleRaw)
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		out[token] = role
+	}
+	return out
 }
 
 // Run starts gateway using environment-based configuration.

@@ -17,6 +17,9 @@ func handleOrchestratorWorkers(w http.ResponseWriter, r *http.Request, requestID
 		writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 		return
 	}
+	if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_EXECUTION_VIEW", "role cannot view orchestrator workers"); !ok {
+		return
+	}
 
 	workers, summary, warnings, err := listOrchestratorWorkerInventory(r, daemon, requestID, cfg)
 	if err != nil {
@@ -41,6 +44,9 @@ func handleOrchestratorWorkersQueue(w http.ResponseWriter, r *http.Request, requ
 	}
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+		return
+	}
+	if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_EXECUTION_VIEW", "role cannot view orchestrator worker queue"); !ok {
 		return
 	}
 
@@ -70,6 +76,9 @@ func handleOrchestratorWorkersReclaimStale(w http.ResponseWriter, r *http.Reques
 	}
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+		return
+	}
+	if _, ok := requireGatewayPermission(w, r, cfg, canManageHosts, "E_RBAC_HOST_MANAGE", "role cannot reclaim stale orchestrator workers"); !ok {
 		return
 	}
 	summary, err := reclaimOrchestratorStaleWorkers(r.Context(), cfg)
