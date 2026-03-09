@@ -800,9 +800,85 @@
         </div>
       </div>
 
+      <div class="card" style="margin-top:12px">
+        <h3>Execution Triggers</h3>
+        <div id="trigger-editor-state" class="text-dim" style="margin-bottom:8px"></div>
+        <div class="form-grid">
+          <div>
+            <label for="trigger-name">Name</label>
+            <input id="trigger-name" type="text" placeholder="incident webhook">
+          </div>
+          <div>
+            <label for="trigger-type">Type</label>
+            <select id="trigger-type">
+              <option value="webhook">webhook</option>
+              <option value="github">github</option>
+              <option value="schedule">schedule</option>
+            </select>
+          </div>
+          <div>
+            <label for="trigger-template-id">Template</label>
+            <select id="trigger-template-id"></select>
+          </div>
+          <div>
+            <label for="trigger-provider">Provider</label>
+            <input id="trigger-provider" type="text" placeholder="openrouter">
+          </div>
+          <div>
+            <label for="trigger-host-ids">Host IDs</label>
+            <input id="trigger-host-ids" type="text" placeholder="host-1, host-2">
+          </div>
+          <div>
+            <label for="trigger-host-labels">Host Labels</label>
+            <input id="trigger-host-labels" type="text" placeholder="prod, gpu">
+          </div>
+          <div>
+            <label for="trigger-max-concurrency">Max Concurrency</label>
+            <input id="trigger-max-concurrency" type="number" min="1" max="64" placeholder="2">
+          </div>
+          <div>
+            <label for="trigger-timezone">Timezone</label>
+            <input id="trigger-timezone" type="text" value="UTC" placeholder="UTC">
+          </div>
+          <div>
+            <label for="trigger-webhook-secret">Webhook Secret</label>
+            <input id="trigger-webhook-secret" type="text" placeholder="secret">
+          </div>
+          <div>
+            <label for="trigger-github-command">GitHub Command</label>
+            <input id="trigger-github-command" type="text" placeholder="/carrier triage">
+          </div>
+          <div>
+            <label for="trigger-github-label">GitHub Label</label>
+            <input id="trigger-github-label" type="text" placeholder="needs-triage">
+          </div>
+          <div>
+            <label for="trigger-github-repository">GitHub Repository</label>
+            <input id="trigger-github-repository" type="text" placeholder="Keith-CY/carrier">
+          </div>
+          <div>
+            <label for="trigger-cron">Cron</label>
+            <input id="trigger-cron" type="text" placeholder="0 * * * *">
+          </div>
+          <div>
+            <label for="trigger-policy-approve">Policy Approve</label>
+            <input id="trigger-policy-approve" type="checkbox">
+          </div>
+          <div style="grid-column:1 / -1">
+            <label for="trigger-inputs">Inputs</label>
+            <textarea id="trigger-inputs" rows="4" placeholder="service={{payload.service}}&#10;environment={{payload.environment}}"></textarea>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button id="trigger-save">Save Trigger</button>
+          <button id="trigger-cancel-edit" class="btn-sm btn-secondary hidden" type="button">Cancel Edit</button>
+        </div>
+      </div>
+
       <div id="profiles-list" class="agent-grid" style="margin-top:12px"></div>
       <div id="bindings-list" class="agent-grid" style="margin-top:12px"></div>
       <div id="execution-policies-list" class="agent-grid" style="margin-top:12px"></div>
+      <div id="execution-triggers-list" class="agent-grid" style="margin-top:12px"></div>
     </section>
 
     <section id="view-remote-chat" class="view hidden view-remote-chat-surface">

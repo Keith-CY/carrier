@@ -1,4 +1,4 @@
-// ../src/remote-control-islands.ts
+// webui/src/remote-control-islands.ts
 (function() {
   const React = window.React;
   const ReactDOM = window.ReactDOM;

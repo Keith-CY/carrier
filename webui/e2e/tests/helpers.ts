@@ -213,6 +213,10 @@ export const MOCK_EXECUTIONS = [
     id: 'exec-complete',
     goal: 'Prepare release notes',
     requestedProvider: 'openrouter',
+    triggerSource: 'github',
+    triggerId: 'trigger-gh-1',
+    triggerEvent: 'issue_comment',
+    initiator: 'github:alice',
     status: 'completed',
     updatedAt: '2026-03-08T10:30:00Z',
     parentExecutionId: 'exec-seed-release',
@@ -492,6 +496,37 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
           provider: 'openrouter',
           model: 'openai/gpt-4o-mini',
           syncMode: 'always_push',
+        },
+      }),
+    }),
+  );
+
+  await page.route('**/api/v1/triggers', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        triggers: [],
+      }),
+    }),
+  );
+
+  await page.route('**/api/v1/triggers/*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        trigger: {
+          id: 'trigger-1',
+          name: 'default trigger',
+          type: 'webhook',
+          templateId: 'incident-diagnosis',
+          enabled: true,
+          config: {
+            webhookSecretConfigured: true,
+          },
         },
       }),
     }),

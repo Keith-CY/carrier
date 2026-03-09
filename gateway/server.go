@@ -267,6 +267,22 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		}
 		handleExecutionTemplates(w, r, requestID, cfg)
 	})
+	mux.HandleFunc("/api/v1/triggers", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleExecutionTriggers(w, r, requestID, cfg)
+	})
+	mux.HandleFunc("/api/v1/triggers/", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleExecutionTriggers(w, r, requestID, cfg)
+	})
 	mux.HandleFunc("/api/v1/orchestrator/executions", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
 		if err := checkGatewayAccess(r, cfg); err != nil {
@@ -424,6 +440,10 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			return
 		}
 		handleTelegramWebhook(w, r, cfg, daemon, sessions, downloads, rl, onboard)
+	})
+	mux.HandleFunc("/api/v1/triggers/webhook/", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		handleExecutionTriggerWebhook(w, r, requestID, cfg)
 	})
 	mux.HandleFunc("/webhook/discord", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

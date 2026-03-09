@@ -37,6 +37,8 @@
   let remoteHostsCache = [];
   let sshConfigHostAliasesCache = [];
   let providerProfilesCache = [];
+  let executionTemplatesCache = [];
+  let executionTriggersCache = [];
   let orchestratorPolicyRulesCache = [];
   let serverManageHostID = '';
   let serverManageOperationRunning = false;
@@ -44,6 +46,7 @@
   let serverHostLastOperationByID = {};
   let serverEditingHostID = '';
   let profileEditingProfileID = '';
+  let triggerEditingTriggerID = '';
   let serverManageInstallStreamAbortController = null;
   let serverManageLiveLogLines = [];
   let serverManageDiagnosisPending = false;
@@ -2257,6 +2260,44 @@
     }
     target.appendChild(summaryCard);
 
+    const triggerSource = String(execution && execution.triggerSource ? execution.triggerSource : '').trim();
+    const triggerID = String(execution && execution.triggerId ? execution.triggerId : '').trim();
+    const triggerEvent = String(execution && execution.triggerEvent ? execution.triggerEvent : '').trim();
+    const initiator = String(execution && execution.initiator ? execution.initiator : '').trim();
+    if (triggerSource || triggerID || triggerEvent || initiator) {
+      const triggerCard = document.createElement('div');
+      triggerCard.className = 'execution-detail-block';
+      const triggerTitle = document.createElement('div');
+      triggerTitle.className = 'execution-detail-title';
+      triggerTitle.textContent = 'Trigger';
+      triggerCard.appendChild(triggerTitle);
+      if (triggerSource) {
+        const row = document.createElement('div');
+        row.className = 'execution-detail-line';
+        row.textContent = 'source: ' + triggerSource;
+        triggerCard.appendChild(row);
+      }
+      if (triggerID) {
+        const row = document.createElement('div');
+        row.className = 'execution-detail-line';
+        row.textContent = 'id: ' + triggerID;
+        triggerCard.appendChild(row);
+      }
+      if (triggerEvent) {
+        const row = document.createElement('div');
+        row.className = 'execution-detail-line';
+        row.textContent = 'event: ' + triggerEvent;
+        triggerCard.appendChild(row);
+      }
+      if (initiator) {
+        const row = document.createElement('div');
+        row.className = 'execution-detail-line';
+        row.textContent = 'initiator: ' + initiator;
+        triggerCard.appendChild(row);
+      }
+      target.appendChild(triggerCard);
+    }
+
     const parentExecutionID = String(execution && execution.parentExecutionId ? execution.parentExecutionId : '').trim();
     const sourceExecutionID = String(execution && execution.sourceExecutionId ? execution.sourceExecutionId : '').trim();
     const launchReason = String(execution && execution.launchReason ? execution.launchReason : '').trim();
@@ -2610,6 +2651,21 @@
       return;
     }
 
+    const selectedExecution = executions.find(item => String(item && item.id ? item.id : '').trim() === selectedExecutionID) || {};
+    const selectedTerminal = isExecutionTerminalStatus(selectedExecution && selectedExecution.status);
+    const selectedHasFailedTasks = executionHasFailedTasks(selectedExecution);
+    const selectedPolicy = selectedExecution && selectedExecution.policy && typeof selectedExecution.policy === 'object' ? selectedExecution.policy : {};
+    const launchAllowed = canLaunchExecutionsUI();
+    const approveAllowed = canApproveExecutionsUI();
+    const selectedPolicyAskPending = !selectedTerminal &&
+      String(selectedPolicy && selectedPolicy.decision ? selectedPolicy.decision : '').trim() === 'ask' &&
+      !String(selectedPolicy && selectedPolicy.approvedAt ? selectedPolicy.approvedAt : '').trim();
+    retryBtn.classList.toggle('hidden', !(launchAllowed && selectedTerminal && selectedHasFailedTasks));
+    rerunBtn.classList.toggle('hidden', !(launchAllowed && selectedTerminal));
+    cloneBtn.classList.toggle('hidden', !(launchAllowed && selectedTerminal));
+    cancelBtn.classList.toggle('hidden', !(launchAllowed && !selectedTerminal));
+    policyApproveBtn.classList.toggle('hidden', !(approveAllowed && selectedPolicyAskPending));
+
     detail.textContent = 'Loading details…';
     try {
       const payload = await fetchExecutionDetails(selectedExecutionID, !!forceDetail);
@@ -2618,8 +2674,6 @@
       const terminal = isExecutionTerminalStatus(execution && execution.status);
       const hasFailedTasks = executionHasFailedTasks(execution);
       const policy = execution && execution.policy && typeof execution.policy === 'object' ? execution.policy : {};
-      const launchAllowed = canLaunchExecutionsUI();
-      const approveAllowed = canApproveExecutionsUI();
       const policyAskPending = !terminal &&
         String(policy && policy.decision ? policy.decision : '').trim() === 'ask' &&
         !String(policy && policy.approvedAt ? policy.approvedAt : '').trim();
@@ -3914,6 +3968,135 @@
       el.value = map[selector];
     });
     updateProfileEditorUI();
+  }
+
+  function updateTriggerEditorUI() {
+    const saveBtn = $('#trigger-save');
+    const cancelBtn = $('#trigger-cancel-edit');
+    const stateEl = $('#trigger-editor-state');
+    const editing = String(triggerEditingTriggerID || '').trim();
+    if (saveBtn) {
+      saveBtn.textContent = editing ? 'Update Trigger' : 'Save Trigger';
+    }
+    if (cancelBtn) {
+      cancelBtn.classList.toggle('hidden', !editing);
+    }
+    if (stateEl) {
+      stateEl.textContent = editing ? ('Editing trigger: ' + editing) : '';
+    }
+  }
+
+  function clearTriggerFormValues() {
+    const defaults = {
+      '#trigger-name': '',
+      '#trigger-type': 'webhook',
+      '#trigger-provider': '',
+      '#trigger-host-ids': '',
+      '#trigger-host-labels': '',
+      '#trigger-max-concurrency': '',
+      '#trigger-inputs': '',
+      '#trigger-webhook-secret': '',
+      '#trigger-github-command': '',
+      '#trigger-github-label': '',
+      '#trigger-github-repository': '',
+      '#trigger-cron': '',
+      '#trigger-timezone': 'UTC',
+    };
+    Object.keys(defaults).forEach(selector => {
+      const el = $(selector);
+      if (!el) return;
+      el.value = defaults[selector];
+    });
+    const templateSelect = $('#trigger-template-id');
+    if (templateSelect && templateSelect.options && templateSelect.options.length > 0) {
+      templateSelect.selectedIndex = 0;
+    }
+    const policyApprove = $('#trigger-policy-approve');
+    if (policyApprove) policyApprove.checked = false;
+  }
+
+  function resetTriggerEditor(clearForm) {
+    triggerEditingTriggerID = '';
+    updateTriggerEditorUI();
+    if (clearForm) {
+      clearTriggerFormValues();
+    }
+  }
+
+  function renderTriggerInputsText(inputs) {
+    const source = inputs && typeof inputs === 'object' ? inputs : {};
+    return Object.keys(source)
+      .sort((a, b) => a.localeCompare(b))
+      .map((key) => String(key) + '=' + String(source[key] || ''))
+      .join('\n');
+  }
+
+  function parseTriggerInputsText(raw) {
+    const out = {};
+    String(raw || '')
+      .split('\n')
+      .map(line => String(line || '').trim())
+      .filter(Boolean)
+      .forEach(line => {
+        const idx = line.indexOf('=');
+        if (idx <= 0) return;
+        const key = line.slice(0, idx).trim();
+        const value = line.slice(idx + 1).trim();
+        if (!key) return;
+        out[key] = value;
+      });
+    return out;
+  }
+
+  function syncTriggerTemplateOptions(templates) {
+    const select = $('#trigger-template-id');
+    if (!select) return;
+    const current = String(select.value || '').trim();
+    select.textContent = '';
+    (Array.isArray(templates) ? templates : []).forEach(template => {
+      const opt = document.createElement('option');
+      opt.value = String(template && template.id ? template.id : '').trim();
+      opt.textContent = String(template && template.name ? template.name : opt.value).trim() || opt.value;
+      select.appendChild(opt);
+    });
+    if (current && Array.from(select.options).some((opt) => opt.value === current)) {
+      select.value = current;
+    } else if (select.options.length > 0) {
+      select.selectedIndex = 0;
+    }
+  }
+
+  function beginTriggerEdit(triggerID) {
+    const key = String(triggerID || '').trim();
+    if (!key) return;
+    const trigger = executionTriggersCache.find(item => String(item && item.id ? item.id : '') === key);
+    if (!trigger) return;
+    const config = trigger && trigger.config && typeof trigger.config === 'object' ? trigger.config : {};
+    triggerEditingTriggerID = key;
+    const map = {
+      '#trigger-name': trigger.name || '',
+      '#trigger-type': trigger.type || 'webhook',
+      '#trigger-template-id': trigger.templateId || '',
+      '#trigger-provider': config.provider || '',
+      '#trigger-host-ids': Array.isArray(config.hostIds) ? config.hostIds.join(', ') : '',
+      '#trigger-host-labels': Array.isArray(config.hostLabels) ? config.hostLabels.join(', ') : '',
+      '#trigger-max-concurrency': config.maxConcurrency ? String(config.maxConcurrency) : '',
+      '#trigger-inputs': renderTriggerInputsText(config.inputs || {}),
+      '#trigger-webhook-secret': '',
+      '#trigger-github-command': config.githubCommand || '',
+      '#trigger-github-label': config.githubLabel || '',
+      '#trigger-github-repository': config.githubRepository || '',
+      '#trigger-cron': config.cron || '',
+      '#trigger-timezone': config.timezone || 'UTC',
+    };
+    Object.keys(map).forEach(selector => {
+      const el = $(selector);
+      if (!el) return;
+      el.value = map[selector];
+    });
+    const policyApprove = $('#trigger-policy-approve');
+    if (policyApprove) policyApprove.checked = !!config.policyApprove;
+    updateTriggerEditorUI();
   }
 
   function syncProfileTestHostOptions(hosts) {
@@ -5852,11 +6035,16 @@
       }
 
       try {
-        setMsg('#servers-msg', '', 'info');
+        if (canManageHostsUI()) {
+          setMsg('#servers-msg', '', 'info');
+        }
         const hosts = await fetchRemoteHosts();
         renderServersList(hosts);
         syncManageSelection(hosts);
         syncServerEditSelection(hosts);
+        if (!canManageHostsUI()) {
+          setMsg('#servers-msg', 'Current role cannot modify remote hosts.', 'info');
+        }
       } catch (e) {
         setMsg('#servers-msg', 'Load failed: ' + e.message, 'error');
         renderServersList([]);
@@ -6143,6 +6331,79 @@
     }
   }
 
+  function renderExecutionTriggers(triggers, onEditTrigger, onToggleTrigger, onDeleteTrigger) {
+    const wrap = $('#execution-triggers-list');
+    if (!wrap) return;
+    wrap.textContent = '';
+    const list = Array.isArray(triggers) ? triggers : [];
+    if (!list.length) {
+      const empty = document.createElement('div');
+      empty.className = 'card';
+      empty.textContent = 'No execution triggers configured.';
+      wrap.appendChild(empty);
+      return;
+    }
+    list.forEach(trigger => {
+      const config = trigger && trigger.config && typeof trigger.config === 'object' ? trigger.config : {};
+      const card = document.createElement('div');
+      card.className = 'agent-card';
+      const title = document.createElement('h4');
+      title.textContent = trigger.name || trigger.id;
+      const meta = document.createElement('div');
+      meta.className = 'instance-meta';
+      meta.textContent =
+        'id: ' + (trigger.id || '-') +
+        '\ntype: ' + (trigger.type || '-') +
+        '\ntemplate: ' + (trigger.templateId || '-') +
+        '\nenabled: ' + String(trigger.enabled !== false) +
+        (trigger.createdBy ? '\ncreated by: ' + trigger.createdBy : '') +
+        (config.provider ? '\nprovider: ' + config.provider : '') +
+        (config.hostIds && config.hostIds.length ? '\nhost ids: ' + config.hostIds.join(', ') : '') +
+        (config.hostLabels && config.hostLabels.length ? '\nhost labels: ' + config.hostLabels.join(', ') : '') +
+        (typeof config.maxConcurrency === 'number' && config.maxConcurrency > 0 ? '\nmax concurrency: ' + String(config.maxConcurrency) : '') +
+        (config.policyApprove ? '\npolicy approve: true' : '') +
+        (config.webhookSecretConfigured ? '\nwebhook secret: configured' : '') +
+        (config.githubCommand ? '\ngithub command: ' + config.githubCommand : '') +
+        (config.githubLabel ? '\ngithub label: ' + config.githubLabel : '') +
+        (config.githubRepository ? '\ngithub repository: ' + config.githubRepository : '') +
+        (config.cron ? '\ncron: ' + config.cron : '') +
+        (config.timezone ? '\ntimezone: ' + config.timezone : '') +
+        (trigger.nextRunAt ? '\nnext run: ' + trigger.nextRunAt : '') +
+        (typeof trigger.triggeredCount === 'number' && trigger.triggeredCount > 0 ? '\ntriggered count: ' + String(trigger.triggeredCount) : '') +
+        (trigger.lastExecutionId ? '\nlast execution: ' + trigger.lastExecutionId : '') +
+        (trigger.lastError ? '\nlast error: ' + trigger.lastError : '') +
+        (config.inputs && Object.keys(config.inputs).length ? '\ninputs:\n' + renderTriggerInputsText(config.inputs) : '');
+      meta.style.whiteSpace = 'pre-line';
+      card.appendChild(title);
+      card.appendChild(meta);
+      if (canManagePoliciesUI()) {
+        const actions = document.createElement('div');
+        actions.className = 'btn-row';
+
+        const editBtn = document.createElement('button');
+        editBtn.className = 'btn-sm btn-secondary';
+        editBtn.textContent = 'Edit';
+        editBtn.onclick = () => onEditTrigger(trigger.id);
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'btn-sm btn-secondary';
+        toggleBtn.textContent = trigger.enabled === false ? 'Enable' : 'Disable';
+        toggleBtn.onclick = () => onToggleTrigger(trigger.id, trigger.enabled === false);
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn-sm btn-danger';
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.onclick = () => onDeleteTrigger(trigger.id);
+
+        actions.appendChild(editBtn);
+        actions.appendChild(toggleBtn);
+        actions.appendChild(deleteBtn);
+        card.appendChild(actions);
+      }
+      wrap.appendChild(card);
+    });
+  }
+
   function parseCommaSeparatedValues(raw) {
     return String(raw || '')
       .split(',')
@@ -6183,6 +6444,8 @@
     const cancelEditBtn = $('#profile-cancel-edit');
     const saveBindingBtn = $('#binding-save');
     const saveExecutionPolicyBtn = $('#execution-policy-save');
+    const saveTriggerBtn = $('#trigger-save');
+    const cancelTriggerEditBtn = $('#trigger-cancel-edit');
     const profileSelect = $('#binding-profile-id');
     const bindingTargetType = $('#binding-target-type');
     const bindingTargetID = $('#binding-target-id');
@@ -6208,6 +6471,32 @@
       }
     }
 
+    function syncTriggerControls() {
+      const canManageTriggers = canManagePoliciesUI();
+      if (saveTriggerBtn) saveTriggerBtn.disabled = !canManageTriggers;
+      [
+        '#trigger-name',
+        '#trigger-type',
+        '#trigger-template-id',
+        '#trigger-provider',
+        '#trigger-host-ids',
+        '#trigger-host-labels',
+        '#trigger-max-concurrency',
+        '#trigger-inputs',
+        '#trigger-webhook-secret',
+        '#trigger-github-command',
+        '#trigger-github-label',
+        '#trigger-github-repository',
+        '#trigger-cron',
+        '#trigger-timezone',
+        '#trigger-policy-approve',
+      ].forEach(selector => {
+        const el = $(selector);
+        if (!el) return;
+        el.disabled = !canManageTriggers;
+      });
+    }
+
     function syncProfileEditSelection(profiles) {
       const list = Array.isArray(profiles) ? profiles : [];
       const current = String(profileEditingProfileID || '').trim();
@@ -6223,20 +6512,27 @@
         if (featureFlags.providerBindingEnabled) {
           setMsg('#profiles-msg', '', 'info');
         }
-        const [profilesPayload, bindingsPayload, hosts, policiesPayload] = await Promise.all([
+        const [profilesPayload, bindingsPayload, hosts, policiesPayload, triggersPayload, templatesPayload] = await Promise.all([
           api('GET', '/api/v1/provider-profiles'),
           api('GET', '/api/v1/provider-bindings'),
           fetchRemoteHosts(),
           api('GET', '/api/v1/orchestrator/policies'),
+          canViewExecutionsUI() ? api('GET', '/api/v1/triggers') : Promise.resolve({ result: 'ok', triggers: [] }),
+          canViewExecutionsUI() ? api('GET', '/api/v1/templates') : Promise.resolve({ result: 'ok', templates: [] }),
         ]);
         const profiles = profilesPayload && Array.isArray(profilesPayload.profiles) ? profilesPayload.profiles : [];
         const bindings = bindingsPayload && Array.isArray(bindingsPayload.bindings) ? bindingsPayload.bindings : [];
         const policies = policiesPayload && Array.isArray(policiesPayload.policies) ? policiesPayload.policies : [];
+        const triggers = triggersPayload && Array.isArray(triggersPayload.triggers) ? triggersPayload.triggers : [];
+        const templates = templatesPayload && Array.isArray(templatesPayload.templates) ? templatesPayload.templates : [];
         providerProfilesCache = profiles;
+        executionTemplatesCache = templates;
+        executionTriggersCache = triggers;
         orchestratorPolicyRulesCache = policies;
         remoteHostsCache = hosts;
         pruneServerHostOperationCache(hosts);
         syncProfileTestHostOptions(hosts);
+        syncTriggerTemplateOptions(templates);
         if (governancePreviewHost) {
           governancePreviewHost.textContent = '';
           hosts.forEach(host => {
@@ -6247,6 +6543,43 @@
           });
         }
         renderProfilesAndBindings(profiles, bindings, policies);
+        renderExecutionTriggers(
+          triggers,
+          (triggerID) => {
+            beginTriggerEdit(triggerID);
+            setMsg('#profiles-msg', 'Editing trigger: ' + triggerID, 'info');
+          },
+          async (triggerID, nextEnabled) => {
+            const key = String(triggerID || '').trim();
+            if (!key) return;
+            const trigger = executionTriggersCache.find(item => String(item && item.id ? item.id : '') === key) || {};
+            const label = String(trigger && trigger.name ? trigger.name : key);
+            try {
+              await api('PATCH', '/api/v1/triggers/' + encodeURIComponent(key), { enabled: !!nextEnabled });
+              await refreshAll();
+              setMsg('#profiles-msg', 'Execution trigger updated: ' + label, 'success');
+            } catch (e) {
+              setMsg('#profiles-msg', 'Update execution trigger failed: ' + e.message, 'error');
+            }
+          },
+          async (triggerID) => {
+            const key = String(triggerID || '').trim();
+            if (!key) return;
+            const trigger = executionTriggersCache.find(item => String(item && item.id ? item.id : '') === key) || {};
+            const label = String(trigger && trigger.name ? trigger.name : key);
+            if (!window.confirm('Delete execution trigger ' + label + '?')) return;
+            try {
+              await api('DELETE', '/api/v1/triggers/' + encodeURIComponent(key));
+              if (String(triggerEditingTriggerID || '') === key) {
+                resetTriggerEditor(true);
+              }
+              await refreshAll();
+              setMsg('#profiles-msg', 'Execution trigger deleted: ' + label, 'success');
+            } catch (e) {
+              setMsg('#profiles-msg', 'Delete execution trigger failed: ' + e.message, 'error');
+            }
+          },
+        );
         syncProfileEditSelection(profiles);
 
         profileSelect.textContent = '';
@@ -6259,8 +6592,10 @@
       } catch (e) {
         setMsg('#profiles-msg', 'Load failed: ' + e.message, 'error');
         renderProfilesAndBindings([], [], []);
+        renderExecutionTriggers([], () => {}, () => {}, () => {});
       } finally {
         syncBindingControls();
+        syncTriggerControls();
       }
     }
 
@@ -6395,6 +6730,64 @@
       };
     }
 
+    if (saveTriggerBtn) {
+      saveTriggerBtn.onclick = async () => {
+        if (!canManagePoliciesUI()) {
+          setMsg('#profiles-msg', 'Current role cannot modify execution triggers.', 'error');
+          return;
+        }
+        const payload: any = {
+          name: ($('#trigger-name').value || '').trim(),
+          type: ($('#trigger-type').value || 'webhook').trim(),
+          templateId: ($('#trigger-template-id').value || '').trim(),
+          createdBy: 'carrier-webui',
+          config: {
+            inputs: parseTriggerInputsText(($('#trigger-inputs').value || '').trim()),
+            provider: ($('#trigger-provider').value || '').trim(),
+            hostIds: parseCommaSeparatedValues(($('#trigger-host-ids').value || '').trim()).sort((a, b) => a.localeCompare(b)),
+            hostLabels: parseCommaSeparatedValues(($('#trigger-host-labels').value || '').trim()).sort((a, b) => a.localeCompare(b)),
+            policyApprove: !!$('#trigger-policy-approve').checked,
+            webhookSecret: ($('#trigger-webhook-secret').value || '').trim(),
+            githubCommand: ($('#trigger-github-command').value || '').trim(),
+            githubLabel: ($('#trigger-github-label').value || '').trim(),
+            githubRepository: ($('#trigger-github-repository').value || '').trim(),
+            cron: ($('#trigger-cron').value || '').trim(),
+            timezone: ($('#trigger-timezone').value || 'UTC').trim(),
+          },
+        };
+        const concurrencyRaw = String(($('#trigger-max-concurrency').value || '')).trim();
+        if (concurrencyRaw !== '') {
+          payload.config.maxConcurrency = parseInt(concurrencyRaw, 10) || 0;
+        }
+        if (!payload.name) {
+          setMsg('#profiles-msg', 'execution trigger name is required.', 'error');
+          return;
+        }
+        if (!payload.templateId) {
+          setMsg('#profiles-msg', 'execution trigger template is required.', 'error');
+          return;
+        }
+        try {
+          saveTriggerBtn.disabled = true;
+          const editingID = String(triggerEditingTriggerID || '').trim();
+          if (editingID) {
+            await api('PATCH', '/api/v1/triggers/' + encodeURIComponent(editingID), payload);
+            await refreshAll();
+            setMsg('#profiles-msg', 'Execution trigger updated: ' + editingID, 'success');
+          } else {
+            await api('POST', '/api/v1/triggers', payload);
+            await refreshAll();
+            setMsg('#profiles-msg', 'Execution trigger saved.', 'success');
+          }
+          resetTriggerEditor(true);
+        } catch (e) {
+          setMsg('#profiles-msg', 'Save execution trigger failed: ' + e.message, 'error');
+        } finally {
+          saveTriggerBtn.disabled = false;
+        }
+      };
+    }
+
     if (governancePreviewResolve) {
       governancePreviewResolve.onclick = async () => {
         if (!featureFlags.providerBindingEnabled) {
@@ -6429,9 +6822,16 @@
         setMsg('#profiles-msg', 'Profile edit cancelled.', 'info');
       };
     }
+    if (cancelTriggerEditBtn) {
+      cancelTriggerEditBtn.onclick = () => {
+        resetTriggerEditor(true);
+        setMsg('#profiles-msg', 'Trigger edit cancelled.', 'info');
+      };
+    }
     if (saveProfileBtn) saveProfileBtn.disabled = !canManageProvidersUI();
     if (saveBindingBtn) saveBindingBtn.disabled = !featureFlags.providerBindingEnabled || !canManageProvidersUI();
     if (saveExecutionPolicyBtn) saveExecutionPolicyBtn.disabled = !canManagePoliciesUI();
+    if (saveTriggerBtn) saveTriggerBtn.disabled = !canManagePoliciesUI();
     if (profileTestHostSelect && !profileTestHostSelect.options.length) {
       const opt = document.createElement('option');
       opt.value = '';
@@ -6440,7 +6840,9 @@
     }
     renderGovernancePreviewResolution(null);
     updateProfileEditorUI();
+    updateTriggerEditorUI();
     syncBindingControls();
+    syncTriggerControls();
     refreshAll();
   }
 

@@ -576,6 +576,10 @@ func TestRenderOrchestrateExecutionIncludesLineageAndArtifacts(t *testing.T) {
 		"execution":{
 			"id":"exec-derived-1",
 			"goal":"retry release notes generation",
+			"triggerSource":"github",
+			"triggerId":"trigger-gh-1",
+			"triggerEvent":"issue_comment",
+			"initiator":"github:alice",
 			"parentExecutionId":"exec-source-1",
 			"sourceExecutionId":"exec-source-1",
 			"launchReason":"retry_failed_tasks",
@@ -604,6 +608,9 @@ func TestRenderOrchestrateExecutionIncludesLineageAndArtifacts(t *testing.T) {
 	out := renderOrchestrateExecution(resp)
 	if !strings.Contains(out, "lineage: parent=exec-source-1 source=exec-source-1 launch=retry_failed_tasks") {
 		t.Fatalf("expected lineage in output, got %q", out)
+	}
+	if !strings.Contains(out, "trigger: source=github id=trigger-gh-1 event=issue_comment initiator=github:alice") {
+		t.Fatalf("expected trigger metadata in output, got %q", out)
 	}
 	if !strings.Contains(out, "outcome: one task failed and can be retried") {
 		t.Fatalf("expected outcome summary in output, got %q", out)

@@ -101,6 +101,9 @@ test.describe('Execution Center', () => {
   test('execution detail shows lineage, artifacts, and derived execution actions', async ({ page }) => {
     await loginWithToken(page, '/#/executions/exec-complete');
 
+    await expect(page.locator('#executions-detail')).toContainText('Trigger');
+    await expect(page.locator('#executions-detail')).toContainText('source: github');
+    await expect(page.locator('#executions-detail')).toContainText('initiator: github:alice');
     await expect(page.locator('#executions-detail')).toContainText('Execution Lineage');
     await expect(page.locator('#executions-detail')).toContainText('parent: exec-seed-release');
     await expect(page.locator('#executions-detail')).toContainText('launch reason: clone_execution');
