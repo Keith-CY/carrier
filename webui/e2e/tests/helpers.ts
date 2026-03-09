@@ -25,6 +25,41 @@ export const MOCK_AGENTS = [
   { id: 'agent-gamma', name: 'agent-gamma', runtime: 'stopped' },
 ];
 
+export const MOCK_TEMPLATES = [
+  {
+    id: 'incident-diagnosis',
+    name: 'Incident Diagnosis',
+    description: 'Triage a live incident and produce an operator-facing diagnosis summary.',
+    inputSchema: [
+      { id: 'service', label: 'Service', required: true, placeholder: 'checkout' },
+      { id: 'environment', label: 'Environment', required: true, placeholder: 'prod' },
+      { id: 'incidentSummary', label: 'Incident Summary', required: true, placeholder: 'latency regression after deploy' },
+    ],
+    defaultGoalTemplate: 'Diagnose incident for service {{service}} in {{environment}}. Summary: {{incidentSummary}}.',
+    plannerTasks: [
+      { id: 'task-1', agentId: 'zeroclaw', inputTemplate: 'Collect incident context for {{service}} in {{environment}}.' },
+      { id: 'task-2', agentId: 'picoclaw', inputTemplate: 'Analyze probable failure paths for {{service}} in {{environment}} given {{incidentSummary}}.' },
+      { id: 'task-3', agentId: 'zeroclaw', inputTemplate: 'Draft diagnosis summary and operator next steps for {{service}}.' },
+    ],
+  },
+  {
+    id: 'pr-triage',
+    name: 'PR Triage',
+    description: 'Collect pull request context, inspect risk, and draft a recommendation.',
+    inputSchema: [
+      { id: 'repository', label: 'Repository', required: true, placeholder: 'Keith-CY/carrier' },
+      { id: 'prNumber', label: 'PR Number', required: true, placeholder: '1554' },
+      { id: 'focus', label: 'Focus', required: false, defaultValue: 'general risk assessment' },
+    ],
+    defaultGoalTemplate: 'Triage pull request {{repository}}#{{prNumber}} with focus on {{focus}}.',
+    plannerTasks: [
+      { id: 'task-1', agentId: 'zeroclaw', inputTemplate: 'Collect PR context for {{repository}}#{{prNumber}}.' },
+      { id: 'task-2', agentId: 'picoclaw', inputTemplate: 'Inspect changed files and risk hotspots for {{repository}}#{{prNumber}} with focus on {{focus}}.' },
+      { id: 'task-3', agentId: 'zeroclaw', inputTemplate: 'Draft a triage recommendation for {{repository}}#{{prNumber}}.' },
+    ],
+  },
+];
+
 export const MOCK_INSTANCES = MOCK_AGENTS.map((agent, idx) => ({
   id: `instance-${idx + 1}`,
   agent_id: agent.id,
@@ -389,6 +424,17 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
     }),
   );
 
+  await page.route('**/api/v1/templates', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        templates: cloneJSON(MOCK_TEMPLATES),
+      }),
+    }),
+  );
+
   await page.route('**/api/v1/remote/hosts', (route) =>
     route.fulfill({
       status: 200,
@@ -698,6 +744,10 @@ export async function mockOrchestrationAPIs(page: Page) {
 
   await page.route('**/api/v1/orchestrator/plans', async (route) => {
     const body = route.request().postDataJSON() as Record<string, unknown>;
+    const templateID = String(body.templateId || '').trim();
+    const templateInputs = body.inputs && typeof body.inputs === 'object'
+      ? (body.inputs as Record<string, unknown>)
+      : {};
     const goal = String(body.goal || '').trim();
     const provider = String(body.provider || '').trim();
     const hostIds = Array.isArray(body.hostIds) ? (body.hostIds as string[]) : [];
@@ -711,30 +761,45 @@ export async function mockOrchestrationAPIs(page: Page) {
     const secondWorkerSelector = hostLabels.length
       ? { hostLabels }
       : { hostId: secondHostId || 'local' };
+    const renderedGoal = templateID === 'incident-diagnosis'
+      ? `Diagnose incident for service ${String(templateInputs.service || '').trim()} in ${String(templateInputs.environment || '').trim()}. Summary: ${String(templateInputs.incidentSummary || '').trim()}.`
+      : goal;
+    const plannerTasks = templateID === 'incident-diagnosis'
+      ? [
+          { id: 'task-1', input: `Collect incident context for ${String(templateInputs.service || '').trim()} in ${String(templateInputs.environment || '').trim()}.`, agentId: 'zeroclaw' },
+          { id: 'task-2', input: `Analyze probable failure paths for ${String(templateInputs.service || '').trim()} in ${String(templateInputs.environment || '').trim()} given ${String(templateInputs.incidentSummary || '').trim()}.`, agentId: 'picoclaw' },
+          { id: 'task-3', input: `Draft diagnosis summary and operator next steps for ${String(templateInputs.service || '').trim()}.`, agentId: 'zeroclaw' },
+        ]
+      : [
+          { id: 'task-1', input: 'collect context', agentId: 'zeroclaw' },
+          { id: 'task-2', input: 'draft summary', agentId: 'picoclaw' },
+        ];
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         result: 'ok',
         plan: {
-          goal,
+          goal: renderedGoal,
+          templateId: templateID,
           provider,
           hostIds,
           hostLabels,
           approvalScope: 'infrastructure_only',
           maxConcurrency,
-          plannerTasks: [
-            { id: 'task-1', input: 'collect context', agentId: 'zeroclaw' },
-            { id: 'task-2', input: 'draft summary', agentId: 'picoclaw' },
-          ],
+          plannerTasks,
           requiredWorkers: [
             { ...workerSelector, agentId: 'zeroclaw', count: 1 },
             { ...secondWorkerSelector, agentId: 'picoclaw', count: 1 },
           ],
-          taskUnits: [
-            { id: 'task-1', input: 'collect context', ...workerSelector, agentId: 'zeroclaw', timeoutMs: 60000, retryBudget: 0 },
-            { id: 'task-2', input: 'draft summary', ...secondWorkerSelector, agentId: 'picoclaw', timeoutMs: 60000, retryBudget: 0 },
-          ],
+          taskUnits: plannerTasks.map((task, index) => ({
+            id: String(task.id),
+            input: String(task.input),
+            ...(index === 0 ? workerSelector : secondWorkerSelector),
+            agentId: String(task.agentId),
+            timeoutMs: 60000,
+            retryBudget: 0,
+          })),
         },
       }),
     });
@@ -758,6 +823,7 @@ export async function mockOrchestrationAPIs(page: Page) {
     const execution = {
       id: `exec-preview-${nextExecutionID++}`,
       goal: String(body.goal || '').trim(),
+      templateId: String(body.templateId || '').trim(),
       requestedProvider: String(body.requestedProvider || '').trim(),
       status: 'pending_authorization',
       updatedAt: '2026-03-08T12:00:00Z',

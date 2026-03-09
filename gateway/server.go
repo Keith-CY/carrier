@@ -251,6 +251,22 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		}
 		handleRemoteSSHConfigHosts(w, r, requestID, cfg)
 	})
+	mux.HandleFunc("/api/v1/templates", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleExecutionTemplates(w, r, requestID, cfg)
+	})
+	mux.HandleFunc("/api/v1/templates/", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleExecutionTemplates(w, r, requestID, cfg)
+	})
 	mux.HandleFunc("/api/v1/orchestrator/executions", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
 		if err := checkGatewayAccess(r, cfg); err != nil {

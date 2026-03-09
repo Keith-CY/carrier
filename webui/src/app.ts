@@ -73,6 +73,7 @@
   let workerQueueSummaryCache = null;
   let quickLaunchPlan = null;
   let quickLaunchProviderCatalog = [];
+  let quickLaunchTemplates = [];
   let workersPollTimer = null;
   const DEFAULT_FEATURE_FLAGS = {
     remoteControlPlaneEnabled: false,
@@ -1487,6 +1488,96 @@
     }
   }
 
+  function renderQuickLaunchTemplateOptions(templates) {
+    const select = $('#quick-launch-template');
+    if (!select) return;
+    const previous = String(select.value || '').trim().toLowerCase();
+    select.textContent = '';
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = 'Select a template';
+    select.appendChild(empty);
+    (Array.isArray(templates) ? templates : []).forEach(template => {
+      const id = String(template && template.id ? template.id : '').trim();
+      if (!id) return;
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = String(template && template.name ? template.name : id);
+      select.appendChild(opt);
+    });
+    if (previous && Array.isArray(templates) && templates.some(template => String(template && template.id ? template.id : '').trim().toLowerCase() === previous)) {
+      select.value = previous;
+    }
+  }
+
+  function selectedQuickLaunchMode() {
+    return String((($('#quick-launch-mode') || {}).value || 'goal')).trim().toLowerCase() || 'goal';
+  }
+
+  function selectedQuickLaunchTemplateID() {
+    return String((($('#quick-launch-template') || {}).value || '')).trim();
+  }
+
+  function findQuickLaunchTemplate(templateID) {
+    const key = String(templateID || '').trim().toLowerCase();
+    return (Array.isArray(quickLaunchTemplates) ? quickLaunchTemplates : []).find(template => String(template && template.id ? template.id : '').trim().toLowerCase() === key) || null;
+  }
+
+  function renderQuickLaunchTemplateInputs(templateID) {
+    const wrap = $('#quick-launch-template-inputs');
+    if (!wrap) return;
+    const previous = {};
+    $$('[data-quick-launch-template-input]', wrap).forEach(input => {
+      previous[String(input.getAttribute('data-quick-launch-template-input') || '').trim()] = String(input.value || '');
+    });
+    wrap.textContent = '';
+    const template = findQuickLaunchTemplate(templateID);
+    const schema = template && Array.isArray(template.inputSchema) ? template.inputSchema : [];
+    if (!schema.length) return;
+    schema.forEach(field => {
+      const key = String(field && field.id ? field.id : '').trim();
+      if (!key) return;
+      const block = document.createElement('div');
+      const label = document.createElement('label');
+      label.htmlFor = 'quick-launch-template-input-' + key;
+      label.textContent = String(field && field.label ? field.label : key);
+      const input = document.createElement('input');
+      input.id = 'quick-launch-template-input-' + key;
+      input.setAttribute('data-quick-launch-template-input', key);
+      input.type = 'text';
+      input.placeholder = String(field && field.placeholder ? field.placeholder : '');
+      input.value = previous[key] != null
+        ? String(previous[key])
+        : String(field && field.defaultValue ? field.defaultValue : '');
+      if (field && field.required) input.required = true;
+      block.appendChild(label);
+      input.title = String(field && field.description ? field.description : '');
+      block.appendChild(input);
+      wrap.appendChild(block);
+    });
+  }
+
+  function collectQuickLaunchTemplateInputs() {
+    const values = {};
+    $$('[data-quick-launch-template-input]').forEach(input => {
+      const key = String(input.getAttribute('data-quick-launch-template-input') || '').trim();
+      if (!key) return;
+      values[key] = String(input.value || '').trim();
+    });
+    return values;
+  }
+
+  function syncQuickLaunchModeUI() {
+    const mode = selectedQuickLaunchMode();
+    const goalField = $('#quick-launch-goal-field');
+    const templateField = $('#quick-launch-template-field');
+    if (goalField) goalField.classList.toggle('hidden', mode !== 'goal');
+    if (templateField) templateField.classList.toggle('hidden', mode !== 'template');
+    if (mode === 'template') {
+      renderQuickLaunchTemplateInputs(selectedQuickLaunchTemplateID());
+    }
+  }
+
   function renderQuickLaunchHostOptions(hosts) {
     const wrap = $('#quick-launch-hosts');
     if (!wrap) return;
@@ -1529,14 +1620,20 @@
     const previewCard = $('#quick-launch-preview-card');
     if (previewCard) previewCard.classList.add('hidden');
     if (clearForm) {
+      const mode = $('#quick-launch-mode');
       const goal = $('#quick-launch-goal');
+      const template = $('#quick-launch-template');
       const provider = $('#quick-launch-provider');
       const maxConcurrency = $('#quick-launch-max-concurrency');
       const hostLabels = $('#quick-launch-host-labels');
+      if (mode) mode.value = 'goal';
       if (goal) goal.value = '';
+      if (template) template.value = '';
       if (provider) provider.value = '';
       if (maxConcurrency) maxConcurrency.value = '';
       if (hostLabels) hostLabels.value = '';
+      renderQuickLaunchTemplateInputs('');
+      syncQuickLaunchModeUI();
       renderQuickLaunchHostOptions(remoteHostsCache);
       setMsg('#quick-launch-msg', '', 'info');
     }
@@ -1551,7 +1648,9 @@
     if (!previewCard || !summary || !tasks || !workers) return;
 
     previewCard.classList.remove('hidden');
+    const templateID = String(plan && plan.templateId ? plan.templateId : '').trim();
     summary.textContent = 'Approval: ' + String(plan.approvalScope || 'infrastructure_only') +
+      (templateID ? ' · Template: ' + templateID : '') +
       ' · Task units: ' + String(Array.isArray(plan.taskUnits) ? plan.taskUnits.length : 0) +
       ' · Max concurrency: ' + String(plan.maxConcurrency || 0);
     tasks.textContent = '';
@@ -1578,19 +1677,31 @@
 
   async function loadQuickLaunchOptions() {
     if (!featureFlags.remoteControlPlaneEnabled) return;
-    const [providerPayload, hosts] = await Promise.all([
+    const [providerPayload, hosts, templatesPayload] = await Promise.all([
       api('GET', '/api/v1/providers'),
       fetchRemoteHosts().catch(() => []),
+      api('GET', '/api/v1/templates').catch(() => ({ templates: [] })),
     ]);
     quickLaunchProviderCatalog = flattenProviderCatalog(providerPayload);
+    quickLaunchTemplates = Array.isArray(templatesPayload && templatesPayload.templates) ? templatesPayload.templates : [];
     renderQuickLaunchProviderOptions(quickLaunchProviderCatalog);
+    renderQuickLaunchTemplateOptions(quickLaunchTemplates);
+    renderQuickLaunchTemplateInputs(selectedQuickLaunchTemplateID());
+    syncQuickLaunchModeUI();
     renderQuickLaunchHostOptions(hosts);
   }
 
   async function previewQuickLaunchPlan() {
+    const mode = selectedQuickLaunchMode();
     const goal = String(($('#quick-launch-goal') || {}).value || '').trim();
-    if (!goal) {
+    const templateID = selectedQuickLaunchTemplateID();
+    const templateInputs = collectQuickLaunchTemplateInputs();
+    if (mode === 'goal' && !goal) {
       setMsg('#quick-launch-msg', 'Goal is required.', 'error');
+      return;
+    }
+    if (mode === 'template' && !templateID) {
+      setMsg('#quick-launch-msg', 'Template is required.', 'error');
       return;
     }
     const previewBtn = $('#quick-launch-preview');
@@ -1600,7 +1711,9 @@
       const maxConcurrency = parseInt(String((($('#quick-launch-max-concurrency') || {}).value || '')).trim(), 10);
       const hostLabels = selectedQuickLaunchHostLabels();
       const response = await api('POST', '/api/v1/orchestrator/plans', {
-        goal,
+        goal: mode === 'goal' ? goal : '',
+        templateId: mode === 'template' ? templateID : '',
+        inputs: mode === 'template' ? templateInputs : {},
         provider,
         hostIds: hostLabels.length ? [] : selectedQuickLaunchHostIDs(),
         hostLabels,
@@ -1625,6 +1738,7 @@
     try {
       const createPayload = {
         goal: String(quickLaunchPlan.goal || '').trim(),
+        templateId: String(quickLaunchPlan.templateId || '').trim(),
         requestedProvider: String(quickLaunchPlan.provider || '').trim(),
         approvalScope: String(quickLaunchPlan.approvalScope || 'infrastructure_only').trim(),
         requiredWorkers: Array.isArray(quickLaunchPlan.requiredWorkers) ? quickLaunchPlan.requiredWorkers : [],
@@ -1672,6 +1786,8 @@
     const runBtn = $('#quick-launch-run');
     const toggleBtn = $('#quick-launch-advanced-toggle');
     const advanced = $('#quick-launch-advanced');
+    const modeSelect = $('#quick-launch-mode');
+    const templateSelect = $('#quick-launch-template');
 
     if (previewBtn) previewBtn.onclick = previewQuickLaunchPlan;
     if (resetBtn) resetBtn.onclick = () => resetQuickLaunchPreview(true);
@@ -1680,6 +1796,8 @@
       if (previewCard) previewCard.classList.add('hidden');
     };
     if (runBtn) runBtn.onclick = runQuickLaunchExecution;
+    if (modeSelect) modeSelect.onchange = () => syncQuickLaunchModeUI();
+    if (templateSelect) templateSelect.onchange = () => renderQuickLaunchTemplateInputs(templateSelect.value);
     if (toggleBtn) toggleBtn.onclick = () => {
       if (!advanced) return;
       const hidden = advanced.classList.toggle('hidden');

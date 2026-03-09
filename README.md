@@ -5,6 +5,7 @@ Carrier is a local-first agent control plane for decomposing goals, dispatching 
 ## What Works Today
 
 - Task-first orchestration via `carrier orchestrate` with execution history in `carrier executions`.
+- Built-in execution templates via `carrier templates` for repeatable triage and diagnosis flows.
 - Execution detail includes lineage, derived retries/reruns/clones, and execution artifacts.
 - Workers inventory includes stale lease detection, queue summary, and stale/idle reclaim actions.
 - Local bootstrap/onboarding via CLI/TUI/WebUI.
@@ -110,6 +111,17 @@ Run the task and wait for results:
 
 ```bash
 carrier orchestrate "triage this issue and summarize next actions"
+```
+
+Or launch a built-in template:
+
+```bash
+carrier templates
+carrier templates show incident-diagnosis
+carrier templates run incident-diagnosis \
+  --input service=checkout \
+  --input environment=prod \
+  --input incidentSummary="Checkout API returns 502s after deploy"
 ```
 
 Inspect execution history:
@@ -243,6 +255,9 @@ carrier uninstall <id|name>
 # orchestration
 carrier orchestrate "<goal>"
 carrier orchestrate "<goal>" --dry-run
+carrier templates
+carrier templates show <template_id>
+carrier templates run <template_id> --input key=value
 carrier executions
 carrier executions show <execution_id>
 carrier executions artifacts <execution_id>

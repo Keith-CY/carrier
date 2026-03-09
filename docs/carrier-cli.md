@@ -10,6 +10,12 @@ All command blocks below assume `carrier` is installed and available in `PATH`.
 - `carrier orchestrate <goal...> [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--idempotency-key <key>] [--timeout <duration>] [--async] [--dry-run] [--json]`
   - Decompose a goal with the base agent, assign task units to worker agents, and optionally execute the plan.
   - `--dry-run` previews the execution plan without creating an execution.
+- `carrier templates [list] [--json]`
+  - List built-in execution templates and their required inputs.
+- `carrier templates show <template_id> [--json]`
+  - Show one built-in execution template with task metadata and input schema.
+- `carrier templates run <template_id> --input key=value [--input key=value]... [--json]`
+  - Launch a built-in execution template, create the execution record, and authorize it immediately.
 - `carrier orchestrate status <execution_id> [--json]`
   - Show one orchestration execution with task results and worker lease state.
 - `carrier orchestrate cancel <execution_id> [--json]`
@@ -189,6 +195,23 @@ carrier orchestrate "triage this issue and summarize next actions" --dry-run
 carrier orchestrate "triage this issue and summarize next actions"
 ```
 
+### Browse and launch templates
+
+```bash
+carrier templates
+```
+
+```bash
+carrier templates show incident-diagnosis
+```
+
+```bash
+carrier templates run incident-diagnosis \
+  --input service=checkout \
+  --input environment=prod \
+  --input incidentSummary="Checkout API returns 502s after deploy"
+```
+
 ```bash
 carrier executions
 ```
@@ -304,6 +327,18 @@ carrier orchestrate "<goal>"
 
 ```bash
 carrier orchestrate "<goal>" --dry-run
+```
+
+```bash
+carrier templates
+```
+
+```bash
+carrier templates show <template_id>
+```
+
+```bash
+carrier templates run <template_id> --input key=value
 ```
 
 ```bash
