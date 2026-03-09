@@ -20,6 +20,27 @@ type executionTemplateLaunchRequest struct {
 	Actor          string            `json:"actor,omitempty"`
 }
 
+type executionLaunchMetadata struct {
+	TriggerSource       string
+	TriggerID           string
+	TriggerEvent        string
+	TriggerPayloadDigest string
+	Initiator           string
+}
+
+type executionTemplateLaunchOptions struct {
+	TemplateID     string
+	Inputs         map[string]string
+	Provider       string
+	HostIDs        []string
+	HostLabels     []string
+	MaxConcurrency int
+	PolicyApprove  bool
+	IdempotencyKey string
+	Actor          string
+	Metadata       executionLaunchMetadata
+}
+
 func handleExecutionTemplates(w http.ResponseWriter, r *http.Request, requestID string, cfg *GatewayConfig) {
 	flags := effectiveGatewayFeatureFlags(cfg)
 	if !flags.RemoteControlPlaneEnabled {
@@ -93,31 +114,17 @@ func handleExecutionTemplates(w http.ResponseWriter, r *http.Request, requestID 
 	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
 	req.Actor = strings.TrimSpace(req.Actor)
 
-	resolved, err := orchestration.ResolveExecutionTemplate(template.ID, req.Inputs)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
-		return
-	}
-	plan, err := orchestration.BuildPlan(orchestration.BuildPlanInput{
-		Goal:           resolved.Goal,
+	authorized, apiErr := launchExecutionTemplate(requestID, cfg, executionTemplateLaunchOptions{
 		TemplateID:     template.ID,
+		Inputs:         req.Inputs,
 		Provider:       req.Provider,
 		HostIDs:        req.HostIDs,
 		HostLabels:     req.HostLabels,
 		MaxConcurrency: req.MaxConcurrency,
-		Tasks:          resolved.Tasks,
+		PolicyApprove:  req.PolicyApprove,
+		IdempotencyKey: req.IdempotencyKey,
+		Actor:          req.Actor,
 	})
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
-		return
-	}
-
-	created, apiErr := createTemplateExecutionRecord(requestID, cfg, plan, req.IdempotencyKey)
-	if apiErr != nil {
-		writeJSON(w, apiErr.Status, apiErr.Body)
-		return
-	}
-	authorized, apiErr := authorizeTemplateExecutionRecord(requestID, cfg, created, req.Actor, req.PolicyApprove, req.MaxConcurrency)
 	if apiErr != nil {
 		writeJSON(w, apiErr.Status, apiErr.Body)
 		return
@@ -141,16 +148,49 @@ type gatewayAPIResponseError struct {
 	Body   map[string]interface{}
 }
 
-func createTemplateExecutionRecord(requestID string, cfg *GatewayConfig, plan orchestration.Plan, idempotencyKey string) (OrchestratorExecution, *gatewayAPIResponseError) {
+func launchExecutionTemplate(requestID string, cfg *GatewayConfig, opts executionTemplateLaunchOptions) (OrchestratorExecution, *gatewayAPIResponseError) {
+	templateID := strings.TrimSpace(opts.TemplateID)
+	if templateID == "" {
+		return OrchestratorExecution{}, &gatewayAPIResponseError{Status: http.StatusBadRequest, Body: gatewayErrBody("E_USAGE", "template id is required")}
+	}
+	resolved, err := orchestration.ResolveExecutionTemplate(templateID, opts.Inputs)
+	if err != nil {
+		return OrchestratorExecution{}, &gatewayAPIResponseError{Status: http.StatusBadRequest, Body: gatewayErrBody("E_USAGE", err.Error())}
+	}
+	plan, err := orchestration.BuildPlan(orchestration.BuildPlanInput{
+		Goal:           resolved.Goal,
+		TemplateID:     templateID,
+		Provider:       strings.TrimSpace(opts.Provider),
+		HostIDs:        opts.HostIDs,
+		HostLabels:     opts.HostLabels,
+		MaxConcurrency: opts.MaxConcurrency,
+		Tasks:          resolved.Tasks,
+	})
+	if err != nil {
+		return OrchestratorExecution{}, &gatewayAPIResponseError{Status: http.StatusBadRequest, Body: gatewayErrBody("E_USAGE", err.Error())}
+	}
+	created, apiErr := createTemplateExecutionRecord(requestID, cfg, plan, opts.IdempotencyKey, opts.Metadata)
+	if apiErr != nil {
+		return OrchestratorExecution{}, apiErr
+	}
+	return authorizeTemplateExecutionRecord(requestID, cfg, created, opts.Actor, opts.PolicyApprove, opts.MaxConcurrency)
+}
+
+func createTemplateExecutionRecord(requestID string, cfg *GatewayConfig, plan orchestration.Plan, idempotencyKey string, metadata executionLaunchMetadata) (OrchestratorExecution, *gatewayAPIResponseError) {
 	req := OrchestratorExecution{
-		Goal:              strings.TrimSpace(plan.Goal),
-		TemplateID:        strings.TrimSpace(plan.TemplateID),
-		RequestedProvider: strings.TrimSpace(plan.Provider),
-		IdempotencyKey:    strings.TrimSpace(idempotencyKey),
-		ApprovalScope:     strings.TrimSpace(plan.ApprovalScope),
-		RequiredWorkers:   make([]OrchestratorRequiredWorker, 0, len(plan.RequiredWorkers)),
-		TaskUnits:         make([]OrchestratorTaskUnit, 0, len(plan.TaskUnits)),
-		MaxConcurrency:    plan.MaxConcurrency,
+		Goal:                strings.TrimSpace(plan.Goal),
+		TemplateID:          strings.TrimSpace(plan.TemplateID),
+		TriggerSource:       strings.TrimSpace(metadata.TriggerSource),
+		TriggerID:           strings.TrimSpace(metadata.TriggerID),
+		TriggerEvent:        strings.TrimSpace(metadata.TriggerEvent),
+		TriggerPayloadDigest: strings.TrimSpace(metadata.TriggerPayloadDigest),
+		Initiator:           strings.TrimSpace(metadata.Initiator),
+		RequestedProvider:   strings.TrimSpace(plan.Provider),
+		IdempotencyKey:      strings.TrimSpace(idempotencyKey),
+		ApprovalScope:       strings.TrimSpace(plan.ApprovalScope),
+		RequiredWorkers:     make([]OrchestratorRequiredWorker, 0, len(plan.RequiredWorkers)),
+		TaskUnits:           make([]OrchestratorTaskUnit, 0, len(plan.TaskUnits)),
+		MaxConcurrency:      plan.MaxConcurrency,
 	}
 	for _, worker := range plan.RequiredWorkers {
 		req.RequiredWorkers = append(req.RequiredWorkers, OrchestratorRequiredWorker{

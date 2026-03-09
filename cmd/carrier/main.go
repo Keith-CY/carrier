@@ -234,6 +234,30 @@ type templatesCommandOptions struct {
 	Inputs         map[string]string
 }
 
+type triggersCommandOptions struct {
+	Action         string
+	TriggerID      string
+	Type           string
+	TemplateID     string
+	Name           string
+	CreatedBy      string
+	HostIDs        []string
+	HostLabels     []string
+	Provider       string
+	MaxConcurrency int
+	PolicyApprove  bool
+	WebhookSecret  string
+	GitHubCommand  string
+	GitHubLabel    string
+	GitHubRepository string
+	Cron           string
+	Timezone       string
+	Enable         bool
+	Disable        bool
+	JSON           bool
+	Inputs         map[string]string
+}
+
 type versionInfo struct {
 	Version   string `json:"version"`
 	Commit    string `json:"commit"`
@@ -545,6 +569,26 @@ Usage:
                         [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>]
                         [--max-concurrency <n>] [--policy-approve] [--json]
                         Launch a built-in execution template through the gateway
+  carrier triggers [list] [--json]
+                        List execution triggers
+  carrier triggers show <trigger_id> [--json]
+                        Show one execution trigger
+  carrier triggers create --type <webhook|github|schedule> --template-id <template_id>
+                        [--name <name>] [--host-id <id>]... [--host-label <label>]...
+                        [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve]
+                        [--webhook-secret <secret>] [--github-command <cmd>] [--github-label <label>]
+                        [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC]
+                        [--input key=value]... [--json]
+                        Create one execution trigger
+  carrier triggers update <trigger_id> [--name <name>] [--template-id <template_id>]
+                        [--enable|--disable] [--host-id <id>]... [--host-label <label>]...
+                        [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve]
+                        [--webhook-secret <secret>] [--github-command <cmd>] [--github-label <label>]
+                        [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC]
+                        [--input key=value]... [--json]
+                        Update one execution trigger
+  carrier triggers delete <trigger_id> [--json]
+                        Delete one execution trigger
   carrier --help         Show this help message
 
 Notes:
@@ -805,6 +849,18 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "triggers":
+			opts, err := parseTriggersCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "triggers failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runTriggersCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "triggers failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "onboard":
 			opts, err := parseOnboardCommandArgs(commandArgs)
 			if err != nil {
@@ -940,6 +996,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "executions", args[2:], nil
 	case "templates":
 		return "templates", args[2:], nil
+	case "triggers":
+		return "triggers", args[2:], nil
 	case "--help", "-h", "help":
 		return "help", nil, nil
 	case "version", "--version", "-v", "-V":
@@ -2631,6 +2689,220 @@ func parseTemplatesCommandArgs(args []string) (templatesCommandOptions, error) {
 	return opts, nil
 }
 
+func parseTriggersCommandArgs(args []string) (triggersCommandOptions, error) {
+	opts := triggersCommandOptions{
+		Action: "list",
+		Inputs: map[string]string{},
+	}
+	if len(args) == 0 {
+		return opts, nil
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(args[0]))
+	startIdx := 0
+	switch mode {
+	case "", "list":
+		opts.Action = "list"
+		startIdx = 1
+	case "show":
+		opts.Action = "show"
+		startIdx = 1
+	case "create":
+		opts.Action = "create"
+		startIdx = 1
+	case "update":
+		opts.Action = "update"
+		startIdx = 1
+	case "delete":
+		opts.Action = "delete"
+		startIdx = 1
+	default:
+		if strings.HasPrefix(mode, "-") {
+			opts.Action = "list"
+			startIdx = 0
+		} else {
+			opts.Action = "show"
+			opts.TriggerID = strings.TrimSpace(args[0])
+			startIdx = 1
+		}
+	}
+
+	for i := startIdx; i < len(args); i++ {
+		raw := strings.TrimSpace(args[i])
+		lower := strings.ToLower(raw)
+		switch lower {
+		case "":
+		case "--json":
+			opts.JSON = true
+		case "--policy-approve":
+			opts.PolicyApprove = true
+		case "--enable":
+			opts.Enable = true
+		case "--disable":
+			opts.Disable = true
+		case "--type":
+			value, next, err := parseRequiredFlagValue(args, i, "--type")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.Type = strings.ToLower(strings.TrimSpace(value))
+			i = next
+		case "--template-id":
+			value, next, err := parseRequiredFlagValue(args, i, "--template-id")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.TemplateID = strings.TrimSpace(value)
+			i = next
+		case "--name":
+			value, next, err := parseRequiredFlagValue(args, i, "--name")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.Name = strings.TrimSpace(value)
+			i = next
+		case "--created-by":
+			value, next, err := parseRequiredFlagValue(args, i, "--created-by")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.CreatedBy = strings.TrimSpace(value)
+			i = next
+		case "--host-id":
+			value, next, err := parseRequiredFlagValue(args, i, "--host-id")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				return triggersCommandOptions{}, errors.New("--host-id cannot be empty")
+			}
+			opts.HostIDs = append(opts.HostIDs, value)
+			i = next
+		case "--host-label":
+			value, next, err := parseRequiredFlagValue(args, i, "--host-label")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				return triggersCommandOptions{}, errors.New("--host-label cannot be empty")
+			}
+			opts.HostLabels = append(opts.HostLabels, value)
+			i = next
+		case "--provider":
+			value, next, err := parseRequiredFlagValue(args, i, "--provider")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.Provider = strings.ToLower(strings.TrimSpace(value))
+			i = next
+		case "--max-concurrency":
+			value, next, err := parseRequiredFlagValue(args, i, "--max-concurrency")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			parsed, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || parsed <= 0 {
+				return triggersCommandOptions{}, fmt.Errorf("invalid --max-concurrency value: %s", value)
+			}
+			opts.MaxConcurrency = parsed
+			i = next
+		case "--webhook-secret":
+			value, next, err := parseRequiredFlagValue(args, i, "--webhook-secret")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.WebhookSecret = strings.TrimSpace(value)
+			i = next
+		case "--github-command":
+			value, next, err := parseRequiredFlagValue(args, i, "--github-command")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.GitHubCommand = strings.TrimSpace(value)
+			i = next
+		case "--github-label":
+			value, next, err := parseRequiredFlagValue(args, i, "--github-label")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.GitHubLabel = strings.TrimSpace(value)
+			i = next
+		case "--github-repository":
+			value, next, err := parseRequiredFlagValue(args, i, "--github-repository")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.GitHubRepository = strings.TrimSpace(value)
+			i = next
+		case "--cron":
+			value, next, err := parseRequiredFlagValue(args, i, "--cron")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.Cron = strings.TrimSpace(value)
+			i = next
+		case "--timezone":
+			value, next, err := parseRequiredFlagValue(args, i, "--timezone")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.Timezone = strings.ToUpper(strings.TrimSpace(value))
+			i = next
+		case "--input":
+			value, next, err := parseRequiredFlagValue(args, i, "--input")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			key, inputValue, ok := strings.Cut(strings.TrimSpace(value), "=")
+			key = strings.TrimSpace(key)
+			inputValue = strings.TrimSpace(inputValue)
+			if !ok || key == "" {
+				return triggersCommandOptions{}, fmt.Errorf("invalid --input value: %s", value)
+			}
+			opts.Inputs[key] = inputValue
+			i = next
+		default:
+			if strings.HasPrefix(raw, "-") {
+				return triggersCommandOptions{}, fmt.Errorf("unknown triggers option: %s", raw)
+			}
+			if (opts.Action == "show" || opts.Action == "update" || opts.Action == "delete") && opts.TriggerID == "" {
+				opts.TriggerID = raw
+				continue
+			}
+			return triggersCommandOptions{}, fmt.Errorf("unexpected triggers argument: %s", raw)
+		}
+	}
+
+	if opts.Enable && opts.Disable {
+		return triggersCommandOptions{}, errors.New("cannot combine --enable and --disable")
+	}
+	opts.HostIDs = dedupeStringSlice(opts.HostIDs)
+	opts.HostLabels = normalizeStringSelectorSlice(opts.HostLabels)
+	if opts.MaxConcurrency > 64 {
+		opts.MaxConcurrency = 64
+	}
+
+	switch opts.Action {
+	case "show":
+		if strings.TrimSpace(opts.TriggerID) == "" {
+			return triggersCommandOptions{}, errors.New("usage: carrier triggers show <trigger_id> [--json]")
+		}
+	case "create":
+		if strings.TrimSpace(opts.Type) == "" || strings.TrimSpace(opts.TemplateID) == "" {
+			return triggersCommandOptions{}, errors.New("usage: carrier triggers create --type <webhook|github|schedule> --template-id <template_id> [--name <name>] [--created-by <actor>] [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--webhook-secret <secret>] [--github-command <command>] [--github-label <label>] [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC] [--input key=value]... [--json]")
+		}
+	case "update":
+		if strings.TrimSpace(opts.TriggerID) == "" {
+			return triggersCommandOptions{}, errors.New("usage: carrier triggers update <trigger_id> [--name <name>] [--template-id <template_id>] [--enable|--disable] [--created-by <actor>] [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--webhook-secret <secret>] [--github-command <command>] [--github-label <label>] [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC] [--input key=value]... [--json]")
+		}
+	case "delete":
+		if strings.TrimSpace(opts.TriggerID) == "" {
+			return triggersCommandOptions{}, errors.New("usage: carrier triggers delete <trigger_id> [--json]")
+		}
+	}
+	return opts, nil
+}
+
 func dedupeStringSlice(values []string) []string {
 	out := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
@@ -3581,6 +3853,11 @@ type orchestrateExecutionSnapshot struct {
 	ID                string                              `json:"id"`
 	Goal              string                              `json:"goal"`
 	TemplateID        string                              `json:"templateId,omitempty"`
+	TriggerSource     string                              `json:"triggerSource,omitempty"`
+	TriggerID         string                              `json:"triggerId,omitempty"`
+	TriggerEvent      string                              `json:"triggerEvent,omitempty"`
+	TriggerPayloadDigest string                           `json:"triggerPayloadDigest,omitempty"`
+	Initiator         string                              `json:"initiator,omitempty"`
 	ParentExecutionID string                              `json:"parentExecutionId,omitempty"`
 	SourceExecutionID string                              `json:"sourceExecutionId,omitempty"`
 	LaunchReason      string                              `json:"launchReason,omitempty"`
@@ -3672,6 +3949,59 @@ type executionTemplateLaunchResponse struct {
 	Execution orchestrateExecutionSnapshot `json:"execution"`
 }
 
+type executionTriggerConfigSnapshot struct {
+	Inputs                  map[string]string `json:"inputs,omitempty"`
+	Provider                string            `json:"provider,omitempty"`
+	HostIDs                 []string          `json:"hostIds,omitempty"`
+	HostLabels              []string          `json:"hostLabels,omitempty"`
+	MaxConcurrency          int               `json:"maxConcurrency,omitempty"`
+	PolicyApprove           bool              `json:"policyApprove,omitempty"`
+	WebhookSecretConfigured bool              `json:"webhookSecretConfigured,omitempty"`
+	GitHubCommand           string            `json:"githubCommand,omitempty"`
+	GitHubLabel             string            `json:"githubLabel,omitempty"`
+	GitHubRepository        string            `json:"githubRepository,omitempty"`
+	Cron                    string            `json:"cron,omitempty"`
+	Timezone                string            `json:"timezone,omitempty"`
+}
+
+type executionTriggerSnapshot struct {
+	ID              string                         `json:"id"`
+	Name            string                         `json:"name"`
+	Type            string                         `json:"type"`
+	TemplateID      string                         `json:"templateId"`
+	Enabled         bool                           `json:"enabled"`
+	CreatedBy       string                         `json:"createdBy,omitempty"`
+	Config          executionTriggerConfigSnapshot `json:"config,omitempty"`
+	LastTriggeredAt string                         `json:"lastTriggeredAt,omitempty"`
+	LastExecutionID string                         `json:"lastExecutionId,omitempty"`
+	LastError       string                         `json:"lastError,omitempty"`
+	TriggeredCount  int64                          `json:"triggeredCount,omitempty"`
+	NextRunAt       string                         `json:"nextRunAt,omitempty"`
+	CreatedAt       string                         `json:"createdAt,omitempty"`
+	UpdatedAt       string                         `json:"updatedAt,omitempty"`
+}
+
+type executionTriggerListResponse struct {
+	Result    string                     `json:"result"`
+	ErrorCode string                     `json:"errorCode,omitempty"`
+	Message   string                     `json:"message,omitempty"`
+	Triggers  []executionTriggerSnapshot `json:"triggers"`
+}
+
+type executionTriggerResponse struct {
+	Result    string                   `json:"result"`
+	ErrorCode string                   `json:"errorCode,omitempty"`
+	Message   string                   `json:"message,omitempty"`
+	Trigger   executionTriggerSnapshot `json:"trigger"`
+}
+
+type executionTriggerDeleteResponse struct {
+	Result    string `json:"result"`
+	ErrorCode string `json:"errorCode,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Deleted   bool   `json:"deleted"`
+}
+
 func runTemplatesCommand(out io.Writer, opts templatesCommandOptions) error {
 	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
 		return err
@@ -3715,6 +4045,69 @@ func runTemplatesCommand(out io.Writer, opts templatesCommandOptions) error {
 		return nil
 	default:
 		return fmt.Errorf("unsupported templates action: %s", opts.Action)
+	}
+}
+
+func runTriggersCommand(out io.Writer, opts triggersCommandOptions) error {
+	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+	switch opts.Action {
+	case "list":
+		resp, raw, err := fetchExecutionTriggers()
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderExecutionTriggerList(resp.Triggers))
+		return nil
+	case "show":
+		resp, raw, err := fetchExecutionTrigger(opts.TriggerID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderExecutionTrigger(resp.Trigger))
+		return nil
+	case "create":
+		resp, raw, err := createExecutionTrigger(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderExecutionTrigger(resp.Trigger))
+		return nil
+	case "update":
+		resp, raw, err := updateExecutionTrigger(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderExecutionTrigger(resp.Trigger))
+		return nil
+	case "delete":
+		resp, raw, err := deleteExecutionTrigger(opts.TriggerID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		if resp.Deleted {
+			_, _ = fmt.Fprintf(out, "deleted trigger %s\n", strings.TrimSpace(opts.TriggerID))
+			return nil
+		}
+		return fmt.Errorf("delete trigger %s did not report success", strings.TrimSpace(opts.TriggerID))
+	default:
+		return fmt.Errorf("unsupported triggers action: %s", opts.Action)
 	}
 }
 
@@ -4072,6 +4465,30 @@ func decodeExecutionTemplateLaunchResponse(raw []byte) (executionTemplateLaunchR
 	return resp, nil
 }
 
+func decodeExecutionTriggerListResponse(raw []byte) (executionTriggerListResponse, error) {
+	var resp executionTriggerListResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return executionTriggerListResponse{}, fmt.Errorf("decode execution trigger list response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeExecutionTriggerResponse(raw []byte) (executionTriggerResponse, error) {
+	var resp executionTriggerResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return executionTriggerResponse{}, fmt.Errorf("decode execution trigger response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeExecutionTriggerDeleteResponse(raw []byte) (executionTriggerDeleteResponse, error) {
+	var resp executionTriggerDeleteResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return executionTriggerDeleteResponse{}, fmt.Errorf("decode execution trigger delete response: %w", err)
+	}
+	return resp, nil
+}
+
 func decodeOrchestrateExecutionArtifactsResponse(raw []byte) (orchestrateExecutionArtifactsResponse, error) {
 	var resp orchestrateExecutionArtifactsResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -4171,6 +4588,172 @@ func fetchExecutionTemplate(templateID string) (executionTemplateResponse, []byt
 	resp, decodeErr := decodeExecutionTemplateResponse(raw)
 	if decodeErr != nil {
 		return executionTemplateResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func fetchExecutionTriggers() (executionTriggerListResponse, []byte, error) {
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, "/api/v1/triggers", nil, 45*time.Second)
+	if err != nil {
+		return executionTriggerListResponse{}, nil, err
+	}
+	resp, decodeErr := decodeExecutionTriggerListResponse(raw)
+	if decodeErr != nil {
+		return executionTriggerListResponse{}, nil, decodeErr
+	}
+	sort.Slice(resp.Triggers, func(i, j int) bool {
+		left, leftOK := parseManagedTimestamp(resp.Triggers[i].UpdatedAt)
+		right, rightOK := parseManagedTimestamp(resp.Triggers[j].UpdatedAt)
+		switch {
+		case leftOK && rightOK:
+			if left.Equal(right) {
+				return resp.Triggers[i].ID > resp.Triggers[j].ID
+			}
+			return left.After(right)
+		case leftOK:
+			return true
+		case rightOK:
+			return false
+		default:
+			return resp.Triggers[i].ID > resp.Triggers[j].ID
+		}
+	})
+	return resp, raw, nil
+}
+
+func fetchExecutionTrigger(triggerID string) (executionTriggerResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(triggerID)
+	if trimmedID == "" {
+		return executionTriggerResponse{}, nil, errors.New("trigger id is required")
+	}
+	path := "/api/v1/triggers/" + neturl.PathEscape(trimmedID)
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return executionTriggerResponse{}, nil, err
+	}
+	resp, decodeErr := decodeExecutionTriggerResponse(raw)
+	if decodeErr != nil {
+		return executionTriggerResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func createExecutionTrigger(opts triggersCommandOptions) (executionTriggerResponse, []byte, error) {
+	body := map[string]interface{}{
+		"type":       strings.TrimSpace(opts.Type),
+		"templateId": strings.TrimSpace(opts.TemplateID),
+		"name":       strings.TrimSpace(opts.Name),
+		"createdBy":  strings.TrimSpace(firstNonEmpty(opts.CreatedBy, "carrier-cli")),
+		"enabled":    !opts.Disable,
+		"config": map[string]interface{}{
+			"inputs":         opts.Inputs,
+			"provider":       strings.TrimSpace(opts.Provider),
+			"hostIds":        opts.HostIDs,
+			"hostLabels":     opts.HostLabels,
+			"maxConcurrency": opts.MaxConcurrency,
+			"policyApprove":  opts.PolicyApprove,
+			"webhookSecret":  strings.TrimSpace(opts.WebhookSecret),
+			"githubCommand":  strings.TrimSpace(opts.GitHubCommand),
+			"githubLabel":    strings.TrimSpace(opts.GitHubLabel),
+			"githubRepository": strings.TrimSpace(opts.GitHubRepository),
+			"cron":             strings.TrimSpace(opts.Cron),
+			"timezone":         firstNonEmpty(strings.TrimSpace(opts.Timezone), "UTC"),
+		},
+	}
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/triggers", body, 90*time.Second)
+	if err != nil {
+		return executionTriggerResponse{}, nil, err
+	}
+	resp, decodeErr := decodeExecutionTriggerResponse(raw)
+	if decodeErr != nil {
+		return executionTriggerResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func updateExecutionTrigger(opts triggersCommandOptions) (executionTriggerResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(opts.TriggerID)
+	if trimmedID == "" {
+		return executionTriggerResponse{}, nil, errors.New("trigger id is required")
+	}
+	body := map[string]interface{}{}
+	if name := strings.TrimSpace(opts.Name); name != "" {
+		body["name"] = name
+	}
+	if templateID := strings.TrimSpace(opts.TemplateID); templateID != "" {
+		body["templateId"] = templateID
+	}
+	if createdBy := strings.TrimSpace(opts.CreatedBy); createdBy != "" {
+		body["createdBy"] = createdBy
+	}
+	if opts.Enable || opts.Disable {
+		body["enabled"] = opts.Enable && !opts.Disable
+	}
+	config := map[string]interface{}{}
+	if len(opts.Inputs) > 0 {
+		config["inputs"] = opts.Inputs
+	}
+	if provider := strings.TrimSpace(opts.Provider); provider != "" {
+		config["provider"] = provider
+	}
+	if len(opts.HostIDs) > 0 {
+		config["hostIds"] = opts.HostIDs
+	}
+	if len(opts.HostLabels) > 0 {
+		config["hostLabels"] = opts.HostLabels
+	}
+	if opts.MaxConcurrency > 0 {
+		config["maxConcurrency"] = opts.MaxConcurrency
+	}
+	if opts.PolicyApprove {
+		config["policyApprove"] = true
+	}
+	if webhookSecret := strings.TrimSpace(opts.WebhookSecret); webhookSecret != "" {
+		config["webhookSecret"] = webhookSecret
+	}
+	if githubCommand := strings.TrimSpace(opts.GitHubCommand); githubCommand != "" {
+		config["githubCommand"] = githubCommand
+	}
+	if githubLabel := strings.TrimSpace(opts.GitHubLabel); githubLabel != "" {
+		config["githubLabel"] = githubLabel
+	}
+	if githubRepo := strings.TrimSpace(opts.GitHubRepository); githubRepo != "" {
+		config["githubRepository"] = githubRepo
+	}
+	if cronExpr := strings.TrimSpace(opts.Cron); cronExpr != "" {
+		config["cron"] = cronExpr
+	}
+	if timezone := strings.TrimSpace(opts.Timezone); timezone != "" {
+		config["timezone"] = timezone
+	}
+	if len(config) > 0 {
+		body["config"] = config
+	}
+	path := "/api/v1/triggers/" + neturl.PathEscape(trimmedID)
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPatch, path, body, 90*time.Second)
+	if err != nil {
+		return executionTriggerResponse{}, nil, err
+	}
+	resp, decodeErr := decodeExecutionTriggerResponse(raw)
+	if decodeErr != nil {
+		return executionTriggerResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func deleteExecutionTrigger(triggerID string) (executionTriggerDeleteResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(triggerID)
+	if trimmedID == "" {
+		return executionTriggerDeleteResponse{}, nil, errors.New("trigger id is required")
+	}
+	path := "/api/v1/triggers/" + neturl.PathEscape(trimmedID)
+	raw, _, err := gatewayRequestWithTimeout(http.MethodDelete, path, nil, 45*time.Second)
+	if err != nil {
+		return executionTriggerDeleteResponse{}, nil, err
+	}
+	resp, decodeErr := decodeExecutionTriggerDeleteResponse(raw)
+	if decodeErr != nil {
+		return executionTriggerDeleteResponse{}, nil, decodeErr
 	}
 	return resp, raw, nil
 }
@@ -4280,6 +4863,104 @@ func renderExecutionTemplate(template executionTemplateSnapshot) string {
 	return strings.Join(lines, "\n")
 }
 
+func renderExecutionTriggerList(triggers []executionTriggerSnapshot) string {
+	if len(triggers) == 0 {
+		return "No execution triggers found."
+	}
+	lines := []string{"Execution triggers:"}
+	for _, trigger := range triggers {
+		parts := []string{
+			firstNonEmpty(strings.TrimSpace(trigger.ID), "unknown"),
+			firstNonEmpty(strings.TrimSpace(trigger.Name), "(unnamed)"),
+			"type=" + firstNonEmpty(strings.TrimSpace(trigger.Type), "unknown"),
+			"template=" + firstNonEmpty(strings.TrimSpace(trigger.TemplateID), "unknown"),
+			"enabled=" + strconv.FormatBool(trigger.Enabled),
+		}
+		if nextRunAt := strings.TrimSpace(trigger.NextRunAt); nextRunAt != "" {
+			parts = append(parts, "nextRun="+nextRunAt)
+		}
+		lines = append(lines, "- "+strings.Join(parts, " · "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderExecutionTrigger(trigger executionTriggerSnapshot) string {
+	lines := []string{
+		fmt.Sprintf("execution trigger %s", firstNonEmpty(strings.TrimSpace(trigger.ID), "unknown")),
+		fmt.Sprintf("name: %s", firstNonEmpty(strings.TrimSpace(trigger.Name), "(unnamed)")),
+		fmt.Sprintf("type: %s", firstNonEmpty(strings.TrimSpace(trigger.Type), "unknown")),
+		fmt.Sprintf("template: %s", firstNonEmpty(strings.TrimSpace(trigger.TemplateID), "unknown")),
+		fmt.Sprintf("enabled=%t", trigger.Enabled),
+	}
+	if createdBy := strings.TrimSpace(trigger.CreatedBy); createdBy != "" {
+		lines = append(lines, "created by: "+createdBy)
+	}
+	if updatedAt := strings.TrimSpace(trigger.UpdatedAt); updatedAt != "" {
+		lines = append(lines, "updated at: "+updatedAt)
+	}
+	if nextRunAt := strings.TrimSpace(trigger.NextRunAt); nextRunAt != "" {
+		lines = append(lines, "next run: "+nextRunAt)
+	}
+	if trigger.TriggeredCount > 0 {
+		lines = append(lines, fmt.Sprintf("triggered count: %d", trigger.TriggeredCount))
+	}
+	if lastExecutionID := strings.TrimSpace(trigger.LastExecutionID); lastExecutionID != "" {
+		lines = append(lines, "last execution: "+lastExecutionID)
+	}
+	if lastTriggeredAt := strings.TrimSpace(trigger.LastTriggeredAt); lastTriggeredAt != "" {
+		lines = append(lines, "last triggered at: "+lastTriggeredAt)
+	}
+	if lastError := strings.TrimSpace(trigger.LastError); lastError != "" {
+		lines = append(lines, "last error: "+lastError)
+	}
+	config := trigger.Config
+	if provider := strings.TrimSpace(config.Provider); provider != "" {
+		lines = append(lines, "provider: "+provider)
+	}
+	if len(config.HostIDs) > 0 {
+		lines = append(lines, "host ids: "+strings.Join(config.HostIDs, ", "))
+	}
+	if len(config.HostLabels) > 0 {
+		lines = append(lines, "host labels: "+strings.Join(config.HostLabels, ", "))
+	}
+	if config.MaxConcurrency > 0 {
+		lines = append(lines, fmt.Sprintf("max concurrency: %d", config.MaxConcurrency))
+	}
+	if config.PolicyApprove {
+		lines = append(lines, "policy approve: true")
+	}
+	if config.WebhookSecretConfigured {
+		lines = append(lines, "webhook secret: configured")
+	}
+	if githubCommand := strings.TrimSpace(config.GitHubCommand); githubCommand != "" {
+		lines = append(lines, "github command: "+githubCommand)
+	}
+	if githubLabel := strings.TrimSpace(config.GitHubLabel); githubLabel != "" {
+		lines = append(lines, "github label: "+githubLabel)
+	}
+	if githubRepository := strings.TrimSpace(config.GitHubRepository); githubRepository != "" {
+		lines = append(lines, "github repository: "+githubRepository)
+	}
+	if cronExpr := strings.TrimSpace(config.Cron); cronExpr != "" {
+		lines = append(lines, "cron: "+cronExpr)
+	}
+	if timezone := strings.TrimSpace(config.Timezone); timezone != "" {
+		lines = append(lines, "timezone: "+timezone)
+	}
+	if len(config.Inputs) > 0 {
+		inputKeys := make([]string, 0, len(config.Inputs))
+		for key := range config.Inputs {
+			inputKeys = append(inputKeys, key)
+		}
+		sort.Strings(inputKeys)
+		lines = append(lines, "inputs:")
+		for _, key := range inputKeys {
+			lines = append(lines, fmt.Sprintf("- %s=%s", key, config.Inputs[key]))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
 	execution := resp.Execution
 	total, completed, failed := summarizeOrchestrateExecution(execution)
@@ -4291,6 +4972,15 @@ func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
 	}
 	if templateID := strings.TrimSpace(execution.TemplateID); templateID != "" {
 		lines = append(lines, "template: "+templateID)
+	}
+	if triggerSource := strings.TrimSpace(execution.TriggerSource); triggerSource != "" || strings.TrimSpace(execution.TriggerID) != "" || strings.TrimSpace(execution.Initiator) != "" {
+		lines = append(lines, fmt.Sprintf(
+			"trigger: source=%s id=%s event=%s initiator=%s",
+			firstNonEmpty(triggerSource, "n/a"),
+			firstNonEmpty(strings.TrimSpace(execution.TriggerID), "n/a"),
+			firstNonEmpty(strings.TrimSpace(execution.TriggerEvent), "n/a"),
+			firstNonEmpty(strings.TrimSpace(execution.Initiator), "n/a"),
+		))
 	}
 	if parentID := strings.TrimSpace(execution.ParentExecutionID); parentID != "" || strings.TrimSpace(execution.SourceExecutionID) != "" || strings.TrimSpace(execution.LaunchReason) != "" {
 		lines = append(lines, fmt.Sprintf(

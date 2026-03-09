@@ -141,6 +141,11 @@ type OrchestratorExecution struct {
 	Project           string                              `json:"project,omitempty"`
 	Environment       string                              `json:"environment,omitempty"`
 	TemplateID        string                              `json:"templateId,omitempty"`
+	TriggerSource     string                              `json:"triggerSource,omitempty"`
+	TriggerID         string                              `json:"triggerId,omitempty"`
+	TriggerEvent      string                              `json:"triggerEvent,omitempty"`
+	TriggerPayloadDigest string                           `json:"triggerPayloadDigest,omitempty"`
+	Initiator         string                              `json:"initiator,omitempty"`
 	RequestedProvider string                              `json:"requestedProvider,omitempty"`
 	IdempotencyKey    string                              `json:"idempotencyKey,omitempty"`
 	ParentExecutionID string                              `json:"parentExecutionId,omitempty"`
@@ -240,6 +245,11 @@ func normalizeOrchestratorExecutionForStore(in OrchestratorExecution) Orchestrat
 	out := in
 	out.ID = strings.TrimSpace(out.ID)
 	out.Goal = strings.TrimSpace(out.Goal)
+	out.TriggerSource = strings.TrimSpace(out.TriggerSource)
+	out.TriggerID = strings.TrimSpace(out.TriggerID)
+	out.TriggerEvent = strings.TrimSpace(out.TriggerEvent)
+	out.TriggerPayloadDigest = strings.TrimSpace(out.TriggerPayloadDigest)
+	out.Initiator = strings.TrimSpace(out.Initiator)
 	out.RequestedProvider = strings.TrimSpace(out.RequestedProvider)
 	out.IdempotencyKey = strings.TrimSpace(out.IdempotencyKey)
 	out.ParentExecutionID = strings.TrimSpace(out.ParentExecutionID)
@@ -358,6 +368,11 @@ func normalizeOrchestratorExecution(in OrchestratorExecution) (OrchestratorExecu
 	out.Project = strings.TrimSpace(out.Project)
 	out.Environment = strings.TrimSpace(out.Environment)
 	out.TemplateID = strings.TrimSpace(out.TemplateID)
+	out.TriggerSource = strings.TrimSpace(out.TriggerSource)
+	out.TriggerID = strings.TrimSpace(out.TriggerID)
+	out.TriggerEvent = strings.TrimSpace(out.TriggerEvent)
+	out.TriggerPayloadDigest = strings.TrimSpace(out.TriggerPayloadDigest)
+	out.Initiator = strings.TrimSpace(out.Initiator)
 	out.RequestedProvider = strings.TrimSpace(out.RequestedProvider)
 	if out.Goal == "" {
 		return OrchestratorExecution{}, errOrchestratorValidation("goal is required", -1)

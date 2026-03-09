@@ -17,6 +17,7 @@ type remoteControlState struct {
 	Profiles      []ProviderProfile                   `json:"providerProfiles"`
 	Bindings      []ProviderBinding                   `json:"providerBindings"`
 	Policies      []OrchestratorPolicyRule            `json:"orchestratorPolicies,omitempty"`
+	Triggers      []ExecutionTrigger                  `json:"executionTriggers,omitempty"`
 	InstanceSyncs map[string]RemoteInstanceSyncStatus `json:"instanceSyncs,omitempty"`
 	Executions    []OrchestratorExecution             `json:"orchestratorExecutions,omitempty"`
 	WorkerLeases  []OrchestratorWorkerLease           `json:"orchestratorWorkerLeases,omitempty"`
@@ -57,6 +58,7 @@ func loadRemoteControlState() (*remoteControlState, string, error) {
 				Profiles:      []ProviderProfile{},
 				Bindings:      []ProviderBinding{},
 				Policies:      []OrchestratorPolicyRule{},
+				Triggers:      []ExecutionTrigger{},
 				InstanceSyncs: map[string]RemoteInstanceSyncStatus{},
 				Executions:    []OrchestratorExecution{},
 				WorkerLeases:  []OrchestratorWorkerLease{},
@@ -79,6 +81,9 @@ func loadRemoteControlState() (*remoteControlState, string, error) {
 	}
 	if state.Policies == nil {
 		state.Policies = []OrchestratorPolicyRule{}
+	}
+	if state.Triggers == nil {
+		state.Triggers = []ExecutionTrigger{}
 	}
 	if state.InstanceSyncs == nil {
 		state.InstanceSyncs = map[string]RemoteInstanceSyncStatus{}
@@ -540,6 +545,96 @@ func listOrchestratorPolicies() ([]OrchestratorPolicyRule, error) {
 	out := make([]OrchestratorPolicyRule, len(state.Policies))
 	copy(out, state.Policies)
 	return sortOrchestratorPolicyRules(out), nil
+}
+
+func listExecutionTriggers() ([]ExecutionTrigger, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, _, err := loadRemoteControlState()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ExecutionTrigger, len(state.Triggers))
+	copy(out, state.Triggers)
+	return out, nil
+}
+
+func getExecutionTrigger(triggerID string) (ExecutionTrigger, bool, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, _, err := loadRemoteControlState()
+	if err != nil {
+		return ExecutionTrigger{}, false, err
+	}
+	id := strings.TrimSpace(triggerID)
+	for _, trigger := range state.Triggers {
+		if strings.EqualFold(strings.TrimSpace(trigger.ID), id) {
+			return trigger, true, nil
+		}
+	}
+	return ExecutionTrigger{}, false, nil
+}
+
+func upsertExecutionTrigger(trigger ExecutionTrigger) (ExecutionTrigger, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, path, err := loadRemoteControlState()
+	if err != nil {
+		return ExecutionTrigger{}, err
+	}
+	trigger, err = normalizeExecutionTriggerForStore(trigger)
+	if err != nil {
+		return ExecutionTrigger{}, err
+	}
+	now := nowTimestamp()
+	trigger.UpdatedAt = now
+	if trigger.CreatedAt == "" {
+		trigger.CreatedAt = now
+	}
+	updated := false
+	for i := range state.Triggers {
+		if strings.EqualFold(strings.TrimSpace(state.Triggers[i].ID), trigger.ID) {
+			trigger.CreatedAt = state.Triggers[i].CreatedAt
+			state.Triggers[i] = trigger
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		state.Triggers = append(state.Triggers, trigger)
+	}
+	if err := saveRemoteControlState(path, state); err != nil {
+		return ExecutionTrigger{}, err
+	}
+	return trigger, nil
+}
+
+func deleteExecutionTrigger(triggerID string) error {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, path, err := loadRemoteControlState()
+	if err != nil {
+		return err
+	}
+	id := strings.TrimSpace(triggerID)
+	filtered := state.Triggers[:0]
+	found := false
+	for _, trigger := range state.Triggers {
+		if strings.EqualFold(strings.TrimSpace(trigger.ID), id) {
+			found = true
+			continue
+		}
+		filtered = append(filtered, trigger)
+	}
+	if !found {
+		return os.ErrNotExist
+	}
+	state.Triggers = append([]ExecutionTrigger(nil), filtered...)
+	return saveRemoteControlState(path, state)
 }
 
 func upsertOrchestratorPolicy(rule OrchestratorPolicyRule) (OrchestratorPolicyRule, error) {
