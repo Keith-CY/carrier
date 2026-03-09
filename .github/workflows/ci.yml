@@ -764,6 +764,50 @@ jobs:
           path: webui/e2e/test-results/
           retention-days: 7
 
+  e2e-control-plane-local:
+    name: Control Plane Local-Real E2E
+    needs: classify-scope
+    if: github.event_name != 'pull_request' || needs.classify-scope.outputs.ci_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3
+        with:
+          bun-version: 1.1.8
+
+      - name: Install dependencies
+        working-directory: webui/e2e
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: webui/e2e
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run local-real control plane E2E
+        run: bash scripts/e2e-control-plane-local.sh
+
+      - name: Upload full-stack test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: playwright-report-fullstack
+          path: webui/e2e/test-results-fullstack/
+          retention-days: 7
+
   e2e-tests:
     name: End-to-End Tests
     runs-on: ubuntu-latest
