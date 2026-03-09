@@ -25,6 +25,10 @@ func TestGenerateLimaTemplateProducesValidYAML(t *testing.T) {
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
+	resolvedWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
 	instance := "carrier-openclaw-a3f2b1c4"
 	data, err := generateLimaTemplate(instance, workspace)
 	if err != nil {
@@ -43,14 +47,77 @@ func TestGenerateLimaTemplateProducesValidYAML(t *testing.T) {
 	if len(parsed.Mounts) != 1 {
 		t.Fatalf("mount count = %d, want 1", len(parsed.Mounts))
 	}
-	if parsed.Mounts[0].Location != workspace {
-		t.Fatalf("mount location = %q, want %q", parsed.Mounts[0].Location, workspace)
+	if parsed.Mounts[0].Location != resolvedWorkspace {
+		t.Fatalf("mount location = %q, want %q", parsed.Mounts[0].Location, resolvedWorkspace)
 	}
 	if !parsed.Mounts[0].Writable {
 		t.Fatal("expected mount to be writable")
 	}
 	if strings.Contains(string(data), ".ssh") || strings.Contains(string(data), "/Users/") {
 		t.Fatalf("template should not contain default home mounts:\n%s", string(data))
+	}
+}
+
+func TestGenerateLimaTemplateExpandsDarwinUbuntuLTSAliasWhenBuiltinTemplateIsAvailable(t *testing.T) {
+	origHome := isolationUserHomeDir
+	origEnv := isolationEnvLookup
+	origGOOS := isolationRuntimeGOOS
+	origCandidates := isolationLimaImageTemplateCandidates
+	origReadFile := isolationReadFile
+	t.Cleanup(func() {
+		isolationUserHomeDir = origHome
+		isolationEnvLookup = origEnv
+		isolationRuntimeGOOS = origGOOS
+		isolationLimaImageTemplateCandidates = origCandidates
+		isolationReadFile = origReadFile
+	})
+
+	home := t.TempDir()
+	isolationUserHomeDir = func() (string, error) { return home, nil }
+	isolationEnvLookup = func(string) string { return "" }
+	isolationRuntimeGOOS = "darwin"
+
+	templatePath := filepath.Join(t.TempDir(), "ubuntu-lts.yaml")
+	raw := []byte(`
+images:
+  - location: "https://example.invalid/ubuntu-arm64.img"
+    arch: "aarch64"
+    digest: "sha256:abc123"
+  - location: "https://example.invalid/ubuntu-amd64.img"
+    arch: "x86_64"
+`)
+	if err := os.WriteFile(templatePath, raw, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	isolationLimaImageTemplateCandidates = func() []string { return []string{templatePath} }
+	isolationReadFile = os.ReadFile
+
+	workspace := filepath.Join(home, ".carrier", "instances", "zeroclaw", "workspace")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	data, err := generateLimaTemplate("carrier-zeroclaw-a3f2b1c4", workspace)
+	if err != nil {
+		t.Fatalf("generateLimaTemplate: %v", err)
+	}
+
+	var parsed struct {
+		Images []limaImage `yaml:"images"`
+	}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+	if len(parsed.Images) != 2 {
+		t.Fatalf("image count = %d, want 2", len(parsed.Images))
+	}
+	if parsed.Images[0].Location != "https://example.invalid/ubuntu-arm64.img" {
+		t.Fatalf("first image location = %q", parsed.Images[0].Location)
+	}
+	if parsed.Images[0].Digest != "sha256:abc123" {
+		t.Fatalf("first image digest = %q", parsed.Images[0].Digest)
+	}
+	if strings.Contains(string(data), `location: "ubuntu-lts"`) {
+		t.Fatalf("template should not retain ubuntu-lts alias when explicit images are available:\n%s", string(data))
 	}
 }
 

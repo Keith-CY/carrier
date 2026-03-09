@@ -205,6 +205,32 @@ func TestDaemonClient_GetStatus(t *testing.T) {
 	}
 }
 
+func TestDaemonClient_GetStatus_SingleObject(t *testing.T) {
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":           "a1",
+			"runtimeState": "running",
+			"health":       "healthy",
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	statuses, err := dc.GetStatus(context.Background(), "a1", "actor", "req")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 status, got %d", len(statuses))
+	}
+	if statuses[0].ID != "a1" || statuses[0].Runtime != "running" {
+		t.Fatalf("unexpected status payload: %+v", statuses[0])
+	}
+}
+
 func TestDaemonClient_GetStatus_AllAgents(t *testing.T) {
 	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/agents/status" {

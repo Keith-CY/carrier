@@ -13,3 +13,4 @@ carrier
 agentd
 .gocache/
 .gomodcache/
+webui/e2e/test-results-fullstack/

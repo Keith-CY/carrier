@@ -994,7 +994,7 @@ func ensureOrchestratorLocalAgentReady(ctx context.Context, daemon *DaemonClient
 	if strings.EqualFold(strings.TrimSpace(matched.Runtime), "running") {
 		return nil
 	}
-	if err := daemon.StartAgent(ctx, agentID, actor, requestID); err != nil {
+	if err := daemon.StartAgentWithOptions(ctx, agentID, StartAgentOptions{Isolation: matched.Isolated}, actor, requestID); err != nil {
 		return fmt.Errorf("start local worker agent %s failed: %w", agentID, err)
 	}
 	statuses, err := daemon.GetStatus(ctx, agentID, actor, requestID)
