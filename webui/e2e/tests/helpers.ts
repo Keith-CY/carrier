@@ -1128,6 +1128,26 @@ export async function mockOrchestrationAPIs(page: Page) {
     });
   });
 
+  await page.route('**/api/v1/audit/export?executionId=*', async (route) => {
+    const executionID = new URL(route.request().url()).searchParams.get('executionId') || '';
+    const execution = executions.find((item) => item.id === executionID);
+    if (!execution) {
+      return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ result: 'error', message: 'not found' }) });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        executionId: executionID,
+        events: [
+          { action: 'orchestrator_execution_create', target: executionID, result: 'ok' },
+          { action: 'gateway_audit_export', target: executionID, result: 'ok' },
+        ],
+      }),
+    });
+  });
+
   await page.route('**/api/v1/orchestrator/executions/*', async (route) => {
     const path = new URL(route.request().url()).pathname;
     const executionID = path.split('/')[5];

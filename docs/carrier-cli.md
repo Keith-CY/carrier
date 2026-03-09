@@ -36,6 +36,8 @@ All command blocks below assume `carrier` is installed and available in `PATH`.
   - List execution artifact metadata.
 - `carrier executions evidence <execution_id> [--format json|zip] [--output <path>] [--json]`
   - Export an execution evidence bundle as JSON or download a ZIP archive.
+- `carrier executions audit <execution_id> [--output <path>] [--json]`
+  - Export execution-scoped gateway audit events as JSON.
 
 ### Bootstrap and runtime
 
@@ -232,6 +234,10 @@ carrier executions evidence <execution_id>
 
 ```bash
 carrier executions evidence <execution_id> --format zip --output evidence.zip
+```
+
+```bash
+carrier executions audit <execution_id> --output audit.json
 ```
 
 ```bash

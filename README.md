@@ -132,6 +132,7 @@ carrier executions show <execution_id>
 carrier executions cancel <execution_id>
 carrier executions artifacts <execution_id>
 carrier executions evidence <execution_id>
+carrier executions audit <execution_id>
 carrier executions retry <execution_id>
 carrier executions rerun <execution_id>
 carrier executions clone <execution_id>

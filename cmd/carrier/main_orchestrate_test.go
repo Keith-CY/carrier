@@ -196,6 +196,14 @@ func TestParseExecutionsCommandArgs(t *testing.T) {
 		t.Fatalf("unexpected evidence opts: %+v", evidenceOpts)
 	}
 
+	auditOpts, err := parseExecutionsCommandArgs([]string{"audit", "exec-102", "--output", "audit.json"})
+	if err != nil {
+		t.Fatalf("parseExecutionsCommandArgs(audit) error: %v", err)
+	}
+	if auditOpts.Action != "audit" || auditOpts.ExecutionID != "exec-102" || auditOpts.OutputPath != "audit.json" {
+		t.Fatalf("unexpected audit opts: %+v", auditOpts)
+	}
+
 	authorizeOpts, err := parseExecutionsCommandArgs([]string{"authorize", "exec-66", "--policy-approve", "--json"})
 	if err != nil {
 		t.Fatalf("parseExecutionsCommandArgs(authorize) error: %v", err)
@@ -739,5 +747,57 @@ func TestRunExecutionEvidenceCommand(t *testing.T) {
 	}
 	if got := string(data); got != "PK\x03\x04mock-zip" {
 		t.Fatalf("unexpected evidence zip bytes: %q", got)
+	}
+}
+
+func TestRunExecutionAuditCommand(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/audit/export":
+			if got := strings.TrimSpace(r.URL.Query().Get("executionId")); got != "exec-audit" {
+				http.Error(w, "unexpected executionId", http.StatusBadRequest)
+				return
+			}
+			_, _ = w.Write([]byte(`{"result":"ok","executionId":"exec-audit","events":[{"action":"orchestrator_execution_create","target":"exec-audit","result":"ok"},{"action":"gateway_audit_export","target":"exec-audit","result":"ok"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gateway.Close()
+
+	setProbeEnvFromURL(t, "CARRIER_GATEWAY_HOST", "CARRIER_GATEWAY_PORT", gateway.URL)
+
+	var out bytes.Buffer
+	if err := runOrchestrateCommand(&out, orchestrateCommandOptions{
+		Action:      "audit",
+		ExecutionID: "exec-audit",
+	}); err != nil {
+		t.Fatalf("runOrchestrateCommand(audit) error: %v", err)
+	}
+	if !strings.Contains(out.String(), "execution audit exec-audit") || !strings.Contains(out.String(), "events: 2") {
+		t.Fatalf("unexpected audit output: %q", out.String())
+	}
+
+	outputPath := filepath.Join(t.TempDir(), "exec-audit.json")
+	out.Reset()
+	if err := runOrchestrateCommand(&out, orchestrateCommandOptions{
+		Action:      "audit",
+		ExecutionID: "exec-audit",
+		OutputPath:  outputPath,
+	}); err != nil {
+		t.Fatalf("runOrchestrateCommand(audit write) error: %v", err)
+	}
+	if got := strings.TrimSpace(out.String()); !strings.Contains(got, outputPath) {
+		t.Fatalf("expected output path in audit export output, got %q", got)
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read audit output: %v", err)
+	}
+	if !strings.Contains(string(data), `"executionId": "exec-audit"`) {
+		t.Fatalf("unexpected audit json: %q", string(data))
 	}
 }
