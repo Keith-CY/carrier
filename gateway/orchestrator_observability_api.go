@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -33,8 +35,28 @@ type orchestratorWorkerMetricsSnapshot struct {
 }
 
 type orchestratorProviderMetricsSnapshot struct {
-	RequestedFailures map[string]int `json:"requestedFailures"`
-	ResolvedFailures  map[string]int `json:"resolvedFailures"`
+	RequestedFailures     map[string]int                               `json:"requestedFailures"`
+	ResolvedFailures      map[string]int                               `json:"resolvedFailures"`
+	Aggregates            []orchestratorProviderAggregateSnapshot      `json:"aggregates,omitempty"`
+	Models                []orchestratorProviderModelAggregateSnapshot `json:"models,omitempty"`
+	TotalEstimatedCostUSD float64                                      `json:"totalEstimatedCostUsd,omitempty"`
+}
+
+type orchestratorProviderAggregateSnapshot struct {
+	Provider         string  `json:"provider"`
+	Successes        int     `json:"successes"`
+	Failures         int     `json:"failures"`
+	AvgLatencyMs     int64   `json:"avgLatencyMs,omitempty"`
+	EstimatedCostUSD float64 `json:"estimatedCostUsd,omitempty"`
+}
+
+type orchestratorProviderModelAggregateSnapshot struct {
+	Provider         string  `json:"provider"`
+	Model            string  `json:"model"`
+	Successes        int     `json:"successes"`
+	Failures         int     `json:"failures"`
+	AvgLatencyMs     int64   `json:"avgLatencyMs,omitempty"`
+	EstimatedCostUSD float64 `json:"estimatedCostUsd,omitempty"`
 }
 
 type orchestratorPolicyMetricsSnapshot struct {
@@ -96,6 +118,12 @@ func buildOrchestratorMetricsSnapshot(executions []OrchestratorExecution, leases
 		RequestedFailures: map[string]int{},
 		ResolvedFailures:  map[string]int{},
 	}
+	providerAggregates := map[string]*orchestratorProviderAggregateSnapshot{}
+	providerLatencyTotals := map[string]int64{}
+	providerLatencyCounts := map[string]int64{}
+	modelAggregates := map[string]*orchestratorProviderModelAggregateSnapshot{}
+	modelLatencyTotals := map[string]int64{}
+	modelLatencyCounts := map[string]int64{}
 	policyMetrics := orchestratorPolicyMetricsSnapshot{}
 
 	var latencyTotal int64
@@ -143,6 +171,47 @@ func buildOrchestratorMetricsSnapshot(executions []OrchestratorExecution, leases
 			policyMetrics.Deny++
 		}
 
+		for _, resolution := range execution.Governance.ProviderResolutions {
+			provider := strings.ToLower(strings.TrimSpace(resolution.Provider))
+			if provider == "" {
+				continue
+			}
+			aggregate := providerAggregates[provider]
+			if aggregate == nil {
+				aggregate = &orchestratorProviderAggregateSnapshot{Provider: provider}
+				providerAggregates[provider] = aggregate
+			}
+			aggregate.Successes += resolution.SuccessfulTasks
+			aggregate.Failures += resolution.FailedTasks
+			aggregate.EstimatedCostUSD += resolution.EstimatedCostUSD
+			providerMetrics.TotalEstimatedCostUSD += resolution.EstimatedCostUSD
+			taskCount := int64(resolution.SuccessfulTasks + resolution.FailedTasks)
+			if resolution.AvgLatencyMs > 0 && taskCount > 0 {
+				providerLatencyTotals[provider] += resolution.AvgLatencyMs * taskCount
+				providerLatencyCounts[provider] += taskCount
+			}
+
+			model := strings.TrimSpace(resolution.Model)
+			if model != "" {
+				modelKey := provider + "\x00" + strings.ToLower(model)
+				modelAggregate := modelAggregates[modelKey]
+				if modelAggregate == nil {
+					modelAggregate = &orchestratorProviderModelAggregateSnapshot{
+						Provider: provider,
+						Model:    model,
+					}
+					modelAggregates[modelKey] = modelAggregate
+				}
+				modelAggregate.Successes += resolution.SuccessfulTasks
+				modelAggregate.Failures += resolution.FailedTasks
+				modelAggregate.EstimatedCostUSD += resolution.EstimatedCostUSD
+				if resolution.AvgLatencyMs > 0 && taskCount > 0 {
+					modelLatencyTotals[modelKey] += resolution.AvgLatencyMs * taskCount
+					modelLatencyCounts[modelKey] += taskCount
+				}
+			}
+		}
+
 		if !executionHasProviderFailure(execution) {
 			continue
 		}
@@ -166,6 +235,38 @@ func buildOrchestratorMetricsSnapshot(executions []OrchestratorExecution, leases
 	if latencyCount > 0 {
 		executionMetrics.AvgLatencyMs = latencyTotal / latencyCount
 	}
+
+	for provider, aggregate := range providerAggregates {
+		if count := providerLatencyCounts[provider]; count > 0 {
+			aggregate.AvgLatencyMs = providerLatencyTotals[provider] / count
+		}
+		aggregate.EstimatedCostUSD = roundProviderAggregateCost(aggregate.EstimatedCostUSD)
+		providerMetrics.Aggregates = append(providerMetrics.Aggregates, *aggregate)
+	}
+	sort.SliceStable(providerMetrics.Aggregates, func(i, j int) bool {
+		if providerMetrics.Aggregates[i].Provider != providerMetrics.Aggregates[j].Provider {
+			return providerMetrics.Aggregates[i].Provider < providerMetrics.Aggregates[j].Provider
+		}
+		return providerMetrics.Aggregates[i].EstimatedCostUSD > providerMetrics.Aggregates[j].EstimatedCostUSD
+	})
+
+	for modelKey, aggregate := range modelAggregates {
+		if count := modelLatencyCounts[modelKey]; count > 0 {
+			aggregate.AvgLatencyMs = modelLatencyTotals[modelKey] / count
+		}
+		aggregate.EstimatedCostUSD = roundProviderAggregateCost(aggregate.EstimatedCostUSD)
+		providerMetrics.Models = append(providerMetrics.Models, *aggregate)
+	}
+	sort.SliceStable(providerMetrics.Models, func(i, j int) bool {
+		if providerMetrics.Models[i].Provider != providerMetrics.Models[j].Provider {
+			return providerMetrics.Models[i].Provider < providerMetrics.Models[j].Provider
+		}
+		if providerMetrics.Models[i].Model != providerMetrics.Models[j].Model {
+			return providerMetrics.Models[i].Model < providerMetrics.Models[j].Model
+		}
+		return providerMetrics.Models[i].EstimatedCostUSD > providerMetrics.Models[j].EstimatedCostUSD
+	})
+	providerMetrics.TotalEstimatedCostUSD = roundProviderAggregateCost(providerMetrics.TotalEstimatedCostUSD)
 
 	for _, lease := range markedLeases {
 		workerMetrics.Total++
@@ -196,6 +297,13 @@ func buildOrchestratorMetricsSnapshot(executions []OrchestratorExecution, leases
 		Policies:   policyMetrics,
 		Queue:      buildOrchestratorWorkerQueueSummary(executions, markedLeases, cfg, now),
 	}
+}
+
+func roundProviderAggregateCost(value float64) float64 {
+	if value <= 0 {
+		return 0
+	}
+	return math.Round(value*1_000_000) / 1_000_000
 }
 
 func isActiveOrchestratorWorkerState(state OrchestratorWorkerState) bool {

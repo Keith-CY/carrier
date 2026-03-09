@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -23,6 +24,17 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 		Goal:              "prepare summary",
 		RequestedProvider: "openrouter",
 		Status:            OrchestratorExecutionStatusCompleted,
+		RequiredWorkers: []OrchestratorRequiredWorker{{
+			HostID:  hostID,
+			AgentID: "zeroclaw",
+			Count:   1,
+		}},
+		TaskUnits: []OrchestratorTaskUnit{{
+			ID:      "task-1",
+			Input:   "prepare release summary for checkout deployment",
+			HostID:  hostID,
+			AgentID: "zeroclaw",
+		}},
 		Policy: OrchestratorExecutionPolicySnapshot{
 			Decision: "allow",
 		},
@@ -31,11 +43,15 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 				HostID:   hostID,
 				AgentID:  "zeroclaw",
 				Provider: "openrouter",
+				Model:    "anthropic/claude-3.7-sonnet",
 			}},
 		},
 		Results: []OrchestratorTaskResult{{
 			TaskID:    "task-1",
 			Status:    OrchestratorTaskStatusCompleted,
+			HostID:    hostID,
+			AgentID:   "zeroclaw",
+			Summary:   "release summary ready for checkout deployment",
 			Attempts:  2,
 			LatencyMs: 700,
 		}},
@@ -52,6 +68,17 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 		Goal:              "diagnose provider issue",
 		RequestedProvider: "anthropic",
 		Status:            OrchestratorExecutionStatusFailed,
+		RequiredWorkers: []OrchestratorRequiredWorker{{
+			HostID:  hostID,
+			AgentID: "picoclaw",
+			Count:   1,
+		}},
+		TaskUnits: []OrchestratorTaskUnit{{
+			ID:      "task-1",
+			Input:   "diagnose provider timeout for checkout incident",
+			HostID:  hostID,
+			AgentID: "picoclaw",
+		}},
 		Policy: OrchestratorExecutionPolicySnapshot{
 			Decision: "ask",
 		},
@@ -60,6 +87,7 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 				HostID:   hostID,
 				AgentID:  "picoclaw",
 				Provider: "anthropic",
+				Model:    "claude-3-7-sonnet",
 			}},
 		},
 		Outcome: OrchestratorExecutionOutcome{
@@ -68,6 +96,8 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 		Results: []OrchestratorTaskResult{{
 			TaskID:          "task-1",
 			Status:          OrchestratorTaskStatusFailed,
+			HostID:          hostID,
+			AgentID:         "picoclaw",
 			Attempts:        3,
 			FailureCategory: "provider_failed",
 			FailureReason:   "provider timeout",
@@ -191,6 +221,48 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 	resolved, _ := providers["resolvedFailures"].(map[string]interface{})
 	if got := int(anyToFloat(resolved["anthropic"])); got != 1 {
 		t.Fatalf("providers.resolvedFailures[anthropic]=%d want 1 providers=%+v", got, providers)
+	}
+	if got := anyToFloat(providers["totalEstimatedCostUsd"]); got <= 0 {
+		t.Fatalf("providers.totalEstimatedCostUsd=%f want > 0 providers=%+v", got, providers)
+	}
+	aggregates, _ := providers["aggregates"].([]interface{})
+	if len(aggregates) < 2 {
+		t.Fatalf("providers.aggregates len=%d want >=2 providers=%+v", len(aggregates), providers)
+	}
+	var anthropicAggregate map[string]interface{}
+	for _, item := range aggregates {
+		current, _ := item.(map[string]interface{})
+		if strings.TrimSpace(anyToString(current["provider"])) == "anthropic" {
+			anthropicAggregate = current
+			break
+		}
+	}
+	if anthropicAggregate == nil {
+		t.Fatalf("expected anthropic aggregate providers=%+v", providers)
+	}
+	if got := int(anyToFloat(anthropicAggregate["failures"])); got != 1 {
+		t.Fatalf("anthropic failures=%d want 1 aggregate=%+v", got, anthropicAggregate)
+	}
+	if got := anyToFloat(anthropicAggregate["estimatedCostUsd"]); got <= 0 {
+		t.Fatalf("anthropic estimatedCostUsd=%f want > 0 aggregate=%+v", got, anthropicAggregate)
+	}
+	models, _ := providers["models"].([]interface{})
+	if len(models) < 2 {
+		t.Fatalf("providers.models len=%d want >=2 providers=%+v", len(models), providers)
+	}
+	var anthropicModel map[string]interface{}
+	for _, item := range models {
+		current, _ := item.(map[string]interface{})
+		if strings.TrimSpace(anyToString(current["provider"])) == "anthropic" {
+			anthropicModel = current
+			break
+		}
+	}
+	if anthropicModel == nil {
+		t.Fatalf("expected anthropic model aggregate providers=%+v", providers)
+	}
+	if got := int(anyToFloat(anthropicModel["failures"])); got != 1 {
+		t.Fatalf("anthropic model failures=%d want 1 aggregate=%+v", got, anthropicModel)
 	}
 
 	policies, _ := metrics["policies"].(map[string]interface{})

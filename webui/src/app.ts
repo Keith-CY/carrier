@@ -2531,6 +2531,11 @@
         const status = String(item && item.status ? item.status : '').trim();
         const syncMode = String(item && item.syncMode ? item.syncMode : '').trim();
         const message = String(item && item.message ? item.message : '').trim();
+        const estimatedTokens = toFiniteNumber(item && item.estimatedTotalTokens, 0);
+        const estimatedCostUSD = toFiniteNumber(item && item.estimatedCostUsd, 0);
+        const successCount = toFiniteNumber(item && item.successfulTasks, 0);
+        const failureCount = toFiniteNumber(item && item.failedTasks, 0);
+        const avgLatencyMs = toFiniteNumber(item && item.avgLatencyMs, 0);
 
         const row = document.createElement('div');
         row.className = 'execution-detail-line';
@@ -2540,7 +2545,11 @@
           (profileName ? ' · profile=' + profileName : '') +
           (provider || model ? ' · ' + [provider, model].filter(Boolean).join('/') : '') +
           (status ? ' · status=' + status : '') +
-          (syncMode ? ' · sync=' + syncMode : '');
+          (syncMode ? ' · sync=' + syncMode : '') +
+          (estimatedTokens > 0 ? ' · tokens=' + String(estimatedTokens) : '') +
+          (estimatedCostUSD > 0 ? ' · cost=' + formatUSD(estimatedCostUSD) : '') +
+          ((successCount > 0 || failureCount > 0) ? ' · tasks=' + String(successCount) + '/' + String(failureCount) : '') +
+          (avgLatencyMs > 0 ? ' · latency=' + formatMilliseconds(avgLatencyMs) : '');
         governanceCard.appendChild(row);
         if (message) {
           const msg = document.createElement('div');
@@ -7261,6 +7270,10 @@
     return Math.round(toFiniteNumber(value, 0)) + 'ms';
   }
 
+  function formatUSD(value) {
+    return '$' + toFiniteNumber(value, 0).toFixed(4);
+  }
+
   function formatMetricsBreakdown(value) {
     const input = value && typeof value === 'object' ? value : {};
     const entries = Object.entries(input)
@@ -7313,10 +7326,54 @@
       providers: {
         requestedFailures: providers.requestedFailures && typeof providers.requestedFailures === 'object' ? providers.requestedFailures : {},
         resolvedFailures: providers.resolvedFailures && typeof providers.resolvedFailures === 'object' ? providers.resolvedFailures : {},
+        totalEstimatedCostUsd: toFiniteNumber(providers.totalEstimatedCostUsd, 0),
+        aggregates: Array.isArray(providers.aggregates) ? providers.aggregates : [],
+        models: Array.isArray(providers.models) ? providers.models : [],
       },
       policies: policies,
       queue: queue,
     };
+  }
+
+  function topProviderUsage(providerMetrics) {
+    const aggregates = providerMetrics && Array.isArray(providerMetrics.aggregates) ? providerMetrics.aggregates : [];
+    if (!aggregates.length) return '';
+    const ordered = aggregates
+      .map(item => ({
+        provider: String(item && item.provider ? item.provider : '').trim(),
+        estimatedCostUsd: toFiniteNumber(item && item.estimatedCostUsd, 0),
+        total: toFiniteNumber(item && item.successes, 0) + toFiniteNumber(item && item.failures, 0),
+      }))
+      .filter(item => item.provider);
+    if (!ordered.length) return '';
+    ordered.sort((a, b) => {
+      if (b.estimatedCostUsd !== a.estimatedCostUsd) return b.estimatedCostUsd - a.estimatedCostUsd;
+      if (b.total !== a.total) return b.total - a.total;
+      return a.provider.localeCompare(b.provider);
+    });
+    return ordered[0].provider;
+  }
+
+  function topModelUsage(providerMetrics) {
+    const models = providerMetrics && Array.isArray(providerMetrics.models) ? providerMetrics.models : [];
+    if (!models.length) return '';
+    const ordered = models
+      .map(item => ({
+        provider: String(item && item.provider ? item.provider : '').trim(),
+        model: String(item && item.model ? item.model : '').trim(),
+        estimatedCostUsd: toFiniteNumber(item && item.estimatedCostUsd, 0),
+        total: toFiniteNumber(item && item.successes, 0) + toFiniteNumber(item && item.failures, 0),
+      }))
+      .filter(item => item.model);
+    if (!ordered.length) return '';
+    ordered.sort((a, b) => {
+      if (b.estimatedCostUsd !== a.estimatedCostUsd) return b.estimatedCostUsd - a.estimatedCostUsd;
+      if (b.total !== a.total) return b.total - a.total;
+      const left = [a.provider, a.model].filter(Boolean).join('/');
+      const right = [b.provider, b.model].filter(Boolean).join('/');
+      return left.localeCompare(right);
+    });
+    return ordered[0].model;
   }
 
   function classifyRemoteOperationGroup(operationName) {
@@ -7470,6 +7527,14 @@
         lines: [
           'requested: ' + formatMetricsBreakdown(providerMetrics.requestedFailures),
           'resolved: ' + formatMetricsBreakdown(providerMetrics.resolvedFailures),
+        ],
+      },
+      {
+        title: 'Provider Usage',
+        lines: [
+          'estimated cost: ' + formatUSD(providerMetrics.totalEstimatedCostUsd),
+          'top provider: ' + (topProviderUsage(providerMetrics) || 'none'),
+          'top model: ' + (topModelUsage(providerMetrics) || 'none'),
         ],
       },
       {

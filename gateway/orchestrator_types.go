@@ -135,38 +135,38 @@ type OrchestratorExecutionOutcome struct {
 }
 
 type OrchestratorExecution struct {
-	ID                string                              `json:"id"`
-	Goal              string                              `json:"goal"`
-	Team              string                              `json:"team,omitempty"`
-	Project           string                              `json:"project,omitempty"`
-	Environment       string                              `json:"environment,omitempty"`
-	TemplateID        string                              `json:"templateId,omitempty"`
-	TriggerSource     string                              `json:"triggerSource,omitempty"`
-	TriggerID         string                              `json:"triggerId,omitempty"`
-	TriggerEvent      string                              `json:"triggerEvent,omitempty"`
-	TriggerPayloadDigest string                           `json:"triggerPayloadDigest,omitempty"`
-	Initiator         string                              `json:"initiator,omitempty"`
-	RequestedProvider string                              `json:"requestedProvider,omitempty"`
-	IdempotencyKey    string                              `json:"idempotencyKey,omitempty"`
-	ParentExecutionID string                              `json:"parentExecutionId,omitempty"`
-	SourceExecutionID string                              `json:"sourceExecutionId,omitempty"`
-	LaunchReason      string                              `json:"launchReason,omitempty"`
-	ApprovalScope     string                              `json:"approvalScope"`
-	ToolPolicy        OrchestratorToolPolicy              `json:"toolPolicy,omitempty"`
-	RequiredWorkers   []OrchestratorRequiredWorker        `json:"requiredWorkers"`
-	TaskUnits         []OrchestratorTaskUnit              `json:"taskUnits"`
-	Status            OrchestratorExecutionStatus         `json:"status"`
-	MaxConcurrency    int                                 `json:"maxConcurrency,omitempty"`
-	Authorization     OrchestratorAuthorization           `json:"authorization"`
-	Policy            OrchestratorExecutionPolicySnapshot `json:"policy,omitempty"`
-	Governance        OrchestratorExecutionGovernance     `json:"governance,omitempty"`
-	Outcome           OrchestratorExecutionOutcome        `json:"outcome,omitempty"`
-	Results           []OrchestratorTaskResult            `json:"results,omitempty"`
-	Error             string                              `json:"error,omitempty"`
-	CreatedAt         string                              `json:"createdAt"`
-	StartedAt         string                              `json:"startedAt,omitempty"`
-	CompletedAt       string                              `json:"completedAt,omitempty"`
-	UpdatedAt         string                              `json:"updatedAt"`
+	ID                   string                              `json:"id"`
+	Goal                 string                              `json:"goal"`
+	Team                 string                              `json:"team,omitempty"`
+	Project              string                              `json:"project,omitempty"`
+	Environment          string                              `json:"environment,omitempty"`
+	TemplateID           string                              `json:"templateId,omitempty"`
+	TriggerSource        string                              `json:"triggerSource,omitempty"`
+	TriggerID            string                              `json:"triggerId,omitempty"`
+	TriggerEvent         string                              `json:"triggerEvent,omitempty"`
+	TriggerPayloadDigest string                              `json:"triggerPayloadDigest,omitempty"`
+	Initiator            string                              `json:"initiator,omitempty"`
+	RequestedProvider    string                              `json:"requestedProvider,omitempty"`
+	IdempotencyKey       string                              `json:"idempotencyKey,omitempty"`
+	ParentExecutionID    string                              `json:"parentExecutionId,omitempty"`
+	SourceExecutionID    string                              `json:"sourceExecutionId,omitempty"`
+	LaunchReason         string                              `json:"launchReason,omitempty"`
+	ApprovalScope        string                              `json:"approvalScope"`
+	ToolPolicy           OrchestratorToolPolicy              `json:"toolPolicy,omitempty"`
+	RequiredWorkers      []OrchestratorRequiredWorker        `json:"requiredWorkers"`
+	TaskUnits            []OrchestratorTaskUnit              `json:"taskUnits"`
+	Status               OrchestratorExecutionStatus         `json:"status"`
+	MaxConcurrency       int                                 `json:"maxConcurrency,omitempty"`
+	Authorization        OrchestratorAuthorization           `json:"authorization"`
+	Policy               OrchestratorExecutionPolicySnapshot `json:"policy,omitempty"`
+	Governance           OrchestratorExecutionGovernance     `json:"governance,omitempty"`
+	Outcome              OrchestratorExecutionOutcome        `json:"outcome,omitempty"`
+	Results              []OrchestratorTaskResult            `json:"results,omitempty"`
+	Error                string                              `json:"error,omitempty"`
+	CreatedAt            string                              `json:"createdAt"`
+	StartedAt            string                              `json:"startedAt,omitempty"`
+	CompletedAt          string                              `json:"completedAt,omitempty"`
+	UpdatedAt            string                              `json:"updatedAt"`
 }
 
 type OrchestratorExecutionGovernance struct {
@@ -277,6 +277,7 @@ func normalizeOrchestratorExecutionForStore(in OrchestratorExecution) Orchestrat
 		out.Results = results
 	}
 	out.Error = strings.TrimSpace(out.Error)
+	out.Governance = hydrateProviderGovernanceUsage(out)
 	out.Policy = buildOrchestratorExecutionPolicySnapshot(out)
 	return out
 }

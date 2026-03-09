@@ -85,22 +85,29 @@ type ProviderBinding struct {
 }
 
 type ProviderGovernanceResolution struct {
-	Source            string `json:"source"`
-	Status            string `json:"status"`
-	HostID            string `json:"hostId"`
-	AgentID           string `json:"agentId,omitempty"`
-	BindingID         string `json:"bindingId,omitempty"`
-	BindingTargetType string `json:"bindingTargetType,omitempty"`
-	BindingTargetID   string `json:"bindingTargetId,omitempty"`
-	ProfileID         string `json:"profileId,omitempty"`
-	ProfileName       string `json:"profileName,omitempty"`
-	Provider          string `json:"provider,omitempty"`
-	Model             string `json:"model,omitempty"`
-	BaseURL           string `json:"baseUrl,omitempty"`
-	AuthRef           string `json:"authRef,omitempty"`
-	SyncMode          string `json:"syncMode,omitempty"`
-	Enabled           bool   `json:"enabled"`
-	Message           string `json:"message,omitempty"`
+	Source                string  `json:"source"`
+	Status                string  `json:"status"`
+	HostID                string  `json:"hostId"`
+	AgentID               string  `json:"agentId,omitempty"`
+	BindingID             string  `json:"bindingId,omitempty"`
+	BindingTargetType     string  `json:"bindingTargetType,omitempty"`
+	BindingTargetID       string  `json:"bindingTargetId,omitempty"`
+	ProfileID             string  `json:"profileId,omitempty"`
+	ProfileName           string  `json:"profileName,omitempty"`
+	Provider              string  `json:"provider,omitempty"`
+	Model                 string  `json:"model,omitempty"`
+	BaseURL               string  `json:"baseUrl,omitempty"`
+	AuthRef               string  `json:"authRef,omitempty"`
+	SyncMode              string  `json:"syncMode,omitempty"`
+	Enabled               bool    `json:"enabled"`
+	EstimatedInputTokens  int     `json:"estimatedInputTokens,omitempty"`
+	EstimatedOutputTokens int     `json:"estimatedOutputTokens,omitempty"`
+	EstimatedTotalTokens  int     `json:"estimatedTotalTokens,omitempty"`
+	EstimatedCostUSD      float64 `json:"estimatedCostUsd,omitempty"`
+	SuccessfulTasks       int     `json:"successfulTasks,omitempty"`
+	FailedTasks           int     `json:"failedTasks,omitempty"`
+	AvgLatencyMs          int64   `json:"avgLatencyMs,omitempty"`
+	Message               string  `json:"message,omitempty"`
 }
 
 type RemoteSessionEntry struct {
