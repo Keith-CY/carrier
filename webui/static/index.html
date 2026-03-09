@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Carrier — Agent Platform</title>
+<title>Carrier — Execution and Knowledge Control Plane</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -39,13 +39,17 @@
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="6" height="6" rx="1"></rect><rect x="14" y="5" width="6" height="6" rx="1"></rect><path d="M7 11v4"></path><path d="M17 11v4"></path><path d="M7 15h10"></path><path d="M12 15v4"></path></svg></span>
           <span class="nav-text">Workers</span>
         </a>
-        <a href="#/servers" class="nav-link" data-route="servers">
+        <a href="#/hosts" class="nav-link" data-route="hosts">
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1.5"></rect><rect x="3" y="10" width="18" height="5" rx="1.5"></rect><rect x="3" y="16" width="18" height="5" rx="1.5"></rect></svg></span>
-          <span class="nav-text">Servers</span>
+          <span class="nav-text">Hosts</span>
         </a>
-        <a href="#/profiles" class="nav-link" data-route="profiles">
+        <a href="#/providers" class="nav-link" data-route="providers">
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"></circle><path d="M4 20c1.8-4 5-6 8-6s6.2 2 8 6"></path></svg></span>
-          <span class="nav-text">Profiles</span>
+          <span class="nav-text">Providers</span>
+        </a>
+        <a href="#/policies" class="nav-link" data-route="policies">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"></path><path d="M4 4h16v16H4z"></path></svg></span>
+          <span class="nav-text">Policies</span>
         </a>
         <a href="#/remote-chat" class="nav-link" data-route="remote-chat">
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 6h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9l-4 3v-3H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"></path></svg></span>
@@ -544,7 +548,7 @@
 
     <section id="view-servers" class="view hidden view-servers-surface">
       <div class="section-head">
-        <h2>Remote Servers</h2>
+        <h2>Hosts</h2>
         <div class="section-actions">
           <button id="servers-refresh" class="btn-sm btn-secondary">Refresh</button>
         </div>
@@ -736,11 +740,12 @@
 
     <section id="view-profiles" class="view hidden">
       <div class="section-head">
-        <h2>Provider Profiles</h2>
+        <h2 id="profiles-title">Providers</h2>
         <div class="section-actions">
           <button id="profiles-refresh" class="btn-sm btn-secondary">Refresh</button>
         </div>
       </div>
+      <div id="providers-shell">
       <div class="card">
         <h3>Create Profile</h3>
         <div class="form-grid">
@@ -827,7 +832,11 @@
         </div>
         <div id="governance-preview-out" class="instance-meta" style="white-space:pre-line; margin-top:12px"></div>
       </div>
+      <div id="profiles-list" class="agent-grid" style="margin-top:12px"></div>
+      <div id="bindings-list" class="agent-grid" style="margin-top:12px"></div>
+      </div>
 
+      <div id="policies-shell">
       <div class="card" style="margin-top:12px">
         <h3>Execution Policies</h3>
         <div class="form-grid">
@@ -982,11 +991,9 @@
           <button id="trigger-cancel-edit" class="btn-sm btn-secondary hidden" type="button">Cancel Edit</button>
         </div>
       </div>
-
-      <div id="profiles-list" class="agent-grid" style="margin-top:12px"></div>
-      <div id="bindings-list" class="agent-grid" style="margin-top:12px"></div>
       <div id="execution-policies-list" class="agent-grid" style="margin-top:12px"></div>
       <div id="execution-triggers-list" class="agent-grid" style="margin-top:12px"></div>
+      </div>
     </section>
 
     <section id="view-remote-chat" class="view hidden view-remote-chat-surface">

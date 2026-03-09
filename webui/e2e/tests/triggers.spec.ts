@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { loginWithToken, mockAPIs, MOCK_TEMPLATES } from './helpers';
 
-test.describe('Profiles Trigger Management', () => {
+test.describe('Policies Trigger Management', () => {
   test('supports create, edit, disable, and delete flow', async ({ page }) => {
     await mockAPIs(page);
 
@@ -123,7 +123,7 @@ test.describe('Profiles Trigger Management', () => {
       return route.fallback();
     });
 
-    await loginWithToken(page, '/#/profiles');
+    await loginWithToken(page, '/#/policies');
 
     await expect(page.locator('#execution-triggers-list .agent-card h4', { hasText: 'incident webhook' })).toBeVisible();
 

@@ -47,6 +47,11 @@ func TestHandleExecutionTriggersCRUD(t *testing.T) {
 	if got := strings.TrimSpace(anyToString(triggerMap["templateId"])); got != "pr-triage" {
 		t.Fatalf("templateId=%q want pr-triage payload=%+v", got, createPayload)
 	}
+	configMap, _ := triggerMap["config"].(map[string]interface{})
+	requiredMemory, _ := configMap["requiredMemory"].([]interface{})
+	if len(requiredMemory) == 0 {
+		t.Fatalf("expected trigger config requiredMemory, payload=%+v", createPayload)
+	}
 
 	listRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/triggers", "")
 	if listRec.Code != http.StatusOK {

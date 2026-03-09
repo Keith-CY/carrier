@@ -28,6 +28,10 @@ func TestHandleExecutionTemplatesListAndShow(t *testing.T) {
 	if got := strings.TrimSpace(anyToString(templateMap["id"])); got != "incident-diagnosis" {
 		t.Fatalf("template id=%q want incident-diagnosis payload=%+v", got, showPayload)
 	}
+	requiredMemory, _ := templateMap["requiredMemory"].([]interface{})
+	if len(requiredMemory) == 0 {
+		t.Fatalf("expected template requiredMemory, payload=%+v", showPayload)
+	}
 	inputSchema, _ := templateMap["inputSchema"].([]interface{})
 	if len(inputSchema) == 0 {
 		t.Fatalf("inputSchema empty payload=%+v", showPayload)
@@ -96,6 +100,13 @@ func TestHandleTemplateLaunchCreatesAuthorizedExecution(t *testing.T) {
 	execution, _ := payload["execution"].(map[string]interface{})
 	if got := strings.TrimSpace(anyToString(execution["templateId"])); got != "pr-triage" {
 		t.Fatalf("execution templateId=%q want pr-triage payload=%+v", got, payload)
+	}
+	requiredMemory, _ := execution["requiredMemory"].([]interface{})
+	if len(requiredMemory) == 0 {
+		t.Fatalf("expected launched execution requiredMemory, payload=%+v", payload)
+	}
+	if got := strings.TrimSpace(anyToString(execution["memoryContractDigest"])); got == "" {
+		t.Fatalf("expected launched execution memoryContractDigest, payload=%+v", payload)
 	}
 	if got := strings.TrimSpace(anyToString(execution["status"])); got != string(OrchestratorExecutionStatusProvisioning) {
 		t.Fatalf("execution status=%q want provisioning payload=%+v", got, payload)

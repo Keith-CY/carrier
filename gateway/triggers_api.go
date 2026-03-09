@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/shared/orchestration"
 	"encoding/json"
 	"errors"
 	"io"
@@ -142,6 +143,12 @@ func handleExecutionTriggers(w http.ResponseWriter, r *http.Request, requestID s
 			if len(nextConfig.HostLabels) == 0 {
 				nextConfig.HostLabels = append([]string(nil), trigger.Config.HostLabels...)
 			}
+			if len(nextConfig.RequiredMemory) == 0 {
+				nextConfig.RequiredMemory = append([]string(nil), trigger.Config.RequiredMemory...)
+			}
+			if len(nextConfig.DistillOutputs) == 0 {
+				nextConfig.DistillOutputs = append([]string(nil), trigger.Config.DistillOutputs...)
+			}
 			if nextConfig.Provider == "" {
 				nextConfig.Provider = trigger.Config.Provider
 			}
@@ -259,6 +266,10 @@ func prepareExecutionTriggerForSave(trigger ExecutionTrigger, isCreate bool) (Ex
 	trigger, err := normalizeExecutionTriggerForStore(trigger)
 	if err != nil {
 		return ExecutionTrigger{}, err
+	}
+	if template, ok := orchestration.GetExecutionTemplate(trigger.TemplateID); ok {
+		trigger.Config.RequiredMemory = normalizeStringSelectorList(append(trigger.Config.RequiredMemory, template.RequiredMemory...), true)
+		trigger.Config.DistillOutputs = normalizeStringSelectorList(append(trigger.Config.DistillOutputs, template.DistillOutputs...), true)
 	}
 	if isCreate && trigger.CreatedBy == "" {
 		trigger.CreatedBy = "admin"

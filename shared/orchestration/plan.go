@@ -42,6 +42,8 @@ type Plan struct {
 	Provider        string           `json:"provider,omitempty"`
 	HostIDs         []string         `json:"hostIds,omitempty"`
 	HostLabels      []string         `json:"hostLabels,omitempty"`
+	RequiredMemory  []string         `json:"requiredMemory,omitempty"`
+	DistillOutputs  []string         `json:"distillOutputs,omitempty"`
 	ApprovalScope   string           `json:"approvalScope"`
 	MaxConcurrency  int              `json:"maxConcurrency"`
 	PlannerTasks    []DecomposeTask  `json:"plannerTasks"`
@@ -55,6 +57,8 @@ type BuildPlanInput struct {
 	Provider       string
 	HostIDs        []string
 	HostLabels     []string
+	RequiredMemory []string
+	DistillOutputs []string
 	MaxConcurrency int
 	Tasks          []DecomposeTask
 }
@@ -71,6 +75,14 @@ func BuildPlan(input BuildPlanInput) (Plan, error) {
 	}
 	hostIDs := dedupeStrings(input.HostIDs)
 	hostLabels := normalizeSelectorStrings(input.HostLabels)
+	requiredMemory := normalizeMemoryScopes(input.RequiredMemory)
+	distillOutputs := normalizeMemoryScopes(input.DistillOutputs)
+	if templateID := strings.TrimSpace(input.TemplateID); templateID != "" {
+		if template, ok := GetExecutionTemplate(templateID); ok {
+			requiredMemory = normalizeMemoryScopes(append(requiredMemory, template.RequiredMemory...))
+			distillOutputs = normalizeMemoryScopes(append(distillOutputs, template.DistillOutputs...))
+		}
+	}
 	taskUnits := AssignTaskUnits(plannerTasks, hostIDs, hostLabels)
 	requiredWorkers := BuildRequiredWorkers(taskUnits)
 	if len(taskUnits) == 0 || len(requiredWorkers) == 0 {
@@ -83,6 +95,8 @@ func BuildPlan(input BuildPlanInput) (Plan, error) {
 		Provider:        strings.TrimSpace(input.Provider),
 		HostIDs:         hostIDs,
 		HostLabels:      hostLabels,
+		RequiredMemory:  requiredMemory,
+		DistillOutputs:  distillOutputs,
 		ApprovalScope:   defaultApprovalScopeName,
 		MaxConcurrency:  EffectiveMaxConcurrency(len(taskUnits), input.MaxConcurrency),
 		PlannerTasks:    plannerTasks,
@@ -262,6 +276,27 @@ func dedupeStrings(values []string) []string {
 		seen[trimmed] = struct{}{}
 		out = append(out, trimmed)
 	}
+	return out
+}
+
+func normalizeMemoryScopes(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		trimmed := strings.ToLower(strings.TrimSpace(value))
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	sort.Strings(out)
 	return out
 }
 

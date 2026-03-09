@@ -47,10 +47,10 @@ func launchExecutionTriggerFromWebhook(requestID string, cfg *GatewayConfig, tri
 	payloadContext := flattenExecutionTriggerPayload(payloadMap)
 
 	metadata := executionLaunchMetadata{
-		TriggerSource:       string(trigger.Type),
-		TriggerID:           trigger.ID,
+		TriggerSource:        string(trigger.Type),
+		TriggerID:            trigger.ID,
 		TriggerPayloadDigest: payloadDigest,
-		Initiator:           "webhook:" + trigger.ID,
+		Initiator:            "webhook:" + trigger.ID,
 	}
 	switch trigger.Type {
 	case ExecutionTriggerTypeWebhook:
@@ -90,6 +90,8 @@ func launchExecutionTriggerFromWebhook(requestID string, cfg *GatewayConfig, tri
 		Provider:       trigger.Config.Provider,
 		HostIDs:        trigger.Config.HostIDs,
 		HostLabels:     trigger.Config.HostLabels,
+		RequiredMemory: trigger.Config.RequiredMemory,
+		DistillOutputs: trigger.Config.DistillOutputs,
 		MaxConcurrency: trigger.Config.MaxConcurrency,
 		PolicyApprove:  trigger.Config.PolicyApprove,
 		IdempotencyKey: idempotencyKey,
@@ -102,13 +104,13 @@ func launchExecutionTriggerFromWebhook(requestID string, cfg *GatewayConfig, tri
 	}
 	markExecutionTriggerLaunch(trigger, execution.ID, "", "", true)
 	emitRemoteAuditEvent(requestID, "orchestrator_trigger_fire", trigger.ID, "success", map[string]interface{}{
-		"type":            trigger.Type,
-		"templateId":      trigger.TemplateID,
-		"executionId":     execution.ID,
-		"triggerSource":   execution.TriggerSource,
-		"triggerEvent":    execution.TriggerEvent,
-		"payloadDigest":   execution.TriggerPayloadDigest,
-		"initiator":       execution.Initiator,
+		"type":          trigger.Type,
+		"templateId":    trigger.TemplateID,
+		"executionId":   execution.ID,
+		"triggerSource": execution.TriggerSource,
+		"triggerEvent":  execution.TriggerEvent,
+		"payloadDigest": execution.TriggerPayloadDigest,
+		"initiator":     execution.Initiator,
 	})
 	return map[string]interface{}{
 		"requestId": requestID,
@@ -142,6 +144,8 @@ func runScheduledExecutionTriggers(now time.Time, requestID string, cfg *Gateway
 			Provider:       trigger.Config.Provider,
 			HostIDs:        trigger.Config.HostIDs,
 			HostLabels:     trigger.Config.HostLabels,
+			RequiredMemory: trigger.Config.RequiredMemory,
+			DistillOutputs: trigger.Config.DistillOutputs,
 			MaxConcurrency: trigger.Config.MaxConcurrency,
 			PolicyApprove:  trigger.Config.PolicyApprove,
 			IdempotencyKey: fmt.Sprintf("trigger:%s:schedule:%s", trigger.ID, dueAt.Format(time.RFC3339)),
@@ -168,11 +172,11 @@ func runScheduledExecutionTriggers(now time.Time, requestID string, cfg *Gateway
 		}
 		markExecutionTriggerLaunch(trigger, execution.ID, "", nextRun, true)
 		emitRemoteAuditEvent(requestID, "orchestrator_trigger_fire", trigger.ID, "success", map[string]interface{}{
-			"type":        trigger.Type,
-			"templateId":  trigger.TemplateID,
-			"executionId": execution.ID,
+			"type":         trigger.Type,
+			"templateId":   trigger.TemplateID,
+			"executionId":  execution.ID,
 			"triggerEvent": "schedule",
-			"initiator":   execution.Initiator,
+			"initiator":    execution.Initiator,
 		})
 	}
 	return nil

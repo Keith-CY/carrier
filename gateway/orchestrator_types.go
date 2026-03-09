@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -147,6 +149,10 @@ type OrchestratorExecution struct {
 	TriggerPayloadDigest string                              `json:"triggerPayloadDigest,omitempty"`
 	Initiator            string                              `json:"initiator,omitempty"`
 	RequestedProvider    string                              `json:"requestedProvider,omitempty"`
+	RequiredMemory       []string                            `json:"requiredMemory,omitempty"`
+	MemoryContractDigest string                              `json:"memoryContractDigest,omitempty"`
+	MemoryProvenance     []string                            `json:"memoryProvenance,omitempty"`
+	DistillOutputs       []string                            `json:"distillOutputs,omitempty"`
 	IdempotencyKey       string                              `json:"idempotencyKey,omitempty"`
 	ParentExecutionID    string                              `json:"parentExecutionId,omitempty"`
 	SourceExecutionID    string                              `json:"sourceExecutionId,omitempty"`
@@ -251,6 +257,16 @@ func normalizeOrchestratorExecutionForStore(in OrchestratorExecution) Orchestrat
 	out.TriggerPayloadDigest = strings.TrimSpace(out.TriggerPayloadDigest)
 	out.Initiator = strings.TrimSpace(out.Initiator)
 	out.RequestedProvider = strings.TrimSpace(out.RequestedProvider)
+	out.RequiredMemory = normalizeStringSelectorList(out.RequiredMemory, true)
+	out.MemoryContractDigest = strings.TrimSpace(out.MemoryContractDigest)
+	out.MemoryProvenance = normalizeStringSelectorList(out.MemoryProvenance, true)
+	out.DistillOutputs = normalizeStringSelectorList(out.DistillOutputs, true)
+	if len(out.MemoryProvenance) == 0 {
+		out.MemoryProvenance = append([]string(nil), out.RequiredMemory...)
+	}
+	if out.MemoryContractDigest == "" {
+		out.MemoryContractDigest = buildMemoryContractDigest(out.MemoryProvenance)
+	}
 	out.IdempotencyKey = strings.TrimSpace(out.IdempotencyKey)
 	out.ParentExecutionID = strings.TrimSpace(out.ParentExecutionID)
 	out.SourceExecutionID = strings.TrimSpace(out.SourceExecutionID)
@@ -375,6 +391,16 @@ func normalizeOrchestratorExecution(in OrchestratorExecution) (OrchestratorExecu
 	out.TriggerPayloadDigest = strings.TrimSpace(out.TriggerPayloadDigest)
 	out.Initiator = strings.TrimSpace(out.Initiator)
 	out.RequestedProvider = strings.TrimSpace(out.RequestedProvider)
+	out.RequiredMemory = normalizeStringSelectorList(out.RequiredMemory, true)
+	out.MemoryContractDigest = strings.TrimSpace(out.MemoryContractDigest)
+	out.MemoryProvenance = normalizeStringSelectorList(out.MemoryProvenance, true)
+	out.DistillOutputs = normalizeStringSelectorList(out.DistillOutputs, true)
+	if len(out.MemoryProvenance) == 0 {
+		out.MemoryProvenance = append([]string(nil), out.RequiredMemory...)
+	}
+	if out.MemoryContractDigest == "" {
+		out.MemoryContractDigest = buildMemoryContractDigest(out.MemoryProvenance)
+	}
 	if out.Goal == "" {
 		return OrchestratorExecution{}, errOrchestratorValidation("goal is required", -1)
 	}
@@ -441,6 +467,15 @@ func normalizeOrchestratorToolPolicy(in OrchestratorToolPolicy) OrchestratorTool
 	sort.Strings(allowed)
 	out.AllowedTools = allowed
 	return out
+}
+
+func buildMemoryContractDigest(scopes []string) string {
+	normalized := normalizeStringSelectorList(scopes, true)
+	if len(normalized) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(strings.Join(normalized, "\n")))
+	return "mem-" + hex.EncodeToString(sum[:])[:12]
 }
 
 func normalizeOrchestratorTaskResult(in OrchestratorTaskResult) OrchestratorTaskResult {

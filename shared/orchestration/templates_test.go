@@ -19,6 +19,12 @@ func TestListExecutionTemplatesIncludesBuiltins(t *testing.T) {
 		if template.ID == "" || template.Name == "" || template.DefaultGoalTemplate == "" {
 			t.Fatalf("template missing required metadata: %+v", template)
 		}
+		if len(template.RequiredMemory) == 0 {
+			t.Fatalf("template missing requiredMemory: %+v", template)
+		}
+		if len(template.DistillOutputs) == 0 {
+			t.Fatalf("template missing distillOutputs: %+v", template)
+		}
 	}
 	for _, wantID := range wantIDs {
 		if !seen[wantID] {
@@ -57,6 +63,9 @@ func TestResolveExecutionTemplateRendersGoalAndTasks(t *testing.T) {
 	if got := resolved.Inputs["service"]; got != "checkout" {
 		t.Fatalf("inputs[service]=%q, want checkout", got)
 	}
+	if len(resolved.Template.RequiredMemory) == 0 || len(resolved.Template.DistillOutputs) == 0 {
+		t.Fatalf("resolved template missing memory contract metadata: %+v", resolved.Template)
+	}
 }
 
 func TestResolveExecutionTemplateRejectsMissingRequiredInputs(t *testing.T) {
@@ -87,6 +96,12 @@ func TestBuildPlanPreservesTemplateID(t *testing.T) {
 	}
 	if plan.TemplateID != "pr-triage" {
 		t.Fatalf("templateId = %q, want pr-triage", plan.TemplateID)
+	}
+	if len(plan.RequiredMemory) == 0 {
+		t.Fatalf("expected template-backed plan requiredMemory, got %+v", plan)
+	}
+	if len(plan.DistillOutputs) == 0 {
+		t.Fatalf("expected template-backed plan distillOutputs, got %+v", plan)
 	}
 	if len(plan.TaskUnits) != 3 {
 		t.Fatalf("taskUnits len=%d, want 3", len(plan.TaskUnits))

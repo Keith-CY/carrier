@@ -126,7 +126,7 @@ func handleDelegate(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClie
 			return errResp(cmd.RequestID, "E_INTERNAL", "failed to load delegate execution status")
 		}
 		if !found {
-			return errResp(cmd.RequestID, "E_NOT_FOUND", fmt.Sprintf("delegate execution %s not found", executionID))
+			return errResp(cmd.RequestID, "E_NOT_FOUND", fmt.Sprintf("execution %s not found", executionID))
 		}
 		return GatewayResponse{
 			RequestID: cmd.RequestID,
@@ -150,7 +150,7 @@ func handleDelegate(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClie
 	}
 
 	lines := []string{
-		fmt.Sprintf("delegate execution accepted: %s", execution.ID),
+		fmt.Sprintf("execution accepted: %s", execution.ID),
 		fmt.Sprintf("Use `/delegate status %s` to check progress.", execution.ID),
 	}
 	if strings.TrimSpace(execution.PlannerWarning) != "" {

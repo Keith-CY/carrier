@@ -100,13 +100,16 @@ test.describe('RBAC UI', () => {
     await expect(page.locator('#executions-cancel')).toBeVisible();
     await expect(page.locator('#executions-policy-approve')).toBeHidden();
 
-    await navigateHash(page, '#/profiles');
+    await navigateHash(page, '#/providers');
     await expect(page.locator('#profiles-msg')).toContainText('read-only access');
     await expect(page.locator('#profile-save')).toBeDisabled();
     await expect(page.locator('#binding-save')).toBeDisabled();
-    await expect(page.locator('#execution-policy-save')).toBeDisabled();
     await expect(page.locator('#profiles-list')).not.toContainText('Delete');
     await expect(page.locator('#bindings-list')).not.toContainText('Delete');
+
+    await navigateHash(page, '#/policies');
+    await expect(page.locator('#profiles-msg')).toContainText('read-only access');
+    await expect(page.locator('#execution-policy-save')).toBeDisabled();
     await expect(page.locator('#execution-policies-list')).not.toContainText('Delete');
   });
 
@@ -123,13 +126,15 @@ test.describe('RBAC UI', () => {
     await expect(page.locator('#executions-policy-approve')).toBeVisible();
     await expect(page.locator('#executions-cancel')).toBeHidden();
 
-    await navigateHash(page, '#/servers');
+    await navigateHash(page, '#/hosts');
     await expect(page.locator('#server-save')).toBeDisabled();
     await expect(page.locator('#servers-msg')).toContainText('cannot modify remote hosts');
     await expect(page.locator('#servers-list')).not.toContainText('Delete');
 
-    await navigateHash(page, '#/profiles');
+    await navigateHash(page, '#/providers');
     await expect(page.locator('#profile-save')).toBeDisabled();
+
+    await navigateHash(page, '#/policies');
     await expect(page.locator('#execution-policy-save')).toBeDisabled();
   });
 
@@ -138,14 +143,16 @@ test.describe('RBAC UI', () => {
     await mockOrchestrationAPIs(page);
     await mockFeaturesRole(page, 'admin');
 
-    await loginWithToken(page, '/#/profiles');
+    await loginWithToken(page, '/#/providers');
 
     await expect(page.locator('#profile-save')).toBeEnabled();
     await expect(page.locator('#binding-save')).toBeEnabled();
-    await expect(page.locator('#execution-policy-save')).toBeEnabled();
     await expect(page.locator('#profiles-list')).toContainText('Delete');
 
-    await navigateHash(page, '#/servers');
+    await navigateHash(page, '#/policies');
+    await expect(page.locator('#execution-policy-save')).toBeEnabled();
+
+    await navigateHash(page, '#/hosts');
     await expect(page.locator('#server-save')).toBeEnabled();
     await expect(page.locator('#servers-list')).toContainText('Delete');
   });

@@ -289,7 +289,7 @@ func TestHandleCommand_Delegate_RespectsTaskAgentPreference(t *testing.T) {
 }
 
 func parseDelegateExecutionID(message string) string {
-	re := regexp.MustCompile(`delegate execution accepted:\s+([a-zA-Z0-9-]+)`)
+	re := regexp.MustCompile(`execution accepted:\s+([a-zA-Z0-9-]+)`)
 	matches := re.FindStringSubmatch(strings.TrimSpace(message))
 	if len(matches) != 2 {
 		return ""

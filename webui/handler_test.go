@@ -34,6 +34,15 @@ func TestHandlerServesRootAndSPAFallback(t *testing.T) {
 	if !strings.Contains(rootRec.Body.String(), `id="view-memory"`) {
 		t.Fatalf("expected memory view container in root html")
 	}
+	if !strings.Contains(rootRec.Body.String(), `data-route="hosts"`) {
+		t.Fatalf("expected hosts nav route in root html")
+	}
+	if !strings.Contains(rootRec.Body.String(), `data-route="providers"`) {
+		t.Fatalf("expected providers nav route in root html")
+	}
+	if !strings.Contains(rootRec.Body.String(), `data-route="policies"`) {
+		t.Fatalf("expected policies nav route in root html")
+	}
 	if !strings.Contains(rootRec.Body.String(), `id="refresh-executions"`) {
 		t.Fatalf("expected dashboard execution refresh button in root html")
 	}

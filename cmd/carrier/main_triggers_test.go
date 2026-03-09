@@ -48,6 +48,8 @@ func TestParseTriggersCommandArgs(t *testing.T) {
 		"--github-repository", "Keith-CY/carrier",
 		"--host-id", "host-1",
 		"--host-label", "prod",
+		"--memory-scope", "shared:code-review",
+		"--distill-scope", "shared:pr-lessons",
 		"--input", "repository={{payload.repository.full_name}}",
 		"--input", "prNumber={{payload.issue.number}}",
 		"--policy-approve",
@@ -64,6 +66,12 @@ func TestParseTriggersCommandArgs(t *testing.T) {
 	}
 	if len(createOpts.HostLabels) != 1 || createOpts.HostLabels[0] != "prod" {
 		t.Fatalf("hostLabels=%v, want [prod]", createOpts.HostLabels)
+	}
+	if len(createOpts.RequiredMemory) != 1 || createOpts.RequiredMemory[0] != "shared:code-review" {
+		t.Fatalf("requiredMemory=%v, want [shared:code-review]", createOpts.RequiredMemory)
+	}
+	if len(createOpts.DistillOutputs) != 1 || createOpts.DistillOutputs[0] != "shared:pr-lessons" {
+		t.Fatalf("distillOutputs=%v, want [shared:pr-lessons]", createOpts.DistillOutputs)
 	}
 	if got := createOpts.Inputs["repository"]; got != "{{payload.repository.full_name}}" {
 		t.Fatalf("inputs[repository]=%q", got)

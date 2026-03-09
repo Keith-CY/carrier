@@ -16,6 +16,8 @@ type orchestratorPlanRequest struct {
 	Provider       string            `json:"provider,omitempty"`
 	HostIDs        []string          `json:"hostIds,omitempty"`
 	HostLabels     []string          `json:"hostLabels,omitempty"`
+	RequiredMemory []string          `json:"requiredMemory,omitempty"`
+	DistillOutputs []string          `json:"distillOutputs,omitempty"`
 	MaxConcurrency int               `json:"maxConcurrency,omitempty"`
 }
 
@@ -57,6 +59,8 @@ func handleOrchestratorPlans(w http.ResponseWriter, r *http.Request, requestID s
 		Provider:       req.Provider,
 		HostIDs:        req.HostIDs,
 		HostLabels:     req.HostLabels,
+		RequiredMemory: req.RequiredMemory,
+		DistillOutputs: req.DistillOutputs,
 		MaxConcurrency: req.MaxConcurrency,
 		Tasks:          plannerTasks,
 	})
