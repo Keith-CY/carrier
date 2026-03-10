@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -53,7 +54,7 @@ func TestPrepareZeroclawManagedOnboard_WritesTOMLConfigAndRecord(t *testing.T) {
 	for _, snippet := range []string{
 		`api_key = "sk-zeroclaw-123"`,
 		`default_provider = "openai"`,
-		`default_model = "openai/`,
+		`default_model = "gpt-5.2"`,
 		`[channels_config.telegram]`,
 		`bot_token = "telegram-token-zero"`,
 		`allowed_users = ["418258935"]`,
@@ -82,6 +83,54 @@ func TestPrepareZeroclawManagedOnboard_WritesTOMLConfigAndRecord(t *testing.T) {
 	}
 	if strings.Contains(string(recordRaw), "sk-zeroclaw-123") || strings.Contains(string(recordRaw), "telegram-token-zero") {
 		t.Fatalf("managed record should not contain secret token values: %s", recordRaw)
+	}
+}
+
+func TestPrepareZeroclawManagedOnboard_UsesConfiguredModelForProvider(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("CARRIER_MANAGED_ZEROCLAW_VERSION", "0.1.7")
+
+	configPath := filepath.Join(t.TempDir(), "config.v2.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "default_model": "openrouter-live",
+  "model_list": [
+    {
+      "model_name": "openrouter-live",
+      "model": "openrouter/google/gemini-2.0-flash-001",
+      "provider_id": "openrouter",
+      "credential_ref": "openrouter"
+    }
+  ]
+}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("CARRIER_CONFIG", configPath)
+
+	sess := &OnboardSession{
+		SelectedAgent:    "zeroclaw",
+		SelectedChannel:  "",
+		SelectedProvider: "openrouter",
+		EnvVars: map[string]string{
+			"OPENROUTER_API_KEY": "sk-zeroclaw-123",
+		},
+	}
+
+	result, err := prepareManagedOnboard("zeroclaw", sess, "webui:add")
+	if err != nil {
+		t.Fatalf("prepareManagedOnboard: %v", err)
+	}
+
+	cfgRaw, err := os.ReadFile(result.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	cfgText := string(cfgRaw)
+	if !strings.Contains(cfgText, `default_model = "google/gemini-2.0-flash-001"`) {
+		t.Fatalf("expected configured provider model in zeroclaw config, got:\n%s", cfgText)
+	}
+	if strings.Contains(cfgText, `default_model = "arcee-ai/trinity-mini:free"`) {
+		t.Fatalf("expected configured provider model to override provider example model, got:\n%s", cfgText)
 	}
 }
 

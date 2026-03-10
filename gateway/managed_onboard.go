@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"carrier/shared/catalog"
+	sharedconfig "carrier/shared/config"
 	"carrier/shared/openclawcfg"
 )
 
@@ -224,6 +225,9 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 	}
 
 	modelID := strings.TrimSpace(provider.ExampleModel)
+	if configuredModel, err := sharedconfig.LoadCarrierModelForProvider(provider.ID); err == nil && configuredModel != nil && strings.TrimSpace(configuredModel.ModelID) != "" {
+		modelID = strings.TrimSpace(configuredModel.ModelID)
+	}
 	if modelID == "" {
 		modelID = provider.ID + "/default"
 	}
@@ -468,6 +472,7 @@ func renderZeroClawConfigTOML(
 	if strings.TrimSpace(modelID) == "" {
 		modelID = "anthropic/claude-sonnet-4-6"
 	}
+	modelID = sharedconfig.NormalizeModelForProvider(providerKey, modelID)
 	if strings.TrimSpace(providerToken) == "" {
 		providerToken = ""
 	}

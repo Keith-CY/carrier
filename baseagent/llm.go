@@ -521,14 +521,7 @@ func inferProviderEnvVar(providerID string) string {
 }
 
 func normalizeModelForProvider(providerID, modelID string) string {
-	modelID = strings.TrimSpace(modelID)
-	if modelID == "" {
-		return ""
-	}
-	if slash := strings.Index(modelID, "/"); slash > 0 && slash < len(modelID)-1 {
-		return strings.TrimSpace(modelID[slash+1:])
-	}
-	return modelID
+	return config.NormalizeModelForProvider(providerID, modelID)
 }
 
 func extractModelContent(raw interface{}) string {
