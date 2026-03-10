@@ -236,12 +236,15 @@ func TestStartWithIsolationWrapsStartCommandWithLimaBwrap(t *testing.T) {
 	for _, want := range []string{
 		"/opt/homebrew/bin/limactl",
 		"shell 'carrier-dev-a3f2'",
-		"bwrap",
-		"--tmpfs /tmp",
 		"tail -f /dev/null",
 	} {
 		if !strings.Contains(wrapped, want) {
 			t.Fatalf("expected wrapped command to contain %q, got %q", want, wrapped)
+		}
+	}
+	for _, unwanted := range []string{"bwrap", "--tmpfs /tmp"} {
+		if strings.Contains(wrapped, unwanted) {
+			t.Fatalf("expected wrapped command to omit %q for lima guest start, got %q", unwanted, wrapped)
 		}
 	}
 	if err := svc.Stop(context.Background(), "openclaw"); err != nil {
@@ -286,12 +289,15 @@ func TestStartWithIsolationWrapsStartCommandWithWSLBwrap(t *testing.T) {
 	for _, want := range []string{
 		"/usr/bin/wsl",
 		"-d 'Ubuntu-22.04'",
-		"bwrap",
-		"--tmpfs /tmp",
 		"tail -f /dev/null",
 	} {
 		if !strings.Contains(wrapped, want) {
 			t.Fatalf("expected wrapped command to contain %q, got %q", want, wrapped)
+		}
+	}
+	for _, unwanted := range []string{"bwrap", "--tmpfs /tmp"} {
+		if strings.Contains(wrapped, unwanted) {
+			t.Fatalf("expected wrapped command to omit %q for wsl guest start, got %q", unwanted, wrapped)
 		}
 	}
 	if err := svc.Stop(context.Background(), "openclaw"); err != nil {
