@@ -82,6 +82,18 @@ provider_default_model() {
   esac
 }
 
+provider_env_var() {
+  case "$1" in
+    openrouter) printf '%s' 'OPENROUTER_API_KEY' ;;
+    openai) printf '%s' 'OPENAI_API_KEY' ;;
+    anthropic) printf '%s' 'ANTHROPIC_API_KEY' ;;
+    *)
+      echo "error: unsupported live provider for env var mapping: $1" >&2
+      exit 2
+      ;;
+  esac
+}
+
 PROVIDER="$(printf '%s' "${CARRIER_LIVE_PROVIDER:-openrouter}" | tr '[:upper:]' '[:lower:]' | xargs)"
 API_KEY="$(printf '%s' "${CARRIER_LIVE_API_KEY:-}" | xargs)"
 MODEL="$(printf '%s' "${CARRIER_LIVE_MODEL:-}" | xargs)"
@@ -110,6 +122,8 @@ fi
 if [[ -z "$MODEL" ]]; then
   MODEL="$(provider_default_model "$PROVIDER")"
 fi
+
+PROVIDER_ENV_VAR="$(provider_env_var "$PROVIDER")"
 
 require_cmd go
 require_cmd jq
@@ -154,6 +168,7 @@ export CARRIER_GATEWAY_PORT="${GATEWAY_PORT}"
 export CARRIER_DAEMON_BASE_URL="http://127.0.0.1:${DAEMON_PORT}"
 export CARRIER_SERVER_API_TOKEN=""
 export CARRIER_GATEWAY_API_TOKEN=""
+export "${PROVIDER_ENV_VAR}=${API_KEY}"
 
 cleanup() {
   set +e

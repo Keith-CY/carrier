@@ -404,6 +404,7 @@ func (c *DaemonClient) DecomposeBaseAgentWithProvider(
 func (c *DaemonClient) ChatAgent(
 	ctx context.Context,
 	agentID string,
+	provider string,
 	message string,
 	sessionID string,
 	actor string,
@@ -411,6 +412,9 @@ func (c *DaemonClient) ChatAgent(
 ) (*AgentChatResult, error) {
 	payload := map[string]interface{}{
 		"message": message,
+	}
+	if strings.TrimSpace(provider) != "" {
+		payload["provider"] = strings.TrimSpace(provider)
 	}
 	if strings.TrimSpace(sessionID) != "" {
 		payload["sessionId"] = strings.TrimSpace(sessionID)

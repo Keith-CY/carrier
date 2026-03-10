@@ -12,22 +12,28 @@ import (
 )
 
 func writeDefaultModelConfig(t *testing.T, providerID, modelID, envVar string) {
+	writeDefaultModelConfigWithBaseURL(t, providerID, modelID, envVar, "")
+}
+
+func writeDefaultModelConfigWithBaseURL(t *testing.T, providerID, modelID, envVar, baseURL string) {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "config.v2.json")
 	t.Setenv("CARRIER_CONFIG", path)
 	modelName := providerID + "-default"
+	entry := map[string]string{
+		"model_name":  modelName,
+		"model":       modelID,
+		"provider_id": providerID,
+		"env_var":     envVar,
+	}
+	if strings.TrimSpace(baseURL) != "" {
+		entry["base_url"] = strings.TrimSpace(baseURL)
+	}
 	payload := map[string]interface{}{
 		"config_version": 2,
 		"default_model":  modelName,
-		"model_list": []map[string]string{
-			{
-				"model_name":  modelName,
-				"model":       modelID,
-				"provider_id": providerID,
-				"env_var":     envVar,
-			},
-		},
+		"model_list":     []map[string]string{entry},
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -132,6 +138,32 @@ func TestResolveLLMRuntimeConfig_OpenAICodexBaseURLOverride(t *testing.T) {
 	}
 	if cfg.BaseURL != "http://127.0.0.1:3001/backend-api" {
 		t.Fatalf("BaseURL = %q, want custom codex base url", cfg.BaseURL)
+	}
+}
+
+func TestResolveLLMRuntimeConfig_UsesProviderSpecificBaseURL(t *testing.T) {
+	writeDefaultModelConfig(t, "openrouter", "openrouter/arcee-ai/trinity-mini:free", "OPENROUTER_API_KEY")
+	t.Setenv("OPENROUTER_API_KEY", "test-token")
+
+	cfg, err := resolveLLMRuntimeConfig()
+	if err != nil {
+		t.Fatalf("resolveLLMRuntimeConfig() error = %v", err)
+	}
+	if cfg.BaseURL != "https://openrouter.ai/api/v1" {
+		t.Fatalf("BaseURL = %q, want %q", cfg.BaseURL, "https://openrouter.ai/api/v1")
+	}
+}
+
+func TestResolveLLMRuntimeConfig_UsesConfiguredBaseURLOverride(t *testing.T) {
+	writeDefaultModelConfigWithBaseURL(t, "openai-compatible", "openai-compatible/demo-model", "OPENAI_COMPATIBLE_API_KEY", "https://compat.example.com/v1")
+	t.Setenv("OPENAI_COMPATIBLE_API_KEY", "test-token")
+
+	cfg, err := resolveLLMRuntimeConfig()
+	if err != nil {
+		t.Fatalf("resolveLLMRuntimeConfig() error = %v", err)
+	}
+	if cfg.BaseURL != "https://compat.example.com/v1" {
+		t.Fatalf("BaseURL = %q, want %q", cfg.BaseURL, "https://compat.example.com/v1")
 	}
 }
 

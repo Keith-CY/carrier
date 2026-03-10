@@ -65,6 +65,10 @@ var (
 	currentUserFunc   = user.Current
 )
 
+type agentChatRuntime interface {
+	Chat(ctx context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error)
+}
+
 // Run starts the daemon HTTP API server. It blocks until a termination
 // signal is received or the server encounters a fatal error.
 func Run() {
@@ -958,12 +962,14 @@ func buildHTTPMuxWithBaseAgent(
 			handleUpgrade(svc, agentID, w, r)
 		case "uninstall":
 			handleUninstall(svc, agentID, w, r)
-		case "diagnose":
-			handleDiagnose(svc, agentID, w, r)
-		default:
-			http.NotFound(w, r)
-		}
-	})
+			case "diagnose":
+				handleDiagnose(svc, agentID, w, r)
+			case "chat":
+				handleAgentChat(baseRuntime, agentID, w, r)
+			default:
+				http.NotFound(w, r)
+			}
+		})
 
 	mux.HandleFunc("/api/v1/diagnosis/handoffs", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -1351,6 +1357,62 @@ func handleStatus(svc *lifecycle.Service, agentID string, w http.ResponseWriter,
 		return
 	}
 	writeJSON(w, http.StatusOK, state)
+}
+
+func handleAgentChat(runtime agentChatRuntime, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
+		return
+	}
+	var body struct {
+		Provider  string `json:"provider"`
+		ChatID    string `json:"chatId"`
+		RequestID string `json:"requestId"`
+		SessionID string `json:"sessionId"`
+		Message   string `json:"message"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	message := strings.TrimSpace(body.Message)
+	if message == "" {
+		writeJSONError(w, http.StatusBadRequest, "message is required")
+		return
+	}
+	sessionID := strings.TrimSpace(body.SessionID)
+	chatID := strings.TrimSpace(body.ChatID)
+	if chatID == "" {
+		if sessionID != "" {
+			chatID = sessionID
+		} else {
+			chatID = fmt.Sprintf("%s-%d", strings.TrimSpace(agentID), time.Now().UnixNano())
+		}
+	}
+	resp, err := runtime.Chat(r.Context(), baseagent.ChatRequest{
+		Provider:  strings.TrimSpace(body.Provider),
+		ChatID:    chatID,
+		RequestID: strings.TrimSpace(body.RequestID),
+		Message:   message,
+	})
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if sessionID == "" {
+		sessionID = chatID
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"agentId":    strings.TrimSpace(agentID),
+		"sessionId":  sessionID,
+		"message":    resp.Message,
+		"action":     resp.Action,
+		"selfHealed": resp.SelfHealed,
+		"backupRef":  resp.BackupRef,
+	})
 }
 
 func handleLogs(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {

@@ -1228,6 +1228,7 @@ func runOrchestratorTaskAttempt(
 		chatResult, runErr := client.ChatAgent(
 			runCtx,
 			strings.TrimSpace(lease.AgentID),
+			strings.TrimSpace(execution.RequestedProvider),
 			strings.TrimSpace(task.Input),
 			sessionID,
 			"gateway:orchestrator:local",

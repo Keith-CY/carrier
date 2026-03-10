@@ -16,6 +16,7 @@ type CarrierDefaultModel struct {
 	ModelID    string
 	ModelName  string
 	EnvVar     string
+	BaseURL    string
 }
 
 type carrierModelEntry struct {
@@ -23,6 +24,7 @@ type carrierModelEntry struct {
 	Model      string `json:"model"`
 	ProviderID string `json:"provider_id"`
 	EnvVar     string `json:"env_var"`
+	BaseURL    string `json:"base_url,omitempty"`
 }
 
 type carrierModelConfig struct {
@@ -104,6 +106,7 @@ func convertCarrierModel(m carrierModelEntry) *CarrierDefaultModel {
 		ModelID:    strings.TrimSpace(m.Model),
 		ModelName:  strings.TrimSpace(m.ModelName),
 		EnvVar:     strings.TrimSpace(m.EnvVar),
+		BaseURL:    strings.TrimSpace(m.BaseURL),
 	}
 }
 
