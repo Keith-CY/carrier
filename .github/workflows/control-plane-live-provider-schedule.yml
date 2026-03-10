@@ -1,0 +1,78 @@
+name: Control Plane Live-Provider Schedule
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  control-plane-live-provider:
+    name: Control Plane Live-Provider E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment:
+      name: live_smoke
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve control-plane live provider inputs
+        id: resolve
+        shell: bash
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CARRIER_LIVE_MODEL_OPENROUTER: ${{ vars.CARRIER_LIVE_MODEL_OPENROUTER }}
+        run: |
+          set -euo pipefail
+          provider="openrouter"
+          key="${OPENROUTER_API_KEY:-}"
+          model="${CARRIER_LIVE_MODEL_OPENROUTER:-openai/gpt-4o-mini}"
+          if [[ -z "$key" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=missing_openrouter_api_key_secret" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Control Plane Live-Provider E2E"
+              echo "- provider: \`${provider}\`"
+              echo "- status: skipped (missing OPENROUTER_API_KEY)"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=" >> "$GITHUB_OUTPUT"
+          printf 'CARRIER_LIVE_PROVIDER=%s\n' "$provider" >> "$GITHUB_ENV"
+          printf 'CARRIER_LIVE_MODEL=%s\n' "$model" >> "$GITHUB_ENV"
+          printf 'CARRIER_LIVE_API_KEY=%s\n' "$key" >> "$GITHUB_ENV"
+
+      - name: Run live-provider control plane E2E
+        if: steps.resolve.outputs.enabled == 'true'
+        run: bash scripts/e2e-control-plane-live-provider.sh
+
+      - name: Emit skipped summary
+        if: steps.resolve.outputs.enabled != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### Control Plane Live-Provider E2E"
+            echo "- provider: \`openrouter\`"
+            echo "- status: skipped"
+            echo "- reason: \`${{ steps.resolve.outputs.skip_reason }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload live-provider artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: control-plane-live-provider-artifacts
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            /tmp/clp.*
