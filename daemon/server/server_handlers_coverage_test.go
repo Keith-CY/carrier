@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -11,8 +12,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"carrier/baseagent"
+	"carrier/daemon/internal/catalog"
 	"carrier/daemon/internal/lifecycle"
 	"carrier/daemon/internal/messaging"
 )
@@ -111,25 +114,25 @@ func TestHandleAgentChatBranches(t *testing.T) {
 	userHomeDirFunc = func() (string, error) { return t.TempDir(), nil }
 
 	notAllowedRR := httptest.NewRecorder()
-	handleAgentChat(nil, "zeroclaw", notAllowedRR, httptest.NewRequest(http.MethodGet, "/chat", nil))
+	handleAgentChat(nil, nil, "zeroclaw", notAllowedRR, httptest.NewRequest(http.MethodGet, "/chat", nil))
 	if notAllowedRR.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("chat method check status=%d", notAllowedRR.Code)
 	}
 
 	unavailableRR := httptest.NewRecorder()
-	handleAgentChat(nil, "zeroclaw", unavailableRR, httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"hi"}`)))
+	handleAgentChat(nil, nil, "zeroclaw", unavailableRR, httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"hi"}`)))
 	if unavailableRR.Code != http.StatusServiceUnavailable {
 		t.Fatalf("chat unavailable status=%d body=%s", unavailableRR.Code, unavailableRR.Body.String())
 	}
 
 	badBodyRR := httptest.NewRecorder()
-	handleAgentChat(&fakeAgentChatRuntime{}, "zeroclaw", badBodyRR, httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message"`)))
+	handleAgentChat(nil, &fakeAgentChatRuntime{}, "zeroclaw", badBodyRR, httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message"`)))
 	if badBodyRR.Code != http.StatusBadRequest {
 		t.Fatalf("chat bad body status=%d body=%s", badBodyRR.Code, badBodyRR.Body.String())
 	}
 
 	missingMessageRR := httptest.NewRecorder()
-	handleAgentChat(&fakeAgentChatRuntime{}, "zeroclaw", missingMessageRR, httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"   "}`)))
+	handleAgentChat(nil, &fakeAgentChatRuntime{}, "zeroclaw", missingMessageRR, httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"   "}`)))
 	if missingMessageRR.Code != http.StatusBadRequest {
 		t.Fatalf("chat missing message status=%d body=%s", missingMessageRR.Code, missingMessageRR.Body.String())
 	}
@@ -139,7 +142,7 @@ func TestHandleAgentChatBranches(t *testing.T) {
 	}
 	okReq := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"hello","sessionId":"sess-1","provider":"openrouter"}`))
 	okRR := httptest.NewRecorder()
-	handleAgentChat(runtime, "zeroclaw", okRR, okReq)
+	handleAgentChat(nil, runtime, "zeroclaw", okRR, okReq)
 	if okRR.Code != http.StatusOK {
 		t.Fatalf("chat ok status=%d body=%s", okRR.Code, okRR.Body.String())
 	}
@@ -196,7 +199,7 @@ require_pairing = false
 	}
 	req := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"hello from proxy","sessionId":"sess-z"}`))
 	rr := httptest.NewRecorder()
-	handleAgentChat(runtime, "zeroclaw", rr, req)
+	handleAgentChat(nil, runtime, "zeroclaw", rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("chat status=%d body=%s", rr.Code, rr.Body.String())
 	}
@@ -211,6 +214,103 @@ require_pairing = false
 	}
 	if !strings.Contains(rr.Body.String(), `"message":"proxied from zeroclaw"`) {
 		t.Fatalf("unexpected proxy response body=%s", rr.Body.String())
+	}
+}
+
+func TestHandleAgentChat_ProxiesManagedZeroClawAgentCLIForIsolatedInstance(t *testing.T) {
+	origHome := userHomeDirFunc
+	origLookPath := managedLookPath
+	t.Cleanup(func() {
+		userHomeDirFunc = origHome
+		managedLookPath = origLookPath
+	})
+
+	home := t.TempDir()
+	userHomeDirFunc = func() (string, error) { return home, nil }
+	if err := os.MkdirAll(filepath.Join(home, ".zeroclaw"), 0o700); err != nil {
+		t.Fatalf("mkdir zeroclaw dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".zeroclaw", "config.toml"), []byte(`
+default_provider = "openrouter"
+[gateway]
+host = "127.0.0.1"
+port = 9091
+require_pairing = false
+`), 0o600); err != nil {
+		t.Fatalf("write zeroclaw config: %v", err)
+	}
+
+	statePath := filepath.Join(t.TempDir(), "lifecycle-state.json")
+	persisted := map[string]lifecycle.PersistedAgentState{
+		"zeroclaw": {
+			ID:               "zeroclaw",
+			Installed:        true,
+			RuntimeState:     string(lifecycle.RuntimeStateStopped),
+			Isolated:         true,
+			LimaInstanceName: "carrier-zeroclaw-a3f2",
+			LastTransition:   time.Now().UTC(),
+		},
+	}
+	raw, err := json.MarshalIndent(persisted, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal persisted state: %v", err)
+	}
+	if err := os.WriteFile(statePath, raw, 0o600); err != nil {
+		t.Fatalf("write persisted state: %v", err)
+	}
+
+	svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithStateFile(statePath))
+	if err := svc.RegisterManifest(catalog.ZeroClawManifest()); err != nil {
+		t.Fatalf("register zeroclaw manifest: %v", err)
+	}
+
+	limactlDir := t.TempDir()
+	limactlPath := filepath.Join(limactlDir, "limactl")
+	argsPath := filepath.Join(limactlDir, "args.txt")
+	t.Setenv("TEST_ZEROCLAW_ARGS_PATH", argsPath)
+	if err := os.WriteFile(limactlPath, []byte(`#!/bin/sh
+printf '%s\n' "$@" >"$TEST_ZEROCLAW_ARGS_PATH"
+printf '\033[2m2026-03-10T07:00:16.309574Z\033[0m \033[32mINFO\033[0m zeroclaw::config::schema: Config loaded\n'
+printf 'Tokyo weather is mild with a chance of rain.\n'
+`), 0o755); err != nil {
+		t.Fatalf("write fake limactl: %v", err)
+	}
+	managedLookPath = func(file string) (string, error) {
+		if file == "limactl" {
+			return limactlPath, nil
+		}
+		return "", fmt.Errorf("unexpected executable lookup: %s", file)
+	}
+
+	runtime := &fakeAgentChatRuntime{
+		resp: baseagent.ChatResponse{Message: "should not be used", Action: "chat"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"weather please","sessionId":"sess-z","provider":"openrouter"}`))
+	rr := httptest.NewRecorder()
+	handleAgentChat(svc, runtime, "zeroclaw", rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("chat status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if runtime.callCount != 0 {
+		t.Fatalf("expected runtime fallback not to be called, got %d", runtime.callCount)
+	}
+	if !strings.Contains(rr.Body.String(), `Tokyo weather is mild with a chance of rain.`) {
+		t.Fatalf("unexpected cli proxy response body=%s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), `Config loaded`) || strings.Contains(rr.Body.String(), `zeroclaw::config::schema`) {
+		t.Fatalf("expected cli proxy response to strip zeroclaw log lines, got %s", rr.Body.String())
+	}
+
+	argsRaw, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read fake limactl args: %v", err)
+	}
+	argsText := string(argsRaw)
+	if !strings.Contains(argsText, "shell") || !strings.Contains(argsText, "carrier-zeroclaw-a3f2") {
+		t.Fatalf("unexpected limactl args=%q", argsText)
+	}
+	if !strings.Contains(argsText, "agent") || !strings.Contains(argsText, "-m") || !strings.Contains(argsText, "weather please") {
+		t.Fatalf("expected zeroclaw agent single-shot args, got %q", argsText)
 	}
 }
 

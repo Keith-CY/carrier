@@ -965,7 +965,7 @@ func buildHTTPMuxWithBaseAgent(
 		case "diagnose":
 			handleDiagnose(svc, agentID, w, r)
 		case "chat":
-			handleAgentChat(baseRuntime, agentID, w, r)
+			handleAgentChat(svc, baseRuntime, agentID, w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -1359,7 +1359,7 @@ func handleStatus(svc *lifecycle.Service, agentID string, w http.ResponseWriter,
 	writeJSON(w, http.StatusOK, state)
 }
 
-func handleAgentChat(runtime agentChatRuntime, agentID string, w http.ResponseWriter, r *http.Request) {
+func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID string, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -1392,7 +1392,7 @@ func handleAgentChat(runtime agentChatRuntime, agentID string, w http.ResponseWr
 			chatID = fmt.Sprintf("%s-%d", strings.TrimSpace(agentID), time.Now().UnixNano())
 		}
 	}
-	if proxied, handled, err := maybeProxyManagedAgentChat(r.Context(), agentID, message); handled {
+	if proxied, handled, err := maybeProxyManagedAgentChat(r.Context(), svc, agentID, strings.TrimSpace(body.Provider), message); handled {
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return

@@ -9,13 +9,23 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"carrier/daemon/internal/lifecycle"
 )
 
 var managedAgentHTTPClient = &http.Client{Timeout: 60 * time.Second}
+var (
+	managedExecCommandContext = exec.CommandContext
+	managedLookPath           = exec.LookPath
+	managedANSISequence       = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+	managedStructuredLogLine  = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO|WARN|ERROR)\b`)
+)
 
 type zeroclawGatewayConfig struct {
 	Host           string
@@ -23,7 +33,7 @@ type zeroclawGatewayConfig struct {
 	RequirePairing bool
 }
 
-func maybeProxyManagedAgentChat(ctx context.Context, agentID string, message string) (string, bool, error) {
+func maybeProxyManagedAgentChat(ctx context.Context, svc *lifecycle.Service, agentID string, provider string, message string) (string, bool, error) {
 	switch strings.ToLower(strings.TrimSpace(agentID)) {
 	case "zeroclaw":
 		cfg, err := loadLocalZeroClawGatewayConfig()
@@ -36,11 +46,127 @@ func maybeProxyManagedAgentChat(ctx context.Context, agentID string, message str
 		if cfg.RequirePairing {
 			return "", true, fmt.Errorf("zeroclaw local gateway still requires pairing")
 		}
+		var cliErr error
+		if svc != nil {
+			if state, stateErr := svc.Status(agentID); stateErr == nil {
+				if reply, handled, err := maybeProxyManagedZeroClawAgentCLI(ctx, state, provider, message); handled {
+					if err == nil {
+						return reply, true, nil
+					}
+					cliErr = err
+				}
+			}
+		}
 		reply, err := proxyZeroClawWebhook(ctx, cfg, message)
+		if err != nil && cliErr != nil {
+			return "", true, fmt.Errorf("%v; webhook fallback failed: %w", cliErr, err)
+		}
 		return reply, true, err
 	default:
 		return "", false, nil
 	}
+}
+
+func maybeProxyManagedZeroClawAgentCLI(ctx context.Context, state lifecycle.AgentState, provider string, message string) (string, bool, error) {
+	if !state.Isolated {
+		return "", false, nil
+	}
+	instanceName := strings.TrimSpace(state.LimaInstanceName)
+	if instanceName == "" {
+		return "", false, nil
+	}
+	reply, err := runManagedZeroClawAgentCLI(ctx, instanceName, provider, message)
+	if err != nil {
+		return "", true, err
+	}
+	return reply, true, nil
+}
+
+func runManagedZeroClawAgentCLI(ctx context.Context, instanceName string, provider string, message string) (string, error) {
+	limactlPath, err := resolveManagedLimaCtlPath()
+	if err != nil {
+		return "", err
+	}
+	safeInstance := strings.TrimSpace(instanceName)
+	if safeInstance == "" {
+		return "", fmt.Errorf("zeroclaw managed instance name is empty")
+	}
+	guestScript := `set -e
+if [ -x "$HOME/.local/bin/zeroclaw" ]; then
+  ZC="$HOME/.local/bin/zeroclaw"
+else
+  ZC="zeroclaw"
+fi
+if [ -n "$2" ]; then
+  exec "$ZC" agent --config-dir "$HOME/.zeroclaw" -p "$2" -m "$1"
+fi
+exec "$ZC" agent --config-dir "$HOME/.zeroclaw" -m "$1"`
+	cmd := managedExecCommandContext(
+		ctx,
+		limactlPath,
+		"shell",
+		safeInstance,
+		"--",
+		"sh",
+		"-lc",
+		guestScript,
+		"carrier-managed-proxy",
+		strings.TrimSpace(message),
+		strings.TrimSpace(provider),
+	)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		errText := strings.TrimSpace(stderr.String())
+		if errText != "" {
+			return "", fmt.Errorf("zeroclaw agent command failed: %w: %s", err, errText)
+		}
+		return "", fmt.Errorf("zeroclaw agent command failed: %w", err)
+	}
+	if out := normalizeManagedAgentCLIOutput(stdout.String()); out != "" {
+		return out, nil
+	}
+	if errText := strings.TrimSpace(stderr.String()); errText != "" {
+		return "", fmt.Errorf("zeroclaw agent command returned empty output: %s", errText)
+	}
+	return "", fmt.Errorf("zeroclaw agent command returned empty output")
+}
+
+func normalizeManagedAgentCLIOutput(raw string) string {
+	lines := strings.Split(raw, "\n")
+	all := make([]string, 0, len(lines))
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		clean := strings.TrimSpace(managedANSISequence.ReplaceAllString(line, ""))
+		if clean == "" {
+			continue
+		}
+		all = append(all, clean)
+		if managedStructuredLogLine.MatchString(clean) {
+			continue
+		}
+		filtered = append(filtered, clean)
+	}
+	if len(filtered) > 0 {
+		return strings.TrimSpace(strings.Join(filtered, "\n"))
+	}
+	return strings.TrimSpace(strings.Join(all, "\n"))
+}
+
+func resolveManagedLimaCtlPath() (string, error) {
+	if managedLookPath != nil {
+		if path, err := managedLookPath("limactl"); err == nil && strings.TrimSpace(path) != "" {
+			return strings.TrimSpace(path), nil
+		}
+	}
+	for _, candidate := range []string{"/opt/homebrew/bin/limactl", "/usr/local/bin/limactl"} {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("limactl executable not found for managed zeroclaw proxy")
 }
 
 func loadLocalZeroClawGatewayConfig() (zeroclawGatewayConfig, error) {

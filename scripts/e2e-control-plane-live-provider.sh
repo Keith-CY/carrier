@@ -421,6 +421,23 @@ jq -e --arg provider "$PROVIDER" '
   (.execution.results[0].output | type == "string" and length > 0)
 ' "$EXEC_STATUS_JSON" >/dev/null
 
+FINAL_OUTPUT="$(jq -r '.execution.results[0].output // ""' "$EXEC_STATUS_JSON")"
+if [[ -z "$FINAL_OUTPUT" ]]; then
+  echo "error: live provider execution returned empty output" >&2
+  cat "$EXEC_STATUS_JSON" >&2
+  exit 1
+fi
+if printf '%s' "$FINAL_OUTPUT" | grep -Eiq '<tool_call>|</tool_call>|<tool_name>|```tool_call|```'; then
+  echo "error: live provider execution returned raw tool-call output instead of a final answer" >&2
+  printf '%s\n' "$FINAL_OUTPUT" >&2
+  exit 1
+fi
+if ! printf '%s' "$FINAL_OUTPUT" | grep -Eq '[.!?]$'; then
+  echo "error: live provider execution output is not a finalized sentence" >&2
+  printf '%s\n' "$FINAL_OUTPUT" >&2
+  exit 1
+fi
+
 echo "[7/8] export evidence, audit, metrics, and derived executions"
 capture_json_output "$EVIDENCE_JSON" "$BIN_PATH" executions evidence "$EXECUTION_ID" --format json --json
 "$BIN_PATH" executions evidence "$EXECUTION_ID" --format zip --output "$EVIDENCE_ZIP" >/dev/null
@@ -451,5 +468,6 @@ echo "execution_id=${EXECUTION_ID}"
 echo "provider=${PROVIDER}"
 echo "model=${MODEL}"
 echo "instance_id=${ZERO_INSTANCE_ID}"
+echo "output=${FINAL_OUTPUT}"
 echo "evidence_zip=${EVIDENCE_ZIP}"
 echo "live provider control-plane smoke passed"
