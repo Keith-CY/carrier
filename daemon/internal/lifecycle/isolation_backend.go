@@ -103,11 +103,7 @@ func (b perAgentLimaIsolationBackend) WrapCommand(command string) (string, error
 }
 
 func (b perAgentLimaIsolationBackend) WrapStartCommand(startCommand string) (string, error) {
-	guestCommand, err := buildGuestBwrapCommand(startCommand)
-	if err != nil {
-		return "", err
-	}
-	return b.WrapCommand(guestCommand)
+	return b.WrapCommand(startCommand)
 }
 
 func (b *perAgentLimaIsolationBackend) ensureTemplatePath() (string, error) {
@@ -148,11 +144,7 @@ func (b *perAgentLimaIsolationBackend) PrepareCommands() ([]string, error) {
 		safeTemplatePath,
 	)
 	startInstance := fmt.Sprintf("%s start %s", safeLimaPath, safeInstance)
-	ensureGuestBwrap, err := b.WrapCommand(buildGuestEnsureBwrapCommand())
-	if err != nil {
-		return nil, err
-	}
-	return []string{ensureInstance, startInstance, ensureGuestBwrap}, nil
+	return []string{ensureInstance, startInstance}, nil
 }
 
 func (b *perAgentLimaIsolationBackend) Cleanup() error {
@@ -221,19 +213,11 @@ func (b wslIsolationBackend) WrapCommand(command string) (string, error) {
 }
 
 func (b wslIsolationBackend) WrapStartCommand(startCommand string) (string, error) {
-	guestCommand, err := buildGuestBwrapCommand(startCommand)
-	if err != nil {
-		return "", err
-	}
-	return b.WrapCommand(guestCommand)
+	return b.WrapCommand(startCommand)
 }
 
 func (b wslIsolationBackend) PrepareCommands() ([]string, error) {
-	ensureGuestBwrap, err := b.WrapCommand(buildGuestEnsureBwrapCommand())
-	if err != nil {
-		return nil, err
-	}
-	return []string{ensureGuestBwrap}, nil
+	return nil, nil
 }
 
 func (b wslIsolationBackend) Cleanup() error {
