@@ -14,6 +14,9 @@ Environment:
   CARRIER_LIVE_API_KEY    Required provider credential.
   CARRIER_LIVE_MODEL      Optional model label for audit/profile metadata.
   CARRIER_LIVE_BASE_URL   Optional provider base URL for profile metadata.
+  CARRIER_E2E_STATE_DIR   Optional persistent state root. When set, Carrier's HOME, Lima cache,
+                          and managed-instance records are reused across runs, while each run still
+                          writes logs/artifacts into a fresh subdirectory under <state>/runs/.
   CARRIER_E2E_DAEMON_PORT Optional daemon port. Default: 9090
   CARRIER_E2E_GATEWAY_PORT Optional gateway port. Default: 8787
 
@@ -26,6 +29,11 @@ What this script verifies:
   6) real CLI derived execution flows (rerun/clone)
 EOF
 }
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
 
 require_cmd() {
   local cmd="$1"
@@ -51,6 +59,57 @@ wait_for_http_ok() {
   done
 }
 
+port_is_listening() {
+  local port="$1"
+  (echo >/dev/tcp/127.0.0.1/"$port") >/dev/null 2>&1
+}
+
+pick_available_port() {
+  local start="$1"
+  local end="$2"
+  local preferred="${3:-}"
+  local candidate=""
+
+  if [[ -n "$preferred" ]]; then
+    if ! port_is_listening "$preferred"; then
+      printf '%s' "$preferred"
+      return 0
+    fi
+  fi
+
+  for candidate in $(seq "$start" "$end"); do
+    if ! port_is_listening "$candidate"; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+
+  echo "error: no available TCP port in range ${start}-${end}" >&2
+  return 1
+}
+
+run_with_timeout() {
+  local timeout_sec="$1"
+  shift
+  local pid=""
+  local waited=0
+
+  "$@" &
+  pid=$!
+
+  while kill -0 "$pid" >/dev/null 2>&1; do
+    if [[ "$waited" -ge "$timeout_sec" ]]; then
+      kill -9 "$pid" >/dev/null 2>&1 || true
+      wait "$pid" >/dev/null 2>&1 || true
+      return 124
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  wait "$pid"
+}
+
 json_get() {
   local file="$1"
   local expr="$2"
@@ -72,7 +131,7 @@ capture_json_output() {
 
 provider_default_model() {
   case "$1" in
-    openrouter) printf '%s' 'openrouter/arcee-ai/trinity-mini:free' ;;
+    openrouter) printf '%s' 'openrouter/google/gemini-2.0-flash-001' ;;
     openai) printf '%s' 'openai/gpt-5.2' ;;
     anthropic) printf '%s' 'anthropic/claude-opus-4-6' ;;
     *)
@@ -98,8 +157,9 @@ PROVIDER="$(printf '%s' "${CARRIER_LIVE_PROVIDER:-openrouter}" | tr '[:upper:]' 
 API_KEY="$(printf '%s' "${CARRIER_LIVE_API_KEY:-}" | xargs)"
 MODEL="$(printf '%s' "${CARRIER_LIVE_MODEL:-}" | xargs)"
 BASE_URL="$(printf '%s' "${CARRIER_LIVE_BASE_URL:-}" | xargs)"
-DAEMON_PORT="${CARRIER_E2E_DAEMON_PORT:-9090}"
-GATEWAY_PORT="${CARRIER_E2E_GATEWAY_PORT:-8787}"
+STATE_ROOT="$(printf '%s' "${CARRIER_E2E_STATE_DIR:-}" | xargs)"
+DAEMON_PORT="$(printf '%s' "${CARRIER_E2E_DAEMON_PORT:-}" | xargs)"
+GATEWAY_PORT="$(printf '%s' "${CARRIER_E2E_GATEWAY_PORT:-}" | xargs)"
 
 case "$PROVIDER" in
   openrouter|openai|anthropic) ;;
@@ -130,8 +190,27 @@ require_cmd jq
 require_cmd curl
 require_cmd unzip
 
-TMP_DIR="$(mktemp -d "/tmp/clp.XXXXXX")"
-HOME_DIR="${TMP_DIR}/h"
+if [[ -z "$DAEMON_PORT" ]]; then
+  DAEMON_PORT="$(pick_available_port 9090 9190 9090)"
+fi
+if [[ -z "$GATEWAY_PORT" ]]; then
+  GATEWAY_PORT="$(pick_available_port 8787 8887 8787)"
+fi
+
+if [[ -n "$STATE_ROOT" ]]; then
+  mkdir -p "$STATE_ROOT" "$STATE_ROOT/runs"
+  TMP_DIR="$(mktemp -d "$STATE_ROOT/runs/clp.XXXXXX")"
+  if [[ -d "$STATE_ROOT/home" ]]; then
+    HOME_DIR="$STATE_ROOT/home"
+  elif [[ -d "$STATE_ROOT/h" ]]; then
+    HOME_DIR="$STATE_ROOT/h"
+  else
+    HOME_DIR="$STATE_ROOT/home"
+  fi
+else
+  TMP_DIR="$(mktemp -d "/tmp/clp.XXXXXX")"
+  HOME_DIR="${TMP_DIR}/h"
+fi
 mkdir -p "$HOME_DIR"
 
 BIN_PATH="${TMP_DIR}/carrier"
@@ -172,6 +251,12 @@ export "${PROVIDER_ENV_VAR}=${API_KEY}"
 
 cleanup() {
   set +e
+  if [[ -n "${BIN_PATH:-}" ]]; then
+    if [[ -n "${ZERO_INSTANCE_ID:-}" ]]; then
+      run_with_timeout 10 "$BIN_PATH" stop "$ZERO_INSTANCE_ID" >/dev/null 2>&1 || true
+    fi
+    run_with_timeout 10 "$BIN_PATH" stop zeroclaw >/dev/null 2>&1 || true
+  fi
   if [[ -n "${GATEWAY_PID:-}" ]]; then
     kill "${GATEWAY_PID}" >/dev/null 2>&1 || true
   fi
@@ -185,6 +270,10 @@ cleanup() {
     wait "${DAEMON_PID}" >/dev/null 2>&1 || true
   fi
   echo "[artifacts] temp_dir=${TMP_DIR}"
+  if [[ -n "$STATE_ROOT" ]]; then
+    echo "[artifacts] state_dir=${STATE_ROOT}"
+    echo "[artifacts] home_dir=${HOME_DIR}"
+  fi
 }
 trap cleanup EXIT
 
@@ -195,6 +284,7 @@ echo "[1/8] build carrier binary"
 )
 
 echo "[2/8] start daemon + gateway"
+echo "  daemon_port=${DAEMON_PORT} gateway_port=${GATEWAY_PORT}"
 "$BIN_PATH" daemon >"$DAEMON_LOG" 2>&1 &
 DAEMON_PID=$!
 "$BIN_PATH" gateway >"$GATEWAY_LOG" 2>&1 &
@@ -202,6 +292,8 @@ GATEWAY_PID=$!
 
 wait_for_http_ok "http://127.0.0.1:${DAEMON_PORT}/readyz" "daemon"
 wait_for_http_ok "http://127.0.0.1:${GATEWAY_PORT}/healthz" "gateway"
+
+"$BIN_PATH" stop zeroclaw >/dev/null 2>&1 || true
 
 echo "[3/8] onboard live provider (${PROVIDER}) in WebUI-only mode"
 printf '\n%s\n%s\n' "$PROVIDER" "$API_KEY" | "$BIN_PATH" onboard >"$ONBOARD_LOG" 2>&1
@@ -249,6 +341,10 @@ if [[ -z "$ZERO_INSTANCE_ID" ]]; then
   echo "error: failed to resolve zeroclaw instance id from ${CARRIER_INSTANCE_STORE}" >&2
   cat "$ADD_LOG" >&2 || true
   exit 1
+fi
+ZERO_GATEWAY_PORT="$(jq -r --arg instance_id "$ZERO_INSTANCE_ID" '.instances | map(select((.id // "") == $instance_id)) | first | (.port // empty)' "$CARRIER_INSTANCE_STORE")"
+if [[ -n "$ZERO_GATEWAY_PORT" && "$ZERO_GATEWAY_PORT" != "null" ]]; then
+  wait_for_http_ok "http://127.0.0.1:${ZERO_GATEWAY_PORT}/health" "zeroclaw gateway" 60
 fi
 
 echo "[5/8] attach/distill memory against the real instance"

@@ -61,6 +61,7 @@ import (
 
 	gatewayruntime "carrier/gateway"
 	"carrier/shared/catalog"
+	sharedconfig "carrier/shared/config"
 	"carrier/shared/openclawcfg"
 	sharedorchestration "carrier/shared/orchestration"
 	gossh "golang.org/x/crypto/ssh"
@@ -7650,7 +7651,7 @@ func buildZeroClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Con
 			providerID = strings.TrimSpace(vendor)
 		}
 		defaultProvider = mapCarrierProviderToManagedProvider(providerID)
-		defaultModel = modelID
+		defaultModel = sharedconfig.NormalizeModelForProvider(defaultProvider, modelID)
 		credentialRef := strings.TrimSpace(model.CredentialRef)
 		if credentialRef == "" {
 			credentialRef = strings.TrimSpace(model.ProviderID)
@@ -8612,6 +8613,9 @@ func runOnboard(in io.Reader, out io.Writer, startGateway func() error) error {
 	}
 	modelName := provider.ID + "-default"
 	modelID := strings.TrimSpace(provider.ExampleModel)
+	if configuredModel, err := sharedconfig.LoadCarrierModelForProvider(provider.ID); err == nil && configuredModel != nil && strings.TrimSpace(configuredModel.ModelID) != "" {
+		modelID = strings.TrimSpace(configuredModel.ModelID)
+	}
 	if modelID == "" {
 		modelID = provider.ID + "/default"
 	}
@@ -9832,6 +9836,9 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 	}
 
 	modelID := strings.TrimSpace(provider.ExampleModel)
+	if configuredModel, err := sharedconfig.LoadCarrierModelForProvider(provider.ID); err == nil && configuredModel != nil && strings.TrimSpace(configuredModel.ModelID) != "" {
+		modelID = strings.TrimSpace(configuredModel.ModelID)
+	}
 	if modelID == "" {
 		modelID = provider.ID + "/default"
 	}
@@ -10035,6 +10042,7 @@ func renderManagedZeroClawConfigTOML(
 	if strings.TrimSpace(modelID) == "" {
 		modelID = "anthropic/claude-sonnet-4.6"
 	}
+	modelID = sharedconfig.NormalizeModelForProvider(providerKey, modelID)
 	if port <= 0 {
 		port = 9091
 	}

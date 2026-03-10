@@ -9,6 +9,41 @@ import (
 	"testing"
 )
 
+func TestNormalizeModelForProvider(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+		want     string
+	}{
+		{
+			name:     "openrouter strips provider prefix",
+			provider: "openrouter",
+			model:    "openrouter/arcee-ai/trinity-mini:free",
+			want:     "arcee-ai/trinity-mini:free",
+		},
+		{
+			name:     "openai strips provider prefix",
+			provider: "openai",
+			model:    "openai/gpt-5.2",
+			want:     "gpt-5.2",
+		},
+		{
+			name:     "plain model id remains unchanged",
+			provider: "anthropic",
+			model:    "claude-opus-4-6",
+			want:     "claude-opus-4-6",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := NormalizeModelForProvider(tc.provider, tc.model); got != tc.want {
+				t.Fatalf("NormalizeModelForProvider(%q, %q) = %q, want %q", tc.provider, tc.model, got, tc.want)
+			}
+		})
+	}
+}
+
 func writeCarrierDefaultModelFixture(t *testing.T, defaultModel string, modelList []map[string]string) string {
 	t.Helper()
 

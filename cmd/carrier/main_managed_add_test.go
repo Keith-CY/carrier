@@ -358,7 +358,7 @@ func TestPrepareManagedAgentAddArtifactsWritesZeroClawTOMLConfig(t *testing.T) {
 	for _, want := range []string{
 		`api_key = "sk-or-test"`,
 		`default_provider = "openrouter"`,
-		`default_model = "openrouter/arcee-ai/trinity-mini:free"`,
+		`default_model = "arcee-ai/trinity-mini:free"`,
 		"[gateway]",
 		fmt.Sprintf("port = %d", result.Port),
 		`host = "127.0.0.1"`,
@@ -385,5 +385,65 @@ func TestPrepareManagedAgentAddArtifactsWritesZeroClawTOMLConfig(t *testing.T) {
 	}
 	if recordPayload.Port != result.Port {
 		t.Fatalf("record port = %d, want %d", recordPayload.Port, result.Port)
+	}
+}
+
+func TestPrepareManagedAgentAddArtifactsUsesConfiguredModelForProvider(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	configPath := filepath.Join(t.TempDir(), "config.v2.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "default_model": "openrouter-live",
+  "model_list": [
+    {
+      "model_name": "openrouter-live",
+      "model": "openrouter/google/gemini-2.0-flash-001",
+      "provider_id": "openrouter",
+      "credential_ref": "openrouter"
+    }
+  ]
+}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("CARRIER_CONFIG", configPath)
+
+	provider := choiceOption{
+		ID:           "openrouter",
+		Name:         "OpenRouter",
+		AuthMode:     authModeAPIKey,
+		ProviderEnv:  "OPENROUTER_API_KEY",
+		ExampleModel: "openrouter/arcee-ai/trinity-mini:free",
+	}
+	envVars := map[string]string{
+		"OPENROUTER_API_KEY": "sk-or-test",
+	}
+
+	result, err := prepareManagedAgentAddArtifacts(
+		"zeroclaw",
+		"zeroclaw-unit",
+		"",
+		"",
+		provider,
+		envVars,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("prepareManagedAgentAddArtifacts: %v", err)
+	}
+
+	rawCfg, err := os.ReadFile(result.ConfigPath)
+	if err != nil {
+		t.Fatalf("read zeroclaw config: %v", err)
+	}
+	cfgText := string(rawCfg)
+	if !strings.Contains(cfgText, `default_model = "google/gemini-2.0-flash-001"`) {
+		t.Fatalf("expected configured provider model in zeroclaw config, got:\n%s", cfgText)
+	}
+	if strings.Contains(cfgText, `default_model = "arcee-ai/trinity-mini:free"`) {
+		t.Fatalf("expected configured provider model to override provider example model, got:\n%s", cfgText)
 	}
 }

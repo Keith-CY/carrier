@@ -75,11 +75,37 @@ func buildManagedIsolationFileSyncCommand(guestDir, guestPath string, raw []byte
 	if dir == "" || target == "" {
 		return "", fmt.Errorf("%w: managed isolation guest path is empty", ErrIsolationUnavailable)
 	}
+	safeDir, err := shellManagedIsolationGuestPath(dir)
+	if err != nil {
+		return "", err
+	}
+	safeTarget, err := shellManagedIsolationGuestPath(target)
+	if err != nil {
+		return "", err
+	}
 	return strings.Join([]string{
 		"set -e",
 		"umask 077",
-		fmt.Sprintf("mkdir -p %s", shellSingleQuote(dir)),
-		fmt.Sprintf("printf %%s %s > %s", shellSingleQuote(string(raw)), shellSingleQuote(target)),
-		fmt.Sprintf("chmod 600 %s", shellSingleQuote(target)),
+		fmt.Sprintf("mkdir -p %s", safeDir),
+		fmt.Sprintf("printf %%s %s > %s", shellSingleQuote(string(raw)), safeTarget),
+		fmt.Sprintf("chmod 600 %s", safeTarget),
 	}, "; "), nil
+}
+
+func shellManagedIsolationGuestPath(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", fmt.Errorf("%w: managed isolation guest path is empty", ErrIsolationUnavailable)
+	}
+	if trimmed == "$HOME" {
+		return `"$HOME"`, nil
+	}
+	if strings.HasPrefix(trimmed, "$HOME/") {
+		suffix := strings.TrimPrefix(trimmed, "$HOME")
+		if strings.ContainsAny(suffix, "\"`") {
+			return "", fmt.Errorf("%w: unsupported managed isolation guest path %q", ErrIsolationUnavailable, trimmed)
+		}
+		return `"$HOME` + suffix + `"`, nil
+	}
+	return shellSingleQuote(trimmed), nil
 }
