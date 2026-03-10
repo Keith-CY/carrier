@@ -129,6 +129,26 @@ func TestLoadCarrierModelForProvider(t *testing.T) {
 	}
 }
 
+func TestLoadCarrierDefaultModelPreservesBaseURL(t *testing.T) {
+	writeCarrierDefaultModelFixture(t, "openrouter-default", []map[string]string{
+		{
+			"model_name":  "openrouter-default",
+			"model":       "openrouter/arcee-ai/trinity-mini:free",
+			"provider_id": "openrouter",
+			"env_var":     "OPENROUTER_API_KEY",
+			"base_url":    "https://openrouter.ai/api/v1",
+		},
+	})
+
+	got, err := LoadCarrierDefaultModel()
+	if err != nil {
+		t.Fatalf("LoadCarrierDefaultModel error: %v", err)
+	}
+	if got.BaseURL != "https://openrouter.ai/api/v1" {
+		t.Fatalf("BaseURL = %q, want %q", got.BaseURL, "https://openrouter.ai/api/v1")
+	}
+}
+
 func TestLoadCarrierModelForProviderRequiresProviderID(t *testing.T) {
 	writeCarrierDefaultModelFixture(t, "openai-default", []map[string]string{
 		{

@@ -475,10 +475,13 @@ func resolveLLMRuntimeConfigForProvider(providerID string) (*llmRuntimeConfig, e
 		return nil, fmt.Errorf("provider credential is missing (%s)", envVar)
 	}
 
-	baseURL := defaultOpenAIBaseURL
+	baseURL := strings.TrimSpace(cfg.BaseURL)
+	providerSpec := catalog.GetProvider(providerID)
 	switch {
 	case isOpenAICodexProvider(providerID):
-		baseURL = strings.TrimSpace(os.Getenv("CARRIER_OPENAI_CODEX_BASE_URL"))
+		if baseURL == "" {
+			baseURL = strings.TrimSpace(os.Getenv("CARRIER_OPENAI_CODEX_BASE_URL"))
+		}
 		if baseURL == "" {
 			baseURL = strings.TrimSpace(os.Getenv("CARRIER_OPENAI_BASE_URL"))
 		}
@@ -486,9 +489,19 @@ func resolveLLMRuntimeConfigForProvider(providerID string) (*llmRuntimeConfig, e
 			baseURL = defaultOpenAICodexBaseURL
 		}
 	default:
-		override := strings.TrimSpace(os.Getenv("CARRIER_OPENAI_BASE_URL"))
-		if override != "" {
+		if baseURL == "" && providerSpec != nil {
+			if baseEnv := strings.TrimSpace(providerSpec.BaseURLEnv); baseEnv != "" {
+				baseURL = strings.TrimSpace(os.Getenv(baseEnv))
+			}
+		}
+		if override := strings.TrimSpace(os.Getenv("CARRIER_OPENAI_BASE_URL")); baseURL == "" && override != "" {
 			baseURL = override
+		}
+		if baseURL == "" {
+			baseURL = catalog.ResolveProviderBaseURL(providerID, providerID, "")
+		}
+		if baseURL == "" {
+			baseURL = defaultOpenAIBaseURL
 		}
 	}
 

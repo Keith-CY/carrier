@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -81,6 +82,64 @@ func TestHandleMetricsAndConfigSetBranches(t *testing.T) {
 	handleConfigSet(svc, "missing-agent", configRR, httptest.NewRequest(http.MethodPost, "/config/set", strings.NewReader(`{"changes":{"A":"1"}}`)))
 	if configRR.Code == http.StatusOK {
 		t.Fatalf("config set should fail for missing agent, body=%s", configRR.Body.String())
+	}
+}
+
+type fakeAgentChatRuntime struct {
+	lastReq  baseagent.ChatRequest
+	resp     baseagent.ChatResponse
+	err      error
+	callCount int
+}
+
+func (f *fakeAgentChatRuntime) Chat(_ context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error) {
+	f.lastReq = req
+	f.callCount++
+	return f.resp, f.err
+}
+
+func TestHandleAgentChatBranches(t *testing.T) {
+	notAllowedRR := httptest.NewRecorder()
+	handleAgentChat(nil, "zeroclaw", notAllowedRR, httptest.NewRequest(http.MethodGet, "/chat", nil))
+	if notAllowedRR.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("chat method check status=%d", notAllowedRR.Code)
+	}
+
+	unavailableRR := httptest.NewRecorder()
+	handleAgentChat(nil, "zeroclaw", unavailableRR, httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"hi"}`)))
+	if unavailableRR.Code != http.StatusServiceUnavailable {
+		t.Fatalf("chat unavailable status=%d body=%s", unavailableRR.Code, unavailableRR.Body.String())
+	}
+
+	badBodyRR := httptest.NewRecorder()
+	handleAgentChat(&fakeAgentChatRuntime{}, "zeroclaw", badBodyRR, httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message"`)))
+	if badBodyRR.Code != http.StatusBadRequest {
+		t.Fatalf("chat bad body status=%d body=%s", badBodyRR.Code, badBodyRR.Body.String())
+	}
+
+	missingMessageRR := httptest.NewRecorder()
+	handleAgentChat(&fakeAgentChatRuntime{}, "zeroclaw", missingMessageRR, httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"   "}`)))
+	if missingMessageRR.Code != http.StatusBadRequest {
+		t.Fatalf("chat missing message status=%d body=%s", missingMessageRR.Code, missingMessageRR.Body.String())
+	}
+
+	runtime := &fakeAgentChatRuntime{
+		resp: baseagent.ChatResponse{Message: "hello from local runtime", Action: "chat"},
+	}
+	okReq := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"hello","sessionId":"sess-1","provider":"openrouter"}`))
+	okRR := httptest.NewRecorder()
+	handleAgentChat(runtime, "zeroclaw", okRR, okReq)
+	if okRR.Code != http.StatusOK {
+		t.Fatalf("chat ok status=%d body=%s", okRR.Code, okRR.Body.String())
+	}
+	if runtime.callCount != 1 {
+		t.Fatalf("expected one runtime call, got %d", runtime.callCount)
+	}
+	if runtime.lastReq.Message != "hello" || runtime.lastReq.ChatID != "sess-1" || runtime.lastReq.Provider != "openrouter" {
+		t.Fatalf("unexpected runtime request: %+v", runtime.lastReq)
+	}
+	if !strings.Contains(okRR.Body.String(), `"agentId":"zeroclaw"`) || !strings.Contains(okRR.Body.String(), `"sessionId":"sess-1"`) {
+		t.Fatalf("unexpected chat response body=%s", okRR.Body.String())
 	}
 }
 

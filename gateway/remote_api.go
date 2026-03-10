@@ -1428,6 +1428,7 @@ func streamLocalChatResponse(w http.ResponseWriter, r *http.Request, requestID s
 		chatResult, err := daemon.ChatAgent(
 			ctx,
 			agentID,
+			provider,
 			req.Message,
 			sessionID,
 			"webui:local-chat",

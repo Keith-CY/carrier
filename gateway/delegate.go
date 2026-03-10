@@ -590,7 +590,7 @@ func runDelegateTasks(
 			for idx := range jobs {
 				task := execution.TaskUnits[idx]
 				workerIdx, worker := workerScheduler.acquire(task.AgentID)
-				result, runErr := runDelegateTask(ctx, daemon, execution.ID, task, worker, idx)
+				result, runErr := runDelegateTask(ctx, daemon, execution.ID, execution.Provider, task, worker, idx)
 				workerScheduler.release(workerIdx)
 				outcomes <- taskOutcome{
 					index:  idx,
@@ -690,6 +690,7 @@ func runDelegateTask(
 	ctx context.Context,
 	daemon *DaemonClient,
 	executionID string,
+	provider string,
 	task BaseAgentDecomposeTask,
 	worker delegateWorker,
 	index int,
@@ -723,6 +724,7 @@ func runDelegateTask(
 		chatResult, err := daemon.ChatAgent(
 			runCtx,
 			worker.AgentID,
+			strings.TrimSpace(provider),
 			task.Input,
 			sessionID,
 			"gateway:delegate:local",
