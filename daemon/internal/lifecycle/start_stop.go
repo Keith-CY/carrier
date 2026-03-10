@@ -48,6 +48,14 @@ func (s *Service) StartWithOptions(ctx context.Context, agentID string, opts Sta
 		}
 		commandGOOS = backend.CommandGOOS()
 	}
+	if isolationEnabled {
+		if err := s.syncManagedIsolationFiles(ctx, agentID, backend); err != nil {
+			startErr := fmt.Errorf("%w: %v", ErrIsolationStartFailed, err)
+			s.updateStateOnStartError(agentID, startErr)
+			s.recordAudit("", "system", "start", agentID, AuditResultFailure, "E_START_FAILED", startErr.Error())
+			return startErr
+		}
+	}
 
 	startCommand, err := m.Runtime.Start.ResolveForGOOS(commandGOOS)
 	if err != nil {

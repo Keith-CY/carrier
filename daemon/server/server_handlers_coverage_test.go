@@ -2,8 +2,13 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -86,9 +91,9 @@ func TestHandleMetricsAndConfigSetBranches(t *testing.T) {
 }
 
 type fakeAgentChatRuntime struct {
-	lastReq  baseagent.ChatRequest
-	resp     baseagent.ChatResponse
-	err      error
+	lastReq   baseagent.ChatRequest
+	resp      baseagent.ChatResponse
+	err       error
 	callCount int
 }
 
@@ -99,6 +104,12 @@ func (f *fakeAgentChatRuntime) Chat(_ context.Context, req baseagent.ChatRequest
 }
 
 func TestHandleAgentChatBranches(t *testing.T) {
+	origHome := userHomeDirFunc
+	t.Cleanup(func() {
+		userHomeDirFunc = origHome
+	})
+	userHomeDirFunc = func() (string, error) { return t.TempDir(), nil }
+
 	notAllowedRR := httptest.NewRecorder()
 	handleAgentChat(nil, "zeroclaw", notAllowedRR, httptest.NewRequest(http.MethodGet, "/chat", nil))
 	if notAllowedRR.Code != http.StatusMethodNotAllowed {
@@ -140,6 +151,66 @@ func TestHandleAgentChatBranches(t *testing.T) {
 	}
 	if !strings.Contains(okRR.Body.String(), `"agentId":"zeroclaw"`) || !strings.Contains(okRR.Body.String(), `"sessionId":"sess-1"`) {
 		t.Fatalf("unexpected chat response body=%s", okRR.Body.String())
+	}
+}
+
+func TestHandleAgentChat_ProxiesManagedZeroClawGateway(t *testing.T) {
+	origHome := userHomeDirFunc
+	t.Cleanup(func() {
+		userHomeDirFunc = origHome
+	})
+
+	var seenPath string
+	var seenBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		raw, _ := io.ReadAll(r.Body)
+		seenBody = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":"proxied from zeroclaw"}`))
+	}))
+	defer srv.Close()
+
+	host, portText, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("SplitHostPort: %v", err)
+	}
+
+	home := t.TempDir()
+	userHomeDirFunc = func() (string, error) { return home, nil }
+	if err := os.MkdirAll(filepath.Join(home, ".zeroclaw"), 0o700); err != nil {
+		t.Fatalf("mkdir zeroclaw dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".zeroclaw", "config.toml"), []byte(fmt.Sprintf(`
+default_provider = "openrouter"
+[gateway]
+host = %q
+port = %s
+require_pairing = false
+`, host, portText)), 0o600); err != nil {
+		t.Fatalf("write zeroclaw config: %v", err)
+	}
+
+	runtime := &fakeAgentChatRuntime{
+		resp: baseagent.ChatResponse{Message: "should not be used", Action: "chat"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"hello from proxy","sessionId":"sess-z"}`))
+	rr := httptest.NewRecorder()
+	handleAgentChat(runtime, "zeroclaw", rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("chat status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if runtime.callCount != 0 {
+		t.Fatalf("expected runtime fallback not to be called, got %d", runtime.callCount)
+	}
+	if seenPath != "/webhook" {
+		t.Fatalf("proxy path=%q, want /webhook", seenPath)
+	}
+	if !strings.Contains(seenBody, `"message":"hello from proxy"`) {
+		t.Fatalf("proxy body=%q", seenBody)
+	}
+	if !strings.Contains(rr.Body.String(), `"message":"proxied from zeroclaw"`) {
+		t.Fatalf("unexpected proxy response body=%s", rr.Body.String())
 	}
 }
 

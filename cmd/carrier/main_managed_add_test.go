@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -312,5 +313,77 @@ func TestPrepareManagedAgentAddArtifactsAllowsPendingChannelToken(t *testing.T) 
 	}
 	if _, ok := telegram["token"]; ok {
 		t.Fatalf("channels.telegram.token should be omitted when setup is pending")
+	}
+}
+
+func TestPrepareManagedAgentAddArtifactsWritesZeroClawTOMLConfig(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	provider := choiceOption{
+		ID:           "openrouter",
+		Name:         "OpenRouter",
+		AuthMode:     authModeAPIKey,
+		ProviderEnv:  "OPENROUTER_API_KEY",
+		ExampleModel: "openrouter/arcee-ai/trinity-mini:free",
+	}
+	envVars := map[string]string{
+		"OPENROUTER_API_KEY": "sk-or-test",
+	}
+
+	result, err := prepareManagedAgentAddArtifacts(
+		"zeroclaw",
+		"zeroclaw-unit",
+		"",
+		"",
+		provider,
+		envVars,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("prepareManagedAgentAddArtifacts: %v", err)
+	}
+	if !strings.HasSuffix(result.ConfigPath, "config.toml") {
+		t.Fatalf("expected zeroclaw config path suffix config.toml, got %q", result.ConfigPath)
+	}
+
+	rawCfg, err := os.ReadFile(result.ConfigPath)
+	if err != nil {
+		t.Fatalf("read zeroclaw config: %v", err)
+	}
+	cfgText := string(rawCfg)
+	for _, want := range []string{
+		`api_key = "sk-or-test"`,
+		`default_provider = "openrouter"`,
+		`default_model = "openrouter/arcee-ai/trinity-mini:free"`,
+		"[gateway]",
+		fmt.Sprintf("port = %d", result.Port),
+		`host = "127.0.0.1"`,
+		"require_pairing = false",
+	} {
+		if !strings.Contains(cfgText, want) {
+			t.Fatalf("zeroclaw config missing %q\nconfig:\n%s", want, cfgText)
+		}
+	}
+
+	var recordPayload struct {
+		ConfigPath string `json:"config_path"`
+		Port       int    `json:"port"`
+	}
+	rawRecord, err := os.ReadFile(result.RecordPath)
+	if err != nil {
+		t.Fatalf("read record: %v", err)
+	}
+	if err := json.Unmarshal(rawRecord, &recordPayload); err != nil {
+		t.Fatalf("parse record: %v", err)
+	}
+	if !strings.HasSuffix(recordPayload.ConfigPath, "config.toml") {
+		t.Fatalf("record config_path = %q, want config.toml suffix", recordPayload.ConfigPath)
+	}
+	if recordPayload.Port != result.Port {
+		t.Fatalf("record port = %d, want %d", recordPayload.Port, result.Port)
 	}
 }

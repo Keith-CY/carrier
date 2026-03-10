@@ -37,6 +37,9 @@ func TestZeroClawManifestBasic(t *testing.T) {
 	if m.Runtime.Stop.Command == "" {
 		t.Fatal("expected stop command to be set")
 	}
+	if m.Runtime.Stop.Command != "signal:term" {
+		t.Fatalf("expected zeroclaw stop command to use signal:term, got %q", m.Runtime.Stop.Command)
+	}
 	if m.Runtime.Install.Command == "" {
 		t.Fatal("expected install command to be set")
 	}
@@ -51,6 +54,25 @@ func TestZeroClawManifestDevMode(t *testing.T) {
 	// Dev mode should not use cargo install.
 	if m.Runtime.Install.Command == "cargo install --git https://github.com/theonlyhennygod/zeroclaw.git --force" {
 		t.Fatal("dev mode should not use production install command")
+	}
+}
+
+func TestGetZeroClawStartCommand_UsesGatewayWithoutLegacyStartSubcommand(t *testing.T) {
+	cmd := getZeroClawStartCommand()
+	if !strings.Contains(cmd, "zeroclaw") {
+		t.Fatalf("expected zeroclaw start command to reference zeroclaw binary, got %q", cmd)
+	}
+	if !strings.Contains(cmd, "gateway") {
+		t.Fatalf("expected zeroclaw start command to invoke gateway, got %q", cmd)
+	}
+	if strings.Contains(cmd, "gateway start") {
+		t.Fatalf("zeroclaw start command should not use legacy gateway start subcommand, got %q", cmd)
+	}
+}
+
+func TestGetZeroClawStopCommand_UsesSignalTerm(t *testing.T) {
+	if got := getZeroClawStopCommand(); got != "signal:term" {
+		t.Fatalf("getZeroClawStopCommand() = %q, want signal:term", got)
 	}
 }
 
