@@ -962,14 +962,14 @@ func buildHTTPMuxWithBaseAgent(
 			handleUpgrade(svc, agentID, w, r)
 		case "uninstall":
 			handleUninstall(svc, agentID, w, r)
-			case "diagnose":
-				handleDiagnose(svc, agentID, w, r)
-			case "chat":
-				handleAgentChat(baseRuntime, agentID, w, r)
-			default:
-				http.NotFound(w, r)
-			}
-		})
+		case "diagnose":
+			handleDiagnose(svc, agentID, w, r)
+		case "chat":
+			handleAgentChat(baseRuntime, agentID, w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	})
 
 	mux.HandleFunc("/api/v1/diagnosis/handoffs", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -1391,6 +1391,21 @@ func handleAgentChat(runtime agentChatRuntime, agentID string, w http.ResponseWr
 		} else {
 			chatID = fmt.Sprintf("%s-%d", strings.TrimSpace(agentID), time.Now().UnixNano())
 		}
+	}
+	if proxied, handled, err := maybeProxyManagedAgentChat(r.Context(), agentID, message); handled {
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if sessionID == "" {
+			sessionID = chatID
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"agentId":   strings.TrimSpace(agentID),
+			"sessionId": sessionID,
+			"message":   proxied,
+		})
+		return
 	}
 	resp, err := runtime.Chat(r.Context(), baseagent.ChatRequest{
 		Provider:  strings.TrimSpace(body.Provider),

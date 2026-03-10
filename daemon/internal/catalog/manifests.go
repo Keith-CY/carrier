@@ -218,8 +218,10 @@ if [ "$1" = "gateway" ] && [ "$2" = "start" ]; then
   echo "ZeroClaw dev placeholder running (pid $$)"
   trap "exit 0" TERM INT
   while true; do sleep 1; done
-elif [ "$1" = "gateway" ] && [ "$2" = "stop" ]; then
-  echo "ZeroClaw dev stop"
+elif [ "$1" = "gateway" ] && [ $# -eq 1 ]; then
+  echo "ZeroClaw dev placeholder running (pid $$)"
+  trap "exit 0" TERM INT
+  while true; do sleep 1; done
 elif [ "$1" = "status" ]; then
   echo "ZeroClaw dev placeholder: ok"
 else
@@ -246,7 +248,7 @@ func getZeroClawGatewayCommandForGOOS(goos, gatewayCommand string) string {
 }
 
 func getZeroClawStartCommandForGOOS(goos string) string {
-	return getZeroClawGatewayCommandForGOOS(goos, "gateway start")
+	return getZeroClawGatewayCommandForGOOS(goos, "gateway")
 }
 
 // getZeroClawStopCommand returns the stop command for ZeroClaw.
@@ -255,7 +257,7 @@ func getZeroClawStopCommand() string {
 }
 
 func getZeroClawStopCommandForGOOS(goos string) string {
-	return getZeroClawGatewayCommandForGOOS(goos, "gateway stop")
+	return "signal:term"
 }
 
 // ZeroClawManifest returns the manifest for the ZeroClaw agent.
