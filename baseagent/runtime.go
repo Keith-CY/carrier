@@ -226,6 +226,28 @@ func (r *Runtime) InstallSkill(ctx context.Context, name string) (SkillDefinitio
 	return r.skillsLoader.InstallSkill(ctx, name)
 }
 
+func (r *Runtime) StartMCP(ctx context.Context) error {
+	if r == nil || r.mcpManager == nil {
+		return nil
+	}
+	manager, ok := r.mcpManager.(interface{ Start(context.Context) error })
+	if !ok {
+		return nil
+	}
+	return manager.Start(ctx)
+}
+
+func (r *Runtime) StopMCP(ctx context.Context) error {
+	if r == nil || r.mcpManager == nil {
+		return nil
+	}
+	manager, ok := r.mcpManager.(interface{ Stop(context.Context) error })
+	if !ok {
+		return nil
+	}
+	return manager.Stop(ctx)
+}
+
 func (r *Runtime) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
 	msg := strings.TrimSpace(req.Message)
 	if msg == "" {
