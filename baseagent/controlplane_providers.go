@@ -2,13 +2,63 @@ package baseagent
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 const maxProviderHistoryMessageLength = 220
+
+type ProviderErrorKind string
+
+const (
+	ProviderErrorRetriable    ProviderErrorKind = "retriable"
+	ProviderErrorNonRetriable ProviderErrorKind = "non_retriable"
+)
+
+type classifiedProviderError struct {
+	kind ProviderErrorKind
+	err  error
+}
+
+func (e *classifiedProviderError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *classifiedProviderError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func (e *classifiedProviderError) Kind() ProviderErrorKind {
+	if e == nil {
+		return ProviderErrorRetriable
+	}
+	return e.kind
+}
+
+func RetriableProviderError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &classifiedProviderError{kind: ProviderErrorRetriable, err: err}
+}
+
+func NonRetriableProviderError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &classifiedProviderError{kind: ProviderErrorNonRetriable, err: err}
+}
 
 // ToolDescriptor is a compact tool description used in provider prompting.
 type ToolDescriptor struct {
@@ -18,10 +68,11 @@ type ToolDescriptor struct {
 
 // ProviderRequest is the normalized provider request envelope for agent replies.
 type ProviderRequest struct {
-	SystemPrompt string
-	UserMessage  string
-	History      []ConversationMessage
-	Tools        []ToolDescriptor
+	SystemPrompt    string
+	UserMessage     string
+	History         []ConversationMessage
+	Tools           []ToolDescriptor
+	StructuredTools []StructuredToolDescriptor
 }
 
 // Provider abstracts a chat backend.
@@ -108,11 +159,17 @@ type ProviderManager struct {
 	mu        sync.RWMutex
 	providers map[string]Provider
 	active    string
+	cooldown  time.Duration
+	now       func() time.Time
+	blocked   map[string]time.Time
 }
 
 func NewProviderManager(defaultProvider Provider) *ProviderManager {
 	pm := &ProviderManager{
 		providers: map[string]Provider{},
+		cooldown:  time.Minute,
+		now:       time.Now,
+		blocked:   map[string]time.Time{},
 	}
 	if defaultProvider != nil {
 		name := strings.ToLower(strings.TrimSpace(defaultProvider.Name()))
@@ -186,14 +243,188 @@ func (pm *ProviderManager) Reply(ctx context.Context, req ProviderRequest) (stri
 	if pm == nil {
 		return "", fmt.Errorf("provider manager is nil")
 	}
-	pm.mu.RLock()
-	active := pm.active
-	provider := pm.providers[active]
-	pm.mu.RUnlock()
-	if provider == nil {
+	if err := providerContextError(ctx); err != nil {
+		return "", err
+	}
+	candidates := pm.availableProviders()
+	if len(candidates) == 0 {
 		return "", fmt.Errorf("no active provider is configured")
 	}
-	return provider.Reply(ctx, req)
+	var lastErr error
+	for _, candidate := range candidates {
+		if err := providerContextError(ctx); err != nil {
+			return "", err
+		}
+		reply, err := candidate.provider.Reply(ctx, req)
+		if err == nil && strings.TrimSpace(reply) != "" {
+			pm.markProviderSuccess(candidate.name)
+			return strings.TrimSpace(reply), nil
+		}
+		if err != nil {
+			if ctxErr := context.Cause(ctx); ctxErr != nil {
+				return "", ctxErr
+			}
+			pm.markProviderFailure(candidate.name, err)
+			lastErr = err
+			continue
+		}
+		pm.markProviderFailure(candidate.name, nil)
+		lastErr = fmt.Errorf("provider %s returned no content", candidate.name)
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", fmt.Errorf("provider chain returned no content")
+}
+
+func (pm *ProviderManager) ReplyWithTools(ctx context.Context, req StructuredToolRequest) (StructuredToolReply, error) {
+	if pm == nil {
+		return StructuredToolReply{}, fmt.Errorf("provider manager is nil")
+	}
+	if err := providerContextError(ctx); err != nil {
+		return StructuredToolReply{}, err
+	}
+	candidates := pm.availableProviders()
+	if len(candidates) == 0 {
+		return StructuredToolReply{}, fmt.Errorf("no active provider is configured")
+	}
+	var lastErr error
+	for _, candidate := range candidates {
+		if err := providerContextError(ctx); err != nil {
+			return StructuredToolReply{}, err
+		}
+		reply, err := pm.replyWithToolsFromProvider(ctx, candidate.provider, req)
+		if err == nil && structuredReplyHasContent(reply) {
+			pm.markProviderSuccess(candidate.name)
+			return reply, nil
+		}
+		if err != nil {
+			if ctxErr := context.Cause(ctx); ctxErr != nil {
+				return StructuredToolReply{}, ctxErr
+			}
+			pm.markProviderFailure(candidate.name, err)
+			lastErr = err
+			continue
+		}
+		pm.markProviderFailure(candidate.name, nil)
+		lastErr = fmt.Errorf("provider %s returned no tool reply", candidate.name)
+	}
+	if lastErr != nil {
+		return StructuredToolReply{}, lastErr
+	}
+	return StructuredToolReply{}, fmt.Errorf("provider chain returned no tool reply")
+}
+
+type providerCandidate struct {
+	name     string
+	provider Provider
+}
+
+func (pm *ProviderManager) availableProviders() []providerCandidate {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+
+	now := time.Now()
+	if pm.now != nil {
+		now = pm.now()
+	}
+
+	orderedNames := make([]string, 0, len(pm.providers))
+	for name := range pm.providers {
+		orderedNames = append(orderedNames, name)
+	}
+	sort.Strings(orderedNames)
+
+	candidates := make([]providerCandidate, 0, len(orderedNames))
+	appendCandidate := func(name string) {
+		provider := pm.providers[name]
+		if provider == nil {
+			return
+		}
+		if until, ok := pm.blocked[name]; ok && until.After(now) {
+			return
+		}
+		candidates = append(candidates, providerCandidate{name: name, provider: provider})
+	}
+
+	active := strings.TrimSpace(pm.active)
+	if active != "" {
+		appendCandidate(active)
+	}
+	for _, name := range orderedNames {
+		if name == active {
+			continue
+		}
+		appendCandidate(name)
+	}
+	return candidates
+}
+
+func (pm *ProviderManager) markProviderFailure(name string, err error) {
+	if pm == nil {
+		return
+	}
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	if !providerErrorShouldCooldown(err) {
+		delete(pm.blocked, name)
+		return
+	}
+	if pm.cooldown <= 0 {
+		return
+	}
+	now := time.Now()
+	if pm.now != nil {
+		now = pm.now()
+	}
+	pm.blocked[name] = now.Add(pm.cooldown)
+}
+
+func (pm *ProviderManager) markProviderSuccess(name string) {
+	if pm == nil {
+		return
+	}
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	delete(pm.blocked, name)
+	if name != "" {
+		pm.active = name
+	}
+}
+
+func (pm *ProviderManager) replyWithToolsFromProvider(ctx context.Context, provider Provider, req StructuredToolRequest) (StructuredToolReply, error) {
+	if aware, ok := provider.(ToolAwareProvider); ok {
+		return aware.ReplyWithTools(ctx, req)
+	}
+	return replyWithToolsViaTextProvider(ctx, provider, req)
+}
+
+func structuredReplyHasContent(reply StructuredToolReply) bool {
+	if strings.TrimSpace(reply.Content) != "" {
+		return true
+	}
+	return len(reply.ToolCalls) > 0
+}
+
+func providerContextError(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func providerErrorShouldCooldown(err error) bool {
+	if err == nil {
+		return true
+	}
+	var classified *classifiedProviderError
+	if errors.As(err, &classified) {
+		return classified.Kind() != ProviderErrorNonRetriable
+	}
+	return true
 }
 
 // LLMProviderAdapter wraps baseagent requestLLMCompletion as a provider.
@@ -227,26 +458,56 @@ func (p *LLMProviderAdapter) Reply(ctx context.Context, req ProviderRequest) (st
 	if history := renderProviderHistory(req.History, p.historyWindow); history != "" {
 		prompt = "Conversation context:\n" + history + "\n\nCurrent user message:\n" + user
 	}
-	if len(req.Tools) > 0 {
-		toolLines := make([]string, 0, len(req.Tools))
-		for _, t := range req.Tools {
-			name := strings.TrimSpace(t.Name)
-			if name == "" {
-				continue
-			}
-			desc := strings.TrimSpace(t.Description)
-			if desc == "" {
-				toolLines = append(toolLines, "- "+name)
-			} else {
-				toolLines = append(toolLines, "- "+name+": "+desc)
-			}
-		}
+	toolLines := renderStructuredToolLines(req.StructuredTools)
+	if len(toolLines) == 0 {
+		toolLines = renderCompactToolLines(req.Tools)
+	}
+	if len(toolLines) > 0 {
 		if len(toolLines) > 0 {
 			prompt += "\n\nAvailable built-in tools:\n" + strings.Join(toolLines, "\n")
 		}
 	}
 
 	return requestLLMCompletionForProvider(ctx, p.name, req.SystemPrompt, prompt)
+}
+
+func renderCompactToolLines(tools []ToolDescriptor) []string {
+	lines := make([]string, 0, len(tools))
+	for _, t := range tools {
+		name := strings.TrimSpace(t.Name)
+		if name == "" {
+			continue
+		}
+		desc := strings.TrimSpace(t.Description)
+		if desc == "" {
+			lines = append(lines, "- "+name)
+		} else {
+			lines = append(lines, "- "+name+": "+desc)
+		}
+	}
+	return lines
+}
+
+func renderStructuredToolLines(tools []StructuredToolDescriptor) []string {
+	lines := make([]string, 0, len(tools))
+	for _, t := range tools {
+		name := strings.TrimSpace(t.Name)
+		if name == "" {
+			continue
+		}
+		line := "- " + name
+		desc := strings.TrimSpace(t.Description)
+		if desc != "" {
+			line += ": " + desc
+		}
+		if len(t.Parameters) > 0 {
+			if raw, err := json.Marshal(t.Parameters); err == nil {
+				line += " | parameters=" + string(raw)
+			}
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func renderProviderHistory(history []ConversationMessage, window int) string {

@@ -5,6 +5,7 @@ import (
 	"carrier/shared/config"
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -77,20 +78,40 @@ type Runtime struct {
 	providers *ProviderManager
 	sessions  *SessionManager
 	loop      *AgentLoop
+	cron      *CronService
 
-	mu          sync.Mutex
-	initialized bool
-	activeID    string
+	mu                sync.Mutex
+	initialized       bool
+	activeID          string
+	workspaceRoot     string
+	maxToolIterations int
+	structuredToolPolicyOverride *StructuredToolPolicySpec
+	mcpManager                  MCPManager
+	skillsLoader                SkillsLoader
 }
 
-func NewRuntime(svc AgentService, memStore MemoryStore) *Runtime {
+func NewRuntime(svc AgentService, memStore MemoryStore, opts ...RuntimeOption) *Runtime {
 	r := &Runtime{
-		svc:      svc,
-		memory:   memStore,
-		activeID: baseAgentActiveMemoryV1ID,
+		svc:               svc,
+		memory:            memStore,
+		activeID:          baseAgentActiveMemoryV1ID,
+		maxToolIterations: defaultMaxToolIterations,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(r)
+		}
+	}
+	structuredToolPolicy := ActiveBoundarySpec().StructuredToolPolicy
+	if r.structuredToolPolicyOverride != nil {
+		structuredToolPolicy = *r.structuredToolPolicyOverride
 	}
 	r.bus = NewMessageBus(0, 0, 0)
-	r.sessions = NewSessionManager(0)
+	if r.workspaceRoot != "" {
+		r.sessions = NewSessionManagerWithStorage(0, filepath.Join(r.workspaceRoot, ".baseagent", "sessions"))
+	} else {
+		r.sessions = NewSessionManager(0)
+	}
 	r.providers = NewProviderManager(nil)
 	for _, provider := range catalog.ListProviders() {
 		mustRegisterProvider(r.providers, NewLLMProviderAdapter(provider.ID, 8))
@@ -102,6 +123,16 @@ func NewRuntime(svc AgentService, memStore MemoryStore) *Runtime {
 	r.channels = NewChannelManager(r.bus)
 	r.loop = NewAgentLoop(r.svc, r.tools, r.providers, r.sessions, r.bus)
 	r.loop.SetChannelManager(r.channels)
+	r.loop.SetSkillsLoader(r.skillsLoader)
+	if r.workspaceRoot != "" {
+		r.loop.SetExecutionTools(NewExecutionToolRegistry(r.workspaceRoot), r.maxToolIterations, structuredToolPolicy, r.mcpManager)
+	} else {
+		r.loop.SetExecutionTools(nil, r.maxToolIterations, structuredToolPolicy, r.mcpManager)
+	}
+	r.cron = NewCronService(func(ctx context.Context, job CronJob) error {
+		_, err := r.Chat(ctx, cronChatRequestForSessionKey(job.SessionKey, job.Prompt))
+		return err
+	})
 	return r
 }
 
@@ -176,6 +207,13 @@ func (r *Runtime) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 		}, healNote, healed, backupRef), nil
 	}
 	return withMemoryNote(resp, healNote, healed, backupRef), nil
+}
+
+func (r *Runtime) ScheduleJob(ctx context.Context, job CronJob) (CronJob, error) {
+	if r == nil || r.cron == nil {
+		return CronJob{}, fmt.Errorf("cron service is unavailable")
+	}
+	return r.cron.Schedule(ctx, job)
 }
 
 func wantsListAgents(lower string) bool {
@@ -264,11 +302,31 @@ func (r *Runtime) executeAgentAction(ctx context.Context, action, agentID string
 }
 
 func baseAgentHelpText() string {
-	return "Base agent manages local agents: `list agents` or `/agents`, `uninstall <agent>`, `start <agent>`, `stop <agent>`, `status <agent>`, `logs <agent>`, `upgrade <agent>`, `diagnose <agent>`. Metadata commands: `/tools`, `/providers`, `/sessions`, `/boundaries`. For install/onboard, use Carrier CLI/TUI (`carrier install <agent>`, `carrier onboard`) or WebUI."
+	return "Base agent manages local agents: `list agents` or `/agents`, `uninstall <agent>`, `start <agent>`, `stop <agent>`, `status <agent>`, `logs <agent>`, `upgrade <agent>`, `diagnose <agent>`. Metadata commands: `/tools`, `/providers`, `/sessions`, `/boundaries`. When workspace tools are enabled, chat can use `read_file`, `write_file`, `append_file`, `edit_file`, `list_dir`, and bounded `exec` inside the current project workspace. For install/onboard, use Carrier CLI/TUI (`carrier install <agent>`, `carrier onboard`) or WebUI."
 }
 
 func baseAgentBoundariesText() string {
 	return ActiveBoundarySpec().RenderSummary()
+}
+
+func (r *Runtime) renderToolSummary() string {
+	if r == nil || r.tools == nil {
+		return "No tools are registered."
+	}
+
+	lines := []string{r.tools.RenderToolSummary()}
+	if r.loop == nil || r.loop.executionTools == nil {
+		return strings.Join(lines, "\n")
+	}
+
+	descriptors := r.loop.executionTools.Descriptors()
+	if len(descriptors) == 0 {
+		return strings.Join(lines, "\n")
+	}
+
+	lines = append(lines, "", fmt.Sprintf("Workspace tools (%d):", len(descriptors)))
+	lines = append(lines, renderStructuredToolLines(descriptors)...)
+	return strings.Join(lines, "\n")
 }
 
 func withMemoryNote(resp ChatResponse, note string, healed bool, backupRef string) ChatResponse {
