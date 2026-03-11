@@ -51,6 +51,105 @@ type scriptedTextProvider struct {
 	requests []ProviderRequest
 }
 
+type runtimeExtendedMemoryFake struct {
+	*runtimeMemoryFake
+	searchHits   []MemorySearchHit
+	searchErr    error
+	searchCalls  []runtimeMemorySearchCall
+	observeID    string
+	observeErr   error
+	observeCalls []runtimeMemoryObserveCall
+	records      map[string]MemoryRecord
+	getRecordErr error
+	grantID      string
+	grantErr     error
+	revokeErr    error
+	audits       []MemoryAudit
+}
+
+type runtimeMemorySearchCall struct {
+	subject    string
+	query      string
+	maxResults int
+	minScore   float64
+}
+
+type runtimeMemoryObserveCall struct {
+	subject       string
+	toolName      string
+	outputSnippet string
+	scope         string
+}
+
+func newRuntimeExtendedMemoryFake() *runtimeExtendedMemoryFake {
+	return &runtimeExtendedMemoryFake{
+		runtimeMemoryFake: newRuntimeMemoryFake(),
+		records:           map[string]MemoryRecord{},
+	}
+}
+
+func (m *runtimeExtendedMemoryFake) Search(subject, query string, maxResults int, minScore float64) ([]MemorySearchHit, error) {
+	m.searchCalls = append(m.searchCalls, runtimeMemorySearchCall{
+		subject:    subject,
+		query:      query,
+		maxResults: maxResults,
+		minScore:   minScore,
+	})
+	if m.searchErr != nil {
+		return nil, m.searchErr
+	}
+	out := make([]MemorySearchHit, len(m.searchHits))
+	copy(out, m.searchHits)
+	return out, nil
+}
+
+func (m *runtimeExtendedMemoryFake) GetRecord(_ string, id string) (MemoryRecord, error) {
+	if m.getRecordErr != nil {
+		return MemoryRecord{}, m.getRecordErr
+	}
+	rec, ok := m.records[id]
+	if !ok {
+		return MemoryRecord{}, os.ErrNotExist
+	}
+	return rec, nil
+}
+
+func (m *runtimeExtendedMemoryFake) Observe(subject, toolName, outputSnippet, scope string) (string, error) {
+	m.observeCalls = append(m.observeCalls, runtimeMemoryObserveCall{
+		subject:       subject,
+		toolName:      toolName,
+		outputSnippet: outputSnippet,
+		scope:         scope,
+	})
+	if m.observeErr != nil {
+		return "", m.observeErr
+	}
+	if strings.TrimSpace(m.observeID) == "" {
+		return "obs-runtime", nil
+	}
+	return m.observeID, nil
+}
+
+func (m *runtimeExtendedMemoryFake) Grant(_ string, _ string, _ string, _ string) (string, error) {
+	if m.grantErr != nil {
+		return "", m.grantErr
+	}
+	if strings.TrimSpace(m.grantID) == "" {
+		return "grant-runtime", nil
+	}
+	return m.grantID, nil
+}
+
+func (m *runtimeExtendedMemoryFake) Revoke(_ string, _ string) error {
+	return m.revokeErr
+}
+
+func (m *runtimeExtendedMemoryFake) ListAudits() []MemoryAudit {
+	out := make([]MemoryAudit, len(m.audits))
+	copy(out, m.audits)
+	return out
+}
+
 func (p *scriptedTextProvider) Name() string { return p.name }
 
 func (p *scriptedTextProvider) Reply(_ context.Context, req ProviderRequest) (string, error) {
@@ -58,6 +157,176 @@ func (p *scriptedTextProvider) Reply(_ context.Context, req ProviderRequest) (st
 	reply := p.replies[0]
 	p.replies = p.replies[1:]
 	return reply, nil
+}
+
+func TestBaseagentMemoryQueryUsesCarrierStore(t *testing.T) {
+	mem := newRuntimeExtendedMemoryFake()
+	mem.searchHits = []MemorySearchHit{
+		{ID: "rec-1", Scope: "public", Score: 0.91, Snippet: "timezone preference: JST", Provenance: "truth/public/preferences.md"},
+	}
+	provider := &scriptedToolAwareProvider{
+		name: "memory-aware",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "memory_search",
+						Arguments: map[string]any{
+							"query": "timezone",
+						},
+					},
+				},
+			},
+			{
+				Content: "memory search completed",
+			},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, mem, WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "memory-search",
+		Message:  "find memory about timezone",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "memory search completed" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(mem.searchCalls) != 1 {
+		t.Fatalf("expected 1 memory search call, got %d", len(mem.searchCalls))
+	}
+	if mem.searchCalls[0].subject != baseAgentVirtualID {
+		t.Fatalf("expected baseagent subject, got %+v", mem.searchCalls[0])
+	}
+	if mem.searchCalls[0].query != "timezone" {
+		t.Fatalf("unexpected search query: %+v", mem.searchCalls[0])
+	}
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.Role != "tool" || last.ToolCallID != "call-1" {
+		t.Fatalf("unexpected memory tool callback: %+v", last)
+	}
+	if !strings.Contains(last.Content, "timezone preference: JST") {
+		t.Fatalf("expected search hit snippet in callback, got %+v", last)
+	}
+}
+
+func TestStructuredLoopObserveMemory(t *testing.T) {
+	mem := newRuntimeExtendedMemoryFake()
+	provider := &scriptedToolAwareProvider{
+		name: "observe-aware",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "list_agents",
+					},
+				},
+			},
+			{
+				Content: "listed agents",
+			},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{
+		agents: []AgentState{{ID: "openclaw", Install: "installed", Runtime: "running", Health: "ok"}},
+	}, mem, WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "memory-observe",
+		Message:  "check the current fleet posture",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "listed agents" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(mem.observeCalls) != 1 {
+		t.Fatalf("expected 1 memory observe call, got %d", len(mem.observeCalls))
+	}
+	if mem.observeCalls[0].subject != baseAgentVirtualID {
+		t.Fatalf("unexpected observe subject: %+v", mem.observeCalls[0])
+	}
+	if mem.observeCalls[0].toolName != "list_agents" {
+		t.Fatalf("unexpected observe tool name: %+v", mem.observeCalls[0])
+	}
+	if !strings.Contains(mem.observeCalls[0].outputSnippet, "openclaw") {
+		t.Fatalf("expected tool output in observe call, got %+v", mem.observeCalls[0])
+	}
+}
+
+func TestMemoryPolicyBlocksUnauthorizedScope(t *testing.T) {
+	mem := newRuntimeExtendedMemoryFake()
+	provider := &scriptedToolAwareProvider{
+		name: "memory-policy",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "memory_search",
+						Arguments: map[string]any{
+							"query": "private",
+							"scope": "agent:other-agent",
+						},
+					},
+				},
+			},
+			{
+				Content: "blocked",
+			},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, mem, WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "memory-scope",
+		Message:  "search forbidden memory",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "blocked" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(mem.searchCalls) != 0 {
+		t.Fatalf("unauthorized scope should not reach memory store: %+v", mem.searchCalls)
+	}
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.ToolResultStatus != ExecutionToolResultStatusError {
+		t.Fatalf("expected memory scope failure, got %+v", last)
+	}
+	if !strings.Contains(strings.ToLower(last.Content), "unauthorized memory scope") {
+		t.Fatalf("unexpected memory scope failure message: %+v", last)
+	}
 }
 
 func TestRuntimeChatUsesToolAwareProviderLoop(t *testing.T) {

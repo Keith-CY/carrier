@@ -139,6 +139,65 @@ func newStructuredToolSurfaceWithPolicy(builtin *ToolRegistry, workspace *Execut
 	return surface
 }
 
+func (s *structuredToolSurface) SetMemoryStore(store ExtendedMemoryStore, subject string) {
+	if s == nil || store == nil {
+		return
+	}
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		subject = baseAgentVirtualID
+	}
+	s.register(structuredToolDefinition{
+		descriptor: StructuredToolDescriptor{
+			Name:        "memory_search",
+			Description: "Search Carrier memory records available to the base agent.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{
+						"type": "string",
+					},
+					"scope": map[string]any{
+						"type":        "string",
+						"description": "Optional scope filter. Allowed values are public, shared:<name>, or agent:carrier.base.internal.",
+					},
+					"max_results": map[string]any{
+						"type": "integer",
+					},
+					"min_score": map[string]any{
+						"type": "number",
+					},
+				},
+				"required": []string{"query"},
+			},
+		},
+		tier: structuredToolTierOperationalRead,
+		execute: func(ctx context.Context, args map[string]any) ExecutionToolResult {
+			query := strings.TrimSpace(stringifyStructuredToolArg(args["query"]))
+			if query == "" {
+				return executionError("query is required")
+			}
+			scope := strings.TrimSpace(stringifyStructuredToolArg(args["scope"]))
+			maxResults, err := readOptionalIntArg(args, "max_results", defaultMemorySearchResults)
+			if err != nil {
+				return executionError(err.Error())
+			}
+			minScore, err := readOptionalFloatArg(args, "min_score", 0)
+			if err != nil {
+				return executionError(err.Error())
+			}
+			hits, err := searchMemoryStore(store, subject, query, scope, maxResults, minScore)
+			if err != nil {
+				return executionError(err.Error())
+			}
+			return ExecutionToolResult{
+				Output:   renderMemorySearchHits(hits),
+				Metadata: map[string]any{"memory_hits": cloneMemorySearchHits(hits)},
+			}
+		},
+	})
+}
+
 func (s *structuredToolSurface) registerBuiltinStructuredTools(builtin *ToolRegistry) {
 	if s == nil || builtin == nil {
 		return
@@ -331,6 +390,51 @@ func structuredMCPToolTier(name string) structuredToolTier {
 		return structuredToolTierMetadataRead
 	default:
 		return structuredToolTierHighRisk
+	}
+}
+
+func renderMemorySearchHits(hits []MemorySearchHit) string {
+	if len(hits) == 0 {
+		return "no memory results"
+	}
+	lines := make([]string, 0, len(hits))
+	for idx, hit := range hits {
+		line := fmt.Sprintf("%d. %s", idx+1, strings.TrimSpace(hit.ID))
+		if scope := strings.TrimSpace(hit.Scope); scope != "" {
+			line += " [" + scope + "]"
+		}
+		lines = append(lines, line)
+		if snippet := strings.TrimSpace(hit.Snippet); snippet != "" {
+			lines = append(lines, snippet)
+		}
+		if provenance := strings.TrimSpace(hit.Provenance); provenance != "" {
+			lines = append(lines, "provenance: "+provenance)
+		}
+	}
+	return truncateExecutionOutput(strings.Join(lines, "\n"))
+}
+
+func readOptionalFloatArg(args map[string]any, key string, fallback float64) (float64, error) {
+	if args == nil {
+		return fallback, nil
+	}
+	value, ok := args[key]
+	if !ok || value == nil {
+		return fallback, nil
+	}
+	switch typed := value.(type) {
+	case float64:
+		return typed, nil
+	case float32:
+		return float64(typed), nil
+	case int:
+		return float64(typed), nil
+	case int32:
+		return float64(typed), nil
+	case int64:
+		return float64(typed), nil
+	default:
+		return 0, fmt.Errorf("%s must be a number", key)
 	}
 }
 

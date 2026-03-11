@@ -14,6 +14,8 @@ type AgentLoop struct {
 	sessions          *SessionManager
 	bus               *MessageBus
 	channels          *ChannelManager
+	memory            ExtendedMemoryStore
+	memorySubject     string
 	executionTools    *ExecutionToolRegistry
 	structuredTools   *structuredToolSurface
 	subagentManager   SubagentManager
@@ -56,6 +58,21 @@ func (l *AgentLoop) SetChannelManager(cm *ChannelManager) {
 
 func (l *AgentLoop) SetSkillsLoader(loader SkillsLoader) {
 	l.skillsLoader = loader
+}
+
+func (l *AgentLoop) SetMemoryStore(store MemoryStore, subject string) {
+	if l == nil {
+		return
+	}
+	extended, _ := store.(ExtendedMemoryStore)
+	l.memory = extended
+	l.memorySubject = strings.TrimSpace(subject)
+	if l.memorySubject == "" {
+		l.memorySubject = baseAgentVirtualID
+	}
+	if l.structuredTools != nil {
+		l.structuredTools.SetMemoryStore(extended, l.memorySubject)
+	}
 }
 
 func (l *AgentLoop) ProcessChat(ctx context.Context, req ChatRequest) (ChatResponse, error) {

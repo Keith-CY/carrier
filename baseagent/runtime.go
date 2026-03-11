@@ -80,17 +80,17 @@ type Runtime struct {
 	loop      *AgentLoop
 	cron      *CronService
 
-	mu                sync.Mutex
-	initialized       bool
-	activeID          string
-	workspaceRoot     string
-	maxToolIterations int
+	mu                           sync.Mutex
+	initialized                  bool
+	activeID                     string
+	workspaceRoot                string
+	maxToolIterations            int
 	structuredToolPolicyOverride *StructuredToolPolicySpec
-	mcpManager                  MCPManager
-	skillsLoader                SkillsLoader
-	webBackend                  WebToolBackend
-	subagentSpawner             SubagentSpawner
-	subagentManager             SubagentManager
+	mcpManager                   MCPManager
+	skillsLoader                 SkillsLoader
+	webBackend                   WebToolBackend
+	subagentSpawner              SubagentSpawner
+	subagentManager              SubagentManager
 }
 
 func NewRuntime(svc AgentService, memStore MemoryStore, opts ...RuntimeOption) *Runtime {
@@ -146,6 +146,7 @@ func NewRuntime(svc AgentService, memStore MemoryStore, opts ...RuntimeOption) *
 		r.workspaceRoot,
 		executionToolOpts...,
 	), r.maxToolIterations, structuredToolPolicy, r.mcpManager, effectiveSubagentManager)
+	r.loop.SetMemoryStore(r.memory, baseAgentVirtualID)
 	r.cron = NewCronService(func(ctx context.Context, job CronJob) error {
 		_, err := r.Chat(ctx, cronChatRequestForSessionKey(job.SessionKey, job.Prompt))
 		return err
