@@ -112,3 +112,5 @@ export function useMemoryData() {
     runAction: (action: 'attach' | 'detach' | 'distill') => actionMutation.mutate(action),
   };
 }
+
+export type MemoryData = ReturnType<typeof useMemoryData>;
