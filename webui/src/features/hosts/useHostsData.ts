@@ -665,3 +665,5 @@ export function useHostsData() {
     loadManageMemory,
   };
 }
+
+export type HostsData = ReturnType<typeof useHostsData>;
