@@ -17,6 +17,9 @@ import (
 const (
 	defaultSessionTTL      = 30 * 24 * time.Hour
 	sessionCleanupInterval = 1 * time.Hour
+	sessionPairStatePaired = "paired"
+	sessionPairMethodPair  = "pair_code"
+	sessionPairMethodAuth  = "channel_auth"
 )
 
 // SessionRecord represents a paired session.
@@ -24,6 +27,8 @@ type SessionRecord struct {
 	Provider     string `json:"provider"`
 	ChatID       string `json:"chatId"`
 	SessionToken string `json:"sessionToken"`
+	PairState    string `json:"pairState,omitempty"`
+	PairMethod   string `json:"pairMethod,omitempty"`
 	CreatedAt    string `json:"createdAt"`
 	LastSeenAt   string `json:"lastSeenAt"`
 }
@@ -85,6 +90,8 @@ func (s *SessionStore) CreateSession(provider, chatID string) *SessionRecord {
 		Provider:     provider,
 		ChatID:       chatID,
 		SessionToken: token,
+		PairState:    sessionPairStatePaired,
+		PairMethod:   defaultSessionPairMethod(provider),
 		CreatedAt:    createdAt,
 		LastSeenAt:   now,
 	}
@@ -97,10 +104,17 @@ func (s *SessionStore) CreateSession(provider, chatID string) *SessionRecord {
 func (s *SessionStore) GetSession(provider, chatID string) *SessionRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec := s.sessions[sessionKey(provider, chatID)]
+	key := sessionKey(provider, chatID)
+	rec := s.sessions[key]
 	if rec == nil {
 		return nil
 	}
+	if s.sessionExpiredLocked(rec) {
+		delete(s.sessions, key)
+		s.dirty = true
+		return nil
+	}
+	ensureSessionMetadata(rec)
 	copy := *rec
 	return &copy
 }
@@ -113,10 +127,18 @@ func (s *SessionStore) ListSessions(provider string) []*SessionRecord {
 
 	filter := strings.ToLower(strings.TrimSpace(provider))
 	records := make([]*SessionRecord, 0, len(s.sessions))
-	for _, rec := range s.sessions {
+	for key, rec := range s.sessions {
 		if rec == nil {
+			delete(s.sessions, key)
+			s.dirty = true
 			continue
 		}
+		if s.sessionExpiredLocked(rec) {
+			delete(s.sessions, key)
+			s.dirty = true
+			continue
+		}
+		ensureSessionMetadata(rec)
 		if filter != "" && strings.ToLower(strings.TrimSpace(rec.Provider)) != filter {
 			continue
 		}
@@ -171,6 +193,11 @@ func (s *SessionStore) Cleanup() int {
 	cutoff := s.now().Add(-s.sessionTTL)
 	removed := 0
 	for key, rec := range s.sessions {
+		if rec == nil {
+			delete(s.sessions, key)
+			removed++
+			continue
+		}
 		t, err := time.Parse(time.RFC3339Nano, rec.LastSeenAt)
 		if err != nil || t.Before(cutoff) {
 			delete(s.sessions, key)
@@ -253,6 +280,7 @@ func (s *SessionStore) loadSessions() {
 			log.Printf("[gateway/session] skipping malformed record: %+v", r)
 			continue
 		}
+		ensureSessionMetadata(r)
 		s.sessions[sessionKey(r.Provider, r.ChatID)] = r
 	}
 }
@@ -260,7 +288,18 @@ func (s *SessionStore) loadSessions() {
 func (s *SessionStore) persistSessions() error {
 	s.mu.Lock()
 	records := make([]*SessionRecord, 0, len(s.sessions))
-	for _, r := range s.sessions {
+	for key, r := range s.sessions {
+		if r == nil {
+			delete(s.sessions, key)
+			s.dirty = true
+			continue
+		}
+		if s.sessionExpiredLocked(r) {
+			delete(s.sessions, key)
+			s.dirty = true
+			continue
+		}
+		ensureSessionMetadata(r)
 		cp := *r
 		records = append(records, &cp)
 	}
@@ -281,4 +320,53 @@ func (s *SessionStore) persistSessions() error {
 		return err
 	}
 	return os.Rename(tmp, s.persistencePath)
+}
+
+// ValidateSession enforces provider+chat scoping and optional token matching.
+// When sessionToken is empty, only pairing/session existence is validated.
+func (s *SessionStore) ValidateSession(provider, chatID, sessionToken string) *apiErr {
+	if s == nil {
+		return &apiErr{code: "E_INTERNAL", msg: "session store is not initialized"}
+	}
+	session := s.GetSession(provider, chatID)
+	if session == nil {
+		return &apiErr{code: "E_SESSION_REQUIRED", msg: "chat is not paired; run /pair <code> first"}
+	}
+	if strings.TrimSpace(sessionToken) == "" {
+		return nil
+	}
+	if session.SessionToken != strings.TrimSpace(sessionToken) {
+		return &apiErr{code: "E_SESSION_TOKEN_INVALID", msg: "session token is invalid"}
+	}
+	return nil
+}
+
+func (s *SessionStore) sessionExpiredLocked(rec *SessionRecord) bool {
+	if rec == nil {
+		return true
+	}
+	t, err := time.Parse(time.RFC3339Nano, rec.LastSeenAt)
+	if err != nil {
+		return true
+	}
+	return t.Before(s.now().Add(-s.sessionTTL))
+}
+
+func defaultSessionPairMethod(provider string) string {
+	if ChannelSupportsPairing(provider) {
+		return sessionPairMethodPair
+	}
+	return sessionPairMethodAuth
+}
+
+func ensureSessionMetadata(rec *SessionRecord) {
+	if rec == nil {
+		return
+	}
+	if strings.TrimSpace(rec.PairState) == "" {
+		rec.PairState = sessionPairStatePaired
+	}
+	if strings.TrimSpace(rec.PairMethod) == "" {
+		rec.PairMethod = defaultSessionPairMethod(rec.Provider)
+	}
 }

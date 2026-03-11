@@ -737,9 +737,8 @@ func processBaseAgentChat(
 	if trimmed == "" {
 		return GatewayResponse{RequestID: requestID, Result: "ok", Message: "empty message ignored"}
 	}
-	session := sessions.GetSession(provider, chatID)
-	if session == nil {
-		return errResp(requestID, "E_SESSION_REQUIRED", "chat is not paired; run /pair <code> first")
+	if authErr := sessions.ValidateSession(provider, chatID, ""); authErr != nil {
+		return errResp(requestID, authErr.code, authErr.msg)
 	}
 	if rl != nil {
 		key := fmt.Sprintf("%s:%s", provider, chatID)
@@ -946,26 +945,25 @@ func validateCommandAuth(input, sessionToken string, sessions *SessionStore) map
 	if cmdName == "/pair" {
 		return nil
 	}
-	session := sessions.GetSession(provider, chatID)
-	if session == nil {
+	if authErr := sessions.ValidateSession(provider, chatID, ""); authErr != nil {
 		return map[string]interface{}{
 			"requestId": requestID, "result": "error",
-			"errorCode": "E_SESSION_REQUIRED",
-			"message":   "chat is not paired; run /pair <code> first",
+			"errorCode": authErr.code,
+			"message":   authErr.msg,
 		}
 	}
 	if sessionToken == "" {
 		return map[string]interface{}{
 			"requestId": requestID, "result": "error",
-			"errorCode": "E_AUTH_REQUIRED",
-			"message":   "session token required (provide via Authorization header or sessionToken field)",
+			"errorCode": "E_SESSION_TOKEN_MISSING",
+			"message":   "session token is required for authenticated commands",
 		}
 	}
-	if session.SessionToken != sessionToken {
+	if authErr := sessions.ValidateSession(provider, chatID, sessionToken); authErr != nil {
 		return map[string]interface{}{
 			"requestId": requestID, "result": "error",
-			"errorCode": "E_AUTH_INVALID",
-			"message":   "invalid session token",
+			"errorCode": authErr.code,
+			"message":   authErr.msg,
 		}
 	}
 	return nil
