@@ -4,6 +4,10 @@ export type WizardProvider = {
   auth_mode?: string;
   env_var?: string;
   example_model?: string;
+  configured?: boolean;
+  reusable?: boolean;
+  hasSavedCredential?: boolean;
+  credentialBackend?: string;
 };
 
 export type WizardState = {

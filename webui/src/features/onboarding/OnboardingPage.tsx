@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { apiGet, apiPost } from '../../lib/api';
+import { apiGet, apiPost, type ChannelStatus, type ChannelStatusPayload, type ProviderAuthStatusPayload } from '../../lib/api';
 import {
   agentDisplayName,
   ensureWizardStateForRoute,
-  getWizardState,
   patchWizardState,
   resetWizardState,
   type WizardProvider,
@@ -12,8 +11,10 @@ import {
 
 type Step = 'welcome' | 'setup' | 'agents' | 'provider' | 'config' | 'install' | 'complete';
 
-function flattenProviderCatalog(payload: any): WizardProvider[] {
+function flattenProviderCatalog(payload: any, authStatusPayload: ProviderAuthStatusPayload | null): WizardProvider[] {
   const categories = payload && payload.by_category && typeof payload.by_category === 'object' ? payload.by_category : {};
+  const authStatuses = Array.isArray(authStatusPayload?.providers) ? authStatusPayload.providers : [];
+  const authStatusByID = new Map(authStatuses.map((provider) => [String(provider.id || '').trim().toLowerCase(), provider] as const));
   const seen = new Set<string>();
   const providers: WizardProvider[] = [];
   Object.keys(categories).forEach((key) => {
@@ -22,7 +23,14 @@ function flattenProviderCatalog(payload: any): WizardProvider[] {
       const id = String(provider?.id || '').trim().toLowerCase();
       if (!id || seen.has(id)) return;
       seen.add(id);
-      providers.push(provider);
+      const authStatus = authStatusByID.get(id);
+      providers.push({
+        ...provider,
+        configured: authStatus?.configured,
+        reusable: authStatus?.reusable,
+        hasSavedCredential: authStatus?.hasSavedCredential,
+        credentialBackend: authStatus?.credentialBackend,
+      });
     });
   });
   return providers.sort((left, right) => String(left?.name || left?.id || '').localeCompare(String(right?.name || right?.id || '')));
@@ -58,11 +66,17 @@ export function OnboardingPage({ step, addTargetAgent }: { step: Step; addTarget
   const [agentsMsg, setAgentsMsg] = useState('Loading agents...');
   const [setupMsg, setSetupMsg] = useState('');
   const [pairMsg, setPairMsg] = useState('');
+  const [channelOptions, setChannelOptions] = useState<ChannelStatus[]>([]);
   const [providers, setProviders] = useState<WizardProvider[]>([]);
   const [providerMsg, setProviderMsg] = useState('');
   const [providerLoading, setProviderLoading] = useState(true);
   const [carrierDefaultProvider, setCarrierDefaultProvider] = useState<any>(null);
   const [installMsg, setInstallMsg] = useState('');
+
+  const selectedChannelStatus = useMemo(
+    () => channelOptions.find((candidate) => String(candidate.id || '').trim().toLowerCase() === String(channel || '').trim().toLowerCase()) || null,
+    [channel, channelOptions],
+  );
 
   useEffect(() => {
     setSelectedAgent(baseState.selectedAgent);
@@ -124,27 +138,58 @@ export function OnboardingPage({ step, addTargetAgent }: { step: Step; addTarget
   }, [step]);
 
   useEffect(() => {
-    if (step !== 'setup' || !baseState.addMode || String(channel).trim().toLowerCase() !== 'telegram') return;
-    void apiGet<any>('/api/v1/pairing/sessions?provider=telegram')
+    if (step !== 'setup') return;
+    let cancelled = false;
+    void apiGet<ChannelStatusPayload>('/api/v1/channels')
+      .then((payload) => {
+        if (cancelled) return;
+        const nextChannels = Array.isArray(payload?.channels)
+          ? payload.channels
+            .filter((candidate) => candidate?.supportsProviderSetup && candidate?.id !== 'webui')
+            .sort((left, right) => String(left?.displayName || left?.id || '').localeCompare(String(right?.displayName || right?.id || '')))
+          : [];
+        setChannelOptions(nextChannels);
+        setChannel((current) => {
+          const currentID = String(current || '').trim().toLowerCase();
+          if (currentID && nextChannels.some((candidate) => String(candidate.id || '').trim().toLowerCase() === currentID)) return current;
+          return String(nextChannels[0]?.id || '');
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setChannelOptions([]);
+        setSetupMsg(`Error loading channels: ${error.message}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [step]);
+
+  useEffect(() => {
+    if (step !== 'setup' || !baseState.addMode || !selectedChannelStatus?.supportsPairing || !String(channel).trim()) return;
+    void apiGet<any>(`/api/v1/pairing/sessions?provider=${encodeURIComponent(channel)}`)
       .then((payload) => {
         const sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
-        const valid = sessions.filter((session) => session?.chatId && /^[0-9]+$/.test(String(session.chatId).trim()));
+        const valid = sessions.filter((session) => String(session?.chatId || '').trim());
         if (valid.length === 1 && !channelChatId) {
           const chatId = String(valid[0].chatId).trim();
           setChannelChatId(chatId);
-          setPairMsg(`Auto-selected Carrier paired Telegram user: ${chatId}`);
+          setPairMsg(`Auto-selected Carrier paired user: ${chatId}`);
         }
       })
       .catch(() => {});
-  }, [baseState.addMode, channel, channelChatId, step]);
+  }, [baseState.addMode, channel, channelChatId, selectedChannelStatus?.supportsPairing, step]);
 
   useEffect(() => {
     if (step !== 'provider') return;
     setProviderLoading(true);
     setProviderMsg('');
-    void apiGet<any>('/api/v1/providers')
-      .then((payload) => {
-        const flattened = flattenProviderCatalog(payload);
+    void Promise.all([
+      apiGet<any>('/api/v1/providers'),
+      apiGet<ProviderAuthStatusPayload>('/api/v1/auth/providers'),
+    ])
+      .then(([payload, authStatusPayload]) => {
+        const flattened = flattenProviderCatalog(payload, authStatusPayload);
         const defaultProvider = payload?.carrier_default_provider || null;
         setProviders(flattened);
         setCarrierDefaultProvider(defaultProvider);
@@ -162,7 +207,13 @@ export function OnboardingPage({ step, addTargetAgent }: { step: Step; addTarget
   }, [baseState.addMode, step]);
 
   const addMode = baseState.addMode;
-  const providerNextEnabled = !!selectedProvider && (selectedProvider.auth_mode !== 'api_key' || !!providerApiKey.trim() || !!carrierDefaultProvider?.reusable);
+  const channelRequiresBotToken = selectedChannelStatus?.requiresBotToken ?? true;
+  const channelRequiresWebhookSecret = !!selectedChannelStatus?.requiresWebhookSecret;
+  const channelRequiresPairing = addMode && !!selectedChannelStatus?.supportsPairing;
+  const selectedProviderReusable = !!selectedProvider?.reusable;
+  const providerNextEnabled =
+    !!selectedProvider &&
+    (selectedProvider.auth_mode !== 'api_key' || !!providerApiKey.trim() || selectedProviderReusable || !!carrierDefaultProvider?.reusable);
 
   if (step === 'welcome') {
     return (
@@ -193,49 +244,73 @@ export function OnboardingPage({ step, addTargetAgent }: { step: Step; addTarget
           <label htmlFor="provider" id="setup-provider-label">{addMode ? 'Channel' : 'Chat Channel'}</label>
           <select id="provider" value={channel} onChange={(event) => setChannel(event.target.value)}>
             <option value="">Select…</option>
-            <option value="telegram">Telegram</option>
-            <option value="discord" disabled={addMode}>Discord</option>
-            <option value="feishu" disabled={addMode}>Feishu</option>
+            {channelOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.displayName}
+              </option>
+            ))}
           </select>
+          {selectedChannelStatus ? (
+            <p id="setup-channel-summary" className="text-dim">
+              {[
+                selectedChannelStatus.supportsPairing ? 'Requires Carrier pairing' : 'No pairing required',
+                selectedChannelStatus.requiresWebhookSecret ? 'Webhook secret required' : 'Webhook secret optional',
+                selectedChannelStatus.configured ? 'Already configured in gateway' : '',
+              ].filter(Boolean).join(' · ')}
+            </p>
+          ) : null}
           <label htmlFor="provider-token" id="setup-token-label">{addMode ? 'Channel Bot Token' : 'Channel Bot Token'}</label>
           <input id="provider-token" type="password" placeholder="Bot token" value={channelToken} onChange={(event) => setChannelToken(event.target.value)} />
-          <label htmlFor="webhook-secret">Webhook Secret <span className="text-dim">(optional)</span></label>
+          <label htmlFor="webhook-secret">
+            Webhook Secret <span className="text-dim">({channelRequiresWebhookSecret ? 'required' : 'optional'})</span>
+          </label>
           <input id="webhook-secret" type="text" placeholder="Webhook verification secret" value={webhookSecret} onChange={(event) => setWebhookSecret(event.target.value)} />
-          <div id="setup-telegram-pair" className={addMode ? '' : 'hidden'}>
-            <p className="text-dim" id="setup-pair-instruction">
-              {channelChatId ? `Paired chat id: ${channelChatId}` : 'Click Start Pairing to get a code, then send it in your Telegram bot chat.'}
-            </p>
-            <div className="btn-row">
-              <button
-                id="setup-pair-use-carrier"
-                type="button"
-                className={`btn-sm${channelChatId ? '' : ' hidden'}`}
-                onClick={() => {
-                  if (channelChatId) setPairMsg(`Using Carrier paired Telegram user: ${channelChatId}`);
-                }}
-              >
-                Use Carrier paired user (Recommended)
-              </button>
-              <button id="setup-pair-start" type="button" className="btn-secondary btn-sm">Start Pairing</button>
+          {channelRequiresPairing ? (
+            <div id="setup-telegram-pair">
+              <p className="text-dim" id="setup-pair-instruction">
+                {channelChatId ? `Paired chat id: ${channelChatId}` : 'Click Start Pairing to get a code, then send it in your bot chat.'}
+              </p>
+              <div className="btn-row">
+                <button
+                  id="setup-pair-use-carrier"
+                  type="button"
+                  className={`btn-sm${channelChatId ? '' : ' hidden'}`}
+                  onClick={() => {
+                    if (channelChatId) setPairMsg(`Using Carrier paired ${selectedChannelStatus?.displayName || 'channel'} user: ${channelChatId}`);
+                  }}
+                >
+                  Use Carrier paired user (Recommended)
+                </button>
+                <button id="setup-pair-start" type="button" className="btn-secondary btn-sm">Start Pairing</button>
+              </div>
+              <div id="setup-pair-msg">{pairMsg}</div>
             </div>
-            <div id="setup-pair-msg">{pairMsg}</div>
-          </div>
+          ) : null}
           <div className="btn-row">
             <button
               id="setup-btn"
               type="button"
-              disabled={!channel.trim() || !channelToken.trim() || (addMode && channel === 'telegram' && !channelChatId)}
+              disabled={
+                !channel.trim() ||
+                (channelRequiresBotToken && !channelToken.trim()) ||
+                (channelRequiresWebhookSecret && !webhookSecret.trim()) ||
+                (channelRequiresPairing && !channelChatId)
+              }
               onClick={() => {
                 if (!channel.trim()) {
                   setSetupMsg(addMode ? 'Please choose a channel.' : 'Please choose a chat channel.');
                   return;
                 }
-                if (!channelToken.trim()) {
+                if (channelRequiresBotToken && !channelToken.trim()) {
                   setSetupMsg('Please enter channel bot token.');
                   return;
                 }
-                if (addMode && channel === 'telegram' && !channelChatId) {
-                  setSetupMsg('Please complete Telegram pairing first to capture your chat id.');
+                if (channelRequiresWebhookSecret && !webhookSecret.trim()) {
+                  setSetupMsg(`Please enter ${selectedChannelStatus?.displayName || 'channel'} webhook secret.`);
+                  return;
+                }
+                if (channelRequiresPairing && !channelChatId) {
+                  setSetupMsg(`Please complete ${selectedChannelStatus?.displayName || 'channel'} pairing first to capture your chat id.`);
                   return;
                 }
                 setSetupMsg('');
@@ -320,6 +395,8 @@ export function OnboardingPage({ step, addTargetAgent }: { step: Step; addTarget
                       onClick={() => setSelectedProvider(provider)}
                     >
                       <strong>{provider.name}</strong> <code>{provider.id}</code>
+                      {provider.reusable ? <><br /><span className="text-dim">Reusable saved credential</span></> : null}
+                      {!provider.reusable && provider.configured ? <><br /><span className="text-dim">Configured in environment</span></> : null}
                       {provider.example_model ? <br /> : null}
                       {provider.example_model ? <span className="text-dim">e.g. {provider.example_model}</span> : null}
                     </li>
@@ -331,9 +408,13 @@ export function OnboardingPage({ step, addTargetAgent }: { step: Step; addTarget
           <div id="provider-auth-section" className={`provider-auth-section${selectedProvider ? '' : ' hidden'}`} style={{ marginTop: '1rem' }}>
             <div id="provider-auth-label" className="text-dim">
               {selectedProvider?.auth_mode === 'api_key'
-                ? `Paste API key for ${selectedProvider?.name} (${selectedProvider?.env_var || ''}):`
+                ? selectedProviderReusable
+                  ? `Carrier already has a reusable credential for ${selectedProvider?.name}. Paste a new API key only if you want to override it.`
+                  : `Paste API key for ${selectedProvider?.name} (${selectedProvider?.env_var || ''}):`
                 : selectedProvider
-                  ? `${selectedProvider.name} requires external authentication.`
+                  ? selectedProvider.reusable
+                    ? `${selectedProvider.name} can reuse an existing Carrier credential.`
+                    : `${selectedProvider.name} requires external authentication.`
                   : ''}
             </div>
             <input

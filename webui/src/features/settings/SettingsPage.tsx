@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useFeatures } from '../../app/useFeatures';
-import { apiGet } from '../../lib/api';
+import { apiGet, type ChannelStatusPayload, type ProviderAuthStatusPayload } from '../../lib/api';
 import { formatPercent, toFiniteNumber } from '../../lib/format';
 import { useSession } from '../../app/session';
 
@@ -8,6 +8,8 @@ function buildSettingsSummary(
   transportPayload: any,
   remoteMetricsPayload: any,
   remoteControlPlaneEnabled: boolean,
+  providerAuthStatusPayload: ProviderAuthStatusPayload | null,
+  channelStatusPayload: ChannelStatusPayload | null,
 ) {
   const lines = ['Daemon mode - provider settings managed via config.json.'];
   const transport = transportPayload?.transport && typeof transportPayload.transport === 'object'
@@ -22,6 +24,26 @@ function buildSettingsSummary(
   } else {
     lines.push('Telegram transport status unavailable.');
   }
+
+  const configuredChannels = Array.isArray(channelStatusPayload?.channels)
+    ? channelStatusPayload.channels
+      .filter((channel) => channel?.configured)
+      .map((channel) => String(channel.displayName || channel.id || '').trim())
+      .filter(Boolean)
+    : [];
+  const providerStatuses = Array.isArray(providerAuthStatusPayload?.providers) ? providerAuthStatusPayload.providers : [];
+  const configuredProviders = providerStatuses
+    .filter((provider) => provider?.configured)
+    .map((provider) => String(provider.name || provider.id || '').trim())
+    .filter(Boolean);
+  const reusableProviders = providerStatuses
+    .filter((provider) => provider?.reusable)
+    .map((provider) => String(provider.name || provider.id || '').trim())
+    .filter(Boolean);
+
+  lines.push(`Configured channels: ${configuredChannels.length ? configuredChannels.join(', ') : 'none'}.`);
+  lines.push(`Configured providers: ${configuredProviders.length ? configuredProviders.join(', ') : 'none'}.`);
+  lines.push(`Reusable providers: ${reusableProviders.length ? reusableProviders.join(', ') : 'none'}.`);
 
   if (!remoteControlPlaneEnabled) {
     lines.push('Remote control plane disabled by feature flag.');
@@ -71,10 +93,24 @@ export function SettingsPage() {
     retry: false,
   });
 
+  const providerAuthStatusQuery = useQuery({
+    queryKey: ['settings-provider-auth-status'],
+    queryFn: () => apiGet<ProviderAuthStatusPayload>('/api/v1/auth/providers'),
+    retry: false,
+  });
+
+  const channelStatusQuery = useQuery({
+    queryKey: ['settings-channel-status'],
+    queryFn: () => apiGet<ChannelStatusPayload>('/api/v1/channels'),
+    retry: false,
+  });
+
   const summary = buildSettingsSummary(
     transportQuery.isError ? null : transportQuery.data,
     remoteMetricsQuery.isError ? null : remoteMetricsQuery.data,
     featureFlags.remoteControlPlaneEnabled,
+    providerAuthStatusQuery.isError ? null : providerAuthStatusQuery.data,
+    channelStatusQuery.isError ? null : channelStatusQuery.data,
   );
 
   return (
