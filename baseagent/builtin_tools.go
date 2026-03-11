@@ -26,6 +26,10 @@ func newBuiltinToolRegistry(rt *Runtime, providers *ProviderManager, sessions *S
 	mustRegisterTool(registry, ToolSpec{
 		Name:        "list_agents",
 		Description: "List currently registered agents and health/runtime status.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
 		Match: func(input string) (ToolInvocation, bool) {
 			lower := strings.ToLower(strings.TrimSpace(input))
 			if lower == "/agents" || lower == "/list agents" || lower == "/agents list" {
@@ -50,6 +54,19 @@ func newBuiltinToolRegistry(rt *Runtime, providers *ProviderManager, sessions *S
 	mustRegisterTool(registry, ToolSpec{
 		Name:        "agent_action",
 		Description: "Run an agent lifecycle action (start/stop/status/logs/upgrade/diagnose/uninstall).",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action": map[string]any{
+					"type": "string",
+					"enum": []string{"start", "stop", "status", "logs", "upgrade", "diagnose", "uninstall"},
+				},
+				"agent_id": map[string]any{
+					"type": "string",
+				},
+			},
+			"required": []string{"action", "agent_id"},
+		},
 		Match: func(input string) (ToolInvocation, bool) {
 			return matchAgentActionInvocation(input)
 		},
@@ -76,6 +93,10 @@ func newBuiltinToolRegistry(rt *Runtime, providers *ProviderManager, sessions *S
 	mustRegisterTool(registry, ToolSpec{
 		Name:        "help",
 		Description: "Show base-agent usage commands.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
 		Match: func(input string) (ToolInvocation, bool) {
 			lower := strings.ToLower(strings.TrimSpace(input))
 			switch lower {
@@ -92,6 +113,10 @@ func newBuiltinToolRegistry(rt *Runtime, providers *ProviderManager, sessions *S
 	mustRegisterTool(registry, ToolSpec{
 		Name:        "list_tools",
 		Description: "List internal tool capabilities available to base-agent.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
 		Match: func(input string) (ToolInvocation, bool) {
 			lower := strings.ToLower(strings.TrimSpace(input))
 			if lower == "/tools" || lower == "list tools" || lower == "show tools" {
@@ -100,8 +125,12 @@ func newBuiltinToolRegistry(rt *Runtime, providers *ProviderManager, sessions *S
 			return ToolInvocation{}, false
 		},
 		Run: func(_ context.Context, _ ToolInvocation) (ChatResponse, error) {
+			summary := registry.RenderToolSummary()
+			if rt != nil {
+				summary = rt.renderToolSummary()
+			}
 			return ChatResponse{
-				Message: registry.RenderToolSummary(),
+				Message: summary,
 				Action:  "tools",
 			}, nil
 		},
@@ -110,6 +139,10 @@ func newBuiltinToolRegistry(rt *Runtime, providers *ProviderManager, sessions *S
 	mustRegisterTool(registry, ToolSpec{
 		Name:        "list_providers",
 		Description: "List configured provider backends and current active provider.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
 		Match: func(input string) (ToolInvocation, bool) {
 			lower := strings.ToLower(strings.TrimSpace(input))
 			if lower == "/providers" || lower == "list providers" || lower == "show providers" {
@@ -143,6 +176,10 @@ func newBuiltinToolRegistry(rt *Runtime, providers *ProviderManager, sessions *S
 	mustRegisterTool(registry, ToolSpec{
 		Name:        "list_sessions",
 		Description: "Show recent chat sessions and compaction state.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
 		Match: func(input string) (ToolInvocation, bool) {
 			lower := strings.ToLower(strings.TrimSpace(input))
 			if lower == "/sessions" || lower == "list sessions" || lower == "show sessions" {
@@ -176,6 +213,10 @@ func newBuiltinToolRegistry(rt *Runtime, providers *ProviderManager, sessions *S
 	mustRegisterTool(registry, ToolSpec{
 		Name:        "show_boundaries",
 		Description: "Explain base-agent capability boundaries, sources, and design rationale.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
 		Match: func(input string) (ToolInvocation, bool) {
 			lower := strings.ToLower(strings.TrimSpace(input))
 			if lower == "/boundaries" || lower == "show boundaries" || lower == "list boundaries" || lower == "what are your boundaries" {

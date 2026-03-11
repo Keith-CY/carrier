@@ -116,6 +116,17 @@ func activeRepairPolicy() RepairPolicy {
 	return ActiveBoundarySpec().RepairPolicy
 }
 
+func isStructuredExecCommandDenied(command string) bool {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return false
+	}
+	if usesSudo(command) {
+		return true
+	}
+	return isBlockedRepairCommand(command, activeRepairPolicy().BlockedSubstrings)
+}
+
 func usesSudo(command string) bool {
 	parts := strings.Fields(command)
 	if len(parts) > 0 && (parts[0] == "sudo" || filepath.Base(parts[0]) == "sudo") {

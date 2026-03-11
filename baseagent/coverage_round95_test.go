@@ -2,6 +2,8 @@ package baseagent
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -135,3 +137,61 @@ func TestLLMProviderNameAndHistoryRenderingBranches(t *testing.T) {
 	}
 }
 
+func TestLLMProviderAdapterIncludesStructuredToolSchemasInPrompt(t *testing.T) {
+	var gotUserPrompt string
+
+	server := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		var payload struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("unmarshal request body: %v", err)
+		}
+		if len(payload.Messages) < 2 {
+			t.Fatalf("expected at least 2 messages, got %+v", payload.Messages)
+		}
+		gotUserPrompt = payload.Messages[1].Content
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	writeDefaultModelConfig(t, "openai", "openai/gpt-5.3", "OPENAI_API_KEY")
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+	t.Setenv("CARRIER_OPENAI_BASE_URL", server.URL)
+
+	provider := NewLLMProviderAdapter("openai", 0)
+	_, err := provider.Reply(context.Background(), ProviderRequest{
+		SystemPrompt: "system",
+		UserMessage:  "hello",
+		StructuredTools: []StructuredToolDescriptor{
+			{
+				Name:        "agent_action",
+				Description: "Run an agent lifecycle action.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"agent_id": map[string]any{"type": "string"},
+						"action":   map[string]any{"type": "string"},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("provider reply failed: %v", err)
+	}
+	if !strings.Contains(gotUserPrompt, "Available built-in tools") {
+		t.Fatalf("expected built-in tools section, got %q", gotUserPrompt)
+	}
+	if !strings.Contains(gotUserPrompt, "agent_action") || !strings.Contains(gotUserPrompt, `parameters={"properties":{"action":{"type":"string"},"agent_id":{"type":"string"}},"type":"object"}`) {
+		t.Fatalf("expected structured tool schema in prompt, got %q", gotUserPrompt)
+	}
+}

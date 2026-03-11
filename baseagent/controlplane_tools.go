@@ -25,6 +25,7 @@ type ToolRunner func(ctx context.Context, call ToolInvocation) (ChatResponse, er
 type ToolSpec struct {
 	Name        string
 	Description string
+	Parameters  map[string]any
 	Match       ToolMatcher
 	Run         ToolRunner
 }
@@ -59,6 +60,7 @@ func (r *ToolRegistry) RegisterTool(spec ToolSpec) error {
 	}
 
 	spec.Name = name
+	spec.Parameters = cloneToolSchema(spec.Parameters)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, exists := r.byName[name]; !exists {
@@ -133,6 +135,24 @@ func (r *ToolRegistry) ListToolDescriptors() []ToolDescriptor {
 	return out
 }
 
+func (r *ToolRegistry) ListStructuredToolDescriptors() []StructuredToolDescriptor {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]StructuredToolDescriptor, 0, len(r.byName))
+	for _, name := range r.order {
+		spec := r.byName[name]
+		out = append(out, StructuredToolDescriptor{
+			Name:        spec.Name,
+			Description: spec.Description,
+			Parameters:  cloneToolSchema(spec.Parameters),
+		})
+	}
+	return out
+}
+
 func (r *ToolRegistry) ListToolNames() []string {
 	if r == nil {
 		return nil
@@ -144,19 +164,13 @@ func (r *ToolRegistry) ListToolNames() []string {
 }
 
 func (r *ToolRegistry) RenderToolSummary() string {
-	descriptors := r.ListToolDescriptors()
+	descriptors := r.ListStructuredToolDescriptors()
 	if len(descriptors) == 0 {
 		return "No tools are registered."
 	}
 	lines := make([]string, 0, len(descriptors)+1)
 	lines = append(lines, fmt.Sprintf("Available tools (%d):", len(descriptors)))
-	for _, d := range descriptors {
-		if strings.TrimSpace(d.Description) == "" {
-			lines = append(lines, "- "+d.Name)
-			continue
-		}
-		lines = append(lines, fmt.Sprintf("- %s: %s", d.Name, d.Description))
-	}
+	lines = append(lines, renderStructuredToolLines(descriptors)...)
 	return strings.Join(lines, "\n")
 }
 
@@ -164,4 +178,46 @@ func (r *ToolRegistry) SortedToolNames() []string {
 	names := r.ListToolNames()
 	sort.Strings(names)
 	return names
+}
+
+func cloneToolSchema(schema map[string]any) map[string]any {
+	if len(schema) == 0 {
+		return nil
+	}
+	cloned, ok := cloneToolSchemaValue(schema).(map[string]any)
+	if !ok {
+		return nil
+	}
+	return cloned
+}
+
+func cloneToolSchemaValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for k, v := range typed {
+			out[k] = cloneToolSchemaValue(v)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i := range typed {
+			out[i] = cloneToolSchemaValue(typed[i])
+		}
+		return out
+	case []string:
+		out := make([]string, len(typed))
+		copy(out, typed)
+		return out
+	case []int:
+		out := make([]int, len(typed))
+		copy(out, typed)
+		return out
+	case []bool:
+		out := make([]bool, len(typed))
+		copy(out, typed)
+		return out
+	default:
+		return typed
+	}
 }

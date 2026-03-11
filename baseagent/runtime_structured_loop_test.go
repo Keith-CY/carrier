@@ -1,0 +1,881 @@
+package baseagent
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+type scriptedToolAwareProvider struct {
+	name       string
+	replies    []StructuredToolReply
+	requests   []StructuredToolRequest
+	replyCalls int
+	textCalls  int
+}
+
+func (p *scriptedToolAwareProvider) Name() string { return p.name }
+
+func (p *scriptedToolAwareProvider) Reply(_ context.Context, _ ProviderRequest) (string, error) {
+	p.textCalls++
+	return "", nil
+}
+
+func (p *scriptedToolAwareProvider) ReplyWithTools(_ context.Context, req StructuredToolRequest) (StructuredToolReply, error) {
+	p.requests = append(p.requests, req)
+	p.replyCalls++
+	reply := p.replies[0]
+	p.replies = p.replies[1:]
+	return reply, nil
+}
+
+type scriptedTextProvider struct {
+	name     string
+	replies  []string
+	requests []ProviderRequest
+}
+
+func (p *scriptedTextProvider) Name() string { return p.name }
+
+func (p *scriptedTextProvider) Reply(_ context.Context, req ProviderRequest) (string, error) {
+	p.requests = append(p.requests, req)
+	reply := p.replies[0]
+	p.replies = p.replies[1:]
+	return reply, nil
+}
+
+func TestRuntimeChatUsesToolAwareProviderLoop(t *testing.T) {
+	root := t.TempDir()
+	provider := &scriptedToolAwareProvider{
+		name: "scripted",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "write_file",
+						Arguments: map[string]any{
+							"path":    "generated.txt",
+							"content": "hello from structured loop",
+						},
+					},
+				},
+			},
+			{
+				Content: "created generated.txt",
+			},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, nil, WithWorkspaceRoot(root), WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "structured",
+		Message:  "create generated.txt",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "created generated.txt" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "generated.txt"))
+	if err != nil {
+		t.Fatalf("read generated file: %v", err)
+	}
+	if string(raw) != "hello from structured loop" {
+		t.Fatalf("unexpected file content: %q", string(raw))
+	}
+
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected 2 provider requests, got %d", len(provider.requests))
+	}
+	if len(provider.requests[1].Messages) == 0 {
+		t.Fatalf("expected tool result in second provider request")
+	}
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.Role != "tool" || last.ToolCallID != "call-1" {
+		t.Fatalf("unexpected final tool message: %+v", last)
+	}
+}
+
+func TestRuntimeChatUsesTextProviderStructuredFallback(t *testing.T) {
+	root := t.TempDir()
+	provider := &scriptedTextProvider{
+		name: "scripted-text",
+		replies: []string{
+			`{"tool_calls":[{"name":"write_file","arguments":{"path":"fallback.txt","content":"created through text provider"}}]}`,
+			`{"content":"created fallback.txt","tool_calls":[]}`,
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, nil, WithWorkspaceRoot(root), WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "text-fallback",
+		Message:  "create fallback.txt",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "created fallback.txt" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "fallback.txt"))
+	if err != nil {
+		t.Fatalf("read fallback file: %v", err)
+	}
+	if string(raw) != "created through text provider" {
+		t.Fatalf("unexpected file content: %q", string(raw))
+	}
+
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected 2 provider requests, got %d", len(provider.requests))
+	}
+	if !strings.Contains(provider.requests[0].UserMessage, `"tool_calls"`) {
+		t.Fatalf("expected structured prompt in text-provider fallback, got %q", provider.requests[0].UserMessage)
+	}
+}
+
+func TestRuntimeChatStructuredLoopRecoversFromToolError(t *testing.T) {
+	root := t.TempDir()
+	provider := &scriptedToolAwareProvider{
+		name: "scripted-recover",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "read_file",
+						Arguments: map[string]any{
+							"path": "missing.txt",
+						},
+					},
+				},
+			},
+			{
+				Content: "missing file handled",
+			},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, nil, WithWorkspaceRoot(root), WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "recover",
+		Message:  "read missing.txt",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "missing file handled" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.Role != "tool" || !strings.Contains(strings.ToLower(last.Content), "read file") {
+		t.Fatalf("expected tool error to be fed back into provider, got %+v", last)
+	}
+}
+
+func TestRuntimeChatStructuredLoopInjectsSessionSummary(t *testing.T) {
+	root := t.TempDir()
+	provider := &scriptedToolAwareProvider{
+		name: "summary-aware",
+		replies: []StructuredToolReply{
+			{Content: "summary seen"},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, nil, WithWorkspaceRoot(root), WithMaxToolIterations(2))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	rt.sessions.SetSummary("cli:summary", "important prior context")
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "summary",
+		Message:  "continue",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "summary seen" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(provider.requests) != 1 || len(provider.requests[0].Messages) == 0 {
+		t.Fatalf("expected initial structured request, got %+v", provider.requests)
+	}
+	first := provider.requests[0].Messages[0]
+	if first.Role != "system" || !strings.Contains(first.Content, "important prior context") {
+		t.Fatalf("expected session summary injection, got %+v", first)
+	}
+}
+
+func TestRuntimeChatStructuredLoopHandlesMultipleToolCalls(t *testing.T) {
+	root := t.TempDir()
+	provider := &scriptedToolAwareProvider{
+		name: "multi-call",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "write_file",
+						Arguments: map[string]any{
+							"path":    "one.txt",
+							"content": "one",
+						},
+					},
+					{
+						ID:   "call-2",
+						Name: "write_file",
+						Arguments: map[string]any{
+							"path":    "two.txt",
+							"content": "two",
+						},
+					},
+				},
+			},
+			{Content: "both files created"},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, nil, WithWorkspaceRoot(root), WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "multi",
+		Message:  "create two files",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "both files created" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	for _, file := range []string{"one.txt", "two.txt"} {
+		if _, err := os.Stat(filepath.Join(root, file)); err != nil {
+			t.Fatalf("expected %s to be created: %v", file, err)
+		}
+	}
+	secondReq := provider.requests[1]
+	if got := len(secondReq.Messages); got < 4 {
+		t.Fatalf("expected assistant plus two tool messages in follow-up request, got %+v", secondReq.Messages)
+	}
+	lastTwo := secondReq.Messages[len(secondReq.Messages)-2:]
+	if lastTwo[0].Role != "tool" || lastTwo[0].ToolCallID != "call-1" {
+		t.Fatalf("unexpected first tool callback message: %+v", lastTwo[0])
+	}
+	if lastTwo[1].Role != "tool" || lastTwo[1].ToolCallID != "call-2" {
+		t.Fatalf("unexpected second tool callback message: %+v", lastTwo[1])
+	}
+}
+
+func TestRuntimeChatStructuredLoopIncludesBuiltInAndWorkspaceToolDescriptors(t *testing.T) {
+	root := t.TempDir()
+	provider := &scriptedToolAwareProvider{
+		name: "descriptor-aware",
+		replies: []StructuredToolReply{
+			{Content: "done"},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, nil, WithWorkspaceRoot(root), WithMaxToolIterations(2))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "descriptor-mix",
+		Message:  "show me the available actions",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "done" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("expected 1 structured request, got %d", len(provider.requests))
+	}
+
+	seen := map[string]StructuredToolDescriptor{}
+	for _, descriptor := range provider.requests[0].Tools {
+		seen[descriptor.Name] = descriptor
+	}
+	if _, ok := seen["agent_status"]; !ok {
+		t.Fatalf("expected split built-in tool descriptor in structured request, got %+v", provider.requests[0].Tools)
+	}
+	if _, ok := seen["agent_action"]; ok {
+		t.Fatalf("did not expect generic agent_action descriptor in structured request, got %+v", provider.requests[0].Tools)
+	}
+	if _, ok := seen["write_file"]; !ok {
+		t.Fatalf("expected workspace tool descriptor in structured request, got %+v", provider.requests[0].Tools)
+	}
+	if _, ok := seen["exec"]; ok {
+		t.Fatalf("did not expect high-risk exec descriptor in structured request, got %+v", provider.requests[0].Tools)
+	}
+	if seen["agent_status"].Parameters == nil {
+		t.Fatalf("expected built-in descriptor schema in structured request, got %+v", seen["agent_status"])
+	}
+}
+
+func TestRuntimeChatStructuredLoopExecutesBuiltInToolCalls(t *testing.T) {
+	root := t.TempDir()
+	provider := &scriptedToolAwareProvider{
+		name: "builtin-tool-aware",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "agent_status",
+						Arguments: map[string]any{
+							"agent_id": "openclaw",
+						},
+					},
+				},
+			},
+			{
+				Content: "got agent status",
+			},
+		},
+	}
+
+	svc := &runtimeServiceFake{
+		agents: []AgentState{
+			{ID: "openclaw", Install: "installed", Runtime: "running", Health: "healthy"},
+		},
+		statuses: map[string]AgentState{
+			"openclaw": {ID: "openclaw", Install: "installed", Runtime: "running", Health: "healthy"},
+		},
+	}
+	rt := NewRuntime(svc, nil, WithWorkspaceRoot(root), WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "builtin-tool",
+		Message:  "check agent status",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "got agent status" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected tool follow-up request, got %d", len(provider.requests))
+	}
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.Role != "tool" || last.ToolCallID != "call-1" {
+		t.Fatalf("unexpected tool callback message: %+v", last)
+	}
+	if !strings.Contains(last.Content, "openclaw") || !strings.Contains(last.Content, "runtime=running") {
+		t.Fatalf("expected built-in tool result to include agent status, got %+v", last)
+	}
+}
+
+func TestRuntimeChatStructuredLoopExecutesBuiltInToolCallsWithoutWorkspaceRoot(t *testing.T) {
+	provider := &scriptedToolAwareProvider{
+		name: "builtin-only",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:        "call-1",
+						Name:      "list_agents",
+						Arguments: map[string]any{},
+					},
+				},
+			},
+			{
+				Content: "listed agents without workspace",
+			},
+		},
+	}
+
+	svc := &runtimeServiceFake{
+		agents: []AgentState{
+			{ID: "openclaw", Install: "installed", Runtime: "running", Health: "healthy"},
+		},
+	}
+	rt := NewRuntime(svc, nil, WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "builtin-noworkspace",
+		Message:  "check agent inventory",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "listed agents without workspace" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected structured loop follow-up request, got %d", len(provider.requests))
+	}
+
+	seen := map[string]StructuredToolDescriptor{}
+	for _, descriptor := range provider.requests[0].Tools {
+		seen[descriptor.Name] = descriptor
+	}
+	if _, ok := seen["list_agents"]; !ok {
+		t.Fatalf("expected built-in tool descriptor without workspace, got %+v", provider.requests[0].Tools)
+	}
+	if _, ok := seen["write_file"]; ok {
+		t.Fatalf("did not expect workspace tool descriptor without workspace root, got %+v", provider.requests[0].Tools)
+	}
+
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.Role != "tool" || last.ToolCallID != "call-1" {
+		t.Fatalf("unexpected tool callback message: %+v", last)
+	}
+	if !strings.Contains(last.Content, "openclaw") {
+		t.Fatalf("expected built-in tool result to include agent listing, got %+v", last)
+	}
+}
+
+func TestRuntimeChatStructuredLoopAsksForHighRiskBuiltInToolCalls(t *testing.T) {
+	provider := &scriptedToolAwareProvider{
+		name: "ask-high-risk-builtin",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "agent_start",
+						Arguments: map[string]any{
+							"agent_id": "openclaw",
+						},
+					},
+				},
+			},
+			{
+				Content: "high risk needs confirmation",
+			},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, nil, WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "ask-high-risk-builtin",
+		Message:  "perform maintenance planning",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "high risk needs confirmation" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected ask callback follow-up request, got %d", len(provider.requests))
+	}
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.Role != "tool" || last.ToolCallID != "call-1" {
+		t.Fatalf("unexpected tool callback message: %+v", last)
+	}
+	if last.ToolName != "agent_start" || last.ToolResultStatus != ExecutionToolResultStatusAsk {
+		t.Fatalf("expected structured ask metadata, got %+v", last)
+	}
+	if !strings.Contains(strings.ToLower(last.Content), "confirmation") {
+		t.Fatalf("expected high-risk ask message, got %+v", last)
+	}
+}
+
+func TestRuntimeChatStructuredLoopAsksForHighRiskWorkspaceExec(t *testing.T) {
+	root := t.TempDir()
+	provider := &scriptedToolAwareProvider{
+		name: "ask-high-risk-exec",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "exec",
+						Arguments: map[string]any{
+							"command": "go test ./...",
+						},
+					},
+				},
+			},
+			{
+				Content: "exec needs confirmation",
+			},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, nil, WithWorkspaceRoot(root), WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "ask-high-risk-exec",
+		Message:  "run repository diagnostics",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "exec needs confirmation" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected ask callback follow-up request, got %d", len(provider.requests))
+	}
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.Role != "tool" || last.ToolCallID != "call-1" {
+		t.Fatalf("unexpected tool callback message: %+v", last)
+	}
+	if last.ToolName != "exec" || last.ToolResultStatus != ExecutionToolResultStatusAsk {
+		t.Fatalf("expected structured ask metadata, got %+v", last)
+	}
+	if !strings.Contains(strings.ToLower(last.Content), "confirmation") {
+		t.Fatalf("expected high-risk exec ask message, got %+v", last)
+	}
+}
+
+func TestRuntimeChatStructuredLoopUsesStructuredToolPolicyOverride(t *testing.T) {
+	root := t.TempDir()
+	provider := &scriptedToolAwareProvider{
+		name: "deny-high-risk-exec",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "exec",
+						Arguments: map[string]any{
+							"command": "go test ./...",
+						},
+					},
+				},
+			},
+			{
+				Content: "exec denied by override",
+			},
+		},
+	}
+
+	policy := ActiveBoundarySpec().StructuredToolPolicy
+	policy.HighRiskDecision = string(structuredToolDecisionDeny)
+
+	rt := NewRuntime(
+		&runtimeServiceFake{},
+		nil,
+		WithWorkspaceRoot(root),
+		WithMaxToolIterations(4),
+		WithStructuredToolPolicy(policy),
+	)
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "deny-high-risk-exec",
+		Message:  "run repository diagnostics",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "exec denied by override" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected deny callback follow-up request, got %d", len(provider.requests))
+	}
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.ToolName != "exec" || last.ToolResultStatus != ExecutionToolResultStatusDeny {
+		t.Fatalf("expected deny metadata after runtime override, got %+v", last)
+	}
+}
+
+func TestRuntimeChatStructuredLoopDeniesBlockedExecCommandByArgumentPolicy(t *testing.T) {
+	root := t.TempDir()
+	provider := &scriptedToolAwareProvider{
+		name: "deny-blocked-exec",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "exec",
+						Arguments: map[string]any{
+							"command": "rm -rf /",
+						},
+					},
+				},
+			},
+			{
+				Content: "blocked exec denied",
+			},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, nil, WithWorkspaceRoot(root), WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "deny-blocked-exec",
+		Message:  "run destructive command",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "blocked exec denied" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected deny callback follow-up request, got %d", len(provider.requests))
+	}
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.ToolName != "exec" || last.ToolResultStatus != ExecutionToolResultStatusDeny {
+		t.Fatalf("expected argument-level deny metadata, got %+v", last)
+	}
+	if last.ToolPolicyRuleID != "exec.blocked_command" {
+		t.Fatalf("expected blocked command rule metadata, got %+v", last)
+	}
+}
+
+func TestRuntimeChatStructuredLoopConfirmExecutesPendingApproval(t *testing.T) {
+	provider := &scriptedToolAwareProvider{
+		name: "confirm-pending",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "agent_start",
+						Arguments: map[string]any{
+							"agent_id": "openclaw",
+						},
+					},
+				},
+			},
+			{
+				Content: "please confirm the pending start",
+			},
+			{
+				Content: "confirmed and started openclaw",
+			},
+		},
+	}
+
+	svc := &runtimeServiceFake{}
+	rt := NewRuntime(svc, nil, WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	firstResp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "confirm-pending",
+		Message:  "perform maintenance planning",
+	})
+	if err != nil {
+		t.Fatalf("first runtime chat: %v", err)
+	}
+	if firstResp.Message != "please confirm the pending start" {
+		t.Fatalf("unexpected first response: %+v", firstResp)
+	}
+	pending := rt.sessions.PendingApproval("cli:confirm-pending")
+	if pending == nil || pending.ToolName != "agent_start" {
+		t.Fatalf("expected pending approval for agent_start, got %+v", pending)
+	}
+
+	secondResp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "confirm-pending",
+		Message:  "confirm",
+	})
+	if err != nil {
+		t.Fatalf("second runtime chat: %v", err)
+	}
+	if secondResp.Message != "confirmed and started openclaw" {
+		t.Fatalf("unexpected confirmation response: %+v", secondResp)
+	}
+	if pending := rt.sessions.PendingApproval("cli:confirm-pending"); pending != nil {
+		t.Fatalf("expected pending approval to be cleared after confirm, got %+v", pending)
+	}
+	if len(svc.callLog) != 1 || svc.callLog[0] != "start:openclaw" {
+		t.Fatalf("expected confirmed tool execution, got %+v", svc.callLog)
+	}
+	if len(provider.requests) != 3 {
+		t.Fatalf("expected confirmation to resume provider loop, got %d requests", len(provider.requests))
+	}
+}
+
+func TestRuntimeChatStructuredLoopCancelClearsPendingApproval(t *testing.T) {
+	provider := &scriptedToolAwareProvider{
+		name: "cancel-pending",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "agent_start",
+						Arguments: map[string]any{
+							"agent_id": "openclaw",
+						},
+					},
+				},
+			},
+			{
+				Content: "please confirm the pending start",
+			},
+		},
+	}
+
+	svc := &runtimeServiceFake{}
+	rt := NewRuntime(svc, nil, WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	if _, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "cancel-pending",
+		Message:  "perform maintenance planning",
+	}); err != nil {
+		t.Fatalf("first runtime chat: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "cancel-pending",
+		Message:  "cancel",
+	})
+	if err != nil {
+		t.Fatalf("cancel runtime chat: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(resp.Message), "canceled pending approval") {
+		t.Fatalf("unexpected cancel response: %+v", resp)
+	}
+	if pending := rt.sessions.PendingApproval("cli:cancel-pending"); pending != nil {
+		t.Fatalf("expected pending approval to be cleared after cancel, got %+v", pending)
+	}
+	if len(svc.callLog) != 0 {
+		t.Fatalf("expected cancel to skip tool execution, got %+v", svc.callLog)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected cancel to skip provider resume, got %d requests", len(provider.requests))
+	}
+}
+
+func TestAgentLoopStructuredLoopStopsAtMaxIterations(t *testing.T) {
+	provider := &scriptedToolAwareProvider{
+		name: "infinite-tools",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{ID: "call-1", Name: "list_dir", Arguments: map[string]any{"path": "."}},
+				},
+			},
+			{
+				ToolCalls: []StructuredToolCall{
+					{ID: "call-2", Name: "list_dir", Arguments: map[string]any{"path": "."}},
+				},
+			},
+			{
+				ToolCalls: []StructuredToolCall{
+					{ID: "call-3", Name: "list_dir", Arguments: map[string]any{"path": "."}},
+				},
+			},
+		},
+	}
+
+	pm := NewProviderManager(provider)
+	sessions := NewSessionManager(8)
+	loop := NewAgentLoop(&runtimeServiceFake{}, NewToolRegistry(), pm, sessions, NewMessageBus(0, 0, 0))
+	loop.SetExecutionTools(NewExecutionToolRegistry(t.TempDir()), 2, ActiveBoundarySpec().StructuredToolPolicy, nil)
+
+	_, handled, err := loop.processStructuredChat(context.Background(), "cli:max-iterations", []ConversationMessage{
+		{Role: "user", Content: "loop forever"},
+	}, "")
+	if !handled {
+		t.Fatal("expected structured loop to handle request")
+	}
+	if err == nil || !strings.Contains(err.Error(), "max iterations") {
+		t.Fatalf("expected max iteration failure, got %v", err)
+	}
+}

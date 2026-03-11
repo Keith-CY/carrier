@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,45 @@ import (
 	"carrier/daemon/internal/manifest"
 	"carrier/daemon/internal/ratelimit"
 )
+
+type fakeBaseAgentRuntime struct {
+	resp         baseagent.ChatResponse
+	approvalResp baseagent.ChatResponse
+	approvalErr  error
+	cronJob      baseagent.CronJob
+	cronErr      error
+	callCount    int
+	approvalCall int
+	cronCall     int
+	lastReq      baseagent.ChatRequest
+	lastSession  string
+	lastApproval string
+	lastDecision string
+	lastCronJob  baseagent.CronJob
+}
+
+func (f *fakeBaseAgentRuntime) Chat(_ context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error) {
+	f.callCount++
+	f.lastReq = req
+	return f.resp, nil
+}
+
+func (f *fakeBaseAgentRuntime) RespondPendingApproval(_ context.Context, sessionKey, approvalID string, decision baseagent.ApprovalDecision) (baseagent.ChatResponse, error) {
+	f.approvalCall++
+	f.lastSession = sessionKey
+	f.lastApproval = approvalID
+	f.lastDecision = string(decision)
+	return f.approvalResp, f.approvalErr
+}
+
+func (f *fakeBaseAgentRuntime) ScheduleJob(_ context.Context, job baseagent.CronJob) (baseagent.CronJob, error) {
+	f.cronCall++
+	f.lastCronJob = job
+	if f.cronJob.ID == "" {
+		f.cronJob = job
+	}
+	return f.cronJob, f.cronErr
+}
 
 func newTestService() *lifecycle.Service {
 	return lifecycle.NewService(baseagent.NoopTriager{})
@@ -96,6 +136,180 @@ func TestReadyz_NotReady(t *testing.T) {
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", w.Code)
+	}
+}
+
+func TestDaemonServerApprovalEndpoint(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		resp:         baseagent.ChatResponse{Message: "unused", Action: "chat"},
+		approvalResp: baseagent.ChatResponse{Message: "confirmed", Action: "approval_confirm"},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/base-agent/approvals/consume", strings.NewReader(`{"sessionKey":"cli:approval-api","approvalId":"approval-1","decision":"confirm"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+	if rt.approvalCall != 1 || rt.lastSession != "cli:approval-api" || rt.lastApproval != "approval-1" || rt.lastDecision != "confirm" {
+		t.Fatalf("unexpected approval runtime call state: %+v", rt)
+	}
+	if !strings.Contains(w.Body.String(), `"action":"approval_confirm"`) {
+		t.Fatalf("unexpected approval response body=%s", w.Body.String())
+	}
+}
+
+func TestDaemonServerApprovalEndpointReject(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		approvalResp: baseagent.ChatResponse{Message: "rejected", Action: "approval_cancel"},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/base-agent/approvals/consume", strings.NewReader(`{"provider":"cli","chatId":"approval-api","approvalId":"approval-2","decision":"reject"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+	if rt.lastSession != baseagent.ResolveSessionKey("cli", "approval-api") || rt.lastDecision != "reject" {
+		t.Fatalf("unexpected derived approval request state: %+v", rt)
+	}
+	if !strings.Contains(w.Body.String(), `"action":"approval_cancel"`) {
+		t.Fatalf("unexpected reject response body=%s", w.Body.String())
+	}
+}
+
+func TestDaemonServerApprovalEndpointMethodAndValidationBranches(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	mux := buildHTTPMuxWithBaseAgent(svc, &fakeBaseAgentRuntime{}, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	t.Run("method not allowed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/base-agent/approvals/consume", nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("expected 405, got %d", w.Code)
+		}
+	})
+
+	t.Run("missing session identity", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/base-agent/approvals/consume", strings.NewReader(`{"approvalId":"approval-1","decision":"confirm"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("missing approval id", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/base-agent/approvals/consume", strings.NewReader(`{"sessionKey":"cli:approval-api","decision":"confirm"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("missing decision", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/base-agent/approvals/consume", strings.NewReader(`{"sessionKey":"cli:approval-api","approvalId":"approval-1"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d; body=%s", w.Code, w.Body.String())
+		}
+	})
+}
+
+func TestDaemonServerApprovalEndpointMapsRuntimeErrors(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+
+	t.Run("invalid decision", func(t *testing.T) {
+		rt := &fakeBaseAgentRuntime{approvalErr: baseagent.ErrInvalidApprovalDecision}
+		mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+		req := httptest.NewRequest(http.MethodPost, "/api/base-agent/approvals/consume", strings.NewReader(`{"sessionKey":"cli:approval-api","approvalId":"approval-1","decision":"later"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		rt := &fakeBaseAgentRuntime{approvalErr: baseagent.ErrPendingApprovalNotFound}
+		mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+		req := httptest.NewRequest(http.MethodPost, "/api/base-agent/approvals/consume", strings.NewReader(`{"sessionKey":"cli:approval-api","approvalId":"approval-1","decision":"confirm"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d; body=%s", w.Code, w.Body.String())
+		}
+	})
+}
+
+func TestDaemonServerCronScheduleEndpoint(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		cronJob: baseagent.CronJob{ID: "cron-1", SessionKey: "cli:cron-api", Prompt: "perform maintenance planning"},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/base-agent/cron/schedule", strings.NewReader(`{"sessionKey":"cli:cron-api","prompt":"perform maintenance planning"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+	if rt.cronCall != 1 || rt.lastCronJob.SessionKey != "cli:cron-api" || rt.lastCronJob.Prompt != "perform maintenance planning" {
+		t.Fatalf("unexpected cron runtime call state: %+v", rt)
+	}
+	if !strings.Contains(w.Body.String(), `"id":"cron-1"`) {
+		t.Fatalf("unexpected cron response body=%s", w.Body.String())
+	}
+}
+
+func TestDaemonServerCronScheduleEndpointDerivesSessionKey(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		cronJob: baseagent.CronJob{ID: "cron-2", SessionKey: "cli:cron-derived", Prompt: "perform maintenance planning"},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/base-agent/cron/schedule", strings.NewReader(`{"provider":"cli","chatId":"cron-derived","prompt":"perform maintenance planning"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+	if rt.lastCronJob.SessionKey != baseagent.ResolveSessionKey("cli", "cron-derived") {
+		t.Fatalf("unexpected derived cron job state: %+v", rt.lastCronJob)
 	}
 }
 
