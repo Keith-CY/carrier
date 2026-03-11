@@ -57,3 +57,9 @@ func WithSubagentSpawner(spawner SubagentSpawner) RuntimeOption {
 		r.subagentSpawner = spawner
 	}
 }
+
+func WithSubagentManager(manager SubagentManager) RuntimeOption {
+	return func(r *Runtime) {
+		r.subagentManager = manager
+	}
+}

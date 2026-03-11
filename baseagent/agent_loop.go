@@ -16,6 +16,7 @@ type AgentLoop struct {
 	channels          *ChannelManager
 	executionTools    *ExecutionToolRegistry
 	structuredTools   *structuredToolSurface
+	subagentManager   SubagentManager
 	maxToolIterations int
 	skillsLoader      SkillsLoader
 }

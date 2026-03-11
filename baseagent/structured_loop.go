@@ -83,9 +83,10 @@ func formatPendingApprovalToolOutput(base string, pending *PendingToolApproval) 
 	return base + "\n" + line
 }
 
-func (l *AgentLoop) SetExecutionTools(registry *ExecutionToolRegistry, maxIterations int, policySpec StructuredToolPolicySpec, mcpManager MCPManager) {
+func (l *AgentLoop) SetExecutionTools(registry *ExecutionToolRegistry, maxIterations int, policySpec StructuredToolPolicySpec, mcpManager MCPManager, subagentManager SubagentManager) {
 	l.executionTools = registry
-	l.structuredTools = newStructuredToolSurfaceWithPolicy(l.tools, registry, mcpManager, policySpec)
+	l.subagentManager = subagentManager
+	l.structuredTools = newStructuredToolSurfaceWithPolicy(l.tools, registry, mcpManager, subagentManager, policySpec)
 	if maxIterations <= 0 {
 		maxIterations = 6
 	}

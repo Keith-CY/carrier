@@ -887,7 +887,7 @@ func TestAgentLoopStructuredLoopStopsAtMaxIterations(t *testing.T) {
 	pm := NewProviderManager(provider)
 	sessions := NewSessionManager(8)
 	loop := NewAgentLoop(&runtimeServiceFake{}, NewToolRegistry(), pm, sessions, NewMessageBus(0, 0, 0))
-	loop.SetExecutionTools(NewExecutionToolRegistry(t.TempDir()), 2, ActiveBoundarySpec().StructuredToolPolicy, nil)
+	loop.SetExecutionTools(NewExecutionToolRegistry(t.TempDir()), 2, ActiveBoundarySpec().StructuredToolPolicy, nil, nil)
 
 	_, handled, err := loop.processStructuredChat(context.Background(), "cli:max-iterations", []ConversationMessage{
 		{Role: "user", Content: "loop forever"},
@@ -969,5 +969,90 @@ func TestStructuredLoopSpawnSubagent(t *testing.T) {
 	}
 	if !strings.Contains(last.Content, "job-42") || !strings.Contains(strings.ToLower(last.Content), "queued") {
 		t.Fatalf("expected delegated job handle in tool output, got %+v", last)
+	}
+}
+
+func TestStructuredLoopDelegatesToSubagent(t *testing.T) {
+	policy := ActiveBoundarySpec().StructuredToolPolicy
+	policy.HighRiskDecision = string(structuredToolDecisionAllow)
+
+	manager := NewInMemorySubagentManager(func(_ context.Context, req SubagentRequest) (string, error) {
+		return "result: " + req.Task, nil
+	})
+	provider := &scriptedToolAwareProvider{
+		name: "delegate-followup",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "spawn_subagent",
+						Arguments: map[string]any{
+							"task": "collect dependency graph",
+						},
+					},
+				},
+			},
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-2",
+						Name: "subagent_result",
+						Arguments: map[string]any{
+							"job_id": "subagent-1",
+						},
+					},
+				},
+			},
+			{
+				Content: "delegated result collected",
+			},
+		},
+	}
+
+	rt := NewRuntime(
+		&runtimeServiceFake{},
+		nil,
+		WithWorkspaceRoot(t.TempDir()),
+		WithMaxToolIterations(5),
+		WithStructuredToolPolicy(policy),
+		WithSubagentManager(manager),
+	)
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "delegate-followup",
+		Message:  "delegate dependency graph analysis and report back",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "delegated result collected" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(provider.requests) != 3 {
+		t.Fatalf("expected spawn + result follow-up requests, got %d", len(provider.requests))
+	}
+
+	job, err := manager.Job(context.Background(), "subagent-1")
+	if err != nil {
+		t.Fatalf("lookup delegated job: %v", err)
+	}
+	if job.Status != SubagentJobStatusCompleted || job.Result != "result: collect dependency graph" {
+		t.Fatalf("unexpected delegated job state: %+v", job)
+	}
+
+	last := provider.requests[2].Messages[len(provider.requests[2].Messages)-1]
+	if last.Role != "tool" || last.ToolName != "subagent_result" {
+		t.Fatalf("unexpected final tool callback message: %+v", last)
+	}
+	if !strings.Contains(last.Content, "subagent-1") || !strings.Contains(last.Content, "result: collect dependency graph") {
+		t.Fatalf("expected delegated result in tool output, got %+v", last)
 	}
 }

@@ -90,6 +90,7 @@ type Runtime struct {
 	skillsLoader                SkillsLoader
 	webBackend                  WebToolBackend
 	subagentSpawner             SubagentSpawner
+	subagentManager             SubagentManager
 }
 
 func NewRuntime(svc AgentService, memStore MemoryStore, opts ...RuntimeOption) *Runtime {
@@ -126,11 +127,25 @@ func NewRuntime(svc AgentService, memStore MemoryStore, opts ...RuntimeOption) *
 	r.loop = NewAgentLoop(r.svc, r.tools, r.providers, r.sessions, r.bus)
 	r.loop.SetChannelManager(r.channels)
 	r.loop.SetSkillsLoader(r.skillsLoader)
+	effectiveSubagentManager := r.subagentManager
+	if effectiveSubagentManager == nil && r.subagentSpawner == nil {
+		effectiveSubagentManager = NewInMemorySubagentManager(nil)
+	}
+	effectiveSubagentSpawner := r.subagentSpawner
+	if effectiveSubagentManager != nil {
+		effectiveSubagentSpawner = effectiveSubagentManager
+	}
+	r.subagentManager = effectiveSubagentManager
+	executionToolOpts := []ExecutionToolRegistryOption{
+		WithExecutionToolWebBackend(r.webBackend),
+	}
+	if effectiveSubagentSpawner != nil {
+		executionToolOpts = append(executionToolOpts, WithExecutionToolSubagentSpawner(effectiveSubagentSpawner))
+	}
 	r.loop.SetExecutionTools(NewExecutionToolRegistry(
 		r.workspaceRoot,
-		WithExecutionToolWebBackend(r.webBackend),
-		WithExecutionToolSubagentSpawner(r.subagentSpawner),
-	), r.maxToolIterations, structuredToolPolicy, r.mcpManager)
+		executionToolOpts...,
+	), r.maxToolIterations, structuredToolPolicy, r.mcpManager, effectiveSubagentManager)
 	r.cron = NewCronService(func(ctx context.Context, job CronJob) error {
 		_, err := r.Chat(ctx, cronChatRequestForSessionKey(job.SessionKey, job.Prompt))
 		return err

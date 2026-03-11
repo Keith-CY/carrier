@@ -115,10 +115,10 @@ var structuredBuiltinPassthroughTiers = map[string]structuredToolTier{
 }
 
 func newStructuredToolSurface(builtin *ToolRegistry, workspace *ExecutionToolRegistry) *structuredToolSurface {
-	return newStructuredToolSurfaceWithPolicy(builtin, workspace, nil, StructuredToolPolicySpec{})
+	return newStructuredToolSurfaceWithPolicy(builtin, workspace, nil, nil, StructuredToolPolicySpec{})
 }
 
-func newStructuredToolSurfaceWithPolicy(builtin *ToolRegistry, workspace *ExecutionToolRegistry, mcpManager MCPManager, policySpec StructuredToolPolicySpec) *structuredToolSurface {
+func newStructuredToolSurfaceWithPolicy(builtin *ToolRegistry, workspace *ExecutionToolRegistry, mcpManager MCPManager, subagentManager SubagentManager, policySpec StructuredToolPolicySpec) *structuredToolSurface {
 	// TODO(baseagent): add real confirmation handshakes for ask decisions and
 	// introduce argument-level controls.
 	hasWorkspace := workspace != nil && workspace.HasWorkspaceRoot()
@@ -131,6 +131,7 @@ func newStructuredToolSurfaceWithPolicy(builtin *ToolRegistry, workspace *Execut
 	surface.registerBuiltinStructuredTools(builtin)
 	surface.registerWorkspaceStructuredTools(workspace)
 	surface.registerMCPStructuredTools(mcpManager)
+	surface.registerSubagentStructuredTools(subagentManager)
 
 	if len(surface.order) == 0 {
 		return nil
@@ -255,6 +256,54 @@ func (s *structuredToolSurface) registerMCPStructuredTools(mcpManager MCPManager
 			},
 		})
 	}
+}
+
+func (s *structuredToolSurface) registerSubagentStructuredTools(manager SubagentManager) {
+	if s == nil || manager == nil {
+		return
+	}
+	s.register(structuredToolDefinition{
+		descriptor: StructuredToolDescriptor{
+			Name:        "subagent_result",
+			Description: "Read the current status and result of a delegated subagent job.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"job_id": map[string]any{
+						"type": "string",
+					},
+				},
+				"required": []string{"job_id"},
+			},
+		},
+		tier: structuredToolTierOperationalRead,
+		execute: func(ctx context.Context, args map[string]any) ExecutionToolResult {
+			jobID := strings.TrimSpace(stringifyStructuredToolArg(args["job_id"]))
+			if jobID == "" {
+				return executionError("job_id is required")
+			}
+			job, err := manager.Job(ctx, jobID)
+			if err != nil {
+				return executionError(err.Error())
+			}
+			output := fmt.Sprintf("subagent job %s status=%s", job.JobID, job.Status)
+			if summary := strings.TrimSpace(job.Summary); summary != "" {
+				output += "\nsummary: " + summary
+			}
+			if result := strings.TrimSpace(job.Result); result != "" {
+				output += "\n" + result
+			}
+			if failure := strings.TrimSpace(job.Error); failure != "" {
+				output += "\nerror: " + failure
+			}
+			return ExecutionToolResult{
+				Output: output,
+				Metadata: map[string]any{
+					"delegation": job,
+				},
+			}
+		},
+	})
 }
 
 func structuredWorkspaceToolTier(name string) structuredToolTier {
