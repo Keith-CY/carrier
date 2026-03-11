@@ -1,5 +1,5 @@
-import { ProfilesSection } from '../providers/ProfilesSection';
+import { PoliciesSection } from './PoliciesSection';
 
 export function PoliciesPage() {
-  return <ProfilesSection />;
+  return <PoliciesSection />;
 }
