@@ -61,12 +61,6 @@ var validCommands = map[CommandName]struct{}{
 	CmdOnboard:         {},
 }
 
-var validProviders = map[string]struct{}{
-	"telegram": {},
-	"discord":  {},
-	"feishu":   {},
-}
-
 // GatewayCommand is a parsed command from the gateway input.
 type GatewayCommand struct {
 	Provider     string
@@ -110,7 +104,7 @@ func ParseInput(input string) (*GatewayCommand, error) {
 	requestID := fields[2]
 	fourth := fields[3]
 
-	if _, ok := validProviders[provider]; !ok {
+	if !supportsGatewayCommandsForChannel(provider) {
 		return nil, &ParseError{RequestID: requestID, Err: fmt.Sprintf("unknown provider: %s", provider)}
 	}
 

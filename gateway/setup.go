@@ -15,17 +15,20 @@ const (
 	ProviderDummy    ProviderType = "dummy"
 )
 
-var validProviderTypes = map[ProviderType]struct{}{
-	ProviderTelegram: {},
-	ProviderDiscord:  {},
-	ProviderFeishu:   {},
-	ProviderDummy:    {},
-}
-
 // IsValidProviderType returns true for valid providers.
 func IsValidProviderType(p string) bool {
-	_, ok := validProviderTypes[ProviderType(p)]
-	return ok
+	if ProviderType(p) == ProviderDummy {
+		return true
+	}
+	desc, ok := LookupChannelDescriptor(p)
+	if !ok {
+		return false
+	}
+	// Preserve existing behavior: only canonical lowercase provider IDs are accepted.
+	if p != string(desc.ID) {
+		return false
+	}
+	return desc.Capabilities.SupportsProviderSetup
 }
 
 // ProviderConfig stores provider setup configuration.
