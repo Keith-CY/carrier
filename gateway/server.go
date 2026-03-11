@@ -137,7 +137,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
-		handleWebUIOnboard(w, r, requestID, daemon)
+		handleWebUIOnboard(w, r, requestID, daemon, setup)
 	})
 	mux.HandleFunc("/api/v1/telegram/pair/init", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())

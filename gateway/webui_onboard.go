@@ -64,7 +64,7 @@ type daemonPairCodeRecord struct {
 	ExpiresAt string `json:"expiresAt"`
 }
 
-func handleWebUIOnboard(w http.ResponseWriter, r *http.Request, requestID string, daemon *DaemonClient) {
+func handleWebUIOnboard(w http.ResponseWriter, r *http.Request, requestID string, daemon *DaemonClient, setup *SetupStore) {
 	var req webUIOnboardRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
@@ -117,6 +117,9 @@ func handleWebUIOnboard(w http.ResponseWriter, r *http.Request, requestID string
 	if err := applyOnboardConfigEnvironment(cfg); err != nil {
 		writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to apply onboarding environment", "apply onboarding environment", err)
 		return
+	}
+	if !webUIOnly && setup != nil {
+		setup.Configure(ProviderType(channelID), channelToken, channelSecret)
 	}
 
 	pairRequired := !webUIOnly

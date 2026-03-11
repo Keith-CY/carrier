@@ -7,6 +7,12 @@ Related references:
 - Cross-provider parity taxonomy: `./e2e-parity-taxonomy.md`
 - Base-agent boundary policy spec: `../baseagent/spec/baseagent-boundary.v1.json`
 
+The gateway now also exposes a unified status surface for WebUI and setup flows:
+- `GET /api/v1/auth/providers`
+- `GET /api/v1/channels`
+
+These endpoints reuse the same registry and validation model as command handling and onboarding. They require the gateway bearer token when `CARRIER_GATEWAY_API_TOKEN` is configured.
+
 ## Input Format
 
 All commands are parsed from a single string with the format:
@@ -54,6 +60,58 @@ type GatewayResponse = {
   handoffStatus?: "pending" | "declined"; // /diagnose-consent success
 };
 ```
+
+## Unified Status APIs
+
+### `GET /api/v1/auth/providers`
+
+Returns redacted provider auth metadata for WebUI onboarding/settings and other clients that need to know whether a provider is configured or reusable.
+
+Example shape:
+
+```json
+{
+  "requestId": "req_123",
+  "result": "ok",
+  "providers": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "authMode": "api_key",
+      "configured": true,
+      "reusable": true,
+      "hasSavedCredential": true,
+      "credentialBackend": "file"
+    }
+  ]
+}
+```
+
+### `GET /api/v1/channels`
+
+Returns canonical channel descriptors merged with redacted setup state.
+
+Example shape:
+
+```json
+{
+  "requestId": "req_456",
+  "result": "ok",
+  "channels": [
+    {
+      "id": "telegram",
+      "displayName": "Telegram",
+      "supportsPairing": true,
+      "requiresBotToken": true,
+      "requiresWebhookSecret": false,
+      "supportsProviderSetup": true,
+      "configured": false
+    }
+  ]
+}
+```
+
+Secrets are never returned by either endpoint.
 
 ## Error Codes
 

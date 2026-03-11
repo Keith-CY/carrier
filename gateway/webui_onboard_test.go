@@ -176,3 +176,93 @@ func TestWebUIOnboard_DiscordIncludesPairStep(t *testing.T) {
 		t.Fatalf("channel webhook secret mismatch")
 	}
 }
+
+func TestWebUIOnboard_StatusEndpointsReflectUnifiedAuthState(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("CARRIER_CONFIG", filepath.Join(tmp, "config.v2.json"))
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+
+	mux, srv, _ := buildTestMux(t, map[string]http.HandlerFunc{
+		"GET /api/v1/pairing/codes": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"codes":[]}`))
+		},
+		"POST /api/v1/pairing/codes": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code":      "pair-status-check",
+				"expiresAt": time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339Nano),
+			})
+		},
+	})
+	defer srv.Close()
+
+	onboardReq := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", strings.NewReader(`{
+		"providerId":"openai",
+		"providerToken":"sk-status-check",
+		"reuseCredential":false,
+		"channel":"discord",
+		"channelToken":"discord-bot-token",
+		"channelSecret":"discord-public-key"
+	}`))
+	onboardReq.Header.Set("Content-Type", "application/json")
+	onboardReq.Header.Set("Authorization", "Bearer test-gateway-token")
+	onboardRec := httptest.NewRecorder()
+	mux.ServeHTTP(onboardRec, onboardReq)
+	if onboardRec.Code != http.StatusOK {
+		t.Fatalf("expected onboard 200, got %d, body=%s", onboardRec.Code, onboardRec.Body.String())
+	}
+
+	providersReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/providers", nil)
+	providersReq.Header.Set("Authorization", "Bearer test-gateway-token")
+	providersRec := httptest.NewRecorder()
+	mux.ServeHTTP(providersRec, providersReq)
+	if providersRec.Code != http.StatusOK {
+		t.Fatalf("expected providers status 200, got %d", providersRec.Code)
+	}
+	var providerStatusResp struct {
+		Providers []ProviderAuthStatus `json:"providers"`
+	}
+	if err := json.NewDecoder(providersRec.Body).Decode(&providerStatusResp); err != nil {
+		t.Fatalf("decode provider auth status: %v", err)
+	}
+	foundOpenAI := false
+	for _, status := range providerStatusResp.Providers {
+		if status.ID == "openai" {
+			foundOpenAI = true
+			if !status.Configured {
+				t.Fatalf("expected openai configured after onboarding")
+			}
+		}
+	}
+	if !foundOpenAI {
+		t.Fatalf("expected openai in provider auth status response")
+	}
+
+	channelsReq := httptest.NewRequest(http.MethodGet, "/api/v1/channels", nil)
+	channelsReq.Header.Set("Authorization", "Bearer test-gateway-token")
+	channelsRec := httptest.NewRecorder()
+	mux.ServeHTTP(channelsRec, channelsReq)
+	if channelsRec.Code != http.StatusOK {
+		t.Fatalf("expected channel status 200, got %d", channelsRec.Code)
+	}
+	var channelStatusResp struct {
+		Channels []ChannelStatus `json:"channels"`
+	}
+	if err := json.NewDecoder(channelsRec.Body).Decode(&channelStatusResp); err != nil {
+		t.Fatalf("decode channel status: %v", err)
+	}
+	foundDiscord := false
+	for _, status := range channelStatusResp.Channels {
+		if status.ID == "discord" {
+			foundDiscord = true
+			if !status.Configured {
+				t.Fatalf("expected discord configured after onboarding")
+			}
+		}
+	}
+	if !foundDiscord {
+		t.Fatalf("expected discord in channel status response")
+	}
+}
