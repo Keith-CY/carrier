@@ -391,46 +391,22 @@ func runTelegramPollingLoop(
 				offset = updateID + 1
 			}
 
-			msg := ParseTelegramMessage(update)
-			if msg == nil {
+			envelope := NormalizeTelegramInboundEnvelope(update, sessions)
+			if envelope == nil {
 				continue
 			}
-
-			var resp GatewayResponse
-			if msg.Command != nil {
-				resp = processTelegramCommand(ctx, msg.Command, daemon, sessions, downloads, rl, onboard)
-			} else {
-				resp = processBaseAgentChat(ctx, msg.Provider, msg.ChatID, msg.RequestID, msg.RawText, daemon, sessions, rl)
-			}
+			resp := RouteInboundChannel(ctx, envelope, daemon, sessions, downloads, rl, onboard)
 			rendered := RenderTelegramResponse(resp)
 			text, _ := rendered["text"].(string)
 			if strings.TrimSpace(text) == "" {
 				continue
 			}
 			disableWebPagePreview, _ := rendered["disable_web_page_preview"].(bool)
-			if err := api.SendMessage(ctx, msg.ChatID, text, disableWebPagePreview); err != nil {
-				log.Printf("[gateway/telegram] sendMessage failed (chat=%s request=%s): %v", msg.ChatID, msg.RequestID, err)
+			if err := api.SendMessage(ctx, envelope.ChatID, text, disableWebPagePreview); err != nil {
+				log.Printf("[gateway/telegram] sendMessage failed (chat=%s request=%s): %v", envelope.ChatID, envelope.RequestID, err)
 			}
 		}
 	}
-}
-
-func processTelegramCommand(
-	ctx context.Context,
-	nc *NormalizedCommand,
-	daemon *DaemonClient,
-	sessions *SessionStore,
-	downloads *DownloadStore,
-	rl *GatewayRateLimiter,
-	onboard *OnboardStore,
-) GatewayResponse {
-	session := sessions.GetSession("telegram", nc.ChatID)
-	var sessionToken string
-	if session != nil {
-		sessionToken = session.SessionToken
-	}
-	input := InjectSessionToken(ToGatewayInput(nc), sessionToken)
-	return SafeHandleCommand(ctx, input, daemon, sessions, downloads, rl, onboard)
 }
 
 func telegramUpdateID(update map[string]interface{}) int64 {

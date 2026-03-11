@@ -632,19 +632,14 @@ func handleTelegramWebhook(w http.ResponseWriter, r *http.Request, cfg *GatewayC
 		return
 	}
 
-	msg := ParseTelegramMessage(payload)
-	if msg == nil {
+	envelope := NormalizeTelegramInboundEnvelope(payload, sessions)
+	if envelope == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "message": "ignored non-command telegram update"})
 		return
 	}
 
-	var resp GatewayResponse
-	if msg.Command != nil {
-		resp = processTelegramCommand(r.Context(), msg.Command, daemon, sessions, downloads, rl, onboard)
-	} else {
-		resp = processBaseAgentChat(r.Context(), msg.Provider, msg.ChatID, msg.RequestID, msg.RawText, daemon, sessions, rl)
-	}
-	writeJSON(w, http.StatusOK, RenderTelegramWebhookResponse(resp, msg.ChatID))
+	resp := RouteInboundChannel(r.Context(), envelope, daemon, sessions, downloads, rl, onboard)
+	writeJSON(w, http.StatusOK, RenderTelegramWebhookResponse(resp, envelope.ChatID))
 }
 
 func handleDiscordWebhook(w http.ResponseWriter, r *http.Request, cfg *GatewayConfig, daemon *DaemonClient, sessions *SessionStore, downloads *DownloadStore, rl *GatewayRateLimiter, onboard *OnboardStore) {
@@ -672,24 +667,13 @@ func handleDiscordWebhook(w http.ResponseWriter, r *http.Request, cfg *GatewayCo
 		return
 	}
 
-	msg := ParseDiscordMessage(payload)
-	if msg == nil {
+	envelope := NormalizeDiscordInboundEnvelope(payload, sessions)
+	if envelope == nil {
 		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "unsupported discord payload"))
 		return
 	}
 
-	var resp GatewayResponse
-	if msg.Command != nil {
-		session := sessions.GetSession("discord", msg.ChatID)
-		var sessionToken string
-		if session != nil {
-			sessionToken = session.SessionToken
-		}
-		input := InjectSessionToken(ToGatewayInput(msg.Command), sessionToken)
-		resp = SafeHandleCommand(r.Context(), input, daemon, sessions, downloads, rl, onboard)
-	} else {
-		resp = processBaseAgentChat(r.Context(), msg.Provider, msg.ChatID, msg.RequestID, msg.RawText, daemon, sessions, rl)
-	}
+	resp := RouteInboundChannel(r.Context(), envelope, daemon, sessions, downloads, rl, onboard)
 	rendered := RenderDiscordResponse(resp)
 
 	_ = requestID
@@ -729,24 +713,13 @@ func handleFeishuWebhook(w http.ResponseWriter, r *http.Request, cfg *GatewayCon
 		return
 	}
 
-	msg := ParseFeishuMessage(payload)
-	if msg == nil {
+	envelope := NormalizeFeishuInboundEnvelope(payload, sessions)
+	if envelope == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "message": "ignored non-command feishu event"})
 		return
 	}
 
-	var resp GatewayResponse
-	if msg.Command != nil {
-		session := sessions.GetSession("feishu", msg.ChatID)
-		var sessionToken string
-		if session != nil {
-			sessionToken = session.SessionToken
-		}
-		input := InjectSessionToken(ToGatewayInput(msg.Command), sessionToken)
-		resp = SafeHandleCommand(r.Context(), input, daemon, sessions, downloads, rl, onboard)
-	} else {
-		resp = processBaseAgentChat(r.Context(), msg.Provider, msg.ChatID, msg.RequestID, msg.RawText, daemon, sessions, rl)
-	}
+	resp := RouteInboundChannel(r.Context(), envelope, daemon, sessions, downloads, rl, onboard)
 	writeJSON(w, http.StatusOK, RenderFeishuResponse(resp))
 }
 
