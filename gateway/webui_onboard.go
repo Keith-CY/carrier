@@ -1,11 +1,11 @@
 package gateway
 
 import (
+	"carrier/shared/catalog"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"carrier/shared/catalog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -79,12 +79,8 @@ func handleWebUIOnboard(w http.ResponseWriter, r *http.Request, requestID string
 	channelToken := strings.TrimSpace(req.ChannelToken)
 	channelSecret := strings.TrimSpace(req.ChannelSecret)
 	if !webUIOnly {
-		if channelToken == "" {
-			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "channelToken is required"))
-			return
-		}
-		if channelID == "discord" && channelSecret == "" {
-			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "Discord requires channelSecret (public key)"))
+		if validationErr := ValidateChannelCredentialInput(channelID, channelToken, channelSecret, "channelToken", "channelSecret"); validationErr != nil {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody(validationErr.code, validationErr.msg))
 			return
 		}
 	}
@@ -147,6 +143,10 @@ func handleWebUIOnboard(w http.ResponseWriter, r *http.Request, requestID string
 			"pairCodeExpiresAt": pairCodeExpiresAt,
 			"configPath":        cfgPath,
 		},
+		"providerAuthStatus": BuildProviderAuthStatus(provider),
+	}
+	if !webUIOnly {
+		resp["channelStatus"] = BuildChannelStatus(channelID, true, cfg.ConfiguredAt)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -156,10 +156,12 @@ func normalizeOnboardChannel(raw string) (string, bool, error) {
 	switch channelID {
 	case "", "skip", "none", "webui":
 		return "", true, nil
-	case "telegram", "discord":
-		return channelID, false, nil
 	default:
-		return "", false, fmt.Errorf("unsupported channel %q; expected telegram, discord, or skip", raw)
+		desc, ok := LookupChannelDescriptor(channelID)
+		if ok && desc.Capabilities.SupportsProviderSetup {
+			return string(desc.ID), false, nil
+		}
+		return "", false, fmt.Errorf("unsupported channel %q; expected telegram, discord, feishu, or skip", raw)
 	}
 }
 

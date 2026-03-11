@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -99,4 +101,44 @@ func (s *SetupStore) IsConfigured() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.config != nil
+}
+
+func ValidateSetupProviderInput(provider, token, webhookSecret string) *apiErr {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return &apiErr{code: "E_MISSING_PROVIDER", msg: "provider field is required"}
+	}
+	if ProviderType(provider) == ProviderDummy {
+		return nil
+	}
+	desc, ok := LookupChannelDescriptor(provider)
+	if !ok || !desc.Capabilities.SupportsProviderSetup {
+		return &apiErr{code: "E_INVALID_PROVIDER", msg: fmt.Sprintf("invalid provider: %s; must be one of telegram, discord, feishu, dummy", provider)}
+	}
+	return ValidateChannelCredentialInput(string(desc.ID), token, webhookSecret, "token", "webhook_secret")
+}
+
+func ValidateChannelCredentialInput(channelID, token, webhookSecret, tokenFieldName, secretFieldName string) *apiErr {
+	desc, ok := LookupChannelDescriptor(channelID)
+	if !ok {
+		return &apiErr{code: "E_USAGE", msg: fmt.Sprintf("unsupported channel %q", channelID)}
+	}
+	if desc.Capabilities.RequiresBotToken && strings.TrimSpace(token) == "" {
+		return &apiErr{code: "E_USAGE", msg: fmt.Sprintf("%s is required", tokenFieldName)}
+	}
+	if desc.Capabilities.RequiresWebhookSecret && strings.TrimSpace(webhookSecret) == "" {
+		return &apiErr{code: "E_USAGE", msg: missingChannelSecretMessage(channelID, secretFieldName)}
+	}
+	return nil
+}
+
+func missingChannelSecretMessage(channelID, fieldName string) string {
+	switch strings.TrimSpace(strings.ToLower(channelID)) {
+	case "discord":
+		return fmt.Sprintf("Discord requires %s (public key)", fieldName)
+	case "feishu":
+		return fmt.Sprintf("Feishu requires %s (verification token)", fieldName)
+	default:
+		return fmt.Sprintf("%s is required", fieldName)
+	}
 }

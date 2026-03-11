@@ -91,6 +91,30 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 		}
 	})
+	mux.HandleFunc("/api/v1/auth/providers", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleProviderAuthStatusAPI(w, r, requestID)
+	})
+	mux.HandleFunc("/api/v1/channels", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleChannelStatusAPI(w, r, requestID, setup)
+	})
 	mux.HandleFunc("/api/v1/add", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
 		if r.Method != http.MethodPost {
@@ -860,16 +884,17 @@ func handleSetupPost(w http.ResponseWriter, r *http.Request, requestID string, s
 		})
 		return
 	}
-	if !IsValidProviderType(req.Provider) {
+	if validationErr := ValidateSetupProviderInput(req.Provider, req.Token, req.WebhookSecret); validationErr != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 			"requestId": requestID, "result": "error",
-			"errorCode": "E_INVALID_PROVIDER",
-			"message":   fmt.Sprintf("invalid provider: %s; must be one of telegram, discord, feishu, dummy", req.Provider),
+			"errorCode": validationErr.code,
+			"message":   validationErr.msg,
 		})
 		return
 	}
 	cfg := setup.Configure(ProviderType(req.Provider), req.Token, req.WebhookSecret)
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	channelStatus := BuildChannelStatus(string(cfg.Provider), true, cfg.ConfiguredAt)
+	resp := map[string]interface{}{
 		"requestId": requestID,
 		"result":    "ok",
 		"message":   fmt.Sprintf("provider %s configured", req.Provider),
@@ -877,7 +902,11 @@ func handleSetupPost(w http.ResponseWriter, r *http.Request, requestID string, s
 			"provider":      cfg.Provider,
 			"configured_at": cfg.ConfiguredAt,
 		},
-	})
+	}
+	if channelStatus.ID != "" {
+		resp["channelStatus"] = channelStatus
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func handleSetupGet(w http.ResponseWriter, r *http.Request, requestID string, setup *SetupStore) {
@@ -887,6 +916,11 @@ func handleSetupGet(w http.ResponseWriter, r *http.Request, requestID string, se
 		"result":     "ok",
 		"configured": setup.IsConfigured(),
 		"provider":   redacted,
+	}
+	if redacted != nil {
+		if channelStatus := BuildChannelStatus(string(redacted.Provider), true, redacted.ConfiguredAt); channelStatus.ID != "" {
+			resp["channelStatus"] = channelStatus
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
