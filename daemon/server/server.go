@@ -69,6 +69,12 @@ type agentChatRuntime interface {
 	Chat(ctx context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error)
 }
 
+type baseAgentRuntime interface {
+	Chat(ctx context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error)
+	RespondPendingApproval(ctx context.Context, sessionKey, approvalID string, decision baseagent.ApprovalDecision) (baseagent.ChatResponse, error)
+	ScheduleJob(ctx context.Context, job baseagent.CronJob) (baseagent.CronJob, error)
+}
+
 // Run starts the daemon HTTP API server. It blocks until a termination
 // signal is received or the server encounters a fatal error.
 func Run() {
@@ -123,7 +129,12 @@ func Run() {
 	if memStore != nil {
 		baseMemoryStore = newBaseAgentMemoryStoreAdapter(memStore)
 	}
-	baseRuntime := baseagent.NewRuntime(newLifecycleAgentServiceAdapter(svc), baseMemoryStore)
+	workspaceRoot, _ := os.Getwd()
+	baseRuntime := baseagent.NewRuntime(
+		newLifecycleAgentServiceAdapter(svc),
+		baseMemoryStore,
+		baseagent.WithWorkspaceRoot(workspaceRoot),
+	)
 	stopBaseAgentDistill := startBaseAgentDistillScheduler(memStore)
 	if stopBaseAgentDistill != nil {
 		defer stopBaseAgentDistill()
@@ -229,7 +240,7 @@ func buildHTTPMux(
 
 func buildHTTPMuxWithBaseAgent(
 	svc *lifecycle.Service,
-	baseRuntime *baseagent.Runtime,
+	baseRuntime baseAgentRuntime,
 	ready *atomic.Bool,
 	pairStore *api.PairingCodeStore,
 	pairLimiter *ratelimit.Limiter,
@@ -399,6 +410,118 @@ func buildHTTPMuxWithBaseAgent(
 			return
 		}
 		writeJSON(w, http.StatusOK, resp)
+	})
+
+	register("/api/base-agent/approvals/consume", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if baseRuntime == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime is unavailable")
+			return
+		}
+		var body struct {
+			SessionKey string `json:"sessionKey"`
+			Provider   string `json:"provider,omitempty"`
+			ChatID     string `json:"chatId,omitempty"`
+			SessionID  string `json:"sessionId,omitempty"`
+			ApprovalID string `json:"approvalId"`
+			Decision   string `json:"decision"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		sessionKey := strings.TrimSpace(body.SessionKey)
+		if sessionKey == "" {
+			chatID := strings.TrimSpace(body.ChatID)
+			if chatID == "" {
+				chatID = strings.TrimSpace(body.SessionID)
+			}
+			if chatID != "" {
+				sessionKey = baseagent.ResolveSessionKey(body.Provider, chatID)
+			}
+		}
+		if sessionKey == "" {
+			writeJSONError(w, http.StatusBadRequest, "sessionKey or chat/session identity is required")
+			return
+		}
+		if strings.TrimSpace(body.ApprovalID) == "" {
+			writeJSONError(w, http.StatusBadRequest, "approvalId is required")
+			return
+		}
+		if strings.TrimSpace(body.Decision) == "" {
+			writeJSONError(w, http.StatusBadRequest, "decision is required")
+			return
+		}
+		resp, err := baseRuntime.RespondPendingApproval(
+			r.Context(),
+			sessionKey,
+			strings.TrimSpace(body.ApprovalID),
+			baseagent.ApprovalDecision(strings.TrimSpace(body.Decision)),
+		)
+		if err != nil {
+			switch {
+			case errors.Is(err, baseagent.ErrInvalidApprovalDecision):
+				writeJSONError(w, http.StatusBadRequest, err.Error())
+			case errors.Is(err, baseagent.ErrPendingApprovalNotFound):
+				writeJSONError(w, http.StatusNotFound, err.Error())
+			default:
+				writeJSONError(w, http.StatusInternalServerError, err.Error())
+			}
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
+
+	register("/api/base-agent/cron/schedule", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if baseRuntime == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime is unavailable")
+			return
+		}
+		var body struct {
+			SessionKey string    `json:"sessionKey"`
+			Provider   string    `json:"provider,omitempty"`
+			ChatID     string    `json:"chatId,omitempty"`
+			SessionID  string    `json:"sessionId,omitempty"`
+			Prompt     string    `json:"prompt"`
+			NextRunAt  time.Time `json:"nextRunAt,omitempty"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		sessionKey := strings.TrimSpace(body.SessionKey)
+		if sessionKey == "" {
+			chatID := strings.TrimSpace(body.ChatID)
+			if chatID == "" {
+				chatID = strings.TrimSpace(body.SessionID)
+			}
+			if chatID != "" {
+				sessionKey = baseagent.ResolveSessionKey(body.Provider, chatID)
+			}
+		}
+		if sessionKey == "" {
+			writeJSONError(w, http.StatusBadRequest, "sessionKey or chat/session identity is required")
+			return
+		}
+		if strings.TrimSpace(body.Prompt) == "" {
+			writeJSONError(w, http.StatusBadRequest, "prompt is required")
+			return
+		}
+		job, err := baseRuntime.ScheduleJob(r.Context(), baseagent.CronJob{
+			SessionKey: sessionKey,
+			Prompt:     strings.TrimSpace(body.Prompt),
+			NextRunAt:  body.NextRunAt,
+		})
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, job)
 	})
 
 	register("/api/base-agent/decompose", func(w http.ResponseWriter, r *http.Request) {

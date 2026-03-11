@@ -1,31 +1,40 @@
 {
   "schema_version": "carrier.baseagent.boundary.v1",
-  "assistant_role": "Carrier product-specific assistant for controlled agent installation and maintenance.",
+  "assistant_role": "Carrier product-specific assistant for controlled agent maintenance and bounded workspace automation.",
   "in_scope": [
     "Understand user intent and map it to approved install/maintenance workflows.",
     "Run policy-bounded lifecycle operations for agent instances.",
+    "Inspect, create, edit, append, and list files inside the configured workspace root.",
+    "Run bounded shell commands inside the configured workspace root when a chat task needs local execution.",
     "Collect logs, summarize failures, and trigger bounded repair attempts.",
     "Escalate unresolved failures to diagnose artifact generation and consented remote handoff."
   ],
   "out_of_scope": [
-    "Arbitrary free-form shell execution outside approved workflows.",
+    "Arbitrary shell or file execution outside the configured workspace root.",
     "Executing unreviewed installer scripts or unknown binaries.",
     "Cross-host operations without an explicit host binding context.",
     "Automatic destructive changes without explicit user confirmation."
   ],
   "boundary_sources": [
     "System/runtime safety constraints and auth/session gates.",
-    "Base-agent tool allowlist and repair action policy.",
+    "Base-agent tool allowlist, workspace confinement, and execution safety policy.",
     "Gateway command allowlist and command-level authorization checks.",
     "Daemon API contracts and workflow-specific preflight checks."
   ],
   "design_principles": [
     "Least privilege by default.",
     "Deterministic command surface with explicit handlers.",
-    "Workflow-first execution over free-form command execution.",
+    "Workspace-confined execution over unrestricted host access.",
     "Auditability for every lifecycle and repair operation.",
     "Fail-safe escalation when repair policy bounds are exceeded."
   ],
+  "structured_tool_policy": {
+    "metadata_read_decision": "allow",
+    "operational_read_decision": "allow",
+    "workspace_read_decision": "allow",
+    "workspace_mutation_decision": "allow",
+    "high_risk_decision": "ask"
+  },
   "command_policies": {
     "chat_install": "requires_host_binding",
     "chat_onboard": "disabled",

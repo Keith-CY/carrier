@@ -18,6 +18,7 @@ type runtimeServiceFake struct {
 	upgrades  map[string]UpgradeResult
 	diagnoses map[string]string
 	errs      map[string]error
+	callLog   []string
 }
 
 func (f *runtimeServiceFake) ListAgents() []AgentState {
@@ -25,18 +26,22 @@ func (f *runtimeServiceFake) ListAgents() []AgentState {
 }
 
 func (f *runtimeServiceFake) Install(_ context.Context, agentID string) error {
+	f.record("install", agentID)
 	return f.err("install", agentID)
 }
 
 func (f *runtimeServiceFake) Uninstall(_ context.Context, agentID string) error {
+	f.record("uninstall", agentID)
 	return f.err("uninstall", agentID)
 }
 
 func (f *runtimeServiceFake) Start(_ context.Context, agentID string) error {
+	f.record("start", agentID)
 	return f.err("start", agentID)
 }
 
 func (f *runtimeServiceFake) Stop(_ context.Context, agentID string) error {
+	f.record("stop", agentID)
 	return f.err("stop", agentID)
 }
 
@@ -58,6 +63,7 @@ func (f *runtimeServiceFake) Logs(agentID string, _ int) ([]string, error) {
 }
 
 func (f *runtimeServiceFake) Upgrade(_ context.Context, agentID string) (UpgradeResult, error) {
+	f.record("upgrade", agentID)
 	if err := f.err("upgrade", agentID); err != nil {
 		return UpgradeResult{}, err
 	}
@@ -68,6 +74,7 @@ func (f *runtimeServiceFake) Upgrade(_ context.Context, agentID string) (Upgrade
 }
 
 func (f *runtimeServiceFake) Diagnose(agentID string) (string, error) {
+	f.record("diagnose", agentID)
 	if err := f.err("diagnose", agentID); err != nil {
 		return "", err
 	}
@@ -88,6 +95,13 @@ func (f *runtimeServiceFake) err(action, agentID string) error {
 		return err
 	}
 	return nil
+}
+
+func (f *runtimeServiceFake) record(action, agentID string) {
+	if f == nil {
+		return
+	}
+	f.callLog = append(f.callLog, action+":"+agentID)
 }
 
 var errMemoryMissing = errors.New("memory entry not found")
