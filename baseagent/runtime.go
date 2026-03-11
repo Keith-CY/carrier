@@ -205,6 +205,27 @@ func (r *Runtime) SetActiveProvider(name string) error {
 	return r.providers.SetActiveProvider(name)
 }
 
+func (r *Runtime) ListInstalledSkills(ctx context.Context) []SkillDefinition {
+	if r == nil || r.skillsLoader == nil {
+		return nil
+	}
+	return r.skillsLoader.ListInstalledSkills(ctx)
+}
+
+func (r *Runtime) SearchSkills(ctx context.Context, query string) []SkillDefinition {
+	if r == nil || r.skillsLoader == nil {
+		return nil
+	}
+	return r.skillsLoader.SearchSkills(ctx, query)
+}
+
+func (r *Runtime) InstallSkill(ctx context.Context, name string) (SkillDefinition, error) {
+	if r == nil || r.skillsLoader == nil {
+		return SkillDefinition{}, fmt.Errorf("skills loader is unavailable")
+	}
+	return r.skillsLoader.InstallSkill(ctx, name)
+}
+
 func (r *Runtime) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
 	msg := strings.TrimSpace(req.Message)
 	if msg == "" {
