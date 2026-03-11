@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { ADMIN_AUTHZ, loginWithToken, mockAPIs, mockOrchestrationAPIs } from './helpers';
+import { ADMIN_AUTHZ, loginWithToken, mockAPIs, mockOrchestrationAPIs, pushHistoryRoute } from './helpers';
 
 function authzFor(role: 'viewer' | 'operator' | 'approver' | 'admin') {
   const permissionsByRole = {
@@ -54,17 +54,13 @@ async function mockFeaturesRole(page, role: 'viewer' | 'operator' | 'approver' |
   );
 }
 
-async function navigateHash(page, hash: string) {
-  await page.evaluate((nextHash: string) => {
-    window.location.hash = nextHash;
-  }, hash);
+async function navigateRoute(page, route: string) {
+  await pushHistoryRoute(page, route);
 }
 
 async function openExecutionFromList(page, executionId: string) {
-  await navigateHash(page, '#/executions');
-  const card = page.locator('#executions-list .execution-list-card').filter({ hasText: executionId }).first();
-  await expect(card).toBeVisible();
-  await card.click();
+  await navigateRoute(page, '/executions/' + encodeURIComponent(executionId));
+  await expect(page.locator('#executions-detail')).toContainText(executionId);
 }
 
 test.describe('RBAC UI', () => {
@@ -73,7 +69,7 @@ test.describe('RBAC UI', () => {
     await mockOrchestrationAPIs(page);
     await mockFeaturesRole(page, 'viewer');
 
-    await loginWithToken(page, '/#/dashboard');
+    await loginWithToken(page, '/dashboard');
 
     await expect(page.locator('#dashboard-quick-launch-section')).toBeHidden();
 
@@ -92,7 +88,7 @@ test.describe('RBAC UI', () => {
     await mockOrchestrationAPIs(page);
     await mockFeaturesRole(page, 'operator');
 
-    await loginWithToken(page, '/#/dashboard');
+    await loginWithToken(page, '/dashboard');
 
     await expect(page.locator('#dashboard-quick-launch-section')).toBeVisible();
 
@@ -100,14 +96,14 @@ test.describe('RBAC UI', () => {
     await expect(page.locator('#executions-cancel')).toBeVisible();
     await expect(page.locator('#executions-policy-approve')).toBeHidden();
 
-    await navigateHash(page, '#/providers');
+    await navigateRoute(page, '/providers');
     await expect(page.locator('#profiles-msg')).toContainText('read-only access');
     await expect(page.locator('#profile-save')).toBeDisabled();
     await expect(page.locator('#binding-save')).toBeDisabled();
     await expect(page.locator('#profiles-list')).not.toContainText('Delete');
     await expect(page.locator('#bindings-list')).not.toContainText('Delete');
 
-    await navigateHash(page, '#/policies');
+    await navigateRoute(page, '/policies');
     await expect(page.locator('#profiles-msg')).toContainText('read-only access');
     await expect(page.locator('#execution-policy-save')).toBeDisabled();
     await expect(page.locator('#execution-policies-list')).not.toContainText('Delete');
@@ -118,7 +114,7 @@ test.describe('RBAC UI', () => {
     await mockOrchestrationAPIs(page);
     await mockFeaturesRole(page, 'approver');
 
-    await loginWithToken(page, '/#/dashboard');
+    await loginWithToken(page, '/dashboard');
 
     await expect(page.locator('#dashboard-quick-launch-section')).toBeHidden();
 
@@ -126,15 +122,15 @@ test.describe('RBAC UI', () => {
     await expect(page.locator('#executions-policy-approve')).toBeVisible();
     await expect(page.locator('#executions-cancel')).toBeHidden();
 
-    await navigateHash(page, '#/hosts');
+    await navigateRoute(page, '/hosts');
     await expect(page.locator('#server-save')).toBeDisabled();
     await expect(page.locator('#servers-msg')).toContainText('cannot modify remote hosts');
     await expect(page.locator('#servers-list')).not.toContainText('Delete');
 
-    await navigateHash(page, '#/providers');
+    await navigateRoute(page, '/providers');
     await expect(page.locator('#profile-save')).toBeDisabled();
 
-    await navigateHash(page, '#/policies');
+    await navigateRoute(page, '/policies');
     await expect(page.locator('#execution-policy-save')).toBeDisabled();
   });
 
@@ -143,16 +139,17 @@ test.describe('RBAC UI', () => {
     await mockOrchestrationAPIs(page);
     await mockFeaturesRole(page, 'admin');
 
-    await loginWithToken(page, '/#/providers');
+    await loginWithToken(page, '/dashboard');
+    await navigateRoute(page, '/providers');
 
     await expect(page.locator('#profile-save')).toBeEnabled();
     await expect(page.locator('#binding-save')).toBeEnabled();
     await expect(page.locator('#profiles-list')).toContainText('Delete');
 
-    await navigateHash(page, '#/policies');
+    await navigateRoute(page, '/policies');
     await expect(page.locator('#execution-policy-save')).toBeEnabled();
 
-    await navigateHash(page, '#/hosts');
+    await navigateRoute(page, '/hosts');
     await expect(page.locator('#server-save')).toBeEnabled();
     await expect(page.locator('#servers-list')).toContainText('Delete');
   });

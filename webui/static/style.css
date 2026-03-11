@@ -743,6 +743,7 @@ button:disabled,
   background: var(--surface-muted);
   padding: 10px 12px;
   margin-bottom: 8px;
+  scroll-margin-top: 120px;
   cursor: pointer;
   transition: border-color 120ms ease, background 120ms ease;
 }

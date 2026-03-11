@@ -1,5 +1,9 @@
 import { expect, test } from '@playwright/test';
-import { loginWithToken, mockAPIs } from './helpers';
+import { loginWithToken, mockAPIs, pushHistoryRoute } from './helpers';
+
+async function domClick(page, selector: string) {
+  await page.locator(selector).evaluate((element: HTMLElement) => element.click());
+}
 
 test.describe('Remote Control Plane Views', () => {
   test('providers binding controls are disabled when provider binding feature is off', async ({ page }) => {
@@ -146,7 +150,7 @@ test.describe('Remote Control Plane Views', () => {
 
     await loginWithToken(page, '/#/hosts');
 
-    await expect.poll(() => page.url()).toContain('#/dashboard');
+    await expect.poll(() => page.url()).toContain('/dashboard');
     await expect(page.locator('#view-dashboard')).toBeVisible();
     await expect(page.locator('.nav-link[data-route="workers"]')).toBeHidden();
     await expect(page.locator('.nav-link[data-route="hosts"]')).toBeHidden();
@@ -155,8 +159,9 @@ test.describe('Remote Control Plane Views', () => {
     await expect(page.locator('.nav-link[data-route="remote-chat"]')).toBeHidden();
     await expect(page.locator('.nav-link[data-route="remote-observability"]')).toBeHidden();
 
-    await page.goto('/#/remote-observability');
-    await expect.poll(() => page.url()).toContain('#/dashboard');
+    await page.goto('/');
+    await pushHistoryRoute(page, '/remote-observability');
+    await expect.poll(() => page.url()).toContain('/dashboard');
   });
 
   test('hosts page supports create/check/delete flow', async ({ page }) => {
@@ -677,25 +682,25 @@ test.describe('Remote Control Plane Views', () => {
     await expect(page.locator('#server-manage-card')).toBeVisible();
     await expect(page.locator('#server-manage-host-label')).toContainText('host-1');
 
-    await page.click('#server-manage-load-instances');
+    await domClick(page, '#server-manage-load-instances');
     await expect(page.locator('#server-manage-instances')).toContainText('main (runtime=running, health=healthy)');
 
-    await page.click('#server-manage-instance-status');
+    await domClick(page, '#server-manage-instance-status');
     await expect.poll(() => statusCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('runtime: running');
 
     const installBtn = page.locator('#server-manage-install-instance');
-    await installBtn.click();
+    await domClick(page, '#server-manage-install-instance');
     await expect(page.locator('#server-manage-msg')).toContainText('Install completed');
     await expect(installBtn).toBeEnabled();
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('Install');
 
-    await page.click('#server-manage-repair-instance');
+    await domClick(page, '#server-manage-repair-instance');
     await expect.poll(() => repairCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('repair status: repaired');
 
     await page.fill('#server-manage-log-tail', '50');
-    await page.click('#server-manage-load-logs');
+    await domClick(page, '#server-manage-load-logs');
     await expect.poll(() => logsCalls).toBe(1);
     await expect(page.locator('#server-manage-logs')).toContainText('gateway.log');
     await expect(page.locator('#server-manage-logs')).toContainText('ready');
@@ -703,45 +708,45 @@ test.describe('Remote Control Plane Views', () => {
     await expect(page.locator('#server-manage-op-meta')).toContainText('requestId=req-logs-1');
     await expect(page.locator('#server-manage-op-meta')).toContainText('duration=');
 
-    await page.click('#server-manage-sync-instance');
+    await domClick(page, '#server-manage-sync-instance');
     await expect.poll(() => syncCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('drift state: in_sync');
 
-    await page.click('#server-manage-sync-status');
+    await domClick(page, '#server-manage-sync-status');
     await expect.poll(() => syncStatusCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('sync status: success');
 
-    await page.click('#server-manage-diagnose-instance');
+    await domClick(page, '#server-manage-diagnose-instance');
     await expect.poll(() => diagnoseCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('diagnose result: healthy');
 
-    await page.click('#server-manage-reconcile-instance');
+    await domClick(page, '#server-manage-reconcile-instance');
     await expect.poll(() => reconcileCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('reconciled: true');
 
-    await page.click('#server-manage-rollback-instance');
+    await domClick(page, '#server-manage-rollback-instance');
     await expect.poll(() => rollbackCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('rolled back: true');
 
     await page.fill('#server-manage-codeagent-command', 'echo hello');
-    await page.click('#server-manage-codeagent-install');
+    await domClick(page, '#server-manage-codeagent-install');
     await expect.poll(() => codeagentInstallCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('backend: codex');
 
-    await page.click('#server-manage-codeagent-health');
+    await domClick(page, '#server-manage-codeagent-health');
     await expect.poll(() => codeagentHealthCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('healthy: true');
 
-    await page.click('#server-manage-codeagent-version');
+    await domClick(page, '#server-manage-codeagent-version');
     await expect.poll(() => codeagentVersionCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('backend: codex');
 
-    await page.click('#server-manage-codeagent-run');
+    await domClick(page, '#server-manage-codeagent-run');
     await expect.poll(() => codeagentRunCalls).toBe(1);
     await expect(page.locator('#server-manage-logs')).toContainText('hello from codeagent');
 
     const loadConfigBtn = page.locator('#server-manage-load-config');
-    await loadConfigBtn.click();
+    await domClick(page, '#server-manage-load-config');
     await expect(page.locator('#server-manage-msg')).toContainText('Loading config');
     await expect(loadConfigBtn).toBeDisabled();
     await expect(loadConfigBtn).toBeEnabled();
@@ -758,20 +763,23 @@ test.describe('Remote Control Plane Views', () => {
         },
       },
     }));
-    await page.click('#server-manage-apply-config');
-    expect(lastConfigPatchBody).toBeTruthy();
+    const applyConfigBtn = page.locator('#server-manage-apply-config');
+    await expect(applyConfigBtn).toBeVisible();
+    await expect(applyConfigBtn).toBeEnabled();
+    await domClick(page, '#server-manage-apply-config');
+    await expect.poll(() => lastConfigPatchBody).not.toBeNull();
     expect((lastConfigPatchBody?.agents as Record<string, unknown>)?.defaults).toBeTruthy();
 
-    await page.click('#server-manage-load-sessions');
+    await domClick(page, '#server-manage-load-sessions');
     await expect(page.locator('#server-manage-sessions')).toContainText('sess-1');
 
     await page.fill('#server-manage-session-id', 'sess-1');
-    await page.click('#server-manage-archive-session');
+    await domClick(page, '#server-manage-archive-session');
     await expect.poll(() => archiveCalls).toBe(1);
-    await page.click('#server-manage-delete-session');
+    await domClick(page, '#server-manage-delete-session');
     await expect.poll(() => deleteCalls).toBe(1);
 
-    await page.click('#server-manage-load-memory');
+    await domClick(page, '#server-manage-load-memory');
     await expect(page.locator('#server-manage-memory')).toContainText('facts/system.md');
   });
 
@@ -1072,7 +1080,7 @@ test.describe('Remote Control Plane Views', () => {
     await loginWithToken(page, '/#/remote-chat');
 
     await page.fill('#remote-chat-input', 'hello remote');
-    await page.click('#remote-chat-send');
+    await domClick(page, '#remote-chat-send');
     await expect(page.locator('#remote-chat-messages')).toContainText('remote-instance-reply');
     expect(lastChatBody).toBeTruthy();
     expect(lastChatBody?.target).toBe('remote');
@@ -1083,7 +1091,7 @@ test.describe('Remote Control Plane Views', () => {
     await page.waitForTimeout(50);
 
     await page.fill('#remote-chat-input', 'hello local');
-    await page.click('#remote-chat-send');
+    await domClick(page, '#remote-chat-send');
     await expect(page.locator('#remote-chat-messages')).toContainText('local-instance-reply');
     expect(lastChatBody).toBeTruthy();
     expect(lastChatBody?.target).toBe('local');

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mockAPIs, TEST_TOKEN } from './helpers';
+import { mockAPIs, pushHistoryRoute, TEST_TOKEN } from './helpers';
 
 test.describe('Login', () => {
   test('shows login overlay when no token', async ({ page }) => {
@@ -73,7 +73,8 @@ test.describe('Login', () => {
     await page.addInitScript((t: string) => {
       localStorage.setItem('carrier_token', t);
     }, TEST_TOKEN);
-    await page.goto('/#/dashboard');
+    await page.goto('/');
+    await pushHistoryRoute(page, '/dashboard');
 
     await expect(page.locator('#login-overlay')).toBeHidden();
     await expect(page.locator('#logout-btn')).toBeVisible();

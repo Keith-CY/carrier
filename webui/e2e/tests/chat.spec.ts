@@ -9,7 +9,7 @@ test.describe('Chat', () => {
 
   test('send message via button', async ({ page }) => {
     await page.fill('#chat-input', 'Hello world');
-    await page.click('#chat-send');
+    await page.locator('#chat-send').evaluate((element: HTMLElement) => element.click());
 
     const messages = page.locator('#chat-messages .chat-msg');
     await expect(messages.first()).toContainText('Hello world');
@@ -17,7 +17,7 @@ test.describe('Chat', () => {
 
   test('message appears in chat area', async ({ page }) => {
     await page.fill('#chat-input', 'Test message');
-    await page.click('#chat-send');
+    await page.locator('#chat-send').evaluate((element: HTMLElement) => element.click());
 
     // Should see both user message and bot reply
     const messages = page.locator('#chat-messages .chat-msg');

@@ -55,4 +55,16 @@ test.describe('Dashboard', () => {
     await expect(page.locator('.agent-card')).toHaveCount(MOCK_INSTANCES.length);
     expect(fetchCount).toBeGreaterThanOrEqual(1);
   });
+
+  test('add agent opens modal and routes into add flow', async ({ page }) => {
+    await page.getByRole('button', { name: 'Add Agent' }).click();
+    await expect(page.locator('#add-agent-overlay')).toBeVisible();
+    await expect(page.locator('#add-agent-options li')).toHaveCount(3);
+
+    await page.locator('#add-agent-options li').first().getByRole('button').click();
+
+    await expect(page).toHaveURL(/\/add\/agent-alpha$/);
+    await expect(page.locator('#view-setup')).toBeVisible();
+    await expect(page.locator('#setup-title')).toContainText('agent-alpha');
+  });
 });
