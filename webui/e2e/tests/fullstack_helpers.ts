@@ -1,4 +1,5 @@
 import { APIRequestContext, Page, expect } from '@playwright/test';
+import { normalizeTestRoute, pushHistoryRoute } from './helpers';
 
 export type TestRole = 'viewer' | 'operator' | 'approver' | 'admin';
 
@@ -16,29 +17,22 @@ export function authHeaders(role: TestRole): Record<string, string> {
   return { Authorization: 'Bearer ' + roleTokens[role] };
 }
 
-export async function loginWithRole(page: Page, role: TestRole, url = '/#/dashboard', waitUntil: 'load' | 'domcontentloaded' | 'commit' = 'commit') {
+export async function loginWithRole(page: Page, role: TestRole, url = '/dashboard', waitUntil: 'load' | 'domcontentloaded' | 'commit' = 'commit') {
   const token = roleTokens[role];
   await page.addInitScript((nextToken: string) => {
     localStorage.setItem('carrier_token', nextToken);
   }, token);
-  const hashIndex = url.indexOf('#');
-  const path = hashIndex >= 0 ? (url.slice(0, hashIndex) || '/') : url;
-  const hash = hashIndex >= 0 ? url.slice(hashIndex) : '';
-  await page.goto(path || '/', { waitUntil });
+  const targetPath = normalizeTestRoute(url);
+  await page.goto('/', { waitUntil });
   await page.locator('#logout-btn').waitFor({ state: 'visible' });
-  await page.waitForFunction(() => {
-    const nav = document.querySelector('#nav');
-    return window.location.hash.length > 0 || (!!nav && !nav.classList.contains('hidden'));
-  });
-  if (hash) {
-    await page.evaluate((nextHash: string) => {
-      window.location.hash = nextHash;
-    }, hash);
-    await page.waitForFunction((expectedHash: string) => {
-      const current = window.location.hash;
-      return current === expectedHash || current === '#/dashboard' || current === '#/welcome';
-    }, hash);
+  if (targetPath !== '/') {
+    await pushHistoryRoute(page, targetPath);
   }
+  await page.waitForFunction((expectedPath: string) => {
+    const nav = document.querySelector('#nav');
+    const current = window.location.pathname || '/';
+    return current === expectedPath || (!!nav && !nav.classList.contains('hidden'));
+  }, targetPath);
 }
 
 export async function gatewayFetch(request: APIRequestContext, role: TestRole, path: string, init: Record<string, unknown> = {}) {

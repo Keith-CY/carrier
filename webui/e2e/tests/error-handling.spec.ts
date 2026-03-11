@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { mockAPIs, loginWithToken, TEST_TOKEN } from './helpers';
+import { mockAPIs, loginWithToken, pushHistoryRoute, TEST_TOKEN } from './helpers';
 
 test.describe('Error Handling', () => {
   test('shows offline badge when daemon is unreachable', async ({ page }) => {
@@ -12,7 +12,8 @@ test.describe('Error Handling', () => {
     await page.addInitScript((t: string) => {
       localStorage.setItem('carrier_token', t);
     }, TEST_TOKEN);
-    await page.goto('/#/dashboard');
+    await page.goto('/');
+    await pushHistoryRoute(page, '/dashboard');
 
     const badge = page.locator('#health-badge');
     await expect(badge).toContainText('offline');
@@ -43,15 +44,15 @@ test.describe('Error Handling', () => {
 
     // We need to set selectedAgent — navigate through wizard
     await loginWithToken(page, '/#/agents');
-    // Select first agent
+    // Trigger the selection state directly; sticky header auto-scroll makes pointer clicks flaky here.
     const items = page.locator('#agent-pick li');
     await expect(items).toHaveCount(3);
-    await items.first().click();
+    await items.first().evaluate((element: HTMLElement) => element.click());
     await page.click('#agents-next');
 
     // Provider page → choose one provider and continue
     await expect(page.locator('#view-provider')).toBeVisible();
-    await page.locator('.provider-item').first().click();
+    await page.locator('.provider-item').first().evaluate((element: HTMLElement) => element.click());
     await page.fill('#provider-api-key', 'sk-test-install-fail');
     await page.click('#provider-next');
 

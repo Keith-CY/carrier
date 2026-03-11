@@ -2,33 +2,35 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC_DIR="${ROOT_DIR}/webui/src"
-OUT_DIR="${ROOT_DIR}/webui/static"
+WEBUI_DIR="${ROOT_DIR}/webui"
+OUT_DIR="${WEBUI_DIR}/static"
 
 if ! command -v bun >/dev/null 2>&1; then
   echo "ERROR: bun is required to build WebUI assets." >&2
   exit 1
 fi
 
-entries=(
-  "app"
-  "remote-control-islands"
-  "remote-chat-island"
-  "remote-observability-island"
-)
+if [[ ! -f "${WEBUI_DIR}/package.json" ]]; then
+  echo "ERROR: missing ${WEBUI_DIR}/package.json" >&2
+  exit 1
+fi
 
-for entry in "${entries[@]}"; do
-  src_file="${SRC_DIR}/${entry}.ts"
-  out_file="${OUT_DIR}/${entry}.js"
-  if [[ ! -f "${src_file}" ]]; then
-    echo "ERROR: missing source file ${src_file}" >&2
-    exit 1
+rm -rf "${OUT_DIR}/assets"
+rm -f "${OUT_DIR}/index.html"
+
+(
+  cd "${WEBUI_DIR}"
+  if [[ ! -d node_modules ]]; then
+    bun install --frozen-lockfile
   fi
+  bun run build
+)
+rm -f \
+  "${OUT_DIR}/app.js" \
+  "${OUT_DIR}/react.production.min.js" \
+  "${OUT_DIR}/react-dom.production.min.js" \
+  "${OUT_DIR}/remote-control-islands.js" \
+  "${OUT_DIR}/remote-chat-island.js" \
+  "${OUT_DIR}/remote-observability-island.js"
 
-  bun build "${src_file}" \
-    --target browser \
-    --outfile "${out_file}"
-
-done
-
-echo "Built WebUI assets from TypeScript sources."
+echo "Built WebUI assets with Vite shell."

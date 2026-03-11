@@ -279,7 +279,7 @@ test.describe('Remote Observability', () => {
 
     await loginWithToken(page, '/#/remote-observability');
     await page.click('#remote-observability-summary .agent-card:has(h4:text("Cost Attribution")) .summary-link:has-text("top team: platform")');
-    await expect.poll(() => page.url()).toContain('#/executions?search=platform');
+    await expect.poll(() => page.url()).toContain('/executions?search=platform');
     await expect(page.locator('#executions-list')).toContainText('platform');
     await expect(page.locator('#executions-list')).not.toContainText('sre');
   });

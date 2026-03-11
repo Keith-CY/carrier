@@ -386,6 +386,25 @@ function cloneJSON<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+export function normalizeTestRoute(url = '/'): string {
+  if (!url) return '/';
+  const hashIndex = url.indexOf('#');
+  if (hashIndex < 0) return url;
+  const hash = url.slice(hashIndex + 1).trim();
+  if (!hash) return url.slice(0, hashIndex) || '/';
+  if (hash.startsWith('/')) return hash;
+  return '/' + hash;
+}
+
+export async function pushHistoryRoute(page: Page, url = '/') {
+  const targetPath = normalizeTestRoute(url);
+  await page.evaluate((nextPath: string) => {
+    window.history.pushState({}, '', nextPath);
+    window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }));
+  }, targetPath);
+  await page.waitForTimeout(50);
+}
+
 /** Set up standard API mocks so the app works without a real daemon. */
 export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
   const healthOk = opts?.healthOk ?? true;
@@ -1343,22 +1362,15 @@ export async function loginWithToken(page: Page, url = '/', waitUntil: 'load' | 
   await page.addInitScript((token: string) => {
     localStorage.setItem('carrier_token', token);
   }, TEST_TOKEN);
-  const hashIndex = url.indexOf('#');
-  const path = hashIndex >= 0 ? (url.slice(0, hashIndex) || '/') : url;
-  const hash = hashIndex >= 0 ? url.slice(hashIndex) : '';
-  await page.goto(path || '/', { waitUntil });
+  const targetPath = normalizeTestRoute(url);
+  await page.goto('/', { waitUntil });
   await page.locator('#logout-btn').waitFor({ state: 'visible' });
-  await page.waitForFunction(() => {
-    const nav = document.querySelector('#nav');
-    return window.location.hash.length > 0 || (!!nav && !nav.classList.contains('hidden'));
-  });
-  if (hash) {
-    await page.evaluate((nextHash: string) => {
-      window.location.hash = nextHash;
-    }, hash);
-    await page.waitForFunction((expectedHash: string) => {
-      const current = window.location.hash;
-      return current === expectedHash || current === '#/dashboard' || current === '#/welcome';
-    }, hash);
+  if (targetPath !== '/') {
+    await pushHistoryRoute(page, targetPath);
   }
+  await page.waitForFunction((expectedPath: string) => {
+    const nav = document.querySelector('#nav');
+    const current = window.location.pathname || '/';
+    return current === expectedPath || (!!nav && !nav.classList.contains('hidden'));
+  }, targetPath);
 }

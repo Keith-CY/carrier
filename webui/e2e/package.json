@@ -2,7 +2,10 @@
   "name": "carrier-webui-e2e",
   "private": true,
   "scripts": {
-    "test": "playwright test"
+    "test": "playwright test --config playwright.config.ts",
+    "test:visual": "playwright test tests/visual.spec.ts --config playwright.config.ts",
+    "test:visual:update": "playwright test tests/visual.spec.ts --config playwright.config.ts --update-snapshots",
+    "test:fullstack": "playwright test --config playwright.fullstack.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.0",

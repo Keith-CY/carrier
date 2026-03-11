@@ -26,7 +26,7 @@ test.describe('Execution Center', () => {
     await expect(page.locator('#quick-launch-preview-card')).toContainText('labels[gpu,prod]/picoclaw');
 
     await page.click('#quick-launch-run');
-    await expect.poll(() => page.url()).toContain('#/executions/exec-preview-1');
+    await expect.poll(() => page.url()).toContain('/executions/exec-preview-1');
     await expect(page.locator('#executions-detail')).toContainText('Investigate checkout latency');
     await expect(page.locator('#executions-detail')).toContainText('Provider Governance');
     await expect(page.locator('#executions-detail')).toContainText('Execution Policy');
@@ -57,7 +57,7 @@ test.describe('Execution Center', () => {
     await expect(page.locator('#quick-launch-preview-card')).toContainText('Analyze probable failure paths');
 
     await page.click('#quick-launch-run');
-    await expect.poll(() => page.url()).toContain('#/executions/exec-preview-1');
+    await expect.poll(() => page.url()).toContain('/executions/exec-preview-1');
     await expect(page.locator('#executions-detail')).toContainText('Diagnose incident for service checkout');
   });
 
@@ -151,7 +151,7 @@ test.describe('Execution Center', () => {
     await expect.poll(() => auditRequests).toBe(1);
 
     await page.click('#executions-clone');
-    await expect.poll(() => page.url()).toContain('#/executions/exec-derived-1');
+    await expect.poll(() => page.url()).toContain('/executions/exec-derived-1');
     await expect(page.locator('#executions-detail')).toContainText('parent: exec-complete');
     await expect(page.locator('#executions-detail')).toContainText('launch reason: clone_execution');
     await expect(page.locator('#executions-detail')).toContainText('status: pending_authorization');
@@ -165,7 +165,7 @@ test.describe('Execution Center', () => {
     await expect(page.locator('#executions-retry')).toBeVisible();
 
     await page.click('#executions-retry');
-    await expect.poll(() => page.url()).toContain('#/executions/exec-derived-1');
+    await expect.poll(() => page.url()).toContain('/executions/exec-derived-1');
     await expect(page.locator('#executions-detail')).toContainText('parent: exec-retryable');
     await expect(page.locator('#executions-detail')).toContainText('launch reason: retry_failed_tasks');
     await expect(page.locator('#executions-detail')).toContainText('collect rollout logs');
