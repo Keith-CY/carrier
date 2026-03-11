@@ -8,6 +8,20 @@ import (
 	"testing"
 )
 
+type stubSubagentSpawner struct {
+	handle SubagentJobHandle
+	err    error
+	calls  []SubagentRequest
+}
+
+func (s *stubSubagentSpawner) Spawn(_ context.Context, req SubagentRequest) (SubagentJobHandle, error) {
+	s.calls = append(s.calls, req)
+	if s.err != nil {
+		return SubagentJobHandle{}, s.err
+	}
+	return s.handle, nil
+}
+
 type scriptedToolAwareProvider struct {
 	name       string
 	replies    []StructuredToolReply
@@ -475,6 +489,12 @@ func TestRuntimeChatStructuredLoopExecutesBuiltInToolCallsWithoutWorkspaceRoot(t
 	if _, ok := seen["list_agents"]; !ok {
 		t.Fatalf("expected built-in tool descriptor without workspace, got %+v", provider.requests[0].Tools)
 	}
+	if _, ok := seen["web_fetch"]; !ok {
+		t.Fatalf("expected web_fetch descriptor without workspace root, got %+v", provider.requests[0].Tools)
+	}
+	if _, ok := seen["web_search"]; !ok {
+		t.Fatalf("expected web_search descriptor without workspace root, got %+v", provider.requests[0].Tools)
+	}
 	if _, ok := seen["write_file"]; ok {
 		t.Fatalf("did not expect workspace tool descriptor without workspace root, got %+v", provider.requests[0].Tools)
 	}
@@ -877,5 +897,77 @@ func TestAgentLoopStructuredLoopStopsAtMaxIterations(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "max iterations") {
 		t.Fatalf("expected max iteration failure, got %v", err)
+	}
+}
+
+func TestStructuredLoopSpawnSubagent(t *testing.T) {
+	policy := ActiveBoundarySpec().StructuredToolPolicy
+	policy.HighRiskDecision = string(structuredToolDecisionAllow)
+
+	spawner := &stubSubagentSpawner{
+		handle: SubagentJobHandle{
+			JobID:   "job-42",
+			Status:  "queued",
+			Summary: "collect dependency graph",
+		},
+	}
+	provider := &scriptedToolAwareProvider{
+		name: "spawn-subagent",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "spawn_subagent",
+						Arguments: map[string]any{
+							"task": "collect dependency graph",
+						},
+					},
+				},
+			},
+			{
+				Content: "delegated work queued",
+			},
+		},
+	}
+
+	rt := NewRuntime(
+		&runtimeServiceFake{},
+		nil,
+		WithWorkspaceRoot(t.TempDir()),
+		WithMaxToolIterations(4),
+		WithStructuredToolPolicy(policy),
+		WithSubagentSpawner(spawner),
+	)
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "spawn-subagent",
+		Message:  "delegate dependency graph analysis",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "delegated work queued" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(spawner.calls) != 1 || spawner.calls[0].Task != "collect dependency graph" {
+		t.Fatalf("expected subagent spawn call, got %+v", spawner.calls)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected tool follow-up request, got %d", len(provider.requests))
+	}
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.Role != "tool" || last.ToolName != "spawn_subagent" {
+		t.Fatalf("unexpected tool callback message: %+v", last)
+	}
+	if !strings.Contains(last.Content, "job-42") || !strings.Contains(strings.ToLower(last.Content), "queued") {
+		t.Fatalf("expected delegated job handle in tool output, got %+v", last)
 	}
 }

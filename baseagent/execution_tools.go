@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -39,7 +40,41 @@ type ExecutionToolResult struct {
 	Status       ExecutionToolResultStatus
 	PolicyReason string
 	PolicyRuleID string
+	Metadata     map[string]any
 }
+
+type WebSearchHit struct {
+	Title   string
+	URL     string
+	Snippet string
+}
+
+type ExecutionAttachment struct {
+	Path      string
+	Name      string
+	SizeBytes int64
+}
+
+type SubagentRequest struct {
+	Task string
+}
+
+type SubagentJobHandle struct {
+	JobID   string
+	Status  string
+	Summary string
+}
+
+type WebToolBackend interface {
+	Fetch(ctx context.Context, url string) (string, error)
+	Search(ctx context.Context, query string, limit int) ([]WebSearchHit, error)
+}
+
+type SubagentSpawner interface {
+	Spawn(ctx context.Context, req SubagentRequest) (SubagentJobHandle, error)
+}
+
+type ExecutionToolRegistryOption func(*ExecutionToolRegistry)
 
 type StructuredToolDescriptor struct {
 	Name        string
@@ -58,9 +93,57 @@ type ExecutionToolRegistry struct {
 	workspaceRoot string
 	tools         map[string]executionToolSpec
 	denyPatterns  []*regexp.Regexp
+	webBackend    WebToolBackend
+	subagents     SubagentSpawner
 }
 
-func NewExecutionToolRegistry(workspaceRoot string) *ExecutionToolRegistry {
+type noopWebToolBackend struct{}
+
+func (noopWebToolBackend) Fetch(_ context.Context, _ string) (string, error) {
+	return "", fmt.Errorf("web fetch backend is not configured")
+}
+
+func (noopWebToolBackend) Search(_ context.Context, _ string, _ int) ([]WebSearchHit, error) {
+	return nil, fmt.Errorf("web search backend is not configured")
+}
+
+type localSubagentSpawner struct {
+	mu   sync.Mutex
+	next int
+}
+
+func (s *localSubagentSpawner) Spawn(_ context.Context, req SubagentRequest) (SubagentJobHandle, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.next++
+	task := strings.TrimSpace(req.Task)
+	if task == "" {
+		task = "delegated task"
+	}
+	return SubagentJobHandle{
+		JobID:   fmt.Sprintf("subagent-%d", s.next),
+		Status:  "queued",
+		Summary: task,
+	}, nil
+}
+
+func WithExecutionToolWebBackend(backend WebToolBackend) ExecutionToolRegistryOption {
+	return func(r *ExecutionToolRegistry) {
+		if backend != nil {
+			r.webBackend = backend
+		}
+	}
+}
+
+func WithExecutionToolSubagentSpawner(spawner SubagentSpawner) ExecutionToolRegistryOption {
+	return func(r *ExecutionToolRegistry) {
+		if spawner != nil {
+			r.subagents = spawner
+		}
+	}
+}
+
+func NewExecutionToolRegistry(workspaceRoot string, opts ...ExecutionToolRegistryOption) *ExecutionToolRegistry {
 	root := strings.TrimSpace(workspaceRoot)
 	if root != "" {
 		if abs, err := filepath.Abs(root); err == nil {
@@ -71,6 +154,8 @@ func NewExecutionToolRegistry(workspaceRoot string) *ExecutionToolRegistry {
 	registry := &ExecutionToolRegistry{
 		workspaceRoot: root,
 		tools:         map[string]executionToolSpec{},
+		webBackend:    noopWebToolBackend{},
+		subagents:     &localSubagentSpawner{},
 		denyPatterns: []*regexp.Regexp{
 			regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
 			regexp.MustCompile(`\bmkfs\b`),
@@ -173,7 +258,73 @@ func NewExecutionToolRegistry(workspaceRoot string) *ExecutionToolRegistry {
 		},
 		Run: registry.execCommand,
 	}
+	registry.tools["web_fetch"] = executionToolSpec{
+		Descriptor: StructuredToolDescriptor{
+			Name:        "web_fetch",
+			Description: "Fetch page text from a URL and return a bounded text envelope.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"url": map[string]any{"type": "string", "description": "URL to fetch."},
+				},
+				"required": []string{"url"},
+			},
+		},
+		Run: registry.webFetch,
+	}
+	registry.tools["web_search"] = executionToolSpec{
+		Descriptor: StructuredToolDescriptor{
+			Name:        "web_search",
+			Description: "Run a compact web search and return the top hits.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"type": "string", "description": "Search query text."},
+					"limit": map[string]any{"type": "integer", "description": "Optional maximum number of search hits to return."},
+				},
+				"required": []string{"query"},
+			},
+		},
+		Run: registry.webSearch,
+	}
+	registry.tools["send_file"] = executionToolSpec{
+		Descriptor: StructuredToolDescriptor{
+			Name:        "send_file",
+			Description: "Prepare a workspace file as a structured attachment result.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{"type": "string", "description": "Path to the file inside the workspace."},
+				},
+				"required": []string{"path"},
+			},
+		},
+		Run: registry.sendFile,
+	}
+	registry.tools["spawn_subagent"] = executionToolSpec{
+		Descriptor: StructuredToolDescriptor{
+			Name:        "spawn_subagent",
+			Description: "Create a delegated subagent job handle for a bounded task request.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task": map[string]any{"type": "string", "description": "Delegated task description."},
+				},
+				"required": []string{"task"},
+			},
+		},
+		Run: registry.spawnSubagent,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(registry)
+		}
+	}
 	return registry
+}
+
+func (r *ExecutionToolRegistry) HasWorkspaceRoot() bool {
+	return r != nil && strings.TrimSpace(r.workspaceRoot) != ""
 }
 
 func (r *ExecutionToolRegistry) Execute(ctx context.Context, name string, args map[string]any) ExecutionToolResult {
@@ -433,6 +584,121 @@ func (r *ExecutionToolRegistry) execCommand(ctx context.Context, args map[string
 	return result
 }
 
+func (r *ExecutionToolRegistry) webFetch(ctx context.Context, args map[string]any) ExecutionToolResult {
+	url, ok := args["url"].(string)
+	if !ok || strings.TrimSpace(url) == "" {
+		return executionError("url is required")
+	}
+	if r.webBackend == nil {
+		return executionError("web fetch backend is not configured")
+	}
+	text, err := r.webBackend.Fetch(ctx, strings.TrimSpace(url))
+	if err != nil {
+		return executionError(fmt.Sprintf("web fetch: %v", err))
+	}
+	text = truncateExecutionOutput(strings.TrimSpace(text))
+	if text == "" {
+		text = "web fetch returned no content"
+	}
+	return ExecutionToolResult{
+		Output: text,
+		Metadata: map[string]any{
+			"source_url": strings.TrimSpace(url),
+		},
+	}
+}
+
+func (r *ExecutionToolRegistry) webSearch(ctx context.Context, args map[string]any) ExecutionToolResult {
+	query, ok := args["query"].(string)
+	if !ok || strings.TrimSpace(query) == "" {
+		return executionError("query is required")
+	}
+	limit, err := readOptionalIntArg(args, "limit", 5)
+	if err != nil {
+		return executionError(err.Error())
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > 10 {
+		limit = 10
+	}
+	if r.webBackend == nil {
+		return executionError("web search backend is not configured")
+	}
+	hits, err := r.webBackend.Search(ctx, strings.TrimSpace(query), limit)
+	if err != nil {
+		return executionError(fmt.Sprintf("web search: %v", err))
+	}
+	if len(hits) > limit {
+		hits = hits[:limit]
+	}
+	return ExecutionToolResult{
+		Output: renderWebSearchHits(hits),
+		Metadata: map[string]any{
+			"query":          strings.TrimSpace(query),
+			"search_results": hits,
+		},
+	}
+}
+
+func (r *ExecutionToolRegistry) sendFile(_ context.Context, args map[string]any) ExecutionToolResult {
+	path, ok := args["path"].(string)
+	if !ok || strings.TrimSpace(path) == "" {
+		return executionError("path is required")
+	}
+	resolved, err := r.resolveWorkspacePath(path)
+	if err != nil {
+		return executionError(err.Error())
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return executionError(fmt.Sprintf("stat file: %v", err))
+	}
+	if info.IsDir() {
+		return executionError("path must point to a file")
+	}
+	attachment := ExecutionAttachment{
+		Path:      resolved,
+		Name:      info.Name(),
+		SizeBytes: info.Size(),
+	}
+	return ExecutionToolResult{
+		Output: fmt.Sprintf("prepared attachment %s (%d bytes)", attachment.Name, attachment.SizeBytes),
+		Metadata: map[string]any{
+			"attachment": attachment,
+		},
+	}
+}
+
+func (r *ExecutionToolRegistry) spawnSubagent(ctx context.Context, args map[string]any) ExecutionToolResult {
+	task, ok := args["task"].(string)
+	if !ok || strings.TrimSpace(task) == "" {
+		return executionError("task is required")
+	}
+	if r.subagents == nil {
+		return executionError("subagent spawner is not configured")
+	}
+	handle, err := r.subagents.Spawn(ctx, SubagentRequest{Task: strings.TrimSpace(task)})
+	if err != nil {
+		return executionError(fmt.Sprintf("spawn subagent: %v", err))
+	}
+	status := strings.TrimSpace(handle.Status)
+	if status == "" {
+		status = "queued"
+	}
+	output := fmt.Sprintf("delegated job %s (%s)", strings.TrimSpace(handle.JobID), status)
+	if summary := strings.TrimSpace(handle.Summary); summary != "" {
+		output += ": " + summary
+	}
+	return ExecutionToolResult{
+		Output: output,
+		Metadata: map[string]any{
+			"delegation": handle,
+		},
+	}
+}
+
 func (r *ExecutionToolRegistry) resolveWorkspacePath(rawPath string) (string, error) {
 	trimmed := strings.TrimSpace(rawPath)
 	if trimmed == "" {
@@ -512,6 +778,29 @@ func executionAskWithPolicy(message string, decision StructuredPolicyDecision) E
 
 func executionDenyWithPolicy(message string, decision StructuredPolicyDecision) ExecutionToolResult {
 	return applyStructuredPolicyMetadata(executionDeny(message), decision)
+}
+
+func renderWebSearchHits(hits []WebSearchHit) string {
+	if len(hits) == 0 {
+		return "no search results"
+	}
+	lines := make([]string, 0, len(hits)*2)
+	for idx, hit := range hits {
+		title := strings.TrimSpace(hit.Title)
+		if title == "" {
+			title = fmt.Sprintf("Result %d", idx+1)
+		}
+		url := strings.TrimSpace(hit.URL)
+		line := fmt.Sprintf("%d. %s", idx+1, title)
+		if url != "" {
+			line += " - " + url
+		}
+		lines = append(lines, line)
+		if snippet := strings.TrimSpace(hit.Snippet); snippet != "" {
+			lines = append(lines, snippet)
+		}
+	}
+	return truncateExecutionOutput(strings.Join(lines, "\n"))
 }
 
 func readOptionalIntArg(args map[string]any, key string, fallback int) (int, error) {

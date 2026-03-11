@@ -45,3 +45,15 @@ func WithSkillsLoader(loader SkillsLoader) RuntimeOption {
 		r.skillsLoader = loader
 	}
 }
+
+func WithWebToolBackend(backend WebToolBackend) RuntimeOption {
+	return func(r *Runtime) {
+		r.webBackend = backend
+	}
+}
+
+func WithSubagentSpawner(spawner SubagentSpawner) RuntimeOption {
+	return func(r *Runtime) {
+		r.subagentSpawner = spawner
+	}
+}

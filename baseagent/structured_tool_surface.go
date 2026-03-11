@@ -63,11 +63,13 @@ func structuredToolPolicyFromSpec(spec StructuredToolPolicySpec, hasWorkspace bo
 	if decision := parseStructuredToolDecision(spec.OperationalReadDecision); decision != "" {
 		resolved.OperationalReadDecision = string(decision)
 	}
-	if decision := parseStructuredToolDecision(spec.WorkspaceReadDecision); decision != "" {
-		resolved.WorkspaceReadDecision = string(decision)
-	}
-	if decision := parseStructuredToolDecision(spec.WorkspaceMutationDecision); decision != "" {
-		resolved.WorkspaceMutationDecision = string(decision)
+	if hasWorkspace {
+		if decision := parseStructuredToolDecision(spec.WorkspaceReadDecision); decision != "" {
+			resolved.WorkspaceReadDecision = string(decision)
+		}
+		if decision := parseStructuredToolDecision(spec.WorkspaceMutationDecision); decision != "" {
+			resolved.WorkspaceMutationDecision = string(decision)
+		}
 	}
 	if decision := parseStructuredToolDecision(spec.HighRiskDecision); decision != "" {
 		resolved.HighRiskDecision = string(decision)
@@ -119,8 +121,9 @@ func newStructuredToolSurface(builtin *ToolRegistry, workspace *ExecutionToolReg
 func newStructuredToolSurfaceWithPolicy(builtin *ToolRegistry, workspace *ExecutionToolRegistry, mcpManager MCPManager, policySpec StructuredToolPolicySpec) *structuredToolSurface {
 	// TODO(baseagent): add real confirmation handshakes for ask decisions and
 	// introduce argument-level controls.
+	hasWorkspace := workspace != nil && workspace.HasWorkspaceRoot()
 	surface := &structuredToolSurface{
-		policy: structuredToolPolicyFromSpec(policySpec, workspace != nil),
+		policy: structuredToolPolicyFromSpec(policySpec, hasWorkspace),
 		order:  []string{},
 		tools:  map[string]structuredToolDefinition{},
 	}
@@ -256,11 +259,13 @@ func (s *structuredToolSurface) registerMCPStructuredTools(mcpManager MCPManager
 
 func structuredWorkspaceToolTier(name string) structuredToolTier {
 	switch strings.TrimSpace(name) {
+	case "web_fetch", "web_search":
+		return structuredToolTierMetadataRead
 	case "read_file", "list_dir":
 		return structuredToolTierWorkspaceRead
 	case "write_file", "append_file", "edit_file":
 		return structuredToolTierWorkspaceMutation
-	case "exec":
+	case "exec", "send_file", "spawn_subagent":
 		return structuredToolTierHighRisk
 	default:
 		return structuredToolTierWorkspaceRead

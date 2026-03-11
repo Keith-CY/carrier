@@ -8,6 +8,10 @@ const (
 	structuredPolicyRuleExecPermissionDenied   = "exec.permission_denied"
 	structuredPolicyRuleAgentConfirmation      = "agent.lifecycle_confirmation_required"
 	structuredPolicyRuleAgentPermissionDenied  = "agent.lifecycle_permission_denied"
+	structuredPolicyRuleSendFileConfirmation   = "send_file.confirmation_required"
+	structuredPolicyRuleSendFilePermissionDeny = "send_file.permission_denied"
+	structuredPolicyRuleSubagentConfirmation   = "spawn_subagent.confirmation_required"
+	structuredPolicyRuleSubagentPermissionDeny = "spawn_subagent.permission_denied"
 )
 
 type StructuredPolicyDecision struct {
@@ -23,6 +27,10 @@ func evaluateStructuredToolPolicy(toolName string, args map[string]any, defaultD
 		return evaluateStructuredExecPolicy(args, defaultDecision)
 	case "agent_start", "agent_stop", "agent_upgrade", "agent_uninstall", "agent_diagnose":
 		return evaluateStructuredAgentLifecyclePolicy(defaultDecision)
+	case "send_file":
+		return evaluateStructuredSimpleHighRiskPolicy(defaultDecision, "Sending files requires confirmation.", structuredPolicyRuleSendFileConfirmation, "Sending files is unavailable at the current permission level.", structuredPolicyRuleSendFilePermissionDeny)
+	case "spawn_subagent":
+		return evaluateStructuredSimpleHighRiskPolicy(defaultDecision, "Subagent delegation requires confirmation.", structuredPolicyRuleSubagentConfirmation, "Subagent delegation is unavailable at the current permission level.", structuredPolicyRuleSubagentPermissionDeny)
 	default:
 		return StructuredPolicyDecision{Decision: defaultDecision}
 	}
@@ -57,18 +65,22 @@ func evaluateStructuredExecPolicy(args map[string]any, defaultDecision structure
 }
 
 func evaluateStructuredAgentLifecyclePolicy(defaultDecision structuredToolDecision) StructuredPolicyDecision {
+	return evaluateStructuredSimpleHighRiskPolicy(defaultDecision, "Agent lifecycle mutation requires confirmation.", structuredPolicyRuleAgentConfirmation, "Agent lifecycle mutation is unavailable at the current permission level.", structuredPolicyRuleAgentPermissionDenied)
+}
+
+func evaluateStructuredSimpleHighRiskPolicy(defaultDecision structuredToolDecision, askReason, askRuleID, denyReason, denyRuleID string) StructuredPolicyDecision {
 	switch defaultDecision {
 	case structuredToolDecisionAsk:
 		return StructuredPolicyDecision{
 			Decision: defaultDecision,
-			Reason:   "Agent lifecycle mutation requires confirmation.",
-			RuleID:   structuredPolicyRuleAgentConfirmation,
+			Reason:   askReason,
+			RuleID:   askRuleID,
 		}
 	case structuredToolDecisionDeny:
 		return StructuredPolicyDecision{
 			Decision: defaultDecision,
-			Reason:   "Agent lifecycle mutation is unavailable at the current permission level.",
-			RuleID:   structuredPolicyRuleAgentPermissionDenied,
+			Reason:   denyReason,
+			RuleID:   denyRuleID,
 		}
 	default:
 		return StructuredPolicyDecision{Decision: defaultDecision}
