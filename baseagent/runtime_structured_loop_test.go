@@ -8,6 +8,20 @@ import (
 	"testing"
 )
 
+type stubSubagentSpawner struct {
+	handle SubagentJobHandle
+	err    error
+	calls  []SubagentRequest
+}
+
+func (s *stubSubagentSpawner) Spawn(_ context.Context, req SubagentRequest) (SubagentJobHandle, error) {
+	s.calls = append(s.calls, req)
+	if s.err != nil {
+		return SubagentJobHandle{}, s.err
+	}
+	return s.handle, nil
+}
+
 type scriptedToolAwareProvider struct {
 	name       string
 	replies    []StructuredToolReply
@@ -37,6 +51,105 @@ type scriptedTextProvider struct {
 	requests []ProviderRequest
 }
 
+type runtimeExtendedMemoryFake struct {
+	*runtimeMemoryFake
+	searchHits   []MemorySearchHit
+	searchErr    error
+	searchCalls  []runtimeMemorySearchCall
+	observeID    string
+	observeErr   error
+	observeCalls []runtimeMemoryObserveCall
+	records      map[string]MemoryRecord
+	getRecordErr error
+	grantID      string
+	grantErr     error
+	revokeErr    error
+	audits       []MemoryAudit
+}
+
+type runtimeMemorySearchCall struct {
+	subject    string
+	query      string
+	maxResults int
+	minScore   float64
+}
+
+type runtimeMemoryObserveCall struct {
+	subject       string
+	toolName      string
+	outputSnippet string
+	scope         string
+}
+
+func newRuntimeExtendedMemoryFake() *runtimeExtendedMemoryFake {
+	return &runtimeExtendedMemoryFake{
+		runtimeMemoryFake: newRuntimeMemoryFake(),
+		records:           map[string]MemoryRecord{},
+	}
+}
+
+func (m *runtimeExtendedMemoryFake) Search(subject, query string, maxResults int, minScore float64) ([]MemorySearchHit, error) {
+	m.searchCalls = append(m.searchCalls, runtimeMemorySearchCall{
+		subject:    subject,
+		query:      query,
+		maxResults: maxResults,
+		minScore:   minScore,
+	})
+	if m.searchErr != nil {
+		return nil, m.searchErr
+	}
+	out := make([]MemorySearchHit, len(m.searchHits))
+	copy(out, m.searchHits)
+	return out, nil
+}
+
+func (m *runtimeExtendedMemoryFake) GetRecord(_ string, id string) (MemoryRecord, error) {
+	if m.getRecordErr != nil {
+		return MemoryRecord{}, m.getRecordErr
+	}
+	rec, ok := m.records[id]
+	if !ok {
+		return MemoryRecord{}, os.ErrNotExist
+	}
+	return rec, nil
+}
+
+func (m *runtimeExtendedMemoryFake) Observe(subject, toolName, outputSnippet, scope string) (string, error) {
+	m.observeCalls = append(m.observeCalls, runtimeMemoryObserveCall{
+		subject:       subject,
+		toolName:      toolName,
+		outputSnippet: outputSnippet,
+		scope:         scope,
+	})
+	if m.observeErr != nil {
+		return "", m.observeErr
+	}
+	if strings.TrimSpace(m.observeID) == "" {
+		return "obs-runtime", nil
+	}
+	return m.observeID, nil
+}
+
+func (m *runtimeExtendedMemoryFake) Grant(_ string, _ string, _ string, _ string) (string, error) {
+	if m.grantErr != nil {
+		return "", m.grantErr
+	}
+	if strings.TrimSpace(m.grantID) == "" {
+		return "grant-runtime", nil
+	}
+	return m.grantID, nil
+}
+
+func (m *runtimeExtendedMemoryFake) Revoke(_ string, _ string) error {
+	return m.revokeErr
+}
+
+func (m *runtimeExtendedMemoryFake) ListAudits() []MemoryAudit {
+	out := make([]MemoryAudit, len(m.audits))
+	copy(out, m.audits)
+	return out
+}
+
 func (p *scriptedTextProvider) Name() string { return p.name }
 
 func (p *scriptedTextProvider) Reply(_ context.Context, req ProviderRequest) (string, error) {
@@ -44,6 +157,176 @@ func (p *scriptedTextProvider) Reply(_ context.Context, req ProviderRequest) (st
 	reply := p.replies[0]
 	p.replies = p.replies[1:]
 	return reply, nil
+}
+
+func TestBaseagentMemoryQueryUsesCarrierStore(t *testing.T) {
+	mem := newRuntimeExtendedMemoryFake()
+	mem.searchHits = []MemorySearchHit{
+		{ID: "rec-1", Scope: "public", Score: 0.91, Snippet: "timezone preference: JST", Provenance: "truth/public/preferences.md"},
+	}
+	provider := &scriptedToolAwareProvider{
+		name: "memory-aware",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "memory_search",
+						Arguments: map[string]any{
+							"query": "timezone",
+						},
+					},
+				},
+			},
+			{
+				Content: "memory search completed",
+			},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, mem, WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "memory-search",
+		Message:  "find memory about timezone",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "memory search completed" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(mem.searchCalls) != 1 {
+		t.Fatalf("expected 1 memory search call, got %d", len(mem.searchCalls))
+	}
+	if mem.searchCalls[0].subject != baseAgentVirtualID {
+		t.Fatalf("expected baseagent subject, got %+v", mem.searchCalls[0])
+	}
+	if mem.searchCalls[0].query != "timezone" {
+		t.Fatalf("unexpected search query: %+v", mem.searchCalls[0])
+	}
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.Role != "tool" || last.ToolCallID != "call-1" {
+		t.Fatalf("unexpected memory tool callback: %+v", last)
+	}
+	if !strings.Contains(last.Content, "timezone preference: JST") {
+		t.Fatalf("expected search hit snippet in callback, got %+v", last)
+	}
+}
+
+func TestStructuredLoopObserveMemory(t *testing.T) {
+	mem := newRuntimeExtendedMemoryFake()
+	provider := &scriptedToolAwareProvider{
+		name: "observe-aware",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "list_agents",
+					},
+				},
+			},
+			{
+				Content: "listed agents",
+			},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{
+		agents: []AgentState{{ID: "openclaw", Install: "installed", Runtime: "running", Health: "ok"}},
+	}, mem, WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "memory-observe",
+		Message:  "check the current fleet posture",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "listed agents" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(mem.observeCalls) != 1 {
+		t.Fatalf("expected 1 memory observe call, got %d", len(mem.observeCalls))
+	}
+	if mem.observeCalls[0].subject != baseAgentVirtualID {
+		t.Fatalf("unexpected observe subject: %+v", mem.observeCalls[0])
+	}
+	if mem.observeCalls[0].toolName != "list_agents" {
+		t.Fatalf("unexpected observe tool name: %+v", mem.observeCalls[0])
+	}
+	if !strings.Contains(mem.observeCalls[0].outputSnippet, "openclaw") {
+		t.Fatalf("expected tool output in observe call, got %+v", mem.observeCalls[0])
+	}
+}
+
+func TestMemoryPolicyBlocksUnauthorizedScope(t *testing.T) {
+	mem := newRuntimeExtendedMemoryFake()
+	provider := &scriptedToolAwareProvider{
+		name: "memory-policy",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "memory_search",
+						Arguments: map[string]any{
+							"query": "private",
+							"scope": "agent:other-agent",
+						},
+					},
+				},
+			},
+			{
+				Content: "blocked",
+			},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, mem, WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "memory-scope",
+		Message:  "search forbidden memory",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "blocked" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(mem.searchCalls) != 0 {
+		t.Fatalf("unauthorized scope should not reach memory store: %+v", mem.searchCalls)
+	}
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.ToolResultStatus != ExecutionToolResultStatusError {
+		t.Fatalf("expected memory scope failure, got %+v", last)
+	}
+	if !strings.Contains(strings.ToLower(last.Content), "unauthorized memory scope") {
+		t.Fatalf("unexpected memory scope failure message: %+v", last)
+	}
 }
 
 func TestRuntimeChatUsesToolAwareProviderLoop(t *testing.T) {
@@ -475,6 +758,12 @@ func TestRuntimeChatStructuredLoopExecutesBuiltInToolCallsWithoutWorkspaceRoot(t
 	if _, ok := seen["list_agents"]; !ok {
 		t.Fatalf("expected built-in tool descriptor without workspace, got %+v", provider.requests[0].Tools)
 	}
+	if _, ok := seen["web_fetch"]; !ok {
+		t.Fatalf("expected web_fetch descriptor without workspace root, got %+v", provider.requests[0].Tools)
+	}
+	if _, ok := seen["web_search"]; !ok {
+		t.Fatalf("expected web_search descriptor without workspace root, got %+v", provider.requests[0].Tools)
+	}
 	if _, ok := seen["write_file"]; ok {
 		t.Fatalf("did not expect workspace tool descriptor without workspace root, got %+v", provider.requests[0].Tools)
 	}
@@ -867,7 +1156,7 @@ func TestAgentLoopStructuredLoopStopsAtMaxIterations(t *testing.T) {
 	pm := NewProviderManager(provider)
 	sessions := NewSessionManager(8)
 	loop := NewAgentLoop(&runtimeServiceFake{}, NewToolRegistry(), pm, sessions, NewMessageBus(0, 0, 0))
-	loop.SetExecutionTools(NewExecutionToolRegistry(t.TempDir()), 2, ActiveBoundarySpec().StructuredToolPolicy, nil)
+	loop.SetExecutionTools(NewExecutionToolRegistry(t.TempDir()), 2, ActiveBoundarySpec().StructuredToolPolicy, nil, nil)
 
 	_, handled, err := loop.processStructuredChat(context.Background(), "cli:max-iterations", []ConversationMessage{
 		{Role: "user", Content: "loop forever"},
@@ -877,5 +1166,153 @@ func TestAgentLoopStructuredLoopStopsAtMaxIterations(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "max iterations") {
 		t.Fatalf("expected max iteration failure, got %v", err)
+	}
+}
+
+func TestStructuredLoopSpawnSubagent(t *testing.T) {
+	policy := ActiveBoundarySpec().StructuredToolPolicy
+	policy.HighRiskDecision = string(structuredToolDecisionAllow)
+
+	spawner := &stubSubagentSpawner{
+		handle: SubagentJobHandle{
+			JobID:   "job-42",
+			Status:  "queued",
+			Summary: "collect dependency graph",
+		},
+	}
+	provider := &scriptedToolAwareProvider{
+		name: "spawn-subagent",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "spawn_subagent",
+						Arguments: map[string]any{
+							"task": "collect dependency graph",
+						},
+					},
+				},
+			},
+			{
+				Content: "delegated work queued",
+			},
+		},
+	}
+
+	rt := NewRuntime(
+		&runtimeServiceFake{},
+		nil,
+		WithWorkspaceRoot(t.TempDir()),
+		WithMaxToolIterations(4),
+		WithStructuredToolPolicy(policy),
+		WithSubagentSpawner(spawner),
+	)
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "spawn-subagent",
+		Message:  "delegate dependency graph analysis",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "delegated work queued" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(spawner.calls) != 1 || spawner.calls[0].Task != "collect dependency graph" {
+		t.Fatalf("expected subagent spawn call, got %+v", spawner.calls)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected tool follow-up request, got %d", len(provider.requests))
+	}
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.Role != "tool" || last.ToolName != "spawn_subagent" {
+		t.Fatalf("unexpected tool callback message: %+v", last)
+	}
+	if !strings.Contains(last.Content, "job-42") || !strings.Contains(strings.ToLower(last.Content), "queued") {
+		t.Fatalf("expected delegated job handle in tool output, got %+v", last)
+	}
+}
+
+func TestStructuredLoopReadsSubagentResult(t *testing.T) {
+	policy := ActiveBoundarySpec().StructuredToolPolicy
+	policy.HighRiskDecision = string(structuredToolDecisionAllow)
+
+	manager := NewInMemorySubagentManager(func(_ context.Context, req SubagentRequest) (string, error) {
+		return "result: " + req.Task, nil
+	})
+	handle, err := manager.Spawn(context.Background(), SubagentRequest{Task: "collect dependency graph"})
+	if err != nil {
+		t.Fatalf("spawn delegated job: %v", err)
+	}
+	job := waitForSubagentJobState(t, manager, handle.JobID, SubagentJobStatusCompleted)
+
+	provider := &scriptedToolAwareProvider{
+		name: "delegate-followup",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-2",
+						Name: "subagent_result",
+						Arguments: map[string]any{
+							"job_id": handle.JobID,
+						},
+					},
+				},
+			},
+			{
+				Content: "delegated result collected",
+			},
+		},
+	}
+
+	rt := NewRuntime(
+		&runtimeServiceFake{},
+		nil,
+		WithWorkspaceRoot(t.TempDir()),
+		WithMaxToolIterations(5),
+		WithStructuredToolPolicy(policy),
+		WithSubagentManager(manager),
+	)
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "delegate-followup",
+		Message:  "delegate dependency graph analysis and report back",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "delegated result collected" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected result follow-up requests, got %d", len(provider.requests))
+	}
+
+	if job.Status != SubagentJobStatusCompleted || job.Result != "result: collect dependency graph" {
+		t.Fatalf("unexpected delegated job state: %+v", job)
+	}
+
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.Role != "tool" || last.ToolName != "subagent_result" {
+		t.Fatalf("unexpected final tool callback message: %+v", last)
+	}
+	if !strings.Contains(last.Content, handle.JobID) || !strings.Contains(last.Content, "result: collect dependency graph") {
+		t.Fatalf("expected delegated result in tool output, got %+v", last)
 	}
 }

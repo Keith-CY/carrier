@@ -79,6 +79,9 @@ func loadManagedInstances() ([]managedAgentInstance, string, error) {
 	if file.Instances == nil {
 		file.Instances = []managedAgentInstance{}
 	}
+	for i := range file.Instances {
+		file.Instances[i].Channel = normalizeManagedInstanceChannel(file.Instances[i].Channel)
+	}
 	return file.Instances, path, nil
 }
 
@@ -121,6 +124,7 @@ func findManagedInstanceIndexByAgentID(instances []managedAgentInstance, agentID
 }
 
 func upsertManagedInstance(inst managedAgentInstance) error {
+	inst.Channel = normalizeManagedInstanceChannel(inst.Channel)
 	instances, path, err := loadManagedInstances()
 	if err != nil {
 		return err
@@ -132,6 +136,19 @@ func upsertManagedInstance(inst managedAgentInstance) error {
 		instances = append(instances, inst)
 	}
 	return saveManagedInstances(path, instances)
+}
+
+func normalizeManagedInstanceChannel(raw string) string {
+	channel := strings.TrimSpace(raw)
+	if channel == "" {
+		return ""
+	}
+	channelID, err := NormalizeChannelID(channel)
+	if err != nil {
+		// Keep unknown values to preserve backward compatibility for older records.
+		return channel
+	}
+	return string(channelID)
 }
 
 func cleanupManagedInstanceFiles(inst managedAgentInstance) error {

@@ -10,6 +10,27 @@ import (
 	"time"
 )
 
+type stubWebToolBackend struct {
+	fetchText string
+	fetchErr  error
+	searchHit []WebSearchHit
+	searchErr error
+}
+
+func (b *stubWebToolBackend) Fetch(_ context.Context, _ string) (string, error) {
+	if b.fetchErr != nil {
+		return "", b.fetchErr
+	}
+	return b.fetchText, nil
+}
+
+func (b *stubWebToolBackend) Search(_ context.Context, _ string, _ int) ([]WebSearchHit, error) {
+	if b.searchErr != nil {
+		return nil, b.searchErr
+	}
+	return append([]WebSearchHit(nil), b.searchHit...), nil
+}
+
 func TestExecutionToolRegistryFileRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	registry := NewExecutionToolRegistry(root)
@@ -317,6 +338,71 @@ func TestExecutionToolRegistryDescriptors(t *testing.T) {
 	}
 	if seen["exec"].Description == "" || seen["exec"].Parameters == nil {
 		t.Fatalf("exec descriptor should include description and parameters: %+v", seen["exec"])
+	}
+}
+
+func TestExecutionToolsWebFetch(t *testing.T) {
+	registry := NewExecutionToolRegistry(t.TempDir(), WithExecutionToolWebBackend(&stubWebToolBackend{
+		fetchText: "Example Domain\nThis domain is for use in illustrative examples.",
+	}))
+
+	result := registry.Execute(context.Background(), "web_fetch", map[string]any{
+		"url": "https://example.com/docs",
+	})
+	if result.IsError {
+		t.Fatalf("expected web_fetch to succeed, got %+v", result)
+	}
+	if !strings.Contains(result.Output, "Example Domain") {
+		t.Fatalf("unexpected web_fetch output: %q", result.Output)
+	}
+	if got, _ := result.Metadata["source_url"].(string); got != "https://example.com/docs" {
+		t.Fatalf("expected source_url metadata, got %+v", result.Metadata)
+	}
+}
+
+func TestExecutionToolsWebSearch(t *testing.T) {
+	registry := NewExecutionToolRegistry(t.TempDir(), WithExecutionToolWebBackend(&stubWebToolBackend{
+		searchHit: []WebSearchHit{
+			{Title: "Carrier docs", URL: "https://example.com/carrier", Snippet: "Baseagent tools"},
+			{Title: "Picoclaw docs", URL: "https://example.com/picoclaw", Snippet: "Reference implementation"},
+		},
+	}))
+
+	result := registry.Execute(context.Background(), "web_search", map[string]any{
+		"query": "carrier baseagent structured tools",
+		"limit": 2,
+	})
+	if result.IsError {
+		t.Fatalf("expected web_search to succeed, got %+v", result)
+	}
+	if !strings.Contains(result.Output, "Carrier docs") || !strings.Contains(result.Output, "Picoclaw docs") {
+		t.Fatalf("unexpected web_search output: %q", result.Output)
+	}
+	hits, _ := result.Metadata["search_results"].([]WebSearchHit)
+	if len(hits) != 2 || hits[0].URL != "https://example.com/carrier" {
+		t.Fatalf("unexpected search_results metadata: %+v", result.Metadata)
+	}
+}
+
+func TestExecutionToolsSendFile(t *testing.T) {
+	root := t.TempDir()
+	registry := NewExecutionToolRegistry(root)
+	if err := os.WriteFile(filepath.Join(root, "artifact.log"), []byte("hello artifact"), 0o600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	result := registry.Execute(context.Background(), "send_file", map[string]any{
+		"path": "artifact.log",
+	})
+	if result.IsError {
+		t.Fatalf("expected send_file to succeed, got %+v", result)
+	}
+	if !strings.Contains(result.Output, "artifact.log") {
+		t.Fatalf("unexpected send_file output: %q", result.Output)
+	}
+	attachment, _ := result.Metadata["attachment"].(ExecutionAttachment)
+	if attachment.Name != "artifact.log" || attachment.Path != filepath.Join(root, "artifact.log") {
+		t.Fatalf("unexpected attachment metadata: %+v", result.Metadata)
 	}
 }
 

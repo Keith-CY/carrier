@@ -63,11 +63,13 @@ func structuredToolPolicyFromSpec(spec StructuredToolPolicySpec, hasWorkspace bo
 	if decision := parseStructuredToolDecision(spec.OperationalReadDecision); decision != "" {
 		resolved.OperationalReadDecision = string(decision)
 	}
-	if decision := parseStructuredToolDecision(spec.WorkspaceReadDecision); decision != "" {
-		resolved.WorkspaceReadDecision = string(decision)
-	}
-	if decision := parseStructuredToolDecision(spec.WorkspaceMutationDecision); decision != "" {
-		resolved.WorkspaceMutationDecision = string(decision)
+	if hasWorkspace {
+		if decision := parseStructuredToolDecision(spec.WorkspaceReadDecision); decision != "" {
+			resolved.WorkspaceReadDecision = string(decision)
+		}
+		if decision := parseStructuredToolDecision(spec.WorkspaceMutationDecision); decision != "" {
+			resolved.WorkspaceMutationDecision = string(decision)
+		}
 	}
 	if decision := parseStructuredToolDecision(spec.HighRiskDecision); decision != "" {
 		resolved.HighRiskDecision = string(decision)
@@ -113,14 +115,15 @@ var structuredBuiltinPassthroughTiers = map[string]structuredToolTier{
 }
 
 func newStructuredToolSurface(builtin *ToolRegistry, workspace *ExecutionToolRegistry) *structuredToolSurface {
-	return newStructuredToolSurfaceWithPolicy(builtin, workspace, nil, StructuredToolPolicySpec{})
+	return newStructuredToolSurfaceWithPolicy(builtin, workspace, nil, nil, StructuredToolPolicySpec{})
 }
 
-func newStructuredToolSurfaceWithPolicy(builtin *ToolRegistry, workspace *ExecutionToolRegistry, mcpManager MCPManager, policySpec StructuredToolPolicySpec) *structuredToolSurface {
+func newStructuredToolSurfaceWithPolicy(builtin *ToolRegistry, workspace *ExecutionToolRegistry, mcpManager MCPManager, subagentManager SubagentManager, policySpec StructuredToolPolicySpec) *structuredToolSurface {
 	// TODO(baseagent): add real confirmation handshakes for ask decisions and
 	// introduce argument-level controls.
+	hasWorkspace := workspace != nil && workspace.HasWorkspaceRoot()
 	surface := &structuredToolSurface{
-		policy: structuredToolPolicyFromSpec(policySpec, workspace != nil),
+		policy: structuredToolPolicyFromSpec(policySpec, hasWorkspace),
 		order:  []string{},
 		tools:  map[string]structuredToolDefinition{},
 	}
@@ -128,11 +131,71 @@ func newStructuredToolSurfaceWithPolicy(builtin *ToolRegistry, workspace *Execut
 	surface.registerBuiltinStructuredTools(builtin)
 	surface.registerWorkspaceStructuredTools(workspace)
 	surface.registerMCPStructuredTools(mcpManager)
+	surface.registerSubagentStructuredTools(subagentManager)
 
 	if len(surface.order) == 0 {
 		return nil
 	}
 	return surface
+}
+
+func (s *structuredToolSurface) SetMemoryStore(store ExtendedMemoryStore, subject string) {
+	if s == nil || store == nil {
+		return
+	}
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		subject = baseAgentVirtualID
+	}
+	s.register(structuredToolDefinition{
+		descriptor: StructuredToolDescriptor{
+			Name:        "memory_search",
+			Description: "Search Carrier memory records available to the base agent.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{
+						"type": "string",
+					},
+					"scope": map[string]any{
+						"type":        "string",
+						"description": "Optional scope filter. Allowed values are public, shared:<name>, or agent:carrier.base.internal.",
+					},
+					"max_results": map[string]any{
+						"type": "integer",
+					},
+					"min_score": map[string]any{
+						"type": "number",
+					},
+				},
+				"required": []string{"query"},
+			},
+		},
+		tier: structuredToolTierOperationalRead,
+		execute: func(ctx context.Context, args map[string]any) ExecutionToolResult {
+			query := strings.TrimSpace(stringifyStructuredToolArg(args["query"]))
+			if query == "" {
+				return executionError("query is required")
+			}
+			scope := strings.TrimSpace(stringifyStructuredToolArg(args["scope"]))
+			maxResults, err := readOptionalIntArg(args, "max_results", defaultMemorySearchResults)
+			if err != nil {
+				return executionError(err.Error())
+			}
+			minScore, err := readOptionalFloatArg(args, "min_score", 0)
+			if err != nil {
+				return executionError(err.Error())
+			}
+			hits, err := searchMemoryStore(store, subject, query, scope, maxResults, minScore)
+			if err != nil {
+				return executionError(err.Error())
+			}
+			return ExecutionToolResult{
+				Output:   renderMemorySearchHits(hits),
+				Metadata: map[string]any{"memory_hits": cloneMemorySearchHits(hits)},
+			}
+		},
+	})
 }
 
 func (s *structuredToolSurface) registerBuiltinStructuredTools(builtin *ToolRegistry) {
@@ -254,13 +317,63 @@ func (s *structuredToolSurface) registerMCPStructuredTools(mcpManager MCPManager
 	}
 }
 
+func (s *structuredToolSurface) registerSubagentStructuredTools(manager SubagentManager) {
+	if s == nil || manager == nil {
+		return
+	}
+	s.register(structuredToolDefinition{
+		descriptor: StructuredToolDescriptor{
+			Name:        "subagent_result",
+			Description: "Read the current status and result of a delegated subagent job.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"job_id": map[string]any{
+						"type": "string",
+					},
+				},
+				"required": []string{"job_id"},
+			},
+		},
+		tier: structuredToolTierOperationalRead,
+		execute: func(ctx context.Context, args map[string]any) ExecutionToolResult {
+			jobID := strings.TrimSpace(stringifyStructuredToolArg(args["job_id"]))
+			if jobID == "" {
+				return executionError("job_id is required")
+			}
+			job, err := manager.Job(ctx, jobID)
+			if err != nil {
+				return executionError(err.Error())
+			}
+			output := fmt.Sprintf("subagent job %s status=%s", job.JobID, job.Status)
+			if summary := strings.TrimSpace(job.Summary); summary != "" {
+				output += "\nsummary: " + summary
+			}
+			if result := strings.TrimSpace(job.Result); result != "" {
+				output += "\n" + result
+			}
+			if failure := strings.TrimSpace(job.Error); failure != "" {
+				output += "\nerror: " + failure
+			}
+			return ExecutionToolResult{
+				Output: output,
+				Metadata: map[string]any{
+					"delegation": job,
+				},
+			}
+		},
+	})
+}
+
 func structuredWorkspaceToolTier(name string) structuredToolTier {
 	switch strings.TrimSpace(name) {
+	case "web_fetch", "web_search":
+		return structuredToolTierOperationalRead
 	case "read_file", "list_dir":
 		return structuredToolTierWorkspaceRead
 	case "write_file", "append_file", "edit_file":
 		return structuredToolTierWorkspaceMutation
-	case "exec":
+	case "exec", "send_file", "spawn_subagent":
 		return structuredToolTierHighRisk
 	default:
 		return structuredToolTierWorkspaceRead
@@ -277,6 +390,51 @@ func structuredMCPToolTier(name string) structuredToolTier {
 		return structuredToolTierMetadataRead
 	default:
 		return structuredToolTierHighRisk
+	}
+}
+
+func renderMemorySearchHits(hits []MemorySearchHit) string {
+	if len(hits) == 0 {
+		return "no memory results"
+	}
+	lines := make([]string, 0, len(hits))
+	for idx, hit := range hits {
+		line := fmt.Sprintf("%d. %s", idx+1, strings.TrimSpace(hit.ID))
+		if scope := strings.TrimSpace(hit.Scope); scope != "" {
+			line += " [" + scope + "]"
+		}
+		lines = append(lines, line)
+		if snippet := strings.TrimSpace(hit.Snippet); snippet != "" {
+			lines = append(lines, snippet)
+		}
+		if provenance := strings.TrimSpace(hit.Provenance); provenance != "" {
+			lines = append(lines, "provenance: "+provenance)
+		}
+	}
+	return truncateExecutionOutput(strings.Join(lines, "\n"))
+}
+
+func readOptionalFloatArg(args map[string]any, key string, fallback float64) (float64, error) {
+	if args == nil {
+		return fallback, nil
+	}
+	value, ok := args[key]
+	if !ok || value == nil {
+		return fallback, nil
+	}
+	switch typed := value.(type) {
+	case float64:
+		return typed, nil
+	case float32:
+		return float64(typed), nil
+	case int:
+		return float64(typed), nil
+	case int32:
+		return float64(typed), nil
+	case int64:
+		return float64(typed), nil
+	default:
+		return 0, fmt.Errorf("%s must be a number", key)
 	}
 }
 

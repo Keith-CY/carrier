@@ -41,7 +41,7 @@ func TestStructuredToolSurfaceReadsPolicyFromBoundarySpec(t *testing.T) {
 	spec := ActiveBoundarySpec()
 	spec.StructuredToolPolicy.HighRiskDecision = string(structuredToolDecisionDeny)
 
-	surface := newStructuredToolSurfaceWithPolicy(NewToolRegistry(), NewExecutionToolRegistry(t.TempDir()), nil, spec.StructuredToolPolicy)
+	surface := newStructuredToolSurfaceWithPolicy(NewToolRegistry(), NewExecutionToolRegistry(t.TempDir()), nil, nil, spec.StructuredToolPolicy)
 	result := surface.Execute(context.Background(), "exec", map[string]any{"command": "go test ./..."})
 	if result.Status != ExecutionToolResultStatusDeny {
 		t.Fatalf("expected boundary policy to drive deny, got %+v", result)

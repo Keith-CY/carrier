@@ -6,28 +6,18 @@ import (
 	"testing"
 )
 
-type fakeSkillsLoader struct {
-	summary string
-	calls   []string
-}
+func TestAgentLoopInjectsRelevantSkills(t *testing.T) {
+	registry := NewSkillsRegistry(NewMemorySkillsStore(), testSkillCatalog())
+	if _, err := registry.InstallSkill(context.Background(), "go-testing"); err != nil {
+		t.Fatalf("install skill: %v", err)
+	}
 
-func (f *fakeSkillsLoader) RelevantSkillsSummary(_ context.Context, message string) string {
-	f.calls = append(f.calls, message)
-	return f.summary
-}
-
-func (f *fakeSkillsLoader) WasConsulted() bool {
-	return len(f.calls) > 0
-}
-
-func TestProviderRequestIncludesRelevantSkillsSummary(t *testing.T) {
-	loader := &fakeSkillsLoader{summary: "Use go test before claiming success."}
 	provider := &scriptedTextProvider{
 		name:    "skills-text",
 		replies: []string{"done"},
 	}
 
-	rt := NewRuntime(&runtimeServiceFake{}, nil, WithSkillsLoader(loader))
+	rt := NewRuntime(&runtimeServiceFake{}, nil, WithSkillsLoader(registry))
 	if err := rt.RegisterProvider(provider); err != nil {
 		t.Fatalf("register provider: %v", err)
 	}
@@ -38,20 +28,59 @@ func TestProviderRequestIncludesRelevantSkillsSummary(t *testing.T) {
 	_, _ = rt.Chat(context.Background(), ChatRequest{
 		Provider: "cli",
 		ChatID:   "skills",
-		Message:  "run repository diagnostics",
+		Message:  "run repository diagnostics and verify with go test",
 	})
 
-	if !loader.WasConsulted() {
-		t.Fatal("expected skills loader to contribute provider context")
+	if len(provider.requests) != 1 || !strings.Contains(provider.requests[0].SystemPrompt, "Use go test before claiming success.") {
+		t.Fatalf("expected provider request to include installed relevant skill summary, got %+v", provider.requests)
 	}
-	if len(provider.requests) != 1 || !strings.Contains(provider.requests[0].SystemPrompt, loader.summary) {
-		t.Fatalf("expected provider request to include skills summary, got %+v", provider.requests)
+}
+
+func TestInstallSkillAffectsFutureRequests(t *testing.T) {
+	registry := NewSkillsRegistry(NewMemorySkillsStore(), testSkillCatalog())
+	provider := &scriptedTextProvider{
+		name:    "skills-install",
+		replies: []string{"first", "second"},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, nil, WithSkillsLoader(registry))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	_, _ = rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "skills-install",
+		Message:  "run repository diagnostics and verify with go test",
+	})
+	if strings.Contains(provider.requests[0].SystemPrompt, "Use go test before claiming success.") {
+		t.Fatalf("did not expect skill summary before install, got %+v", provider.requests[0])
+	}
+
+	if _, err := rt.InstallSkill(context.Background(), "go-testing"); err != nil {
+		t.Fatalf("install skill through runtime: %v", err)
+	}
+
+	_, _ = rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "skills-install",
+		Message:  "run repository diagnostics and verify with go test",
+	})
+	if len(provider.requests) != 2 || !strings.Contains(provider.requests[1].SystemPrompt, "Use go test before claiming success.") {
+		t.Fatalf("expected installed skill to affect future requests, got %+v", provider.requests)
 	}
 }
 
 func TestStructuredLoopCarriesSkillSummaryAcrossTurns(t *testing.T) {
 	root := t.TempDir()
-	loader := &fakeSkillsLoader{summary: "Prefer bounded workspace reads before edits."}
+	registry := NewSkillsRegistry(NewMemorySkillsStore(), testSkillCatalog())
+	if _, err := registry.InstallSkill(context.Background(), "workspace-inspection"); err != nil {
+		t.Fatalf("install skill: %v", err)
+	}
+
 	provider := &scriptedToolAwareProvider{
 		name: "skills-structured",
 		replies: []StructuredToolReply{
@@ -72,7 +101,7 @@ func TestStructuredLoopCarriesSkillSummaryAcrossTurns(t *testing.T) {
 		},
 	}
 
-	rt := NewRuntime(&runtimeServiceFake{}, nil, WithWorkspaceRoot(root), WithMaxToolIterations(4), WithSkillsLoader(loader))
+	rt := NewRuntime(&runtimeServiceFake{}, nil, WithWorkspaceRoot(root), WithMaxToolIterations(4), WithSkillsLoader(registry))
 	if err := rt.RegisterProvider(provider); err != nil {
 		t.Fatalf("register provider: %v", err)
 	}
@@ -83,7 +112,7 @@ func TestStructuredLoopCarriesSkillSummaryAcrossTurns(t *testing.T) {
 	resp, err := rt.Chat(context.Background(), ChatRequest{
 		Provider: "cli",
 		ChatID:   "skills-structured",
-		Message:  "inspect the workspace",
+		Message:  "inspect workspace contents",
 	})
 	if err != nil {
 		t.Fatalf("runtime chat: %v", err)
@@ -95,7 +124,7 @@ func TestStructuredLoopCarriesSkillSummaryAcrossTurns(t *testing.T) {
 		t.Fatalf("expected two structured requests, got %d", len(provider.requests))
 	}
 	for _, req := range provider.requests {
-		if !strings.Contains(req.SystemPrompt, loader.summary) {
+		if !strings.Contains(req.SystemPrompt, "Prefer bounded workspace reads before edits.") {
 			t.Fatalf("expected structured request to carry skills summary, got %+v", provider.requests)
 		}
 	}

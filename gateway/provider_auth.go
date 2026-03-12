@@ -1,10 +1,64 @@
 package gateway
 
 import (
-	"fmt"
 	"carrier/shared/catalog"
+	"fmt"
+	"os"
 	"strings"
 )
+
+type ProviderAuthStatus struct {
+	ID                 string `json:"id"`
+	Name               string `json:"name"`
+	AuthMode           string `json:"authMode"`
+	EnvVar             string `json:"envVar,omitempty"`
+	Category           string `json:"category,omitempty"`
+	Configured         bool   `json:"configured"`
+	Reusable           bool   `json:"reusable"`
+	HasSavedCredential bool   `json:"hasSavedCredential"`
+	CredentialBackend  string `json:"credentialBackend,omitempty"`
+}
+
+func BuildProviderAuthStatus(p *LLMProvider) ProviderAuthStatus {
+	status := ProviderAuthStatus{}
+	if p == nil {
+		return status
+	}
+	status = ProviderAuthStatus{
+		ID:       p.ID,
+		Name:     p.Name,
+		AuthMode: string(p.AuthMode),
+		EnvVar:   strings.TrimSpace(p.EnvVar),
+		Category: strings.TrimSpace(p.Category),
+	}
+
+	if p.AuthMode == AuthModeNone {
+		status.Configured = true
+		status.Reusable = true
+		return status
+	}
+
+	if strings.TrimSpace(p.EnvVar) != "" && strings.TrimSpace(os.Getenv(p.EnvVar)) != "" {
+		status.Configured = true
+	}
+	if backend, ok, err := loadProviderCredentialStatus(p.ID); err == nil && ok {
+		status.HasSavedCredential = true
+		status.CredentialBackend = backend
+		status.Configured = true
+		status.Reusable = true
+	}
+	return status
+}
+
+func ListProviderAuthStatuses() []ProviderAuthStatus {
+	providers := ListLLMProviders()
+	statuses := make([]ProviderAuthStatus, 0, len(providers))
+	for i := range providers {
+		provider := providers[i]
+		statuses = append(statuses, BuildProviderAuthStatus(&provider))
+	}
+	return statuses
+}
 
 // ProviderAuthResult holds the result of a provider auth interaction.
 type ProviderAuthResult struct {

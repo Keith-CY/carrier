@@ -39,6 +39,8 @@ export function ProviderStep({ data }: { data: OnboardingData }) {
                     onClick={() => data.setSelectedProvider(provider)}
                   >
                     <strong>{provider.name}</strong> <code>{provider.id}</code>
+                    {provider.reusable ? <><br /><span className="text-dim">Reusable saved credential</span></> : null}
+                    {!provider.reusable && provider.configured ? <><br /><span className="text-dim">Configured in environment</span></> : null}
                     {provider.example_model ? <br /> : null}
                     {provider.example_model ? <span className="text-dim">e.g. {provider.example_model}</span> : null}
                   </li>
@@ -50,9 +52,13 @@ export function ProviderStep({ data }: { data: OnboardingData }) {
         <div id="provider-auth-section" className={`provider-auth-section${data.selectedProvider ? '' : ' hidden'}`} style={{ marginTop: '1rem' }}>
           <div id="provider-auth-label" className="text-dim">
             {data.selectedProvider?.auth_mode === 'api_key'
-              ? `Paste API key for ${data.selectedProvider?.name} (${data.selectedProvider?.env_var || ''}):`
+              ? data.selectedProviderReusable
+                ? `Carrier already has a reusable credential for ${data.selectedProvider?.name}. Paste a new API key only if you want to override it.`
+                : `Paste API key for ${data.selectedProvider?.name} (${data.selectedProvider?.env_var || ''}):`
               : data.selectedProvider
-                ? `${data.selectedProvider.name} requires external authentication.`
+                ? data.selectedProvider.reusable
+                  ? `${data.selectedProvider.name} can reuse an existing Carrier credential.`
+                  : `${data.selectedProvider.name} requires external authentication.`
                 : ''}
           </div>
           <input

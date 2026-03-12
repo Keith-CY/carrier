@@ -3,6 +3,41 @@ export type ApiError = Error & {
   payload?: unknown;
 };
 
+export type ProviderAuthStatus = {
+  id: string;
+  name: string;
+  authMode: string;
+  envVar?: string;
+  category?: string;
+  configured: boolean;
+  reusable: boolean;
+  hasSavedCredential?: boolean;
+  credentialBackend?: string;
+};
+
+export type ChannelStatus = {
+  id: string;
+  displayName: string;
+  supportsWebhook: boolean;
+  supportsPolling: boolean;
+  supportsPairing: boolean;
+  requiresBotToken: boolean;
+  requiresWebhookSecret: boolean;
+  supportsWebUI: boolean;
+  supportsGatewayCmd: boolean;
+  supportsProviderSetup: boolean;
+  configured: boolean;
+  configuredAt?: string;
+};
+
+export type ProviderAuthStatusPayload = {
+  providers?: ProviderAuthStatus[];
+};
+
+export type ChannelStatusPayload = {
+  channels?: ChannelStatus[];
+};
+
 function handleUnauthorized(): void {
   if (typeof window === 'undefined') return;
   window.localStorage.removeItem('carrier_token');

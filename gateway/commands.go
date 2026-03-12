@@ -61,12 +61,6 @@ var validCommands = map[CommandName]struct{}{
 	CmdOnboard:         {},
 }
 
-var validProviders = map[string]struct{}{
-	"telegram": {},
-	"discord":  {},
-	"feishu":   {},
-}
-
 // GatewayCommand is a parsed command from the gateway input.
 type GatewayCommand struct {
 	Provider     string
@@ -110,7 +104,7 @@ func ParseInput(input string) (*GatewayCommand, error) {
 	requestID := fields[2]
 	fourth := fields[3]
 
-	if _, ok := validProviders[provider]; !ok {
+	if !supportsGatewayCommandsForChannel(provider) {
 		return nil, &ParseError{RequestID: requestID, Err: fmt.Sprintf("unknown provider: %s", provider)}
 	}
 
@@ -151,17 +145,15 @@ func HandleCommand(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClien
 		return handlePair(ctx, cmd, daemon, sessions)
 	}
 
-	// All other commands require a session
-	session := sessions.GetSession(cmd.Provider, cmd.ChatID)
-	if session == nil {
-		return errResp(cmd.RequestID, "E_SESSION_REQUIRED", "chat is not paired; run /pair <code> first")
+	// All other commands require a valid paired session.
+	if authErr := sessions.ValidateSession(cmd.Provider, cmd.ChatID, ""); authErr != nil {
+		return errResp(cmd.RequestID, authErr.code, authErr.msg)
 	}
-
 	if cmd.SessionToken == "" {
 		return errResp(cmd.RequestID, "E_SESSION_TOKEN_MISSING", "session token is required for authenticated commands")
 	}
-	if cmd.SessionToken != session.SessionToken {
-		return errResp(cmd.RequestID, "E_SESSION_TOKEN_INVALID", "session token is invalid")
+	if authErr := sessions.ValidateSession(cmd.Provider, cmd.ChatID, cmd.SessionToken); authErr != nil {
+		return errResp(cmd.RequestID, authErr.code, authErr.msg)
 	}
 
 	sessions.Touch(cmd.Provider, cmd.ChatID)

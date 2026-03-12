@@ -684,11 +684,14 @@ func TestHandleWebUIInstance_ErrorBranches(t *testing.T) {
 		if err := saveManagedInstances(storePath, []managedAgentInstance{{ID: "inst-1", AgentID: "picoclaw", CreatedAt: now, UpdatedAt: now}}); err != nil {
 			t.Fatalf("saveManagedInstances: %v", err)
 		}
-		if err := os.Chmod(storePath, 0o400); err != nil {
-			t.Fatalf("chmod store read-only: %v", err)
-		}
 		_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
 			"POST /api/v1/agents/picoclaw/start": func(w http.ResponseWriter, r *http.Request) {
+				if err := os.Remove(storePath); err != nil {
+					t.Fatalf("remove store file: %v", err)
+				}
+				if err := os.Mkdir(storePath, 0o700); err != nil {
+					t.Fatalf("replace store with dir: %v", err)
+				}
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{}`))
 			},
@@ -736,11 +739,14 @@ func TestHandleWebUIInstance_ErrorBranches(t *testing.T) {
 		if err := saveManagedInstances(storePath, []managedAgentInstance{{ID: "inst-1", AgentID: "picoclaw", CreatedAt: now, UpdatedAt: now}}); err != nil {
 			t.Fatalf("saveManagedInstances: %v", err)
 		}
-		if err := os.Chmod(storePath, 0o400); err != nil {
-			t.Fatalf("chmod store read-only: %v", err)
-		}
 		_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
 			"POST /api/v1/agents/picoclaw/stop": func(w http.ResponseWriter, r *http.Request) {
+				if err := os.Remove(storePath); err != nil {
+					t.Fatalf("remove store file: %v", err)
+				}
+				if err := os.Mkdir(storePath, 0o700); err != nil {
+					t.Fatalf("replace store with dir: %v", err)
+				}
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{}`))
 			},
@@ -836,15 +842,18 @@ func TestHandleWebUIInstance_ErrorBranches(t *testing.T) {
 		if err := saveManagedInstances(storePath, []managedAgentInstance{{ID: "inst-1", AgentID: "picoclaw", CreatedAt: now, UpdatedAt: now}}); err != nil {
 			t.Fatalf("saveManagedInstances: %v", err)
 		}
-		if err := os.Chmod(storePath, 0o400); err != nil {
-			t.Fatalf("chmod store read-only: %v", err)
-		}
 		_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
 			"POST /api/v1/agents/picoclaw/stop": func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{}`))
 			},
 			"POST /api/v1/agents/picoclaw/uninstall": func(w http.ResponseWriter, r *http.Request) {
+				if err := os.Remove(storePath); err != nil {
+					t.Fatalf("remove store file: %v", err)
+				}
+				if err := os.Mkdir(storePath, 0o700); err != nil {
+					t.Fatalf("replace store with dir: %v", err)
+				}
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{}`))
 			},

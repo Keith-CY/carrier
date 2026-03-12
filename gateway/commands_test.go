@@ -234,3 +234,45 @@ func TestParseConsent(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionAuthScopesTokenToProviderAndChat(t *testing.T) {
+	sessions := NewSessionStore("", time.Hour, nil)
+	t.Cleanup(sessions.Stop)
+	session := sessions.CreateSession("telegram", "chat-1")
+
+	if err := sessions.ValidateSession("telegram", "chat-1", session.SessionToken); err != nil {
+		t.Fatalf("expected matching provider/chat token to validate, got %+v", err)
+	}
+	if err := sessions.ValidateSession("telegram", "chat-2", session.SessionToken); err == nil || err.code != "E_SESSION_REQUIRED" {
+		t.Fatalf("expected provider+chat scope miss to require pairing, got %+v", err)
+	}
+	if err := sessions.ValidateSession("discord", "chat-1", session.SessionToken); err == nil || err.code != "E_SESSION_REQUIRED" {
+		t.Fatalf("expected provider scope miss to require pairing, got %+v", err)
+	}
+	if err := sessions.ValidateSession("telegram", "chat-1", "session-wrong"); err == nil || err.code != "E_SESSION_TOKEN_INVALID" {
+		t.Fatalf("expected wrong token to be rejected, got %+v", err)
+	}
+}
+
+func TestCommandAuthRejectsExpiredSession(t *testing.T) {
+	baseNow := time.Date(2026, 3, 12, 10, 0, 0, 0, time.UTC)
+	now := baseNow
+	sessions := NewSessionStore("", time.Hour, func() time.Time { return now })
+	t.Cleanup(sessions.Stop)
+
+	session := sessions.CreateSession("telegram", "123")
+	sessions.mu.Lock()
+	sessions.sessions[sessionKey("telegram", "123")].LastSeenAt = baseNow.Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	sessions.mu.Unlock()
+
+	result := validateCommandAuth("telegram 123 r1 /agents", session.SessionToken, sessions)
+	if result == nil {
+		t.Fatal("expected expired session auth failure")
+	}
+	if result["errorCode"] != "E_SESSION_REQUIRED" {
+		t.Fatalf("expected E_SESSION_REQUIRED, got %#v", result)
+	}
+	if got := sessions.GetSession("telegram", "123"); got != nil {
+		t.Fatalf("expected expired session to be evicted, got %+v", got)
+	}
+}

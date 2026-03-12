@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useFeatures } from '../../app/useFeatures';
 import { useSession } from '../../app/session';
-import { apiGet } from '../../lib/api';
+import { apiGet, type ChannelStatusPayload, type ProviderAuthStatusPayload } from '../../lib/api';
 import { buildSettingsSummary } from './model';
 
 export function useSettingsData() {
@@ -21,10 +21,24 @@ export function useSettingsData() {
     retry: false,
   });
 
+  const providerAuthStatusQuery = useQuery({
+    queryKey: ['settings-provider-auth-status'],
+    queryFn: () => apiGet<ProviderAuthStatusPayload>('/api/v1/auth/providers'),
+    retry: false,
+  });
+
+  const channelStatusQuery = useQuery({
+    queryKey: ['settings-channel-status'],
+    queryFn: () => apiGet<ChannelStatusPayload>('/api/v1/channels'),
+    retry: false,
+  });
+
   const summary = buildSettingsSummary(
     transportQuery.isError ? null : transportQuery.data,
     remoteMetricsQuery.isError ? null : remoteMetricsQuery.data,
     featureFlags.remoteControlPlaneEnabled,
+    providerAuthStatusQuery.isError ? null : providerAuthStatusQuery.data,
+    channelStatusQuery.isError ? null : channelStatusQuery.data,
   );
 
   return {

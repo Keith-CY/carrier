@@ -95,6 +95,77 @@ func TestCommand_WrongToken(t *testing.T) {
 	}
 }
 
+func TestChannelRoutingAuthFailurePaths(t *testing.T) {
+	t.Run("missing gateway bearer token", func(t *testing.T) {
+		mux, srv, _ := buildTestMux(t, nil)
+		defer srv.Close()
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/channels", nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", w.Code)
+		}
+		if !strings.Contains(w.Body.String(), `"errorCode":"E_GATEWAY_AUTH_REQUIRED"`) {
+			t.Fatalf("expected E_GATEWAY_AUTH_REQUIRED, got %s", w.Body.String())
+		}
+	})
+
+	t.Run("invalid session token", func(t *testing.T) {
+		mux, srv, sessions := buildTestMux(t, map[string]http.HandlerFunc{
+			"GET /api/v1/agents": func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"agents": []interface{}{}})
+			},
+		})
+		defer srv.Close()
+
+		sessions.CreateSession("telegram", "123")
+		req := httptest.NewRequest("POST", "/command", strings.NewReader(`{"input":"telegram 123 r1 /agents","sessionToken":"session-wrong"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer test-gateway-token")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", w.Code)
+		}
+		if !strings.Contains(w.Body.String(), `"errorCode":"E_SESSION_TOKEN_INVALID"`) {
+			t.Fatalf("expected E_SESSION_TOKEN_INVALID, got %s", w.Body.String())
+		}
+	})
+
+	t.Run("invalid provider channel credential input", func(t *testing.T) {
+		tmp := t.TempDir()
+		t.Setenv("CARRIER_CONFIG", filepath.Join(tmp, "config.v2.json"))
+		t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(tmp, "credentials.json"))
+		t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+
+		mux, srv, _ := buildTestMux(t, nil)
+		defer srv.Close()
+
+		reqBody := `{
+			"providerId":"openai",
+			"providerToken":"sk-openai",
+			"reuseCredential":false,
+			"channel":"feishu",
+			"channelToken":"feishu-app-token"
+		}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", strings.NewReader(reqBody))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer test-gateway-token")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+		if !strings.Contains(w.Body.String(), `"errorCode":"E_USAGE"`) || !strings.Contains(w.Body.String(), "Feishu requires channelSecret") {
+			t.Fatalf("expected shared channel credential validation error, got %s", w.Body.String())
+		}
+	})
+}
+
 func TestCommand_EmptyInput(t *testing.T) {
 	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()

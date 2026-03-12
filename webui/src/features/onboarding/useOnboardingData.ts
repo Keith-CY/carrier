@@ -20,9 +20,11 @@ export function useOnboardingData({ step, addTargetAgent }: { step: Step; addTar
     step,
     addMode: wizardState.baseState.addMode,
     channel: wizardState.channel,
+    setChannel: wizardState.setChannel,
     channelChatId: wizardState.channelChatId,
     setChannelChatId: wizardState.setChannelChatId,
     setSelectedProvider: wizardState.setSelectedProvider,
+    setSetupMsg,
   });
   const actions = useOnboardingActions({
     navigate,
@@ -38,10 +40,18 @@ export function useOnboardingData({ step, addTargetAgent }: { step: Step; addTar
     setLastAddResult: wizardState.setLastAddResult,
     setSetupMsg,
     setInstallMsg,
+    channelRequiresBotToken: stepData.selectedChannelStatus?.requiresBotToken ?? true,
+    channelRequiresWebhookSecret: !!stepData.selectedChannelStatus?.requiresWebhookSecret,
+    channelRequiresPairing: wizardState.baseState.addMode && !!stepData.selectedChannelStatus?.supportsPairing,
+    selectedChannelDisplayName: stepData.selectedChannelStatus?.displayName || '',
   });
   const addMode = wizardState.baseState.addMode;
   const selectedProvider = wizardState.selectedProvider as WizardProvider | null;
-  const providerNextEnabled = !!selectedProvider && (selectedProvider.auth_mode !== 'api_key' || !!wizardState.providerApiKey.trim() || !!stepData.carrierDefaultProvider?.reusable);
+  const selectedProviderReusable = !!selectedProvider?.reusable;
+  const providerNextEnabled = !!selectedProvider && (selectedProvider.auth_mode !== 'api_key' || !!wizardState.providerApiKey.trim() || selectedProviderReusable);
+  const channelRequiresBotToken = stepData.selectedChannelStatus?.requiresBotToken ?? true;
+  const channelRequiresWebhookSecret = !!stepData.selectedChannelStatus?.requiresWebhookSecret;
+  const channelRequiresPairing = addMode && !!stepData.selectedChannelStatus?.supportsPairing;
 
   return {
     step,
@@ -53,6 +63,10 @@ export function useOnboardingData({ step, addTargetAgent }: { step: Step; addTar
     setupMsg,
     installMsg,
     providerNextEnabled,
+    channelRequiresBotToken,
+    channelRequiresWebhookSecret,
+    channelRequiresPairing,
+    selectedProviderReusable,
     agentDisplayName,
     ...actions,
   };

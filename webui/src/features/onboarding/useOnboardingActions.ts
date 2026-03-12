@@ -17,6 +17,10 @@ export function useOnboardingActions(args: {
   setLastAddResult: (value: any) => void;
   setSetupMsg: (value: string) => void;
   setInstallMsg: (value: string) => void;
+  channelRequiresBotToken: boolean;
+  channelRequiresWebhookSecret: boolean;
+  channelRequiresPairing: boolean;
+  selectedChannelDisplayName: string;
 }) {
   return {
     nextFromSetup: () => {
@@ -24,12 +28,16 @@ export function useOnboardingActions(args: {
         args.setSetupMsg(args.addMode ? 'Please choose a channel.' : 'Please choose a chat channel.');
         return;
       }
-      if (!args.channelToken.trim()) {
+      if (args.channelRequiresBotToken && !args.channelToken.trim()) {
         args.setSetupMsg('Please enter channel bot token.');
         return;
       }
-      if (args.addMode && args.channel === 'telegram' && !args.channelChatId) {
-        args.setSetupMsg('Please complete Telegram pairing first to capture your chat id.');
+      if (args.channelRequiresWebhookSecret && !args.webhookSecret.trim()) {
+        args.setSetupMsg(`Please enter ${args.selectedChannelDisplayName || 'channel'} webhook secret.`);
+        return;
+      }
+      if (args.channelRequiresPairing && !args.channelChatId) {
+        args.setSetupMsg(`Please complete ${args.selectedChannelDisplayName || 'channel'} pairing first to capture your chat id.`);
         return;
       }
       args.setSetupMsg('');

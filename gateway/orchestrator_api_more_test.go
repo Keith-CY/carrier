@@ -2667,17 +2667,15 @@ func TestRunOrchestratorTaskAttemptGetHostErrorBranch(t *testing.T) {
 
 func mustMakeReadOnly(t *testing.T, path string) {
 	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat path %q failed: %v", path, err)
-	}
-	if info.IsDir() {
-		if err := os.Chmod(path, 0o500); err != nil {
-			t.Fatalf("chmod dir read-only failed: %v", err)
+	target := strings.TrimSpace(path)
+	prev := writeRemoteControlStoreFile
+	writeRemoteControlStoreFile = func(name string, data []byte, perm os.FileMode) error {
+		if strings.TrimSpace(name) == target {
+			return os.ErrPermission
 		}
-		return
+		return prev(name, data, perm)
 	}
-	if err := os.Chmod(path, 0o400); err != nil {
-		t.Fatalf("chmod file read-only failed: %v", err)
-	}
+	t.Cleanup(func() {
+		writeRemoteControlStoreFile = prev
+	})
 }

@@ -80,14 +80,17 @@ type Runtime struct {
 	loop      *AgentLoop
 	cron      *CronService
 
-	mu                sync.Mutex
-	initialized       bool
-	activeID          string
-	workspaceRoot     string
-	maxToolIterations int
+	mu                           sync.Mutex
+	initialized                  bool
+	activeID                     string
+	workspaceRoot                string
+	maxToolIterations            int
 	structuredToolPolicyOverride *StructuredToolPolicySpec
-	mcpManager                  MCPManager
-	skillsLoader                SkillsLoader
+	mcpManager                   MCPManager
+	skillsLoader                 SkillsLoader
+	webBackend                   WebToolBackend
+	subagentSpawner              SubagentSpawner
+	subagentManager              SubagentManager
 }
 
 func NewRuntime(svc AgentService, memStore MemoryStore, opts ...RuntimeOption) *Runtime {
@@ -124,11 +127,26 @@ func NewRuntime(svc AgentService, memStore MemoryStore, opts ...RuntimeOption) *
 	r.loop = NewAgentLoop(r.svc, r.tools, r.providers, r.sessions, r.bus)
 	r.loop.SetChannelManager(r.channels)
 	r.loop.SetSkillsLoader(r.skillsLoader)
-	if r.workspaceRoot != "" {
-		r.loop.SetExecutionTools(NewExecutionToolRegistry(r.workspaceRoot), r.maxToolIterations, structuredToolPolicy, r.mcpManager)
-	} else {
-		r.loop.SetExecutionTools(nil, r.maxToolIterations, structuredToolPolicy, r.mcpManager)
+	effectiveSubagentManager := r.subagentManager
+	if effectiveSubagentManager == nil && r.subagentSpawner == nil {
+		effectiveSubagentManager = NewInMemorySubagentManager(nil)
 	}
+	effectiveSubagentSpawner := r.subagentSpawner
+	if effectiveSubagentManager != nil {
+		effectiveSubagentSpawner = effectiveSubagentManager
+	}
+	r.subagentManager = effectiveSubagentManager
+	executionToolOpts := []ExecutionToolRegistryOption{
+		WithExecutionToolWebBackend(r.webBackend),
+	}
+	if effectiveSubagentSpawner != nil {
+		executionToolOpts = append(executionToolOpts, WithExecutionToolSubagentSpawner(effectiveSubagentSpawner))
+	}
+	r.loop.SetExecutionTools(NewExecutionToolRegistry(
+		r.workspaceRoot,
+		executionToolOpts...,
+	), r.maxToolIterations, structuredToolPolicy, r.mcpManager, effectiveSubagentManager)
+	r.loop.SetMemoryStore(r.memory, baseAgentVirtualID)
 	r.cron = NewCronService(func(ctx context.Context, job CronJob) error {
 		_, err := r.Chat(ctx, cronChatRequestForSessionKey(job.SessionKey, job.Prompt))
 		return err
@@ -186,6 +204,49 @@ func (r *Runtime) SetActiveProvider(name string) error {
 		return fmt.Errorf("provider manager is unavailable")
 	}
 	return r.providers.SetActiveProvider(name)
+}
+
+func (r *Runtime) ListInstalledSkills(ctx context.Context) []SkillDefinition {
+	if r == nil || r.skillsLoader == nil {
+		return nil
+	}
+	return r.skillsLoader.ListInstalledSkills(ctx)
+}
+
+func (r *Runtime) SearchSkills(ctx context.Context, query string) []SkillDefinition {
+	if r == nil || r.skillsLoader == nil {
+		return nil
+	}
+	return r.skillsLoader.SearchSkills(ctx, query)
+}
+
+func (r *Runtime) InstallSkill(ctx context.Context, name string) (SkillDefinition, error) {
+	if r == nil || r.skillsLoader == nil {
+		return SkillDefinition{}, fmt.Errorf("skills loader is unavailable")
+	}
+	return r.skillsLoader.InstallSkill(ctx, name)
+}
+
+func (r *Runtime) StartMCP(ctx context.Context) error {
+	if r == nil || r.mcpManager == nil {
+		return nil
+	}
+	manager, ok := r.mcpManager.(interface{ Start(context.Context) error })
+	if !ok {
+		return nil
+	}
+	return manager.Start(ctx)
+}
+
+func (r *Runtime) StopMCP(ctx context.Context) error {
+	if r == nil || r.mcpManager == nil {
+		return nil
+	}
+	manager, ok := r.mcpManager.(interface{ Stop(context.Context) error })
+	if !ok {
+		return nil
+	}
+	return manager.Stop(ctx)
 }
 
 func (r *Runtime) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {

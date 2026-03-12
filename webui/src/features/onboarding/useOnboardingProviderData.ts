@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { apiGet } from '../../lib/api';
+import { apiGet, type ProviderAuthStatusPayload } from '../../lib/api';
 import { flattenProviderCatalog } from './model';
 import type { WizardProvider } from './state';
 
@@ -19,9 +19,12 @@ export function useOnboardingProviderData({ enabled, addMode, setSelectedProvide
     if (!enabled) return;
     setProviderLoading(true);
     setProviderMsg('');
-    void apiGet<any>('/api/v1/providers')
-      .then((payload) => {
-        const flattened = flattenProviderCatalog(payload);
+    void Promise.all([
+      apiGet<any>('/api/v1/providers'),
+      apiGet<ProviderAuthStatusPayload>('/api/v1/auth/providers'),
+    ])
+      .then(([payload, authStatusPayload]) => {
+        const flattened = flattenProviderCatalog(payload, authStatusPayload);
         const defaultProvider = payload?.carrier_default_provider || null;
         setProviders(flattened);
         setCarrierDefaultProvider(defaultProvider);
@@ -49,4 +52,3 @@ export function useOnboardingProviderData({ enabled, addMode, setSelectedProvide
     carrierDefaultProvider,
   };
 }
-

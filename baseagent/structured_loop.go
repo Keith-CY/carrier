@@ -83,9 +83,39 @@ func formatPendingApprovalToolOutput(base string, pending *PendingToolApproval) 
 	return base + "\n" + line
 }
 
-func (l *AgentLoop) SetExecutionTools(registry *ExecutionToolRegistry, maxIterations int, policySpec StructuredToolPolicySpec, mcpManager MCPManager) {
+func shouldObserveStructuredToolResult(toolName string, status ExecutionToolResultStatus) bool {
+	if status != ExecutionToolResultStatusOK {
+		return false
+	}
+	switch strings.TrimSpace(toolName) {
+	case "", "memory_search":
+		return false
+	default:
+		return true
+	}
+}
+
+func (l *AgentLoop) observeStructuredToolResult(toolName string, result ExecutionToolResult) {
+	if l == nil || l.memory == nil {
+		return
+	}
+	status := normalizeExecutionToolResultStatus(result)
+	if !shouldObserveStructuredToolResult(toolName, status) {
+		return
+	}
+	output := strings.TrimSpace(renderStructuredToolResultOutput(toolName, result))
+	if output == "" {
+		return
+	}
+	if _, err := observeMemoryStore(l.memory, l.memorySubject, strings.TrimSpace(toolName), output, ""); err != nil {
+		return
+	}
+}
+
+func (l *AgentLoop) SetExecutionTools(registry *ExecutionToolRegistry, maxIterations int, policySpec StructuredToolPolicySpec, mcpManager MCPManager, subagentManager SubagentManager) {
 	l.executionTools = registry
-	l.structuredTools = newStructuredToolSurfaceWithPolicy(l.tools, registry, mcpManager, policySpec)
+	l.subagentManager = subagentManager
+	l.structuredTools = newStructuredToolSurfaceWithPolicy(l.tools, registry, mcpManager, subagentManager, policySpec)
 	if maxIterations <= 0 {
 		maxIterations = 6
 	}
@@ -155,6 +185,7 @@ func (l *AgentLoop) processStructuredChat(
 			result := l.structuredTools.Execute(ctx, call.Name, call.Arguments)
 			status := normalizeExecutionToolResultStatus(result)
 			toolOutput := renderStructuredToolResultOutput(call.Name, result)
+			l.observeStructuredToolResult(call.Name, result)
 			if status == ExecutionToolResultStatusAsk && l.sessions != nil {
 				requestedAt := time.Now().UTC()
 				pending := &PendingToolApproval{
