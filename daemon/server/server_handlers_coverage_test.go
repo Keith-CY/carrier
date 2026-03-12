@@ -140,7 +140,7 @@ func TestHandleAgentChatBranches(t *testing.T) {
 	runtime := &fakeAgentChatRuntime{
 		resp: baseagent.ChatResponse{Message: "hello from local runtime", Action: "chat"},
 	}
-	okReq := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"hello","sessionId":"sess-1","provider":"openrouter"}`))
+	okReq := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"hello","sessionId":"sess-1","provider":"openrouter","modelAlias":"flash","model":"google/gemini-2.0-flash-001"}`))
 	okRR := httptest.NewRecorder()
 	handleAgentChat(nil, runtime, "zeroclaw", okRR, okReq)
 	if okRR.Code != http.StatusOK {
@@ -149,7 +149,7 @@ func TestHandleAgentChatBranches(t *testing.T) {
 	if runtime.callCount != 1 {
 		t.Fatalf("expected one runtime call, got %d", runtime.callCount)
 	}
-	if runtime.lastReq.Message != "hello" || runtime.lastReq.ChatID != "sess-1" || runtime.lastReq.Provider != "openrouter" {
+	if runtime.lastReq.Message != "hello" || runtime.lastReq.ChatID != "sess-1" || runtime.lastReq.Provider != "openrouter" || runtime.lastReq.ModelAlias != "flash" || runtime.lastReq.Model != "google/gemini-2.0-flash-001" {
 		t.Fatalf("unexpected runtime request: %+v", runtime.lastReq)
 	}
 	if !strings.Contains(okRR.Body.String(), `"agentId":"zeroclaw"`) || !strings.Contains(okRR.Body.String(), `"sessionId":"sess-1"`) {

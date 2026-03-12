@@ -28,13 +28,39 @@ func TestHandleAgentLauncherReturnsSummary(t *testing.T) {
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if err := saveManagedInstances(storePath, []managedAgentInstance{{
-		ID:           "picoclaw-prod",
-		Type:         "picoclaw",
-		AgentID:      "picoclaw",
-		Isolation:    true,
-		GatewayURL:   "http://127.0.0.1:8787",
-		Channel:      "telegram",
-		Provider:     "openrouter",
+		ID:         "picoclaw-prod",
+		Type:       "picoclaw",
+		AgentID:    "picoclaw",
+		Isolation:  true,
+		GatewayURL: "http://127.0.0.1:8787",
+		Channel:    "telegram",
+		Provider:   "openrouter",
+		ModelSurface: &managedAgentModelSurface{
+			DefaultProfile: "openrouter-fast",
+			Profiles: []managedAgentModelProfile{
+				{
+					ProfileName:    "openrouter-fast",
+					ModelAlias:     "flash",
+					ModelID:        "google/gemini-2.0-flash-001",
+					ProviderID:     "openrouter",
+					ProviderKey:    "openrouter",
+					ProtocolFamily: "openai-compatible",
+					BaseURL:        "https://openrouter.ai/api/v1",
+					AuthMethod:     "api_key",
+					Primary:        true,
+				},
+				{
+					ProfileName:    "openrouter-safe",
+					ModelAlias:     "flash",
+					ModelID:        "deepseek/deepseek-chat-v3-0324",
+					ProviderID:     "openrouter",
+					ProviderKey:    "openrouter",
+					ProtocolFamily: "openai-compatible",
+					BaseURL:        "https://openrouter.ai/api/v1",
+					AuthMethod:     "api_key",
+				},
+			},
+		},
 		PairRequired: false,
 		PairedChatID: "123456",
 		RuntimeState: "running",
@@ -114,6 +140,10 @@ func TestHandleAgentLauncherReturnsSummary(t *testing.T) {
 		`"toolbox"`,
 		`"count":1`,
 		`"lastResult":"succeeded"`,
+		`"defaultProfile":"openrouter-fast"`,
+		`"modelAlias":"flash"`,
+		`"modelId":"google/gemini-2.0-flash-001"`,
+		`"protocolFamily":"openai-compatible"`,
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("expected response to contain %s, got %s", needle, body)

@@ -324,7 +324,7 @@ func TestDaemonClient_ChatAgent(t *testing.T) {
 	defer srv.Close()
 
 	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
-	result, err := dc.ChatAgent(context.Background(), "openclaw", "openrouter", "hello", "sess-local-1", "actor", "req")
+	result, err := dc.ChatAgent(context.Background(), "openclaw", "openrouter", "hello", "sess-local-1", "flash", "google/gemini-2.0-flash-001", "actor", "req")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -339,6 +339,12 @@ func TestDaemonClient_ChatAgent(t *testing.T) {
 	}
 	if gotBody["sessionId"] != "sess-local-1" {
 		t.Fatalf("unexpected session body: %#v", gotBody)
+	}
+	if gotBody["modelAlias"] != "flash" {
+		t.Fatalf("unexpected modelAlias body: %#v", gotBody)
+	}
+	if gotBody["model"] != "google/gemini-2.0-flash-001" {
+		t.Fatalf("unexpected model body: %#v", gotBody)
 	}
 	if result.AgentID != "openclaw" || result.SessionID != "sess-local-1" || result.Message != "hello local" {
 		t.Fatalf("unexpected chat result: %+v", result)
@@ -826,7 +832,7 @@ func TestDaemonClient_UpgradeDiagnoseAndChatParseErrors(t *testing.T) {
 			name: "agent chat parse error",
 			path: "/api/v1/agents/openclaw/chat",
 			run: func(c *DaemonClient) error {
-				_, err := c.ChatAgent(context.Background(), "openclaw", "openrouter", "hello", "sess-1", "actor", "req")
+				_, err := c.ChatAgent(context.Background(), "openclaw", "openrouter", "hello", "sess-1", "", "", "actor", "req")
 				return err
 			},
 			want: "agent chat response",

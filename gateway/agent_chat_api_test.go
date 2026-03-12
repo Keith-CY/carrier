@@ -11,6 +11,7 @@ import (
 func TestHandleWebUIAgentChatPassesThroughToDaemon(t *testing.T) {
 	var gotActor string
 	var gotRequestID string
+	var gotBody map[string]any
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/agents/picoclaw/chat" {
 			http.NotFound(w, r)
@@ -18,13 +19,16 @@ func TestHandleWebUIAgentChatPassesThroughToDaemon(t *testing.T) {
 		}
 		gotActor = r.Header.Get("X-Carrier-Actor")
 		gotRequestID = r.Header.Get("X-Carrier-Request-Id")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
 		_, _ = w.Write([]byte(`{"agentId":"picoclaw","sessionId":"sess-1","message":"pong"}`))
 	}))
 	defer daemon.Close()
 
 	client := NewDaemonClient(daemon.URL, "", 0)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/chat", strings.NewReader(`{"message":"hello","provider":"openrouter"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/chat", strings.NewReader(`{"message":"hello","provider":"openrouter","modelAlias":"flash","model":"google/gemini-2.0-flash-001"}`))
 	req.Header.Set("Content-Type", "application/json")
 
 	handleWebUIAgent(rec, req, "req-chat-ok", client)
@@ -40,6 +44,9 @@ func TestHandleWebUIAgentChatPassesThroughToDaemon(t *testing.T) {
 	}
 	if gotRequestID != "req-chat-ok" {
 		t.Fatalf("request id=%q want req-chat-ok", gotRequestID)
+	}
+	if gotBody["modelAlias"] != "flash" || gotBody["model"] != "google/gemini-2.0-flash-001" {
+		t.Fatalf("unexpected forwarded body: %#v", gotBody)
 	}
 }
 

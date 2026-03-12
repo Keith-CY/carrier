@@ -9,14 +9,32 @@ import (
 )
 
 type agentLauncherSummary struct {
-	AgentID           string                 `json:"agentId"`
-	Status            AgentState             `json:"status"`
-	Heartbeat         *AgentHeartbeat        `json:"heartbeat,omitempty"`
-	Memory            *AgentMemoryState      `json:"memory,omitempty"`
-	Capabilities      AgentCapabilitySummary `json:"capabilities"`
-	ProviderReadiness agentProviderReadiness `json:"providerReadiness"`
-	Cron              *agentLauncherCronSummary `json:"cron,omitempty"`
-	Session           *agentLauncherSession  `json:"session,omitempty"`
+	AgentID           string                     `json:"agentId"`
+	Status            AgentState                 `json:"status"`
+	Heartbeat         *AgentHeartbeat            `json:"heartbeat,omitempty"`
+	Memory            *AgentMemoryState          `json:"memory,omitempty"`
+	Capabilities      AgentCapabilitySummary     `json:"capabilities"`
+	ProviderReadiness agentProviderReadiness     `json:"providerReadiness"`
+	ModelSurface      *agentLauncherModelSurface `json:"modelSurface,omitempty"`
+	Cron              *agentLauncherCronSummary  `json:"cron,omitempty"`
+	Session           *agentLauncherSession      `json:"session,omitempty"`
+}
+
+type agentLauncherModelSurface struct {
+	DefaultProfile string                             `json:"defaultProfile,omitempty"`
+	Profiles       []agentLauncherModelSurfaceProfile `json:"profiles,omitempty"`
+}
+
+type agentLauncherModelSurfaceProfile struct {
+	ProfileName    string `json:"profileName,omitempty"`
+	ModelAlias     string `json:"modelAlias,omitempty"`
+	ModelID        string `json:"modelId,omitempty"`
+	ProviderID     string `json:"providerId,omitempty"`
+	ProviderKey    string `json:"providerKey,omitempty"`
+	ProtocolFamily string `json:"protocolFamily,omitempty"`
+	BaseURL        string `json:"baseUrl,omitempty"`
+	AuthMethod     string `json:"authMethod,omitempty"`
+	Primary        bool   `json:"primary,omitempty"`
 }
 
 type agentLauncherCronSummary struct {
@@ -79,6 +97,7 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 
 	var session *agentLauncherSession
 	var readiness agentProviderReadiness
+	var modelSurface *agentLauncherModelSurface
 	if inst, ok := latestManagedInstanceForAgent(agentID); ok {
 		session = &agentLauncherSession{
 			InstanceID:   strings.TrimSpace(inst.ID),
@@ -97,6 +116,7 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 			UpdatedAt:    strings.TrimSpace(inst.UpdatedAt),
 		}
 		readiness = buildAgentProviderReadiness(inst.Provider)
+		modelSurface = buildAgentLauncherModelSurface(inst.ModelSurface)
 	}
 	var cronSummary *agentLauncherCronSummary
 	if jobs, err := daemon.ListCronJobs(r.Context(), agentID, "", "webui:agents:launcher", requestID); err == nil && len(jobs) > 0 {
@@ -115,9 +135,34 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 		Memory:            status.Memory,
 		Capabilities:      capabilities,
 		ProviderReadiness: readiness,
+		ModelSurface:      modelSurface,
 		Cron:              cronSummary,
 		Session:           session,
 	})
+}
+
+func buildAgentLauncherModelSurface(surface *managedAgentModelSurface) *agentLauncherModelSurface {
+	if surface == nil {
+		return nil
+	}
+	result := &agentLauncherModelSurface{
+		DefaultProfile: strings.TrimSpace(surface.DefaultProfile),
+		Profiles:       make([]agentLauncherModelSurfaceProfile, 0, len(surface.Profiles)),
+	}
+	for _, profile := range surface.Profiles {
+		result.Profiles = append(result.Profiles, agentLauncherModelSurfaceProfile{
+			ProfileName:    strings.TrimSpace(profile.ProfileName),
+			ModelAlias:     strings.TrimSpace(profile.ModelAlias),
+			ModelID:        strings.TrimSpace(profile.ModelID),
+			ProviderID:     strings.TrimSpace(profile.ProviderID),
+			ProviderKey:    strings.TrimSpace(profile.ProviderKey),
+			ProtocolFamily: strings.TrimSpace(profile.ProtocolFamily),
+			BaseURL:        strings.TrimSpace(profile.BaseURL),
+			AuthMethod:     strings.TrimSpace(profile.AuthMethod),
+			Primary:        profile.Primary,
+		})
+	}
+	return result
 }
 
 func buildAgentProviderReadiness(providerID string) agentProviderReadiness {

@@ -96,9 +96,11 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 			return
 		}
 		var body struct {
-			Provider  string `json:"provider"`
-			Message   string `json:"message"`
-			SessionID string `json:"sessionId"`
+			Provider   string `json:"provider"`
+			ModelAlias string `json:"modelAlias,omitempty"`
+			Model      string `json:"model,omitempty"`
+			Message    string `json:"message"`
+			SessionID  string `json:"sessionId"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid JSON body"))
@@ -109,7 +111,7 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "message is required"))
 			return
 		}
-		result, err := daemon.ChatAgent(r.Context(), agentID, strings.TrimSpace(body.Provider), message, strings.TrimSpace(body.SessionID), "webui:agents:chat", requestID)
+		result, err := daemon.ChatAgent(r.Context(), agentID, strings.TrimSpace(body.Provider), message, strings.TrimSpace(body.SessionID), strings.TrimSpace(body.ModelAlias), strings.TrimSpace(body.Model), "webui:agents:chat", requestID)
 		if err != nil {
 			writeDaemonAPIError(w, err)
 			return

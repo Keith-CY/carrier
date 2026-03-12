@@ -30,6 +30,8 @@ func mustRegisterProvider(pm *ProviderManager, provider Provider) {
 
 type ChatRequest struct {
 	Provider    string          `json:"provider"`
+	ModelAlias  string          `json:"modelAlias,omitempty"`
+	Model       string          `json:"model,omitempty"`
 	ChatID      string          `json:"chatId"`
 	RequestID   string          `json:"requestId"`
 	Message     string          `json:"message"`

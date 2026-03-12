@@ -61,6 +61,13 @@ describe('AgentDetailPage', () => {
           heartbeat: { state: 'fresh', ageSeconds: 12 },
           memory: { contractId: 'memory-alpha' },
           providerReadiness: { provider: 'openrouter', ready: true, authMode: 'api_key' },
+          modelSurface: {
+            defaultProfile: 'openrouter-fast',
+            profiles: [
+              { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', primary: true },
+              { profileName: 'openrouter-safe', modelAlias: 'flash', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', primary: false },
+            ],
+          },
           cron: {
             count: 2,
             nextRunAt: '2026-03-13T00:00:00Z',
@@ -94,5 +101,8 @@ describe('AgentDetailPage', () => {
     expect(screen.getByText(/healthy/i)).toBeInTheDocument();
     expect(screen.getByText(/2 job\(s\)/i)).toBeInTheDocument();
     expect(screen.getByText(/check launcher/i)).toBeInTheDocument();
+    expect(screen.getByText(/openrouter-fast/i)).toBeInTheDocument();
+    expect(screen.getByText(/google\/gemini-2.0-flash-001/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/flash/i).length).toBeGreaterThan(0);
   });
 });

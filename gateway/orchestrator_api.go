@@ -1231,6 +1231,8 @@ func runOrchestratorTaskAttempt(
 			strings.TrimSpace(execution.RequestedProvider),
 			strings.TrimSpace(task.Input),
 			sessionID,
+			"",
+			"",
 			"gateway:orchestrator:local",
 			requestID,
 		)

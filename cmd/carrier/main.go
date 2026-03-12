@@ -284,14 +284,16 @@ type memoryCommandOptions struct {
 }
 
 type agentCommandOptions struct {
-	Action    string
-	AgentID   string
-	CronJobID string
-	Message   string
-	Provider  string
-	SessionID string
-	NextRunAt time.Time
-	JSON      bool
+	Action     string
+	AgentID    string
+	CronJobID  string
+	Message    string
+	Provider   string
+	ModelAlias string
+	Model      string
+	SessionID  string
+	NextRunAt  time.Time
+	JSON       bool
 }
 
 type versionInfo struct {
@@ -333,6 +335,7 @@ type managedAgentAddResult struct {
 	RecordPath    string
 	ChannelID     string
 	ProviderID    string
+	ModelSurface  *managedAgentModelSurface
 	PairedChatID  string
 	Port          int
 }
@@ -349,6 +352,23 @@ type managedModelProfile struct {
 	AuthMethod     string
 }
 
+type managedAgentModelSurface struct {
+	DefaultProfile string                     `json:"default_profile,omitempty"`
+	Profiles       []managedAgentModelProfile `json:"profiles,omitempty"`
+}
+
+type managedAgentModelProfile struct {
+	ProfileName    string `json:"profile_name,omitempty"`
+	ModelAlias     string `json:"model_alias,omitempty"`
+	ModelID        string `json:"model_id,omitempty"`
+	ProviderID     string `json:"provider_id,omitempty"`
+	ProviderKey    string `json:"provider_key,omitempty"`
+	ProtocolFamily string `json:"protocol_family,omitempty"`
+	BaseURL        string `json:"base_url,omitempty"`
+	AuthMethod     string `json:"auth_method,omitempty"`
+	Primary        bool   `json:"primary,omitempty"`
+}
+
 type managedAgentConfig struct {
 	ID                  string
 	Name                string
@@ -358,24 +378,25 @@ type managedAgentConfig struct {
 }
 
 type managedAgentInstance struct {
-	ID           string `json:"id"`
-	Name         string `json:"name,omitempty"`
-	Type         string `json:"type"`
-	AgentID      string `json:"agent_id"`
-	Isolation    bool   `json:"isolation,omitempty"`
-	GatewayURL   string `json:"gateway_url"`
-	Workspace    string `json:"workspace_path,omitempty"`
-	ConfigPath   string `json:"config_path,omitempty"`
-	RecordPath   string `json:"record_path,omitempty"`
-	Channel      string `json:"channel,omitempty"`
-	Provider     string `json:"provider,omitempty"`
-	PairRequired bool   `json:"pair_required,omitempty"`
-	PairCode     string `json:"pair_code,omitempty"`
-	PairedChatID string `json:"paired_chat_id,omitempty"`
-	RuntimeState string `json:"runtime_state,omitempty"`
-	Port         int    `json:"port,omitempty"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
+	ID           string                    `json:"id"`
+	Name         string                    `json:"name,omitempty"`
+	Type         string                    `json:"type"`
+	AgentID      string                    `json:"agent_id"`
+	Isolation    bool                      `json:"isolation,omitempty"`
+	GatewayURL   string                    `json:"gateway_url"`
+	Workspace    string                    `json:"workspace_path,omitempty"`
+	ConfigPath   string                    `json:"config_path,omitempty"`
+	RecordPath   string                    `json:"record_path,omitempty"`
+	Channel      string                    `json:"channel,omitempty"`
+	Provider     string                    `json:"provider,omitempty"`
+	ModelSurface *managedAgentModelSurface `json:"model_surface,omitempty"`
+	PairRequired bool                      `json:"pair_required,omitempty"`
+	PairCode     string                    `json:"pair_code,omitempty"`
+	PairedChatID string                    `json:"paired_chat_id,omitempty"`
+	RuntimeState string                    `json:"runtime_state,omitempty"`
+	Port         int                       `json:"port,omitempty"`
+	CreatedAt    string                    `json:"created_at"`
+	UpdatedAt    string                    `json:"updated_at"`
 }
 
 type managedAgentInstanceFile struct {
@@ -538,7 +559,7 @@ Core workflows:
                         List orchestration executions
   carrier agent launcher <agent_id> [--json]
                         Show managed-agent launcher summary
-  carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--session-id <id>] [--json]
+  carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--model-alias <alias>] [--model <model-id>] [--session-id <id>] [--json]
                         Run one managed-agent prompt through the gateway
   carrier memory [list] [--subject <subject>] [--json]
                         List memory packages, attachments, grants, and audit snapshot
@@ -648,7 +669,7 @@ Usage:
                         Show orchestration execution status/results
   carrier executions cancel <execution_id> [--json]
                         Cancel orchestration execution
-  carrier agent shell <agent_id> [--provider <provider-id>] [--session-id <id>]
+  carrier agent shell <agent_id> [--provider <provider-id>] [--model-alias <alias>] [--model <model-id>] [--session-id <id>]
                         Run an interactive managed-agent shell
   carrier agent heartbeat <agent_id> [--json]
                         Show managed-agent heartbeat summary
@@ -3315,7 +3336,7 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 		case "-m", "--message":
 			value, next, err := parseRequiredFlagValue(args, i, raw)
 			if err != nil {
-				return agentCommandOptions{}, errors.New("usage: carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--session-id <id>] [--json]")
+				return agentCommandOptions{}, errors.New("usage: carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--model-alias <alias>] [--model <model-id>] [--session-id <id>] [--json]")
 			}
 			opts.Message = strings.TrimSpace(value)
 			i = next
@@ -3332,6 +3353,20 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 				return agentCommandOptions{}, err
 			}
 			opts.SessionID = strings.TrimSpace(value)
+			i = next
+		case "--model-alias":
+			value, next, err := parseRequiredFlagValue(args, i, "--model-alias")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.ModelAlias = strings.TrimSpace(value)
+			i = next
+		case "--model":
+			value, next, err := parseRequiredFlagValue(args, i, "--model")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.Model = strings.TrimSpace(value)
 			i = next
 		case "--next-run-at":
 			value, next, err := parseRequiredFlagValue(args, i, "--next-run-at")
@@ -3353,7 +3388,7 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 	switch opts.Action {
 	case "run":
 		if opts.Message == "" {
-			return agentCommandOptions{}, errors.New("usage: carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--session-id <id>] [--json]")
+			return agentCommandOptions{}, errors.New("usage: carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--model-alias <alias>] [--model <model-id>] [--session-id <id>] [--json]")
 		}
 	case "cron-schedule":
 		if opts.Message == "" {
@@ -4618,19 +4653,19 @@ type memoryDistillResponse struct {
 }
 
 type agentLauncherCLIResponse struct {
-	Result            string `json:"result,omitempty"`
-	AgentID           string `json:"agentId"`
-	Status            struct {
+	Result  string `json:"result,omitempty"`
+	AgentID string `json:"agentId"`
+	Status  struct {
 		RuntimeState string `json:"runtimeState,omitempty"`
 		InstallState string `json:"installState,omitempty"`
 		Health       string `json:"health,omitempty"`
 	} `json:"status"`
-	Heartbeat         *struct {
+	Heartbeat *struct {
 		State          string `json:"state"`
 		AgeSeconds     int64  `json:"ageSeconds"`
 		LastActivityAt string `json:"lastActivityAt,omitempty"`
 	} `json:"heartbeat,omitempty"`
-	Memory            *struct {
+	Memory *struct {
 		ContractID     string `json:"contractId,omitempty"`
 		ContractDigest string `json:"contractDigest,omitempty"`
 		SyncState      string `json:"syncState,omitempty"`
@@ -4640,11 +4675,25 @@ type agentLauncherCLIResponse struct {
 		Ready    bool   `json:"ready"`
 		AuthMode string `json:"authMode,omitempty"`
 	} `json:"providerReadiness,omitempty"`
+	ModelSurface *struct {
+		DefaultProfile string `json:"defaultProfile,omitempty"`
+		Profiles       []struct {
+			ProfileName    string `json:"profileName,omitempty"`
+			ModelAlias     string `json:"modelAlias,omitempty"`
+			ModelID        string `json:"modelId,omitempty"`
+			ProviderID     string `json:"providerId,omitempty"`
+			ProviderKey    string `json:"providerKey,omitempty"`
+			ProtocolFamily string `json:"protocolFamily,omitempty"`
+			BaseURL        string `json:"baseUrl,omitempty"`
+			AuthMethod     string `json:"authMethod,omitempty"`
+			Primary        bool   `json:"primary,omitempty"`
+		} `json:"profiles,omitempty"`
+	} `json:"modelSurface,omitempty"`
 	Cron *struct {
-		Count      int    `json:"count"`
-		NextRunAt  string `json:"nextRunAt,omitempty"`
-		LastRunAt  string `json:"lastRunAt,omitempty"`
-		LastResult string `json:"lastResult,omitempty"`
+		Count      int                       `json:"count"`
+		NextRunAt  string                    `json:"nextRunAt,omitempty"`
+		LastRunAt  string                    `json:"lastRunAt,omitempty"`
+		LastResult string                    `json:"lastResult,omitempty"`
 		Jobs       []agentCronJobCLIResponse `json:"jobs,omitempty"`
 	} `json:"cron,omitempty"`
 	Session *struct {
@@ -4818,6 +4867,12 @@ func runManagedAgentPrompt(opts agentCommandOptions) (*gatewayruntime.AgentChatR
 	if strings.TrimSpace(opts.Provider) != "" {
 		payload["provider"] = strings.TrimSpace(opts.Provider)
 	}
+	if strings.TrimSpace(opts.ModelAlias) != "" {
+		payload["modelAlias"] = strings.TrimSpace(opts.ModelAlias)
+	}
+	if strings.TrimSpace(opts.Model) != "" {
+		payload["model"] = strings.TrimSpace(opts.Model)
+	}
 	if strings.TrimSpace(opts.SessionID) != "" {
 		payload["sessionId"] = strings.TrimSpace(opts.SessionID)
 	}
@@ -4917,11 +4972,13 @@ func runManagedAgentShell(in io.Reader, out io.Writer, opts agentCommandOptions)
 				return nil
 			default:
 				resp, _, runErr := runManagedAgentPrompt(agentCommandOptions{
-					Action:    "run",
-					AgentID:   opts.AgentID,
-					Message:   line,
-					Provider:  opts.Provider,
-					SessionID: sessionID,
+					Action:     "run",
+					AgentID:    opts.AgentID,
+					Message:    line,
+					Provider:   opts.Provider,
+					ModelAlias: opts.ModelAlias,
+					Model:      opts.Model,
+					SessionID:  sessionID,
 				})
 				if runErr != nil {
 					return runErr
@@ -4949,13 +5006,39 @@ func renderManagedAgentLauncher(resp *agentLauncherCLIResponse) string {
 		fmt.Sprintf("health=%s", strings.TrimSpace(resp.Status.Health)),
 	}
 	if resp.Heartbeat != nil {
-		lines = append(lines, fmt.Sprintf("heartbeat=%s age=%s", strings.TrimSpace(resp.Heartbeat.State), (time.Duration(resp.Heartbeat.AgeSeconds) * time.Second).String()))
+		lines = append(lines, fmt.Sprintf("heartbeat=%s age=%s", strings.TrimSpace(resp.Heartbeat.State), (time.Duration(resp.Heartbeat.AgeSeconds)*time.Second).String()))
 	}
 	if resp.Memory != nil && strings.TrimSpace(resp.Memory.ContractID) != "" {
 		lines = append(lines, fmt.Sprintf("memory=%s sync=%s", strings.TrimSpace(resp.Memory.ContractID), strings.TrimSpace(resp.Memory.SyncState)))
 	}
 	if resp.ProviderReadiness != nil && strings.TrimSpace(resp.ProviderReadiness.Provider) != "" {
 		lines = append(lines, fmt.Sprintf("provider=%s ready=%t auth=%s", strings.TrimSpace(resp.ProviderReadiness.Provider), resp.ProviderReadiness.Ready, strings.TrimSpace(resp.ProviderReadiness.AuthMode)))
+	}
+	if resp.ModelSurface != nil {
+		defaultProfile := strings.TrimSpace(resp.ModelSurface.DefaultProfile)
+		for _, profile := range resp.ModelSurface.Profiles {
+			if profile.Primary || (defaultProfile != "" && strings.EqualFold(strings.TrimSpace(profile.ProfileName), defaultProfile)) {
+				label := firstNonEmpty(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(profile.ProfileName))
+				lines = append(lines, fmt.Sprintf("default=%s -> %s", label, strings.TrimSpace(profile.ModelID)))
+				break
+			}
+		}
+		if len(resp.ModelSurface.Profiles) > 0 {
+			for _, profile := range resp.ModelSurface.Profiles {
+				label := firstNonEmpty(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(profile.ProfileName))
+				entry := fmt.Sprintf("profile=%s model=%s", label, strings.TrimSpace(profile.ModelID))
+				if strings.TrimSpace(profile.ProviderID) != "" {
+					entry += " provider=" + strings.TrimSpace(profile.ProviderID)
+				}
+				if strings.TrimSpace(profile.ProtocolFamily) != "" {
+					entry += " protocol=" + strings.TrimSpace(profile.ProtocolFamily)
+				}
+				if profile.Primary {
+					entry += " primary=true"
+				}
+				lines = append(lines, entry)
+			}
+		}
 	}
 	if resp.Session != nil && strings.TrimSpace(resp.Session.InstanceID) != "" {
 		lines = append(lines, fmt.Sprintf("instance=%s state=%s", strings.TrimSpace(resp.Session.InstanceID), firstNonEmpty(strings.TrimSpace(resp.Session.RuntimeState), strings.TrimSpace(resp.Status.RuntimeState))))
@@ -9470,6 +9553,7 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 		RecordPath:   result.RecordPath,
 		Channel:      result.ChannelID,
 		Provider:     result.ProviderID,
+		ModelSurface: result.ModelSurface,
 		PairRequired: hasChannel && strings.TrimSpace(token) != "" && strings.TrimSpace(result.PairedChatID) == "",
 		PairedChatID: result.PairedChatID,
 		Port:         result.Port,
@@ -10467,9 +10551,34 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 		RecordPath:    recordPath,
 		ChannelID:     channelID,
 		ProviderID:    provider.ID,
+		ModelSurface:  buildManagedModelSurfaceForAdd(profiles),
 		PairedChatID:  pairedChatID,
 		Port:          allocatedPort,
 	}, nil
+}
+
+func buildManagedModelSurfaceForAdd(profiles []managedModelProfile) *managedAgentModelSurface {
+	if len(profiles) == 0 {
+		return nil
+	}
+	surface := &managedAgentModelSurface{
+		DefaultProfile: strings.TrimSpace(profiles[0].ProfileName),
+		Profiles:       make([]managedAgentModelProfile, 0, len(profiles)),
+	}
+	for i, profile := range profiles {
+		surface.Profiles = append(surface.Profiles, managedAgentModelProfile{
+			ProfileName:    strings.TrimSpace(profile.ProfileName),
+			ModelAlias:     strings.TrimSpace(profile.ModelAlias),
+			ModelID:        strings.TrimSpace(profile.ModelID),
+			ProviderID:     strings.TrimSpace(profile.ProviderID),
+			ProviderKey:    strings.TrimSpace(profile.ProviderKey),
+			ProtocolFamily: strings.TrimSpace(profile.ProtocolFamily),
+			BaseURL:        strings.TrimSpace(profile.BaseURL),
+			AuthMethod:     strings.TrimSpace(profile.AuthMethod),
+			Primary:        i == 0,
+		})
+	}
+	return surface
 }
 
 func buildManagedPicoClawConfigPayload(

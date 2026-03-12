@@ -1620,6 +1620,8 @@ func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID s
 	}
 	var body struct {
 		Provider    string                    `json:"provider"`
+		ModelAlias  string                    `json:"modelAlias,omitempty"`
+		Model       string                    `json:"model,omitempty"`
 		ChatID      string                    `json:"chatId"`
 		RequestID   string                    `json:"requestId"`
 		SessionID   string                    `json:"sessionId"`
@@ -1660,6 +1662,8 @@ func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID s
 	}
 	resp, err := runtime.Chat(r.Context(), baseagent.ChatRequest{
 		Provider:    strings.TrimSpace(body.Provider),
+		ModelAlias:  strings.TrimSpace(body.ModelAlias),
+		Model:       strings.TrimSpace(body.Model),
 		ChatID:      chatID,
 		RequestID:   strings.TrimSpace(body.RequestID),
 		Message:     message,

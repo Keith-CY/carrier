@@ -44,6 +44,20 @@ type AgentLauncherSummary = {
     ready?: boolean;
     credentialBackend?: string;
   };
+  modelSurface?: {
+    defaultProfile?: string;
+    profiles?: Array<{
+      profileName?: string;
+      modelAlias?: string;
+      modelId?: string;
+      providerId?: string;
+      providerKey?: string;
+      protocolFamily?: string;
+      baseUrl?: string;
+      authMethod?: string;
+      primary?: boolean;
+    }>;
+  };
   cron?: {
     count?: number;
     nextRunAt?: string;
@@ -209,6 +223,30 @@ export function AgentDetailPage() {
                       </span>
                     </li>
                   ))}
+                </ul>
+              </div>
+            ) : null}
+            {content.launcher?.modelSurface?.profiles && content.launcher.modelSurface.profiles.length ? (
+              <div>
+                <strong>Model Surface</strong>
+                <div className="text-dim">
+                  {content.launcher.modelSurface.defaultProfile ? `default=${content.launcher.modelSurface.defaultProfile}` : 'default=unconfigured'}
+                </div>
+                <ul className="compact-list">
+                  {content.launcher.modelSurface.profiles.map((profile, index) => {
+                    const label = String(profile.modelAlias || profile.profileName || `profile-${index + 1}`).trim();
+                    return (
+                      <li key={String(profile.profileName || label || index)}>
+                        <span>{label}</span>
+                        <span className="text-dim">
+                          {profile.modelId || 'unknown-model'}
+                          {profile.providerId ? ` · ${profile.providerId}` : ''}
+                          {profile.protocolFamily ? ` · ${profile.protocolFamily}` : ''}
+                          {profile.primary ? ' · primary' : ''}
+                        </span>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             ) : null}

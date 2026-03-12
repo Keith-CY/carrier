@@ -13,22 +13,40 @@ import (
 )
 
 type managedAgentInstance struct {
-	ID           string `json:"id"`
-	Type         string `json:"type"`
-	AgentID      string `json:"agent_id"`
-	Isolation    bool   `json:"isolation,omitempty"`
-	GatewayURL   string `json:"gateway_url"`
-	Workspace    string `json:"workspace_path,omitempty"`
-	ConfigPath   string `json:"config_path,omitempty"`
-	RecordPath   string `json:"record_path,omitempty"`
-	Channel      string `json:"channel,omitempty"`
-	Provider     string `json:"provider,omitempty"`
-	PairRequired bool   `json:"pair_required,omitempty"`
-	PairCode     string `json:"pair_code,omitempty"`
-	PairedChatID string `json:"paired_chat_id,omitempty"`
-	RuntimeState string `json:"runtime_state,omitempty"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
+	ID           string                    `json:"id"`
+	Type         string                    `json:"type"`
+	AgentID      string                    `json:"agent_id"`
+	Isolation    bool                      `json:"isolation,omitempty"`
+	GatewayURL   string                    `json:"gateway_url"`
+	Workspace    string                    `json:"workspace_path,omitempty"`
+	ConfigPath   string                    `json:"config_path,omitempty"`
+	RecordPath   string                    `json:"record_path,omitempty"`
+	Channel      string                    `json:"channel,omitempty"`
+	Provider     string                    `json:"provider,omitempty"`
+	ModelSurface *managedAgentModelSurface `json:"model_surface,omitempty"`
+	PairRequired bool                      `json:"pair_required,omitempty"`
+	PairCode     string                    `json:"pair_code,omitempty"`
+	PairedChatID string                    `json:"paired_chat_id,omitempty"`
+	RuntimeState string                    `json:"runtime_state,omitempty"`
+	CreatedAt    string                    `json:"created_at"`
+	UpdatedAt    string                    `json:"updated_at"`
+}
+
+type managedAgentModelSurface struct {
+	DefaultProfile string                     `json:"default_profile,omitempty"`
+	Profiles       []managedAgentModelProfile `json:"profiles,omitempty"`
+}
+
+type managedAgentModelProfile struct {
+	ProfileName    string `json:"profile_name,omitempty"`
+	ModelAlias     string `json:"model_alias,omitempty"`
+	ModelID        string `json:"model_id,omitempty"`
+	ProviderID     string `json:"provider_id,omitempty"`
+	ProviderKey    string `json:"provider_key,omitempty"`
+	ProtocolFamily string `json:"protocol_family,omitempty"`
+	BaseURL        string `json:"base_url,omitempty"`
+	AuthMethod     string `json:"auth_method,omitempty"`
+	Primary        bool   `json:"primary,omitempty"`
 }
 
 type managedAgentInstanceFile struct {

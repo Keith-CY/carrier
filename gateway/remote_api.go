@@ -1431,6 +1431,8 @@ func streamLocalChatResponse(w http.ResponseWriter, r *http.Request, requestID s
 			provider,
 			req.Message,
 			sessionID,
+			"",
+			"",
 			"webui:local-chat",
 			requestID,
 		)

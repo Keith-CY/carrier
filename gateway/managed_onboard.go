@@ -25,6 +25,7 @@ type managedOnboardResult struct {
 	WorkspacePath string
 	ConfigPath    string
 	RecordPath    string
+	ModelSurface  managedAgentModelSurface
 	RendererID    string
 	ConfigFormat  string
 	AgentVersion  string
@@ -41,6 +42,30 @@ type managedModelProfile struct {
 	ProtocolFamily string
 	BaseURL        string
 	AuthMethod     string
+}
+
+func buildManagedModelSurface(profiles []managedModelProfile) managedAgentModelSurface {
+	surface := managedAgentModelSurface{
+		Profiles: make([]managedAgentModelProfile, 0, len(profiles)),
+	}
+	if len(profiles) == 0 {
+		return surface
+	}
+	surface.DefaultProfile = strings.TrimSpace(profiles[0].ProfileName)
+	for i, profile := range profiles {
+		surface.Profiles = append(surface.Profiles, managedAgentModelProfile{
+			ProfileName:    strings.TrimSpace(profile.ProfileName),
+			ModelAlias:     strings.TrimSpace(profile.ModelAlias),
+			ModelID:        strings.TrimSpace(profile.ModelID),
+			ProviderID:     strings.TrimSpace(profile.ProviderID),
+			ProviderKey:    strings.TrimSpace(profile.ProviderKey),
+			ProtocolFamily: strings.TrimSpace(profile.ProtocolFamily),
+			BaseURL:        strings.TrimSpace(profile.BaseURL),
+			AuthMethod:     strings.TrimSpace(profile.AuthMethod),
+			Primary:        i == 0,
+		})
+	}
+	return surface
 }
 
 var managedAgents = map[string]managedAgentConfig{
@@ -322,6 +347,7 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 		WorkspacePath: workspacePath,
 		ConfigPath:    configPath,
 		RecordPath:    recordPath,
+		ModelSurface:  buildManagedModelSurface(profiles),
 		RendererID:    renderer.RendererID,
 		ConfigFormat:  renderer.ConfigFormat,
 		AgentVersion:  renderer.AgentVersion,

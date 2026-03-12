@@ -440,6 +440,8 @@ func (c *DaemonClient) ChatAgent(
 	provider string,
 	message string,
 	sessionID string,
+	modelAlias string,
+	model string,
 	actor string,
 	requestID string,
 ) (*AgentChatResult, error) {
@@ -451,6 +453,12 @@ func (c *DaemonClient) ChatAgent(
 	}
 	if strings.TrimSpace(sessionID) != "" {
 		payload["sessionId"] = strings.TrimSpace(sessionID)
+	}
+	if strings.TrimSpace(modelAlias) != "" {
+		payload["modelAlias"] = strings.TrimSpace(modelAlias)
+	}
+	if strings.TrimSpace(model) != "" {
+		payload["model"] = strings.TrimSpace(model)
 	}
 	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/chat", payload, actor, requestID)
 	if err != nil {

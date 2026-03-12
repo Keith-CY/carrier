@@ -727,6 +727,8 @@ func runDelegateTask(
 			strings.TrimSpace(provider),
 			task.Input,
 			sessionID,
+			"",
+			"",
 			"gateway:delegate:local",
 			requestID,
 		)
