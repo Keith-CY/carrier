@@ -119,6 +119,14 @@ func TestParseAgentCommandArgs(t *testing.T) {
 	if modelsSyncOpts.Action != "models-sync" || modelsSyncOpts.AgentID != "picoclaw" || !modelsSyncOpts.JSON {
 		t.Fatalf("unexpected models sync opts: %+v", modelsSyncOpts)
 	}
+
+	modelsDefaultOpts, err := parseAgentCommandArgs([]string{"models", "default", "picoclaw", "openrouter-safe", "--json"})
+	if err != nil {
+		t.Fatalf("parseAgentCommandArgs(models default) error: %v", err)
+	}
+	if modelsDefaultOpts.Action != "models-default" || modelsDefaultOpts.AgentID != "picoclaw" || modelsDefaultOpts.ProfileName != "openrouter-safe" || !modelsDefaultOpts.JSON {
+		t.Fatalf("unexpected models default opts: %+v", modelsDefaultOpts)
+	}
 }
 
 func TestRunAgentCommand(t *testing.T) {
@@ -149,7 +157,7 @@ func TestRunAgentCommand(t *testing.T) {
 				http.NotFound(w, r)
 				return
 			}
-			_, _ = w.Write([]byte(`{"result":"ok","agentId":"picoclaw","status":{"runtimeState":"running","installState":"installed","health":"healthy"},"heartbeat":{"state":"fresh","ageSeconds":4,"lastActivityAt":"2026-03-12T00:00:00Z"},"memory":{"contractId":"memory-alpha","contractDigest":"digest-1","syncState":"synced"},"providerReadiness":{"provider":"openrouter","ready":true,"authMode":"api_key"},"modelSurface":{"defaultProfile":"openrouter-fast","profiles":[{"profileName":"openrouter-fast","modelAlias":"flash","modelId":"google/gemini-2.0-flash-001","providerId":"openrouter","protocolFamily":"openai-compatible","primary":true},{"profileName":"openrouter-safe","modelAlias":"flash","modelId":"deepseek/deepseek-chat-v3-0324","providerId":"openrouter","protocolFamily":"openai-compatible","primary":false}]},"session":{"instanceId":"picoclaw-main","runtimeMode":"managed_gateway","updatedAt":"2026-03-12T00:00:00Z"},"cron":{"count":1,"jobs":[{"id":"cron-1","agentId":"picoclaw","prompt":"check launcher","nextRunAt":"2026-03-12T01:00:00Z","lastResult":"succeeded","lastRunAt":"2026-03-12T00:30:00Z"}]}}`))
+			_, _ = w.Write([]byte(`{"result":"ok","agentId":"picoclaw","status":{"runtimeState":"running","installState":"installed","health":"healthy"},"heartbeat":{"state":"fresh","ageSeconds":4,"lastActivityAt":"2026-03-12T00:00:00Z"},"memory":{"contractId":"memory-alpha","contractDigest":"digest-1","syncState":"synced"},"providerReadiness":{"provider":"openrouter","ready":true,"authMode":"api_key"},"modelSurface":{"defaultProfile":"openrouter-fast","profiles":[{"profileName":"openrouter-fast","modelAlias":"flash","modelId":"google/gemini-2.0-flash-001","providerId":"openrouter","protocolFamily":"openai-compatible","timeoutMs":45000,"retryBudget":2,"fallbackStrategy":"ordered","primary":true},{"profileName":"openrouter-safe","modelAlias":"flash-safe","modelId":"deepseek/deepseek-chat-v3-0324","providerId":"openrouter","protocolFamily":"openai-compatible","primary":false}]},"session":{"instanceId":"picoclaw-main","runtimeMode":"managed_gateway","updatedAt":"2026-03-12T00:00:00Z"},"cron":{"count":1,"jobs":[{"id":"cron-1","agentId":"picoclaw","prompt":"check launcher","nextRunAt":"2026-03-12T01:00:00Z","lastResult":"succeeded","lastRunAt":"2026-03-12T00:30:00Z"}]}}`))
 		case "/api/v1/agents/picoclaw/cron":
 			switch r.Method {
 			case http.MethodGet:
@@ -201,6 +209,17 @@ func TestRunAgentCommand(t *testing.T) {
 				return
 			}
 			_, _ = w.Write([]byte(`{"agentId":"picoclaw","instanceId":"picoclaw-main","configPath":"/tmp/picoclaw/config.json","synced":true,"modelSurface":{"defaultProfile":"openrouter-fast","profiles":[{"profileName":"openrouter-fast","modelAlias":"flash","modelId":"google/gemini-2.0-flash-001","providerId":"openrouter","protocolFamily":"openai-compatible","primary":true}]}}`))
+		case "/api/v1/agents/picoclaw/models/default":
+			if r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["profileName"] != "openrouter-safe" {
+				t.Fatalf("profileName=%v want openrouter-safe", body["profileName"])
+			}
+			_, _ = w.Write([]byte(`{"agentId":"picoclaw","instanceId":"picoclaw-main","configPath":"/tmp/picoclaw/config.json","modelSurface":{"defaultProfile":"openrouter-safe","profiles":[{"profileName":"openrouter-fast","modelAlias":"flash","modelId":"google/gemini-2.0-flash-001","providerId":"openrouter","protocolFamily":"openai-compatible","primary":true},{"profileName":"openrouter-safe","modelAlias":"flash-safe","modelId":"deepseek/deepseek-chat-v3-0324","providerId":"openrouter","protocolFamily":"openai-compatible","primary":false}]}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -221,7 +240,7 @@ func TestRunAgentCommand(t *testing.T) {
 	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "launcher", AgentID: "picoclaw"}); err != nil {
 		t.Fatalf("runAgentCommand(launcher) error: %v", err)
 	}
-	if !strings.Contains(out.String(), "fresh") || !strings.Contains(out.String(), "memory-alpha") || !strings.Contains(out.String(), "openrouter") || !strings.Contains(out.String(), "default=flash -> google/gemini-2.0-flash-001") {
+	if !strings.Contains(out.String(), "fresh") || !strings.Contains(out.String(), "memory-alpha") || !strings.Contains(out.String(), "openrouter") || !strings.Contains(out.String(), "default=flash -> google/gemini-2.0-flash-001") || !strings.Contains(out.String(), "timeout=45000ms") || !strings.Contains(out.String(), "retry=2") || !strings.Contains(out.String(), "fallback=ordered") {
 		t.Fatalf("launcher output=%s", out.String())
 	}
 
@@ -295,6 +314,14 @@ func TestRunAgentCommand(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "synced=true") || !strings.Contains(out.String(), "default=flash -> google/gemini-2.0-flash-001") {
 		t.Fatalf("models sync output=%s", out.String())
+	}
+
+	out.Reset()
+	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "models-default", AgentID: "picoclaw", ProfileName: "openrouter-safe"}); err != nil {
+		t.Fatalf("runAgentCommand(models default) error: %v", err)
+	}
+	if !strings.Contains(out.String(), "default=flash-safe -> deepseek/deepseek-chat-v3-0324") {
+		t.Fatalf("models default output=%s", out.String())
 	}
 }
 

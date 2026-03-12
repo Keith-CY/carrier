@@ -287,6 +287,7 @@ type agentCommandOptions struct {
 	Action     string
 	AgentID    string
 	CronJobID  string
+	ProfileName string
 	Query      string
 	SkillName  string
 	Message    string
@@ -368,6 +369,9 @@ type managedAgentModelProfile struct {
 	ProtocolFamily string `json:"protocol_family,omitempty"`
 	BaseURL        string `json:"base_url,omitempty"`
 	AuthMethod     string `json:"auth_method,omitempty"`
+	TimeoutMs      int    `json:"timeout_ms,omitempty"`
+	RetryBudget    int    `json:"retry_budget,omitempty"`
+	FallbackStrategy string `json:"fallback_strategy,omitempty"`
 	Primary        bool   `json:"primary,omitempty"`
 }
 
@@ -3313,7 +3317,7 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 		startIdx = 2
 	case "models":
 		if len(args) < 2 {
-			return agentCommandOptions{}, errors.New("usage: carrier agent models [sync] <agent_id> [--json]")
+			return agentCommandOptions{}, errors.New("usage: carrier agent models [sync|default] <agent_id> [profile_name] [--json]")
 		}
 		if strings.EqualFold(strings.TrimSpace(args[1]), "sync") {
 			if len(args) < 3 {
@@ -3322,6 +3326,14 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 			opts.Action = "models-sync"
 			opts.AgentID = strings.TrimSpace(args[2])
 			startIdx = 3
+		} else if strings.EqualFold(strings.TrimSpace(args[1]), "default") {
+			if len(args) < 4 {
+				return agentCommandOptions{}, errors.New("usage: carrier agent models default <agent_id> <profile_name> [--json]")
+			}
+			opts.Action = "models-default"
+			opts.AgentID = strings.TrimSpace(args[2])
+			opts.ProfileName = strings.TrimSpace(args[3])
+			startIdx = 4
 		} else {
 			opts.Action = "models"
 			opts.AgentID = strings.TrimSpace(args[1])
@@ -3445,6 +3457,10 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 			return agentCommandOptions{}, fmt.Errorf("usage: carrier agent skills %s <agent_id> <skill_name> [--json]", strings.TrimPrefix(opts.Action, "skills-"))
 		}
 	case "shell", "launcher", "heartbeat", "models", "models-sync":
+	case "models-default":
+		if strings.TrimSpace(opts.ProfileName) == "" {
+			return agentCommandOptions{}, errors.New("usage: carrier agent models default <agent_id> <profile_name> [--json]")
+		}
 	default:
 		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills|models> ...")
 	}
@@ -4731,6 +4747,9 @@ type agentLauncherCLIResponse struct {
 			ProtocolFamily string `json:"protocolFamily,omitempty"`
 			BaseURL        string `json:"baseUrl,omitempty"`
 			AuthMethod     string `json:"authMethod,omitempty"`
+			TimeoutMs      int    `json:"timeoutMs,omitempty"`
+			RetryBudget    int    `json:"retryBudget,omitempty"`
+			FallbackStrategy string `json:"fallbackStrategy,omitempty"`
 			Primary        bool   `json:"primary,omitempty"`
 		} `json:"profiles,omitempty"`
 	} `json:"modelSurface,omitempty"`
@@ -4793,6 +4812,9 @@ type agentModelsCLIResponse struct {
 			ProtocolFamily string `json:"protocolFamily,omitempty"`
 			BaseURL        string `json:"baseUrl,omitempty"`
 			AuthMethod     string `json:"authMethod,omitempty"`
+			TimeoutMs      int    `json:"timeoutMs,omitempty"`
+			RetryBudget    int    `json:"retryBudget,omitempty"`
+			FallbackStrategy string `json:"fallbackStrategy,omitempty"`
 			FallbackGroup  string `json:"fallbackGroup,omitempty"`
 			AliasGroupSize int    `json:"aliasGroupSize,omitempty"`
 			Primary        bool   `json:"primary,omitempty"`
@@ -4984,6 +5006,16 @@ func runAgentCommand(in io.Reader, out io.Writer, opts agentCommandOptions) erro
 		}
 		_, _ = fmt.Fprintln(out, renderManagedAgentModels(resp))
 		return nil
+	case "models-default":
+		resp, raw, err := updateManagedAgentModelsDefault(opts.AgentID, opts.ProfileName)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentModels(resp))
+		return nil
 	case "shell":
 		return runManagedAgentShell(in, out, opts)
 	default:
@@ -5157,6 +5189,19 @@ func syncManagedAgentModels(agentID string) (*agentModelsCLIResponse, []byte, er
 	return &resp, raw, nil
 }
 
+func updateManagedAgentModelsDefault(agentID, profileName string) (*agentModelsCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/models/default", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]string{"profileName": strings.TrimSpace(profileName)})
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentModelsCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent model default response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
 func runManagedAgentShell(in io.Reader, out io.Writer, opts agentCommandOptions) error {
 	reader := bufio.NewReader(in)
 	sessionID := strings.TrimSpace(opts.SessionID)
@@ -5234,6 +5279,15 @@ func renderManagedAgentLauncher(resp *agentLauncherCLIResponse) string {
 				}
 				if strings.TrimSpace(profile.ProtocolFamily) != "" {
 					entry += " protocol=" + strings.TrimSpace(profile.ProtocolFamily)
+				}
+				if profile.TimeoutMs > 0 {
+					entry += fmt.Sprintf(" timeout=%dms", profile.TimeoutMs)
+				}
+				if profile.RetryBudget > 0 {
+					entry += fmt.Sprintf(" retry=%d", profile.RetryBudget)
+				}
+				if strings.TrimSpace(profile.FallbackStrategy) != "" {
+					entry += " fallback=" + strings.TrimSpace(profile.FallbackStrategy)
 				}
 				if profile.Primary {
 					entry += " primary=true"
@@ -5358,13 +5412,23 @@ func renderManagedAgentModels(resp *agentModelsCLIResponse) string {
 		return strings.Join(lines, "\n")
 	}
 	defaultProfile := strings.TrimSpace(resp.ModelSurface.DefaultProfile)
+	if defaultProfile != "" {
+		for _, profile := range resp.ModelSurface.Profiles {
+			if strings.EqualFold(strings.TrimSpace(profile.ProfileName), defaultProfile) {
+				label := firstNonEmpty(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(profile.ProfileName))
+				lines = append(lines, fmt.Sprintf("default=%s -> %s", label, strings.TrimSpace(profile.ModelID)))
+				goto renderProfiles
+			}
+		}
+	}
 	for _, profile := range resp.ModelSurface.Profiles {
-		if profile.Primary || (defaultProfile != "" && strings.EqualFold(strings.TrimSpace(profile.ProfileName), defaultProfile)) {
+		if profile.Primary {
 			label := firstNonEmpty(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(profile.ProfileName))
 			lines = append(lines, fmt.Sprintf("default=%s -> %s", label, strings.TrimSpace(profile.ModelID)))
 			break
 		}
 	}
+renderProfiles:
 	for _, profile := range resp.ModelSurface.Profiles {
 		label := firstNonEmpty(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(profile.ProfileName))
 		entry := fmt.Sprintf("profile=%s model=%s", label, strings.TrimSpace(profile.ModelID))
@@ -5373,6 +5437,15 @@ func renderManagedAgentModels(resp *agentModelsCLIResponse) string {
 		}
 		if strings.TrimSpace(profile.ProtocolFamily) != "" {
 			entry += " protocol=" + strings.TrimSpace(profile.ProtocolFamily)
+		}
+		if profile.TimeoutMs > 0 {
+			entry += fmt.Sprintf(" timeout=%dms", profile.TimeoutMs)
+		}
+		if profile.RetryBudget > 0 {
+			entry += fmt.Sprintf(" retry=%d", profile.RetryBudget)
+		}
+		if strings.TrimSpace(profile.FallbackStrategy) != "" {
+			entry += " fallback=" + strings.TrimSpace(profile.FallbackStrategy)
 		}
 		if profile.Primary {
 			entry += " primary=true"

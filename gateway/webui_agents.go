@@ -205,6 +205,29 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 			}
 			writeJSON(w, http.StatusOK, summary)
 			return
+		case len(parts) == 3 && strings.EqualFold(strings.TrimSpace(parts[2]), "default") && r.Method == http.MethodPost:
+			var body struct {
+				ProfileName string `json:"profileName"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid JSON body"))
+				return
+			}
+			summary, err := updateManagedAgentModelsDefaultSummary(agentID, strings.TrimSpace(body.ProfileName))
+			if err != nil {
+				if errors.Is(err, errManagedAgentInstanceNotFound) {
+					writeJSON(w, http.StatusNotFound, gatewayErrBody("E_AGENT_NOT_FOUND", fmt.Sprintf("managed agent %s not found", agentID)))
+					return
+				}
+				if strings.Contains(strings.ToLower(err.Error()), "not found") || strings.Contains(strings.ToLower(err.Error()), "required") || strings.Contains(strings.ToLower(err.Error()), "unavailable") {
+					writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", err.Error()))
+					return
+				}
+				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to update managed agent default model profile", "update managed agent default model profile", err)
+				return
+			}
+			writeJSON(w, http.StatusOK, summary)
+			return
 		default:
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return

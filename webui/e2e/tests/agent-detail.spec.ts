@@ -18,6 +18,8 @@ test.describe('Agent Detail', () => {
     let cronResumeCalls = 0;
     let cronPaused = false;
     let syncedModels = false;
+    let defaultProfile = 'openrouter-fast';
+    let setDefaultCalls = 0;
 
     await page.route('**/api/v1/agents/agent-alpha/capabilities', async (route) => {
       await route.fulfill({
@@ -43,6 +45,13 @@ test.describe('Agent Detail', () => {
           heartbeat: { state: 'fresh', ageSeconds: 12, lastActivityAt: '2026-03-12T03:59:48Z' },
           memory: { contractId: 'memory-alpha', contractDigest: 'sha256:abc' },
           providerReadiness: { provider: 'openrouter', authMode: 'api_key', credentialConfigured: true, ready: true },
+          modelSurface: {
+            defaultProfile,
+            profiles: [
+              { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
+              { profileName: 'openrouter-safe', modelAlias: 'flash-safe', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: false },
+            ],
+          },
           cron: {
             count: 2,
             nextRunAt: '2026-03-13T00:00:00Z',
@@ -74,15 +83,15 @@ test.describe('Agent Detail', () => {
           instanceId: 'instance-1',
           configPath: '/tmp/agent-alpha/config.toml',
           modelSurface: {
-            defaultProfile: syncedModels ? 'openrouter-safe' : 'openrouter-fast',
-            profiles: syncedModels
+            defaultProfile: syncedModels ? 'openrouter-safe' : defaultProfile,
+            profiles: syncedModels || defaultProfile === 'openrouter-safe'
               ? [
-                  { profileName: 'openrouter-safe', modelAlias: 'flash', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
+                  { profileName: 'openrouter-safe', modelAlias: 'flash-safe', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
                   { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: false },
                 ]
               : [
                   { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
-                  { profileName: 'openrouter-safe', modelAlias: 'flash', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: false },
+                  { profileName: 'openrouter-safe', modelAlias: 'flash-safe', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: false },
                 ],
           },
         }),
@@ -90,6 +99,7 @@ test.describe('Agent Detail', () => {
     });
     await page.route('**/api/v1/agents/agent-alpha/models/sync', async (route) => {
       syncedModels = true;
+      defaultProfile = 'openrouter-safe';
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -101,8 +111,28 @@ test.describe('Agent Detail', () => {
           modelSurface: {
             defaultProfile: 'openrouter-safe',
             profiles: [
-              { profileName: 'openrouter-safe', modelAlias: 'flash', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
+              { profileName: 'openrouter-safe', modelAlias: 'flash-safe', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
               { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: false },
+            ],
+          },
+        }),
+      });
+    });
+    await page.route('**/api/v1/agents/agent-alpha/models/default', async (route) => {
+      setDefaultCalls += 1;
+      defaultProfile = 'openrouter-safe';
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          agentId: 'agent-alpha',
+          instanceId: 'instance-1',
+          configPath: '/tmp/agent-alpha/config.toml',
+          modelSurface: {
+            defaultProfile: 'openrouter-safe',
+            profiles: [
+              { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
+              { profileName: 'openrouter-safe', modelAlias: 'flash-safe', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: false },
             ],
           },
         }),
@@ -247,6 +277,11 @@ test.describe('Agent Detail', () => {
     await page.getByRole('button', { name: 'Resume cron-1' }).click();
     await expect.poll(() => cronResumeCalls).toBe(1);
     await expect(page.locator('#agent-detail-content')).toContainText('Cron job cron-1 resumed.');
+
+    await page.getByRole('button', { name: 'Set default openrouter-safe' }).click();
+    await expect.poll(() => setDefaultCalls).toBe(1);
+    await expect(page.locator('#agent-detail-content')).toContainText('Default model profile set to openrouter-safe.');
+    await expect(page.locator('#agent-detail-content')).toContainText('default=openrouter-safe');
 
     await page.getByRole('button', { name: /Sync models/i }).click();
     await expect(page.locator('#agent-detail-content')).toContainText('Model surface synced.');

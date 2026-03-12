@@ -42,6 +42,9 @@ type managedModelProfile struct {
 	ProtocolFamily string
 	BaseURL        string
 	AuthMethod     string
+	TimeoutMs      int
+	RetryBudget    int
+	FallbackStrategy string
 }
 
 func buildManagedModelSurface(profiles []managedModelProfile) managedAgentModelSurface {
@@ -77,6 +80,9 @@ func buildManagedModelSurface(profiles []managedModelProfile) managedAgentModelS
 			ProtocolFamily: strings.TrimSpace(profile.ProtocolFamily),
 			BaseURL:        strings.TrimSpace(profile.BaseURL),
 			AuthMethod:     strings.TrimSpace(profile.AuthMethod),
+			TimeoutMs:      profile.TimeoutMs,
+			RetryBudget:    profile.RetryBudget,
+			FallbackStrategy: strings.TrimSpace(profile.FallbackStrategy),
 			FallbackGroup:  group,
 			AliasGroupSize: groupSizes[group],
 			Primary:        primary,

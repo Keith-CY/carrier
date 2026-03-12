@@ -35,6 +35,9 @@ type agentLauncherModelSurfaceProfile struct {
 	ProtocolFamily string `json:"protocolFamily,omitempty"`
 	BaseURL        string `json:"baseUrl,omitempty"`
 	AuthMethod     string `json:"authMethod,omitempty"`
+	TimeoutMs      int    `json:"timeoutMs,omitempty"`
+	RetryBudget    int    `json:"retryBudget,omitempty"`
+	FallbackStrategy string `json:"fallbackStrategy,omitempty"`
 	FallbackGroup  string `json:"fallbackGroup,omitempty"`
 	AliasGroupSize int    `json:"aliasGroupSize,omitempty"`
 	Primary        bool   `json:"primary,omitempty"`
@@ -220,6 +223,9 @@ func buildAgentLauncherModelSurface(surface *managedAgentModelSurface) *agentLau
 			ProtocolFamily: strings.TrimSpace(profile.ProtocolFamily),
 			BaseURL:        strings.TrimSpace(profile.BaseURL),
 			AuthMethod:     strings.TrimSpace(profile.AuthMethod),
+			TimeoutMs:      profile.TimeoutMs,
+			RetryBudget:    profile.RetryBudget,
+			FallbackStrategy: strings.TrimSpace(profile.FallbackStrategy),
 			FallbackGroup:  group,
 			AliasGroupSize: aliasGroupSize,
 			Primary:        primary,

@@ -57,6 +57,9 @@ type managedAgentModelProfile struct {
 	ProtocolFamily string `json:"protocol_family,omitempty"`
 	BaseURL        string `json:"base_url,omitempty"`
 	AuthMethod     string `json:"auth_method,omitempty"`
+	TimeoutMs      int    `json:"timeout_ms,omitempty"`
+	RetryBudget    int    `json:"retry_budget,omitempty"`
+	FallbackStrategy string `json:"fallback_strategy,omitempty"`
 	FallbackGroup  string `json:"fallback_group,omitempty"`
 	AliasGroupSize int    `json:"alias_group_size,omitempty"`
 	Primary        bool   `json:"primary,omitempty"`

@@ -48,6 +48,9 @@ func TestHandleAgentLauncherReturnsSummary(t *testing.T) {
 					ProtocolFamily: "openai-compatible",
 					BaseURL:        "https://openrouter.ai/api/v1",
 					AuthMethod:     "api_key",
+					TimeoutMs:      45000,
+					RetryBudget:    2,
+					FallbackStrategy: "ordered",
 					Primary:        true,
 				},
 				{
@@ -152,6 +155,9 @@ func TestHandleAgentLauncherReturnsSummary(t *testing.T) {
 		`"modelAlias":"flash"`,
 		`"modelId":"google/gemini-2.0-flash-001"`,
 		`"protocolFamily":"openai-compatible"`,
+		`"timeoutMs":45000`,
+		`"retryBudget":2`,
+		`"fallbackStrategy":"ordered"`,
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("expected response to contain %s, got %s", needle, body)
@@ -507,5 +513,76 @@ base_url = "https://openrouter.ai/api/v1"
 	}
 	if instances[idx].ModelSurface == nil || strings.TrimSpace(instances[idx].ModelSurface.DefaultProfile) != "openrouter_fast" {
 		t.Fatalf("expected synced model surface, got %+v", instances[idx].ModelSurface)
+	}
+}
+
+func TestHandleAgentModelsUpdatesDefaultProfile(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	storePath := filepath.Join(tmp, ".carrier", "instances.json")
+	t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := saveManagedInstances(storePath, []managedAgentInstance{{
+		ID:         "picoclaw-prod",
+		Type:       "picoclaw",
+		AgentID:    "picoclaw",
+		ConfigPath: filepath.Join(tmp, ".picoclaw", "config.json"),
+		ModelSurface: &managedAgentModelSurface{
+			DefaultProfile: "openrouter-fast",
+			Profiles: []managedAgentModelProfile{
+				{
+					ProfileName:    "openrouter-fast",
+					ModelAlias:     "flash",
+					ModelID:        "google/gemini-2.0-flash-001",
+					ProviderID:     "openrouter",
+					ProviderKey:    "openrouter",
+					ProtocolFamily: "openai-compatible",
+					Primary:        true,
+				},
+				{
+					ProfileName:    "openrouter-safe",
+					ModelAlias:     "flash-safe",
+					ModelID:        "deepseek/deepseek-chat-v3-0324",
+					ProviderID:     "openrouter",
+					ProviderKey:    "openrouter",
+					ProtocolFamily: "openai-compatible",
+				},
+			},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}}); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/models/default", strings.NewReader(`{"profileName":"openrouter-safe"}`))
+	handleWebUIAgent(rec, req, "req-models-default", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, needle := range []string{
+		`"defaultProfile":"openrouter-safe"`,
+		`"profileName":"openrouter-fast"`,
+		`"profileName":"openrouter-safe"`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("expected response to contain %s, got %s", needle, body)
+		}
+	}
+
+	instances, _, err := loadManagedInstances()
+	if err != nil {
+		t.Fatalf("loadManagedInstances: %v", err)
+	}
+	idx := findManagedInstanceIndexByAgentID(instances, "picoclaw")
+	if idx < 0 {
+		t.Fatal("expected updated managed instance")
+	}
+	if instances[idx].ModelSurface == nil || strings.TrimSpace(instances[idx].ModelSurface.DefaultProfile) != "openrouter-safe" {
+		t.Fatalf("expected updated default profile, got %+v", instances[idx].ModelSurface)
 	}
 }

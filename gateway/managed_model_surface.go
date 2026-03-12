@@ -115,6 +115,54 @@ func syncManagedAgentModelsSummary(agentID string) (*agentModelsSummary, error) 
 	return buildAgentModelsSummary(instances[idx], updated), nil
 }
 
+func updateManagedAgentModelsDefaultSummary(agentID, profileName string) (*agentModelsSummary, error) {
+	instances, path, err := loadManagedInstances()
+	if err != nil {
+		return nil, err
+	}
+	idx := findManagedInstanceIndexByAgentID(instances, agentID)
+	if idx < 0 {
+		return nil, errManagedAgentInstanceNotFound
+	}
+	profileName = strings.TrimSpace(profileName)
+	if profileName == "" {
+		return nil, fmt.Errorf("profile name is required")
+	}
+	surface := instances[idx].ModelSurface
+	if surface == nil || len(surface.Profiles) == 0 {
+		return nil, fmt.Errorf("managed agent model surface is unavailable")
+	}
+	profiles := make([]managedModelProfile, 0, len(surface.Profiles))
+	matched := false
+	for _, profile := range surface.Profiles {
+		profiles = append(profiles, managedModelProfile{
+			ProfileName:    strings.TrimSpace(profile.ProfileName),
+			ModelAlias:     strings.TrimSpace(profile.ModelAlias),
+			ModelID:        strings.TrimSpace(profile.ModelID),
+			ProviderID:     strings.TrimSpace(profile.ProviderID),
+			ProviderKey:    strings.TrimSpace(profile.ProviderKey),
+			ProtocolFamily: strings.TrimSpace(profile.ProtocolFamily),
+			BaseURL:        strings.TrimSpace(profile.BaseURL),
+			AuthMethod:     strings.TrimSpace(profile.AuthMethod),
+			TimeoutMs:      profile.TimeoutMs,
+			RetryBudget:    profile.RetryBudget,
+			FallbackStrategy: strings.TrimSpace(profile.FallbackStrategy),
+		})
+		if strings.EqualFold(strings.TrimSpace(profile.ProfileName), profileName) {
+			matched = true
+		}
+	}
+	if !matched {
+		return nil, fmt.Errorf("profile %q not found", profileName)
+	}
+	instances[idx].ModelSurface = buildManagedModelSurfaceWithDefault(profiles, profileName)
+	instances[idx].UpdatedAt = nowRFC3339Nano()
+	if err := saveManagedInstances(path, instances); err != nil {
+		return nil, err
+	}
+	return buildAgentModelsSummary(instances[idx], false), nil
+}
+
 func buildAgentModelsSummary(inst managedAgentInstance, synced bool) *agentModelsSummary {
 	return &agentModelsSummary{
 		AgentID:      strings.TrimSpace(inst.AgentID),

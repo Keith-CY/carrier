@@ -292,6 +292,20 @@ export function AgentDetailPage() {
     },
   });
 
+  const modelDefaultMutation = useMutation({
+    mutationFn: async (profileName: string) =>
+      apiPost<AgentModelsSummary>(`/api/v1/agents/${encodeURIComponent(agentId)}/models/default`, { profileName }),
+    onSuccess: async (updated) => {
+      const updatedProfile = String(updated.modelSurface?.defaultProfile || '').trim();
+      setLastActionMessage(updatedProfile ? `Default model profile set to ${updatedProfile}.` : 'Default model profile updated.');
+      await modelsQuery.refetch();
+      await launcherQuery.refetch();
+    },
+    onError: (error) => {
+      setLastActionMessage((error as Error).message);
+    },
+  });
+
   const content = useMemo(() => {
     if (!agentId) return { state: 'error', message: 'Error: missing agent id.' } as const;
     const launcherPayload = launcherQuery.data || {};
@@ -466,9 +480,14 @@ export function AgentDetailPage() {
             {((content.models?.modelSurface && content.models.modelSurface.profiles) || content.launcher?.modelSurface?.profiles)?.length ? (
               <div>
                 <strong>Model Surface</strong>
+                {(() => {
+                  const currentDefaultProfile = String(content.models?.modelSurface?.defaultProfile || content.launcher?.modelSurface?.defaultProfile || '').trim();
+                  const profiles = content.models?.modelSurface?.profiles || content.launcher?.modelSurface?.profiles || [];
+                  return (
+                    <>
                 <div className="text-dim">
-                  {(content.models?.modelSurface?.defaultProfile || content.launcher?.modelSurface?.defaultProfile)
-                    ? `default=${content.models?.modelSurface?.defaultProfile || content.launcher?.modelSurface?.defaultProfile}`
+                  {currentDefaultProfile
+                    ? `default=${currentDefaultProfile}`
                     : 'default=unconfigured'}
                   {content.models?.configPath ? ` · ${content.models.configPath}` : ''}
                 </div>
@@ -483,8 +502,10 @@ export function AgentDetailPage() {
                   </button>
                 </div>
                 <ul className="compact-list">
-                  {(content.models?.modelSurface?.profiles || content.launcher?.modelSurface?.profiles || []).map((profile, index) => {
+                  {profiles.map((profile, index) => {
                     const label = String(profile.modelAlias || profile.profileName || `profile-${index + 1}`).trim();
+                    const profileName = String(profile.profileName || '').trim();
+                    const isDefault = profileName !== '' && profileName === currentDefaultProfile;
                     return (
                       <li key={String(profile.profileName || label || index)}>
                         <span>{label}</span>
@@ -496,10 +517,25 @@ export function AgentDetailPage() {
                           {profile.fallbackGroup ? ` · ${profile.fallbackGroup}` : ''}
                           {profile.aliasGroupSize ? ` · group=${profile.aliasGroupSize}` : ''}
                         </span>
+                        {profileName ? (
+                          <div className="btn-row">
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              disabled={modelDefaultMutation.isPending || isDefault}
+                              onClick={() => modelDefaultMutation.mutate(profileName)}
+                            >
+                              {isDefault ? `Default ${profileName}` : `Set default ${profileName}`}
+                            </button>
+                          </div>
+                        ) : null}
                       </li>
                     );
                   })}
                 </ul>
+                    </>
+                  );
+                })()}
               </div>
             ) : null}
             <div className="kv-grid">
