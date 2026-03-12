@@ -24,6 +24,36 @@ type AgentCapabilities = {
   };
 };
 
+type AgentLauncherSummary = {
+  agentId?: string;
+  status?: AgentStatus;
+  heartbeat?: {
+    state?: string;
+    ageSeconds?: number;
+    lastActivityAt?: string;
+  };
+  memory?: {
+    contractId?: string;
+    contractDigest?: string;
+    syncState?: string;
+  };
+  providerReadiness?: {
+    provider?: string;
+    authMode?: string;
+    credentialConfigured?: boolean;
+    ready?: boolean;
+    credentialBackend?: string;
+  };
+  session?: {
+    instanceId?: string;
+    channel?: string;
+    isolation?: boolean;
+    runtimeState?: string;
+    pairedChatId?: string;
+  };
+  capabilities?: AgentCapabilities;
+};
+
 export function AgentDetailPage() {
   const navigate = useNavigate();
   const params = useParams<{ agentId: string }>();
@@ -42,6 +72,12 @@ export function AgentDetailPage() {
     enabled: !!agentId,
     retry: false,
   });
+  const launcherQuery = useQuery({
+    queryKey: ['agent-launcher', agentId],
+    queryFn: () => apiGet<AgentLauncherSummary>(`/api/v1/agents/${encodeURIComponent(agentId)}/launcher`),
+    enabled: !!agentId,
+    retry: false,
+  });
 
   const actionMutation = useMutation({
     mutationFn: async (action: 'start' | 'stop') => {
@@ -52,6 +88,7 @@ export function AgentDetailPage() {
       setLastActionMessage(`Agent ${action} requested.`);
       await statusQuery.refetch();
       await capabilitiesQuery.refetch();
+      await launcherQuery.refetch();
     },
     onError: (error) => {
       setLastActionMessage((error as Error).message);
@@ -60,20 +97,27 @@ export function AgentDetailPage() {
 
   const content = useMemo(() => {
     if (!agentId) return { state: 'error', message: 'Error: missing agent id.' } as const;
-    if (statusQuery.isLoading || capabilitiesQuery.isLoading) return { state: 'loading', message: `Loading ${agentId}…` } as const;
-    if (statusQuery.isError) {
+    const launcherPayload = launcherQuery.data || {};
+    const statusPayload = statusQuery.data || launcherPayload.status || {};
+    const capabilitiesPayload = capabilitiesQuery.data || launcherPayload.capabilities || {};
+    const waitingForStatus = !statusQuery.data && !launcherPayload.status && (statusQuery.isLoading || launcherQuery.isLoading);
+    const waitingForCapabilities = !capabilitiesQuery.data && !launcherPayload.capabilities && (capabilitiesQuery.isLoading || launcherQuery.isLoading);
+    if (waitingForStatus || waitingForCapabilities) return { state: 'loading', message: `Loading ${agentId}…` } as const;
+    if (statusQuery.isError && !launcherPayload.status) {
       return { state: 'error', message: `Error: ${(statusQuery.error as Error).message}` } as const;
     }
-    if (capabilitiesQuery.isError) {
+    if (capabilitiesQuery.isError && !launcherPayload.capabilities) {
       return { state: 'error', message: `Error: ${(capabilitiesQuery.error as Error).message}` } as const;
     }
-    return { state: 'ready', payload: statusQuery.data || {}, capabilities: capabilitiesQuery.data || {} } as const;
+    return { state: 'ready', payload: statusPayload, capabilities: capabilitiesPayload, launcher: launcherPayload } as const;
   }, [
     agentId,
     capabilitiesQuery.data,
     capabilitiesQuery.error,
     capabilitiesQuery.isError,
     capabilitiesQuery.isLoading,
+    launcherQuery.data,
+    launcherQuery.isLoading,
     statusQuery.data,
     statusQuery.error,
     statusQuery.isError,
@@ -89,6 +133,45 @@ export function AgentDetailPage() {
           <div className="card">
             <h3>{`Agent: ${agentId}`}</h3>
             <div className="card-subtitle">Runtime Capabilities</div>
+            {content.launcher && (content.launcher.heartbeat || content.launcher.providerReadiness || content.launcher.memory || content.launcher.session) ? (
+              <div className="kv-grid">
+                <div>
+                  <strong>Heartbeat</strong>
+                  <div className="text-dim">
+                    {content.launcher.heartbeat?.state || 'unknown'}
+                    {typeof content.launcher.heartbeat?.ageSeconds === 'number' ? ` · age=${content.launcher.heartbeat.ageSeconds}s` : ''}
+                    {content.launcher.heartbeat?.lastActivityAt ? ` · last=${content.launcher.heartbeat.lastActivityAt}` : ''}
+                  </div>
+                </div>
+                <div>
+                  <strong>Provider</strong>
+                  <div className="text-dim">
+                    {content.launcher.providerReadiness?.provider || 'unconfigured'}
+                    {content.launcher.providerReadiness?.authMode ? ` · ${content.launcher.providerReadiness.authMode}` : ''}
+                    {typeof content.launcher.providerReadiness?.ready === 'boolean' ? ` · ${content.launcher.providerReadiness.ready ? 'ready' : 'not ready'}` : ''}
+                    {content.launcher.providerReadiness?.credentialConfigured ? ` · ${content.launcher.providerReadiness.credentialBackend || 'credential configured'}` : ''}
+                  </div>
+                </div>
+                <div>
+                  <strong>Memory</strong>
+                  <div className="text-dim">
+                    {content.launcher.memory?.contractId || 'none'}
+                    {content.launcher.memory?.contractDigest ? ` · ${content.launcher.memory.contractDigest}` : ''}
+                    {content.launcher.memory?.syncState ? ` · ${content.launcher.memory.syncState}` : ''}
+                  </div>
+                </div>
+                <div>
+                  <strong>Launcher Session</strong>
+                  <div className="text-dim">
+                    {content.launcher.session?.instanceId || 'n/a'}
+                    {content.launcher.session?.channel ? ` · ${content.launcher.session.channel}` : ''}
+                    {content.launcher.session?.runtimeState ? ` · ${content.launcher.session.runtimeState}` : ''}
+                    {content.launcher.session?.isolation ? ' · isolated' : ''}
+                    {content.launcher.session?.pairedChatId ? ` · paired=${content.launcher.session.pairedChatId}` : ''}
+                  </div>
+                </div>
+              </div>
+            ) : null}
             <div className="kv-grid">
               <div>
                 <strong>Skills</strong>

@@ -475,7 +475,46 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ id: 'agent-alpha', runtime: 'running', uptime: '1h' }),
+      body: JSON.stringify({ id: 'agent-alpha', runtimeState: 'running', uptime: '1h' }),
+    }),
+  );
+
+  await page.route('**/api/v1/agents/*/launcher', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        agentId: 'agent-alpha',
+        status: { id: 'agent-alpha', runtimeState: 'running', health: 'healthy' },
+        heartbeat: {
+          state: 'fresh',
+          ageSeconds: 12,
+          lastActivityAt: '2026-03-12T03:59:48Z',
+        },
+        memory: {
+          contractId: 'memory-alpha',
+          contractDigest: 'sha256:abc',
+        },
+        providerReadiness: {
+          provider: 'openrouter',
+          authMode: 'api_key',
+          credentialConfigured: true,
+          ready: true,
+        },
+        session: {
+          instanceId: 'instance-1',
+          channel: 'telegram',
+          isolation: true,
+          runtimeState: 'running',
+        },
+        capabilities: {
+          skills: [{ name: 'toolbox', enabled: true }],
+          mcp: {
+            servers: [{ name: 'repo', health: 'healthy', visibleToolCount: 1, hiddenToolCount: 0 }],
+            visibleTools: [{ name: 'repo_search', description: 'Search code' }],
+          },
+        },
+      }),
     }),
   );
 

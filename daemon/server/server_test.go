@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -911,6 +912,32 @@ func TestV1AgentStatus(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestV1AgentStatus_IncludesHeartbeat(t *testing.T) {
+	mux := newTestMuxWithAgent(t)
+	req := httptest.NewRequest("GET", "/api/v1/agents/test-agent/status", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode status body: %v", err)
+	}
+	heartbeat, ok := body["heartbeat"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected heartbeat object, got %+v", body["heartbeat"])
+	}
+	if strings.TrimSpace(fmt.Sprint(heartbeat["state"])) == "" {
+		t.Fatalf("expected heartbeat.state, got %+v", heartbeat)
+	}
+	if strings.TrimSpace(fmt.Sprint(heartbeat["lastActivityAt"])) == "" {
+		t.Fatalf("expected heartbeat.lastActivityAt, got %+v", heartbeat)
 	}
 }
 

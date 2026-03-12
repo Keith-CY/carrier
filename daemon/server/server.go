@@ -55,6 +55,7 @@ const (
 	minBaseAgentDistillInterval     = 1 * time.Hour
 	baseAgentDistillMaxRecords      = 12
 	baseAgentDistillMaxTextLen      = 420
+	defaultAgentHeartbeatStaleAfter = 2 * time.Minute
 )
 
 var agentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
@@ -1494,7 +1495,38 @@ func handleStatus(svc *lifecycle.Service, agentID string, w http.ResponseWriter,
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, state)
+	writeJSON(w, http.StatusOK, withAgentHeartbeat(state, time.Now().UTC()))
+}
+
+func withAgentHeartbeat(state lifecycle.AgentState, now time.Time) lifecycle.AgentState {
+	if state.Heartbeat != nil {
+		return state
+	}
+
+	var lastActivity *time.Time
+	if !state.UpdatedAt.IsZero() {
+		ts := state.UpdatedAt.UTC()
+		lastActivity = &ts
+	} else if state.StartedAt != nil && !state.StartedAt.IsZero() {
+		ts := state.StartedAt.UTC()
+		lastActivity = &ts
+	}
+
+	heartbeat := &lifecycle.AgentHeartbeat{State: "unknown"}
+	if lastActivity != nil {
+		age := now.Sub(*lastActivity)
+		if age < 0 {
+			age = 0
+		}
+		heartbeat.AgeSeconds = int64(age / time.Second)
+		heartbeat.LastActivityAt = lastActivity
+		heartbeat.State = "fresh"
+		if age > defaultAgentHeartbeatStaleAfter {
+			heartbeat.State = "stale"
+		}
+	}
+	state.Heartbeat = heartbeat
+	return state
 }
 
 func handleAgentCapabilities(svc *lifecycle.Service, runtime baseAgentRuntime, agentID string, w http.ResponseWriter, r *http.Request) {

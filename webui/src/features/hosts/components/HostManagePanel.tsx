@@ -2,6 +2,27 @@ import { formatOperationMeta } from '../model';
 import type { HostsData } from '../useHostsData';
 import { renderHostsMessage } from './shared';
 
+function buildHeartbeatSummary(raw: string): string {
+  const text = String(raw || '').trim();
+  if (!text.startsWith('{')) return '';
+  try {
+    const parsed = JSON.parse(text) as {
+      heartbeat?: { state?: string; ageSeconds?: number; lastActivityAt?: string };
+    };
+    const heartbeat = parsed.heartbeat;
+    if (!heartbeat || !heartbeat.state) return '';
+    return [
+      `Heartbeat: ${heartbeat.state}`,
+      typeof heartbeat.ageSeconds === 'number' ? `age=${heartbeat.ageSeconds}s` : '',
+      heartbeat.lastActivityAt ? `last=${heartbeat.lastActivityAt}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  } catch {
+    return '';
+  }
+}
+
 export function HostManagePanel({ data }: { data: HostsData }) {
   const {
     selectedHost,
@@ -38,6 +59,7 @@ export function HostManagePanel({ data }: { data: HostsData }) {
     applySessionAction,
     loadManageMemory,
   } = data;
+  const heartbeatSummary = buildHeartbeatSummary(instanceStatusText);
 
   return (
     <div id="server-manage-card" className={`card servers-manage-panel${selectedHost ? '' : ' hidden'}`}>
@@ -131,6 +153,7 @@ export function HostManagePanel({ data }: { data: HostsData }) {
       </div>
       <pre id="server-manage-instances" className="code-block text-dim" style={{ marginTop: '8px', minHeight: '72px' }}>{instancesText}</pre>
       <div id="server-manage-instance-status-out" className="manage-output" style={{ marginTop: '8px', minHeight: '72px', whiteSpace: 'pre-line' }}>{instanceStatusText}</div>
+      {heartbeatSummary ? <p id="server-manage-heartbeat-summary" className="text-dim">{heartbeatSummary}</p> : null}
       <div id="server-manage-logs" className="manage-output" style={{ marginTop: '8px', minHeight: '72px', whiteSpace: 'pre-line' }}>{logsText}</div>
       <p id="server-manage-stream-status" className="text-dim" />
       <div id="server-manage-diagnosis" className="manage-output" style={{ marginTop: '8px' }} />

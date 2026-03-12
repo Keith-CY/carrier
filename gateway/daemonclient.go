@@ -22,20 +22,36 @@ const (
 
 // AgentState mirrors the daemon's agent status.
 type AgentState struct {
-	ID                   string  `json:"id"`
-	Name                 string  `json:"name"`
-	Version              string  `json:"version"`
-	InstallState         string  `json:"installState"`
-	Runtime              string  `json:"runtimeState"`
-	Health               string  `json:"health"`
-	Ports                []int   `json:"ports"`
-	StartedAt            *string `json:"startedAt,omitempty"`
-	RestartCount         int     `json:"restartCount"`
-	NeedsRemoteDiagnosis bool    `json:"needsRemoteDiagnosis"`
-	Isolated             bool    `json:"isolated"`
-	LimaInstanceName     *string `json:"limaInstanceName,omitempty"`
-	LastError            *string `json:"lastError,omitempty"`
-	UpdatedAt            string  `json:"updatedAt"`
+	ID                   string            `json:"id"`
+	Name                 string            `json:"name"`
+	Version              string            `json:"version"`
+	InstallState         string            `json:"installState"`
+	Runtime              string            `json:"runtimeState"`
+	Health               string            `json:"health"`
+	Memory               *AgentMemoryState `json:"memory,omitempty"`
+	Heartbeat            *AgentHeartbeat   `json:"heartbeat,omitempty"`
+	Ports                []int             `json:"ports"`
+	StartedAt            *string           `json:"startedAt,omitempty"`
+	RestartCount         int               `json:"restartCount"`
+	NeedsRemoteDiagnosis bool              `json:"needsRemoteDiagnosis"`
+	Isolated             bool              `json:"isolated"`
+	LimaInstanceName     *string           `json:"limaInstanceName,omitempty"`
+	LastError            *string           `json:"lastError,omitempty"`
+	UpdatedAt            string            `json:"updatedAt"`
+}
+
+type AgentMemoryState struct {
+	ContractID     string  `json:"contractId,omitempty"`
+	ContractDigest string  `json:"contractDigest,omitempty"`
+	SyncState      string  `json:"syncState,omitempty"`
+	SyncError      string  `json:"syncError,omitempty"`
+	SyncedAt       *string `json:"syncedAt,omitempty"`
+}
+
+type AgentHeartbeat struct {
+	State          string  `json:"state"`
+	AgeSeconds     int64   `json:"ageSeconds"`
+	LastActivityAt *string `json:"lastActivityAt,omitempty"`
 }
 
 // LogsResult holds log lines from the daemon.

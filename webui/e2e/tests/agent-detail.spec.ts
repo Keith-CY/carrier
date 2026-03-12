@@ -20,7 +20,11 @@ test.describe('Agent Detail', () => {
 
     await expect(page.locator('#view-agent-detail')).toBeVisible();
     await expect(page.locator('#agent-detail-content')).toContainText('Agent: agent-alpha');
-    await expect(page.locator('#agent-detail-content')).toContainText('"runtime": "running"');
+    await expect(page.locator('#agent-detail-content')).toContainText('Heartbeat');
+    await expect(page.locator('#agent-detail-content')).toContainText('fresh');
+    await expect(page.locator('#agent-detail-content')).toContainText('openrouter');
+    await expect(page.locator('#agent-detail-content')).toContainText('memory-alpha');
+    await expect(page.locator('#agent-detail-content')).toContainText('"runtimeState": "running"');
 
     await page.getByRole('button', { name: '▶ Start' }).evaluate((element: HTMLButtonElement) => element.click());
     await expect.poll(() => startCalls).toBe(1);

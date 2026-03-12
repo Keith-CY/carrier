@@ -84,6 +84,9 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 		}
 		writeJSON(w, http.StatusOK, summary)
 		return
+	case "launcher":
+		handleAgentLauncher(w, r, requestID, agentID, daemon)
+		return
 	case "install", "start", "stop", "uninstall":
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
