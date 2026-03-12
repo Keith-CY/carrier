@@ -104,9 +104,12 @@ func TestHandleOrchestratorExecutionEvidenceJSONAndAuditExport(t *testing.T) {
 				TaskID:      "task-1",
 				Name:        "release-notes.txt",
 				Kind:        "text",
+				MediaType:   "text/plain",
 				ContentType: "text/plain",
 				SizeBytes:   13,
 				Path:        artifactPath,
+				Source:      "telegram",
+				ExternalID:  "tg-doc-1",
 				CreatedAt:   "2026-03-09T09:01:00Z",
 			}},
 		},
@@ -189,6 +192,16 @@ func TestHandleOrchestratorExecutionEvidenceJSONAndAuditExport(t *testing.T) {
 	manifest, _ := evidence["artifactManifest"].([]interface{})
 	if len(manifest) != 1 {
 		t.Fatalf("artifactManifest len=%d want 1 evidence=%+v", len(manifest), evidence)
+	}
+	manifestEntry, _ := manifest[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(manifestEntry["mediaType"])); got != "text/plain" {
+		t.Fatalf("artifactManifest.mediaType=%q want text/plain entry=%+v", got, manifestEntry)
+	}
+	if got := strings.TrimSpace(anyToString(manifestEntry["source"])); got != "telegram" {
+		t.Fatalf("artifactManifest.source=%q want telegram entry=%+v", got, manifestEntry)
+	}
+	if got := strings.TrimSpace(anyToString(manifestEntry["externalId"])); got != "tg-doc-1" {
+		t.Fatalf("artifactManifest.externalId=%q want tg-doc-1 entry=%+v", got, manifestEntry)
 	}
 	audit, _ := evidence["audit"].([]interface{})
 	if len(audit) != 2 {

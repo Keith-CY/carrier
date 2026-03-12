@@ -63,8 +63,9 @@ func ParseTelegramMessage(payload map[string]interface{}) *NormalizedMessage {
 
 	chat, _ := asMap(message["chat"])
 	chatID := toID(chat["id"])
+	messageID := toID(message["message_id"])
 	rawText := firstString(message["text"], message["caption"])
-	attachments := extractTelegramAttachments(message)
+	attachments := extractTelegramAttachments(message, chatID, messageID)
 	if chatID == "" || (rawText == "" && len(attachments) == 0) {
 		return nil
 	}
@@ -154,7 +155,7 @@ func RenderTelegramResponse(resp GatewayResponse) map[string]interface{} {
 	return result
 }
 
-func extractTelegramAttachments(message map[string]interface{}) []baseagent.AttachmentRef {
+func extractTelegramAttachments(message map[string]interface{}, chatID, messageID string) []baseagent.AttachmentRef {
 	if len(message) == 0 {
 		return nil
 	}
@@ -167,16 +168,16 @@ func extractTelegramAttachments(message map[string]interface{}) []baseagent.Atta
 	}
 
 	if document, ok := asMap(message["document"]); ok {
-		appendAttachment(telegramAttachmentRef("document", document))
+		appendAttachment(telegramAttachmentRef("document", document, chatID, messageID))
 	}
 	if audio, ok := asMap(message["audio"]); ok {
-		appendAttachment(telegramAttachmentRef("audio", audio))
+		appendAttachment(telegramAttachmentRef("audio", audio, chatID, messageID))
 	}
 	if voice, ok := asMap(message["voice"]); ok {
-		appendAttachment(telegramAttachmentRef("voice", voice))
+		appendAttachment(telegramAttachmentRef("voice", voice, chatID, messageID))
 	}
 	if video, ok := asMap(message["video"]); ok {
-		appendAttachment(telegramAttachmentRef("video", video))
+		appendAttachment(telegramAttachmentRef("video", video, chatID, messageID))
 	}
 	if photos, ok := message["photo"].([]interface{}); ok && len(photos) > 0 {
 		best := map[string]interface{}{}
@@ -192,19 +193,30 @@ func extractTelegramAttachments(message map[string]interface{}) []baseagent.Atta
 				bestSize = size
 			}
 		}
-		appendAttachment(telegramAttachmentRef("image", best))
+		appendAttachment(telegramAttachmentRef("image", best, chatID, messageID))
 	}
 	return attachments
 }
 
-func telegramAttachmentRef(kind string, payload map[string]interface{}) baseagent.AttachmentRef {
+func telegramAttachmentRef(kind string, payload map[string]interface{}, chatID, messageID string) baseagent.AttachmentRef {
+	fileID := firstString(payload["file_id"])
+	fileUniqueID := firstString(payload["file_unique_id"])
 	ref := baseagent.AttachmentRef{
+		ID:         strings.TrimSpace(firstString(fileUniqueID, fileID)),
 		Kind:       strings.TrimSpace(kind),
 		Name:       firstString(payload["file_name"]),
 		MIMEType:   firstString(payload["mime_type"]),
+		MediaType:  firstString(payload["mime_type"]),
 		SizeBytes:  int64(toFloat(payload["file_size"])),
-		ExternalID: firstString(payload["file_id"], payload["file_unique_id"]),
+		ExternalID: firstString(fileID, fileUniqueID),
 		Source:     "telegram",
+		SourceMetadata: map[string]string{
+			"transport":          "telegram",
+			"chat_id":            strings.TrimSpace(chatID),
+			"message_id":         strings.TrimSpace(messageID),
+			"telegram_file_id":   strings.TrimSpace(fileID),
+			"telegram_unique_id": strings.TrimSpace(fileUniqueID),
+		},
 	}
 	if ref.Name == "" {
 		switch ref.Kind {
@@ -220,7 +232,33 @@ func telegramAttachmentRef(kind string, payload map[string]interface{}) baseagen
 			ref.Name = "telegram-document"
 		}
 	}
+	if ref.MediaType == "" {
+		ref.MediaType = defaultTelegramMediaType(ref.Kind)
+	}
+	if ref.MIMEType == "" {
+		ref.MIMEType = ref.MediaType
+	}
+	if ref.ID == "" {
+		ref.ID = strings.TrimSpace(firstString(ref.ExternalID, ref.Name))
+	}
 	return ref
+}
+
+func defaultTelegramMediaType(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "image":
+		return "image/jpeg"
+	case "voice":
+		return "audio/ogg"
+	case "audio":
+		return "audio/mpeg"
+	case "video":
+		return "video/mp4"
+	case "document", "file":
+		return "application/octet-stream"
+	default:
+		return ""
+	}
 }
 
 // RenderTelegramWebhookResponse wraps a gateway response as a Telegram Bot API

@@ -123,9 +123,12 @@ type OrchestratorArtifact struct {
 	TaskID      string `json:"taskId,omitempty"`
 	Name        string `json:"name"`
 	Kind        string `json:"kind,omitempty"`
+	MediaType   string `json:"mediaType,omitempty"`
 	ContentType string `json:"contentType,omitempty"`
 	SizeBytes   int64  `json:"sizeBytes,omitempty"`
 	Path        string `json:"path,omitempty"`
+	Source      string `json:"source,omitempty"`
+	ExternalID  string `json:"externalId,omitempty"`
 	CreatedAt   string `json:"createdAt,omitempty"`
 }
 
@@ -500,9 +503,15 @@ func normalizeOrchestratorArtifact(in OrchestratorArtifact) OrchestratorArtifact
 	out.TaskID = strings.TrimSpace(out.TaskID)
 	out.Name = strings.TrimSpace(out.Name)
 	out.Kind = strings.TrimSpace(out.Kind)
+	out.MediaType = strings.TrimSpace(out.MediaType)
 	out.ContentType = strings.TrimSpace(out.ContentType)
 	out.Path = strings.TrimSpace(out.Path)
+	out.Source = strings.TrimSpace(out.Source)
+	out.ExternalID = strings.TrimSpace(out.ExternalID)
 	out.CreatedAt = strings.TrimSpace(out.CreatedAt)
+	if out.MediaType == "" {
+		out.MediaType = out.ContentType
+	}
 	if out.SizeBytes < 0 {
 		out.SizeBytes = 0
 	}

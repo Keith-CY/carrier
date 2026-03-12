@@ -173,6 +173,47 @@ func TestParseTelegramMessage_NonCommand(t *testing.T) {
 	}
 }
 
+func TestParseTelegramMessage_AttachmentsCarryStableMetadata(t *testing.T) {
+	payload := map[string]interface{}{
+		"update_id": float64(42),
+		"message": map[string]interface{}{
+			"message_id": float64(99),
+			"caption":    "see attachment",
+			"chat": map[string]interface{}{
+				"id": float64(777),
+			},
+			"document": map[string]interface{}{
+				"file_id":        "tg-file-id-1",
+				"file_unique_id": "tg-file-unique-1",
+				"file_name":      "report.pdf",
+				"mime_type":      "application/pdf",
+				"file_size":      float64(1234),
+			},
+		},
+	}
+
+	msg := ParseTelegramMessage(payload)
+	if msg == nil {
+		t.Fatal("expected normalized message")
+	}
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("attachments len=%d want 1 attachments=%+v", len(msg.Attachments), msg.Attachments)
+	}
+	attachment := msg.Attachments[0]
+	if attachment.ID != "tg-file-unique-1" {
+		t.Fatalf("attachment.ID=%q want %q", attachment.ID, "tg-file-unique-1")
+	}
+	if attachment.MediaType != "application/pdf" {
+		t.Fatalf("attachment.MediaType=%q want %q", attachment.MediaType, "application/pdf")
+	}
+	if attachment.SourceMetadata["chat_id"] != "777" {
+		t.Fatalf("attachment.SourceMetadata[chat_id]=%q want 777 metadata=%+v", attachment.SourceMetadata["chat_id"], attachment.SourceMetadata)
+	}
+	if attachment.SourceMetadata["message_id"] != "99" {
+		t.Fatalf("attachment.SourceMetadata[message_id]=%q want 99 metadata=%+v", attachment.SourceMetadata["message_id"], attachment.SourceMetadata)
+	}
+}
+
 // --- Feishu ---
 
 func TestVerifyFeishuToken(t *testing.T) {

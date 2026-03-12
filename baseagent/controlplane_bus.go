@@ -14,23 +14,29 @@ const (
 )
 
 type AttachmentRef struct {
-	Kind       string `json:"kind,omitempty"`
-	Path       string `json:"path,omitempty"`
-	Name       string `json:"name,omitempty"`
-	MIMEType   string `json:"mimeType,omitempty"`
-	SizeBytes  int64  `json:"sizeBytes,omitempty"`
-	Source     string `json:"source,omitempty"`
-	ExternalID string `json:"externalId,omitempty"`
+	ID             string            `json:"id,omitempty"`
+	Kind           string            `json:"kind,omitempty"`
+	Path           string            `json:"path,omitempty"`
+	Name           string            `json:"name,omitempty"`
+	MIMEType       string            `json:"mimeType,omitempty"`
+	MediaType      string            `json:"mediaType,omitempty"`
+	SizeBytes      int64             `json:"sizeBytes,omitempty"`
+	Source         string            `json:"source,omitempty"`
+	ExternalID     string            `json:"externalId,omitempty"`
+	ArtifactID     string            `json:"artifactId,omitempty"`
+	SourceMetadata map[string]string `json:"sourceMetadata,omitempty"`
 }
 
 type ContentBlock struct {
-	Type      string `json:"type"`
-	Text      string `json:"text,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Path      string `json:"path,omitempty"`
-	MIMEType  string `json:"mimeType,omitempty"`
-	URL       string `json:"url,omitempty"`
-	SizeBytes int64  `json:"sizeBytes,omitempty"`
+	Type         string `json:"type"`
+	Text         string `json:"text,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Path         string `json:"path,omitempty"`
+	MIMEType     string `json:"mimeType,omitempty"`
+	MediaType    string `json:"mediaType,omitempty"`
+	AttachmentID string `json:"attachmentId,omitempty"`
+	URL          string `json:"url,omitempty"`
+	SizeBytes    int64  `json:"sizeBytes,omitempty"`
 }
 
 type RichOutboundMessage struct {

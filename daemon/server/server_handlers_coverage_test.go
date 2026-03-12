@@ -165,7 +165,7 @@ func TestHandleAgentChat_PassesAttachmentMetadataToRuntime(t *testing.T) {
 		"message":"hello with attachment",
 		"sessionId":"sess-a",
 		"attachments":[
-			{"kind":"audio","name":"voice.ogg","mimeType":"audio/ogg","externalId":"tg-audio-1"}
+			{"id":"tg-audio-unique-1","kind":"audio","name":"voice.ogg","mimeType":"audio/ogg","mediaType":"audio/ogg","externalId":"tg-audio-1","sourceMetadata":{"chat_id":"123","message_id":"456"}}
 		]
 	}`))
 	rr := httptest.NewRecorder()
@@ -178,6 +178,12 @@ func TestHandleAgentChat_PassesAttachmentMetadataToRuntime(t *testing.T) {
 	}
 	if runtime.lastReq.Attachments[0].Kind != "audio" || runtime.lastReq.Attachments[0].ExternalID != "tg-audio-1" {
 		t.Fatalf("unexpected runtime attachments: %+v", runtime.lastReq.Attachments)
+	}
+	if runtime.lastReq.Attachments[0].ID != "tg-audio-unique-1" || runtime.lastReq.Attachments[0].MediaType != "audio/ogg" {
+		t.Fatalf("unexpected attachment identity/media: %+v", runtime.lastReq.Attachments[0])
+	}
+	if runtime.lastReq.Attachments[0].SourceMetadata["chat_id"] != "123" || runtime.lastReq.Attachments[0].SourceMetadata["message_id"] != "456" {
+		t.Fatalf("unexpected attachment source metadata: %+v", runtime.lastReq.Attachments[0].SourceMetadata)
 	}
 }
 

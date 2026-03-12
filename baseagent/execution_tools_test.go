@@ -428,6 +428,12 @@ func TestExecutionToolsSendFile(t *testing.T) {
 	if result.ContentBlocks[0].Type != "file" || result.ContentBlocks[0].Name != "artifact.log" {
 		t.Fatalf("unexpected content blocks: %+v", result.ContentBlocks)
 	}
+	if result.ContentBlocks[0].AttachmentID == "" || result.ContentBlocks[0].AttachmentID != result.Attachments[0].ID {
+		t.Fatalf("expected content block to link attachment, block=%+v attachment=%+v", result.ContentBlocks[0], result.Attachments[0])
+	}
+	if result.ContentBlocks[0].MediaType != result.Attachments[0].MediaType {
+		t.Fatalf("expected content block media type to match attachment, block=%+v attachment=%+v", result.ContentBlocks[0], result.Attachments[0])
+	}
 }
 
 func TestExecutionToolsSpawnSubagentIncludesDelegationMetadata(t *testing.T) {

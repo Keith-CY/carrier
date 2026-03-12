@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"mime"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -659,21 +660,28 @@ func (r *ExecutionToolRegistry) sendFile(_ context.Context, args map[string]any)
 		return executionError("path must point to a file")
 	}
 	attachment := ExecutionAttachment{
-		Kind:      "file",
-		Path:      resolved,
-		Name:      info.Name(),
-		SizeBytes: info.Size(),
-		Source:    "workspace",
+		ID:         resolved,
+		Kind:       "file",
+		Path:       resolved,
+		Name:       info.Name(),
+		MIMEType:   mime.TypeByExtension(filepath.Ext(info.Name())),
+		MediaType:  mime.TypeByExtension(filepath.Ext(info.Name())),
+		SizeBytes:  info.Size(),
+		Source:     "workspace",
+		ArtifactID: resolved,
 	}
 	return ExecutionToolResult{
 		Output:      fmt.Sprintf("prepared attachment %s (%d bytes)", attachment.Name, attachment.SizeBytes),
 		Attachments: []AttachmentRef{attachment},
 		ContentBlocks: []ContentBlock{
 			{
-				Type:      "file",
-				Name:      attachment.Name,
-				Path:      attachment.Path,
-				SizeBytes: attachment.SizeBytes,
+				Type:         "file",
+				Name:         attachment.Name,
+				Path:         attachment.Path,
+				MIMEType:     attachment.MIMEType,
+				MediaType:    attachment.MediaType,
+				AttachmentID: attachment.ID,
+				SizeBytes:    attachment.SizeBytes,
 			},
 		},
 		Metadata: map[string]any{

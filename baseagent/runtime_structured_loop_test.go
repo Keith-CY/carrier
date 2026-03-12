@@ -452,6 +452,9 @@ func TestRuntimeChatStructuredLoopCarriesAttachmentMetadata(t *testing.T) {
 	if len(last.ContentBlocks) != 1 || last.ContentBlocks[0].Type != "file" {
 		t.Fatalf("unexpected content blocks: %+v", last.ContentBlocks)
 	}
+	if last.ContentBlocks[0].AttachmentID != last.Attachments[0].ID {
+		t.Fatalf("expected file block to point at attachment id, block=%+v attachments=%+v", last.ContentBlocks[0], last.Attachments)
+	}
 }
 
 func TestRuntimeChatUsesTextProviderStructuredFallback(t *testing.T) {

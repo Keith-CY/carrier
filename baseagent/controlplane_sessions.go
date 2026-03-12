@@ -775,14 +775,51 @@ func cloneAttachmentRefs(attachments []AttachmentRef) []AttachmentRef {
 	out := make([]AttachmentRef, len(attachments))
 	for i, attachment := range attachments {
 		out[i] = AttachmentRef{
-			Kind:       strings.TrimSpace(strings.ToLower(attachment.Kind)),
-			Path:       strings.TrimSpace(attachment.Path),
-			Name:       strings.TrimSpace(attachment.Name),
-			MIMEType:   strings.TrimSpace(attachment.MIMEType),
-			SizeBytes:  attachment.SizeBytes,
-			Source:     strings.TrimSpace(attachment.Source),
-			ExternalID: strings.TrimSpace(attachment.ExternalID),
+			ID:             strings.TrimSpace(attachment.ID),
+			Kind:           strings.TrimSpace(strings.ToLower(attachment.Kind)),
+			Path:           strings.TrimSpace(attachment.Path),
+			Name:           strings.TrimSpace(attachment.Name),
+			MIMEType:       strings.TrimSpace(attachment.MIMEType),
+			MediaType:      strings.TrimSpace(attachment.MediaType),
+			SizeBytes:      attachment.SizeBytes,
+			Source:         strings.TrimSpace(attachment.Source),
+			ExternalID:     strings.TrimSpace(attachment.ExternalID),
+			ArtifactID:     strings.TrimSpace(attachment.ArtifactID),
+			SourceMetadata: cloneStringStringMap(attachment.SourceMetadata),
 		}
+		if out[i].MediaType == "" {
+			out[i].MediaType = out[i].MIMEType
+		}
+		if out[i].ID == "" {
+			out[i].ID = strings.TrimSpace(firstNonEmptyString(out[i].ExternalID, out[i].ArtifactID, out[i].Path, out[i].Name))
+		}
+	}
+	return out
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func cloneStringStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		out[trimmedKey] = strings.TrimSpace(value)
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -794,13 +831,18 @@ func cloneContentBlocks(blocks []ContentBlock) []ContentBlock {
 	out := make([]ContentBlock, len(blocks))
 	for i, block := range blocks {
 		out[i] = ContentBlock{
-			Type:      strings.TrimSpace(strings.ToLower(block.Type)),
-			Text:      strings.TrimSpace(block.Text),
-			Name:      strings.TrimSpace(block.Name),
-			Path:      strings.TrimSpace(block.Path),
-			MIMEType:  strings.TrimSpace(block.MIMEType),
-			URL:       strings.TrimSpace(block.URL),
-			SizeBytes: block.SizeBytes,
+			Type:         strings.TrimSpace(strings.ToLower(block.Type)),
+			Text:         strings.TrimSpace(block.Text),
+			Name:         strings.TrimSpace(block.Name),
+			Path:         strings.TrimSpace(block.Path),
+			MIMEType:     strings.TrimSpace(block.MIMEType),
+			MediaType:    strings.TrimSpace(block.MediaType),
+			AttachmentID: strings.TrimSpace(block.AttachmentID),
+			URL:          strings.TrimSpace(block.URL),
+			SizeBytes:    block.SizeBytes,
+		}
+		if out[i].MediaType == "" {
+			out[i].MediaType = out[i].MIMEType
 		}
 	}
 	return out

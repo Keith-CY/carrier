@@ -14,9 +14,13 @@ func isAudioAttachment(ref AttachmentRef) bool {
 	switch strings.ToLower(strings.TrimSpace(ref.Kind)) {
 	case "audio", "voice":
 		return true
-	default:
-		return false
 	}
+	for _, mediaType := range []string{ref.MediaType, ref.MIMEType} {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(mediaType)), "audio/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runtime) prepareMediaRequest(ctx context.Context, req ChatRequest) (ChatRequest, *ChatResponse, error) {
