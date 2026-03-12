@@ -95,6 +95,12 @@ func TestHandleAgentLauncherReturnsSummary(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"skills": []map[string]interface{}{
 					{"name": "toolbox", "enabled": true},
+					{"name": "workspace-inspection", "enabled": false},
+				},
+				"skillSummary": map[string]interface{}{
+					"installedCount": 2,
+					"enabledCount":   1,
+					"disabledCount":  1,
 				},
 				"mcp": map[string]interface{}{
 					"servers": []map[string]interface{}{
@@ -138,6 +144,7 @@ func TestHandleAgentLauncherReturnsSummary(t *testing.T) {
 		`"credentialConfigured":true`,
 		`"channel":"telegram"`,
 		`"toolbox"`,
+		`"disabledCount":1`,
 		`"count":1`,
 		`"lastResult":"succeeded"`,
 		`"defaultProfile":"openrouter-fast"`,

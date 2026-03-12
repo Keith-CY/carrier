@@ -5,6 +5,11 @@ import { apiGet, apiPost } from '../../lib/api';
 
 type AgentStatus = Record<string, unknown>;
 type AgentCapabilities = {
+  skillSummary?: {
+    installedCount?: number;
+    enabledCount?: number;
+    disabledCount?: number;
+  };
   skills?: Array<{
     name?: string;
     summary?: string;
@@ -116,6 +121,21 @@ export function AgentDetailPage() {
     onSuccess: async (action) => {
       setLastActionMessage(`Agent ${action} requested.`);
       await statusQuery.refetch();
+      await capabilitiesQuery.refetch();
+      await launcherQuery.refetch();
+    },
+    onError: (error) => {
+      setLastActionMessage((error as Error).message);
+    },
+  });
+
+  const skillToggleMutation = useMutation({
+    mutationFn: async ({ skillName, enabled }: { skillName: string; enabled: boolean }) => {
+      await apiPost(`/api/v1/agents/${encodeURIComponent(agentId)}/skills/${encodeURIComponent(skillName)}`, { enabled });
+      return { skillName, enabled };
+    },
+    onSuccess: async ({ skillName, enabled }) => {
+      setLastActionMessage(`Skill ${skillName} ${enabled ? 'enabled' : 'disabled'}.`);
       await capabilitiesQuery.refetch();
       await launcherQuery.refetch();
     },
@@ -257,11 +277,31 @@ export function AgentDetailPage() {
             <div className="kv-grid">
               <div>
                 <strong>Skills</strong>
+                {content.capabilities.skillSummary ? (
+                  <div className="text-dim">
+                    {content.capabilities.skillSummary.installedCount || 0} installed
+                    {typeof content.capabilities.skillSummary.enabledCount === 'number' ? ` · ${content.capabilities.skillSummary.enabledCount} enabled` : ''}
+                    {typeof content.capabilities.skillSummary.disabledCount === 'number' ? ` · ${content.capabilities.skillSummary.disabledCount} disabled` : ''}
+                  </div>
+                ) : null}
                 <ul className="compact-list">
                   {(content.capabilities.skills || []).map((skill) => (
                     <li key={String(skill.name || '')}>
                       <span>{skill.name || 'unknown-skill'}</span>
-                      <span className="text-dim">{skill.enabled ? 'enabled' : 'disabled'}</span>
+                      <span className="text-dim">
+                        {skill.enabled ? 'enabled' : 'disabled'}
+                        {skill.summary ? ` · ${skill.summary}` : ''}
+                      </span>
+                      {skill.name ? (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          disabled={skillToggleMutation.isPending}
+                          onClick={() => skillToggleMutation.mutate({ skillName: String(skill.name), enabled: !skill.enabled })}
+                        >
+                          {skill.enabled ? 'Disable' : 'Enable'}
+                        </button>
+                      ) : null}
                     </li>
                   ))}
                 </ul>

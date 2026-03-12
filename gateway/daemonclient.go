@@ -275,6 +275,19 @@ func (c *DaemonClient) GetAgentCapabilities(ctx context.Context, agentID, actor,
 	return summary, nil
 }
 
+func (c *DaemonClient) SetAgentSkillEnabled(ctx context.Context, agentID, skillName string, enabled bool, actor, requestID string) (AgentCapabilitySummary, error) {
+	body := map[string]bool{"enabled": enabled}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/skills/"+url.PathEscape(skillName), body, actor, requestID)
+	if err != nil {
+		return AgentCapabilitySummary{}, err
+	}
+	var summary AgentCapabilitySummary
+	if err := json.Unmarshal(raw, &summary); err != nil {
+		return AgentCapabilitySummary{}, fmt.Errorf("skill toggle response: %w", err)
+	}
+	return summary, nil
+}
+
 // GetLogs returns agent logs.
 func (c *DaemonClient) GetLogs(ctx context.Context, agentID string, tail int, actor, requestID string) (*LogsResult, error) {
 	safeTail := tail

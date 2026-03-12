@@ -20,26 +20,30 @@ import (
 )
 
 type fakeBaseAgentRuntime struct {
-	resp         baseagent.ChatResponse
-	capabilities baseagent.RuntimeCapabilitySummary
-	approvalResp baseagent.ChatResponse
-	approvalErr  error
-	cronJob      baseagent.CronJob
-	cronJobs     []baseagent.CronJob
-	cancelledCronJob baseagent.CronJob
-	cronErr      error
-	callCount    int
-	approvalCall int
-	cronCall     int
-	listCronCall int
-	cancelCronCall int
-	lastReq      baseagent.ChatRequest
-	lastSession  string
-	lastApproval string
-	lastDecision string
-	lastCronJob  baseagent.CronJob
+	resp                baseagent.ChatResponse
+	capabilities        baseagent.RuntimeCapabilitySummary
+	approvalResp        baseagent.ChatResponse
+	approvalErr         error
+	cronJob             baseagent.CronJob
+	cronJobs            []baseagent.CronJob
+	cancelledCronJob    baseagent.CronJob
+	cronErr             error
+	skillToggleErr      error
+	callCount           int
+	approvalCall        int
+	cronCall            int
+	listCronCall        int
+	cancelCronCall      int
+	skillToggleCall     int
+	lastReq             baseagent.ChatRequest
+	lastSession         string
+	lastApproval        string
+	lastDecision        string
+	lastCronJob         baseagent.CronJob
 	lastCronListSession string
 	lastCancelledCronID string
+	lastSkillName       string
+	lastSkillEnabled    bool
 }
 
 func (f *fakeBaseAgentRuntime) Chat(_ context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error) {
@@ -50,6 +54,30 @@ func (f *fakeBaseAgentRuntime) Chat(_ context.Context, req baseagent.ChatRequest
 
 func (f *fakeBaseAgentRuntime) CapabilitySummary(_ context.Context) baseagent.RuntimeCapabilitySummary {
 	return f.capabilities
+}
+
+func (f *fakeBaseAgentRuntime) SetSkillEnabled(_ context.Context, name string, enabled bool) error {
+	f.skillToggleCall++
+	f.lastSkillName = name
+	f.lastSkillEnabled = enabled
+	if f.skillToggleErr != nil {
+		return f.skillToggleErr
+	}
+	for i := range f.capabilities.Skills {
+		if f.capabilities.Skills[i].Name == name {
+			f.capabilities.Skills[i].Enabled = enabled
+		}
+	}
+	f.capabilities.SkillSummary = baseagent.RuntimeSkillSummary{}
+	for _, skill := range f.capabilities.Skills {
+		f.capabilities.SkillSummary.InstalledCount++
+		if skill.Enabled {
+			f.capabilities.SkillSummary.EnabledCount++
+			continue
+		}
+		f.capabilities.SkillSummary.DisabledCount++
+	}
+	return nil
 }
 
 func (f *fakeBaseAgentRuntime) RespondPendingApproval(_ context.Context, sessionKey, approvalID string, decision baseagent.ApprovalDecision) (baseagent.ChatResponse, error) {
@@ -148,6 +176,7 @@ func TestBaseAgentCapabilitiesEndpoint(t *testing.T) {
 			Skills: []baseagent.RuntimeSkillCapability{
 				{Name: "go-testing", Enabled: true},
 			},
+			SkillSummary: baseagent.RuntimeSkillSummary{InstalledCount: 1, EnabledCount: 1},
 			MCP: baseagent.MCPCapabilitySummary{
 				Servers: []baseagent.MCPServerCapability{
 					{Name: "repo", Health: "healthy", VisibleToolCount: 1},
@@ -167,8 +196,52 @@ func TestBaseAgentCapabilitiesEndpoint(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), `"go-testing"`) || !strings.Contains(w.Body.String(), `"repo_search"`) {
+	if !strings.Contains(w.Body.String(), `"go-testing"`) || !strings.Contains(w.Body.String(), `"repo_search"`) || !strings.Contains(w.Body.String(), `"enabledCount":1`) {
 		t.Fatalf("unexpected capabilities body: %s", w.Body.String())
+	}
+}
+
+func TestAgentSkillToggleEndpoint(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		capabilities: baseagent.RuntimeCapabilitySummary{
+			Skills: []baseagent.RuntimeSkillCapability{
+				{Name: "go-testing", Enabled: true},
+				{Name: "workspace-inspection", Enabled: false},
+			},
+			SkillSummary: baseagent.RuntimeSkillSummary{InstalledCount: 2, EnabledCount: 1, DisabledCount: 1},
+		},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	methodReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/skills/go-testing", nil)
+	methodRec := httptest.NewRecorder()
+	mux.ServeHTTP(methodRec, methodReq)
+	if methodRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", methodRec.Code)
+	}
+
+	badReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/go-testing", strings.NewReader("{"))
+	badRec := httptest.NewRecorder()
+	mux.ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", badRec.Code)
+	}
+
+	okReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/go-testing", strings.NewReader(`{"enabled":false}`))
+	okReq.Header.Set("Content-Type", "application/json")
+	okRec := httptest.NewRecorder()
+	mux.ServeHTTP(okRec, okReq)
+	if okRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", okRec.Code, okRec.Body.String())
+	}
+	if rt.skillToggleCall != 1 || rt.lastSkillName != "go-testing" || rt.lastSkillEnabled {
+		t.Fatalf("unexpected skill toggle state: %+v", rt)
+	}
+	if !strings.Contains(okRec.Body.String(), `"disabledCount":2`) || !strings.Contains(okRec.Body.String(), `"enabled":false`) {
+		t.Fatalf("unexpected skill toggle body: %s", okRec.Body.String())
 	}
 }
 

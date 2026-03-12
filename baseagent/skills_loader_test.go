@@ -175,10 +175,34 @@ func TestRuntimeCapabilitySummaryIncludesSkillsAndMCP(t *testing.T) {
 	if len(summary.Skills) != 1 || summary.Skills[0].Name != "go-testing" || !summary.Skills[0].Enabled {
 		t.Fatalf("unexpected runtime skill summary: %+v", summary.Skills)
 	}
+	if summary.SkillSummary.InstalledCount != 1 || summary.SkillSummary.EnabledCount != 1 || summary.SkillSummary.DisabledCount != 0 {
+		t.Fatalf("unexpected runtime skill counts: %+v", summary.SkillSummary)
+	}
 	if len(summary.MCP.Servers) != 1 || summary.MCP.Servers[0].Name != "repo" {
 		t.Fatalf("unexpected runtime mcp summary: %+v", summary.MCP)
 	}
 	if len(summary.MCP.VisibleTools) != 1 || summary.MCP.VisibleTools[0].Name != "repo_search" {
 		t.Fatalf("unexpected runtime visible tools: %+v", summary.MCP.VisibleTools)
+	}
+}
+
+func TestRuntimeCapabilitySummaryTracksDisabledSkills(t *testing.T) {
+	ctx := context.Background()
+	registry := NewSkillsRegistry(NewMemorySkillsStore(), testSkillCatalog())
+	if _, err := registry.InstallSkill(ctx, "go-testing"); err != nil {
+		t.Fatalf("install go-testing: %v", err)
+	}
+	if _, err := registry.InstallSkill(ctx, "workspace-inspection"); err != nil {
+		t.Fatalf("install workspace-inspection: %v", err)
+	}
+	if err := registry.SetSkillEnabled(ctx, "workspace-inspection", false); err != nil {
+		t.Fatalf("disable workspace-inspection: %v", err)
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, nil, WithSkillsLoader(registry))
+	summary := rt.CapabilitySummary(ctx)
+
+	if summary.SkillSummary.InstalledCount != 2 || summary.SkillSummary.EnabledCount != 1 || summary.SkillSummary.DisabledCount != 1 {
+		t.Fatalf("unexpected runtime skill counts: %+v", summary.SkillSummary)
 	}
 }

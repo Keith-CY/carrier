@@ -22,9 +22,16 @@ type MCPCapabilitySummary struct {
 	VisibleTools []MCPToolCapability   `json:"visibleTools,omitempty"`
 }
 
+type RuntimeSkillSummary struct {
+	InstalledCount int `json:"installedCount"`
+	EnabledCount   int `json:"enabledCount"`
+	DisabledCount  int `json:"disabledCount"`
+}
+
 type RuntimeCapabilitySummary struct {
-	Skills []RuntimeSkillCapability `json:"skills,omitempty"`
-	MCP    MCPCapabilitySummary     `json:"mcp"`
+	Skills       []RuntimeSkillCapability `json:"skills,omitempty"`
+	SkillSummary RuntimeSkillSummary      `json:"skillSummary"`
+	MCP          MCPCapabilitySummary     `json:"mcp"`
 }
 
 type runtimeSkillCapabilityLoader interface {
@@ -60,6 +67,7 @@ func (r *Runtime) CapabilitySummary(ctx context.Context) RuntimeCapabilitySummar
 	if reporter, ok := r.mcpManager.(mcpCapabilityReporter); ok {
 		summary.MCP = reporter.CapabilitySummary()
 	}
+	summary.SkillSummary = buildRuntimeSkillSummary(summary.Skills)
 	return summary
 }
 
@@ -84,4 +92,16 @@ func sortMCPCapabilitySummary(summary *MCPCapabilitySummary) {
 	sort.Slice(summary.VisibleTools, func(i, j int) bool {
 		return summary.VisibleTools[i].Name < summary.VisibleTools[j].Name
 	})
+}
+
+func buildRuntimeSkillSummary(skills []RuntimeSkillCapability) RuntimeSkillSummary {
+	summary := RuntimeSkillSummary{InstalledCount: len(skills)}
+	for _, skill := range skills {
+		if skill.Enabled {
+			summary.EnabledCount++
+			continue
+		}
+		summary.DisabledCount++
+	}
+	return summary
 }

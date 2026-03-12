@@ -73,6 +73,7 @@ type agentChatRuntime interface {
 type baseAgentRuntime interface {
 	Chat(ctx context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error)
 	CapabilitySummary(ctx context.Context) baseagent.RuntimeCapabilitySummary
+	SetSkillEnabled(ctx context.Context, name string, enabled bool) error
 	RespondPendingApproval(ctx context.Context, sessionKey, approvalID string, decision baseagent.ApprovalDecision) (baseagent.ChatResponse, error)
 	ScheduleJob(ctx context.Context, job baseagent.CronJob) (baseagent.CronJob, error)
 	ListCronJobs(ctx context.Context, sessionKey string) ([]baseagent.CronJob, error)
@@ -1137,6 +1138,10 @@ func buildHTTPMuxWithBaseAgent(
 			}
 			return
 		}
+		if agentID, skillName, ok := parseAgentSkillPath(r.URL.Path); ok {
+			handleAgentSkill(svc, baseRuntime, agentID, skillName, w, r)
+			return
+		}
 
 		agentID, action, ok := parseAgentActionPath(r.URL.Path)
 		if !ok {
@@ -1609,6 +1614,32 @@ func handleAgentCapabilities(svc *lifecycle.Service, runtime baseAgentRuntime, a
 	writeJSON(w, http.StatusOK, runtime.CapabilitySummary(r.Context()))
 }
 
+func handleAgentSkill(svc *lifecycle.Service, runtime baseAgentRuntime, agentID, skillName string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
+		return
+	}
+	if _, err := svc.Status(agentID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if err := runtime.SetSkillEnabled(r.Context(), skillName, body.Enabled); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, runtime.CapabilitySummary(r.Context()))
+}
+
 func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID string, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1927,6 +1958,49 @@ func parseAgentActionPath(path string) (agentID string, action string, ok bool) 
 		return "", "", false
 	}
 	return decoded, action, true
+}
+
+func parseAgentSkillPath(path string) (agentID string, skillName string, ok bool) {
+	const prefix = "/api/v1/agents/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	rest := path[len(prefix):]
+	if strings.Contains(rest, "//") {
+		return "", "", false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 3 || strings.TrimSpace(parts[1]) != "skills" {
+		return "", "", false
+	}
+	rawAgentID := strings.TrimSpace(parts[0])
+	rawSkillName := strings.TrimSpace(parts[2])
+	if rawAgentID == "" || rawSkillName == "" {
+		return "", "", false
+	}
+	decodedAgentID, err := url.PathUnescape(rawAgentID)
+	if err != nil {
+		return "", "", false
+	}
+	decodedAgentID = strings.TrimSpace(decodedAgentID)
+	if decodedAgentID == "" || strings.Contains(decodedAgentID, "/") || strings.Contains(decodedAgentID, "\\") || strings.Contains(decodedAgentID, "..") {
+		return "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedAgentID) {
+		return "", "", false
+	}
+	decodedSkillName, err := url.PathUnescape(rawSkillName)
+	if err != nil {
+		return "", "", false
+	}
+	decodedSkillName = strings.TrimSpace(strings.ToLower(decodedSkillName))
+	if decodedSkillName == "" || strings.Contains(decodedSkillName, "/") || strings.Contains(decodedSkillName, "\\") || strings.Contains(decodedSkillName, "..") {
+		return "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedSkillName) {
+		return "", "", false
+	}
+	return decodedAgentID, decodedSkillName, true
 }
 
 func parseAgentMessagingPath(path string) (agentID string, action string, ok bool) {

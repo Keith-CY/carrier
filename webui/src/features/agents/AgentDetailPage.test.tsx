@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -39,6 +39,11 @@ describe('AgentDetailPage', () => {
       }
       if (url.endsWith('/api/v1/agents/agent-alpha/capabilities')) {
         return new Response(JSON.stringify({
+          skillSummary: {
+            installedCount: 1,
+            enabledCount: 1,
+            disabledCount: 0,
+          },
           skills: [
             { name: 'go-testing', enabled: true, summary: 'Use go test before claiming success.' },
           ],
@@ -82,6 +87,21 @@ describe('AgentDetailPage', () => {
           headers: { 'Content-Type': 'application/json' },
         });
       }
+      if (url.endsWith('/api/v1/agents/agent-alpha/skills/go-testing')) {
+        return new Response(JSON.stringify({
+          skillSummary: {
+            installedCount: 1,
+            enabledCount: 0,
+            disabledCount: 1,
+          },
+          skills: [
+            { name: 'go-testing', enabled: false, summary: 'Use go test before claiming success.' },
+          ],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }) as typeof fetch;
   });
@@ -106,5 +126,21 @@ describe('AgentDetailPage', () => {
     expect(screen.getAllByText(/flash/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/openrouter:flash/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/group=2/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/1 installed · 1 enabled · 0 disabled/i)).toBeInTheDocument();
+  });
+
+  test('toggles skill state through the agent skill endpoint', async () => {
+    renderAgentDetailPage();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /disable/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /disable/i }));
+
+    await waitFor(() => expect(screen.getByText(/Skill go-testing disabled\./i)).toBeInTheDocument());
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/skills/go-testing'),
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    );
   });
 });

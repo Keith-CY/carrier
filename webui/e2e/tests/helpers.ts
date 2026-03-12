@@ -479,6 +479,21 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
     }),
   );
 
+  await page.route('**/api/v1/agents/*/capabilities', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        skillSummary: { installedCount: 1, enabledCount: 1, disabledCount: 0 },
+        skills: [{ name: 'toolbox', enabled: true }],
+        mcp: {
+          servers: [{ name: 'repo', health: 'healthy', visibleToolCount: 1, hiddenToolCount: 0 }],
+          visibleTools: [{ name: 'repo_search', description: 'Search code' }],
+        },
+      }),
+    }),
+  );
+
   await page.route('**/api/v1/agents/*/launcher', (route) =>
     route.fulfill({
       status: 200,
@@ -518,6 +533,7 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
           runtimeState: 'running',
         },
         capabilities: {
+          skillSummary: { installedCount: 1, enabledCount: 1, disabledCount: 0 },
           skills: [{ name: 'toolbox', enabled: true }],
           mcp: {
             servers: [{ name: 'repo', health: 'healthy', visibleToolCount: 1, hiddenToolCount: 0 }],
