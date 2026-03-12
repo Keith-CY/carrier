@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, test } from 'vitest';
-import { getWizardState, resetWizardState } from './state';
+import { ensureWizardStateForRoute, resetWizardState } from './state';
 import { useOnboardingWizardState } from './useOnboardingWizardState';
 
 describe('useOnboardingWizardState', () => {
@@ -21,7 +21,7 @@ describe('useOnboardingWizardState', () => {
       result.current.setEnvRows([{ key: 'OPENAI_API_KEY', value: 'sk-test' }]);
     });
 
-    const persisted = getWizardState();
+    const persisted = ensureWizardStateForRoute('setup', 'zeroclaw');
     expect(persisted.channelToken).toBe('token-123');
     expect(persisted.webhookSecret).toBe('secret-abc');
     expect(persisted.envRows).toEqual([{ key: 'OPENAI_API_KEY', value: 'sk-test' }]);

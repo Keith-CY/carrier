@@ -36,10 +36,6 @@ const DEFAULT_WIZARD_STATE: WizardState = {
 
 let wizardState: WizardState = structuredClone(DEFAULT_WIZARD_STATE);
 
-export function getWizardState() {
-  return wizardState;
-}
-
 export function patchWizardState(patch: Partial<WizardState>) {
   wizardState = {
     ...wizardState,

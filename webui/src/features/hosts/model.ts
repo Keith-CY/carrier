@@ -1,3 +1,5 @@
+import { parseCommaSeparatedValues } from '../../lib/format';
+
 export type HostRecord = Record<string, any>;
 
 export type OperationSummary = {
@@ -82,15 +84,12 @@ export function normalizeSSHAliases(payload: any): string[] {
 }
 
 export function parseCSV(raw: string): string[] {
-  return String(raw || '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean)
+  return parseCommaSeparatedValues(raw)
     .filter((value, index, list) => list.indexOf(value) === index)
     .sort((left, right) => left.localeCompare(right));
 }
 
-export function hostEndpoint(host: HostRecord): string {
+function hostEndpoint(host: HostRecord): string {
   if (String(host?.authMode || '').trim().toLowerCase() === 'ssh_config') {
     return String(host?.sshConfigHost || host?.host || '-');
   }
@@ -99,7 +98,7 @@ export function hostEndpoint(host: HostRecord): string {
   return `${user}@${hostName}`;
 }
 
-export function formatHostOperationMetaLines(operation?: OperationSummary): string[] {
+function formatHostOperationMetaLines(operation?: OperationSummary): string[] {
   if (!operation) return [];
   const lines = [`last op: ${operation.operation} (${operation.success ? 'ok' : 'error'})`];
   if (operation.requestId) lines.push(`requestId: ${operation.requestId}`);
