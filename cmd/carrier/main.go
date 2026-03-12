@@ -284,20 +284,25 @@ type memoryCommandOptions struct {
 }
 
 type agentCommandOptions struct {
-	Action     string
-	AgentID    string
-	CronJobID  string
+	Action      string
+	AgentID     string
+	CronJobID   string
 	ProfileName string
-	Query      string
-	SkillName  string
-	Version    string
-	Message    string
-	Provider   string
-	ModelAlias string
-	Model      string
-	SessionID  string
-	NextRunAt  time.Time
-	JSON       bool
+	Query       string
+	SkillName   string
+	Version     string
+	Message     string
+	Provider    string
+	BaseURL     string
+	AuthMethod  string
+	ModelAlias  string
+	Model       string
+	SessionID   string
+	NextRunAt   time.Time
+	TimeoutMs   int
+	RetryBudget int
+	FallbackStrategy string
+	JSON        bool
 }
 
 type versionInfo struct {
@@ -3318,7 +3323,7 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 		startIdx = 2
 	case "models":
 		if len(args) < 2 {
-			return agentCommandOptions{}, errors.New("usage: carrier agent models [sync|default] <agent_id> [profile_name] [--json]")
+			return agentCommandOptions{}, errors.New("usage: carrier agent models [sync|default|update-profile] <agent_id> [profile_name] [flags]")
 		}
 		if strings.EqualFold(strings.TrimSpace(args[1]), "sync") {
 			if len(args) < 3 {
@@ -3332,6 +3337,14 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 				return agentCommandOptions{}, errors.New("usage: carrier agent models default <agent_id> <profile_name> [--json]")
 			}
 			opts.Action = "models-default"
+			opts.AgentID = strings.TrimSpace(args[2])
+			opts.ProfileName = strings.TrimSpace(args[3])
+			startIdx = 4
+		} else if strings.EqualFold(strings.TrimSpace(args[1]), "update-profile") {
+			if len(args) < 4 {
+				return agentCommandOptions{}, errors.New("usage: carrier agent models update-profile <agent_id> <profile_name> [--model-alias <alias>] [--model <model-id>] [--provider <provider-id>] [--base-url <url>] [--auth-method <method>] [--timeout-ms <ms>] [--retry-budget <n>] [--fallback-strategy <name>] [--json]")
+			}
+			opts.Action = "models-update-profile"
 			opts.AgentID = strings.TrimSpace(args[2])
 			opts.ProfileName = strings.TrimSpace(args[3])
 			startIdx = 4
@@ -3393,6 +3406,20 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 			}
 			opts.Provider = strings.TrimSpace(value)
 			i = next
+		case "--base-url":
+			value, next, err := parseRequiredFlagValue(args, i, "--base-url")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.BaseURL = strings.TrimSpace(value)
+			i = next
+		case "--auth-method":
+			value, next, err := parseRequiredFlagValue(args, i, "--auth-method")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.AuthMethod = strings.TrimSpace(value)
+			i = next
 		case "--session-id":
 			value, next, err := parseRequiredFlagValue(args, i, "--session-id")
 			if err != nil {
@@ -3439,6 +3466,35 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 			}
 			opts.Version = strings.TrimSpace(value)
 			i = next
+		case "--timeout-ms":
+			value, next, err := parseRequiredFlagValue(args, i, "--timeout-ms")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			parsed, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || parsed < 0 {
+				return agentCommandOptions{}, fmt.Errorf("invalid --timeout-ms value: %s", value)
+			}
+			opts.TimeoutMs = parsed
+			i = next
+		case "--retry-budget":
+			value, next, err := parseRequiredFlagValue(args, i, "--retry-budget")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			parsed, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || parsed < 0 {
+				return agentCommandOptions{}, fmt.Errorf("invalid --retry-budget value: %s", value)
+			}
+			opts.RetryBudget = parsed
+			i = next
+		case "--fallback-strategy":
+			value, next, err := parseRequiredFlagValue(args, i, "--fallback-strategy")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.FallbackStrategy = strings.TrimSpace(value)
+			i = next
 		case "--json":
 			opts.JSON = true
 		default:
@@ -3468,6 +3524,10 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 	case "models-default":
 		if strings.TrimSpace(opts.ProfileName) == "" {
 			return agentCommandOptions{}, errors.New("usage: carrier agent models default <agent_id> <profile_name> [--json]")
+		}
+	case "models-update-profile":
+		if strings.TrimSpace(opts.ProfileName) == "" {
+			return agentCommandOptions{}, errors.New("usage: carrier agent models update-profile <agent_id> <profile_name> [--model-alias <alias>] [--model <model-id>] [--provider <provider-id>] [--base-url <url>] [--auth-method <method>] [--timeout-ms <ms>] [--retry-budget <n>] [--fallback-strategy <name>] [--json]")
 		}
 	default:
 		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills|models> ...")
@@ -5044,6 +5104,16 @@ func runAgentCommand(in io.Reader, out io.Writer, opts agentCommandOptions) erro
 		}
 		_, _ = fmt.Fprintln(out, renderManagedAgentModels(resp))
 		return nil
+	case "models-update-profile":
+		resp, raw, err := updateManagedAgentModelProfile(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentModels(resp))
+		return nil
 	case "shell":
 		return runManagedAgentShell(in, out, opts)
 	default:
@@ -5242,6 +5312,30 @@ func updateManagedAgentModelsDefault(agentID, profileName string) (*agentModelsC
 	var resp agentModelsCLIResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, nil, fmt.Errorf("decode agent model default response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func updateManagedAgentModelProfile(opts agentCommandOptions) (*agentModelsCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/models/profile", neturl.PathEscape(strings.TrimSpace(opts.AgentID)))
+	payload := map[string]any{
+		"profileName": strings.TrimSpace(opts.ProfileName),
+		"modelAlias": strings.TrimSpace(opts.ModelAlias),
+		"modelId": strings.TrimSpace(opts.Model),
+		"providerId": strings.TrimSpace(opts.Provider),
+		"baseUrl": strings.TrimSpace(opts.BaseURL),
+		"authMethod": strings.TrimSpace(opts.AuthMethod),
+		"timeoutMs": opts.TimeoutMs,
+		"retryBudget": opts.RetryBudget,
+		"fallbackStrategy": strings.TrimSpace(opts.FallbackStrategy),
+	}
+	raw, _, err := gatewayRequest(http.MethodPost, path, payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentModelsCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent model profile response: %w", err)
 	}
 	return &resp, raw, nil
 }

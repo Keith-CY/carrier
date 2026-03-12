@@ -13,24 +13,25 @@ import (
 )
 
 type managedAgentInstance struct {
-	ID           string                    `json:"id"`
-	Type         string                    `json:"type"`
-	AgentID      string                    `json:"agent_id"`
-	Isolation    bool                      `json:"isolation,omitempty"`
-	GatewayURL   string                    `json:"gateway_url"`
-	Workspace    string                    `json:"workspace_path,omitempty"`
-	ConfigPath   string                    `json:"config_path,omitempty"`
-	RecordPath   string                    `json:"record_path,omitempty"`
-	Channel      string                    `json:"channel,omitempty"`
-	Provider     string                    `json:"provider,omitempty"`
-	ModelSurface *managedAgentModelSurface `json:"model_surface,omitempty"`
-	ModelRuntime *managedAgentModelRuntime `json:"model_runtime,omitempty"`
-	PairRequired bool                      `json:"pair_required,omitempty"`
-	PairCode     string                    `json:"pair_code,omitempty"`
-	PairedChatID string                    `json:"paired_chat_id,omitempty"`
-	RuntimeState string                    `json:"runtime_state,omitempty"`
-	CreatedAt    string                    `json:"created_at"`
-	UpdatedAt    string                    `json:"updated_at"`
+	ID                  string                    `json:"id"`
+	Type                string                    `json:"type"`
+	AgentID             string                    `json:"agent_id"`
+	Isolation           bool                      `json:"isolation,omitempty"`
+	GatewayURL          string                    `json:"gateway_url"`
+	Workspace           string                    `json:"workspace_path,omitempty"`
+	ConfigPath          string                    `json:"config_path,omitempty"`
+	RecordPath          string                    `json:"record_path,omitempty"`
+	Channel             string                    `json:"channel,omitempty"`
+	Provider            string                    `json:"provider,omitempty"`
+	ModelSurface        *managedAgentModelSurface `json:"model_surface,omitempty"`
+	ModelRuntime        *managedAgentModelRuntime `json:"model_runtime,omitempty"`
+	ModelSelectionCursors map[string]int          `json:"model_selection_cursors,omitempty"`
+	PairRequired        bool                      `json:"pair_required,omitempty"`
+	PairCode            string                    `json:"pair_code,omitempty"`
+	PairedChatID        string                    `json:"paired_chat_id,omitempty"`
+	RuntimeState        string                    `json:"runtime_state,omitempty"`
+	CreatedAt           string                    `json:"created_at"`
+	UpdatedAt           string                    `json:"updated_at"`
 }
 
 type managedAgentModelSurface struct {
@@ -39,13 +40,16 @@ type managedAgentModelSurface struct {
 }
 
 type managedAgentModelRuntime struct {
-	RequestedAlias string `json:"requested_alias,omitempty"`
-	RequestedModel string `json:"requested_model,omitempty"`
-	ResolvedModel  string `json:"resolved_model,omitempty"`
-	FallbackGroup  string `json:"fallback_group,omitempty"`
-	OverrideHit    bool   `json:"override_hit,omitempty"`
-	FallbackHit    bool   `json:"fallback_hit,omitempty"`
-	LastRunAt      string `json:"last_run_at,omitempty"`
+	RequestedAlias   string `json:"requested_alias,omitempty"`
+	RequestedModel   string `json:"requested_model,omitempty"`
+	ResolvedModel    string `json:"resolved_model,omitempty"`
+	ResolvedProfile  string `json:"resolved_profile,omitempty"`
+	FallbackGroup    string `json:"fallback_group,omitempty"`
+	SelectionStrategy string `json:"selection_strategy,omitempty"`
+	SelectionOrdinal int    `json:"selection_ordinal,omitempty"`
+	OverrideHit      bool   `json:"override_hit,omitempty"`
+	FallbackHit      bool   `json:"fallback_hit,omitempty"`
+	LastRunAt        string `json:"last_run_at,omitempty"`
 }
 
 type managedAgentModelProfile struct {

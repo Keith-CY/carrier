@@ -366,7 +366,10 @@ func TestHandleAgentLauncherReturnsLastModelRunMetadata(t *testing.T) {
 		`"requestedAlias":"flash"`,
 		`"requestedModel":"deepseek/deepseek-chat-v3-0324"`,
 		`"resolvedModel":"deepseek/deepseek-chat-v3-0324"`,
+		`"resolvedProfile":"openrouter-safe"`,
 		`"fallbackGroup":"openrouter:flash"`,
+		`"selectionStrategy":"explicit_model"`,
+		`"selectionOrdinal":1`,
 		`"overrideHit":true`,
 		`"fallbackHit":true`,
 		`"lastRunAt":"`,
@@ -584,5 +587,167 @@ func TestHandleAgentModelsUpdatesDefaultProfile(t *testing.T) {
 	}
 	if instances[idx].ModelSurface == nil || strings.TrimSpace(instances[idx].ModelSurface.DefaultProfile) != "openrouter-safe" {
 		t.Fatalf("expected updated default profile, got %+v", instances[idx].ModelSurface)
+	}
+}
+
+func TestHandleAgentModelsUpdatesProfileAndPersistsConfig(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	storePath := filepath.Join(tmp, ".carrier", "instances.json")
+	t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+
+	configDir := filepath.Join(tmp, ".picoclaw")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "agents": {
+    "defaults": {
+      "workspace": "/tmp/workspace",
+      "provider": "openrouter",
+      "model": "openrouter-fast"
+    }
+  },
+  "model_list": [
+    {
+      "model_name": "openrouter-fast",
+      "model_alias": "flash",
+      "model": "google/gemini-2.0-flash-001",
+      "protocol_family": "openai-compatible"
+    },
+    {
+      "model_name": "openrouter-safe",
+      "model_alias": "flash-safe",
+      "model": "deepseek/deepseek-chat-v3-0324",
+      "protocol_family": "openai-compatible"
+    }
+  ],
+  "provider_profiles": {
+    "openrouter-fast": {
+      "provider": "openrouter",
+      "provider_id": "openrouter",
+      "protocol_family": "openai-compatible",
+      "model_alias": "flash",
+      "model": "google/gemini-2.0-flash-001",
+      "credential_ref": "openrouter"
+    },
+    "openrouter-safe": {
+      "provider": "openrouter",
+      "provider_id": "openrouter",
+      "protocol_family": "openai-compatible",
+      "model_alias": "flash-safe",
+      "model": "deepseek/deepseek-chat-v3-0324",
+      "credential_ref": "openrouter"
+    }
+  },
+  "providers": {
+    "openrouter": {
+      "credential_ref": "openrouter"
+    }
+  }
+}
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := saveManagedInstances(storePath, []managedAgentInstance{{
+		ID:         "picoclaw-prod",
+		Type:       "picoclaw",
+		AgentID:    "picoclaw",
+		ConfigPath: configPath,
+		ModelSurface: &managedAgentModelSurface{
+			DefaultProfile: "openrouter-fast",
+			Profiles: []managedAgentModelProfile{
+				{
+					ProfileName:    "openrouter-fast",
+					ModelAlias:     "flash",
+					ModelID:        "google/gemini-2.0-flash-001",
+					ProviderID:     "openrouter",
+					ProviderKey:    "openrouter",
+					ProtocolFamily: "openai-compatible",
+					Primary:        true,
+				},
+				{
+					ProfileName:      "openrouter-safe",
+					ModelAlias:       "flash-safe",
+					ModelID:          "deepseek/deepseek-chat-v3-0324",
+					ProviderID:       "openrouter",
+					ProviderKey:      "openrouter",
+					ProtocolFamily:   "openai-compatible",
+					TimeoutMs:        45000,
+					RetryBudget:      2,
+					FallbackStrategy: "ordered",
+				},
+			},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}}); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/models/profile", strings.NewReader(`{
+		"profileName":"openrouter-safe",
+		"modelAlias":"flash-safe-v2",
+		"modelId":"anthropic/claude-sonnet-4.6",
+		"providerId":"anthropic",
+		"baseUrl":"https://api.anthropic.com/v1",
+		"authMethod":"api_key",
+		"timeoutMs":60000,
+		"retryBudget":4,
+		"fallbackStrategy":"round_robin"
+	}`))
+	handleWebUIAgent(rec, req, "req-models-profile", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, needle := range []string{
+		`"profileName":"openrouter-safe"`,
+		`"modelAlias":"flash-safe-v2"`,
+		`"modelId":"anthropic/claude-sonnet-4.6"`,
+		`"providerId":"anthropic"`,
+		`"timeoutMs":60000`,
+		`"retryBudget":4`,
+		`"fallbackStrategy":"round_robin"`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("expected response to contain %s, got %s", needle, body)
+		}
+	}
+
+	instances, _, err := loadManagedInstances()
+	if err != nil {
+		t.Fatalf("loadManagedInstances: %v", err)
+	}
+	idx := findManagedInstanceIndexByAgentID(instances, "picoclaw")
+	if idx < 0 {
+		t.Fatal("expected updated managed instance")
+	}
+	gotProfile := instances[idx].ModelSurface.Profiles[1]
+	if gotProfile.ModelAlias != "flash-safe-v2" || gotProfile.ModelID != "anthropic/claude-sonnet-4.6" || gotProfile.ProviderID != "anthropic" || gotProfile.TimeoutMs != 60000 || gotProfile.RetryBudget != 4 || gotProfile.FallbackStrategy != "round_robin" {
+		t.Fatalf("unexpected updated profile: %+v", gotProfile)
+	}
+
+	updatedRaw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read updated config: %v", err)
+	}
+	updatedText := string(updatedRaw)
+	for _, needle := range []string{
+		`"model_alias": "flash-safe-v2"`,
+		`"model": "anthropic/claude-sonnet-4.6"`,
+		`"provider_id": "anthropic"`,
+		`"base_url": "https://api.anthropic.com/v1"`,
+		`"auth_method": "api_key"`,
+		`"credential_ref": "openrouter"`,
+	} {
+		if !strings.Contains(updatedText, needle) {
+			t.Fatalf("expected config to contain %s, got %s", needle, updatedText)
+		}
 	}
 }

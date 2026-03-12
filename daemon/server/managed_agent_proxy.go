@@ -31,13 +31,16 @@ var (
 )
 
 type managedAgentModelRuntimeRecord struct {
-	RequestedAlias string `json:"requested_alias,omitempty"`
-	RequestedModel string `json:"requested_model,omitempty"`
-	ResolvedModel  string `json:"resolved_model,omitempty"`
-	FallbackGroup  string `json:"fallback_group,omitempty"`
-	OverrideHit    bool   `json:"override_hit,omitempty"`
-	FallbackHit    bool   `json:"fallback_hit,omitempty"`
-	LastRunAt      string `json:"last_run_at,omitempty"`
+	RequestedAlias   string `json:"requested_alias,omitempty"`
+	RequestedModel   string `json:"requested_model,omitempty"`
+	ResolvedModel    string `json:"resolved_model,omitempty"`
+	ResolvedProfile  string `json:"resolved_profile,omitempty"`
+	FallbackGroup    string `json:"fallback_group,omitempty"`
+	SelectionStrategy string `json:"selection_strategy,omitempty"`
+	SelectionOrdinal int    `json:"selection_ordinal,omitempty"`
+	OverrideHit      bool   `json:"override_hit,omitempty"`
+	FallbackHit      bool   `json:"fallback_hit,omitempty"`
+	LastRunAt        string `json:"last_run_at,omitempty"`
 }
 
 type managedAgentInstanceRecord struct {
@@ -76,9 +79,14 @@ type managedZeroClawModelSelection struct {
 	RequestedAlias string
 	RequestedModel string
 	ResolvedModel  string
+	ResolvedProfile string
 	FallbackGroup  string
+	SelectionStrategy string
+	SelectionOrdinal int
 	OverrideHit    bool
 	FallbackHit    bool
+	cursorGroup    string
+	nextCursor     int
 }
 
 func maybeProxyManagedAgentChat(ctx context.Context, svc *lifecycle.Service, agentID string, provider string, modelAlias string, model string, message string) (string, bool, error) {
@@ -123,11 +131,11 @@ func maybeProxyManagedZeroClawAgentCLI(ctx context.Context, state lifecycle.Agen
 	if instanceName == "" {
 		return "", false, nil
 	}
-	selection, err := resolveManagedZeroClawModelSelection(cfg, provider, modelAlias, model)
+	selection, err := resolveManagedZeroClawModelSelection(agentIDFromStateOrDefault(state, "zeroclaw"), cfg, provider, modelAlias, model)
 	if err != nil {
 		return "", true, err
 	}
-	overrideConfig, err := buildManagedZeroClawModelOverride(cfg, provider, modelAlias, model)
+	overrideConfig, err := buildManagedZeroClawModelOverride(cfg, selection.ResolvedModel)
 	if err != nil {
 		return "", true, err
 	}
@@ -305,13 +313,24 @@ func persistManagedAgentModelRuntime(agentID string, selection managedZeroClawMo
 			continue
 		}
 		entry["model_runtime"] = map[string]any{
-			"requested_alias": strings.TrimSpace(selection.RequestedAlias),
-			"requested_model": strings.TrimSpace(selection.RequestedModel),
-			"resolved_model":  strings.TrimSpace(selection.ResolvedModel),
-			"fallback_group":  strings.TrimSpace(selection.FallbackGroup),
-			"override_hit":    selection.OverrideHit,
-			"fallback_hit":    selection.FallbackHit,
-			"last_run_at":     now,
+			"requested_alias":    strings.TrimSpace(selection.RequestedAlias),
+			"requested_model":    strings.TrimSpace(selection.RequestedModel),
+			"resolved_model":     strings.TrimSpace(selection.ResolvedModel),
+			"resolved_profile":   strings.TrimSpace(selection.ResolvedProfile),
+			"fallback_group":     strings.TrimSpace(selection.FallbackGroup),
+			"selection_strategy": strings.TrimSpace(selection.SelectionStrategy),
+			"selection_ordinal":  selection.SelectionOrdinal,
+			"override_hit":       selection.OverrideHit,
+			"fallback_hit":       selection.FallbackHit,
+			"last_run_at":        now,
+		}
+		if strings.TrimSpace(selection.cursorGroup) != "" {
+			cursors, _ := entry["model_selection_cursors"].(map[string]any)
+			if cursors == nil {
+				cursors = map[string]any{}
+			}
+			cursors[strings.TrimSpace(selection.cursorGroup)] = selection.nextCursor
+			entry["model_selection_cursors"] = cursors
 		}
 		entry["updated_at"] = now
 		instances[i] = entry
@@ -431,20 +450,16 @@ func parseZeroClawGatewayConfig(raw []byte) zeroclawGatewayConfig {
 	return parseZeroClawLocalConfig(raw).Gateway
 }
 
-func buildManagedZeroClawModelOverride(cfg zeroclawLocalConfig, provider, modelAlias, model string) (string, error) {
-	selectedModel, err := resolveManagedZeroClawSelectedModel(cfg, provider, modelAlias, model)
-	if err != nil {
-		return "", err
-	}
+func buildManagedZeroClawModelOverride(cfg zeroclawLocalConfig, selectedModel string) (string, error) {
 	if strings.TrimSpace(selectedModel) == "" {
 		return "", nil
 	}
-	rewritten := rewriteZeroClawDefaultModel(cfg.Raw, selectedModel)
+	rewritten := rewriteZeroClawDefaultModel(cfg.Raw, strings.TrimSpace(selectedModel))
 	return base64.StdEncoding.EncodeToString(rewritten), nil
 }
 
-func resolveManagedZeroClawModelSelection(cfg zeroclawLocalConfig, provider, modelAlias, model string) (managedZeroClawModelSelection, error) {
-	selectedModel, err := resolveManagedZeroClawSelectedModel(cfg, provider, modelAlias, model)
+func resolveManagedZeroClawModelSelection(agentID string, cfg zeroclawLocalConfig, provider, modelAlias, model string) (managedZeroClawModelSelection, error) {
+	selectedModel, err := resolveManagedZeroClawSelectedModel(agentID, cfg, provider, modelAlias, model)
 	if err != nil {
 		return managedZeroClawModelSelection{}, err
 	}
@@ -456,14 +471,31 @@ func resolveManagedZeroClawModelSelection(cfg zeroclawLocalConfig, provider, mod
 	if selection.RequestedAlias != "" || selection.RequestedModel != "" {
 		selection.OverrideHit = true
 	}
-	if profile, primary, ok := findManagedZeroClawProfile(cfg, provider, selection.RequestedAlias, selection.ResolvedModel); ok {
+	matchModel := ""
+	if selection.RequestedModel != "" {
+		matchModel = selection.ResolvedModel
+	}
+	if profile, primary, ordinal, strategy, ok := findManagedZeroClawProfile(agentID, cfg, provider, selection.RequestedAlias, matchModel); ok {
+		selection.ResolvedProfile = strings.TrimSpace(profile.SectionName)
 		selection.FallbackGroup = managedZeroClawFallbackGroup(profile)
+		if selection.RequestedModel != "" {
+			selection.SelectionStrategy = "explicit_model"
+		} else {
+			selection.SelectionStrategy = strings.TrimSpace(strategy)
+		}
+		selection.SelectionOrdinal = managedZeroClawProfileOrdinal(cfg, profile)
 		selection.FallbackHit = !primary
+		if selection.SelectionStrategy == "round_robin" && selection.FallbackGroup != "" {
+			selection.cursorGroup = selection.FallbackGroup
+			selection.nextCursor = (ordinal + 1) % max(1, countManagedZeroClawProfilesInGroup(cfg, selection.FallbackGroup))
+		}
+	} else if selection.RequestedModel != "" {
+		selection.SelectionStrategy = "explicit_model"
 	}
 	return selection, nil
 }
 
-func findManagedZeroClawProfile(cfg zeroclawLocalConfig, provider, alias, model string) (zeroclawProviderProfile, bool, bool) {
+func findManagedZeroClawProfile(agentID string, cfg zeroclawLocalConfig, provider, alias, model string) (zeroclawProviderProfile, bool, int, string, bool) {
 	matchProvider := strings.ToLower(strings.TrimSpace(provider))
 	if matchProvider == "" {
 		matchProvider = strings.ToLower(strings.TrimSpace(cfg.DefaultProvider))
@@ -478,6 +510,7 @@ func findManagedZeroClawProfile(cfg zeroclawLocalConfig, provider, alias, model 
 			groupPrimaryModel[group] = strings.TrimSpace(profile.Model)
 		}
 	}
+	withProvider := make([]zeroclawProviderProfile, 0, len(cfg.Profiles))
 	for _, profile := range cfg.Profiles {
 		if model != "" && !strings.EqualFold(strings.TrimSpace(profile.Model), strings.TrimSpace(model)) {
 			continue
@@ -489,9 +522,14 @@ func findManagedZeroClawProfile(cfg zeroclawLocalConfig, provider, alias, model 
 		if matchProvider != "" && profileProvider != "" && profileProvider != matchProvider {
 			continue
 		}
-		group := managedZeroClawFallbackGroup(profile)
-		return profile, strings.EqualFold(strings.TrimSpace(profile.Model), strings.TrimSpace(groupPrimaryModel[group])), true
+		withProvider = append(withProvider, profile)
 	}
+	if len(withProvider) > 0 {
+		profile, ordinal, strategy := selectManagedZeroClawProfile(agentID, cfg, withProvider)
+		group := managedZeroClawFallbackGroup(profile)
+		return profile, strings.EqualFold(strings.TrimSpace(profile.Model), strings.TrimSpace(groupPrimaryModel[group])), ordinal, strategy, true
+	}
+	withoutProvider := make([]zeroclawProviderProfile, 0, len(cfg.Profiles))
 	for _, profile := range cfg.Profiles {
 		if model != "" && !strings.EqualFold(strings.TrimSpace(profile.Model), strings.TrimSpace(model)) {
 			continue
@@ -499,10 +537,14 @@ func findManagedZeroClawProfile(cfg zeroclawLocalConfig, provider, alias, model 
 		if alias != "" && !strings.EqualFold(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(alias)) {
 			continue
 		}
-		group := managedZeroClawFallbackGroup(profile)
-		return profile, strings.EqualFold(strings.TrimSpace(profile.Model), strings.TrimSpace(groupPrimaryModel[group])), true
+		withoutProvider = append(withoutProvider, profile)
 	}
-	return zeroclawProviderProfile{}, false, false
+	if len(withoutProvider) > 0 {
+		profile, ordinal, strategy := selectManagedZeroClawProfile(agentID, cfg, withoutProvider)
+		group := managedZeroClawFallbackGroup(profile)
+		return profile, strings.EqualFold(strings.TrimSpace(profile.Model), strings.TrimSpace(groupPrimaryModel[group])), ordinal, strategy, true
+	}
+	return zeroclawProviderProfile{}, false, 0, "", false
 }
 
 func managedZeroClawFallbackGroup(profile zeroclawProviderProfile) string {
@@ -526,7 +568,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func resolveManagedZeroClawSelectedModel(cfg zeroclawLocalConfig, provider, modelAlias, model string) (string, error) {
+func resolveManagedZeroClawSelectedModel(agentID string, cfg zeroclawLocalConfig, provider, modelAlias, model string) (string, error) {
 	if trimmedModel := strings.TrimSpace(model); trimmedModel != "" {
 		return trimmedModel, nil
 	}
@@ -536,33 +578,102 @@ func resolveManagedZeroClawSelectedModel(cfg zeroclawLocalConfig, provider, mode
 	}
 	requestedProvider := strings.ToLower(strings.TrimSpace(provider))
 	defaultProvider := strings.ToLower(strings.TrimSpace(cfg.DefaultProvider))
-	for _, profile := range cfg.Profiles {
-		if !strings.EqualFold(strings.TrimSpace(profile.ModelAlias), alias) {
-			continue
-		}
-		candidateProviders := []string{
-			strings.ToLower(strings.TrimSpace(profile.Provider)),
-			strings.ToLower(strings.TrimSpace(profile.ProviderID)),
-		}
-		if requestedProvider != "" {
-			if requestedProvider != candidateProviders[0] && requestedProvider != candidateProviders[1] {
-				continue
-			}
-		} else if defaultProvider != "" {
-			if defaultProvider != candidateProviders[0] && defaultProvider != candidateProviders[1] {
-				continue
-			}
-		}
-		if strings.TrimSpace(profile.Model) != "" {
-			return strings.TrimSpace(profile.Model), nil
-		}
+	profile, _, _, _, ok := findManagedZeroClawProfile(agentID, cfg, provider, alias, "")
+	if ok && strings.TrimSpace(profile.Model) != "" {
+		return strings.TrimSpace(profile.Model), nil
 	}
-	for _, profile := range cfg.Profiles {
-		if strings.EqualFold(strings.TrimSpace(profile.ModelAlias), alias) && strings.TrimSpace(profile.Model) != "" {
-			return strings.TrimSpace(profile.Model), nil
-		}
+	if requestedProvider != "" || defaultProvider != "" {
+		return "", fmt.Errorf("zeroclaw config does not define model alias %q", alias)
 	}
 	return "", fmt.Errorf("zeroclaw config does not define model alias %q", alias)
+}
+
+func selectManagedZeroClawProfile(agentID string, cfg zeroclawLocalConfig, candidates []zeroclawProviderProfile) (zeroclawProviderProfile, int, string) {
+	if len(candidates) == 0 {
+		return zeroclawProviderProfile{}, 0, ""
+	}
+	group := managedZeroClawFallbackGroup(candidates[0])
+	if len(candidates) == 1 || strings.TrimSpace(group) == "" {
+		return candidates[0], 0, "alias_exact"
+	}
+	cursor := readManagedAgentModelSelectionCursor(agentID, group) % len(candidates)
+	return candidates[cursor], cursor, "round_robin"
+}
+
+func readManagedAgentModelSelectionCursor(agentID, group string) int {
+	agentID = strings.TrimSpace(agentID)
+	group = strings.TrimSpace(group)
+	if agentID == "" || group == "" {
+		return 0
+	}
+	storePath, err := managedInstanceStorePath()
+	if err != nil {
+		return 0
+	}
+	raw, err := os.ReadFile(storePath)
+	if err != nil {
+		return 0
+	}
+	var store map[string]any
+	if err := json.Unmarshal(raw, &store); err != nil {
+		return 0
+	}
+	instances, _ := store["instances"].([]any)
+	for _, item := range instances {
+		entry, _ := item.(map[string]any)
+		if !strings.EqualFold(strings.TrimSpace(anyString(entry["agent_id"])), agentID) {
+			continue
+		}
+		cursors, _ := entry["model_selection_cursors"].(map[string]any)
+		if cursors == nil {
+			return 0
+		}
+		value, ok := cursors[group]
+		if !ok {
+			return 0
+		}
+		switch typed := value.(type) {
+		case float64:
+			return int(typed)
+		case int:
+			return typed
+		}
+		return 0
+	}
+	return 0
+}
+
+func countManagedZeroClawProfilesInGroup(cfg zeroclawLocalConfig, group string) int {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return 0
+	}
+	count := 0
+	for _, profile := range cfg.Profiles {
+		if strings.EqualFold(managedZeroClawFallbackGroup(profile), group) {
+			count++
+		}
+	}
+	return count
+}
+
+func managedZeroClawProfileOrdinal(cfg zeroclawLocalConfig, target zeroclawProviderProfile) int {
+	group := managedZeroClawFallbackGroup(target)
+	if group == "" {
+		return 0
+	}
+	ordinal := 0
+	for _, profile := range cfg.Profiles {
+		if !strings.EqualFold(managedZeroClawFallbackGroup(profile), group) {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(profile.SectionName), strings.TrimSpace(target.SectionName)) &&
+			strings.EqualFold(strings.TrimSpace(profile.Model), strings.TrimSpace(target.Model)) {
+			return ordinal
+		}
+		ordinal++
+	}
+	return 0
 }
 
 func rewriteZeroClawDefaultModel(raw []byte, model string) []byte {

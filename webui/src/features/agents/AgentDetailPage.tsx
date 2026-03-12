@@ -62,6 +62,35 @@ type AgentMCPServerDetail = {
   }>;
 };
 
+type AgentModelSurfaceProfile = {
+  profileName?: string;
+  modelAlias?: string;
+  modelId?: string;
+  providerId?: string;
+  providerKey?: string;
+  protocolFamily?: string;
+  baseUrl?: string;
+  authMethod?: string;
+  timeoutMs?: number;
+  retryBudget?: number;
+  fallbackStrategy?: string;
+  fallbackGroup?: string;
+  aliasGroupSize?: number;
+  primary?: boolean;
+};
+
+type AgentModelProfileDraft = {
+  profileName: string;
+  modelAlias: string;
+  modelId: string;
+  providerId: string;
+  baseUrl: string;
+  authMethod: string;
+  timeoutMs: string;
+  retryBudget: string;
+  fallbackStrategy: string;
+};
+
 type AgentLauncherSummary = {
   agentId?: string;
   status?: AgentStatus;
@@ -84,25 +113,16 @@ type AgentLauncherSummary = {
   };
   modelSurface?: {
     defaultProfile?: string;
-    profiles?: Array<{
-      profileName?: string;
-      modelAlias?: string;
-      modelId?: string;
-      providerId?: string;
-      providerKey?: string;
-      protocolFamily?: string;
-      baseUrl?: string;
-      authMethod?: string;
-      fallbackGroup?: string;
-      aliasGroupSize?: number;
-      primary?: boolean;
-    }>;
+    profiles?: AgentModelSurfaceProfile[];
   };
   lastModelRun?: {
     requestedAlias?: string;
     requestedModel?: string;
     resolvedModel?: string;
+    resolvedProfile?: string;
     fallbackGroup?: string;
+    selectionStrategy?: string;
+    selectionOrdinal?: number;
     overrideHit?: boolean;
     fallbackHit?: boolean;
     lastRunAt?: string;
@@ -143,8 +163,25 @@ type AgentModelsSummary = {
   instanceId?: string;
   configPath?: string;
   synced?: boolean;
-  modelSurface?: AgentLauncherSummary['modelSurface'];
+  modelSurface?: {
+    defaultProfile?: string;
+    profiles?: AgentModelSurfaceProfile[];
+  };
 };
+
+function buildProfileDraft(profile: AgentModelSurfaceProfile): AgentModelProfileDraft {
+  return {
+    profileName: String(profile.profileName || '').trim(),
+    modelAlias: String(profile.modelAlias || '').trim(),
+    modelId: String(profile.modelId || '').trim(),
+    providerId: String(profile.providerId || '').trim(),
+    baseUrl: String(profile.baseUrl || '').trim(),
+    authMethod: String(profile.authMethod || '').trim(),
+    timeoutMs: String(profile.timeoutMs || '').trim(),
+    retryBudget: String(profile.retryBudget || '').trim(),
+    fallbackStrategy: String(profile.fallbackStrategy || '').trim(),
+  };
+}
 
 function buildLauncherRemediationMessages(launcher: AgentLauncherSummary | undefined): string[] {
   if (!launcher) return [];
@@ -177,6 +214,8 @@ export function AgentDetailPage() {
   const [skillSearchResults, setSkillSearchResults] = useState<AgentSkillCatalogEntry[]>([]);
   const [skillVersionDrafts, setSkillVersionDrafts] = useState<Record<string, string>>({});
   const [selectedMCPServerName, setSelectedMCPServerName] = useState('');
+  const [editingProfileName, setEditingProfileName] = useState('');
+  const [profileDraft, setProfileDraft] = useState<AgentModelProfileDraft | null>(null);
 
   const statusQuery = useQuery({
     queryKey: ['agent-detail', agentId],
@@ -362,6 +401,32 @@ export function AgentDetailPage() {
     onSuccess: async (updated) => {
       const updatedProfile = String(updated.modelSurface?.defaultProfile || '').trim();
       setLastActionMessage(updatedProfile ? `Default model profile set to ${updatedProfile}.` : 'Default model profile updated.');
+      await modelsQuery.refetch();
+      await launcherQuery.refetch();
+    },
+    onError: (error) => {
+      setLastActionMessage((error as Error).message);
+    },
+  });
+
+  const modelProfileMutation = useMutation({
+    mutationFn: async (draft: AgentModelProfileDraft) =>
+      apiPost<AgentModelsSummary>(`/api/v1/agents/${encodeURIComponent(agentId)}/models/profile`, {
+        profileName: draft.profileName,
+        modelAlias: draft.modelAlias,
+        modelId: draft.modelId,
+        providerId: draft.providerId,
+        baseUrl: draft.baseUrl,
+        authMethod: draft.authMethod,
+        timeoutMs: draft.timeoutMs ? Number(draft.timeoutMs) : 0,
+        retryBudget: draft.retryBudget ? Number(draft.retryBudget) : 0,
+        fallbackStrategy: draft.fallbackStrategy,
+      }),
+    onSuccess: async (updated) => {
+      const updatedProfile = String(profileDraft?.profileName || updated.modelSurface?.defaultProfile || '').trim();
+      setLastActionMessage(updatedProfile ? `Model profile ${updatedProfile} updated.` : 'Model profile updated.');
+      setEditingProfileName('');
+      setProfileDraft(null);
       await modelsQuery.refetch();
       await launcherQuery.refetch();
     },
@@ -570,6 +635,7 @@ export function AgentDetailPage() {
                     const label = String(profile.modelAlias || profile.profileName || `profile-${index + 1}`).trim();
                     const profileName = String(profile.profileName || '').trim();
                     const isDefault = profileName !== '' && profileName === currentDefaultProfile;
+                    const isEditing = profileName !== '' && profileName === editingProfileName && profileDraft?.profileName === profileName;
                     return (
                       <li key={String(profile.profileName || label || index)}>
                         <span>{label}</span>
@@ -591,6 +657,116 @@ export function AgentDetailPage() {
                             >
                               {isDefault ? `Default ${profileName}` : `Set default ${profileName}`}
                             </button>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              disabled={modelProfileMutation.isPending}
+                              onClick={() => {
+                                setEditingProfileName(profileName);
+                                setProfileDraft(buildProfileDraft(profile));
+                              }}
+                            >
+                              {`Edit profile ${profileName}`}
+                            </button>
+                          </div>
+                        ) : null}
+                        {isEditing && profileDraft ? (
+                          <div className="kv-grid">
+                            <label>
+                              <strong>{`Model alias for ${profileName}`}</strong>
+                              <input
+                                aria-label={`Model alias for ${profileName}`}
+                                type="text"
+                                value={profileDraft.modelAlias}
+                                onChange={(event) => setProfileDraft({ ...profileDraft, modelAlias: event.target.value })}
+                              />
+                            </label>
+                            <label>
+                              <strong>{`Model ID for ${profileName}`}</strong>
+                              <input
+                                aria-label={`Model ID for ${profileName}`}
+                                type="text"
+                                value={profileDraft.modelId}
+                                onChange={(event) => setProfileDraft({ ...profileDraft, modelId: event.target.value })}
+                              />
+                            </label>
+                            <label>
+                              <strong>{`Provider for ${profileName}`}</strong>
+                              <input
+                                aria-label={`Provider for ${profileName}`}
+                                type="text"
+                                value={profileDraft.providerId}
+                                onChange={(event) => setProfileDraft({ ...profileDraft, providerId: event.target.value })}
+                              />
+                            </label>
+                            <label>
+                              <strong>{`Base URL for ${profileName}`}</strong>
+                              <input
+                                aria-label={`Base URL for ${profileName}`}
+                                type="text"
+                                value={profileDraft.baseUrl}
+                                onChange={(event) => setProfileDraft({ ...profileDraft, baseUrl: event.target.value })}
+                              />
+                            </label>
+                            <label>
+                              <strong>{`Auth method for ${profileName}`}</strong>
+                              <input
+                                aria-label={`Auth method for ${profileName}`}
+                                type="text"
+                                value={profileDraft.authMethod}
+                                onChange={(event) => setProfileDraft({ ...profileDraft, authMethod: event.target.value })}
+                              />
+                            </label>
+                            <label>
+                              <strong>{`Timeout ms for ${profileName}`}</strong>
+                              <input
+                                aria-label={`Timeout ms for ${profileName}`}
+                                type="number"
+                                value={profileDraft.timeoutMs}
+                                onChange={(event) => setProfileDraft({ ...profileDraft, timeoutMs: event.target.value })}
+                              />
+                            </label>
+                            <label>
+                              <strong>{`Retry budget for ${profileName}`}</strong>
+                              <input
+                                aria-label={`Retry budget for ${profileName}`}
+                                type="number"
+                                value={profileDraft.retryBudget}
+                                onChange={(event) => setProfileDraft({ ...profileDraft, retryBudget: event.target.value })}
+                              />
+                            </label>
+                            <label>
+                              <strong>{`Fallback strategy for ${profileName}`}</strong>
+                              <input
+                                aria-label={`Fallback strategy for ${profileName}`}
+                                type="text"
+                                value={profileDraft.fallbackStrategy}
+                                onChange={(event) => setProfileDraft({ ...profileDraft, fallbackStrategy: event.target.value })}
+                              />
+                            </label>
+                          </div>
+                        ) : null}
+                        {isEditing && profileDraft ? (
+                          <div className="btn-row">
+                            <button
+                              type="button"
+                              className="btn-primary"
+                              disabled={modelProfileMutation.isPending}
+                              onClick={() => modelProfileMutation.mutate(profileDraft)}
+                            >
+                              {`Save profile ${profileName}`}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              disabled={modelProfileMutation.isPending}
+                              onClick={() => {
+                                setEditingProfileName('');
+                                setProfileDraft(null);
+                              }}
+                            >
+                              {`Cancel profile ${profileName}`}
+                            </button>
                           </div>
                         ) : null}
                       </li>
@@ -609,7 +785,11 @@ export function AgentDetailPage() {
                   {content.launcher.lastModelRun.requestedAlias ? `requested=${content.launcher.lastModelRun.requestedAlias}` : 'requested=default'}
                   {content.launcher.lastModelRun.requestedModel ? ` · explicit=${content.launcher.lastModelRun.requestedModel}` : ''}
                   {content.launcher.lastModelRun.resolvedModel ? ` · resolved=${content.launcher.lastModelRun.resolvedModel}` : ''}
+                  {content.launcher.lastModelRun.resolvedProfile ? ` · profile=${content.launcher.lastModelRun.resolvedProfile}` : ''}
                   {content.launcher.lastModelRun.fallbackGroup ? ` · group=${content.launcher.lastModelRun.fallbackGroup}` : ''}
+                  {content.launcher.lastModelRun.selectionStrategy
+                    ? ` · ${content.launcher.lastModelRun.selectionStrategy}${typeof content.launcher.lastModelRun.selectionOrdinal === 'number' ? `#${content.launcher.lastModelRun.selectionOrdinal}` : ''}`
+                    : ''}
                   {content.launcher.lastModelRun.overrideHit ? ' · override hit' : ''}
                   {content.launcher.lastModelRun.fallbackHit ? ' · fallback hit' : ''}
                   {content.launcher.lastModelRun.lastRunAt ? ` · last=${content.launcher.lastModelRun.lastRunAt}` : ''}

@@ -44,13 +44,16 @@ type agentLauncherModelSurfaceProfile struct {
 }
 
 type agentLauncherModelRuntime struct {
-	RequestedAlias string `json:"requestedAlias,omitempty"`
-	RequestedModel string `json:"requestedModel,omitempty"`
-	ResolvedModel  string `json:"resolvedModel,omitempty"`
-	FallbackGroup  string `json:"fallbackGroup,omitempty"`
-	OverrideHit    bool   `json:"overrideHit,omitempty"`
-	FallbackHit    bool   `json:"fallbackHit,omitempty"`
-	LastRunAt      string `json:"lastRunAt,omitempty"`
+	RequestedAlias   string `json:"requestedAlias,omitempty"`
+	RequestedModel   string `json:"requestedModel,omitempty"`
+	ResolvedModel    string `json:"resolvedModel,omitempty"`
+	ResolvedProfile  string `json:"resolvedProfile,omitempty"`
+	FallbackGroup    string `json:"fallbackGroup,omitempty"`
+	SelectionStrategy string `json:"selectionStrategy,omitempty"`
+	SelectionOrdinal int    `json:"selectionOrdinal,omitempty"`
+	OverrideHit      bool   `json:"overrideHit,omitempty"`
+	FallbackHit      bool   `json:"fallbackHit,omitempty"`
+	LastRunAt        string `json:"lastRunAt,omitempty"`
 }
 
 type agentLauncherCronSummary struct {
@@ -165,13 +168,16 @@ func buildAgentLauncherModelRuntime(runtime *managedAgentModelRuntime) *agentLau
 		return nil
 	}
 	return &agentLauncherModelRuntime{
-		RequestedAlias: strings.TrimSpace(runtime.RequestedAlias),
-		RequestedModel: strings.TrimSpace(runtime.RequestedModel),
-		ResolvedModel:  strings.TrimSpace(runtime.ResolvedModel),
-		FallbackGroup:  strings.TrimSpace(runtime.FallbackGroup),
-		OverrideHit:    runtime.OverrideHit,
-		FallbackHit:    runtime.FallbackHit,
-		LastRunAt:      strings.TrimSpace(runtime.LastRunAt),
+		RequestedAlias:   strings.TrimSpace(runtime.RequestedAlias),
+		RequestedModel:   strings.TrimSpace(runtime.RequestedModel),
+		ResolvedModel:    strings.TrimSpace(runtime.ResolvedModel),
+		ResolvedProfile:  strings.TrimSpace(runtime.ResolvedProfile),
+		FallbackGroup:    strings.TrimSpace(runtime.FallbackGroup),
+		SelectionStrategy: strings.TrimSpace(runtime.SelectionStrategy),
+		SelectionOrdinal: runtime.SelectionOrdinal,
+		OverrideHit:      runtime.OverrideHit,
+		FallbackHit:      runtime.FallbackHit,
+		LastRunAt:        strings.TrimSpace(runtime.LastRunAt),
 	}
 }
 

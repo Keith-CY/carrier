@@ -42,10 +42,25 @@ type orchestratorProviderMetricsSnapshot struct {
 	DriftStates           map[string]int                               `json:"driftStates,omitempty"`
 	ManagedOverrideHits   int                                          `json:"managedOverrideHits,omitempty"`
 	ManagedFallbackHits   int                                          `json:"managedFallbackHits,omitempty"`
+	ManagedRuns           []orchestratorManagedModelRunSnapshot        `json:"managedRuns,omitempty"`
 	Attribution           orchestratorProviderAttributionSnapshot      `json:"attribution,omitempty"`
 	Aggregates            []orchestratorProviderAggregateSnapshot      `json:"aggregates,omitempty"`
 	Models                []orchestratorProviderModelAggregateSnapshot `json:"models,omitempty"`
 	TotalEstimatedCostUSD float64                                      `json:"totalEstimatedCostUsd,omitempty"`
+}
+
+type orchestratorManagedModelRunSnapshot struct {
+	AgentID            string `json:"agentId,omitempty"`
+	RequestedAlias     string `json:"requestedAlias,omitempty"`
+	RequestedModel     string `json:"requestedModel,omitempty"`
+	ResolvedModel      string `json:"resolvedModel,omitempty"`
+	ResolvedProfile    string `json:"resolvedProfile,omitempty"`
+	FallbackGroup      string `json:"fallbackGroup,omitempty"`
+	SelectionStrategy  string `json:"selectionStrategy,omitempty"`
+	SelectionOrdinal   int    `json:"selectionOrdinal,omitempty"`
+	OverrideHit        bool   `json:"overrideHit,omitempty"`
+	FallbackHit        bool   `json:"fallbackHit,omitempty"`
+	LastRunAt          string `json:"lastRunAt,omitempty"`
 }
 
 type orchestratorProviderAttributionSnapshot struct {
@@ -297,8 +312,30 @@ func buildOrchestratorMetricsSnapshot(executions []OrchestratorExecution, leases
 			if inst.ModelRuntime.FallbackHit {
 				providerMetrics.ManagedFallbackHits++
 			}
+			providerMetrics.ManagedRuns = append(providerMetrics.ManagedRuns, orchestratorManagedModelRunSnapshot{
+				AgentID:           strings.TrimSpace(inst.AgentID),
+				RequestedAlias:    strings.TrimSpace(inst.ModelRuntime.RequestedAlias),
+				RequestedModel:    strings.TrimSpace(inst.ModelRuntime.RequestedModel),
+				ResolvedModel:     strings.TrimSpace(inst.ModelRuntime.ResolvedModel),
+				ResolvedProfile:   strings.TrimSpace(inst.ModelRuntime.ResolvedProfile),
+				FallbackGroup:     strings.TrimSpace(inst.ModelRuntime.FallbackGroup),
+				SelectionStrategy: strings.TrimSpace(inst.ModelRuntime.SelectionStrategy),
+				SelectionOrdinal:  inst.ModelRuntime.SelectionOrdinal,
+				OverrideHit:       inst.ModelRuntime.OverrideHit,
+				FallbackHit:       inst.ModelRuntime.FallbackHit,
+				LastRunAt:         strings.TrimSpace(inst.ModelRuntime.LastRunAt),
+			})
 		}
 	}
+	sort.SliceStable(providerMetrics.ManagedRuns, func(i, j int) bool {
+		if providerMetrics.ManagedRuns[i].AgentID != providerMetrics.ManagedRuns[j].AgentID {
+			return providerMetrics.ManagedRuns[i].AgentID < providerMetrics.ManagedRuns[j].AgentID
+		}
+		if providerMetrics.ManagedRuns[i].ResolvedProfile != providerMetrics.ManagedRuns[j].ResolvedProfile {
+			return providerMetrics.ManagedRuns[i].ResolvedProfile < providerMetrics.ManagedRuns[j].ResolvedProfile
+		}
+		return providerMetrics.ManagedRuns[i].LastRunAt > providerMetrics.ManagedRuns[j].LastRunAt
+	})
 
 	if latencyCount > 0 {
 		executionMetrics.AvgLatencyMs = latencyTotal / latencyCount

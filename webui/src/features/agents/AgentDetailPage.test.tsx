@@ -29,6 +29,21 @@ describe('AgentDetailPage', () => {
   beforeEach(() => {
     let cronPaused = false;
     let defaultProfile = 'openrouter-fast';
+    let updatedProfile = {
+      profileName: 'openrouter-safe',
+      modelAlias: 'flash-safe',
+      modelId: 'deepseek/deepseek-chat-v3-0324',
+      providerId: 'openrouter',
+      protocolFamily: 'openai-compatible',
+      baseUrl: '',
+      authMethod: '',
+      timeoutMs: 0,
+      retryBudget: 0,
+      fallbackStrategy: '',
+      fallbackGroup: 'openrouter:flash',
+      aliasGroupSize: 2,
+      primary: false,
+    };
     localStorage.clear();
     localStorage.setItem('carrier_token', 'test-token');
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -68,14 +83,17 @@ describe('AgentDetailPage', () => {
           heartbeat: { state: 'fresh', ageSeconds: 12 },
           memory: { contractId: 'memory-alpha' },
           providerReadiness: { provider: 'openrouter', ready: true, authMode: 'api_key' },
-          lastModelRun: {
-            requestedAlias: 'flash-safe',
-            requestedModel: 'deepseek/deepseek-chat-v3-0324',
-            resolvedModel: 'deepseek/deepseek-chat-v3-0324',
-            fallbackGroup: 'openrouter:flash',
-            overrideHit: true,
-            fallbackHit: true,
-            lastRunAt: '2026-03-12T00:05:00Z',
+        lastModelRun: {
+          requestedAlias: 'flash-safe',
+          requestedModel: 'deepseek/deepseek-chat-v3-0324',
+          resolvedModel: 'deepseek/deepseek-chat-v3-0324',
+          resolvedProfile: 'openrouter-safe',
+          fallbackGroup: 'openrouter:flash',
+          selectionStrategy: 'explicit_model',
+          selectionOrdinal: 1,
+          overrideHit: true,
+          fallbackHit: true,
+          lastRunAt: '2026-03-12T00:05:00Z',
           },
           modelSurface: {
             defaultProfile,
@@ -107,12 +125,12 @@ describe('AgentDetailPage', () => {
             defaultProfile,
             profiles: defaultProfile === 'openrouter-safe'
               ? [
-                  { profileName: 'openrouter-safe', modelAlias: 'flash-safe', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
+                  { ...updatedProfile, primary: true },
                   { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: false },
                 ]
               : [
                   { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
-                  { profileName: 'openrouter-safe', modelAlias: 'flash-safe', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: false },
+                  updatedProfile,
                 ],
           },
         }), {
@@ -150,6 +168,39 @@ describe('AgentDetailPage', () => {
             profiles: [
               { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
               { profileName: 'openrouter-safe', modelAlias: 'flash-safe', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: false },
+            ],
+          },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/v1/agents/agent-alpha/models/profile')) {
+        const body = JSON.parse(String(init?.body || '{}'));
+        updatedProfile = {
+          profileName: 'openrouter-safe',
+          modelAlias: body.modelAlias,
+          modelId: body.modelId,
+          providerId: body.providerId,
+          protocolFamily: body.providerId === 'anthropic' ? 'anthropic' : 'openai-compatible',
+          baseUrl: body.baseUrl,
+          authMethod: body.authMethod,
+          timeoutMs: body.timeoutMs,
+          retryBudget: body.retryBudget,
+          fallbackStrategy: body.fallbackStrategy,
+          fallbackGroup: 'anthropic:flash-safe-v2',
+          aliasGroupSize: 1,
+          primary: false,
+        };
+        return new Response(JSON.stringify({
+          agentId: 'agent-alpha',
+          instanceId: 'agent-alpha-main',
+          configPath: '/tmp/agent-alpha/config.toml',
+          modelSurface: {
+            defaultProfile,
+            profiles: [
+              { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
+              updatedProfile,
             ],
           },
         }), {
@@ -520,5 +571,33 @@ describe('AgentDetailPage', () => {
       }),
     );
     expect(screen.getByText(/default=openrouter-safe/i)).toBeInTheDocument();
+  });
+
+  test('updates a managed profile and refetches launcher/models', async () => {
+    renderAgentDetailPage();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /edit profile openrouter-safe/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /edit profile openrouter-safe/i }));
+
+    fireEvent.change(screen.getByLabelText(/model alias for openrouter-safe/i), { target: { value: 'flash-safe-v2' } });
+    fireEvent.change(screen.getByLabelText(/model id for openrouter-safe/i), { target: { value: 'anthropic/claude-sonnet-4.6' } });
+    fireEvent.change(screen.getByLabelText(/provider for openrouter-safe/i), { target: { value: 'anthropic' } });
+    fireEvent.change(screen.getByLabelText(/base url for openrouter-safe/i), { target: { value: 'https://api.anthropic.com/v1' } });
+    fireEvent.change(screen.getByLabelText(/auth method for openrouter-safe/i), { target: { value: 'api_key' } });
+    fireEvent.change(screen.getByLabelText(/timeout ms for openrouter-safe/i), { target: { value: '60000' } });
+    fireEvent.change(screen.getByLabelText(/retry budget for openrouter-safe/i), { target: { value: '4' } });
+    fireEvent.change(screen.getByLabelText(/fallback strategy for openrouter-safe/i), { target: { value: 'round_robin' } });
+    fireEvent.click(screen.getByRole('button', { name: /save profile openrouter-safe/i }));
+
+    await waitFor(() => expect(screen.getByText(/Model profile openrouter-safe updated\./i)).toBeInTheDocument());
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/models/profile'),
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"modelAlias":"flash-safe-v2"'),
+      }),
+    );
+    expect(screen.getAllByText(/flash-safe-v2/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/anthropic\/claude-sonnet-4.6/i)).toBeInTheDocument();
   });
 });

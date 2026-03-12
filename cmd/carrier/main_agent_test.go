@@ -135,6 +135,36 @@ func TestParseAgentCommandArgs(t *testing.T) {
 	if modelsDefaultOpts.Action != "models-default" || modelsDefaultOpts.AgentID != "picoclaw" || modelsDefaultOpts.ProfileName != "openrouter-safe" || !modelsDefaultOpts.JSON {
 		t.Fatalf("unexpected models default opts: %+v", modelsDefaultOpts)
 	}
+
+	modelsUpdateProfileOpts, err := parseAgentCommandArgs([]string{
+		"models", "update-profile", "picoclaw", "openrouter-safe",
+		"--model-alias", "flash-safe-v2",
+		"--model", "anthropic/claude-sonnet-4.6",
+		"--provider", "anthropic",
+		"--base-url", "https://api.anthropic.com/v1",
+		"--auth-method", "api_key",
+		"--timeout-ms", "60000",
+		"--retry-budget", "4",
+		"--fallback-strategy", "round_robin",
+		"--json",
+	})
+	if err != nil {
+		t.Fatalf("parseAgentCommandArgs(models update-profile) error: %v", err)
+	}
+	if modelsUpdateProfileOpts.Action != "models-update-profile" ||
+		modelsUpdateProfileOpts.AgentID != "picoclaw" ||
+		modelsUpdateProfileOpts.ProfileName != "openrouter-safe" ||
+		modelsUpdateProfileOpts.ModelAlias != "flash-safe-v2" ||
+		modelsUpdateProfileOpts.Model != "anthropic/claude-sonnet-4.6" ||
+		modelsUpdateProfileOpts.Provider != "anthropic" ||
+		modelsUpdateProfileOpts.BaseURL != "https://api.anthropic.com/v1" ||
+		modelsUpdateProfileOpts.AuthMethod != "api_key" ||
+		modelsUpdateProfileOpts.TimeoutMs != 60000 ||
+		modelsUpdateProfileOpts.RetryBudget != 4 ||
+		modelsUpdateProfileOpts.FallbackStrategy != "round_robin" ||
+		!modelsUpdateProfileOpts.JSON {
+		t.Fatalf("unexpected models update-profile opts: %+v", modelsUpdateProfileOpts)
+	}
 }
 
 func TestRunAgentCommand(t *testing.T) {
@@ -242,6 +272,41 @@ func TestRunAgentCommand(t *testing.T) {
 				t.Fatalf("profileName=%v want openrouter-safe", body["profileName"])
 			}
 			_, _ = w.Write([]byte(`{"agentId":"picoclaw","instanceId":"picoclaw-main","configPath":"/tmp/picoclaw/config.json","modelSurface":{"defaultProfile":"openrouter-safe","profiles":[{"profileName":"openrouter-fast","modelAlias":"flash","modelId":"google/gemini-2.0-flash-001","providerId":"openrouter","protocolFamily":"openai-compatible","primary":true},{"profileName":"openrouter-safe","modelAlias":"flash-safe","modelId":"deepseek/deepseek-chat-v3-0324","providerId":"openrouter","protocolFamily":"openai-compatible","primary":false}]}}`))
+		case "/api/v1/agents/picoclaw/models/profile":
+			if r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["profileName"] != "openrouter-safe" {
+				t.Fatalf("profileName=%v want openrouter-safe", body["profileName"])
+			}
+			if body["modelAlias"] != "flash-safe-v2" {
+				t.Fatalf("modelAlias=%v want flash-safe-v2", body["modelAlias"])
+			}
+			if body["modelId"] != "anthropic/claude-sonnet-4.6" {
+				t.Fatalf("modelId=%v want anthropic/claude-sonnet-4.6", body["modelId"])
+			}
+			if body["providerId"] != "anthropic" {
+				t.Fatalf("providerId=%v want anthropic", body["providerId"])
+			}
+			if body["baseUrl"] != "https://api.anthropic.com/v1" {
+				t.Fatalf("baseUrl=%v want https://api.anthropic.com/v1", body["baseUrl"])
+			}
+			if body["authMethod"] != "api_key" {
+				t.Fatalf("authMethod=%v want api_key", body["authMethod"])
+			}
+			if body["timeoutMs"] != float64(60000) {
+				t.Fatalf("timeoutMs=%v want 60000", body["timeoutMs"])
+			}
+			if body["retryBudget"] != float64(4) {
+				t.Fatalf("retryBudget=%v want 4", body["retryBudget"])
+			}
+			if body["fallbackStrategy"] != "round_robin" {
+				t.Fatalf("fallbackStrategy=%v want round_robin", body["fallbackStrategy"])
+			}
+			_, _ = w.Write([]byte(`{"agentId":"picoclaw","instanceId":"picoclaw-main","configPath":"/tmp/picoclaw/config.json","modelSurface":{"defaultProfile":"openrouter-safe","profiles":[{"profileName":"openrouter-fast","modelAlias":"flash","modelId":"google/gemini-2.0-flash-001","providerId":"openrouter","protocolFamily":"openai-compatible","primary":true},{"profileName":"openrouter-safe","modelAlias":"flash-safe-v2","modelId":"anthropic/claude-sonnet-4.6","providerId":"anthropic","protocolFamily":"anthropic","baseUrl":"https://api.anthropic.com/v1","authMethod":"api_key","timeoutMs":60000,"retryBudget":4,"fallbackStrategy":"round_robin","primary":false}]}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -352,6 +417,26 @@ func TestRunAgentCommand(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "default=flash-safe -> deepseek/deepseek-chat-v3-0324") {
 		t.Fatalf("models default output=%s", out.String())
+	}
+
+	out.Reset()
+	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{
+		Action:           "models-update-profile",
+		AgentID:          "picoclaw",
+		ProfileName:      "openrouter-safe",
+		ModelAlias:       "flash-safe-v2",
+		Model:            "anthropic/claude-sonnet-4.6",
+		Provider:         "anthropic",
+		BaseURL:          "https://api.anthropic.com/v1",
+		AuthMethod:       "api_key",
+		TimeoutMs:        60000,
+		RetryBudget:      4,
+		FallbackStrategy: "round_robin",
+	}); err != nil {
+		t.Fatalf("runAgentCommand(models update-profile) error: %v", err)
+	}
+	if !strings.Contains(out.String(), "profile=flash-safe-v2 model=anthropic/claude-sonnet-4.6") || !strings.Contains(out.String(), "fallback=round_robin") {
+		t.Fatalf("models update-profile output=%s", out.String())
 	}
 }
 

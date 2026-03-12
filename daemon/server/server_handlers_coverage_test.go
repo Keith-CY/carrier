@@ -468,14 +468,18 @@ printf 'managed reply\n'
 	var store struct {
 		Instances []struct {
 			AgentID      string `json:"agent_id"`
+			ModelSelectionCursors map[string]int `json:"model_selection_cursors"`
 			ModelRuntime struct {
-				RequestedAlias string `json:"requested_alias"`
-				RequestedModel string `json:"requested_model"`
-				ResolvedModel  string `json:"resolved_model"`
-				FallbackGroup  string `json:"fallback_group"`
-				OverrideHit    bool   `json:"override_hit"`
-				FallbackHit    bool   `json:"fallback_hit"`
-				LastRunAt      string `json:"last_run_at"`
+				RequestedAlias   string `json:"requested_alias"`
+				RequestedModel   string `json:"requested_model"`
+				ResolvedModel    string `json:"resolved_model"`
+				ResolvedProfile  string `json:"resolved_profile"`
+				FallbackGroup    string `json:"fallback_group"`
+				SelectionStrategy string `json:"selection_strategy"`
+				SelectionOrdinal int    `json:"selection_ordinal"`
+				OverrideHit      bool   `json:"override_hit"`
+				FallbackHit      bool   `json:"fallback_hit"`
+				LastRunAt        string `json:"last_run_at"`
 			} `json:"model_runtime"`
 		} `json:"instances"`
 	}
@@ -489,12 +493,23 @@ printf 'managed reply\n'
 	if runtimeMeta.RequestedAlias != "flash" || runtimeMeta.RequestedModel != "deepseek/deepseek-chat-v3-0324" || runtimeMeta.ResolvedModel != "deepseek/deepseek-chat-v3-0324" {
 		t.Fatalf("unexpected model runtime metadata: %+v", runtimeMeta)
 	}
+	if runtimeMeta.ResolvedProfile != "openrouter-safe" || runtimeMeta.SelectionStrategy != "explicit_model" || runtimeMeta.SelectionOrdinal != 1 {
+		t.Fatalf("unexpected model runtime selection trace: %+v", runtimeMeta)
+	}
 	if runtimeMeta.FallbackGroup != "openrouter:flash" || !runtimeMeta.OverrideHit || !runtimeMeta.FallbackHit || strings.TrimSpace(runtimeMeta.LastRunAt) == "" {
 		t.Fatalf("unexpected model runtime flags: %+v", runtimeMeta)
+	}
+	if got := store.Instances[0].ModelSelectionCursors["openrouter:flash"]; got != 0 {
+		t.Fatalf("unexpected stored cursor after explicit model selection: %d", got)
 	}
 }
 
 func TestResolveManagedZeroClawSelectedModel_UsesAliasProfile(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "instances.json")
+	t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+	if err := os.WriteFile(storePath, []byte(`{"instances":[{"agent_id":"zeroclaw"}]}`), 0o600); err != nil {
+		t.Fatalf("write managed instance store: %v", err)
+	}
 	cfg := zeroclawLocalConfig{
 		DefaultProvider: "openrouter",
 		Profiles: []zeroclawProviderProfile{
@@ -515,12 +530,40 @@ func TestResolveManagedZeroClawSelectedModel_UsesAliasProfile(t *testing.T) {
 		},
 	}
 
-	got, err := resolveManagedZeroClawSelectedModel(cfg, "openrouter", "flash", "")
+	first, err := resolveManagedZeroClawModelSelection("zeroclaw", cfg, "openrouter", "flash", "")
 	if err != nil {
-		t.Fatalf("resolveManagedZeroClawSelectedModel returned error: %v", err)
+		t.Fatalf("resolveManagedZeroClawModelSelection first returned error: %v", err)
 	}
-	if got != "google/gemini-2.0-flash-001" {
-		t.Fatalf("selected model = %q, want %q", got, "google/gemini-2.0-flash-001")
+	if first.ResolvedModel != "google/gemini-2.0-flash-001" || first.ResolvedProfile != "openrouter-fast" {
+		t.Fatalf("first selection = %+v", first)
+	}
+	if first.SelectionStrategy != "round_robin" || first.SelectionOrdinal != 0 || first.FallbackHit {
+		t.Fatalf("unexpected first selection trace: %+v", first)
+	}
+	if err := persistManagedAgentModelRuntime("zeroclaw", first); err != nil {
+		t.Fatalf("persistManagedAgentModelRuntime first: %v", err)
+	}
+
+	second, err := resolveManagedZeroClawModelSelection("zeroclaw", cfg, "openrouter", "flash", "")
+	if err != nil {
+		t.Fatalf("resolveManagedZeroClawModelSelection second returned error: %v", err)
+	}
+	if second.ResolvedModel != "deepseek/deepseek-chat-v3-0324" || second.ResolvedProfile != "openrouter-safe" {
+		t.Fatalf("second selection = %+v", second)
+	}
+	if second.SelectionStrategy != "round_robin" || second.SelectionOrdinal != 1 || !second.FallbackHit {
+		t.Fatalf("unexpected second selection trace: %+v", second)
+	}
+	if err := persistManagedAgentModelRuntime("zeroclaw", second); err != nil {
+		t.Fatalf("persistManagedAgentModelRuntime second: %v", err)
+	}
+
+	storeRaw, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatalf("read managed instance store: %v", err)
+	}
+	if !strings.Contains(string(storeRaw), `"selection_strategy": "round_robin"`) || !strings.Contains(string(storeRaw), `"selection_ordinal": 1`) {
+		t.Fatalf("managed instance store missing selection trace: %s", string(storeRaw))
 	}
 }
 

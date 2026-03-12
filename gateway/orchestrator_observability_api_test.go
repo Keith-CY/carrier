@@ -27,12 +27,15 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 			Type:    "picoclaw",
 			AgentID: "picoclaw",
 			ModelRuntime: &managedAgentModelRuntime{
-				RequestedAlias: "flash",
-				ResolvedModel:  "google/gemini-2.0-flash-001",
-				FallbackGroup:  "openrouter:flash",
-				OverrideHit:    true,
-				FallbackHit:    false,
-				LastRunAt:      nowStore,
+				RequestedAlias:    "flash",
+				ResolvedModel:     "google/gemini-2.0-flash-001",
+				ResolvedProfile:   "openrouter-fast",
+				FallbackGroup:     "openrouter:flash",
+				SelectionStrategy: "round_robin",
+				SelectionOrdinal:  0,
+				OverrideHit:       true,
+				FallbackHit:       false,
+				LastRunAt:         nowStore,
 			},
 			CreatedAt: nowStore,
 			UpdatedAt: nowStore,
@@ -42,13 +45,16 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 			Type:    "zeroclaw",
 			AgentID: "zeroclaw",
 			ModelRuntime: &managedAgentModelRuntime{
-				RequestedAlias: "flash",
-				RequestedModel: "deepseek/deepseek-chat-v3-0324",
-				ResolvedModel:  "deepseek/deepseek-chat-v3-0324",
-				FallbackGroup:  "openrouter:flash",
-				OverrideHit:    true,
-				FallbackHit:    true,
-				LastRunAt:      nowStore,
+				RequestedAlias:    "flash",
+				RequestedModel:    "deepseek/deepseek-chat-v3-0324",
+				ResolvedModel:     "deepseek/deepseek-chat-v3-0324",
+				ResolvedProfile:   "openrouter-safe",
+				FallbackGroup:     "openrouter:flash",
+				SelectionStrategy: "round_robin",
+				SelectionOrdinal:  1,
+				OverrideHit:       true,
+				FallbackHit:       true,
+				LastRunAt:         nowStore,
 			},
 			CreatedAt: nowStore,
 			UpdatedAt: nowStore,
@@ -288,6 +294,20 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 	}
 	if got := int(anyToFloat(providers["managedFallbackHits"])); got != 1 {
 		t.Fatalf("providers.managedFallbackHits=%d want 1 providers=%+v", got, providers)
+	}
+	managedRuns, _ := providers["managedRuns"].([]interface{})
+	if len(managedRuns) != 2 {
+		t.Fatalf("providers.managedRuns len=%d want 2 providers=%+v", len(managedRuns), providers)
+	}
+	firstRun, _ := managedRuns[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(firstRun["resolvedProfile"])); got != "openrouter-fast" {
+		t.Fatalf("providers.managedRuns[0].resolvedProfile=%q want %q", got, "openrouter-fast")
+	}
+	if got := strings.TrimSpace(anyToString(firstRun["selectionStrategy"])); got != "round_robin" {
+		t.Fatalf("providers.managedRuns[0].selectionStrategy=%q want %q", got, "round_robin")
+	}
+	if got := int(anyToFloat(firstRun["selectionOrdinal"])); got != 0 {
+		t.Fatalf("providers.managedRuns[0].selectionOrdinal=%d want %d", got, 0)
 	}
 	aggregates, _ := providers["aggregates"].([]interface{})
 	if len(aggregates) < 2 {

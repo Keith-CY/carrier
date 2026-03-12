@@ -252,6 +252,47 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 			}
 			writeJSON(w, http.StatusOK, summary)
 			return
+		case len(parts) == 3 && strings.EqualFold(strings.TrimSpace(parts[2]), "profile") && r.Method == http.MethodPost:
+			var body struct {
+				ProfileName      string `json:"profileName"`
+				ModelAlias       string `json:"modelAlias,omitempty"`
+				ModelID          string `json:"modelId,omitempty"`
+				ProviderID       string `json:"providerId,omitempty"`
+				BaseURL          string `json:"baseUrl,omitempty"`
+				AuthMethod       string `json:"authMethod,omitempty"`
+				TimeoutMs        int    `json:"timeoutMs,omitempty"`
+				RetryBudget      int    `json:"retryBudget,omitempty"`
+				FallbackStrategy string `json:"fallbackStrategy,omitempty"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid JSON body"))
+				return
+			}
+			summary, err := updateManagedAgentModelProfileSummary(agentID, managedAgentModelProfileUpdate{
+				ProfileName:      strings.TrimSpace(body.ProfileName),
+				ModelAlias:       strings.TrimSpace(body.ModelAlias),
+				ModelID:          strings.TrimSpace(body.ModelID),
+				ProviderID:       strings.TrimSpace(body.ProviderID),
+				BaseURL:          strings.TrimSpace(body.BaseURL),
+				AuthMethod:       strings.TrimSpace(body.AuthMethod),
+				TimeoutMs:        body.TimeoutMs,
+				RetryBudget:      body.RetryBudget,
+				FallbackStrategy: strings.TrimSpace(body.FallbackStrategy),
+			})
+			if err != nil {
+				if errors.Is(err, errManagedAgentInstanceNotFound) {
+					writeJSON(w, http.StatusNotFound, gatewayErrBody("E_AGENT_NOT_FOUND", fmt.Sprintf("managed agent %s not found", agentID)))
+					return
+				}
+				if strings.Contains(strings.ToLower(err.Error()), "not found") || strings.Contains(strings.ToLower(err.Error()), "required") || strings.Contains(strings.ToLower(err.Error()), "unavailable") {
+					writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", err.Error()))
+					return
+				}
+				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to update managed agent model profile", "update managed agent model profile", err)
+				return
+			}
+			writeJSON(w, http.StatusOK, summary)
+			return
 		default:
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
