@@ -19,6 +19,8 @@ import (
 const (
 	defaultExecTimeoutSeconds = 30
 	maxExecutionOutputBytes   = 8192
+	defaultWebSearchLimit     = 5
+	maxWebSearchLimit         = 10
 )
 
 type ExecutionToolResultStatus string
@@ -613,15 +615,15 @@ func (r *ExecutionToolRegistry) webSearch(ctx context.Context, args map[string]a
 	if !ok || strings.TrimSpace(query) == "" {
 		return executionError("query is required")
 	}
-	limit, err := readOptionalIntArg(args, "limit", 5)
+	limit, err := readOptionalIntArg(args, "limit", defaultWebSearchLimit)
 	if err != nil {
 		return executionError(err.Error())
 	}
 	if limit <= 0 {
-		limit = 5
+		limit = defaultWebSearchLimit
 	}
-	if limit > 10 {
-		limit = 10
+	if limit > maxWebSearchLimit {
+		limit = maxWebSearchLimit
 	}
 	if r.webBackend == nil {
 		return executionError("web search backend is not configured")
