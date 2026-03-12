@@ -1241,34 +1241,29 @@ func TestStructuredLoopSpawnSubagent(t *testing.T) {
 	}
 }
 
-func TestStructuredLoopDelegatesToSubagent(t *testing.T) {
+func TestStructuredLoopReadsSubagentResult(t *testing.T) {
 	policy := ActiveBoundarySpec().StructuredToolPolicy
 	policy.HighRiskDecision = string(structuredToolDecisionAllow)
 
 	manager := NewInMemorySubagentManager(func(_ context.Context, req SubagentRequest) (string, error) {
 		return "result: " + req.Task, nil
 	})
+	handle, err := manager.Spawn(context.Background(), SubagentRequest{Task: "collect dependency graph"})
+	if err != nil {
+		t.Fatalf("spawn delegated job: %v", err)
+	}
+	job := waitForSubagentJobState(t, manager, handle.JobID, SubagentJobStatusCompleted)
+
 	provider := &scriptedToolAwareProvider{
 		name: "delegate-followup",
 		replies: []StructuredToolReply{
 			{
 				ToolCalls: []StructuredToolCall{
 					{
-						ID:   "call-1",
-						Name: "spawn_subagent",
-						Arguments: map[string]any{
-							"task": "collect dependency graph",
-						},
-					},
-				},
-			},
-			{
-				ToolCalls: []StructuredToolCall{
-					{
 						ID:   "call-2",
 						Name: "subagent_result",
 						Arguments: map[string]any{
-							"job_id": "subagent-1",
+							"job_id": handle.JobID,
 						},
 					},
 				},
@@ -1305,23 +1300,19 @@ func TestStructuredLoopDelegatesToSubagent(t *testing.T) {
 	if resp.Message != "delegated result collected" {
 		t.Fatalf("unexpected chat response: %+v", resp)
 	}
-	if len(provider.requests) != 3 {
-		t.Fatalf("expected spawn + result follow-up requests, got %d", len(provider.requests))
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected result follow-up requests, got %d", len(provider.requests))
 	}
 
-	job, err := manager.Job(context.Background(), "subagent-1")
-	if err != nil {
-		t.Fatalf("lookup delegated job: %v", err)
-	}
 	if job.Status != SubagentJobStatusCompleted || job.Result != "result: collect dependency graph" {
 		t.Fatalf("unexpected delegated job state: %+v", job)
 	}
 
-	last := provider.requests[2].Messages[len(provider.requests[2].Messages)-1]
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
 	if last.Role != "tool" || last.ToolName != "subagent_result" {
 		t.Fatalf("unexpected final tool callback message: %+v", last)
 	}
-	if !strings.Contains(last.Content, "subagent-1") || !strings.Contains(last.Content, "result: collect dependency graph") {
+	if !strings.Contains(last.Content, handle.JobID) || !strings.Contains(last.Content, "result: collect dependency graph") {
 		t.Fatalf("expected delegated result in tool output, got %+v", last)
 	}
 }

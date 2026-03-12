@@ -368,7 +368,7 @@ func (s *structuredToolSurface) registerSubagentStructuredTools(manager Subagent
 func structuredWorkspaceToolTier(name string) structuredToolTier {
 	switch strings.TrimSpace(name) {
 	case "web_fetch", "web_search":
-		return structuredToolTierMetadataRead
+		return structuredToolTierOperationalRead
 	case "read_file", "list_dir":
 		return structuredToolTierWorkspaceRead
 	case "write_file", "append_file", "edit_file":

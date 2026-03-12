@@ -17,6 +17,7 @@ fi
 
 rm -rf "${OUT_DIR}/assets"
 rm -f "${OUT_DIR}/index.html"
+find "${OUT_DIR}" -maxdepth 1 -type f \( -name '*.js' -o -name '*.min.js' \) -delete
 
 (
   cd "${WEBUI_DIR}"
@@ -25,12 +26,5 @@ rm -f "${OUT_DIR}/index.html"
   fi
   bun run build
 )
-rm -f \
-  "${OUT_DIR}/app.js" \
-  "${OUT_DIR}/react.production.min.js" \
-  "${OUT_DIR}/react-dom.production.min.js" \
-  "${OUT_DIR}/remote-control-islands.js" \
-  "${OUT_DIR}/remote-chat-island.js" \
-  "${OUT_DIR}/remote-observability-island.js"
 
 echo "Built WebUI assets with Vite shell."

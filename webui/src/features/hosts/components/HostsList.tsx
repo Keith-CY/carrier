@@ -2,7 +2,18 @@ import { formatHostMeta, updateEditorFromHost } from '../model';
 import type { HostsData } from '../useHostsData';
 
 export function HostsList({ data }: { data: HostsData }) {
-  const { hosts, canManageHosts, hostOps, handleCheckHost, showManageHost, setEditingHostId, setEditor, setServersMessage, handleDeleteHost } = data;
+  const {
+    hosts,
+    canManageHosts,
+    hostOps,
+    handleCheckHost,
+    showManageHost,
+    startEditingHost,
+    setEditingHostId,
+    setEditor,
+    setServersMessage,
+    handleDeleteHost,
+  } = data;
 
   return (
     <div id="servers-list" className="agent-grid server-host-list">
@@ -18,7 +29,20 @@ export function HostsList({ data }: { data: HostsData }) {
               <div className="btn-row">
                 <button className="btn-sm btn-secondary" onClick={() => void handleCheckHost(hostId)}>Check</button>
                 <button className="btn-sm" onClick={() => showManageHost(hostId)}>Manage</button>
-                <button className="btn-sm btn-secondary" onClick={() => { setEditingHostId(hostId); setEditor(updateEditorFromHost(host)); setServersMessage({ type: 'info', text: `Editing remote host: ${hostId}` }); }}>Edit</button>
+                <button
+                  className="btn-sm btn-secondary"
+                  onClick={() => {
+                    if (typeof startEditingHost === 'function') {
+                      startEditingHost(host);
+                      return;
+                    }
+                    setEditingHostId(hostId);
+                    setEditor(updateEditorFromHost(host));
+                    setServersMessage({ type: 'info', text: `Editing remote host: ${hostId}` });
+                  }}
+                >
+                  Edit
+                </button>
                 <button className="btn-sm btn-danger" onClick={() => void handleDeleteHost(hostId)}>Delete</button>
               </div>
             ) : null}

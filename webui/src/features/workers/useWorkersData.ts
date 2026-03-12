@@ -67,3 +67,5 @@ export function useWorkersData() {
     reclaimStale: () => reclaimMutation.mutate(true),
   };
 }
+
+export type WorkersData = ReturnType<typeof useWorkersData>;

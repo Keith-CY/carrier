@@ -149,3 +149,5 @@ export function useExecutionsData() {
     executionCounts,
   };
 }
+
+export type ExecutionsData = ReturnType<typeof useExecutionsData>;

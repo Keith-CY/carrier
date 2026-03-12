@@ -75,7 +75,7 @@ func (m *InMemorySubagentManager) Spawn(ctx context.Context, req SubagentRequest
 	job := SubagentJob{
 		JobID:     jobID,
 		Task:      task,
-		Status:    SubagentJobStatusRunning,
+		Status:    SubagentJobStatusQueued,
 		Summary:   task,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -83,10 +83,43 @@ func (m *InMemorySubagentManager) Spawn(ctx context.Context, req SubagentRequest
 	m.jobs[jobID] = job
 	m.mu.Unlock()
 
+	execCtx := context.Background()
+	if ctx != nil {
+		execCtx = context.WithoutCancel(ctx)
+	}
+	go m.runJob(execCtx, jobID, req)
+
+	return SubagentJobHandle{
+		JobID:   job.JobID,
+		Status:  string(job.Status),
+		Summary: job.Summary,
+	}, nil
+}
+
+func (m *InMemorySubagentManager) runJob(ctx context.Context, jobID string, req SubagentRequest) {
+	if m == nil {
+		return
+	}
+
+	m.mu.Lock()
+	job, ok := m.jobs[jobID]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	job.Status = SubagentJobStatusRunning
+	job.UpdatedAt = time.Now().UTC()
+	m.jobs[jobID] = job
+	m.mu.Unlock()
+
 	result, err := m.executor(ctx, req)
 
 	m.mu.Lock()
-	job = m.jobs[jobID]
+	job, ok = m.jobs[jobID]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
 	job.UpdatedAt = time.Now().UTC()
 	if err != nil {
 		job.Status = SubagentJobStatusFailed
@@ -97,12 +130,6 @@ func (m *InMemorySubagentManager) Spawn(ctx context.Context, req SubagentRequest
 	}
 	m.jobs[jobID] = job
 	m.mu.Unlock()
-
-	return SubagentJobHandle{
-		JobID:   job.JobID,
-		Status:  string(job.Status),
-		Summary: job.Summary,
-	}, nil
 }
 
 func (m *InMemorySubagentManager) Job(_ context.Context, jobID string) (SubagentJob, error) {
