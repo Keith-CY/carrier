@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -734,6 +735,47 @@ func TestDaemonClient_GetMergedLogs_ClampsTail(t *testing.T) {
 	}
 	if gotPath != "/api/v1/logs?tail=1000" {
 		t.Fatalf("tail=9999 path = %q, want %q", gotPath, "/api/v1/logs?tail=1000")
+	}
+}
+
+func TestDaemonClient_ScheduleCronJob_SendsOnlyAcceptedFields(t *testing.T) {
+	var rawBody map[string]any
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/base-agent/cron/schedule" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&rawBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"id":"cron-1","agentId":"picoclaw","prompt":"check launcher","lastResult":"scheduled"}`))
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	resp, err := dc.ScheduleCronJob(context.Background(), baseagent.CronJob{
+		AgentID:    "picoclaw",
+		SessionKey: "openrouter:cron-ui-smoke",
+		Prompt:     "check launcher",
+		NextRunAt:  time.Now().UTC().Add(time.Hour),
+		LastResult: "should-not-send",
+	}, "actor", "req")
+	if err != nil {
+		t.Fatalf("ScheduleCronJob error: %v", err)
+	}
+	if resp == nil || resp.ID != "cron-1" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	for _, forbidden := range []string{"lastResult", "lastRunAt", "cancelledAt"} {
+		if _, exists := rawBody[forbidden]; exists {
+			t.Fatalf("unexpected field %q in payload: %#v", forbidden, rawBody)
+		}
+	}
+	if got := strings.TrimSpace(rawBody["sessionKey"].(string)); got != "openrouter:cron-ui-smoke" {
+		t.Fatalf("sessionKey=%q want openrouter:cron-ui-smoke", got)
+	}
+	if got := strings.TrimSpace(rawBody["prompt"].(string)); got != "check launcher" {
+		t.Fatalf("prompt=%q want check launcher", got)
 	}
 }
 

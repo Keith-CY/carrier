@@ -120,3 +120,63 @@ func TestHandleAgentLauncherReturnsSummary(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleAgentLauncherTreatsEnvCredentialAsReady(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	storePath := filepath.Join(tmp, ".carrier", "instances.json")
+	t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+	t.Setenv("OPENROUTER_API_KEY", "token-from-env")
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := saveManagedInstances(storePath, []managedAgentInstance{{
+		ID:           "zeroclaw-local",
+		Type:         "zeroclaw",
+		AgentID:      "zeroclaw",
+		Isolation:    true,
+		GatewayURL:   "http://127.0.0.1:8787",
+		Provider:     "openrouter",
+		RuntimeState: "running",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}}); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+		"GET /api/v1/agents/zeroclaw/status": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":           "zeroclaw",
+				"runtimeState": "running",
+				"health":       "healthy",
+				"updatedAt":    now,
+			})
+		},
+		"GET /api/v1/agents/zeroclaw/capabilities": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{})
+		},
+		"GET /api/base-agent/cron/jobs": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"jobs": []map[string]interface{}{}})
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/zeroclaw/launcher", nil)
+	handleWebUIAgent(rec, req, "req-launcher-env", daemon)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, needle := range []string{
+		`"provider":"openrouter"`,
+		`"credentialConfigured":true`,
+		`"credentialBackend":"env"`,
+		`"ready":true`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("expected response to contain %s, got %s", needle, body)
+		}
+	}
+}

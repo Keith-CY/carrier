@@ -189,6 +189,7 @@ require_cmd go
 require_cmd jq
 require_cmd curl
 require_cmd unzip
+require_cmd python3
 
 if [[ -z "$DAEMON_PORT" ]]; then
   DAEMON_PORT="$(pick_available_port 9090 9190 9090)"
@@ -225,6 +226,13 @@ EVIDENCE_JSON="${TMP_DIR}/evidence.json"
 AUDIT_JSON="${TMP_DIR}/audit.json"
 METRICS_JSON="${TMP_DIR}/metrics.json"
 DISTILL_JSON="${TMP_DIR}/distill.json"
+LAUNCHER_JSON="${TMP_DIR}/agent-launcher.json"
+LAUNCHER_CRON_JSON="${TMP_DIR}/agent-launcher-after-cron.json"
+HEARTBEAT_JSON="${TMP_DIR}/agent-heartbeat.json"
+AGENT_RUN_JSON="${TMP_DIR}/agent-run.json"
+AGENT_CRON_SCHEDULE_JSON="${TMP_DIR}/agent-cron-schedule.json"
+AGENT_CRON_LIST_JSON="${TMP_DIR}/agent-cron-list.json"
+AGENT_CRON_CANCEL_JSON="${TMP_DIR}/agent-cron-cancel.json"
 RERUN_JSON="${TMP_DIR}/rerun.json"
 CLONE_JSON="${TMP_DIR}/clone.json"
 EVIDENCE_ZIP="${TMP_DIR}/execution-evidence.zip"
@@ -277,13 +285,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "[1/8] build carrier binary"
+echo "[1/9] build carrier binary"
 (
   cd "$ROOT_DIR"
   go build -o "$BIN_PATH" ./cmd/carrier
 )
 
-echo "[2/8] start daemon + gateway"
+echo "[2/9] start daemon + gateway"
 echo "  daemon_port=${DAEMON_PORT} gateway_port=${GATEWAY_PORT}"
 "$BIN_PATH" daemon >"$DAEMON_LOG" 2>&1 &
 DAEMON_PID=$!
@@ -295,7 +303,7 @@ wait_for_http_ok "http://127.0.0.1:${GATEWAY_PORT}/healthz" "gateway"
 
 "$BIN_PATH" stop zeroclaw >/dev/null 2>&1 || true
 
-echo "[3/8] onboard live provider (${PROVIDER}) in WebUI-only mode"
+echo "[3/9] onboard live provider (${PROVIDER}) in WebUI-only mode"
 printf '\n%s\n%s\n' "$PROVIDER" "$API_KEY" | "$BIN_PATH" onboard >"$ONBOARD_LOG" 2>&1
 
 if [[ -n "$MODEL" || -n "$BASE_URL" ]]; then
@@ -333,7 +341,7 @@ jq -e \
     ($base_url == "" or .model_list[0].base_url == $base_url)
   ' "$CARRIER_CONFIG" >/dev/null
 
-echo "[4/8] install local zeroclaw with isolation"
+echo "[4/9] install local zeroclaw with isolation"
 printf '\n\n' | "$BIN_PATH" add zeroclaw --isolation >"$ADD_LOG" 2>&1
 
 ZERO_INSTANCE_ID="$(jq -r '.instances | map(select((.agent_id // .agentId // .agentID // .type // "") == "zeroclaw")) | first | .id // empty' "$CARRIER_INSTANCE_STORE")"
@@ -347,13 +355,63 @@ if [[ -n "$ZERO_GATEWAY_PORT" && "$ZERO_GATEWAY_PORT" != "null" ]]; then
   wait_for_http_ok "http://127.0.0.1:${ZERO_GATEWAY_PORT}/health" "zeroclaw gateway" 60
 fi
 
-echo "[5/8] attach/distill memory against the real instance"
+echo "[5/9] validate standalone managed-agent launcher/run/heartbeat/cron surfaces"
+capture_json_output "$LAUNCHER_JSON" "$BIN_PATH" agent launcher zeroclaw --json
+jq -e --arg provider "$PROVIDER" '
+  (.agentId == "zeroclaw") and
+  (.providerReadiness.provider == $provider) and
+  (.providerReadiness.ready == true) and
+  (.session.instanceId | type == "string" and length > 0)
+' "$LAUNCHER_JSON" >/dev/null
+
+capture_json_output "$HEARTBEAT_JSON" "$BIN_PATH" agent heartbeat zeroclaw --json
+jq -e '
+  (.agentId == "zeroclaw") and
+  (.heartbeat.state | type == "string" and length > 0)
+' "$HEARTBEAT_JSON" >/dev/null
+
+capture_json_output "$AGENT_RUN_JSON" "$BIN_PATH" agent run zeroclaw -m "Reply with exactly the token live-agent-ok." --provider "$PROVIDER" --json
+jq -e '
+  (.agentId == "zeroclaw") and
+  (.sessionId | type == "string" and length > 0) and
+  (.message | type == "string" and length > 0)
+' "$AGENT_RUN_JSON" >/dev/null
+if ! jq -er '.message // ""' "$AGENT_RUN_JSON" | grep -qi 'live-agent-ok'; then
+  echo "error: managed-agent one-shot run did not return the expected token" >&2
+  cat "$AGENT_RUN_JSON" >&2
+  exit 1
+fi
+
+AGENT_CRON_NEXT_RUN_AT="$(python3 - <<'PY'
+import datetime
+print((datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30)).replace(microsecond=0).isoformat().replace("+00:00", "Z"))
+PY
+)"
+capture_json_output "$AGENT_CRON_SCHEDULE_JSON" "$BIN_PATH" agent cron schedule zeroclaw -m "Check launcher readiness." --provider "$PROVIDER" --session-id live-agent-cron --next-run-at "$AGENT_CRON_NEXT_RUN_AT" --json
+AGENT_CRON_JOB_ID="$(json_get "$AGENT_CRON_SCHEDULE_JSON" '.id')"
+jq -e '.lastResult == "scheduled"' "$AGENT_CRON_SCHEDULE_JSON" >/dev/null
+
+capture_json_output "$AGENT_CRON_LIST_JSON" "$BIN_PATH" agent cron list zeroclaw --json
+jq -e --arg job_id "$AGENT_CRON_JOB_ID" '
+  (.jobs | map(select(.id == $job_id and .lastResult == "scheduled")) | length) >= 1
+' "$AGENT_CRON_LIST_JSON" >/dev/null
+
+capture_json_output "$LAUNCHER_CRON_JSON" "$BIN_PATH" agent launcher zeroclaw --json
+jq -e --arg job_id "$AGENT_CRON_JOB_ID" '
+  (.cron.count >= 1) and
+  (.cron.jobs | map(select(.id == $job_id)) | length) >= 1
+' "$LAUNCHER_CRON_JSON" >/dev/null
+
+capture_json_output "$AGENT_CRON_CANCEL_JSON" "$BIN_PATH" agent cron cancel zeroclaw "$AGENT_CRON_JOB_ID" --json
+jq -e '.lastResult == "cancelled"' "$AGENT_CRON_CANCEL_JSON" >/dev/null
+
+echo "[6/9] attach/distill memory against the real instance"
 "$BIN_PATH" memory attach --instance "$ZERO_INSTANCE_ID" --scope shared:incident-response >/dev/null
 "$BIN_PATH" memory attach --instance "$ZERO_INSTANCE_ID" --scope shared:service-catalog >/dev/null
 capture_json_output "$DISTILL_JSON" "$BIN_PATH" memory distill --instance "$ZERO_INSTANCE_ID" --dry-run --json
 json_get "$DISTILL_JSON" '.result.runId // .run.runId // empty' >/dev/null
 
-echo "[6/8] create and authorize a real execution"
+echo "[7/9] create and authorize a real execution"
 curl -fsS -X POST \
   -H 'Content-Type: application/json' \
   "http://127.0.0.1:${GATEWAY_PORT}/api/v1/orchestrator/executions" \
@@ -438,7 +496,7 @@ if ! printf '%s' "$FINAL_OUTPUT" | grep -Eq '[.!?]$'; then
   exit 1
 fi
 
-echo "[7/8] export evidence, audit, metrics, and derived executions"
+echo "[8/9] export evidence, audit, metrics, and derived executions"
 capture_json_output "$EVIDENCE_JSON" "$BIN_PATH" executions evidence "$EXECUTION_ID" --format json --json
 "$BIN_PATH" executions evidence "$EXECUTION_ID" --format zip --output "$EVIDENCE_ZIP" >/dev/null
 capture_json_output "$AUDIT_JSON" "$BIN_PATH" executions audit "$EXECUTION_ID" --json
@@ -459,15 +517,17 @@ jq -e --arg exec_id "$EXECUTION_ID" '.executionId == $exec_id or .executionId ==
 jq -e --arg exec_id "$EXECUTION_ID" '.execution.parentExecutionId == $exec_id and .execution.launchReason == "rerun_execution"' "$RERUN_JSON" >/dev/null
 jq -e --arg exec_id "$EXECUTION_ID" '.execution.parentExecutionId == $exec_id and .execution.launchReason == "clone_execution"' "$CLONE_JSON" >/dev/null
 
-unzip -l "$EVIDENCE_ZIP" | grep -q 'provider-attribution.json'
-unzip -l "$EVIDENCE_ZIP" | grep -q 'plan.json'
-unzip -l "$EVIDENCE_ZIP" | grep -q 'audit.json'
+ZIP_ENTRIES="$(unzip -Z1 "$EVIDENCE_ZIP")"
+printf '%s\n' "$ZIP_ENTRIES" | grep -Fxq 'provider-attribution.json'
+printf '%s\n' "$ZIP_ENTRIES" | grep -Fxq 'plan.json'
+printf '%s\n' "$ZIP_ENTRIES" | grep -Fxq 'audit.json'
 
-echo "[8/8] summarize"
+echo "[9/9] summarize"
 echo "execution_id=${EXECUTION_ID}"
 echo "provider=${PROVIDER}"
 echo "model=${MODEL}"
 echo "instance_id=${ZERO_INSTANCE_ID}"
+echo "agent_cron_job_id=${AGENT_CRON_JOB_ID}"
 echo "output=${FINAL_OUTPUT}"
 echo "evidence_zip=${EVIDENCE_ZIP}"
 echo "live provider control-plane smoke passed"

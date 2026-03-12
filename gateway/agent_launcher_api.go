@@ -3,6 +3,7 @@ package gateway
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -78,7 +79,6 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 
 	var session *agentLauncherSession
 	var readiness agentProviderReadiness
-	var cronSummary *agentLauncherCronSummary
 	if inst, ok := latestManagedInstanceForAgent(agentID); ok {
 		session = &agentLauncherSession{
 			InstanceID:   strings.TrimSpace(inst.ID),
@@ -97,9 +97,10 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 			UpdatedAt:    strings.TrimSpace(inst.UpdatedAt),
 		}
 		readiness = buildAgentProviderReadiness(inst.Provider)
-		if jobs, err := daemon.ListCronJobs(r.Context(), agentID, "", "webui:agents:launcher", requestID); err == nil && len(jobs) > 0 {
-			cronSummary = buildAgentCronSummary(jobs)
-		}
+	}
+	var cronSummary *agentLauncherCronSummary
+	if jobs, err := daemon.ListCronJobs(r.Context(), agentID, "", "webui:agents:launcher", requestID); err == nil && len(jobs) > 0 {
+		cronSummary = buildAgentCronSummary(jobs)
 	}
 
 	status := statuses[0]
@@ -130,6 +131,11 @@ func buildAgentProviderReadiness(providerID string) agentProviderReadiness {
 		if provider.AuthMode == AuthModeNone {
 			readiness.Ready = true
 			return readiness
+		}
+		if strings.TrimSpace(provider.EnvVar) != "" && strings.TrimSpace(os.Getenv(provider.EnvVar)) != "" {
+			readiness.CredentialConfigured = true
+			readiness.CredentialBackend = "env"
+			readiness.Ready = true
 		}
 	}
 	backend, ok, err := loadProviderCredentialStatus(providerID)

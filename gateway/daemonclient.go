@@ -469,7 +469,18 @@ func (c *DaemonClient) ScheduleCronJob(
 	actor string,
 	requestID string,
 ) (*CronJob, error) {
-	raw, err := c.request(ctx, http.MethodPost, "/api/base-agent/cron/schedule", job, actor, requestID)
+	payload := struct {
+		SessionKey string    `json:"sessionKey"`
+		AgentID    string    `json:"agentId,omitempty"`
+		Prompt     string    `json:"prompt"`
+		NextRunAt  time.Time `json:"nextRunAt,omitempty"`
+	}{
+		SessionKey: strings.TrimSpace(job.SessionKey),
+		AgentID:    strings.TrimSpace(job.AgentID),
+		Prompt:     strings.TrimSpace(job.Prompt),
+		NextRunAt:  job.NextRunAt,
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/base-agent/cron/schedule", payload, actor, requestID)
 	if err != nil {
 		return nil, err
 	}
