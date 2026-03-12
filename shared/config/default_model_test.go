@@ -229,3 +229,63 @@ func TestLoadCarrierModelForProviderFromPathLoadError(t *testing.T) {
 		t.Fatal("expected load error for missing config path")
 	}
 }
+
+func TestLoadCarrierModelProfilesResolveProtocolFamily(t *testing.T) {
+	writeCarrierDefaultModelFixture(t, "openrouter-fast", []map[string]string{
+		{
+			"model_name":  "openrouter-fast",
+			"model_alias": "flash",
+			"model":       "openrouter/google/gemini-2.0-flash-001",
+			"provider_id": "openrouter",
+			"env_var":     "OPENROUTER_API_KEY",
+			"base_url":    "https://openrouter.ai/api/v1",
+		},
+		{
+			"model_name":  "ollama-dev",
+			"model":       "ollama/llama3.2",
+			"provider_id": "ollama",
+		},
+		{
+			"model_name":  "codex-default",
+			"model":       "openai-codex/gpt-5.3-codex",
+			"provider_id": "openai-codex",
+			"env_var":     "OPENAI_CODEX_TOKEN",
+		},
+	})
+
+	openrouterProfiles, err := LoadCarrierModelProfilesForProvider("openrouter")
+	if err != nil {
+		t.Fatalf("LoadCarrierModelProfilesForProvider error: %v", err)
+	}
+	if len(openrouterProfiles) != 1 {
+		t.Fatalf("expected 1 openrouter profile, got %d", len(openrouterProfiles))
+	}
+	if openrouterProfiles[0].ProtocolFamily != "openai-compatible" {
+		t.Fatalf("ProtocolFamily = %q, want %q", openrouterProfiles[0].ProtocolFamily, "openai-compatible")
+	}
+	if openrouterProfiles[0].ModelAlias != "flash" {
+		t.Fatalf("ModelAlias = %q, want %q", openrouterProfiles[0].ModelAlias, "flash")
+	}
+
+	oauthProfiles, err := LoadCarrierModelProfilesForProtocolFamily("oauth-openai")
+	if err != nil {
+		t.Fatalf("LoadCarrierModelProfilesForProtocolFamily error: %v", err)
+	}
+	if len(oauthProfiles) != 1 {
+		t.Fatalf("expected 1 oauth-openai profile, got %d", len(oauthProfiles))
+	}
+	if oauthProfiles[0].ProviderID != "openai-codex" {
+		t.Fatalf("ProviderID = %q, want %q", oauthProfiles[0].ProviderID, "openai-codex")
+	}
+
+	ollamaProfiles, err := LoadCarrierModelProfilesForProtocolFamily("ollama")
+	if err != nil {
+		t.Fatalf("LoadCarrierModelProfilesForProtocolFamily error: %v", err)
+	}
+	if len(ollamaProfiles) != 1 {
+		t.Fatalf("expected 1 ollama profile, got %d", len(ollamaProfiles))
+	}
+	if ollamaProfiles[0].ProtocolFamily != "ollama" {
+		t.Fatalf("ProtocolFamily = %q, want %q", ollamaProfiles[0].ProtocolFamily, "ollama")
+	}
+}

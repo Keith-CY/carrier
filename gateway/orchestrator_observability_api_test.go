@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -323,5 +325,106 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 	}
 	if got := int(anyToFloat(policies["ask"])); got != 1 {
 		t.Fatalf("policies.ask=%d want 1", got)
+	}
+}
+
+func TestOrchestratorMetricsSummaryUsesResolvedProviderModelFromAlias(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config.v2.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "default_model": "openrouter-fast",
+  "model_list": [
+    {
+      "model_name": "openrouter-fast",
+      "model_alias": "flash",
+      "model": "openrouter/google/gemini-2.0-flash-001",
+      "provider_id": "openrouter",
+      "env_var": "OPENROUTER_API_KEY",
+      "base_url": "https://openrouter.ai/api/v1"
+    },
+    {
+      "model_name": "openrouter-safe",
+      "model_alias": "flash",
+      "model": "openrouter/deepseek/deepseek-chat-v3-0324",
+      "provider_id": "openrouter",
+      "env_var": "OPENROUTER_API_KEY",
+      "base_url": "https://openrouter.ai/api/v1"
+    }
+  ]
+}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("CARRIER_CONFIG", configPath)
+
+	mux := buildRemoteFeatureMuxWithConfigAndDaemonHandlers(t, &GatewayConfig{
+		APIToken:                  "test-gateway-token",
+		MaxCommandBodyBytes:       64 * 1024,
+		RemoteControlPlaneEnabled: true,
+		ProviderBindingEnabled:    true,
+	}, nil)
+	hostID := createRemoteHostForTests(t, mux)
+
+	profile, err := upsertProviderProfile(ProviderProfile{
+		ID:       "profile-openrouter-flash",
+		Name:     "OpenRouter Flash Alias",
+		Provider: "openrouter",
+		Model:    "flash",
+		Enabled:  true,
+	})
+	if err != nil {
+		t.Fatalf("upsertProviderProfile failed: %v", err)
+	}
+	if _, err := upsertProviderBinding(ProviderBinding{
+		ID:         "binding-openrouter-flash",
+		ProfileID:  profile.ID,
+		TargetType: "host",
+		TargetID:   hostID,
+		SyncMode:   providerBindingSyncModeAlwaysPush,
+	}); err != nil {
+		t.Fatalf("upsertProviderBinding failed: %v", err)
+	}
+
+	resolution, err := resolveProviderGovernance(hostID, "zeroclaw")
+	if err != nil {
+		t.Fatalf("resolveProviderGovernance failed: %v", err)
+	}
+	if _, err := upsertOrchestratorExecution(OrchestratorExecution{
+		ID:                "exec-openrouter-flash",
+		Goal:              "summarize weather",
+		RequestedProvider: "openrouter",
+		Status:            OrchestratorExecutionStatusCompleted,
+		Governance: OrchestratorExecutionGovernance{
+			ProviderResolutions: []ProviderGovernanceResolution{resolution},
+		},
+		Results: []OrchestratorTaskResult{{
+			TaskID:    "task-1",
+			Status:    OrchestratorTaskStatusCompleted,
+			HostID:    hostID,
+			AgentID:   "zeroclaw",
+			LatencyMs: 250,
+		}},
+		StartedAt:   "2026-03-09T12:00:00Z",
+		CompletedAt: "2026-03-09T12:00:01Z",
+		CreatedAt:   nowTimestamp(),
+		UpdatedAt:   nowTimestamp(),
+	}); err != nil {
+		t.Fatalf("upsertOrchestratorExecution failed: %v", err)
+	}
+
+	rec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/orchestrator/metrics", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("metrics status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	metrics, _ := payload["metrics"].(map[string]interface{})
+	providers, _ := metrics["providers"].(map[string]interface{})
+	models, _ := providers["models"].([]interface{})
+	if len(models) == 0 {
+		t.Fatalf("expected provider model aggregates, got %+v", providers)
+	}
+	first, _ := models[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(first["model"])); got != "openrouter/google/gemini-2.0-flash-001" {
+		t.Fatalf("providers.models[0].model = %q, want %q", got, "openrouter/google/gemini-2.0-flash-001")
 	}
 }

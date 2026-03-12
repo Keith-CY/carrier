@@ -447,3 +447,76 @@ func TestPrepareManagedAgentAddArtifactsUsesConfiguredModelForProvider(t *testin
 		t.Fatalf("expected configured provider model to override provider example model, got:\n%s", cfgText)
 	}
 }
+
+func TestPrepareManagedAgentAddArtifactsRendersProtocolProfiles(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	configPath := filepath.Join(t.TempDir(), "config.v2.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "default_model": "openrouter-fast",
+  "model_list": [
+    {
+      "model_name": "openrouter-fast",
+      "model_alias": "flash",
+      "model": "openrouter/google/gemini-2.0-flash-001",
+      "provider_id": "openrouter",
+      "env_var": "OPENROUTER_API_KEY",
+      "base_url": "https://openrouter.ai/api/v1"
+    },
+    {
+      "model_name": "openrouter-safe",
+      "model_alias": "flash",
+      "model": "openrouter/deepseek/deepseek-chat-v3-0324",
+      "provider_id": "openrouter",
+      "env_var": "OPENROUTER_API_KEY",
+      "base_url": "https://openrouter.ai/api/v1"
+    }
+  ]
+}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("CARRIER_CONFIG", configPath)
+
+	provider := choiceOption{
+		ID:           "openrouter",
+		Name:         "OpenRouter",
+		AuthMode:     authModeAPIKey,
+		ProviderEnv:  "OPENROUTER_API_KEY",
+		ExampleModel: "openrouter/arcee-ai/trinity-mini:free",
+	}
+	envVars := map[string]string{
+		"OPENROUTER_API_KEY": "sk-or-test",
+	}
+
+	result, err := prepareManagedAgentAddArtifacts(
+		"zeroclaw",
+		"zeroclaw-unit",
+		"",
+		"",
+		provider,
+		envVars,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("prepareManagedAgentAddArtifacts: %v", err)
+	}
+
+	rawCfg, err := os.ReadFile(result.ConfigPath)
+	if err != nil {
+		t.Fatalf("read zeroclaw config: %v", err)
+	}
+	cfgText := string(rawCfg)
+	if !strings.Contains(cfgText, `[provider_profiles.openrouter_fast]`) {
+		t.Fatalf("expected zeroclaw config to contain managed profile section, got:\n%s", cfgText)
+	}
+	if !strings.Contains(cfgText, `model_alias = "flash"`) {
+		t.Fatalf("expected zeroclaw config to contain model alias, got:\n%s", cfgText)
+	}
+	if !strings.Contains(cfgText, `[provider_profiles.openrouter_safe]`) {
+		t.Fatalf("expected zeroclaw config to contain second managed profile section, got:\n%s", cfgText)
+	}
+}

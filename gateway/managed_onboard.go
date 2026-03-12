@@ -31,6 +31,18 @@ type managedOnboardResult struct {
 	VersionSource string
 }
 
+type managedModelProfile struct {
+	ProfileName    string
+	ModelAlias     string
+	ModelID        string
+	EnvVar         string
+	ProviderID     string
+	ProviderKey    string
+	ProtocolFamily string
+	BaseURL        string
+	AuthMethod     string
+}
+
 var managedAgents = map[string]managedAgentConfig{
 	"picoclaw": {
 		ID:         "picoclaw",
@@ -224,30 +236,10 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 		return nil, fmt.Errorf("backup existing %s config: %w", cfg.ID, err)
 	}
 
-	modelID := strings.TrimSpace(provider.ExampleModel)
-	if configuredModel, err := sharedconfig.LoadCarrierModelForProvider(provider.ID); err == nil && configuredModel != nil && strings.TrimSpace(configuredModel.ModelID) != "" {
-		modelID = strings.TrimSpace(configuredModel.ModelID)
-	}
-	if modelID == "" {
-		modelID = provider.ID + "/default"
-	}
-	if catalog.IsOpenAICodexProviderID(provider.ID) {
-		if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
-			modelID = "openai/" + strings.TrimSpace(name)
-		} else {
-			modelID = "openai/gpt-5.3-codex"
-		}
-	}
-	modelName := modelID
-	if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
-		modelName = strings.TrimSpace(name)
-	}
-	providerKey := provider.ID
-	if vendor, _, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(vendor) != "" {
-		providerKey = strings.TrimSpace(vendor)
-	}
-	providerKey = mapCarrierProviderToManagedProvider(providerKey)
-	providerBaseURL := resolveManagedProviderBaseURL(provider, providerKey)
+	profiles := resolveManagedModelProfiles(provider)
+	primaryProfile := profiles[0]
+	providerKey := primaryProfile.ProviderKey
+	providerBaseURL := primaryProfile.BaseURL
 	providerToken := pickProviderToken(provider, sess.EnvVars)
 	if catalog.IsOpenAICodexProviderID(provider.ID) && strings.EqualFold(cfg.ID, "picoclaw") {
 		accountID := extractOpenAIAccountID(providerToken)
@@ -273,8 +265,8 @@ func prepareManagedOnboard(agentID string, sess *OnboardSession, actor string) (
 		providerKey,
 		providerBaseURL,
 		providerToken,
-		modelID,
-		modelName,
+		profiles,
+		primaryProfile,
 		workspacePath,
 	)
 	if err != nil {
@@ -358,20 +350,23 @@ func renderManagedConfigBytes(
 	channelSetupPending bool,
 	allowFrom []string,
 	provider *LLMProvider,
-	providerKey, providerBaseURL, providerToken, modelID, modelName, workspacePath string,
+	providerKey, providerBaseURL, providerToken string,
+	profiles []managedModelProfile,
+	primaryProfile managedModelProfile,
+	workspacePath string,
 ) ([]byte, error) {
 	switch strings.ToLower(strings.TrimSpace(renderer.ConfigFormat)) {
 	case "toml":
 		if strings.EqualFold(cfg.ID, "zeroclaw") {
-			return renderZeroClawConfigTOML(channelID, channelToken, channelSetupPending, allowFrom, providerKey, providerToken, modelID), nil
+			return renderZeroClawConfigTOML(channelID, channelToken, channelSetupPending, allowFrom, providerKey, providerToken, primaryProfile.ModelID, profiles), nil
 		}
 		return nil, fmt.Errorf("toml renderer is not supported for %s", cfg.ID)
 	case "json":
 		var payload map[string]interface{}
 		if strings.EqualFold(cfg.ID, "openclaw") {
-			payload = buildManagedOpenClawJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerBaseURL, providerToken, modelID, workspacePath)
+			payload = buildManagedOpenClawJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerBaseURL, providerToken, primaryProfile.ModelID, workspacePath)
 		} else {
-			payload = buildManagedPicoClawJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerToken, modelID, modelName, workspacePath)
+			payload = buildManagedPicoClawJSONConfigPayload(channelID, channelToken, channelSetupPending, allowFrom, provider, providerKey, providerToken, profiles, primaryProfile, workspacePath)
 		}
 		raw, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
@@ -388,20 +383,60 @@ func buildManagedPicoClawJSONConfigPayload(
 	channelSetupPending bool,
 	allowFrom []string,
 	provider *LLMProvider,
-	providerKey, providerToken, modelID, modelName, workspacePath string,
+	providerKey, providerToken string,
+	profiles []managedModelProfile,
+	primaryProfile managedModelProfile,
+	workspacePath string,
 ) map[string]interface{} {
-	modelItem := map[string]interface{}{
-		"model_name": modelName,
-		"model":      modelID,
-	}
-	providerItem := map[string]interface{}{
-		"credential_ref": provider.ID,
-	}
-	if catalog.IsOpenAICodexProviderID(provider.ID) {
-		modelItem["auth_method"] = "oauth"
-		providerItem["auth_method"] = "oauth"
-	} else if providerToken != "" {
-		providerItem["api_key"] = providerToken
+	modelList := make([]interface{}, 0, len(profiles))
+	providerProfiles := map[string]interface{}{}
+	providers := map[string]interface{}{}
+	for _, profile := range profiles {
+		modelItem := map[string]interface{}{
+			"model_name":      profile.ProfileName,
+			"model":           profile.ModelID,
+			"protocol_family": profile.ProtocolFamily,
+		}
+		if strings.TrimSpace(profile.ModelAlias) != "" {
+			modelItem["model_alias"] = profile.ModelAlias
+		}
+		if strings.TrimSpace(profile.BaseURL) != "" {
+			modelItem["base_url"] = profile.BaseURL
+		}
+		if strings.TrimSpace(profile.AuthMethod) != "" {
+			modelItem["auth_method"] = profile.AuthMethod
+		}
+		modelList = append(modelList, modelItem)
+
+		profileEntry := map[string]interface{}{
+			"provider":        profile.ProviderKey,
+			"provider_id":     profile.ProviderID,
+			"protocol_family": profile.ProtocolFamily,
+			"model":           profile.ModelID,
+			"credential_ref":  provider.ID,
+		}
+		if strings.TrimSpace(profile.ModelAlias) != "" {
+			profileEntry["model_alias"] = profile.ModelAlias
+		}
+		if strings.TrimSpace(profile.BaseURL) != "" {
+			profileEntry["base_url"] = profile.BaseURL
+		}
+		if strings.TrimSpace(profile.AuthMethod) != "" {
+			profileEntry["auth_method"] = profile.AuthMethod
+		}
+		providerProfiles[profile.ProfileName] = profileEntry
+
+		if _, ok := providers[profile.ProviderKey]; !ok {
+			providerItem := map[string]interface{}{
+				"credential_ref": provider.ID,
+			}
+			if strings.TrimSpace(profile.AuthMethod) != "" {
+				providerItem["auth_method"] = profile.AuthMethod
+			} else if providerToken != "" {
+				providerItem["api_key"] = providerToken
+			}
+			providers[profile.ProviderKey] = providerItem
+		}
 	}
 
 	channels := map[string]interface{}{}
@@ -424,18 +459,17 @@ func buildManagedPicoClawJSONConfigPayload(
 			"defaults": map[string]interface{}{
 				"workspace":             workspacePath,
 				"provider":              providerKey,
-				"model":                 modelName,
+				"model":                 deriveManagedModelName(primaryProfile.ModelID),
 				"max_tokens":            8192,
 				"temperature":           0.7,
 				"max_tool_iterations":   20,
 				"restrict_to_workspace": true,
 			},
 		},
-		"model_list": []interface{}{modelItem},
-		"providers": map[string]interface{}{
-			providerKey: providerItem,
-		},
-		"channels": channels,
+		"model_list":        modelList,
+		"provider_profiles": providerProfiles,
+		"providers":         providers,
+		"channels":          channels,
 	}
 }
 
@@ -465,6 +499,7 @@ func renderZeroClawConfigTOML(
 	channelSetupPending bool,
 	allowFrom []string,
 	providerKey, providerToken, modelID string,
+	profiles []managedModelProfile,
 ) []byte {
 	if strings.TrimSpace(providerKey) == "" {
 		providerKey = "openai"
@@ -504,6 +539,28 @@ func renderZeroClawConfigTOML(
 		"[agent]",
 		"max_tool_iterations = 20",
 	}
+	if len(profiles) > 0 {
+		lines = append(lines, "", "# Managed provider profiles")
+		for _, profile := range profiles {
+			lines = append(lines,
+				"",
+				fmt.Sprintf("[provider_profiles.%s]", sanitizeManagedProfileSectionName(profile.ProfileName)),
+				fmt.Sprintf("protocol_family = %s", strconv.Quote(profile.ProtocolFamily)),
+				fmt.Sprintf("provider = %s", strconv.Quote(profile.ProviderKey)),
+				fmt.Sprintf("provider_id = %s", strconv.Quote(profile.ProviderID)),
+			)
+			if strings.TrimSpace(profile.ModelAlias) != "" {
+				lines = append(lines, fmt.Sprintf("model_alias = %s", strconv.Quote(profile.ModelAlias)))
+			}
+			lines = append(lines, fmt.Sprintf("model = %s", strconv.Quote(sharedconfig.NormalizeModelForProvider(profile.ProviderKey, profile.ModelID))))
+			if strings.TrimSpace(profile.BaseURL) != "" {
+				lines = append(lines, fmt.Sprintf("base_url = %s", strconv.Quote(profile.BaseURL)))
+			}
+			if strings.TrimSpace(profile.EnvVar) != "" {
+				lines = append(lines, fmt.Sprintf("credential_env = %s", strconv.Quote(profile.EnvVar)))
+			}
+		}
+	}
 	if strings.TrimSpace(channelID) == "" {
 		lines = append(lines,
 			"",
@@ -526,6 +583,131 @@ func renderZeroClawConfigTOML(
 		)
 	}
 	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+func resolveManagedModelProfiles(provider *LLMProvider) []managedModelProfile {
+	if provider == nil {
+		return []managedModelProfile{buildFallbackManagedModelProfile(nil)}
+	}
+	configuredProfiles, err := sharedconfig.LoadCarrierModelProfilesForProvider(provider.ID)
+	if err == nil && len(configuredProfiles) > 0 {
+		profiles := make([]managedModelProfile, 0, len(configuredProfiles))
+		for _, configured := range configuredProfiles {
+			profiles = append(profiles, buildManagedModelProfile(provider, configured))
+		}
+		return profiles
+	}
+	return []managedModelProfile{buildFallbackManagedModelProfile(provider)}
+}
+
+func buildManagedModelProfile(provider *LLMProvider, configured sharedconfig.CarrierDefaultModel) managedModelProfile {
+	modelID := normalizeManagedModelID(configured.ProviderID, configured.ModelID)
+	providerKey := deriveManagedProviderKey(configured.ProviderID, modelID)
+	baseURL := strings.TrimSpace(configured.BaseURL)
+	if baseURL == "" {
+		baseURL = resolveManagedProviderBaseURL(provider, providerKey)
+	}
+	authMethod := ""
+	if catalog.IsOpenAICodexProviderID(configured.ProviderID) {
+		authMethod = "oauth"
+	}
+	return managedModelProfile{
+		ProfileName:    firstNonEmptyProfile(strings.TrimSpace(configured.ModelName), deriveManagedModelName(modelID)),
+		ModelAlias:     strings.TrimSpace(configured.ModelAlias),
+		ModelID:        modelID,
+		EnvVar:         strings.TrimSpace(configured.EnvVar),
+		ProviderID:     strings.TrimSpace(configured.ProviderID),
+		ProviderKey:    providerKey,
+		ProtocolFamily: firstNonEmptyProfile(strings.TrimSpace(configured.ProtocolFamily), catalog.ProtocolFamilyForProvider(configured.ProviderID)),
+		BaseURL:        baseURL,
+		AuthMethod:     authMethod,
+	}
+}
+
+func buildFallbackManagedModelProfile(provider *LLMProvider) managedModelProfile {
+	providerID := ""
+	modelID := ""
+	envVar := ""
+	if provider != nil {
+		providerID = strings.TrimSpace(provider.ID)
+		modelID = strings.TrimSpace(provider.ExampleModel)
+		envVar = strings.TrimSpace(provider.EnvVar)
+	}
+	if modelID == "" {
+		modelID = providerID + "/default"
+	}
+	modelID = normalizeManagedModelID(providerID, modelID)
+	providerKey := deriveManagedProviderKey(providerID, modelID)
+	authMethod := ""
+	if catalog.IsOpenAICodexProviderID(providerID) {
+		authMethod = "oauth"
+	}
+	return managedModelProfile{
+		ProfileName:    deriveManagedModelName(modelID),
+		ModelID:        modelID,
+		EnvVar:         envVar,
+		ProviderID:     providerID,
+		ProviderKey:    providerKey,
+		ProtocolFamily: catalog.ProtocolFamilyForProvider(providerID),
+		BaseURL:        resolveManagedProviderBaseURL(provider, providerKey),
+		AuthMethod:     authMethod,
+	}
+}
+
+func normalizeManagedModelID(providerID, modelID string) string {
+	modelID = strings.TrimSpace(modelID)
+	if catalog.IsOpenAICodexProviderID(providerID) {
+		if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
+			return "openai/" + strings.TrimSpace(name)
+		}
+		return "openai/gpt-5.3-codex"
+	}
+	return modelID
+}
+
+func deriveManagedProviderKey(providerID, modelID string) string {
+	providerKey := strings.TrimSpace(providerID)
+	if vendor, _, ok := strings.Cut(strings.TrimSpace(modelID), "/"); ok && strings.TrimSpace(vendor) != "" {
+		providerKey = strings.TrimSpace(vendor)
+	}
+	return mapCarrierProviderToManagedProvider(providerKey)
+}
+
+func deriveManagedModelName(modelID string) string {
+	modelName := strings.TrimSpace(modelID)
+	if _, name, ok := strings.Cut(modelName, "/"); ok && strings.TrimSpace(name) != "" {
+		return strings.TrimSpace(name)
+	}
+	if modelName == "" {
+		return "default"
+	}
+	return modelName
+}
+
+func sanitizeManagedProfileSectionName(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "default"
+	}
+	var b strings.Builder
+	for _, r := range raw {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	return strings.Trim(strings.ToLower(b.String()), "_")
+}
+
+func firstNonEmptyProfile(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func mapCarrierProviderToManagedProvider(providerID string) string {

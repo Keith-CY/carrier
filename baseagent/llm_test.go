@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,23 +18,24 @@ func writeDefaultModelConfig(t *testing.T, providerID, modelID, envVar string) {
 
 func writeDefaultModelConfigWithBaseURL(t *testing.T, providerID, modelID, envVar, baseURL string) {
 	t.Helper()
-
-	path := filepath.Join(t.TempDir(), "config.v2.json")
-	t.Setenv("CARRIER_CONFIG", path)
-	modelName := providerID + "-default"
-	entry := map[string]string{
-		"model_name":  modelName,
+	writeDefaultModelConfigEntries(t, providerID+"-default", []map[string]string{{
+		"model_name":  providerID + "-default",
 		"model":       modelID,
 		"provider_id": providerID,
 		"env_var":     envVar,
-	}
-	if strings.TrimSpace(baseURL) != "" {
-		entry["base_url"] = strings.TrimSpace(baseURL)
-	}
+		"base_url":    strings.TrimSpace(baseURL),
+	}})
+}
+
+func writeDefaultModelConfigEntries(t *testing.T, defaultModel string, entries []map[string]string) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "config.v2.json")
+	t.Setenv("CARRIER_CONFIG", path)
 	payload := map[string]interface{}{
 		"config_version": 2,
-		"default_model":  modelName,
-		"model_list":     []map[string]string{entry},
+		"default_model":  defaultModel,
+		"model_list":     entries,
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -41,6 +43,72 @@ func writeDefaultModelConfigWithBaseURL(t *testing.T, providerID, modelID, envVa
 	}
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatalf("write config payload: %v", err)
+	}
+}
+
+func TestRequestLLMCompletionWithProviderAndDeps_FallbackUsesAliasCandidates(t *testing.T) {
+	writeDefaultModelConfigEntries(t, "openrouter-fast", []map[string]string{
+		{
+			"model_name":  "openrouter-fast",
+			"model_alias": "flash",
+			"model":       "openrouter/google/gemini-2.0-flash-001",
+			"provider_id": "openrouter",
+			"env_var":     "OPENROUTER_API_KEY",
+			"base_url":    "https://openrouter.ai/api/v1",
+		},
+		{
+			"model_name":  "openrouter-safe",
+			"model_alias": "flash",
+			"model":       "openrouter/deepseek/deepseek-chat-v3-0324",
+			"provider_id": "openrouter",
+			"env_var":     "OPENROUTER_API_KEY",
+			"base_url":    "https://openrouter.ai/api/v1",
+		},
+	})
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-fallback")
+
+	var requestedModels []string
+	callCount := 0
+	got, err := requestLLMCompletionWithProviderAndDeps(context.Background(), "openrouter", "system", "user", llmRequestDeps{
+		doRequest: func(req *http.Request) (*http.Response, error) {
+			callCount++
+			var body map[string]interface{}
+			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			requestedModel, _ := body["model"].(string)
+			requestedModels = append(requestedModels, strings.TrimSpace(requestedModel))
+			if callCount == 1 {
+				return &http.Response{
+					StatusCode: http.StatusBadGateway,
+					Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"temporary upstream failure"}}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"fallback ok"}}]}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("requestLLMCompletionWithProviderAndDeps error: %v", err)
+	}
+	if got != "fallback ok" {
+		t.Fatalf("reply = %q, want %q", got, "fallback ok")
+	}
+	if callCount != 2 {
+		t.Fatalf("expected 2 provider attempts, got %d", callCount)
+	}
+	wantModels := []string{"google/gemini-2.0-flash-001", "deepseek/deepseek-chat-v3-0324"}
+	if len(requestedModels) != len(wantModels) {
+		t.Fatalf("requested models = %v, want %v", requestedModels, wantModels)
+	}
+	for i := range wantModels {
+		if requestedModels[i] != wantModels[i] {
+			t.Fatalf("requested model[%d] = %q, want %q", i, requestedModels[i], wantModels[i])
+		}
 	}
 }
 

@@ -185,3 +185,66 @@ func TestPrepareZeroclawManagedOnboard_AllowsWebUIOnlyMode(t *testing.T) {
 		t.Fatalf("expected webui-only comment in config, got:\n%s", cfgText)
 	}
 }
+
+func TestPrepareZeroclawManagedOnboard_RendersProtocolProfiles(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("CARRIER_MANAGED_ZEROCLAW_VERSION", "0.1.7")
+
+	configPath := filepath.Join(t.TempDir(), "config.v2.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "default_model": "openrouter-fast",
+  "model_list": [
+    {
+      "model_name": "openrouter-fast",
+      "model_alias": "flash",
+      "model": "openrouter/google/gemini-2.0-flash-001",
+      "provider_id": "openrouter",
+      "env_var": "OPENROUTER_API_KEY",
+      "base_url": "https://openrouter.ai/api/v1"
+    },
+    {
+      "model_name": "openrouter-safe",
+      "model_alias": "flash",
+      "model": "openrouter/deepseek/deepseek-chat-v3-0324",
+      "provider_id": "openrouter",
+      "env_var": "OPENROUTER_API_KEY",
+      "base_url": "https://openrouter.ai/api/v1"
+    }
+  ]
+}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("CARRIER_CONFIG", configPath)
+
+	sess := &OnboardSession{
+		SelectedAgent:    "zeroclaw",
+		SelectedProvider: "openrouter",
+		EnvVars: map[string]string{
+			"OPENROUTER_API_KEY": "sk-zeroclaw-profile",
+		},
+	}
+
+	result, err := prepareManagedOnboard("zeroclaw", sess, "webui:add")
+	if err != nil {
+		t.Fatalf("prepareManagedOnboard: %v", err)
+	}
+
+	cfgRaw, err := os.ReadFile(result.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	cfgText := string(cfgRaw)
+	for _, snippet := range []string{
+		`[provider_profiles.openrouter_fast]`,
+		`protocol_family = "openai-compatible"`,
+		`model_alias = "flash"`,
+		`model = "google/gemini-2.0-flash-001"`,
+		`[provider_profiles.openrouter_safe]`,
+		`model = "deepseek/deepseek-chat-v3-0324"`,
+	} {
+		if !strings.Contains(cfgText, snippet) {
+			t.Fatalf("expected config to contain %q, got:\n%s", snippet, cfgText)
+		}
+	}
+}

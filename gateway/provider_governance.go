@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	sharedconfig "carrier/shared/config"
 )
 
 func handleProviderGovernanceResolve(w http.ResponseWriter, r *http.Request, requestID string, cfg *GatewayConfig) {
@@ -201,6 +203,12 @@ func buildProviderGovernanceTraceEntry(binding ProviderBinding, source string) (
 		entry.Status = "broken_profile"
 		entry.Message = fmt.Sprintf("profile %s not found", strings.TrimSpace(binding.ProfileID))
 		return entry, ProviderProfile{}, false, nil
+	}
+	if candidates, err := sharedconfig.LoadCarrierModelProfilesForAlias(profile.Provider, profile.Model); err == nil && len(candidates) > 0 {
+		profile.Model = strings.TrimSpace(candidates[0].ModelID)
+		if strings.TrimSpace(profile.BaseURL) == "" {
+			profile.BaseURL = strings.TrimSpace(candidates[0].BaseURL)
+		}
 	}
 	entry.ProfileName = strings.TrimSpace(profile.Name)
 	entry.Provider = strings.TrimSpace(profile.Provider)
