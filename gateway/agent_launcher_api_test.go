@@ -77,6 +77,23 @@ func TestHandleAgentLauncherReturnsSummary(t *testing.T) {
 				},
 			})
 		},
+		"GET /api/base-agent/cron/jobs": func(w http.ResponseWriter, r *http.Request) {
+			if got := r.URL.Query().Get("agentId"); got != "picoclaw" {
+				t.Fatalf("agentId query=%q want picoclaw", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"jobs": []map[string]interface{}{
+					{
+						"id":         "cron-1",
+						"agentId":    "picoclaw",
+						"prompt":     "check launcher",
+						"nextRunAt":  now,
+						"lastResult": "succeeded",
+						"lastRunAt":  now,
+					},
+				},
+			})
+		},
 	})
 
 	rec := httptest.NewRecorder()
@@ -95,6 +112,8 @@ func TestHandleAgentLauncherReturnsSummary(t *testing.T) {
 		`"credentialConfigured":true`,
 		`"channel":"telegram"`,
 		`"toolbox"`,
+		`"count":1`,
+		`"lastResult":"succeeded"`,
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("expected response to contain %s, got %s", needle, body)

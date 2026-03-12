@@ -75,6 +75,8 @@ type baseAgentRuntime interface {
 	CapabilitySummary(ctx context.Context) baseagent.RuntimeCapabilitySummary
 	RespondPendingApproval(ctx context.Context, sessionKey, approvalID string, decision baseagent.ApprovalDecision) (baseagent.ChatResponse, error)
 	ScheduleJob(ctx context.Context, job baseagent.CronJob) (baseagent.CronJob, error)
+	ListCronJobs(ctx context.Context, sessionKey string) ([]baseagent.CronJob, error)
+	CancelCronJob(ctx context.Context, jobID string) (baseagent.CronJob, error)
 }
 
 // Run starts the daemon HTTP API server. It blocks until a termination
@@ -499,6 +501,7 @@ func buildHTTPMuxWithBaseAgent(
 		}
 		var body struct {
 			SessionKey string    `json:"sessionKey"`
+			AgentID    string    `json:"agentId,omitempty"`
 			Provider   string    `json:"provider,omitempty"`
 			ChatID     string    `json:"chatId,omitempty"`
 			SessionID  string    `json:"sessionId,omitempty"`
@@ -527,12 +530,73 @@ func buildHTTPMuxWithBaseAgent(
 			return
 		}
 		job, err := baseRuntime.ScheduleJob(r.Context(), baseagent.CronJob{
+			AgentID:    strings.TrimSpace(body.AgentID),
 			SessionKey: sessionKey,
 			Prompt:     strings.TrimSpace(body.Prompt),
 			NextRunAt:  body.NextRunAt,
 		})
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, job)
+	})
+
+	register("/api/base-agent/cron/jobs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if baseRuntime == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime is unavailable")
+			return
+		}
+		sessionKey := strings.TrimSpace(r.URL.Query().Get("sessionKey"))
+		agentID := strings.TrimSpace(r.URL.Query().Get("agentId"))
+		jobs, err := baseRuntime.ListCronJobs(r.Context(), sessionKey)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if agentID != "" {
+			filtered := make([]baseagent.CronJob, 0, len(jobs))
+			for _, job := range jobs {
+				if strings.EqualFold(strings.TrimSpace(job.AgentID), agentID) {
+					filtered = append(filtered, job)
+				}
+			}
+			jobs = filtered
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
+	})
+
+	register("/api/base-agent/cron/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if baseRuntime == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime is unavailable")
+			return
+		}
+		trimmed := strings.TrimPrefix(strings.TrimSpace(r.URL.Path), "/api/base-agent/cron/")
+		trimmed = strings.Trim(trimmed, "/")
+		if !strings.HasSuffix(trimmed, "/cancel") {
+			http.NotFound(w, r)
+			return
+		}
+		jobID := strings.Trim(strings.TrimSuffix(trimmed, "/cancel"), "/")
+		if jobID == "" {
+			writeJSONError(w, http.StatusBadRequest, "cron job id is required")
+			return
+		}
+		job, err := baseRuntime.CancelCronJob(r.Context(), jobID)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if strings.Contains(strings.ToLower(err.Error()), "not found") {
+				status = http.StatusNotFound
+			}
+			writeJSONError(w, status, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, job)

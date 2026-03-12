@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -115,6 +116,64 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 		}
 		writeJSON(w, http.StatusOK, result)
 		return
+	case "cron":
+		if daemon == nil {
+			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_COMMAND_FAILED", "daemon client is unavailable"))
+			return
+		}
+		switch {
+		case len(parts) == 2 && r.Method == http.MethodGet:
+			jobs, err := daemon.ListCronJobs(r.Context(), agentID, "", "webui:agents:cron:list", requestID)
+			if err != nil {
+				writeDaemonAPIError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
+			return
+		case len(parts) == 2 && r.Method == http.MethodPost:
+			var body struct {
+				Provider  string    `json:"provider,omitempty"`
+				SessionID string    `json:"sessionId,omitempty"`
+				Message   string    `json:"message"`
+				NextRunAt time.Time `json:"nextRunAt,omitempty"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid JSON body"))
+				return
+			}
+			if strings.TrimSpace(body.Message) == "" {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "message is required"))
+				return
+			}
+			job, err := daemon.ScheduleCronJob(r.Context(), baseagent.CronJob{
+				AgentID:    agentID,
+				SessionKey: baseagent.ResolveSessionKey(firstNonEmpty(strings.TrimSpace(body.Provider), "managed-agent"), firstNonEmpty(strings.TrimSpace(body.SessionID), agentID+"-cron")),
+				Prompt:     strings.TrimSpace(body.Message),
+				NextRunAt:  body.NextRunAt,
+			}, "webui:agents:cron:schedule", requestID)
+			if err != nil {
+				writeDaemonAPIError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, job)
+			return
+		case len(parts) == 4 && strings.EqualFold(strings.TrimSpace(parts[3]), "cancel") && r.Method == http.MethodPost:
+			jobID := strings.TrimSpace(parts[2])
+			if jobID == "" {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "cron job id is required"))
+				return
+			}
+			job, err := daemon.CancelCronJob(r.Context(), jobID, "webui:agents:cron:cancel", requestID)
+			if err != nil {
+				writeDaemonAPIError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, job)
+			return
+		default:
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
 	case "launcher":
 		handleAgentLauncher(w, r, requestID, agentID, daemon)
 		return

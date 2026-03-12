@@ -55,6 +55,26 @@ describe('AgentDetailPage', () => {
           headers: { 'Content-Type': 'application/json' },
         });
       }
+      if (url.endsWith('/api/v1/agents/agent-alpha/launcher')) {
+        return new Response(JSON.stringify({
+          agentId: 'agent-alpha',
+          heartbeat: { state: 'fresh', ageSeconds: 12 },
+          memory: { contractId: 'memory-alpha' },
+          providerReadiness: { provider: 'openrouter', ready: true, authMode: 'api_key' },
+          cron: {
+            count: 2,
+            nextRunAt: '2026-03-13T00:00:00Z',
+            lastRunAt: '2026-03-12T23:55:00Z',
+            lastResult: 'succeeded',
+            jobs: [
+              { id: 'cron-1', prompt: 'check launcher', nextRunAt: '2026-03-13T00:00:00Z', lastResult: 'succeeded' },
+            ],
+          },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }) as typeof fetch;
   });
@@ -72,5 +92,7 @@ describe('AgentDetailPage', () => {
     expect(screen.getByText(/go-testing/i)).toBeInTheDocument();
     expect(screen.getByText(/repo_search/i)).toBeInTheDocument();
     expect(screen.getByText(/healthy/i)).toBeInTheDocument();
+    expect(screen.getByText(/2 job\(s\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/check launcher/i)).toBeInTheDocument();
   });
 });

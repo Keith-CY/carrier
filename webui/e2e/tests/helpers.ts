@@ -501,6 +501,16 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
           credentialConfigured: true,
           ready: true,
         },
+        cron: {
+          count: 2,
+          nextRunAt: '2026-03-13T00:00:00Z',
+          lastRunAt: '2026-03-12T23:55:00Z',
+          lastResult: 'succeeded',
+          jobs: [
+            { id: 'cron-1', prompt: 'check launcher', nextRunAt: '2026-03-13T00:00:00Z', lastRunAt: '2026-03-12T23:55:00Z', lastResult: 'succeeded' },
+            { id: 'cron-2', prompt: 'refresh heartbeat', nextRunAt: '2026-03-13T01:00:00Z', lastResult: 'scheduled' },
+          ],
+        },
         session: {
           instanceId: 'instance-1',
           channel: 'telegram',

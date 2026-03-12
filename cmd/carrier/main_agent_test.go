@@ -55,6 +55,30 @@ func TestParseAgentCommandArgs(t *testing.T) {
     if heartbeatOpts.Action != "heartbeat" || heartbeatOpts.AgentID != "picoclaw" || !heartbeatOpts.JSON {
         t.Fatalf("unexpected heartbeat opts: %+v", heartbeatOpts)
     }
+
+    cronScheduleOpts, err := parseAgentCommandArgs([]string{"cron", "schedule", "picoclaw", "-m", "check launcher", "--provider", "openrouter", "--session-id", "cron-sess", "--json"})
+    if err != nil {
+        t.Fatalf("parseAgentCommandArgs(cron schedule) error: %v", err)
+    }
+    if cronScheduleOpts.Action != "cron-schedule" || cronScheduleOpts.AgentID != "picoclaw" || cronScheduleOpts.Message != "check launcher" || cronScheduleOpts.Provider != "openrouter" || cronScheduleOpts.SessionID != "cron-sess" || !cronScheduleOpts.JSON {
+        t.Fatalf("unexpected cron schedule opts: %+v", cronScheduleOpts)
+    }
+
+    cronListOpts, err := parseAgentCommandArgs([]string{"cron", "list", "picoclaw", "--json"})
+    if err != nil {
+        t.Fatalf("parseAgentCommandArgs(cron list) error: %v", err)
+    }
+    if cronListOpts.Action != "cron-list" || cronListOpts.AgentID != "picoclaw" || !cronListOpts.JSON {
+        t.Fatalf("unexpected cron list opts: %+v", cronListOpts)
+    }
+
+    cronCancelOpts, err := parseAgentCommandArgs([]string{"cron", "cancel", "picoclaw", "cron-1", "--json"})
+    if err != nil {
+        t.Fatalf("parseAgentCommandArgs(cron cancel) error: %v", err)
+    }
+    if cronCancelOpts.Action != "cron-cancel" || cronCancelOpts.AgentID != "picoclaw" || cronCancelOpts.CronJobID != "cron-1" || !cronCancelOpts.JSON {
+        t.Fatalf("unexpected cron cancel opts: %+v", cronCancelOpts)
+    }
 }
 
 func TestRunAgentCommand(t *testing.T) {
@@ -79,7 +103,22 @@ func TestRunAgentCommand(t *testing.T) {
                 http.NotFound(w, r)
                 return
             }
-            _, _ = w.Write([]byte(`{"result":"ok","agentId":"picoclaw","status":{"runtimeState":"running","installState":"installed","health":"healthy"},"heartbeat":{"state":"fresh","ageSeconds":4,"lastActivityAt":"2026-03-12T00:00:00Z"},"memory":{"contractId":"memory-alpha","contractDigest":"digest-1","syncState":"synced"},"providerReadiness":{"provider":"openrouter","ready":true,"authMode":"api_key"},"session":{"instanceId":"picoclaw-main","runtimeMode":"managed_gateway","updatedAt":"2026-03-12T00:00:00Z"}}`))
+            _, _ = w.Write([]byte(`{"result":"ok","agentId":"picoclaw","status":{"runtimeState":"running","installState":"installed","health":"healthy"},"heartbeat":{"state":"fresh","ageSeconds":4,"lastActivityAt":"2026-03-12T00:00:00Z"},"memory":{"contractId":"memory-alpha","contractDigest":"digest-1","syncState":"synced"},"providerReadiness":{"provider":"openrouter","ready":true,"authMode":"api_key"},"session":{"instanceId":"picoclaw-main","runtimeMode":"managed_gateway","updatedAt":"2026-03-12T00:00:00Z"},"cron":{"count":1,"jobs":[{"id":"cron-1","agentId":"picoclaw","prompt":"check launcher","nextRunAt":"2026-03-12T01:00:00Z","lastResult":"succeeded","lastRunAt":"2026-03-12T00:30:00Z"}]}}`))
+        case "/api/v1/agents/picoclaw/cron":
+            switch r.Method {
+            case http.MethodGet:
+                _, _ = w.Write([]byte(`{"jobs":[{"id":"cron-1","agentId":"picoclaw","prompt":"check launcher","lastResult":"succeeded","nextRunAt":"2026-03-12T01:00:00Z"}]}`))
+            case http.MethodPost:
+                _, _ = w.Write([]byte(`{"id":"cron-2","agentId":"picoclaw","prompt":"check launcher","lastResult":"scheduled","nextRunAt":"2026-03-12T01:00:00Z"}`))
+            default:
+                http.NotFound(w, r)
+            }
+        case "/api/v1/agents/picoclaw/cron/cron-1/cancel":
+            if r.Method != http.MethodPost {
+                http.NotFound(w, r)
+                return
+            }
+            _, _ = w.Write([]byte(`{"id":"cron-1","agentId":"picoclaw","prompt":"check launcher","lastResult":"cancelled","cancelledAt":"2026-03-12T00:40:00Z"}`))
         default:
             http.NotFound(w, r)
         }
@@ -110,6 +149,30 @@ func TestRunAgentCommand(t *testing.T) {
     }
     if !strings.Contains(out.String(), "fresh") || !strings.Contains(out.String(), "4s") {
         t.Fatalf("heartbeat output=%s", out.String())
+    }
+
+    out.Reset()
+    if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "cron-schedule", AgentID: "picoclaw", Message: "check launcher", Provider: "openrouter", SessionID: "cron-sess"}); err != nil {
+        t.Fatalf("runAgentCommand(cron schedule) error: %v", err)
+    }
+    if !strings.Contains(out.String(), "cron-2") || !strings.Contains(out.String(), "scheduled") {
+        t.Fatalf("cron schedule output=%s", out.String())
+    }
+
+    out.Reset()
+    if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "cron-list", AgentID: "picoclaw"}); err != nil {
+        t.Fatalf("runAgentCommand(cron list) error: %v", err)
+    }
+    if !strings.Contains(out.String(), "cron-1") || !strings.Contains(out.String(), "check launcher") {
+        t.Fatalf("cron list output=%s", out.String())
+    }
+
+    out.Reset()
+    if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "cron-cancel", AgentID: "picoclaw", CronJobID: "cron-1"}); err != nil {
+        t.Fatalf("runAgentCommand(cron cancel) error: %v", err)
+    }
+    if !strings.Contains(out.String(), "cron-1") || !strings.Contains(out.String(), "cancelled") {
+        t.Fatalf("cron cancel output=%s", out.String())
     }
 }
 

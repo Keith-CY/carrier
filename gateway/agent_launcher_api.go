@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type agentLauncherSummary struct {
@@ -13,7 +14,16 @@ type agentLauncherSummary struct {
 	Memory            *AgentMemoryState      `json:"memory,omitempty"`
 	Capabilities      AgentCapabilitySummary `json:"capabilities"`
 	ProviderReadiness agentProviderReadiness `json:"providerReadiness"`
+	Cron              *agentLauncherCronSummary `json:"cron,omitempty"`
 	Session           *agentLauncherSession  `json:"session,omitempty"`
+}
+
+type agentLauncherCronSummary struct {
+	Count      int       `json:"count"`
+	NextRunAt  string    `json:"nextRunAt,omitempty"`
+	LastRunAt  string    `json:"lastRunAt,omitempty"`
+	LastResult string    `json:"lastResult,omitempty"`
+	Jobs       []CronJob `json:"jobs,omitempty"`
 }
 
 type agentProviderReadiness struct {
@@ -68,6 +78,7 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 
 	var session *agentLauncherSession
 	var readiness agentProviderReadiness
+	var cronSummary *agentLauncherCronSummary
 	if inst, ok := latestManagedInstanceForAgent(agentID); ok {
 		session = &agentLauncherSession{
 			InstanceID:   strings.TrimSpace(inst.ID),
@@ -86,6 +97,9 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 			UpdatedAt:    strings.TrimSpace(inst.UpdatedAt),
 		}
 		readiness = buildAgentProviderReadiness(inst.Provider)
+		if jobs, err := daemon.ListCronJobs(r.Context(), agentID, "", "webui:agents:launcher", requestID); err == nil && len(jobs) > 0 {
+			cronSummary = buildAgentCronSummary(jobs)
+		}
 	}
 
 	status := statuses[0]
@@ -100,6 +114,7 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 		Memory:            status.Memory,
 		Capabilities:      capabilities,
 		ProviderReadiness: readiness,
+		Cron:              cronSummary,
 		Session:           session,
 	})
 }
@@ -131,4 +146,32 @@ func agentProviderFromStatus(status AgentState) string {
 		return ""
 	}
 	return ""
+}
+
+func buildAgentCronSummary(jobs []CronJob) *agentLauncherCronSummary {
+	if len(jobs) == 0 {
+		return nil
+	}
+	summary := &agentLauncherCronSummary{
+		Count: len(jobs),
+		Jobs:  append([]CronJob(nil), jobs...),
+	}
+	var lastRunAt time.Time
+	var nextRunAt time.Time
+	for _, job := range jobs {
+		if !job.NextRunAt.IsZero() && (nextRunAt.IsZero() || job.NextRunAt.Before(nextRunAt)) {
+			nextRunAt = job.NextRunAt
+		}
+		if job.LastRunAt != nil && (lastRunAt.IsZero() || job.LastRunAt.After(lastRunAt)) {
+			lastRunAt = *job.LastRunAt
+			summary.LastResult = strings.TrimSpace(job.LastResult)
+		}
+	}
+	if !nextRunAt.IsZero() {
+		summary.NextRunAt = nextRunAt.UTC().Format(time.RFC3339Nano)
+	}
+	if !lastRunAt.IsZero() {
+		summary.LastRunAt = lastRunAt.UTC().Format(time.RFC3339Nano)
+	}
+	return summary
 }

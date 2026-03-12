@@ -3,6 +3,7 @@ package baseagent
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestCronJobReentersStructuredLoopWithSessionContext(t *testing.T) {
@@ -75,5 +76,65 @@ func TestCronJobRespectsPendingApprovalPolicy(t *testing.T) {
 	pending := rt.sessions.PendingApprovals("cli:cron-pending")
 	if len(pending) != 1 || pending[0].ToolName != "agent_start" {
 		t.Fatalf("expected cron job to preserve pending approval policy, got %+v", pending)
+	}
+}
+
+func TestCronServiceListIncludesLastRunState(t *testing.T) {
+	var executed int
+	svc := NewCronService(func(_ context.Context, job CronJob) error {
+		executed++
+		return nil
+	})
+
+	job, err := svc.Schedule(context.Background(), CronJob{
+		ID:         "cron-list-1",
+		SessionKey: "agent:picoclaw",
+		Prompt:     "summarize heartbeat",
+	})
+	if err != nil {
+		t.Fatalf("schedule job: %v", err)
+	}
+
+	jobs := svc.List("agent:picoclaw")
+	if len(jobs) != 1 {
+		t.Fatalf("jobs=%d want 1", len(jobs))
+	}
+	if jobs[0].ID != "cron-list-1" || jobs[0].LastRunAt == nil || jobs[0].LastResult != "succeeded" {
+		t.Fatalf("unexpected listed job: %+v", jobs[0])
+	}
+	if jobs[0].NextRunAt.IsZero() {
+		t.Fatalf("expected next run at on listed job: %+v", jobs[0])
+	}
+	if executed != 1 {
+		t.Fatalf("executed=%d want 1", executed)
+	}
+	if job.ID != "cron-list-1" {
+		t.Fatalf("scheduled job id=%q want cron-list-1", job.ID)
+	}
+}
+
+func TestCronServiceCancelMarksJobCancelled(t *testing.T) {
+	svc := NewCronService(nil)
+	scheduledAt := time.Now().UTC().Add(5 * time.Minute)
+	if _, err := svc.Schedule(context.Background(), CronJob{
+		ID:         "cron-cancel-1",
+		SessionKey: "agent:picoclaw",
+		Prompt:     "ping",
+		NextRunAt:  scheduledAt,
+	}); err != nil {
+		t.Fatalf("schedule job: %v", err)
+	}
+
+	job, err := svc.Cancel("cron-cancel-1")
+	if err != nil {
+		t.Fatalf("cancel job: %v", err)
+	}
+	if job.CancelledAt == nil || job.LastResult != "cancelled" {
+		t.Fatalf("unexpected cancelled job: %+v", job)
+	}
+
+	jobs := svc.List("agent:picoclaw")
+	if len(jobs) != 1 || jobs[0].CancelledAt == nil || jobs[0].LastResult != "cancelled" {
+		t.Fatalf("unexpected listed cancelled job: %+v", jobs)
 	}
 }

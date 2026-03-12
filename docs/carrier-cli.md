@@ -72,6 +72,12 @@ All command blocks below assume `carrier` is installed and available in `PATH`.
   - Show launcher summary with runtime, provider, memory, and session details.
 - `carrier agent heartbeat <agent_id> [--json]`
   - Show heartbeat age and last activity for one managed agent.
+- `carrier agent cron schedule <agent_id> -m <message> [--provider <provider-id>] [--session-id <id>] [--next-run-at <rfc3339>] [--json]`
+  - Schedule one managed-agent cron prompt through the gateway.
+- `carrier agent cron list <agent_id> [--json]`
+  - List managed-agent cron jobs with next/last run state.
+- `carrier agent cron cancel <agent_id> <job_id> [--json]`
+  - Cancel one managed-agent cron job.
 
 ### Bootstrap and runtime
 
@@ -350,6 +356,12 @@ carrier agent launcher picoclaw
 
 ```bash
 carrier agent heartbeat picoclaw
+```
+
+```bash
+carrier agent cron schedule picoclaw -m "Check launcher readiness" --provider openrouter --next-run-at 2026-03-13T00:00:00Z
+carrier agent cron list picoclaw
+carrier agent cron cancel picoclaw cron-1
 ```
 
 ### Install OpenClaw on VPS

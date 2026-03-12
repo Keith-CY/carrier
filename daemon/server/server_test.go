@@ -25,15 +25,21 @@ type fakeBaseAgentRuntime struct {
 	approvalResp baseagent.ChatResponse
 	approvalErr  error
 	cronJob      baseagent.CronJob
+	cronJobs     []baseagent.CronJob
+	cancelledCronJob baseagent.CronJob
 	cronErr      error
 	callCount    int
 	approvalCall int
 	cronCall     int
+	listCronCall int
+	cancelCronCall int
 	lastReq      baseagent.ChatRequest
 	lastSession  string
 	lastApproval string
 	lastDecision string
 	lastCronJob  baseagent.CronJob
+	lastCronListSession string
+	lastCancelledCronID string
 }
 
 func (f *fakeBaseAgentRuntime) Chat(_ context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error) {
@@ -61,6 +67,21 @@ func (f *fakeBaseAgentRuntime) ScheduleJob(_ context.Context, job baseagent.Cron
 		f.cronJob = job
 	}
 	return f.cronJob, f.cronErr
+}
+
+func (f *fakeBaseAgentRuntime) ListCronJobs(_ context.Context, sessionKey string) ([]baseagent.CronJob, error) {
+	f.listCronCall++
+	f.lastCronListSession = sessionKey
+	return append([]baseagent.CronJob(nil), f.cronJobs...), nil
+}
+
+func (f *fakeBaseAgentRuntime) CancelCronJob(_ context.Context, jobID string) (baseagent.CronJob, error) {
+	f.cancelCronCall++
+	f.lastCancelledCronID = jobID
+	if f.cancelledCronJob.ID == "" {
+		f.cancelledCronJob = baseagent.CronJob{ID: jobID}
+	}
+	return f.cancelledCronJob, nil
 }
 
 func newTestService() *lifecycle.Service {
@@ -349,6 +370,57 @@ func TestDaemonServerCronScheduleEndpointDerivesSessionKey(t *testing.T) {
 	}
 	if rt.lastCronJob.SessionKey != baseagent.ResolveSessionKey("cli", "cron-derived") {
 		t.Fatalf("unexpected derived cron job state: %+v", rt.lastCronJob)
+	}
+}
+
+func TestDaemonServerCronListAndCancelEndpoints(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	lastRunAt := time.Date(2026, 3, 12, 10, 0, 0, 0, time.UTC)
+	rt := &fakeBaseAgentRuntime{
+		cronJobs: []baseagent.CronJob{{
+			ID:         "cron-3",
+			SessionKey: "agent:picoclaw",
+			Prompt:     "check launcher",
+			NextRunAt:  time.Date(2026, 3, 12, 11, 0, 0, 0, time.UTC),
+			LastRunAt:  &lastRunAt,
+			LastResult: "succeeded",
+		}},
+		cancelledCronJob: baseagent.CronJob{
+			ID:          "cron-3",
+			SessionKey:  "agent:picoclaw",
+			Prompt:      "check launcher",
+			LastResult:  "cancelled",
+			CancelledAt: &lastRunAt,
+		},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/base-agent/cron/jobs?sessionKey=agent:picoclaw", nil)
+	listRec := httptest.NewRecorder()
+	mux.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	if rt.listCronCall != 1 || rt.lastCronListSession != "agent:picoclaw" {
+		t.Fatalf("unexpected cron list call state: %+v", rt)
+	}
+	if !strings.Contains(listRec.Body.String(), `"lastResult":"succeeded"`) {
+		t.Fatalf("unexpected cron list body=%s", listRec.Body.String())
+	}
+
+	cancelReq := httptest.NewRequest(http.MethodPost, "/api/base-agent/cron/cron-3/cancel", nil)
+	cancelRec := httptest.NewRecorder()
+	mux.ServeHTTP(cancelRec, cancelReq)
+	if cancelRec.Code != http.StatusOK {
+		t.Fatalf("cancel status=%d body=%s", cancelRec.Code, cancelRec.Body.String())
+	}
+	if rt.cancelCronCall != 1 || rt.lastCancelledCronID != "cron-3" {
+		t.Fatalf("unexpected cron cancel call state: %+v", rt)
+	}
+	if !strings.Contains(cancelRec.Body.String(), `"lastResult":"cancelled"`) {
+		t.Fatalf("unexpected cron cancel body=%s", cancelRec.Body.String())
 	}
 }
 

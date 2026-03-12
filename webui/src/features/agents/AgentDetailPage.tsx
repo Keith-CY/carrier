@@ -44,6 +44,19 @@ type AgentLauncherSummary = {
     ready?: boolean;
     credentialBackend?: string;
   };
+  cron?: {
+    count?: number;
+    nextRunAt?: string;
+    lastRunAt?: string;
+    lastResult?: string;
+    jobs?: Array<{
+      id?: string;
+      prompt?: string;
+      nextRunAt?: string;
+      lastRunAt?: string;
+      lastResult?: string;
+    }>;
+  };
   session?: {
     instanceId?: string;
     channel?: string;
@@ -133,7 +146,7 @@ export function AgentDetailPage() {
           <div className="card">
             <h3>{`Agent: ${agentId}`}</h3>
             <div className="card-subtitle">Runtime Capabilities</div>
-            {content.launcher && (content.launcher.heartbeat || content.launcher.providerReadiness || content.launcher.memory || content.launcher.session) ? (
+            {content.launcher && (content.launcher.heartbeat || content.launcher.providerReadiness || content.launcher.memory || content.launcher.session || content.launcher.cron) ? (
               <div className="kv-grid">
                 <div>
                   <strong>Heartbeat</strong>
@@ -170,6 +183,33 @@ export function AgentDetailPage() {
                     {content.launcher.session?.pairedChatId ? ` · paired=${content.launcher.session.pairedChatId}` : ''}
                   </div>
                 </div>
+                <div>
+                  <strong>Cron</strong>
+                  <div className="text-dim">
+                    {typeof content.launcher.cron?.count === 'number' ? `${content.launcher.cron.count} job(s)` : 'none'}
+                    {content.launcher.cron?.nextRunAt ? ` · next=${content.launcher.cron.nextRunAt}` : ''}
+                    {content.launcher.cron?.lastRunAt ? ` · last=${content.launcher.cron.lastRunAt}` : ''}
+                    {content.launcher.cron?.lastResult ? ` · ${content.launcher.cron.lastResult}` : ''}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+            {content.launcher?.cron?.jobs && content.launcher.cron.jobs.length ? (
+              <div>
+                <strong>Cron Jobs</strong>
+                <ul className="compact-list">
+                  {content.launcher.cron.jobs.map((job) => (
+                    <li key={String(job.id || '')}>
+                      <span>{job.id || 'unknown-job'}</span>
+                      <span className="text-dim">
+                        {job.prompt || 'no prompt'}
+                        {job.nextRunAt ? ` · next=${job.nextRunAt}` : ''}
+                        {job.lastRunAt ? ` · last=${job.lastRunAt}` : ''}
+                        {job.lastResult ? ` · ${job.lastResult}` : ''}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
               </div>
             ) : null}
             <div className="kv-grid">

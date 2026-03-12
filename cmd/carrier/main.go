@@ -286,9 +286,11 @@ type memoryCommandOptions struct {
 type agentCommandOptions struct {
 	Action    string
 	AgentID   string
+	CronJobID string
 	Message   string
 	Provider  string
 	SessionID string
+	NextRunAt time.Time
 	JSON      bool
 }
 
@@ -650,6 +652,12 @@ Usage:
                         Run an interactive managed-agent shell
   carrier agent heartbeat <agent_id> [--json]
                         Show managed-agent heartbeat summary
+  carrier agent cron schedule <agent_id> -m <message> [--provider <provider-id>] [--session-id <id>] [--next-run-at <rfc3339>] [--json]
+                        Schedule one managed-agent cron prompt
+  carrier agent cron list <agent_id> [--json]
+                        List managed-agent cron jobs
+  carrier agent cron cancel <agent_id> <job_id> [--json]
+                        Cancel one managed-agent cron job
   carrier memory search --subject <subject> --query <query> [--limit <n>] [--min-score <f>] [--json]
                         Search curated memory records through the gateway knowledge facade
   carrier memory attach --instance <id> --scope <scope> [--json]
@@ -3266,17 +3274,42 @@ func parseMemoryCommandArgs(args []string) (memoryCommandOptions, error) {
 }
 
 func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
-	if len(args) < 2 {
-		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat> <agent_id> [flags]")
+	if len(args) == 0 {
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron> ...")
 	}
-	opts := agentCommandOptions{
-		Action:  strings.ToLower(strings.TrimSpace(args[0])),
-		AgentID: strings.TrimSpace(args[1]),
+	opts := agentCommandOptions{}
+	startIdx := 0
+	mode := strings.ToLower(strings.TrimSpace(args[0]))
+	switch mode {
+	case "run", "shell", "launcher", "heartbeat":
+		if len(args) < 2 {
+			return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat> <agent_id> [flags]")
+		}
+		opts.Action = mode
+		opts.AgentID = strings.TrimSpace(args[1])
+		startIdx = 2
+	case "cron":
+		if len(args) < 3 {
+			return agentCommandOptions{}, errors.New("usage: carrier agent cron <schedule|list|cancel> <agent_id> [job_id] [flags]")
+		}
+		subaction := strings.ToLower(strings.TrimSpace(args[1]))
+		opts.Action = "cron-" + subaction
+		opts.AgentID = strings.TrimSpace(args[2])
+		startIdx = 3
+		if subaction == "cancel" {
+			if len(args) < 4 {
+				return agentCommandOptions{}, errors.New("usage: carrier agent cron cancel <agent_id> <job_id> [--json]")
+			}
+			opts.CronJobID = strings.TrimSpace(args[3])
+			startIdx = 4
+		}
+	default:
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron> ...")
 	}
 	if opts.AgentID == "" {
-		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat> <agent_id> [flags]")
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron> ...")
 	}
-	for i := 2; i < len(args); i++ {
+	for i := startIdx; i < len(args); i++ {
 		raw := strings.TrimSpace(args[i])
 		switch strings.ToLower(raw) {
 		case "-m", "--message":
@@ -3300,6 +3333,17 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 			}
 			opts.SessionID = strings.TrimSpace(value)
 			i = next
+		case "--next-run-at":
+			value, next, err := parseRequiredFlagValue(args, i, "--next-run-at")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			parsed, convErr := time.Parse(time.RFC3339, strings.TrimSpace(value))
+			if convErr != nil {
+				return agentCommandOptions{}, fmt.Errorf("invalid --next-run-at value: %s", value)
+			}
+			opts.NextRunAt = parsed.UTC()
+			i = next
 		case "--json":
 			opts.JSON = true
 		default:
@@ -3311,9 +3355,18 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 		if opts.Message == "" {
 			return agentCommandOptions{}, errors.New("usage: carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--session-id <id>] [--json]")
 		}
+	case "cron-schedule":
+		if opts.Message == "" {
+			return agentCommandOptions{}, errors.New("usage: carrier agent cron schedule <agent_id> -m <message> [--provider <provider-id>] [--session-id <id>] [--next-run-at <rfc3339>] [--json]")
+		}
+	case "cron-list":
+	case "cron-cancel":
+		if strings.TrimSpace(opts.CronJobID) == "" {
+			return agentCommandOptions{}, errors.New("usage: carrier agent cron cancel <agent_id> <job_id> [--json]")
+		}
 	case "shell", "launcher", "heartbeat":
 	default:
-		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat> <agent_id> [flags]")
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron> ...")
 	}
 	return opts, nil
 }
@@ -4587,12 +4640,34 @@ type agentLauncherCLIResponse struct {
 		Ready    bool   `json:"ready"`
 		AuthMode string `json:"authMode,omitempty"`
 	} `json:"providerReadiness,omitempty"`
+	Cron *struct {
+		Count      int    `json:"count"`
+		NextRunAt  string `json:"nextRunAt,omitempty"`
+		LastRunAt  string `json:"lastRunAt,omitempty"`
+		LastResult string `json:"lastResult,omitempty"`
+		Jobs       []agentCronJobCLIResponse `json:"jobs,omitempty"`
+	} `json:"cron,omitempty"`
 	Session *struct {
 		InstanceID   string `json:"instanceId,omitempty"`
 		RuntimeMode  string `json:"runtimeMode,omitempty"`
 		RuntimeState string `json:"runtimeState,omitempty"`
 		UpdatedAt    string `json:"updatedAt,omitempty"`
 	} `json:"session,omitempty"`
+}
+
+type agentCronJobCLIResponse struct {
+	ID          string `json:"id"`
+	AgentID     string `json:"agentId,omitempty"`
+	SessionKey  string `json:"sessionKey,omitempty"`
+	Prompt      string `json:"prompt"`
+	NextRunAt   string `json:"nextRunAt,omitempty"`
+	LastRunAt   string `json:"lastRunAt,omitempty"`
+	LastResult  string `json:"lastResult,omitempty"`
+	CancelledAt string `json:"cancelledAt,omitempty"`
+}
+
+type agentCronListCLIResponse struct {
+	Jobs []agentCronJobCLIResponse `json:"jobs"`
 }
 
 func runMemoryCommand(out io.Writer, opts memoryCommandOptions) error {
@@ -4699,6 +4774,36 @@ func runAgentCommand(in io.Reader, out io.Writer, opts agentCommandOptions) erro
 		}
 		_, _ = fmt.Fprintln(out, renderManagedAgentHeartbeat(resp))
 		return nil
+	case "cron-schedule":
+		resp, raw, err := scheduleManagedAgentCron(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentCronJob(resp))
+		return nil
+	case "cron-list":
+		resp, raw, err := listManagedAgentCron(opts.AgentID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentCronList(resp))
+		return nil
+	case "cron-cancel":
+		resp, raw, err := cancelManagedAgentCron(opts.AgentID, opts.CronJobID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentCronJob(resp))
+		return nil
 	case "shell":
 		return runManagedAgentShell(in, out, opts)
 	default:
@@ -4737,6 +4842,60 @@ func fetchManagedAgentLauncher(agentID string) (*agentLauncherCLIResponse, []byt
 	var resp agentLauncherCLIResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, nil, fmt.Errorf("decode agent launcher response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func scheduleManagedAgentCron(opts agentCommandOptions) (*agentCronJobCLIResponse, []byte, error) {
+	payload := map[string]interface{}{
+		"message": strings.TrimSpace(opts.Message),
+	}
+	if strings.TrimSpace(opts.Provider) != "" {
+		payload["provider"] = strings.TrimSpace(opts.Provider)
+	}
+	if strings.TrimSpace(opts.SessionID) != "" {
+		payload["sessionId"] = strings.TrimSpace(opts.SessionID)
+	}
+	if !opts.NextRunAt.IsZero() {
+		payload["nextRunAt"] = opts.NextRunAt.UTC().Format(time.RFC3339)
+	}
+	path := fmt.Sprintf("/api/v1/agents/%s/cron", neturl.PathEscape(strings.TrimSpace(opts.AgentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentCronJobCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent cron schedule response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func listManagedAgentCron(agentID string) (*agentCronListCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/cron", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentCronListCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent cron list response: %w", err)
+	}
+	if resp.Jobs == nil {
+		resp.Jobs = []agentCronJobCLIResponse{}
+	}
+	return &resp, raw, nil
+}
+
+func cancelManagedAgentCron(agentID, jobID string) (*agentCronJobCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/cron/%s/cancel", neturl.PathEscape(strings.TrimSpace(agentID)), neturl.PathEscape(strings.TrimSpace(jobID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]any{})
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentCronJobCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent cron cancel response: %w", err)
 	}
 	return &resp, raw, nil
 }
@@ -4801,6 +4960,19 @@ func renderManagedAgentLauncher(resp *agentLauncherCLIResponse) string {
 	if resp.Session != nil && strings.TrimSpace(resp.Session.InstanceID) != "" {
 		lines = append(lines, fmt.Sprintf("instance=%s state=%s", strings.TrimSpace(resp.Session.InstanceID), firstNonEmpty(strings.TrimSpace(resp.Session.RuntimeState), strings.TrimSpace(resp.Status.RuntimeState))))
 	}
+	if resp.Cron != nil {
+		line := fmt.Sprintf("cron=%d", resp.Cron.Count)
+		if trimmed := strings.TrimSpace(resp.Cron.NextRunAt); trimmed != "" {
+			line += " next=" + trimmed
+		}
+		if trimmed := strings.TrimSpace(resp.Cron.LastRunAt); trimmed != "" {
+			line += " last=" + trimmed
+		}
+		if trimmed := strings.TrimSpace(resp.Cron.LastResult); trimmed != "" {
+			line += " result=" + trimmed
+		}
+		lines = append(lines, line)
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -4815,6 +4987,68 @@ func renderManagedAgentHeartbeat(resp *agentLauncherCLIResponse) string {
 	}
 	if trimmed := strings.TrimSpace(resp.Heartbeat.LastActivityAt); trimmed != "" {
 		lines = append(lines, fmt.Sprintf("lastActivityAt=%s", trimmed))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderManagedAgentCronJob(resp *agentCronJobCLIResponse) string {
+	if resp == nil {
+		return ""
+	}
+	lines := []string{
+		fmt.Sprintf("job=%s", strings.TrimSpace(resp.ID)),
+	}
+	if trimmed := strings.TrimSpace(resp.AgentID); trimmed != "" {
+		lines = append(lines, "agent="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.SessionKey); trimmed != "" {
+		lines = append(lines, "session="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.Prompt); trimmed != "" {
+		lines = append(lines, "prompt="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.NextRunAt); trimmed != "" {
+		lines = append(lines, "nextRunAt="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.LastRunAt); trimmed != "" {
+		lines = append(lines, "lastRunAt="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.LastResult); trimmed != "" {
+		lines = append(lines, "result="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.CancelledAt); trimmed != "" {
+		lines = append(lines, "cancelledAt="+trimmed)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderManagedAgentCronList(resp *agentCronListCLIResponse) string {
+	if resp == nil || len(resp.Jobs) == 0 {
+		return "no cron jobs"
+	}
+	lines := make([]string, 0, len(resp.Jobs))
+	for _, job := range resp.Jobs {
+		line := fmt.Sprintf("%s", strings.TrimSpace(job.ID))
+		if trimmed := strings.TrimSpace(job.Prompt); trimmed != "" {
+			line += " · " + trimmed
+		}
+		details := make([]string, 0, 3)
+		if trimmed := strings.TrimSpace(job.NextRunAt); trimmed != "" {
+			details = append(details, "next="+trimmed)
+		}
+		if trimmed := strings.TrimSpace(job.LastRunAt); trimmed != "" {
+			details = append(details, "last="+trimmed)
+		}
+		if trimmed := strings.TrimSpace(job.LastResult); trimmed != "" {
+			details = append(details, "result="+trimmed)
+		}
+		if trimmed := strings.TrimSpace(job.CancelledAt); trimmed != "" {
+			details = append(details, "cancelled="+trimmed)
+		}
+		if len(details) > 0 {
+			line += " (" + strings.Join(details, ", ") + ")"
+		}
+		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
 }

@@ -102,6 +102,7 @@ type AgentChatResult struct {
 }
 
 type AgentCapabilitySummary = baseagent.RuntimeCapabilitySummary
+type CronJob = baseagent.CronJob
 
 // DaemonClientError is returned when the daemon returns a non-2xx response.
 type DaemonClientError struct {
@@ -458,6 +459,75 @@ func (c *DaemonClient) ChatAgent(
 	var result AgentChatResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, fmt.Errorf("agent chat response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *DaemonClient) ScheduleCronJob(
+	ctx context.Context,
+	job baseagent.CronJob,
+	actor string,
+	requestID string,
+) (*CronJob, error) {
+	raw, err := c.request(ctx, http.MethodPost, "/api/base-agent/cron/schedule", job, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result CronJob
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("cron schedule response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *DaemonClient) ListCronJobs(
+	ctx context.Context,
+	agentID string,
+	sessionKey string,
+	actor string,
+	requestID string,
+) ([]CronJob, error) {
+	values := url.Values{}
+	if trimmed := strings.TrimSpace(agentID); trimmed != "" {
+		values.Set("agentId", trimmed)
+	}
+	if trimmed := strings.TrimSpace(sessionKey); trimmed != "" {
+		values.Set("sessionKey", trimmed)
+	}
+	path := "/api/base-agent/cron/jobs"
+	if encoded := values.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	raw, err := c.request(ctx, http.MethodGet, path, nil, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var wrapped struct {
+		Jobs []CronJob `json:"jobs"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("cron jobs response: %w", err)
+	}
+	if wrapped.Jobs == nil {
+		wrapped.Jobs = []CronJob{}
+	}
+	return wrapped.Jobs, nil
+}
+
+func (c *DaemonClient) CancelCronJob(
+	ctx context.Context,
+	jobID string,
+	actor string,
+	requestID string,
+) (*CronJob, error) {
+	path := "/api/base-agent/cron/" + url.PathEscape(strings.TrimSpace(jobID)) + "/cancel"
+	raw, err := c.request(ctx, http.MethodPost, path, map[string]any{}, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result CronJob
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("cron cancel response: %w", err)
 	}
 	return &result, nil
 }

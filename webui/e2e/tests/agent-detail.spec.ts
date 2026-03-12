@@ -24,6 +24,9 @@ test.describe('Agent Detail', () => {
     await expect(page.locator('#agent-detail-content')).toContainText('fresh');
     await expect(page.locator('#agent-detail-content')).toContainText('openrouter');
     await expect(page.locator('#agent-detail-content')).toContainText('memory-alpha');
+    await expect(page.locator('#agent-detail-content')).toContainText('Cron');
+    await expect(page.locator('#agent-detail-content')).toContainText('2 job(s)');
+    await expect(page.locator('#agent-detail-content')).toContainText('check launcher');
     await expect(page.locator('#agent-detail-content')).toContainText('"runtimeState": "running"');
 
     await page.getByRole('button', { name: '▶ Start' }).evaluate((element: HTMLButtonElement) => element.click());
