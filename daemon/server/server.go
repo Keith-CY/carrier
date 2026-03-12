@@ -79,6 +79,9 @@ type baseAgentRuntime interface {
 	ScheduleJob(ctx context.Context, job baseagent.CronJob) (baseagent.CronJob, error)
 	ListCronJobs(ctx context.Context, sessionKey string) ([]baseagent.CronJob, error)
 	CancelCronJob(ctx context.Context, jobID string) (baseagent.CronJob, error)
+	PauseCronJob(ctx context.Context, jobID string) (baseagent.CronJob, error)
+	ResumeCronJob(ctx context.Context, jobID string) (baseagent.CronJob, error)
+	RunCronJob(ctx context.Context, jobID string) (baseagent.CronJob, error)
 }
 
 // Run starts the daemon HTTP API server. It blocks until a termination
@@ -583,25 +586,82 @@ func buildHTTPMuxWithBaseAgent(
 		}
 		trimmed := strings.TrimPrefix(strings.TrimSpace(r.URL.Path), "/api/base-agent/cron/")
 		trimmed = strings.Trim(trimmed, "/")
-		if !strings.HasSuffix(trimmed, "/cancel") {
+		switch {
+		case strings.HasSuffix(trimmed, "/cancel"):
+			jobID := strings.Trim(strings.TrimSuffix(trimmed, "/cancel"), "/")
+			if jobID == "" {
+				writeJSONError(w, http.StatusBadRequest, "cron job id is required")
+				return
+			}
+			job, err := baseRuntime.CancelCronJob(r.Context(), jobID)
+			if err != nil {
+				status := http.StatusInternalServerError
+				if strings.Contains(strings.ToLower(err.Error()), "not found") {
+					status = http.StatusNotFound
+				}
+				writeJSONError(w, status, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, job)
+			return
+		case strings.HasSuffix(trimmed, "/pause"):
+			jobID := strings.Trim(strings.TrimSuffix(trimmed, "/pause"), "/")
+			if jobID == "" {
+				writeJSONError(w, http.StatusBadRequest, "cron job id is required")
+				return
+			}
+			job, err := baseRuntime.PauseCronJob(r.Context(), jobID)
+			if err != nil {
+				status := http.StatusInternalServerError
+				if strings.Contains(strings.ToLower(err.Error()), "not found") {
+					status = http.StatusNotFound
+				}
+				writeJSONError(w, status, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, job)
+			return
+		case strings.HasSuffix(trimmed, "/resume"):
+			jobID := strings.Trim(strings.TrimSuffix(trimmed, "/resume"), "/")
+			if jobID == "" {
+				writeJSONError(w, http.StatusBadRequest, "cron job id is required")
+				return
+			}
+			job, err := baseRuntime.ResumeCronJob(r.Context(), jobID)
+			if err != nil {
+				status := http.StatusInternalServerError
+				if strings.Contains(strings.ToLower(err.Error()), "not found") {
+					status = http.StatusNotFound
+				}
+				writeJSONError(w, status, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, job)
+			return
+		case strings.HasSuffix(trimmed, "/run"):
+			jobID := strings.Trim(strings.TrimSuffix(trimmed, "/run"), "/")
+			if jobID == "" {
+				writeJSONError(w, http.StatusBadRequest, "cron job id is required")
+				return
+			}
+			job, err := baseRuntime.RunCronJob(r.Context(), jobID)
+			if err != nil {
+				status := http.StatusInternalServerError
+				if strings.Contains(strings.ToLower(err.Error()), "not found") {
+					status = http.StatusNotFound
+				}
+				if strings.Contains(strings.ToLower(err.Error()), "paused") {
+					status = http.StatusConflict
+				}
+				writeJSONError(w, status, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, job)
+			return
+		default:
 			http.NotFound(w, r)
 			return
 		}
-		jobID := strings.Trim(strings.TrimSuffix(trimmed, "/cancel"), "/")
-		if jobID == "" {
-			writeJSONError(w, http.StatusBadRequest, "cron job id is required")
-			return
-		}
-		job, err := baseRuntime.CancelCronJob(r.Context(), jobID)
-		if err != nil {
-			status := http.StatusInternalServerError
-			if strings.Contains(strings.ToLower(err.Error()), "not found") {
-				status = http.StatusNotFound
-			}
-			writeJSONError(w, status, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, job)
 	})
 
 	register("/api/base-agent/decompose", func(w http.ResponseWriter, r *http.Request) {

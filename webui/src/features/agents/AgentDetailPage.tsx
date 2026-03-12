@@ -78,6 +78,14 @@ type AgentLauncherSummary = {
       nextRunAt?: string;
       lastRunAt?: string;
       lastResult?: string;
+      paused?: boolean;
+      pausedAt?: string;
+      history?: Array<{
+        ranAt?: string;
+        trigger?: string;
+        result?: string;
+        error?: string;
+      }>;
     }>;
   };
   session?: {
@@ -154,6 +162,21 @@ export function AgentDetailPage() {
     onSuccess: async ({ serverName, enabled }) => {
       setLastActionMessage(`MCP server ${serverName} ${enabled ? 'enabled' : 'disabled'}.`);
       await capabilitiesQuery.refetch();
+      await launcherQuery.refetch();
+    },
+    onError: (error) => {
+      setLastActionMessage((error as Error).message);
+    },
+  });
+
+  const cronMutation = useMutation({
+    mutationFn: async ({ jobId, action }: { jobId: string; action: 'run' | 'pause' | 'resume' }) => {
+      await apiPost(`/api/v1/agents/${encodeURIComponent(agentId)}/cron/${encodeURIComponent(jobId)}/${action}`, {});
+      return { jobId, action };
+    },
+    onSuccess: async ({ jobId, action }) => {
+      const actionLabel = action === 'run' ? 'run requested' : action === 'pause' ? 'paused' : 'resumed';
+      setLastActionMessage(`Cron job ${jobId} ${actionLabel}.`);
       await launcherQuery.refetch();
     },
     onError: (error) => {
@@ -259,7 +282,51 @@ export function AgentDetailPage() {
                         {job.nextRunAt ? ` · next=${job.nextRunAt}` : ''}
                         {job.lastRunAt ? ` · last=${job.lastRunAt}` : ''}
                         {job.lastResult ? ` · ${job.lastResult}` : ''}
+                        {job.paused ? ' · paused' : ''}
+                        {job.pausedAt ? ` · pausedAt=${job.pausedAt}` : ''}
                       </span>
+                      {job.id ? (
+                        <div className="btn-row">
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={cronMutation.isPending}
+                            onClick={() => cronMutation.mutate({ jobId: String(job.id), action: 'run' })}
+                          >
+                            {`Run ${job.id} now`}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={cronMutation.isPending || !!job.paused}
+                            onClick={() => cronMutation.mutate({ jobId: String(job.id), action: 'pause' })}
+                          >
+                            {`Pause ${job.id}`}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={cronMutation.isPending || !job.paused}
+                            onClick={() => cronMutation.mutate({ jobId: String(job.id), action: 'resume' })}
+                          >
+                            {`Resume ${job.id}`}
+                          </button>
+                        </div>
+                      ) : null}
+                      {job.history && job.history.length ? (
+                        <ul className="compact-list">
+                          {job.history.map((run, index) => (
+                            <li key={`${job.id || 'job'}-run-${index}`}>
+                              <span>{run.ranAt || 'unknown-time'}</span>
+                              <span className="text-dim">
+                                {run.trigger || 'unknown-trigger'}
+                                {run.result ? ` · ${run.result}` : ''}
+                                {run.error ? ` · ${run.error}` : ''}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
                     </li>
                   ))}
                 </ul>

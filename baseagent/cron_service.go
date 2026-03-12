@@ -18,7 +18,19 @@ type CronJob struct {
 	LastRunAt   *time.Time `json:"lastRunAt,omitempty"`
 	LastResult  string     `json:"lastResult,omitempty"`
 	LastError   string     `json:"lastError,omitempty"`
+	Paused      bool       `json:"paused,omitempty"`
+	PausedAt    *time.Time `json:"pausedAt,omitempty"`
 	CancelledAt *time.Time `json:"cancelledAt,omitempty"`
+	History     []CronRun  `json:"history,omitempty"`
+}
+
+type CronRun struct {
+	RanAt    time.Time `json:"ranAt"`
+	Trigger  string    `json:"trigger,omitempty"`
+	Result   string    `json:"result,omitempty"`
+	Error    string    `json:"error,omitempty"`
+	Prompt   string    `json:"prompt,omitempty"`
+	AgentID  string    `json:"agentId,omitempty"`
 }
 
 type CronService struct {
@@ -61,23 +73,11 @@ func (s *CronService) Schedule(ctx context.Context, job CronJob) (CronJob, error
 	s.mu.Unlock()
 
 	if !job.NextRunAt.After(time.Now().UTC()) && s.execute != nil {
-		if err := s.execute(ctx, job); err != nil {
-			now := time.Now().UTC()
-			job.LastRunAt = &now
-			job.LastResult = "failed"
-			job.LastError = err.Error()
-			s.mu.Lock()
-			s.jobs[job.ID] = job
-			s.mu.Unlock()
+		updated, err := s.executeAndRecord(ctx, job, "schedule")
+		if err != nil {
 			return CronJob{}, err
 		}
-		now := time.Now().UTC()
-		job.LastRunAt = &now
-		job.LastResult = "succeeded"
-		job.LastError = ""
-		s.mu.Lock()
-		s.jobs[job.ID] = job
-		s.mu.Unlock()
+		job = updated
 	}
 	return job, nil
 }
@@ -124,6 +124,112 @@ func (s *CronService) Cancel(jobID string) (CronJob, error) {
 	job.LastResult = "cancelled"
 	job.LastError = ""
 	s.jobs[trimmedID] = job
+	return job, nil
+}
+
+func (s *CronService) Pause(jobID string) (CronJob, error) {
+	if s == nil {
+		return CronJob{}, fmt.Errorf("cron service is unavailable")
+	}
+	trimmedID := strings.TrimSpace(jobID)
+	if trimmedID == "" {
+		return CronJob{}, fmt.Errorf("cron job id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.jobs[trimmedID]
+	if !ok {
+		return CronJob{}, fmt.Errorf("cron job %s not found", trimmedID)
+	}
+	now := time.Now().UTC()
+	job.Paused = true
+	job.PausedAt = &now
+	job.LastResult = "paused"
+	job.LastError = ""
+	s.jobs[trimmedID] = job
+	return job, nil
+}
+
+func (s *CronService) Resume(jobID string) (CronJob, error) {
+	if s == nil {
+		return CronJob{}, fmt.Errorf("cron service is unavailable")
+	}
+	trimmedID := strings.TrimSpace(jobID)
+	if trimmedID == "" {
+		return CronJob{}, fmt.Errorf("cron job id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.jobs[trimmedID]
+	if !ok {
+		return CronJob{}, fmt.Errorf("cron job %s not found", trimmedID)
+	}
+	job.Paused = false
+	job.PausedAt = nil
+	job.LastResult = "resumed"
+	job.LastError = ""
+	s.jobs[trimmedID] = job
+	return job, nil
+}
+
+func (s *CronService) RunNow(ctx context.Context, jobID string) (CronJob, error) {
+	if s == nil {
+		return CronJob{}, fmt.Errorf("cron service is unavailable")
+	}
+	trimmedID := strings.TrimSpace(jobID)
+	if trimmedID == "" {
+		return CronJob{}, fmt.Errorf("cron job id is required")
+	}
+	s.mu.Lock()
+	job, ok := s.jobs[trimmedID]
+	s.mu.Unlock()
+	if !ok {
+		return CronJob{}, fmt.Errorf("cron job %s not found", trimmedID)
+	}
+	if job.Paused {
+		return CronJob{}, fmt.Errorf("cron job %s is paused", trimmedID)
+	}
+	return s.executeAndRecord(ctx, job, "manual")
+}
+
+func (s *CronService) executeAndRecord(ctx context.Context, job CronJob, trigger string) (CronJob, error) {
+	if s == nil {
+		return CronJob{}, fmt.Errorf("cron service is unavailable")
+	}
+	if s.execute != nil {
+		if err := s.execute(ctx, job); err != nil {
+			now := time.Now().UTC()
+			job.LastRunAt = &now
+			job.LastResult = "failed"
+			job.LastError = err.Error()
+			job.History = append(job.History, CronRun{
+				RanAt:   now,
+				Trigger: strings.TrimSpace(trigger),
+				Result:  "failed",
+				Error:   err.Error(),
+				Prompt:  job.Prompt,
+				AgentID: job.AgentID,
+			})
+			s.mu.Lock()
+			s.jobs[job.ID] = job
+			s.mu.Unlock()
+			return CronJob{}, err
+		}
+	}
+	now := time.Now().UTC()
+	job.LastRunAt = &now
+	job.LastResult = "succeeded"
+	job.LastError = ""
+	job.History = append(job.History, CronRun{
+		RanAt:   now,
+		Trigger: strings.TrimSpace(trigger),
+		Result:  "succeeded",
+		Prompt:  job.Prompt,
+		AgentID: job.AgentID,
+	})
+	s.mu.Lock()
+	s.jobs[job.ID] = job
+	s.mu.Unlock()
 	return job, nil
 }
 

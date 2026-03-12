@@ -862,6 +862,58 @@ func TestDaemonClient_ScheduleCronJob_SendsOnlyAcceptedFields(t *testing.T) {
 	}
 }
 
+func TestDaemonClient_CronActionEndpoints(t *testing.T) {
+	var gotPath string
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"id":"cron-1","lastResult":"ok"}`))
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	cases := []struct {
+		name string
+		want string
+		run  func() error
+	}{
+		{
+			name: "pause",
+			want: "/api/base-agent/cron/cron-1/pause",
+			run: func() error {
+				_, err := dc.PauseCronJob(context.Background(), "cron-1", "actor", "req")
+				return err
+			},
+		},
+		{
+			name: "resume",
+			want: "/api/base-agent/cron/cron-1/resume",
+			run: func() error {
+				_, err := dc.ResumeCronJob(context.Background(), "cron-1", "actor", "req")
+				return err
+			},
+		},
+		{
+			name: "run",
+			want: "/api/base-agent/cron/cron-1/run",
+			run: func() error {
+				_, err := dc.RunCronJob(context.Background(), "cron-1", "actor", "req")
+				return err
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotPath = ""
+			if err := tc.run(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotPath != tc.want {
+				t.Fatalf("path=%q want %q", gotPath, tc.want)
+			}
+		})
+	}
+}
+
 func TestDaemonClient_UpgradeDiagnoseAndChatParseErrors(t *testing.T) {
 	tests := []struct {
 		name string

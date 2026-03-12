@@ -327,6 +327,27 @@ func (r *Runtime) CancelCronJob(_ context.Context, jobID string) (CronJob, error
 	return r.cron.Cancel(jobID)
 }
 
+func (r *Runtime) PauseCronJob(_ context.Context, jobID string) (CronJob, error) {
+	if r == nil || r.cron == nil {
+		return CronJob{}, fmt.Errorf("cron service is unavailable")
+	}
+	return r.cron.Pause(jobID)
+}
+
+func (r *Runtime) ResumeCronJob(_ context.Context, jobID string) (CronJob, error) {
+	if r == nil || r.cron == nil {
+		return CronJob{}, fmt.Errorf("cron service is unavailable")
+	}
+	return r.cron.Resume(jobID)
+}
+
+func (r *Runtime) RunCronJob(ctx context.Context, jobID string) (CronJob, error) {
+	if r == nil || r.cron == nil {
+		return CronJob{}, fmt.Errorf("cron service is unavailable")
+	}
+	return r.cron.RunNow(ctx, jobID)
+}
+
 func wantsListAgents(lower string) bool {
 	lower = strings.TrimSpace(lower)
 	if strings.HasPrefix(lower, "/agents") || lower == "/list agents" {

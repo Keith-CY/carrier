@@ -2,6 +2,7 @@ package baseagent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -136,5 +137,60 @@ func TestCronServiceCancelMarksJobCancelled(t *testing.T) {
 	jobs := svc.List("agent:picoclaw")
 	if len(jobs) != 1 || jobs[0].CancelledAt == nil || jobs[0].LastResult != "cancelled" {
 		t.Fatalf("unexpected listed cancelled job: %+v", jobs)
+	}
+}
+
+func TestCronServicePauseResumeAndRunNowTrackHistory(t *testing.T) {
+	var executed int
+	svc := NewCronService(func(_ context.Context, job CronJob) error {
+		executed++
+		if strings.TrimSpace(job.Prompt) == "fail once" {
+			return context.DeadlineExceeded
+		}
+		return nil
+	})
+
+	nextRun := time.Now().UTC().Add(10 * time.Minute)
+	if _, err := svc.Schedule(context.Background(), CronJob{
+		ID:         "cron-runtime-1",
+		SessionKey: "agent:picoclaw",
+		Prompt:     "summarize heartbeat",
+		NextRunAt:  nextRun,
+	}); err != nil {
+		t.Fatalf("schedule job: %v", err)
+	}
+
+	paused, err := svc.Pause("cron-runtime-1")
+	if err != nil {
+		t.Fatalf("pause job: %v", err)
+	}
+	if paused.PausedAt == nil || !paused.Paused || paused.LastResult != "paused" {
+		t.Fatalf("unexpected paused job: %+v", paused)
+	}
+
+	if _, err := svc.RunNow(context.Background(), "cron-runtime-1"); err == nil || !strings.Contains(strings.ToLower(err.Error()), "paused") {
+		t.Fatalf("expected paused run-now to fail, got %v", err)
+	}
+
+	resumed, err := svc.Resume("cron-runtime-1")
+	if err != nil {
+		t.Fatalf("resume job: %v", err)
+	}
+	if resumed.Paused || resumed.PausedAt != nil || resumed.LastResult != "resumed" {
+		t.Fatalf("unexpected resumed job: %+v", resumed)
+	}
+
+	ran, err := svc.RunNow(context.Background(), "cron-runtime-1")
+	if err != nil {
+		t.Fatalf("run job now: %v", err)
+	}
+	if ran.LastRunAt == nil || ran.LastResult != "succeeded" || len(ran.History) != 1 {
+		t.Fatalf("unexpected run-now result: %+v", ran)
+	}
+	if ran.History[0].Trigger != "manual" || ran.History[0].Result != "succeeded" {
+		t.Fatalf("unexpected history entry: %+v", ran.History[0])
+	}
+	if executed != 1 {
+		t.Fatalf("executed=%d want 1", executed)
 	}
 }

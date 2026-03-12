@@ -27,6 +27,9 @@ type fakeBaseAgentRuntime struct {
 	cronJob             baseagent.CronJob
 	cronJobs            []baseagent.CronJob
 	cancelledCronJob    baseagent.CronJob
+	pausedCronJob       baseagent.CronJob
+	resumedCronJob      baseagent.CronJob
+	ranCronJob          baseagent.CronJob
 	cronErr             error
 	skillToggleErr      error
 	mcpToggleErr        error
@@ -35,6 +38,9 @@ type fakeBaseAgentRuntime struct {
 	cronCall            int
 	listCronCall        int
 	cancelCronCall      int
+	pauseCronCall       int
+	resumeCronCall      int
+	runCronCall         int
 	skillToggleCall     int
 	mcpToggleCall       int
 	lastReq             baseagent.ChatRequest
@@ -137,6 +143,33 @@ func (f *fakeBaseAgentRuntime) CancelCronJob(_ context.Context, jobID string) (b
 		f.cancelledCronJob = baseagent.CronJob{ID: jobID}
 	}
 	return f.cancelledCronJob, nil
+}
+
+func (f *fakeBaseAgentRuntime) PauseCronJob(_ context.Context, jobID string) (baseagent.CronJob, error) {
+	f.pauseCronCall++
+	f.lastCancelledCronID = jobID
+	if f.pausedCronJob.ID == "" {
+		f.pausedCronJob = baseagent.CronJob{ID: jobID, Paused: true, LastResult: "paused"}
+	}
+	return f.pausedCronJob, nil
+}
+
+func (f *fakeBaseAgentRuntime) ResumeCronJob(_ context.Context, jobID string) (baseagent.CronJob, error) {
+	f.resumeCronCall++
+	f.lastCancelledCronID = jobID
+	if f.resumedCronJob.ID == "" {
+		f.resumedCronJob = baseagent.CronJob{ID: jobID, LastResult: "resumed"}
+	}
+	return f.resumedCronJob, nil
+}
+
+func (f *fakeBaseAgentRuntime) RunCronJob(_ context.Context, jobID string) (baseagent.CronJob, error) {
+	f.runCronCall++
+	f.lastCancelledCronID = jobID
+	if f.ranCronJob.ID == "" {
+		f.ranCronJob = baseagent.CronJob{ID: jobID, LastResult: "succeeded", History: []baseagent.CronRun{{Trigger: "manual", Result: "succeeded"}}}
+	}
+	return f.ranCronJob, nil
 }
 
 func newTestService() *lifecycle.Service {
@@ -559,6 +592,66 @@ func TestDaemonServerCronListAndCancelEndpoints(t *testing.T) {
 	}
 	if !strings.Contains(cancelRec.Body.String(), `"lastResult":"cancelled"`) {
 		t.Fatalf("unexpected cron cancel body=%s", cancelRec.Body.String())
+	}
+
+	rt.pausedCronJob = baseagent.CronJob{
+		ID:         "cron-3",
+		SessionKey: "agent:picoclaw",
+		Prompt:     "check launcher",
+		LastResult: "paused",
+		Paused:     true,
+	}
+	pauseReq := httptest.NewRequest(http.MethodPost, "/api/base-agent/cron/cron-3/pause", nil)
+	pauseRec := httptest.NewRecorder()
+	mux.ServeHTTP(pauseRec, pauseReq)
+	if pauseRec.Code != http.StatusOK {
+		t.Fatalf("pause status=%d body=%s", pauseRec.Code, pauseRec.Body.String())
+	}
+	if rt.pauseCronCall != 1 || rt.lastCancelledCronID != "cron-3" {
+		t.Fatalf("unexpected cron pause call state: %+v", rt)
+	}
+	if !strings.Contains(pauseRec.Body.String(), `"lastResult":"paused"`) {
+		t.Fatalf("unexpected cron pause body=%s", pauseRec.Body.String())
+	}
+
+	rt.resumedCronJob = baseagent.CronJob{
+		ID:         "cron-3",
+		SessionKey: "agent:picoclaw",
+		Prompt:     "check launcher",
+		LastResult: "resumed",
+		Paused:     false,
+	}
+	resumeReq := httptest.NewRequest(http.MethodPost, "/api/base-agent/cron/cron-3/resume", nil)
+	resumeRec := httptest.NewRecorder()
+	mux.ServeHTTP(resumeRec, resumeReq)
+	if resumeRec.Code != http.StatusOK {
+		t.Fatalf("resume status=%d body=%s", resumeRec.Code, resumeRec.Body.String())
+	}
+	if rt.resumeCronCall != 1 || rt.lastCancelledCronID != "cron-3" {
+		t.Fatalf("unexpected cron resume call state: %+v", rt)
+	}
+	if !strings.Contains(resumeRec.Body.String(), `"lastResult":"resumed"`) {
+		t.Fatalf("unexpected cron resume body=%s", resumeRec.Body.String())
+	}
+
+	rt.ranCronJob = baseagent.CronJob{
+		ID:         "cron-3",
+		SessionKey: "agent:picoclaw",
+		Prompt:     "check launcher",
+		LastResult: "succeeded",
+		History:    []baseagent.CronRun{{Trigger: "manual", Result: "succeeded"}},
+	}
+	runReq := httptest.NewRequest(http.MethodPost, "/api/base-agent/cron/cron-3/run", nil)
+	runRec := httptest.NewRecorder()
+	mux.ServeHTTP(runRec, runReq)
+	if runRec.Code != http.StatusOK {
+		t.Fatalf("run status=%d body=%s", runRec.Code, runRec.Body.String())
+	}
+	if rt.runCronCall != 1 || rt.lastCancelledCronID != "cron-3" {
+		t.Fatalf("unexpected cron run call state: %+v", rt)
+	}
+	if !strings.Contains(runRec.Body.String(), `"trigger":"manual"`) {
+		t.Fatalf("unexpected cron run body=%s", runRec.Body.String())
 	}
 }
 

@@ -27,6 +27,7 @@ function renderAgentDetailPage() {
 
 describe('AgentDetailPage', () => {
   beforeEach(() => {
+    let cronPaused = false;
     localStorage.clear();
     localStorage.setItem('carrier_token', 'test-token');
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -79,7 +80,7 @@ describe('AgentDetailPage', () => {
             lastRunAt: '2026-03-12T23:55:00Z',
             lastResult: 'succeeded',
             jobs: [
-              { id: 'cron-1', prompt: 'check launcher', nextRunAt: '2026-03-13T00:00:00Z', lastResult: 'succeeded' },
+              { id: 'cron-1', prompt: 'check launcher', nextRunAt: '2026-03-13T00:00:00Z', lastResult: cronPaused ? 'paused' : 'succeeded', paused: cronPaused, history: [{ trigger: 'manual', result: 'succeeded' }] },
             ],
           },
         }), {
@@ -111,6 +112,26 @@ describe('AgentDetailPage', () => {
             visibleTools: [],
           },
         }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/v1/agents/agent-alpha/cron/cron-1/run')) {
+        return new Response(JSON.stringify({ id: 'cron-1', prompt: 'check launcher', lastResult: 'succeeded', paused: false, history: [{ trigger: 'manual', result: 'succeeded' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/v1/agents/agent-alpha/cron/cron-1/pause')) {
+        cronPaused = true;
+        return new Response(JSON.stringify({ id: 'cron-1', prompt: 'check launcher', lastResult: 'paused', paused: true, history: [{ trigger: 'manual', result: 'succeeded' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/v1/agents/agent-alpha/cron/cron-1/resume')) {
+        cronPaused = false;
+        return new Response(JSON.stringify({ id: 'cron-1', prompt: 'check launcher', lastResult: 'resumed', paused: false, history: [{ trigger: 'manual', result: 'succeeded' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
@@ -169,6 +190,33 @@ describe('AgentDetailPage', () => {
       expect.objectContaining({
         method: 'POST',
       }),
+    );
+  });
+
+  test('runs, pauses, and resumes cron jobs through agent cron endpoints', async () => {
+    renderAgentDetailPage();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Run cron-1 now/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Run cron-1 now/i }));
+    await waitFor(() => expect(screen.getByText(/Cron job cron-1 run requested\./i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Pause cron-1/i }));
+    await waitFor(() => expect(screen.getByText(/Cron job cron-1 paused\./i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Resume cron-1/i }));
+    await waitFor(() => expect(screen.getByText(/Cron job cron-1 resumed\./i)).toBeInTheDocument());
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/cron/cron-1/run'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/cron/cron-1/pause'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/cron/cron-1/resume'),
+      expect.objectContaining({ method: 'POST' }),
     );
   });
 });

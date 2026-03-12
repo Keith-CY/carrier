@@ -226,6 +226,45 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 			}
 			writeJSON(w, http.StatusOK, job)
 			return
+		case len(parts) == 4 && strings.EqualFold(strings.TrimSpace(parts[3]), "pause") && r.Method == http.MethodPost:
+			jobID := strings.TrimSpace(parts[2])
+			if jobID == "" {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "cron job id is required"))
+				return
+			}
+			job, err := daemon.PauseCronJob(r.Context(), jobID, "webui:agents:cron:pause", requestID)
+			if err != nil {
+				writeDaemonAPIError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, job)
+			return
+		case len(parts) == 4 && strings.EqualFold(strings.TrimSpace(parts[3]), "resume") && r.Method == http.MethodPost:
+			jobID := strings.TrimSpace(parts[2])
+			if jobID == "" {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "cron job id is required"))
+				return
+			}
+			job, err := daemon.ResumeCronJob(r.Context(), jobID, "webui:agents:cron:resume", requestID)
+			if err != nil {
+				writeDaemonAPIError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, job)
+			return
+		case len(parts) == 4 && strings.EqualFold(strings.TrimSpace(parts[3]), "run") && r.Method == http.MethodPost:
+			jobID := strings.TrimSpace(parts[2])
+			if jobID == "" {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "cron job id is required"))
+				return
+			}
+			job, err := daemon.RunCronJob(r.Context(), jobID, "webui:agents:cron:run", requestID)
+			if err != nil {
+				writeDaemonAPIError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, job)
+			return
 		default:
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return

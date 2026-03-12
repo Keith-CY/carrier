@@ -577,6 +577,60 @@ func (c *DaemonClient) CancelCronJob(
 	return &result, nil
 }
 
+func (c *DaemonClient) PauseCronJob(
+	ctx context.Context,
+	jobID string,
+	actor string,
+	requestID string,
+) (*CronJob, error) {
+	path := "/api/base-agent/cron/" + url.PathEscape(strings.TrimSpace(jobID)) + "/pause"
+	raw, err := c.request(ctx, http.MethodPost, path, map[string]any{}, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result CronJob
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("cron pause response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *DaemonClient) ResumeCronJob(
+	ctx context.Context,
+	jobID string,
+	actor string,
+	requestID string,
+) (*CronJob, error) {
+	path := "/api/base-agent/cron/" + url.PathEscape(strings.TrimSpace(jobID)) + "/resume"
+	raw, err := c.request(ctx, http.MethodPost, path, map[string]any{}, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result CronJob
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("cron resume response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *DaemonClient) RunCronJob(
+	ctx context.Context,
+	jobID string,
+	actor string,
+	requestID string,
+) (*CronJob, error) {
+	path := "/api/base-agent/cron/" + url.PathEscape(strings.TrimSpace(jobID)) + "/run"
+	raw, err := c.request(ctx, http.MethodPost, path, map[string]any{}, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result CronJob
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("cron run response: %w", err)
+	}
+	return &result, nil
+}
+
 func (c *DaemonClient) request(ctx context.Context, method, path string, body interface{}, actor, requestID string) ([]byte, error) {
 	var bodyReader io.Reader
 	if body != nil {

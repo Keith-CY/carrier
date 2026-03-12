@@ -54,6 +54,9 @@ func TestHandleWebUIAgentCronPassesThroughToDaemon(t *testing.T) {
 	var gotSchedule map[string]any
 	var gotActor string
 	var gotRequestID string
+	var runCalls int
+	var pauseCalls int
+	var resumeCalls int
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/base-agent/cron/jobs":
@@ -68,6 +71,15 @@ func TestHandleWebUIAgentCronPassesThroughToDaemon(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id":"cron-2","agentId":"picoclaw","prompt":"check launcher","lastResult":"scheduled"}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/base-agent/cron/cron-1/cancel":
 			_, _ = w.Write([]byte(`{"id":"cron-1","agentId":"picoclaw","prompt":"check launcher","lastResult":"cancelled"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/base-agent/cron/cron-1/run":
+			runCalls++
+			_, _ = w.Write([]byte(`{"id":"cron-1","agentId":"picoclaw","prompt":"check launcher","lastResult":"succeeded","history":[{"trigger":"manual","result":"succeeded"}]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/base-agent/cron/cron-1/pause":
+			pauseCalls++
+			_, _ = w.Write([]byte(`{"id":"cron-1","agentId":"picoclaw","prompt":"check launcher","lastResult":"paused","paused":true}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/base-agent/cron/cron-1/resume":
+			resumeCalls++
+			_, _ = w.Write([]byte(`{"id":"cron-1","agentId":"picoclaw","prompt":"check launcher","lastResult":"resumed","paused":false}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -120,5 +132,35 @@ func TestHandleWebUIAgentCronPassesThroughToDaemon(t *testing.T) {
 	}
 	if !strings.Contains(cancelRec.Body.String(), `"lastResult":"cancelled"`) {
 		t.Fatalf("cancel body=%s", cancelRec.Body.String())
+	}
+
+	runRec := httptest.NewRecorder()
+	runReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/cron/cron-1/run", nil)
+	handleWebUIAgent(runRec, runReq, "req-cron-run", client)
+	if runRec.Code != http.StatusOK {
+		t.Fatalf("run status=%d body=%s", runRec.Code, runRec.Body.String())
+	}
+	if runCalls != 1 || !strings.Contains(runRec.Body.String(), `"trigger":"manual"`) {
+		t.Fatalf("run body=%s runCalls=%d", runRec.Body.String(), runCalls)
+	}
+
+	pauseRec := httptest.NewRecorder()
+	pauseReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/cron/cron-1/pause", nil)
+	handleWebUIAgent(pauseRec, pauseReq, "req-cron-pause", client)
+	if pauseRec.Code != http.StatusOK {
+		t.Fatalf("pause status=%d body=%s", pauseRec.Code, pauseRec.Body.String())
+	}
+	if pauseCalls != 1 || !strings.Contains(pauseRec.Body.String(), `"paused":true`) {
+		t.Fatalf("pause body=%s pauseCalls=%d", pauseRec.Body.String(), pauseCalls)
+	}
+
+	resumeRec := httptest.NewRecorder()
+	resumeReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/cron/cron-1/resume", nil)
+	handleWebUIAgent(resumeRec, resumeReq, "req-cron-resume", client)
+	if resumeRec.Code != http.StatusOK {
+		t.Fatalf("resume status=%d body=%s", resumeRec.Code, resumeRec.Body.String())
+	}
+	if resumeCalls != 1 || !strings.Contains(resumeRec.Body.String(), `"lastResult":"resumed"`) {
+		t.Fatalf("resume body=%s resumeCalls=%d", resumeRec.Body.String(), resumeCalls)
 	}
 }

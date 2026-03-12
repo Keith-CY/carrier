@@ -10,6 +10,10 @@ test.describe('Agent Detail', () => {
     let skillEnabled = true;
     let mcpToggleCalls = 0;
     let mcpEnabled = true;
+    let cronRunCalls = 0;
+    let cronPauseCalls = 0;
+    let cronResumeCalls = 0;
+    let cronPaused = false;
 
     await page.route('**/api/v1/agents/agent-alpha/capabilities', async (route) => {
       await route.fulfill({
@@ -41,7 +45,7 @@ test.describe('Agent Detail', () => {
             lastRunAt: '2026-03-12T23:55:00Z',
             lastResult: 'succeeded',
             jobs: [
-              { id: 'cron-1', prompt: 'check launcher', nextRunAt: '2026-03-13T00:00:00Z', lastRunAt: '2026-03-12T23:55:00Z', lastResult: 'succeeded' },
+              { id: 'cron-1', prompt: 'check launcher', nextRunAt: '2026-03-13T00:00:00Z', lastRunAt: '2026-03-12T23:55:00Z', lastResult: cronPaused ? 'paused' : 'succeeded', paused: cronPaused, history: [{ trigger: 'manual', result: 'succeeded' }] },
               { id: 'cron-2', prompt: 'refresh heartbeat', nextRunAt: '2026-03-13T01:00:00Z', lastResult: 'scheduled' },
             ],
           },
@@ -96,6 +100,32 @@ test.describe('Agent Detail', () => {
         }),
       });
     });
+    await page.route('**/api/v1/agents/agent-alpha/cron/cron-1/run', async (route) => {
+      cronRunCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ id: 'cron-1', prompt: 'check launcher', lastResult: 'succeeded', paused: cronPaused, history: [{ trigger: 'manual', result: 'succeeded' }] }),
+      });
+    });
+    await page.route('**/api/v1/agents/agent-alpha/cron/cron-1/pause', async (route) => {
+      cronPauseCalls += 1;
+      cronPaused = true;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ id: 'cron-1', prompt: 'check launcher', lastResult: 'paused', paused: true, history: [{ trigger: 'manual', result: 'succeeded' }] }),
+      });
+    });
+    await page.route('**/api/v1/agents/agent-alpha/cron/cron-1/resume', async (route) => {
+      cronResumeCalls += 1;
+      cronPaused = false;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ id: 'cron-1', prompt: 'check launcher', lastResult: 'resumed', paused: false, history: [{ trigger: 'manual', result: 'succeeded' }] }),
+      });
+    });
 
     await loginWithToken(page, '/#/agents/agent-alpha');
 
@@ -108,6 +138,7 @@ test.describe('Agent Detail', () => {
     await expect(page.locator('#agent-detail-content')).toContainText('Cron');
     await expect(page.locator('#agent-detail-content')).toContainText('2 job(s)');
     await expect(page.locator('#agent-detail-content')).toContainText('check launcher');
+    await expect(page.locator('#agent-detail-content')).toContainText('manual');
     await expect(page.locator('#agent-detail-content')).toContainText('1 installed · 1 enabled · 0 disabled');
     await expect(page.locator('#agent-detail-content')).toContainText('"runtimeState": "running"');
 
@@ -118,6 +149,18 @@ test.describe('Agent Detail', () => {
     await page.getByRole('button', { name: 'Disable MCP' }).click();
     await expect.poll(() => mcpToggleCalls).toBe(1);
     await expect(page.locator('#agent-detail-content')).toContainText('MCP server repo disabled.');
+
+    await page.getByRole('button', { name: 'Run cron-1 now' }).click();
+    await expect.poll(() => cronRunCalls).toBe(1);
+    await expect(page.locator('#agent-detail-content')).toContainText('Cron job cron-1 run requested.');
+
+    await page.getByRole('button', { name: 'Pause cron-1' }).click();
+    await expect.poll(() => cronPauseCalls).toBe(1);
+    await expect(page.locator('#agent-detail-content')).toContainText('Cron job cron-1 paused.');
+
+    await page.getByRole('button', { name: 'Resume cron-1' }).click();
+    await expect.poll(() => cronResumeCalls).toBe(1);
+    await expect(page.locator('#agent-detail-content')).toContainText('Cron job cron-1 resumed.');
 
     await page.getByRole('button', { name: '▶ Start' }).evaluate((element: HTMLButtonElement) => element.click());
     await expect.poll(() => startCalls).toBe(1);
