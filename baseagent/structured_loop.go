@@ -116,6 +116,9 @@ func (l *AgentLoop) SetExecutionTools(registry *ExecutionToolRegistry, maxIterat
 	l.executionTools = registry
 	l.subagentManager = subagentManager
 	l.structuredTools = newStructuredToolSurfaceWithPolicy(l.tools, registry, mcpManager, subagentManager, policySpec)
+	if l.memory != nil && l.structuredTools != nil {
+		l.structuredTools.SetMemoryStore(l.memory, l.memorySubject)
+	}
 	if maxIterations <= 0 {
 		maxIterations = 6
 	}

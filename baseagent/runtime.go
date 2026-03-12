@@ -254,6 +254,29 @@ func (r *Runtime) StopMCP(ctx context.Context) error {
 	return manager.Stop(ctx)
 }
 
+func (r *Runtime) SetMCPServerEnabled(ctx context.Context, name string, enabled bool) error {
+	if r == nil || r.mcpManager == nil {
+		return fmt.Errorf("mcp manager is unavailable")
+	}
+	if err := r.mcpManager.SetServerEnabled(ctx, name, enabled); err != nil {
+		return err
+	}
+	if r.loop != nil {
+		r.loop.SetExecutionTools(r.loop.executionTools, r.loop.maxToolIterations, r.effectiveStructuredToolPolicy(), r.mcpManager, r.subagentManager)
+	}
+	return nil
+}
+
+func (r *Runtime) effectiveStructuredToolPolicy() StructuredToolPolicySpec {
+	if r == nil {
+		return StructuredToolPolicySpec{}
+	}
+	if r.structuredToolPolicyOverride != nil {
+		return *r.structuredToolPolicyOverride
+	}
+	return ActiveBoundarySpec().StructuredToolPolicy
+}
+
 func (r *Runtime) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
 	preparedReq, boundedResp, err := r.prepareMediaRequest(ctx, req)
 	if err != nil {

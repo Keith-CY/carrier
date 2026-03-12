@@ -8,6 +8,8 @@ test.describe('Agent Detail', () => {
     let stopCalls = 0;
     let skillToggleCalls = 0;
     let skillEnabled = true;
+    let mcpToggleCalls = 0;
+    let mcpEnabled = true;
 
     await page.route('**/api/v1/agents/agent-alpha/capabilities', async (route) => {
       await route.fulfill({
@@ -17,7 +19,7 @@ test.describe('Agent Detail', () => {
           skillSummary: { installedCount: 1, enabledCount: skillEnabled ? 1 : 0, disabledCount: skillEnabled ? 0 : 1 },
           skills: [{ name: 'toolbox', enabled: skillEnabled }],
           mcp: {
-            servers: [{ name: 'repo', health: 'healthy', visibleToolCount: 1, hiddenToolCount: 0 }],
+            servers: [{ name: 'repo', health: mcpEnabled ? 'healthy' : 'stopped', enabled: mcpEnabled, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
             visibleTools: [{ name: 'repo_search', description: 'Search code' }],
           },
         }),
@@ -48,7 +50,7 @@ test.describe('Agent Detail', () => {
             skillSummary: { installedCount: 1, enabledCount: skillEnabled ? 1 : 0, disabledCount: skillEnabled ? 0 : 1 },
             skills: [{ name: 'toolbox', enabled: skillEnabled }],
             mcp: {
-              servers: [{ name: 'repo', health: 'healthy', visibleToolCount: 1, hiddenToolCount: 0 }],
+              servers: [{ name: 'repo', health: mcpEnabled ? 'healthy' : 'stopped', enabled: mcpEnabled, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
               visibleTools: [{ name: 'repo_search', description: 'Search code' }],
             },
           },
@@ -80,6 +82,20 @@ test.describe('Agent Detail', () => {
         }),
       });
     });
+    await page.route('**/api/v1/agents/agent-alpha/mcp/repo', async (route) => {
+      mcpToggleCalls += 1;
+      mcpEnabled = false;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          mcp: {
+            servers: [{ name: 'repo', health: 'stopped', enabled: false, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
+            visibleTools: [],
+          },
+        }),
+      });
+    });
 
     await loginWithToken(page, '/#/agents/agent-alpha');
 
@@ -95,9 +111,13 @@ test.describe('Agent Detail', () => {
     await expect(page.locator('#agent-detail-content')).toContainText('1 installed · 1 enabled · 0 disabled');
     await expect(page.locator('#agent-detail-content')).toContainText('"runtimeState": "running"');
 
-    await page.getByRole('button', { name: 'Disable' }).click();
+    await page.getByRole('button', { name: 'Disable', exact: true }).click();
     await expect.poll(() => skillToggleCalls).toBe(1);
     await expect(page.locator('#agent-detail-content')).toContainText('Skill toolbox disabled.');
+
+    await page.getByRole('button', { name: 'Disable MCP' }).click();
+    await expect.poll(() => mcpToggleCalls).toBe(1);
+    await expect(page.locator('#agent-detail-content')).toContainText('MCP server repo disabled.');
 
     await page.getByRole('button', { name: '▶ Start' }).evaluate((element: HTMLButtonElement) => element.click());
     await expect.poll(() => startCalls).toBe(1);

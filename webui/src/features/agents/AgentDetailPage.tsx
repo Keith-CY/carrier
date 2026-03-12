@@ -19,6 +19,8 @@ type AgentCapabilities = {
     servers?: Array<{
       name?: string;
       health?: string;
+      enabled?: boolean;
+      manageable?: boolean;
       visibleToolCount?: number;
       hiddenToolCount?: number;
     }>;
@@ -136,6 +138,21 @@ export function AgentDetailPage() {
     },
     onSuccess: async ({ skillName, enabled }) => {
       setLastActionMessage(`Skill ${skillName} ${enabled ? 'enabled' : 'disabled'}.`);
+      await capabilitiesQuery.refetch();
+      await launcherQuery.refetch();
+    },
+    onError: (error) => {
+      setLastActionMessage((error as Error).message);
+    },
+  });
+
+  const mcpToggleMutation = useMutation({
+    mutationFn: async ({ serverName, enabled }: { serverName: string; enabled: boolean }) => {
+      await apiPost(`/api/v1/agents/${encodeURIComponent(agentId)}/mcp/${encodeURIComponent(serverName)}`, { enabled });
+      return { serverName, enabled };
+    },
+    onSuccess: async ({ serverName, enabled }) => {
+      setLastActionMessage(`MCP server ${serverName} ${enabled ? 'enabled' : 'disabled'}.`);
       await capabilitiesQuery.refetch();
       await launcherQuery.refetch();
     },
@@ -313,8 +330,20 @@ export function AgentDetailPage() {
                     <li key={String(server.name || '')}>
                       <span>{server.name || 'unknown-server'}</span>
                       <span className="text-dim">
-                        {server.health || 'unknown'} · visible={server.visibleToolCount || 0} · hidden={server.hiddenToolCount || 0}
+                        {server.health || 'unknown'}
+                        {typeof server.enabled === 'boolean' ? ` · ${server.enabled ? 'enabled' : 'disabled'}` : ''}
+                        {` · visible=${server.visibleToolCount || 0} · hidden=${server.hiddenToolCount || 0}`}
                       </span>
+                      {server.name && server.manageable ? (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          disabled={mcpToggleMutation.isPending}
+                          onClick={() => mcpToggleMutation.mutate({ serverName: String(server.name), enabled: !server.enabled })}
+                        >
+                          {server.enabled ? 'Disable MCP' : 'Enable MCP'}
+                        </button>
+                      ) : null}
                     </li>
                   ))}
                 </ul>

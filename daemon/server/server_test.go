@@ -29,12 +29,14 @@ type fakeBaseAgentRuntime struct {
 	cancelledCronJob    baseagent.CronJob
 	cronErr             error
 	skillToggleErr      error
+	mcpToggleErr        error
 	callCount           int
 	approvalCall        int
 	cronCall            int
 	listCronCall        int
 	cancelCronCall      int
 	skillToggleCall     int
+	mcpToggleCall       int
 	lastReq             baseagent.ChatRequest
 	lastSession         string
 	lastApproval        string
@@ -44,6 +46,8 @@ type fakeBaseAgentRuntime struct {
 	lastCancelledCronID string
 	lastSkillName       string
 	lastSkillEnabled    bool
+	lastMCPServerName   string
+	lastMCPEnabled      bool
 }
 
 func (f *fakeBaseAgentRuntime) Chat(_ context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error) {
@@ -76,6 +80,29 @@ func (f *fakeBaseAgentRuntime) SetSkillEnabled(_ context.Context, name string, e
 			continue
 		}
 		f.capabilities.SkillSummary.DisabledCount++
+	}
+	return nil
+}
+
+func (f *fakeBaseAgentRuntime) SetMCPServerEnabled(_ context.Context, name string, enabled bool) error {
+	f.mcpToggleCall++
+	f.lastMCPServerName = name
+	f.lastMCPEnabled = enabled
+	if f.mcpToggleErr != nil {
+		return f.mcpToggleErr
+	}
+	for i := range f.capabilities.MCP.Servers {
+		if f.capabilities.MCP.Servers[i].Name == name {
+			f.capabilities.MCP.Servers[i].Enabled = enabled
+			if enabled {
+				f.capabilities.MCP.Servers[i].Health = "healthy"
+			} else {
+				f.capabilities.MCP.Servers[i].Health = "stopped"
+			}
+		}
+	}
+	if !enabled {
+		f.capabilities.MCP.VisibleTools = nil
 	}
 	return nil
 }
@@ -242,6 +269,44 @@ func TestAgentSkillToggleEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(okRec.Body.String(), `"disabledCount":2`) || !strings.Contains(okRec.Body.String(), `"enabled":false`) {
 		t.Fatalf("unexpected skill toggle body: %s", okRec.Body.String())
+	}
+}
+
+func TestAgentMCPServerToggleEndpoint(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		capabilities: baseagent.RuntimeCapabilitySummary{
+			MCP: baseagent.MCPCapabilitySummary{
+				Servers: []baseagent.MCPServerCapability{
+					{Name: "repo", Health: "healthy", Enabled: true, Manageable: true, VisibleToolCount: 1},
+				},
+				VisibleTools: []baseagent.MCPToolCapability{{Name: "repo_search"}},
+			},
+		},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	methodReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/mcp/repo", nil)
+	methodRec := httptest.NewRecorder()
+	mux.ServeHTTP(methodRec, methodReq)
+	if methodRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", methodRec.Code)
+	}
+
+	okReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/mcp/repo", strings.NewReader(`{"enabled":false}`))
+	okReq.Header.Set("Content-Type", "application/json")
+	okRec := httptest.NewRecorder()
+	mux.ServeHTTP(okRec, okReq)
+	if okRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", okRec.Code, okRec.Body.String())
+	}
+	if rt.mcpToggleCall != 1 || rt.lastMCPServerName != "repo" || rt.lastMCPEnabled {
+		t.Fatalf("unexpected mcp toggle state: %+v", rt)
+	}
+	if !strings.Contains(okRec.Body.String(), `"name":"repo"`) || !strings.Contains(okRec.Body.String(), `"enabled":false`) {
+		t.Fatalf("unexpected mcp toggle body: %s", okRec.Body.String())
 	}
 }
 

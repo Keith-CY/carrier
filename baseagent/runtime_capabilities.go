@@ -13,6 +13,8 @@ type MCPToolCapability struct {
 type MCPServerCapability struct {
 	Name             string `json:"name"`
 	Health           string `json:"health"`
+	Enabled          bool   `json:"enabled"`
+	Manageable       bool   `json:"manageable,omitempty"`
 	VisibleToolCount int    `json:"visibleToolCount"`
 	HiddenToolCount  int    `json:"hiddenToolCount"`
 }

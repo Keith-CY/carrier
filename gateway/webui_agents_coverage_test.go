@@ -411,6 +411,52 @@ func TestHandleWebUIAgent_Branches(t *testing.T) {
 		}
 	})
 
+	t.Run("mcp action", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/picoclaw/mcp/repo", nil)
+		handleWebUIAgent(rec, req, "req-mcp-method", nil)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("expected 405, got %d", rec.Code)
+		}
+
+		_, daemonStub, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{})
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/mcp/repo", strings.NewReader("{"))
+		handleWebUIAgent(rec, req, "req-mcp-bad-body", daemonStub)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", rec.Code)
+		}
+
+		_, daemonOK, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+			"POST /api/v1/agents/picoclaw/mcp/repo": func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatalf("decode toggle body: %v", err)
+				}
+				if enabled, ok := body["enabled"].(bool); !ok || enabled {
+					t.Fatalf("unexpected toggle body: %+v", body)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"mcp": map[string]any{
+						"servers": []map[string]any{
+							{"name": "repo", "health": "stopped", "enabled": false, "manageable": true, "visibleToolCount": 1, "hiddenToolCount": 0},
+						},
+						"visibleTools": []map[string]any{},
+					},
+				})
+			},
+		})
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/mcp/repo", strings.NewReader(`{"enabled":false}`))
+		handleWebUIAgent(rec, req, "req-mcp-ok", daemonOK)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"health":"stopped"`) {
+			t.Fatalf("expected toggled mcp summary, got %s", rec.Body.String())
+		}
+	})
+
 	t.Run("unsupported action", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/picoclaw/unknown", nil)

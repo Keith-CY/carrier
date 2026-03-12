@@ -12,6 +12,7 @@ type MCPManager interface {
 	ListStructuredTools() []StructuredToolDescriptor
 	ExecuteTool(ctx context.Context, name string, args map[string]any) ExecutionToolResult
 	CapabilitySummary() MCPCapabilitySummary
+	SetServerEnabled(ctx context.Context, name string, enabled bool) error
 }
 
 type staticMCPTool struct {
@@ -90,6 +91,8 @@ func (m *StaticMCPManager) CapabilitySummary() MCPCapabilitySummary {
 			{
 				Name:             "static",
 				Health:           "healthy",
+				Enabled:          true,
+				Manageable:       false,
 				VisibleToolCount: len(visible),
 				HiddenToolCount:  0,
 			},
@@ -104,6 +107,16 @@ func (m *StaticMCPManager) CapabilitySummary() MCPCapabilitySummary {
 	}
 	sortMCPCapabilitySummary(&summary)
 	return summary
+}
+
+func (m *StaticMCPManager) SetServerEnabled(_ context.Context, name string, enabled bool) error {
+	if strings.TrimSpace(strings.ToLower(name)) != "static" {
+		return fmt.Errorf("mcp server %q is not available", strings.TrimSpace(name))
+	}
+	if !enabled {
+		return fmt.Errorf("mcp server %q cannot be disabled", strings.TrimSpace(name))
+	}
+	return nil
 }
 
 type MCPServerHooks struct {
@@ -153,7 +166,7 @@ func NewManagedMCPManager(cfg MCPConfig, opts ManagedMCPManagerOptions) (*Manage
 	}
 	for _, server := range cfg.Servers {
 		manager.serverOrder = append(manager.serverOrder, server.Name)
-		manager.serverState[server.Name] = false
+		manager.serverState[server.Name] = true
 		for _, tool := range server.Tools {
 			manager.toolOrder = append(manager.toolOrder, tool.Name)
 			manager.tools[tool.Name] = managedMCPTool{
@@ -193,9 +206,6 @@ func (m *ManagedMCPManager) Start(ctx context.Context) error {
 				return err
 			}
 		}
-		m.mu.Lock()
-		m.serverState[server] = true
-		m.mu.Unlock()
 	}
 	return nil
 }
@@ -220,9 +230,6 @@ func (m *ManagedMCPManager) Stop(ctx context.Context) error {
 				return err
 			}
 		}
-		m.mu.Lock()
-		m.serverState[server] = false
-		m.mu.Unlock()
 	}
 	return nil
 }
@@ -237,6 +244,9 @@ func (m *ManagedMCPManager) ListStructuredTools() []StructuredToolDescriptor {
 	out := make([]StructuredToolDescriptor, 0, len(m.toolOrder))
 	for _, name := range m.toolOrder {
 		tool := m.tools[name]
+		if !m.serverState[tool.serverName] {
+			continue
+		}
 		if tool.config.Hidden {
 			continue
 		}
@@ -262,6 +272,9 @@ func (m *ManagedMCPManager) ExecuteTool(ctx context.Context, name string, args m
 	m.mu.RUnlock()
 	if !ok {
 		return executionError("unknown mcp tool")
+	}
+	if !m.serverState[tool.serverName] {
+		return executionError(fmt.Sprintf("mcp server %s is disabled", tool.serverName))
 	}
 	if tool.run == nil {
 		return executionError(fmt.Sprintf("mcp tool %s is not configured", canonical))
@@ -292,8 +305,10 @@ func (m *ManagedMCPManager) CapabilitySummary() MCPCapabilitySummary {
 	}
 	for _, serverName := range m.serverOrder {
 		serverSummary := MCPServerCapability{
-			Name:   serverName,
-			Health: "stopped",
+			Name:       serverName,
+			Health:     "stopped",
+			Enabled:    m.serverState[serverName],
+			Manageable: true,
 		}
 		if m.serverState[serverName] {
 			serverSummary.Health = "healthy"
@@ -308,6 +323,9 @@ func (m *ManagedMCPManager) CapabilitySummary() MCPCapabilitySummary {
 				continue
 			}
 			serverSummary.VisibleToolCount++
+			if !m.serverState[serverName] {
+				continue
+			}
 			summary.VisibleTools = append(summary.VisibleTools, MCPToolCapability{
 				Name:        tool.descriptor.Name,
 				Description: tool.descriptor.Description,
@@ -317,4 +335,45 @@ func (m *ManagedMCPManager) CapabilitySummary() MCPCapabilitySummary {
 	}
 	sortMCPCapabilitySummary(&summary)
 	return summary
+}
+
+func (m *ManagedMCPManager) SetServerEnabled(ctx context.Context, name string, enabled bool) error {
+	if m == nil {
+		return fmt.Errorf("mcp manager is unavailable")
+	}
+	serverName := strings.TrimSpace(strings.ToLower(name))
+	if serverName == "" {
+		return fmt.Errorf("mcp server name is required")
+	}
+
+	m.mu.RLock()
+	hook := m.serverHooks[serverName]
+	_, knownServer := m.serverState[serverName]
+	current := m.serverState[serverName]
+	m.mu.RUnlock()
+	if !knownServer {
+		return fmt.Errorf("mcp server %q is not available", serverName)
+	}
+	if current == enabled {
+		return nil
+	}
+
+	if enabled {
+		if hook.Start != nil {
+			if err := hook.Start(ctx); err != nil {
+				return err
+			}
+		}
+	} else {
+		if hook.Stop != nil {
+			if err := hook.Stop(ctx); err != nil {
+				return err
+			}
+		}
+	}
+
+	m.mu.Lock()
+	m.serverState[serverName] = enabled
+	m.mu.Unlock()
+	return nil
 }

@@ -74,6 +74,7 @@ type baseAgentRuntime interface {
 	Chat(ctx context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error)
 	CapabilitySummary(ctx context.Context) baseagent.RuntimeCapabilitySummary
 	SetSkillEnabled(ctx context.Context, name string, enabled bool) error
+	SetMCPServerEnabled(ctx context.Context, name string, enabled bool) error
 	RespondPendingApproval(ctx context.Context, sessionKey, approvalID string, decision baseagent.ApprovalDecision) (baseagent.ChatResponse, error)
 	ScheduleJob(ctx context.Context, job baseagent.CronJob) (baseagent.CronJob, error)
 	ListCronJobs(ctx context.Context, sessionKey string) ([]baseagent.CronJob, error)
@@ -1142,6 +1143,10 @@ func buildHTTPMuxWithBaseAgent(
 			handleAgentSkill(svc, baseRuntime, agentID, skillName, w, r)
 			return
 		}
+		if agentID, serverName, ok := parseAgentMCPServerPath(r.URL.Path); ok {
+			handleAgentMCPServer(svc, baseRuntime, agentID, serverName, w, r)
+			return
+		}
 
 		agentID, action, ok := parseAgentActionPath(r.URL.Path)
 		if !ok {
@@ -1640,6 +1645,32 @@ func handleAgentSkill(svc *lifecycle.Service, runtime baseAgentRuntime, agentID,
 	writeJSON(w, http.StatusOK, runtime.CapabilitySummary(r.Context()))
 }
 
+func handleAgentMCPServer(svc *lifecycle.Service, runtime baseAgentRuntime, agentID, serverName string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
+		return
+	}
+	if _, err := svc.Status(agentID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if err := runtime.SetMCPServerEnabled(r.Context(), serverName, body.Enabled); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, runtime.CapabilitySummary(r.Context()))
+}
+
 func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID string, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -2001,6 +2032,49 @@ func parseAgentSkillPath(path string) (agentID string, skillName string, ok bool
 		return "", "", false
 	}
 	return decodedAgentID, decodedSkillName, true
+}
+
+func parseAgentMCPServerPath(path string) (agentID string, serverName string, ok bool) {
+	const prefix = "/api/v1/agents/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	rest := path[len(prefix):]
+	if strings.Contains(rest, "//") {
+		return "", "", false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 3 || strings.TrimSpace(parts[1]) != "mcp" {
+		return "", "", false
+	}
+	rawAgentID := strings.TrimSpace(parts[0])
+	rawServerName := strings.TrimSpace(parts[2])
+	if rawAgentID == "" || rawServerName == "" {
+		return "", "", false
+	}
+	decodedAgentID, err := url.PathUnescape(rawAgentID)
+	if err != nil {
+		return "", "", false
+	}
+	decodedAgentID = strings.TrimSpace(decodedAgentID)
+	if decodedAgentID == "" || strings.Contains(decodedAgentID, "/") || strings.Contains(decodedAgentID, "\\") || strings.Contains(decodedAgentID, "..") {
+		return "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedAgentID) {
+		return "", "", false
+	}
+	decodedServerName, err := url.PathUnescape(rawServerName)
+	if err != nil {
+		return "", "", false
+	}
+	decodedServerName = strings.TrimSpace(strings.ToLower(decodedServerName))
+	if decodedServerName == "" || strings.Contains(decodedServerName, "/") || strings.Contains(decodedServerName, "\\") || strings.Contains(decodedServerName, "..") {
+		return "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedServerName) {
+		return "", "", false
+	}
+	return decodedAgentID, decodedServerName, true
 }
 
 func parseAgentMessagingPath(path string) (agentID string, action string, ok bool) {

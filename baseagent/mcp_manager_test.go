@@ -227,3 +227,133 @@ func TestManagedMCPManagerVisibleCapabilitySummary(t *testing.T) {
 		t.Fatalf("unexpected visible tool summary: %+v", summary.VisibleTools)
 	}
 }
+
+func TestManagedMCPManagerSetServerEnabled(t *testing.T) {
+	cfg := MCPConfig{
+		Servers: []MCPServerConfig{
+			{
+				Name: "repo",
+				Tools: []MCPToolConfig{
+					{
+						Name:        "repo_search",
+						Description: "Search the repository index.",
+					},
+				},
+			},
+		},
+	}
+
+	started := 0
+	stopped := 0
+	manager, err := NewManagedMCPManager(cfg, ManagedMCPManagerOptions{
+		ServerHooks: map[string]MCPServerHooks{
+			"repo": {
+				Start: func(context.Context) error {
+					started++
+					return nil
+				},
+				Stop: func(context.Context) error {
+					stopped++
+					return nil
+				},
+			},
+		},
+		ToolRunners: map[string]MCPToolRunner{
+			"repo_search": func(context.Context, map[string]any) ExecutionToolResult {
+				return ExecutionToolResult{Output: "found"}
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new managed mcp manager: %v", err)
+	}
+
+	initial := manager.CapabilitySummary()
+	if len(initial.Servers) != 1 || !initial.Servers[0].Enabled {
+		t.Fatalf("expected server enabled by default, got %+v", initial.Servers)
+	}
+	if len(initial.VisibleTools) != 1 || initial.VisibleTools[0].Name != "repo_search" {
+		t.Fatalf("expected visible tools while enabled, got %+v", initial.VisibleTools)
+	}
+
+	if err := manager.SetServerEnabled(context.Background(), "repo", false); err != nil {
+		t.Fatalf("disable server: %v", err)
+	}
+	if stopped != 1 {
+		t.Fatalf("expected one stop call, got %d", stopped)
+	}
+	disabled := manager.CapabilitySummary()
+	if disabled.Servers[0].Enabled || disabled.Servers[0].Health != "stopped" {
+		t.Fatalf("unexpected disabled server summary: %+v", disabled.Servers[0])
+	}
+	if len(disabled.VisibleTools) != 0 {
+		t.Fatalf("expected no visible tools after disable, got %+v", disabled.VisibleTools)
+	}
+	if result := manager.ExecuteTool(context.Background(), "repo_search", map[string]any{}); !result.IsError || result.Output == "" {
+		t.Fatalf("expected disabled server to block tool execution, got %+v", result)
+	}
+
+	if err := manager.SetServerEnabled(context.Background(), "repo", true); err != nil {
+		t.Fatalf("enable server: %v", err)
+	}
+	if started != 1 {
+		t.Fatalf("expected one start call, got %d", started)
+	}
+	enabled := manager.CapabilitySummary()
+	if !enabled.Servers[0].Enabled || enabled.Servers[0].Health != "healthy" {
+		t.Fatalf("unexpected enabled server summary: %+v", enabled.Servers[0])
+	}
+	if len(enabled.VisibleTools) != 1 || enabled.VisibleTools[0].Name != "repo_search" {
+		t.Fatalf("unexpected visible tools after enable: %+v", enabled.VisibleTools)
+	}
+
+	if result := manager.ExecuteTool(context.Background(), "repo_search", map[string]any{}); result.IsError || result.Output != "found" {
+		t.Fatalf("expected tool execution to work while enabled, got %+v", result)
+	}
+}
+
+func TestRuntimeSetMCPServerEnabledRefreshesStructuredTools(t *testing.T) {
+	cfg := MCPConfig{
+		Servers: []MCPServerConfig{
+			{
+				Name: "repo",
+				Tools: []MCPToolConfig{
+					{
+						Name:        "repo_search",
+						Description: "Search the repository index.",
+					},
+				},
+			},
+		},
+	}
+
+	manager, err := NewManagedMCPManager(cfg, ManagedMCPManagerOptions{
+		ToolRunners: map[string]MCPToolRunner{
+			"repo_search": func(context.Context, map[string]any) ExecutionToolResult {
+				return ExecutionToolResult{Output: "found"}
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new managed mcp manager: %v", err)
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, nil, WithMCPManager(manager))
+	if !containsStructuredTool(rt.loop.structuredTools.Descriptors(), "repo_search") {
+		t.Fatalf("expected runtime to expose repo_search before disable, got %+v", rt.loop.structuredTools.Descriptors())
+	}
+
+	if err := rt.SetMCPServerEnabled(context.Background(), "repo", false); err != nil {
+		t.Fatalf("disable server through runtime: %v", err)
+	}
+	if containsStructuredTool(rt.loop.structuredTools.Descriptors(), "repo_search") {
+		t.Fatalf("expected runtime to hide repo_search after disable, got %+v", rt.loop.structuredTools.Descriptors())
+	}
+
+	if err := rt.SetMCPServerEnabled(context.Background(), "repo", true); err != nil {
+		t.Fatalf("enable server through runtime: %v", err)
+	}
+	if !containsStructuredTool(rt.loop.structuredTools.Descriptors(), "repo_search") {
+		t.Fatalf("expected runtime to expose repo_search after re-enable, got %+v", rt.loop.structuredTools.Descriptors())
+	}
+}

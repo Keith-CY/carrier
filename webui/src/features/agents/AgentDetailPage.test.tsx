@@ -49,7 +49,7 @@ describe('AgentDetailPage', () => {
           ],
           mcp: {
             servers: [
-              { name: 'repo', health: 'healthy', visibleToolCount: 1, hiddenToolCount: 0 },
+              { name: 'repo', health: 'healthy', enabled: true, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 },
             ],
             visibleTools: [
               { name: 'repo_search', description: 'Search the repository index.' },
@@ -102,6 +102,19 @@ describe('AgentDetailPage', () => {
           headers: { 'Content-Type': 'application/json' },
         });
       }
+      if (url.endsWith('/api/v1/agents/agent-alpha/mcp/repo')) {
+        return new Response(JSON.stringify({
+          mcp: {
+            servers: [
+              { name: 'repo', health: 'stopped', enabled: false, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 },
+            ],
+            visibleTools: [],
+          },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }) as typeof fetch;
   });
@@ -132,12 +145,27 @@ describe('AgentDetailPage', () => {
   test('toggles skill state through the agent skill endpoint', async () => {
     renderAgentDetailPage();
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /disable/i })).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /disable/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Disable' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Disable' }));
 
     await waitFor(() => expect(screen.getByText(/Skill go-testing disabled\./i)).toBeInTheDocument());
     expect(globalThis.fetch).toHaveBeenCalledWith(
       expect.stringContaining('/api/v1/agents/agent-alpha/skills/go-testing'),
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    );
+  });
+
+  test('toggles MCP server state through the agent MCP endpoint', async () => {
+    renderAgentDetailPage();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /disable mcp/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /disable mcp/i }));
+
+    await waitFor(() => expect(screen.getByText(/MCP server repo disabled\./i)).toBeInTheDocument());
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/mcp/repo'),
       expect.objectContaining({
         method: 'POST',
       }),

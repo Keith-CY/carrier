@@ -325,6 +325,43 @@ func TestDaemonClient_SetAgentSkillEnabled(t *testing.T) {
 	}
 }
 
+func TestDaemonClient_SetAgentMCPServerEnabled(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"mcp": map[string]any{
+				"servers": []map[string]any{
+					{"name": "repo", "health": "stopped", "enabled": false, "manageable": true, "visibleToolCount": 1, "hiddenToolCount": 0},
+				},
+				"visibleTools": []map[string]any{},
+			},
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	summary, err := dc.SetAgentMCPServerEnabled(context.Background(), "a1", "repo", false, "actor", "req")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/api/v1/agents/a1/mcp/repo" {
+		t.Fatalf("unexpected path: %s", gotPath)
+	}
+	if enabled, ok := gotBody["enabled"].(bool); !ok || enabled {
+		t.Fatalf("unexpected toggle body: %+v", gotBody)
+	}
+	if len(summary.MCP.Servers) != 1 || summary.MCP.Servers[0].Enabled || summary.MCP.Servers[0].Health != "stopped" {
+		t.Fatalf("unexpected mcp summary: %+v", summary)
+	}
+}
+
 func TestDaemonClient_GetLogs(t *testing.T) {
 	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewEncoder(w).Encode(map[string]interface{}{

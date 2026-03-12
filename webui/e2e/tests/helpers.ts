@@ -487,7 +487,7 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
         skillSummary: { installedCount: 1, enabledCount: 1, disabledCount: 0 },
         skills: [{ name: 'toolbox', enabled: true }],
         mcp: {
-          servers: [{ name: 'repo', health: 'healthy', visibleToolCount: 1, hiddenToolCount: 0 }],
+          servers: [{ name: 'repo', health: 'healthy', enabled: true, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
           visibleTools: [{ name: 'repo_search', description: 'Search code' }],
         },
       }),
@@ -532,14 +532,14 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
           isolation: true,
           runtimeState: 'running',
         },
-        capabilities: {
-          skillSummary: { installedCount: 1, enabledCount: 1, disabledCount: 0 },
-          skills: [{ name: 'toolbox', enabled: true }],
-          mcp: {
-            servers: [{ name: 'repo', health: 'healthy', visibleToolCount: 1, hiddenToolCount: 0 }],
-            visibleTools: [{ name: 'repo_search', description: 'Search code' }],
+          capabilities: {
+            skillSummary: { installedCount: 1, enabledCount: 1, disabledCount: 0 },
+            skills: [{ name: 'toolbox', enabled: true }],
+            mcp: {
+              servers: [{ name: 'repo', health: 'healthy', enabled: true, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
+              visibleTools: [{ name: 'repo_search', description: 'Search code' }],
+            },
           },
-        },
       }),
     }),
   );
