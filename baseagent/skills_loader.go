@@ -6,12 +6,13 @@ import (
 )
 
 type SkillDefinition struct {
-	Name     string   `json:"name"`
-	Summary  string   `json:"summary,omitempty"`
-	Keywords []string `json:"keywords,omitempty"`
-	Tags     []string `json:"tags,omitempty"`
-	Source   string   `json:"source,omitempty"`
-	Version  string   `json:"version,omitempty"`
+	Name          string   `json:"name"`
+	Summary       string   `json:"summary,omitempty"`
+	Keywords      []string `json:"keywords,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	Source        string   `json:"source,omitempty"`
+	Version       string   `json:"version,omitempty"`
+	TargetVersion string   `json:"targetVersion,omitempty"`
 }
 
 type SkillsLoader interface {
@@ -19,6 +20,7 @@ type SkillsLoader interface {
 	ListInstalledSkills(ctx context.Context) []SkillDefinition
 	SearchSkills(ctx context.Context, query string) []SkillDefinition
 	InstallSkill(ctx context.Context, name string) (SkillDefinition, error)
+	UpdateSkill(ctx context.Context, name, version string) (SkillDefinition, error)
 	UninstallSkill(ctx context.Context, name string) (SkillDefinition, error)
 }
 

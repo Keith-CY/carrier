@@ -133,6 +133,30 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 			}
 			writeJSON(w, http.StatusOK, installed)
 			return
+		case strings.EqualFold(skillAction, "update"):
+			if r.Method != http.MethodPost {
+				writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+				return
+			}
+			if daemon == nil {
+				writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_COMMAND_FAILED", "daemon client is unavailable"))
+				return
+			}
+			var body struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid JSON body"))
+				return
+			}
+			updated, err := daemon.UpdateAgentSkill(r.Context(), agentID, strings.TrimSpace(body.Name), strings.TrimSpace(body.Version), "webui:agents:skills:update", requestID)
+			if err != nil {
+				writeDaemonAPIError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, updated)
+			return
 		case strings.EqualFold(skillAction, "uninstall"):
 			if r.Method != http.MethodPost {
 				writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
@@ -237,27 +261,36 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "mcp server name is required"))
 			return
 		}
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
-			return
-		}
 		if daemon == nil {
 			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_COMMAND_FAILED", "daemon client is unavailable"))
 			return
 		}
-		var body struct {
-			Enabled bool `json:"enabled"`
+		serverName := strings.TrimSpace(parts[2])
+		switch r.Method {
+		case http.MethodGet:
+			detail, err := daemon.GetAgentMCPServerDetail(r.Context(), agentID, serverName, "webui:agents:mcp:detail", requestID)
+			if err != nil {
+				writeDaemonAPIError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, detail)
+		case http.MethodPost:
+			var body struct {
+				Enabled bool `json:"enabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid JSON body"))
+				return
+			}
+			summary, err := daemon.SetAgentMCPServerEnabled(r.Context(), agentID, serverName, body.Enabled, "webui:agents:mcp", requestID)
+			if err != nil {
+				writeDaemonAPIError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, summary)
+		default:
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid JSON body"))
-			return
-		}
-		summary, err := daemon.SetAgentMCPServerEnabled(r.Context(), agentID, strings.TrimSpace(parts[2]), body.Enabled, "webui:agents:mcp", requestID)
-		if err != nil {
-			writeDaemonAPIError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, summary)
 		return
 	case "chat":
 		if r.Method != http.MethodPost {

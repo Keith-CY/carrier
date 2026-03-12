@@ -10,6 +10,7 @@ test.describe('Agent Detail', () => {
     let skillEnabled = true;
     let skillSearchCalls = 0;
     let skillInstallCalls = 0;
+    let skillUpdateCalls = 0;
     let skillUninstallCalls = 0;
     let mcpToggleCalls = 0;
     let mcpEnabled = true;
@@ -27,7 +28,7 @@ test.describe('Agent Detail', () => {
         contentType: 'application/json',
         body: JSON.stringify({
           skillSummary: { installedCount: 1, enabledCount: skillEnabled ? 1 : 0, disabledCount: skillEnabled ? 0 : 1 },
-          skills: [{ name: 'toolbox', enabled: skillEnabled, source: 'catalog', version: 'builtin' }],
+          skills: [{ name: 'toolbox', enabled: skillEnabled, source: 'catalog', version: 'builtin', targetVersion: 'v2.0.0' }],
           mcp: {
             servers: [{ name: 'repo', health: mcpEnabled ? 'healthy' : 'stopped', enabled: mcpEnabled, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
             visibleTools: [{ name: 'repo_search', description: 'Search code' }],
@@ -45,6 +46,15 @@ test.describe('Agent Detail', () => {
           heartbeat: { state: 'fresh', ageSeconds: 12, lastActivityAt: '2026-03-12T03:59:48Z' },
           memory: { contractId: 'memory-alpha', contractDigest: 'sha256:abc' },
           providerReadiness: { provider: 'openrouter', authMode: 'api_key', credentialConfigured: true, ready: true },
+          lastModelRun: {
+            requestedAlias: 'flash-safe',
+            requestedModel: 'deepseek/deepseek-chat-v3-0324',
+            resolvedModel: 'deepseek/deepseek-chat-v3-0324',
+            fallbackGroup: 'openrouter:flash',
+            overrideHit: true,
+            fallbackHit: true,
+            lastRunAt: '2026-03-12T00:05:00Z',
+          },
           modelSurface: {
             defaultProfile,
             profiles: [
@@ -65,7 +75,7 @@ test.describe('Agent Detail', () => {
           session: { instanceId: 'instance-1', channel: 'telegram', isolation: true, runtimeState: 'running' },
           capabilities: {
             skillSummary: { installedCount: 1, enabledCount: skillEnabled ? 1 : 0, disabledCount: skillEnabled ? 0 : 1 },
-            skills: [{ name: 'toolbox', enabled: skillEnabled, source: 'catalog', version: 'builtin' }],
+            skills: [{ name: 'toolbox', enabled: skillEnabled, source: 'catalog', version: 'builtin', targetVersion: 'v2.0.0' }],
             mcp: {
               servers: [{ name: 'repo', health: mcpEnabled ? 'healthy' : 'stopped', enabled: mcpEnabled, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
               visibleTools: [{ name: 'repo_search', description: 'Search code' }],
@@ -181,6 +191,14 @@ test.describe('Agent Detail', () => {
         body: JSON.stringify({ name: 'workspace-inspection', summary: 'Inspect workspace state.', source: 'catalog', version: 'v1.2.3' }),
       });
     });
+    await page.route('**/api/v1/agents/agent-alpha/skills/update', async (route) => {
+      skillUpdateCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ name: 'toolbox', summary: 'Core toolbox', source: 'catalog', version: 'builtin', targetVersion: 'v2.0.0' }),
+      });
+    });
     await page.route('**/api/v1/agents/agent-alpha/skills/uninstall', async (route) => {
       skillUninstallCalls += 1;
       await route.fulfill({
@@ -190,16 +208,35 @@ test.describe('Agent Detail', () => {
       });
     });
     await page.route('**/api/v1/agents/agent-alpha/mcp/repo', async (route) => {
-      mcpToggleCalls += 1;
-      mcpEnabled = false;
+      if (route.request().method() === 'POST') {
+        mcpToggleCalls += 1;
+        mcpEnabled = false;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            mcp: {
+              servers: [{ name: 'repo', health: 'stopped', enabled: false, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
+              visibleTools: [],
+            },
+          }),
+        });
+        return;
+      }
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          mcp: {
-            servers: [{ name: 'repo', health: 'stopped', enabled: false, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
-            visibleTools: [],
-          },
+          name: 'repo',
+          health: 'healthy',
+          enabled: true,
+          manageable: true,
+          visibleToolCount: 1,
+          hiddenToolCount: 1,
+          healthDetail: 'connected to repository index',
+          remediationHint: 'Disable MCP if repository indexing becomes noisy.',
+          visibleTools: [{ name: 'repo_search', description: 'Search code' }],
+          hiddenTools: [{ name: 'repo_admin', description: 'Admin index' }],
         }),
       });
     });
@@ -243,8 +280,15 @@ test.describe('Agent Detail', () => {
     await expect(page.locator('#agent-detail-content')).toContainText('check launcher');
     await expect(page.locator('#agent-detail-content')).toContainText('manual');
     await expect(page.locator('#agent-detail-content')).toContainText('1 installed · 1 enabled · 0 disabled');
+    await expect(page.locator('#agent-detail-content')).toContainText('target=v2.0.0');
     await expect(page.locator('#agent-detail-content')).toContainText('"runtimeState": "running"');
     await expect(page.locator('#agent-detail-content')).toContainText('/tmp/agent-alpha/config.toml');
+    await expect(page.locator('#agent-detail-content')).toContainText('Model Runtime Trace');
+    await expect(page.locator('#agent-detail-content')).toContainText('requested=flash-safe');
+    await expect(page.locator('#agent-detail-content')).toContainText('resolved=deepseek/deepseek-chat-v3-0324');
+    await expect(page.locator('#agent-detail-content')).toContainText('override hit');
+    await expect(page.locator('#agent-detail-content')).toContainText('fallback hit');
+    await expect(page.locator('#agent-detail-content')).toContainText('last=2026-03-12T00:05:00Z');
 
     await page.getByRole('button', { name: 'Disable', exact: true }).click();
     await expect.poll(() => skillToggleCalls).toBe(1);
@@ -259,9 +303,18 @@ test.describe('Agent Detail', () => {
     await expect.poll(() => skillInstallCalls).toBe(1);
     await expect(page.locator('#agent-detail-content')).toContainText('Installed skill workspace-inspection.');
 
+    await page.getByPlaceholder('Pin version for toolbox').fill('v2.0.0');
+    await page.getByRole('button', { name: 'Update toolbox' }).click();
+    await expect.poll(() => skillUpdateCalls).toBe(1);
+    await expect(page.locator('#agent-detail-content')).toContainText('Updated skill toolbox.');
+
     await page.getByRole('button', { name: 'Disable MCP' }).click();
     await expect.poll(() => mcpToggleCalls).toBe(1);
     await expect(page.locator('#agent-detail-content')).toContainText('MCP server repo disabled.');
+
+    await page.getByRole('button', { name: 'Inspect repo MCP' }).click();
+    await expect(page.locator('#agent-detail-content')).toContainText('connected to repository index');
+    await expect(page.locator('#agent-detail-content')).toContainText('repo_admin');
 
     await page.getByRole('button', { name: 'Run cron-1 now' }).click();
     await expect.poll(() => cronRunCalls).toBe(1);

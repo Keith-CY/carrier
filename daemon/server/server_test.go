@@ -25,6 +25,7 @@ type fakeBaseAgentRuntime struct {
 	approvalResp        baseagent.ChatResponse
 	approvalErr         error
 	installSkill        baseagent.SkillDefinition
+	updateSkill         baseagent.SkillDefinition
 	uninstallSkill      baseagent.SkillDefinition
 	searchSkills        []baseagent.SkillDefinition
 	subagentJobs        []baseagent.SubagentJob
@@ -35,6 +36,7 @@ type fakeBaseAgentRuntime struct {
 	pausedCronJob       baseagent.CronJob
 	resumedCronJob      baseagent.CronJob
 	ranCronJob          baseagent.CronJob
+	mcpServerDetail     baseagent.MCPServerCapability
 	cronErr             error
 	skillToggleErr      error
 	mcpToggleErr        error
@@ -50,6 +52,7 @@ type fakeBaseAgentRuntime struct {
 	mcpToggleCall       int
 	searchSkillsCall    int
 	installSkillCall    int
+	updateSkillCall     int
 	uninstallSkillCall  int
 	lastReq             baseagent.ChatRequest
 	lastSession         string
@@ -63,6 +66,8 @@ type fakeBaseAgentRuntime struct {
 	lastMCPServerName   string
 	lastMCPEnabled      bool
 	lastInstallSkill    string
+	lastUpdateSkill     string
+	lastUpdateVersion   string
 	lastUninstallSkill  string
 	lastSkillSearch     string
 	lastSubagentJobID   string
@@ -118,6 +123,16 @@ func (f *fakeBaseAgentRuntime) InstallSkill(_ context.Context, name string) (bas
 	return f.installSkill, nil
 }
 
+func (f *fakeBaseAgentRuntime) UpdateSkill(_ context.Context, name, version string) (baseagent.SkillDefinition, error) {
+	f.updateSkillCall++
+	f.lastUpdateSkill = name
+	f.lastUpdateVersion = version
+	if f.updateSkill.Name == "" {
+		f.updateSkill = baseagent.SkillDefinition{Name: name, Summary: "updated skill", TargetVersion: version}
+	}
+	return f.updateSkill, nil
+}
+
 func (f *fakeBaseAgentRuntime) UninstallSkill(_ context.Context, name string) (baseagent.SkillDefinition, error) {
 	f.uninstallSkillCall++
 	f.lastUninstallSkill = name
@@ -161,6 +176,14 @@ func (f *fakeBaseAgentRuntime) SetMCPServerEnabled(_ context.Context, name strin
 		f.capabilities.MCP.VisibleTools = nil
 	}
 	return nil
+}
+
+func (f *fakeBaseAgentRuntime) MCPServerDetail(_ context.Context, name string) (baseagent.MCPServerCapability, error) {
+	f.lastMCPServerName = name
+	if strings.TrimSpace(f.mcpServerDetail.Name) == "" {
+		return baseagent.MCPServerCapability{}, fmt.Errorf("mcp server %s not found", name)
+	}
+	return f.mcpServerDetail, nil
 }
 
 func (f *fakeBaseAgentRuntime) RespondPendingApproval(_ context.Context, sessionKey, approvalID string, decision baseagent.ApprovalDecision) (baseagent.ChatResponse, error) {
@@ -365,6 +388,7 @@ func TestAgentSkillSearchAndInstallEndpoints(t *testing.T) {
 			{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3"},
 		},
 		installSkill:   baseagent.SkillDefinition{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3"},
+		updateSkill:    baseagent.SkillDefinition{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3", TargetVersion: "v2.0.0"},
 		uninstallSkill: baseagent.SkillDefinition{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3"},
 	}
 	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
@@ -409,6 +433,20 @@ func TestAgentSkillSearchAndInstallEndpoints(t *testing.T) {
 		t.Fatalf("expected install metadata in body: %s", installRec.Body.String())
 	}
 
+	updateReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/update", strings.NewReader(`{"name":"workspace-inspection","version":"v2.0.0"}`))
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateRec := httptest.NewRecorder()
+	mux.ServeHTTP(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected update 200, got %d body=%s", updateRec.Code, updateRec.Body.String())
+	}
+	if rt.updateSkillCall != 1 || rt.lastUpdateSkill != "workspace-inspection" || rt.lastUpdateVersion != "v2.0.0" {
+		t.Fatalf("unexpected skill update state: %+v", rt)
+	}
+	if !strings.Contains(updateRec.Body.String(), `"workspace-inspection"`) || !strings.Contains(updateRec.Body.String(), `"targetVersion":"v2.0.0"`) {
+		t.Fatalf("unexpected skill update body: %s", updateRec.Body.String())
+	}
+
 	uninstallReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/uninstall", strings.NewReader(`{"name":"workspace-inspection"}`))
 	uninstallReq.Header.Set("Content-Type", "application/json")
 	uninstallRec := httptest.NewRecorder()
@@ -437,14 +475,31 @@ func TestAgentMCPServerToggleEndpoint(t *testing.T) {
 				VisibleTools: []baseagent.MCPToolCapability{{Name: "repo_search"}},
 			},
 		},
+		mcpServerDetail: baseagent.MCPServerCapability{
+			Name:            "repo",
+			Health:          "healthy",
+			Enabled:         true,
+			Manageable:      true,
+			VisibleToolCount: 1,
+			HiddenToolCount: 1,
+			HealthDetail:    "connected to repository index",
+			RemediationHint: "Disable MCP if repository indexing becomes noisy.",
+			VisibleTools:    []baseagent.MCPToolCapability{{Name: "repo_search", Description: "Search code"}},
+			HiddenTools:     []baseagent.MCPToolCapability{{Name: "repo_admin", Description: "Admin index"}},
+		},
 	}
 	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
 
-	methodReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/mcp/repo", nil)
-	methodRec := httptest.NewRecorder()
-	mux.ServeHTTP(methodRec, methodReq)
-	if methodRec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("expected 405, got %d", methodRec.Code)
+	detailReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/mcp/repo", nil)
+	detailRec := httptest.NewRecorder()
+	mux.ServeHTTP(detailRec, detailReq)
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", detailRec.Code, detailRec.Body.String())
+	}
+	if !strings.Contains(detailRec.Body.String(), `"healthDetail":"connected to repository index"`) ||
+		!strings.Contains(detailRec.Body.String(), `"remediationHint":"Disable MCP if repository indexing becomes noisy."`) ||
+		!strings.Contains(detailRec.Body.String(), `"hiddenToolCount":1`) {
+		t.Fatalf("unexpected mcp detail body: %s", detailRec.Body.String())
 	}
 
 	okReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/mcp/repo", strings.NewReader(`{"enabled":false}`))

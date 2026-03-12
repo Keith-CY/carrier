@@ -246,6 +246,13 @@ func (r *Runtime) InstallSkill(ctx context.Context, name string) (SkillDefinitio
 	return r.skillsLoader.InstallSkill(ctx, name)
 }
 
+func (r *Runtime) UpdateSkill(ctx context.Context, name, version string) (SkillDefinition, error) {
+	if r == nil || r.skillsLoader == nil {
+		return SkillDefinition{}, fmt.Errorf("skills loader is unavailable")
+	}
+	return r.skillsLoader.UpdateSkill(ctx, name, version)
+}
+
 func (r *Runtime) UninstallSkill(ctx context.Context, name string) (SkillDefinition, error) {
 	if r == nil || r.skillsLoader == nil {
 		return SkillDefinition{}, fmt.Errorf("skills loader is unavailable")
@@ -286,6 +293,13 @@ func (r *Runtime) SetMCPServerEnabled(ctx context.Context, name string, enabled 
 		r.loop.SetExecutionTools(r.loop.executionTools, r.loop.maxToolIterations, r.effectiveStructuredToolPolicy(), r.mcpManager, r.subagentManager)
 	}
 	return nil
+}
+
+func (r *Runtime) MCPServerDetail(_ context.Context, name string) (MCPServerCapability, error) {
+	if r == nil || r.mcpManager == nil {
+		return MCPServerCapability{}, fmt.Errorf("mcp manager is unavailable")
+	}
+	return r.mcpManager.ServerDetail(name)
 }
 
 func (r *Runtime) effectiveStructuredToolPolicy() StructuredToolPolicySpec {

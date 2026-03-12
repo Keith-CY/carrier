@@ -15,6 +15,7 @@ type AgentCapabilities = {
     summary?: string;
     source?: string;
     version?: string;
+    targetVersion?: string;
     enabled?: boolean;
   }>;
   mcp?: {
@@ -40,6 +41,25 @@ type AgentSkillCatalogEntry = {
   version?: string;
   keywords?: string[];
   tags?: string[];
+};
+
+type AgentMCPServerDetail = {
+  name?: string;
+  health?: string;
+  enabled?: boolean;
+  manageable?: boolean;
+  visibleToolCount?: number;
+  hiddenToolCount?: number;
+  healthDetail?: string;
+  remediationHint?: string;
+  visibleTools?: Array<{
+    name?: string;
+    description?: string;
+  }>;
+  hiddenTools?: Array<{
+    name?: string;
+    description?: string;
+  }>;
 };
 
 type AgentLauncherSummary = {
@@ -77,6 +97,15 @@ type AgentLauncherSummary = {
       aliasGroupSize?: number;
       primary?: boolean;
     }>;
+  };
+  lastModelRun?: {
+    requestedAlias?: string;
+    requestedModel?: string;
+    resolvedModel?: string;
+    fallbackGroup?: string;
+    overrideHit?: boolean;
+    fallbackHit?: boolean;
+    lastRunAt?: string;
   };
   cron?: {
     count?: number;
@@ -146,6 +175,8 @@ export function AgentDetailPage() {
   const [lastActionMessage, setLastActionMessage] = useState('');
   const [skillSearchQuery, setSkillSearchQuery] = useState('');
   const [skillSearchResults, setSkillSearchResults] = useState<AgentSkillCatalogEntry[]>([]);
+  const [skillVersionDrafts, setSkillVersionDrafts] = useState<Record<string, string>>({});
+  const [selectedMCPServerName, setSelectedMCPServerName] = useState('');
 
   const statusQuery = useQuery({
     queryKey: ['agent-detail', agentId],
@@ -235,6 +266,29 @@ export function AgentDetailPage() {
     },
   });
 
+  const skillUpdateMutation = useMutation({
+    mutationFn: async ({ skillName, version }: { skillName: string; version: string }) => {
+      return apiPost<AgentSkillCatalogEntry>(`/api/v1/agents/${encodeURIComponent(agentId)}/skills/update`, {
+        name: skillName,
+        version,
+      });
+    },
+    onSuccess: async (updated) => {
+      const updatedName = String(updated.name || '').trim() || 'unknown-skill';
+      setLastActionMessage(`Updated skill ${updatedName}.`);
+      setSkillVersionDrafts((current) => {
+        const next = { ...current };
+        delete next[updatedName];
+        return next;
+      });
+      await capabilitiesQuery.refetch();
+      await launcherQuery.refetch();
+    },
+    onError: (error) => {
+      setLastActionMessage((error as Error).message);
+    },
+  });
+
   const skillUninstallMutation = useMutation({
     mutationFn: async (skillName: string) => {
       return apiPost<AgentSkillCatalogEntry>(`/api/v1/agents/${encodeURIComponent(agentId)}/skills/uninstall`, { name: skillName });
@@ -250,6 +304,13 @@ export function AgentDetailPage() {
     },
   });
 
+  const mcpDetailQuery = useQuery({
+    queryKey: ['agent-mcp-detail', agentId, selectedMCPServerName],
+    queryFn: () => apiGet<AgentMCPServerDetail>(`/api/v1/agents/${encodeURIComponent(agentId)}/mcp/${encodeURIComponent(selectedMCPServerName)}`),
+    enabled: !!agentId && !!selectedMCPServerName,
+    retry: false,
+  });
+
   const mcpToggleMutation = useMutation({
     mutationFn: async ({ serverName, enabled }: { serverName: string; enabled: boolean }) => {
       await apiPost(`/api/v1/agents/${encodeURIComponent(agentId)}/mcp/${encodeURIComponent(serverName)}`, { enabled });
@@ -259,6 +320,9 @@ export function AgentDetailPage() {
       setLastActionMessage(`MCP server ${serverName} ${enabled ? 'enabled' : 'disabled'}.`);
       await capabilitiesQuery.refetch();
       await launcherQuery.refetch();
+      if (selectedMCPServerName === serverName) {
+        await mcpDetailQuery.refetch();
+      }
     },
     onError: (error) => {
       setLastActionMessage((error as Error).message);
@@ -538,6 +602,20 @@ export function AgentDetailPage() {
                 })()}
               </div>
             ) : null}
+            {content.launcher?.lastModelRun ? (
+              <div>
+                <strong>Model Runtime Trace</strong>
+                <div className="text-dim">
+                  {content.launcher.lastModelRun.requestedAlias ? `requested=${content.launcher.lastModelRun.requestedAlias}` : 'requested=default'}
+                  {content.launcher.lastModelRun.requestedModel ? ` · explicit=${content.launcher.lastModelRun.requestedModel}` : ''}
+                  {content.launcher.lastModelRun.resolvedModel ? ` · resolved=${content.launcher.lastModelRun.resolvedModel}` : ''}
+                  {content.launcher.lastModelRun.fallbackGroup ? ` · group=${content.launcher.lastModelRun.fallbackGroup}` : ''}
+                  {content.launcher.lastModelRun.overrideHit ? ' · override hit' : ''}
+                  {content.launcher.lastModelRun.fallbackHit ? ' · fallback hit' : ''}
+                  {content.launcher.lastModelRun.lastRunAt ? ` · last=${content.launcher.lastModelRun.lastRunAt}` : ''}
+                </div>
+              </div>
+            ) : null}
             <div className="kv-grid">
               <div>
                 <strong>Skills</strong>
@@ -557,6 +635,7 @@ export function AgentDetailPage() {
                         {skill.summary ? ` · ${skill.summary}` : ''}
                         {skill.source ? ` · ${skill.source}` : ''}
                         {skill.version ? ` · ${skill.version}` : ''}
+                        {skill.targetVersion ? ` · target=${skill.targetVersion}` : ''}
                       </span>
                       {skill.name ? (
                         <div className="btn-row">
@@ -575,6 +654,30 @@ export function AgentDetailPage() {
                             onClick={() => skillUninstallMutation.mutate(String(skill.name))}
                           >
                             Uninstall
+                          </button>
+                          <input
+                            type="text"
+                            placeholder={`Pin version for ${String(skill.name)}`}
+                            value={skillVersionDrafts[String(skill.name)] || ''}
+                            onChange={(event) =>
+                              setSkillVersionDrafts((current) => ({
+                                ...current,
+                                [String(skill.name)]: event.target.value,
+                              }))
+                            }
+                          />
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={skillUpdateMutation.isPending}
+                            onClick={() =>
+                              skillUpdateMutation.mutate({
+                                skillName: String(skill.name),
+                                version: String(skillVersionDrafts[String(skill.name)] || '').trim(),
+                              })
+                            }
+                          >
+                            {`Update ${String(skill.name)}`}
                           </button>
                         </div>
                       ) : null}
@@ -638,18 +741,68 @@ export function AgentDetailPage() {
                         {` · visible=${server.visibleToolCount || 0} · hidden=${server.hiddenToolCount || 0}`}
                       </span>
                       {server.name && server.manageable ? (
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          disabled={mcpToggleMutation.isPending}
-                          onClick={() => mcpToggleMutation.mutate({ serverName: String(server.name), enabled: !server.enabled })}
-                        >
-                          {server.enabled ? 'Disable MCP' : 'Enable MCP'}
-                        </button>
+                        <div className="btn-row">
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={mcpDetailQuery.isFetching && selectedMCPServerName === String(server.name)}
+                            onClick={() => setSelectedMCPServerName(String(server.name))}
+                          >
+                            {`Inspect ${String(server.name)} MCP`}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={mcpToggleMutation.isPending}
+                            onClick={() => mcpToggleMutation.mutate({ serverName: String(server.name), enabled: !server.enabled })}
+                          >
+                            {server.enabled ? 'Disable MCP' : 'Enable MCP'}
+                          </button>
+                        </div>
                       ) : null}
                     </li>
                   ))}
                 </ul>
+                {selectedMCPServerName ? (
+                  <div>
+                    <strong>{`${selectedMCPServerName} MCP Detail`}</strong>
+                    {mcpDetailQuery.isLoading ? (
+                      <div className="text-dim">Loading MCP detail…</div>
+                    ) : mcpDetailQuery.isError ? (
+                      <div className="text-dim">{(mcpDetailQuery.error as Error).message}</div>
+                    ) : mcpDetailQuery.data ? (
+                      <>
+                        <div className="text-dim">
+                          {mcpDetailQuery.data.health || 'unknown'}
+                          {typeof mcpDetailQuery.data.enabled === 'boolean' ? ` · ${mcpDetailQuery.data.enabled ? 'enabled' : 'disabled'}` : ''}
+                          {` · visible=${mcpDetailQuery.data.visibleToolCount || 0} · hidden=${mcpDetailQuery.data.hiddenToolCount || 0}`}
+                        </div>
+                        {mcpDetailQuery.data.healthDetail ? <div className="text-dim">{mcpDetailQuery.data.healthDetail}</div> : null}
+                        {mcpDetailQuery.data.remediationHint ? <div className="text-dim">{mcpDetailQuery.data.remediationHint}</div> : null}
+                        {mcpDetailQuery.data.visibleTools?.length ? (
+                          <ul className="compact-list">
+                            {mcpDetailQuery.data.visibleTools.map((tool) => (
+                              <li key={`visible-${String(tool.name || '')}`}>
+                                <span>{tool.name || 'unknown-tool'}</span>
+                                {tool.description ? <span className="text-dim">{tool.description}</span> : null}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        {mcpDetailQuery.data.hiddenTools?.length ? (
+                          <ul className="compact-list">
+                            {mcpDetailQuery.data.hiddenTools.map((tool) => (
+                              <li key={`hidden-${String(tool.name || '')}`}>
+                                <span>{tool.name || 'unknown-tool'}</span>
+                                {tool.description ? <span className="text-dim">{tool.description}</span> : null}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </div>
             <div>

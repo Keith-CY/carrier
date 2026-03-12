@@ -15,12 +15,15 @@ type SkillsStore interface {
 	SetInstalledSkillNames(ctx context.Context, names []string) error
 	ListEnabledSkillNames(ctx context.Context) ([]string, error)
 	SetEnabledSkillNames(ctx context.Context, names []string) error
+	ListSkillVersionPins(ctx context.Context) (map[string]string, error)
+	SetSkillVersionPins(ctx context.Context, pins map[string]string) error
 }
 
 type MemorySkillsStore struct {
-	mu        sync.RWMutex
-	installed []string
-	enabled   []string
+	mu         sync.RWMutex
+	installed  []string
+	enabled    []string
+	versionPins map[string]string
 	configured bool
 }
 
@@ -70,6 +73,25 @@ func (s *MemorySkillsStore) SetEnabledSkillNames(_ context.Context, names []stri
 	return nil
 }
 
+func (s *MemorySkillsStore) ListSkillVersionPins(_ context.Context) (map[string]string, error) {
+	if s == nil {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return cloneSkillVersionPins(s.versionPins), nil
+}
+
+func (s *MemorySkillsStore) SetSkillVersionPins(_ context.Context, pins map[string]string) error {
+	if s == nil {
+		return fmt.Errorf("skills store is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.versionPins = normalizeSkillVersionPins(pins)
+	return nil
+}
+
 type FileSkillsStore struct {
 	path string
 	mu   sync.Mutex
@@ -109,6 +131,7 @@ func (s *FileSkillsStore) SetInstalledSkillNames(_ context.Context, names []stri
 	}
 	state.Enabled = append([]string(nil), existing.Enabled...)
 	state.EnabledConfigured = existing.EnabledConfigured
+	state.VersionPins = cloneSkillVersionPins(existing.VersionPins)
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return fmt.Errorf("create skills store directory: %w", err)
 	}
@@ -162,10 +185,50 @@ func (s *FileSkillsStore) SetEnabledSkillNames(_ context.Context, names []string
 	return nil
 }
 
+func (s *FileSkillsStore) ListSkillVersionPins(_ context.Context) (map[string]string, error) {
+	if s == nil || strings.TrimSpace(s.path) == "" {
+		return nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	return cloneSkillVersionPins(state.VersionPins), nil
+}
+
+func (s *FileSkillsStore) SetSkillVersionPins(_ context.Context, pins map[string]string) error {
+	if s == nil || strings.TrimSpace(s.path) == "" {
+		return fmt.Errorf("skills store path is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.load()
+	if err != nil {
+		return err
+	}
+	state.VersionPins = normalizeSkillVersionPins(pins)
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+		return fmt.Errorf("create skills store directory: %w", err)
+	}
+	raw, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal skills store: %w", err)
+	}
+	if err := os.WriteFile(s.path, raw, 0o600); err != nil {
+		return fmt.Errorf("write skills store: %w", err)
+	}
+	return nil
+}
+
 type fileSkillsStoreState struct {
 	Installed         []string `json:"installed"`
 	Enabled           []string `json:"enabled"`
 	EnabledConfigured bool     `json:"enabledConfigured,omitempty"`
+	VersionPins       map[string]string `json:"versionPins,omitempty"`
 }
 
 func (s *FileSkillsStore) load() (fileSkillsStoreState, error) {
@@ -182,6 +245,7 @@ func (s *FileSkillsStore) load() (fileSkillsStoreState, error) {
 	}
 	state.Installed = normalizeSkillNames(state.Installed)
 	state.Enabled = normalizeSkillNames(state.Enabled)
+	state.VersionPins = normalizeSkillVersionPins(state.VersionPins)
 	if !state.EnabledConfigured {
 		state.Enabled = append([]string(nil), state.Installed...)
 	}
@@ -204,6 +268,36 @@ func normalizeSkillNames(names []string) []string {
 		}
 		seen[name] = struct{}{}
 		out = append(out, name)
+	}
+	return out
+}
+
+func normalizeSkillVersionPins(pins map[string]string) map[string]string {
+	if len(pins) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(pins))
+	for name, version := range pins {
+		normalizedName := strings.TrimSpace(strings.ToLower(name))
+		normalizedVersion := strings.TrimSpace(version)
+		if normalizedName == "" || normalizedVersion == "" {
+			continue
+		}
+		out[normalizedName] = normalizedVersion
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func cloneSkillVersionPins(pins map[string]string) map[string]string {
+	if len(pins) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(pins))
+	for name, version := range pins {
+		out[name] = version
 	}
 	return out
 }

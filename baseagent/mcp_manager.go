@@ -12,6 +12,7 @@ type MCPManager interface {
 	ListStructuredTools() []StructuredToolDescriptor
 	ExecuteTool(ctx context.Context, name string, args map[string]any) ExecutionToolResult
 	CapabilitySummary() MCPCapabilitySummary
+	ServerDetail(name string) (MCPServerCapability, error)
 	SetServerEnabled(ctx context.Context, name string, enabled bool) error
 }
 
@@ -107,6 +108,30 @@ func (m *StaticMCPManager) CapabilitySummary() MCPCapabilitySummary {
 	}
 	sortMCPCapabilitySummary(&summary)
 	return summary
+}
+
+func (m *StaticMCPManager) ServerDetail(name string) (MCPServerCapability, error) {
+	if strings.TrimSpace(strings.ToLower(name)) != "static" {
+		return MCPServerCapability{}, fmt.Errorf("mcp server %q is not available", strings.TrimSpace(name))
+	}
+	visible := m.ListStructuredTools()
+	detail := MCPServerCapability{
+		Name:             "static",
+		Health:           "healthy",
+		Enabled:          true,
+		Manageable:       false,
+		VisibleToolCount: len(visible),
+		HiddenToolCount:  0,
+		HealthDetail:     "Static MCP tools are wired into the runtime.",
+		VisibleTools:     make([]MCPToolCapability, 0, len(visible)),
+	}
+	for _, tool := range visible {
+		detail.VisibleTools = append(detail.VisibleTools, MCPToolCapability{
+			Name:        tool.Name,
+			Description: tool.Description,
+		})
+	}
+	return detail, nil
 }
 
 func (m *StaticMCPManager) SetServerEnabled(_ context.Context, name string, enabled bool) error {
@@ -318,23 +343,81 @@ func (m *ManagedMCPManager) CapabilitySummary() MCPCapabilitySummary {
 			if tool.serverName != serverName {
 				continue
 			}
+			capability := MCPToolCapability{
+				Name:        tool.descriptor.Name,
+				Description: tool.descriptor.Description,
+			}
 			if tool.config.Hidden {
 				serverSummary.HiddenToolCount++
+				serverSummary.HiddenTools = append(serverSummary.HiddenTools, capability)
 				continue
 			}
 			serverSummary.VisibleToolCount++
+			serverSummary.VisibleTools = append(serverSummary.VisibleTools, capability)
 			if !m.serverState[serverName] {
 				continue
 			}
-			summary.VisibleTools = append(summary.VisibleTools, MCPToolCapability{
-				Name:        tool.descriptor.Name,
-				Description: tool.descriptor.Description,
-			})
+			summary.VisibleTools = append(summary.VisibleTools, capability)
 		}
 		summary.Servers = append(summary.Servers, serverSummary)
 	}
 	sortMCPCapabilitySummary(&summary)
 	return summary
+}
+
+func (m *ManagedMCPManager) ServerDetail(name string) (MCPServerCapability, error) {
+	if m == nil {
+		return MCPServerCapability{}, fmt.Errorf("mcp manager is unavailable")
+	}
+	serverName := strings.TrimSpace(strings.ToLower(name))
+	if serverName == "" {
+		return MCPServerCapability{}, fmt.Errorf("mcp server name is required")
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	enabled, knownServer := m.serverState[serverName]
+	if !knownServer {
+		return MCPServerCapability{}, fmt.Errorf("mcp server %q is not available", serverName)
+	}
+	detail := MCPServerCapability{
+		Name:       serverName,
+		Health:     "stopped",
+		Enabled:    enabled,
+		Manageable: true,
+	}
+	if enabled {
+		detail.Health = "healthy"
+		detail.HealthDetail = "connected to managed tool runtime"
+		detail.RemediationHint = "Disable MCP if the tool surface becomes noisy or conflicts with local tools."
+	} else {
+		detail.HealthDetail = "server is disabled"
+		detail.RemediationHint = "Enable MCP to expose its tool surface to the agent runtime."
+	}
+	for _, toolName := range m.toolOrder {
+		tool := m.tools[toolName]
+		if tool.serverName != serverName {
+			continue
+		}
+		capability := MCPToolCapability{
+			Name:        tool.descriptor.Name,
+			Description: tool.descriptor.Description,
+		}
+		if tool.config.Hidden {
+			detail.HiddenToolCount++
+			detail.HiddenTools = append(detail.HiddenTools, capability)
+			continue
+		}
+		detail.VisibleToolCount++
+		detail.VisibleTools = append(detail.VisibleTools, capability)
+	}
+	sort.Slice(detail.VisibleTools, func(i, j int) bool {
+		return detail.VisibleTools[i].Name < detail.VisibleTools[j].Name
+	})
+	sort.Slice(detail.HiddenTools, func(i, j int) bool {
+		return detail.HiddenTools[i].Name < detail.HiddenTools[j].Name
+	})
+	return detail, nil
 }
 
 func (m *ManagedMCPManager) SetServerEnabled(ctx context.Context, name string, enabled bool) error {

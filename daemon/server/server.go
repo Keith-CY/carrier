@@ -75,11 +75,13 @@ type baseAgentRuntime interface {
 	CapabilitySummary(ctx context.Context) baseagent.RuntimeCapabilitySummary
 	SearchSkills(ctx context.Context, query string) []baseagent.SkillDefinition
 	InstallSkill(ctx context.Context, name string) (baseagent.SkillDefinition, error)
+	UpdateSkill(ctx context.Context, name, version string) (baseagent.SkillDefinition, error)
 	UninstallSkill(ctx context.Context, name string) (baseagent.SkillDefinition, error)
 	RecentSubagentJobs(ctx context.Context, limit int) []baseagent.SubagentJob
 	SubagentJob(ctx context.Context, jobID string) (baseagent.SubagentJob, error)
 	SetSkillEnabled(ctx context.Context, name string, enabled bool) error
 	SetMCPServerEnabled(ctx context.Context, name string, enabled bool) error
+	MCPServerDetail(ctx context.Context, name string) (baseagent.MCPServerCapability, error)
 	RespondPendingApproval(ctx context.Context, sessionKey, approvalID string, decision baseagent.ApprovalDecision) (baseagent.ChatResponse, error)
 	ScheduleJob(ctx context.Context, job baseagent.CronJob) (baseagent.CronJob, error)
 	ListCronJobs(ctx context.Context, sessionKey string) ([]baseagent.CronJob, error)
@@ -1732,6 +1734,30 @@ func handleAgentSkill(svc *lifecycle.Service, runtime baseAgentRuntime, agentID,
 		}
 		writeJSON(w, http.StatusOK, installed)
 		return
+	case "update":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		name := strings.TrimSpace(body.Name)
+		if name == "" {
+			writeJSONError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		updated, err := runtime.UpdateSkill(r.Context(), name, strings.TrimSpace(body.Version))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, updated)
+		return
 	case "uninstall":
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1776,10 +1802,6 @@ func handleAgentSkill(svc *lifecycle.Service, runtime baseAgentRuntime, agentID,
 }
 
 func handleAgentMCPServer(svc *lifecycle.Service, runtime baseAgentRuntime, agentID, serverName string, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
 	if runtime == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
 		return
@@ -1788,17 +1810,29 @@ func handleAgentMCPServer(svc *lifecycle.Service, runtime baseAgentRuntime, agen
 		writeServiceError(w, err)
 		return
 	}
-	var body struct {
-		Enabled bool `json:"enabled"`
+	switch r.Method {
+	case http.MethodGet:
+		detail, err := runtime.MCPServerDetail(r.Context(), serverName)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, detail)
+	case http.MethodPost:
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := runtime.SetMCPServerEnabled(r.Context(), serverName, body.Enabled); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, runtime.CapabilitySummary(r.Context()))
+	default:
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
-	if !decodeBody(w, r, &body) {
-		return
-	}
-	if err := runtime.SetMCPServerEnabled(r.Context(), serverName, body.Enabled); err != nil {
-		writeJSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, runtime.CapabilitySummary(r.Context()))
 }
 
 func handleAgentSubagent(svc *lifecycle.Service, runtime baseAgentRuntime, agentID, jobID string, w http.ResponseWriter, r *http.Request) {

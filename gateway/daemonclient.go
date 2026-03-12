@@ -322,6 +322,22 @@ func (c *DaemonClient) InstallAgentSkill(ctx context.Context, agentID, skillName
 	return installed, nil
 }
 
+func (c *DaemonClient) UpdateAgentSkill(ctx context.Context, agentID, skillName, version, actor, requestID string) (baseagent.SkillDefinition, error) {
+	body := map[string]string{
+		"name":    strings.TrimSpace(skillName),
+		"version": strings.TrimSpace(version),
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/skills/update", body, actor, requestID)
+	if err != nil {
+		return baseagent.SkillDefinition{}, err
+	}
+	var updated baseagent.SkillDefinition
+	if err := json.Unmarshal(raw, &updated); err != nil {
+		return baseagent.SkillDefinition{}, fmt.Errorf("skill update response: %w", err)
+	}
+	return updated, nil
+}
+
 func (c *DaemonClient) UninstallAgentSkill(ctx context.Context, agentID, skillName, actor, requestID string) (baseagent.SkillDefinition, error) {
 	body := map[string]string{"name": strings.TrimSpace(skillName)}
 	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/skills/uninstall", body, actor, requestID)
@@ -346,6 +362,18 @@ func (c *DaemonClient) SetAgentMCPServerEnabled(ctx context.Context, agentID, se
 		return AgentCapabilitySummary{}, fmt.Errorf("mcp toggle response: %w", err)
 	}
 	return summary, nil
+}
+
+func (c *DaemonClient) GetAgentMCPServerDetail(ctx context.Context, agentID, serverName, actor, requestID string) (baseagent.MCPServerCapability, error) {
+	raw, err := c.request(ctx, http.MethodGet, "/api/v1/agents/"+url.PathEscape(agentID)+"/mcp/"+url.PathEscape(serverName), nil, actor, requestID)
+	if err != nil {
+		return baseagent.MCPServerCapability{}, err
+	}
+	var detail baseagent.MCPServerCapability
+	if err := json.Unmarshal(raw, &detail); err != nil {
+		return baseagent.MCPServerCapability{}, fmt.Errorf("mcp detail response: %w", err)
+	}
+	return detail, nil
 }
 
 // GetLogs returns agent logs.

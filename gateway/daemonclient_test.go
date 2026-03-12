@@ -328,6 +328,7 @@ func TestDaemonClient_SetAgentSkillEnabled(t *testing.T) {
 func TestDaemonClient_SearchAndInstallAgentSkills(t *testing.T) {
 	var paths []string
 	var installBody map[string]any
+	var updateBody map[string]any
 	var uninstallBody map[string]any
 	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.RequestURI())
@@ -349,6 +350,19 @@ func TestDaemonClient_SearchAndInstallAgentSkills(t *testing.T) {
 				"summary": "Inspect workspace state.",
 				"source":  "catalog",
 				"version": "v1.2.3",
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+		case "/api/v1/agents/a1/skills/update":
+			if err := json.NewDecoder(r.Body).Decode(&updateBody); err != nil {
+				t.Fatalf("decode update body: %v", err)
+			}
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"name":          "workspace-inspection",
+				"summary":       "Inspect workspace state.",
+				"source":        "catalog",
+				"version":       "v1.2.3",
+				"targetVersion": "v2.0.0",
 			}); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 			}
@@ -393,6 +407,14 @@ func TestDaemonClient_SearchAndInstallAgentSkills(t *testing.T) {
 		t.Fatalf("unexpected installed metadata: %+v", installed)
 	}
 
+	updated, err := dc.UpdateAgentSkill(context.Background(), "a1", "workspace-inspection", "v2.0.0", "actor", "req")
+	if err != nil {
+		t.Fatalf("UpdateAgentSkill error: %v", err)
+	}
+	if updated.Name != "workspace-inspection" || updated.TargetVersion != "v2.0.0" {
+		t.Fatalf("unexpected updated skill: %+v", updated)
+	}
+
 	removed, err := dc.UninstallAgentSkill(context.Background(), "a1", "workspace-inspection", "actor", "req")
 	if err != nil {
 		t.Fatalf("UninstallAgentSkill error: %v", err)
@@ -401,11 +423,14 @@ func TestDaemonClient_SearchAndInstallAgentSkills(t *testing.T) {
 		t.Fatalf("unexpected removed skill: %+v", removed)
 	}
 
-	if len(paths) != 3 || paths[0] != "/api/v1/agents/a1/skills/search?q=workspace" || paths[1] != "/api/v1/agents/a1/skills/install" || paths[2] != "/api/v1/agents/a1/skills/uninstall" {
+	if len(paths) != 4 || paths[0] != "/api/v1/agents/a1/skills/search?q=workspace" || paths[1] != "/api/v1/agents/a1/skills/install" || paths[2] != "/api/v1/agents/a1/skills/update" || paths[3] != "/api/v1/agents/a1/skills/uninstall" {
 		t.Fatalf("unexpected paths: %+v", paths)
 	}
 	if installBody["name"] != "workspace-inspection" {
 		t.Fatalf("unexpected install body: %+v", installBody)
+	}
+	if updateBody["name"] != "workspace-inspection" || updateBody["version"] != "v2.0.0" {
+		t.Fatalf("unexpected update body: %+v", updateBody)
 	}
 	if uninstallBody["name"] != "workspace-inspection" {
 		t.Fatalf("unexpected uninstall body: %+v", uninstallBody)
@@ -446,6 +471,47 @@ func TestDaemonClient_SetAgentMCPServerEnabled(t *testing.T) {
 	}
 	if len(summary.MCP.Servers) != 1 || summary.MCP.Servers[0].Enabled || summary.MCP.Servers[0].Health != "stopped" {
 		t.Fatalf("unexpected mcp summary: %+v", summary)
+	}
+}
+
+func TestDaemonClient_GetAgentMCPServerDetail(t *testing.T) {
+	var gotPath string
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"name":            "repo",
+			"health":          "healthy",
+			"enabled":         true,
+			"manageable":      true,
+			"visibleToolCount": 1,
+			"hiddenToolCount": 1,
+			"healthDetail":    "connected to repository index",
+			"remediationHint": "Disable MCP if repository indexing becomes noisy.",
+			"visibleTools": []map[string]any{
+				{"name": "repo_search", "description": "Search code"},
+			},
+			"hiddenTools": []map[string]any{
+				{"name": "repo_admin", "description": "Admin index"},
+			},
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	detail, err := dc.GetAgentMCPServerDetail(context.Background(), "a1", "repo", "actor", "req")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/api/v1/agents/a1/mcp/repo" {
+		t.Fatalf("unexpected path: %s", gotPath)
+	}
+	if detail.Name != "repo" || detail.HealthDetail != "connected to repository index" || detail.HiddenToolCount != 1 {
+		t.Fatalf("unexpected mcp detail: %+v", detail)
+	}
+	if len(detail.VisibleTools) != 1 || detail.VisibleTools[0].Name != "repo_search" {
+		t.Fatalf("unexpected visible tools: %+v", detail.VisibleTools)
 	}
 }
 

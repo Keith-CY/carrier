@@ -228,6 +228,45 @@ func TestManagedMCPManagerVisibleCapabilitySummary(t *testing.T) {
 	}
 }
 
+func TestManagedMCPManagerServerDetail(t *testing.T) {
+	cfg := MCPConfig{
+		Servers: []MCPServerConfig{
+			{
+				Name: "repo",
+				Tools: []MCPToolConfig{
+					{Name: "repo_search", Description: "Search the repository index."},
+					{Name: "repo_write", Description: "Write to the repository index.", Hidden: true},
+				},
+			},
+		},
+	}
+
+	manager, err := NewManagedMCPManager(cfg, ManagedMCPManagerOptions{})
+	if err != nil {
+		t.Fatalf("new managed mcp manager: %v", err)
+	}
+
+	detail, err := manager.ServerDetail("repo")
+	if err != nil {
+		t.Fatalf("server detail: %v", err)
+	}
+	if detail.Name != "repo" || detail.Health != "healthy" || !detail.Enabled {
+		t.Fatalf("unexpected mcp detail: %+v", detail)
+	}
+	if detail.VisibleToolCount != 1 || detail.HiddenToolCount != 1 {
+		t.Fatalf("unexpected tool counts: %+v", detail)
+	}
+	if len(detail.VisibleTools) != 1 || detail.VisibleTools[0].Name != "repo_search" {
+		t.Fatalf("unexpected visible tools: %+v", detail.VisibleTools)
+	}
+	if len(detail.HiddenTools) != 1 || detail.HiddenTools[0].Name != "repo_write" {
+		t.Fatalf("unexpected hidden tools: %+v", detail.HiddenTools)
+	}
+	if detail.HealthDetail == "" || detail.RemediationHint == "" {
+		t.Fatalf("expected detail metadata, got %+v", detail)
+	}
+}
+
 func TestManagedMCPManagerSetServerEnabled(t *testing.T) {
 	cfg := MCPConfig{
 		Servers: []MCPServerConfig{

@@ -17,6 +17,10 @@ type MCPServerCapability struct {
 	Manageable       bool   `json:"manageable,omitempty"`
 	VisibleToolCount int    `json:"visibleToolCount"`
 	HiddenToolCount  int    `json:"hiddenToolCount"`
+	HealthDetail     string `json:"healthDetail,omitempty"`
+	RemediationHint  string `json:"remediationHint,omitempty"`
+	VisibleTools     []MCPToolCapability `json:"visibleTools,omitempty"`
+	HiddenTools      []MCPToolCapability `json:"hiddenTools,omitempty"`
 }
 
 type MCPCapabilitySummary struct {
@@ -58,13 +62,14 @@ func (r *Runtime) CapabilitySummary(ctx context.Context) RuntimeCapabilitySummar
 		summary.Skills = make([]RuntimeSkillCapability, 0, len(installed))
 		for _, skill := range installed {
 			summary.Skills = append(summary.Skills, RuntimeSkillCapability{
-				Name:     skill.Name,
-				Summary:  skill.Summary,
-				Keywords: append([]string(nil), skill.Keywords...),
-				Tags:     append([]string(nil), skill.Tags...),
-				Source:   skill.Source,
-				Version:  skill.Version,
-				Enabled:  true,
+				Name:          skill.Name,
+				Summary:       skill.Summary,
+				Keywords:      append([]string(nil), skill.Keywords...),
+				Tags:          append([]string(nil), skill.Tags...),
+				Source:        skill.Source,
+				Version:       skill.Version,
+				TargetVersion: skill.TargetVersion,
+				Enabled:       true,
 			})
 		}
 	}
@@ -93,6 +98,14 @@ func sortMCPCapabilitySummary(summary *MCPCapabilitySummary) {
 	sort.Slice(summary.Servers, func(i, j int) bool {
 		return summary.Servers[i].Name < summary.Servers[j].Name
 	})
+	for i := range summary.Servers {
+		sort.Slice(summary.Servers[i].VisibleTools, func(a, b int) bool {
+			return summary.Servers[i].VisibleTools[a].Name < summary.Servers[i].VisibleTools[b].Name
+		})
+		sort.Slice(summary.Servers[i].HiddenTools, func(a, b int) bool {
+			return summary.Servers[i].HiddenTools[a].Name < summary.Servers[i].HiddenTools[b].Name
+		})
+	}
 	sort.Slice(summary.VisibleTools, func(i, j int) bool {
 		return summary.VisibleTools[i].Name < summary.VisibleTools[j].Name
 	})

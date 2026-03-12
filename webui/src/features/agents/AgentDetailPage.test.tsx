@@ -31,7 +31,7 @@ describe('AgentDetailPage', () => {
     let defaultProfile = 'openrouter-fast';
     localStorage.clear();
     localStorage.setItem('carrier_token', 'test-token');
-    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url);
       if (url.endsWith('/api/v1/agents/agent-alpha/status')) {
         return new Response(JSON.stringify({ id: 'agent-alpha', runtimeState: 'running' }), {
@@ -47,7 +47,7 @@ describe('AgentDetailPage', () => {
             disabledCount: 0,
           },
           skills: [
-            { name: 'go-testing', enabled: true, summary: 'Use go test before claiming success.', source: 'catalog', version: 'builtin' },
+            { name: 'go-testing', enabled: true, summary: 'Use go test before claiming success.', source: 'catalog', version: 'builtin', targetVersion: 'v2.0.0' },
           ],
           mcp: {
             servers: [
@@ -68,6 +68,15 @@ describe('AgentDetailPage', () => {
           heartbeat: { state: 'fresh', ageSeconds: 12 },
           memory: { contractId: 'memory-alpha' },
           providerReadiness: { provider: 'openrouter', ready: true, authMode: 'api_key' },
+          lastModelRun: {
+            requestedAlias: 'flash-safe',
+            requestedModel: 'deepseek/deepseek-chat-v3-0324',
+            resolvedModel: 'deepseek/deepseek-chat-v3-0324',
+            fallbackGroup: 'openrouter:flash',
+            overrideHit: true,
+            fallbackHit: true,
+            lastRunAt: '2026-03-12T00:05:00Z',
+          },
           modelSurface: {
             defaultProfile,
             profiles: [
@@ -184,6 +193,18 @@ describe('AgentDetailPage', () => {
           headers: { 'Content-Type': 'application/json' },
         });
       }
+      if (url.endsWith('/api/v1/agents/agent-alpha/skills/update')) {
+        return new Response(JSON.stringify({
+          name: 'go-testing',
+          summary: 'Use go test before claiming success.',
+          source: 'catalog',
+          version: 'builtin',
+          targetVersion: 'v2.0.0',
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       if (url.endsWith('/api/v1/agents/agent-alpha/skills/uninstall')) {
         return new Response(JSON.stringify({
           name: 'go-testing',
@@ -196,13 +217,34 @@ describe('AgentDetailPage', () => {
         });
       }
       if (url.endsWith('/api/v1/agents/agent-alpha/mcp/repo')) {
+        if (String(init?.method || 'GET').toUpperCase() === 'POST') {
+          return new Response(JSON.stringify({
+            mcp: {
+              servers: [
+                { name: 'repo', health: 'stopped', enabled: false, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 },
+              ],
+              visibleTools: [],
+            },
+          }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
         return new Response(JSON.stringify({
-          mcp: {
-            servers: [
-              { name: 'repo', health: 'stopped', enabled: false, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 },
-            ],
-            visibleTools: [],
-          },
+          name: 'repo',
+          health: 'healthy',
+          enabled: true,
+          manageable: true,
+          visibleToolCount: 1,
+          hiddenToolCount: 1,
+          healthDetail: 'connected to repository index',
+          remediationHint: 'Disable MCP if repository indexing becomes noisy.',
+          visibleTools: [
+            { name: 'repo_search', description: 'Search code' },
+          ],
+          hiddenTools: [
+            { name: 'repo_admin', description: 'Admin index' },
+          ],
         }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -242,7 +284,7 @@ describe('AgentDetailPage', () => {
     renderAgentDetailPage();
 
     await waitFor(() => expect(screen.getByText('Runtime Capabilities')).toBeInTheDocument());
-    expect(screen.getByText(/go-testing/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/go-testing/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/repo_search/i)).toBeInTheDocument();
     expect(screen.getByText(/healthy/i)).toBeInTheDocument();
     expect(screen.getByText(/2 job\(s\)/i)).toBeInTheDocument();
@@ -252,9 +294,16 @@ describe('AgentDetailPage', () => {
     expect(screen.getAllByText(/flash/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/openrouter:flash/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/group=2/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Model Runtime Trace/i)).toBeInTheDocument();
+    expect(screen.getByText(/requested=flash-safe/i)).toBeInTheDocument();
+    expect(screen.getByText(/resolved=deepseek\/deepseek-chat-v3-0324/i)).toBeInTheDocument();
+    expect(screen.getByText(/override hit/i)).toBeInTheDocument();
+    expect(screen.getByText(/fallback hit/i)).toBeInTheDocument();
+    expect(screen.getByText(/last=2026-03-12T00:05:00Z/i)).toBeInTheDocument();
     expect(screen.getByText(/1 installed · 1 enabled · 0 disabled/i)).toBeInTheDocument();
     expect(screen.getAllByText(/catalog/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/builtin/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/target=v2.0.0/i)).toBeInTheDocument();
   });
 
   test('toggles skill state through the agent skill endpoint', async () => {
@@ -312,6 +361,23 @@ describe('AgentDetailPage', () => {
     );
   });
 
+  test('updates skills with an explicit target version', async () => {
+    renderAgentDetailPage();
+
+    await waitFor(() => expect(screen.getByPlaceholderText(/Pin version for go-testing/i)).toBeInTheDocument());
+    fireEvent.change(screen.getByPlaceholderText(/Pin version for go-testing/i), { target: { value: 'v2.0.0' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update go-testing' }));
+
+    await waitFor(() => expect(screen.getByText(/Updated skill go-testing\./i)).toBeInTheDocument());
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/skills/update'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ name: 'go-testing', version: 'v2.0.0' }),
+      }),
+    );
+  });
+
   test('toggles MCP server state through the agent MCP endpoint', async () => {
     renderAgentDetailPage();
 
@@ -324,6 +390,21 @@ describe('AgentDetailPage', () => {
       expect.objectContaining({
         method: 'POST',
       }),
+    );
+  });
+
+  test('loads MCP server detail and remediation hints', async () => {
+    renderAgentDetailPage();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Inspect repo MCP/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Inspect repo MCP/i }));
+
+    await waitFor(() => expect(screen.getByText(/connected to repository index/i)).toBeInTheDocument());
+    expect(screen.getByText(/Disable MCP if repository indexing becomes noisy\./i)).toBeInTheDocument();
+    expect(screen.getByText(/repo_admin/i)).toBeInTheDocument();
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/mcp/repo'),
+      expect.anything(),
     );
   });
 
@@ -358,7 +439,7 @@ describe('AgentDetailPage', () => {
   });
 
   test('renders remediation callouts for stale heartbeat and provider readiness', async () => {
-    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url);
       if (url.endsWith('/api/v1/agents/agent-alpha/status')) {
         return new Response(JSON.stringify({ id: 'agent-alpha', runtimeState: 'running' }), {

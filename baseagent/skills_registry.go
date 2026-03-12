@@ -8,13 +8,14 @@ import (
 )
 
 type RuntimeSkillCapability struct {
-	Name     string   `json:"name"`
-	Summary  string   `json:"summary,omitempty"`
-	Keywords []string `json:"keywords,omitempty"`
-	Tags     []string `json:"tags,omitempty"`
-	Source   string   `json:"source,omitempty"`
-	Version  string   `json:"version,omitempty"`
-	Enabled  bool     `json:"enabled"`
+	Name          string   `json:"name"`
+	Summary       string   `json:"summary,omitempty"`
+	Keywords      []string `json:"keywords,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	Source        string   `json:"source,omitempty"`
+	Version       string   `json:"version,omitempty"`
+	TargetVersion string   `json:"targetVersion,omitempty"`
+	Enabled       bool     `json:"enabled"`
 }
 
 type SkillsRegistry struct {
@@ -48,13 +49,17 @@ func (r *SkillsRegistry) ListInstalledSkills(ctx context.Context) []SkillDefinit
 	if err != nil {
 		return nil
 	}
+	versionPins, err := r.store.ListSkillVersionPins(ctx)
+	if err != nil {
+		return nil
+	}
 	out := make([]SkillDefinition, 0, len(names))
 	for _, name := range names {
 		skill, ok := r.catalog[name]
 		if !ok {
 			continue
 		}
-		out = append(out, cloneSkillDefinition(skill))
+		out = append(out, hydrateSkillDefinitionTargetVersion(skill, versionPins))
 	}
 	return out
 }
@@ -64,10 +69,11 @@ func (r *SkillsRegistry) SearchSkills(ctx context.Context, query string) []Skill
 		return nil
 	}
 	query = strings.TrimSpace(query)
+	versionPins, _ := r.store.ListSkillVersionPins(ctx)
 	if query == "" {
 		out := make([]SkillDefinition, 0, len(r.catalog))
 		for _, skill := range r.catalog {
-			out = append(out, cloneSkillDefinition(skill))
+			out = append(out, hydrateSkillDefinitionTargetVersion(skill, versionPins))
 		}
 		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 		return out
@@ -93,7 +99,7 @@ func (r *SkillsRegistry) SearchSkills(ctx context.Context, query string) []Skill
 	})
 	out := make([]SkillDefinition, 0, len(scored))
 	for _, item := range scored {
-		out = append(out, cloneSkillDefinition(item.skill))
+		out = append(out, hydrateSkillDefinitionTargetVersion(item.skill, versionPins))
 	}
 	return out
 }
@@ -123,7 +129,49 @@ func (r *SkillsRegistry) InstallSkill(ctx context.Context, name string) (SkillDe
 	if err := r.store.SetEnabledSkillNames(ctx, enabledNames); err != nil {
 		return SkillDefinition{}, err
 	}
-	return cloneSkillDefinition(skill), nil
+	return hydrateSkillDefinitionTargetVersion(skill, nil), nil
+}
+
+func (r *SkillsRegistry) UpdateSkill(ctx context.Context, name, version string) (SkillDefinition, error) {
+	if r == nil {
+		return SkillDefinition{}, fmt.Errorf("skills registry is unavailable")
+	}
+	name = strings.TrimSpace(strings.ToLower(name))
+	if name == "" {
+		return SkillDefinition{}, fmt.Errorf("skill name is required")
+	}
+	skill, ok := r.catalog[name]
+	if !ok {
+		return SkillDefinition{}, fmt.Errorf("skill %q is not available", name)
+	}
+	installedNames, err := r.store.ListInstalledSkillNames(ctx)
+	if err != nil {
+		return SkillDefinition{}, err
+	}
+	installedSet := map[string]struct{}{}
+	for _, installed := range installedNames {
+		installedSet[installed] = struct{}{}
+	}
+	if _, ok := installedSet[name]; !ok {
+		return SkillDefinition{}, fmt.Errorf("skill %q is not installed", name)
+	}
+	versionPins, err := r.store.ListSkillVersionPins(ctx)
+	if err != nil {
+		return SkillDefinition{}, err
+	}
+	if versionPins == nil {
+		versionPins = map[string]string{}
+	}
+	trimmedVersion := strings.TrimSpace(version)
+	if trimmedVersion == "" {
+		delete(versionPins, name)
+	} else {
+		versionPins[name] = trimmedVersion
+	}
+	if err := r.store.SetSkillVersionPins(ctx, versionPins); err != nil {
+		return SkillDefinition{}, err
+	}
+	return hydrateSkillDefinitionTargetVersion(skill, versionPins), nil
 }
 
 func (r *SkillsRegistry) UninstallSkill(ctx context.Context, name string) (SkillDefinition, error) {
@@ -171,7 +219,15 @@ func (r *SkillsRegistry) UninstallSkill(ctx context.Context, name string) (Skill
 	if err := r.store.SetEnabledSkillNames(ctx, filteredEnabled); err != nil {
 		return SkillDefinition{}, err
 	}
-	return cloneSkillDefinition(skill), nil
+	versionPins, err := r.store.ListSkillVersionPins(ctx)
+	if err != nil {
+		return SkillDefinition{}, err
+	}
+	delete(versionPins, name)
+	if err := r.store.SetSkillVersionPins(ctx, versionPins); err != nil {
+		return SkillDefinition{}, err
+	}
+	return hydrateSkillDefinitionTargetVersion(skill, versionPins), nil
 }
 
 func (r *SkillsRegistry) ListRuntimeSkillCapabilities(ctx context.Context) []RuntimeSkillCapability {
@@ -190,6 +246,10 @@ func (r *SkillsRegistry) ListRuntimeSkillCapabilities(ctx context.Context) []Run
 	for _, name := range enabledNames {
 		enabledSet[name] = struct{}{}
 	}
+	versionPins, err := r.store.ListSkillVersionPins(ctx)
+	if err != nil {
+		return nil
+	}
 	out := make([]RuntimeSkillCapability, 0, len(names))
 	for _, name := range names {
 		skill, ok := r.catalog[name]
@@ -198,13 +258,14 @@ func (r *SkillsRegistry) ListRuntimeSkillCapabilities(ctx context.Context) []Run
 		}
 		_, enabled := enabledSet[name]
 		out = append(out, RuntimeSkillCapability{
-			Name:     skill.Name,
-			Summary:  skill.Summary,
-			Keywords: append([]string(nil), skill.Keywords...),
-			Tags:     append([]string(nil), skill.Tags...),
-			Source:   skill.Source,
-			Version:  skill.Version,
-			Enabled:  enabled,
+			Name:          skill.Name,
+			Summary:       skill.Summary,
+			Keywords:      append([]string(nil), skill.Keywords...),
+			Tags:          append([]string(nil), skill.Tags...),
+			Source:        skill.Source,
+			Version:       skill.Version,
+			TargetVersion: strings.TrimSpace(versionPins[name]),
+			Enabled:       enabled,
 		})
 	}
 	return out
@@ -309,6 +370,7 @@ func normalizeSkillDefinition(skill SkillDefinition) SkillDefinition {
 	skill.Tags = normalizeSkillValues(skill.Tags)
 	skill.Source = strings.TrimSpace(skill.Source)
 	skill.Version = strings.TrimSpace(skill.Version)
+	skill.TargetVersion = strings.TrimSpace(skill.TargetVersion)
 	if skill.Source == "" {
 		skill.Source = "catalog"
 	}
@@ -340,13 +402,23 @@ func normalizeSkillValues(values []string) []string {
 
 func cloneSkillDefinition(skill SkillDefinition) SkillDefinition {
 	return SkillDefinition{
-		Name:     skill.Name,
-		Summary:  skill.Summary,
-		Keywords: append([]string(nil), skill.Keywords...),
-		Tags:     append([]string(nil), skill.Tags...),
-		Source:   skill.Source,
-		Version:  skill.Version,
+		Name:          skill.Name,
+		Summary:       skill.Summary,
+		Keywords:      append([]string(nil), skill.Keywords...),
+		Tags:          append([]string(nil), skill.Tags...),
+		Source:        skill.Source,
+		Version:       skill.Version,
+		TargetVersion: skill.TargetVersion,
 	}
+}
+
+func hydrateSkillDefinitionTargetVersion(skill SkillDefinition, versionPins map[string]string) SkillDefinition {
+	cloned := cloneSkillDefinition(skill)
+	if len(versionPins) == 0 {
+		return cloned
+	}
+	cloned.TargetVersion = strings.TrimSpace(versionPins[strings.TrimSpace(strings.ToLower(skill.Name))])
+	return cloned
 }
 
 func scoreSkillMatch(skill SkillDefinition, query string) int {

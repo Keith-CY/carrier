@@ -414,9 +414,28 @@ func TestHandleWebUIAgent_Branches(t *testing.T) {
 	t.Run("mcp action", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/picoclaw/mcp/repo", nil)
-		handleWebUIAgent(rec, req, "req-mcp-method", nil)
-		if rec.Code != http.StatusMethodNotAllowed {
-			t.Fatalf("expected 405, got %d", rec.Code)
+		_, daemonDetail, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+			"GET /api/v1/agents/picoclaw/mcp/repo": func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"name":             "repo",
+					"health":           "healthy",
+					"enabled":          true,
+					"manageable":       true,
+					"visibleToolCount": 1,
+					"hiddenToolCount":  1,
+					"healthDetail":     "connected to repository index",
+					"remediationHint":  "Disable MCP if repository indexing becomes noisy.",
+					"visibleTools":     []map[string]any{{"name": "repo_search", "description": "Search code"}},
+					"hiddenTools":      []map[string]any{{"name": "repo_admin", "description": "Admin index"}},
+				})
+			},
+		})
+		handleWebUIAgent(rec, req, "req-mcp-detail", daemonDetail)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"healthDetail":"connected to repository index"`) {
+			t.Fatalf("expected mcp detail payload, got %s", rec.Body.String())
 		}
 
 		_, daemonStub, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{})

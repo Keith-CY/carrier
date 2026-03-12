@@ -290,6 +290,7 @@ type agentCommandOptions struct {
 	ProfileName string
 	Query      string
 	SkillName  string
+	Version    string
 	Message    string
 	Provider   string
 	ModelAlias string
@@ -3356,13 +3357,13 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 		}
 	case "skills":
 		if len(args) < 3 {
-			return agentCommandOptions{}, errors.New("usage: carrier agent skills <search|install|uninstall> <agent_id> [args] [--json]")
+			return agentCommandOptions{}, errors.New("usage: carrier agent skills <search|install|update|uninstall> <agent_id> [args] [--json]")
 		}
 		subaction := strings.ToLower(strings.TrimSpace(args[1]))
 		opts.Action = "skills-" + subaction
 		opts.AgentID = strings.TrimSpace(args[2])
 		startIdx = 3
-		if subaction == "install" || subaction == "uninstall" {
+		if subaction == "install" || subaction == "update" || subaction == "uninstall" {
 			if len(args) < 4 {
 				return agentCommandOptions{}, fmt.Errorf("usage: carrier agent skills %s <agent_id> <skill_name> [--json]", subaction)
 			}
@@ -3431,6 +3432,13 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 			}
 			opts.Query = strings.TrimSpace(value)
 			i = next
+		case "--version":
+			value, next, err := parseRequiredFlagValue(args, i, "--version")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.Version = strings.TrimSpace(value)
+			i = next
 		case "--json":
 			opts.JSON = true
 		default:
@@ -3452,7 +3460,7 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 			return agentCommandOptions{}, errors.New("usage: carrier agent cron cancel <agent_id> <job_id> [--json]")
 		}
 	case "skills-search":
-	case "skills-install", "skills-uninstall":
+	case "skills-install", "skills-update", "skills-uninstall":
 		if strings.TrimSpace(opts.SkillName) == "" {
 			return agentCommandOptions{}, fmt.Errorf("usage: carrier agent skills %s <agent_id> <skill_name> [--json]", strings.TrimPrefix(opts.Action, "skills-"))
 		}
@@ -4753,6 +4761,15 @@ type agentLauncherCLIResponse struct {
 			Primary        bool   `json:"primary,omitempty"`
 		} `json:"profiles,omitempty"`
 	} `json:"modelSurface,omitempty"`
+	LastModelRun *struct {
+		RequestedAlias string `json:"requestedAlias,omitempty"`
+		RequestedModel string `json:"requestedModel,omitempty"`
+		ResolvedModel  string `json:"resolvedModel,omitempty"`
+		FallbackGroup  string `json:"fallbackGroup,omitempty"`
+		OverrideHit    bool   `json:"overrideHit,omitempty"`
+		FallbackHit    bool   `json:"fallbackHit,omitempty"`
+		LastRunAt      string `json:"lastRunAt,omitempty"`
+	} `json:"lastModelRun,omitempty"`
 	Cron *struct {
 		Count      int                       `json:"count"`
 		NextRunAt  string                    `json:"nextRunAt,omitempty"`
@@ -4784,12 +4801,13 @@ type agentCronListCLIResponse struct {
 }
 
 type agentSkillCLIResponse struct {
-	Name     string   `json:"name"`
-	Summary  string   `json:"summary,omitempty"`
-	Keywords []string `json:"keywords,omitempty"`
-	Tags     []string `json:"tags,omitempty"`
-	Source   string   `json:"source,omitempty"`
-	Version  string   `json:"version,omitempty"`
+	Name          string   `json:"name"`
+	Summary       string   `json:"summary,omitempty"`
+	Keywords      []string `json:"keywords,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
+	Source        string   `json:"source,omitempty"`
+	Version       string   `json:"version,omitempty"`
+	TargetVersion string   `json:"targetVersion,omitempty"`
 }
 
 type agentSkillsSearchCLIResponse struct {
@@ -4976,6 +4994,16 @@ func runAgentCommand(in io.Reader, out io.Writer, opts agentCommandOptions) erro
 		}
 		_, _ = fmt.Fprintln(out, renderManagedAgentInstalledSkill(resp))
 		return nil
+	case "skills-update":
+		resp, raw, err := updateManagedAgentSkill(opts.AgentID, opts.SkillName, opts.Version)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentUpdatedSkill(resp))
+		return nil
 	case "skills-uninstall":
 		resp, raw, err := uninstallManagedAgentSkill(opts.AgentID, opts.SkillName)
 		if err != nil {
@@ -5150,6 +5178,22 @@ func installManagedAgentSkill(agentID, skillName string) (*agentSkillCLIResponse
 	return &resp, raw, nil
 }
 
+func updateManagedAgentSkill(agentID, skillName, version string) (*agentSkillCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/skills/update", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]string{
+		"name":    strings.TrimSpace(skillName),
+		"version": strings.TrimSpace(version),
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentSkillCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent skill update response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
 func uninstallManagedAgentSkill(agentID, skillName string) (*agentSkillCLIResponse, []byte, error) {
 	path := fmt.Sprintf("/api/v1/agents/%s/skills/uninstall", neturl.PathEscape(strings.TrimSpace(agentID)))
 	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]string{"name": strings.TrimSpace(skillName)})
@@ -5296,6 +5340,26 @@ func renderManagedAgentLauncher(resp *agentLauncherCLIResponse) string {
 			}
 		}
 	}
+	if resp.LastModelRun != nil {
+		entry := "last-model"
+		if trimmed := strings.TrimSpace(resp.LastModelRun.RequestedAlias); trimmed != "" {
+			entry += " requested=" + trimmed
+		}
+		if trimmed := strings.TrimSpace(resp.LastModelRun.RequestedModel); trimmed != "" {
+			entry += " explicit=" + trimmed
+		}
+		if trimmed := strings.TrimSpace(resp.LastModelRun.ResolvedModel); trimmed != "" {
+			entry += " resolved=" + trimmed
+		}
+		if trimmed := strings.TrimSpace(resp.LastModelRun.FallbackGroup); trimmed != "" {
+			entry += " group=" + trimmed
+		}
+		entry += fmt.Sprintf(" override=%t fallback-hit=%t", resp.LastModelRun.OverrideHit, resp.LastModelRun.FallbackHit)
+		if trimmed := strings.TrimSpace(resp.LastModelRun.LastRunAt); trimmed != "" {
+			entry += " last=" + trimmed
+		}
+		lines = append(lines, entry)
+	}
 	if resp.Session != nil && strings.TrimSpace(resp.Session.InstanceID) != "" {
 		lines = append(lines, fmt.Sprintf("instance=%s state=%s", strings.TrimSpace(resp.Session.InstanceID), firstNonEmpty(strings.TrimSpace(resp.Session.RuntimeState), strings.TrimSpace(resp.Status.RuntimeState))))
 	}
@@ -5364,6 +5428,37 @@ func renderManagedAgentInstalledSkill(resp *agentSkillCLIResponse) string {
 	}
 	if len(meta) > 0 {
 		line += " · " + strings.Join(meta, " ")
+	}
+	if strings.TrimSpace(resp.TargetVersion) != "" {
+		line += " · target=" + strings.TrimSpace(resp.TargetVersion)
+	}
+	return line
+}
+
+func renderManagedAgentUpdatedSkill(resp *agentSkillCLIResponse) string {
+	if resp == nil {
+		return ""
+	}
+	label := strings.TrimSpace(resp.Name)
+	if label == "" {
+		label = "unknown-skill"
+	}
+	line := "updated " + label
+	if strings.TrimSpace(resp.Summary) != "" {
+		line += " · " + strings.TrimSpace(resp.Summary)
+	}
+	meta := []string{}
+	if strings.TrimSpace(resp.Source) != "" {
+		meta = append(meta, strings.TrimSpace(resp.Source))
+	}
+	if strings.TrimSpace(resp.Version) != "" {
+		meta = append(meta, strings.TrimSpace(resp.Version))
+	}
+	if len(meta) > 0 {
+		line += " · " + strings.Join(meta, " ")
+	}
+	if strings.TrimSpace(resp.TargetVersion) != "" {
+		line += " · target=" + strings.TrimSpace(resp.TargetVersion)
 	}
 	return line
 }
