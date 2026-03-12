@@ -4,7 +4,7 @@ import { executionStatusBadgeClass } from './detailShared';
 export function ExecutionResultsBlock({ execution, workers }: { execution: any; workers: any[] }) {
   const taskUnits = Array.isArray(execution?.taskUnits) ? execution.taskUnits : [];
   const results = Array.isArray(execution?.results) ? execution.results : [];
-  const resultByTaskId = new Map(
+  const resultByTaskId = new Map<string, any>(
     results
       .map((item: any) => [String(item?.taskId || '').trim(), item] as const)
       .filter(([taskId]) => taskId),
@@ -25,7 +25,7 @@ export function ExecutionResultsBlock({ execution, workers }: { execution: any; 
         <div className="execution-detail-title">Task Results</div>
         {taskUnits.length ? taskUnits.map((task: any, index: number) => {
           const taskID = String(task?.id || `task-${index + 1}`).trim();
-          const result = resultByTaskId.get(taskID) || {};
+          const result: any = resultByTaskId.get(taskID) || {};
           const output = String(result.output || result.error || '').trim();
           const metaParts = [];
           if (result.hostId || result.agentId) metaParts.push(`${String(result.hostId || '').trim() || 'local'}/${String(result.agentId || '').trim() || 'unknown'}`);

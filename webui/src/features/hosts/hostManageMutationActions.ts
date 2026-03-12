@@ -1,4 +1,4 @@
-import { apiGet, apiPatch, apiPost } from '../../lib/api';
+import { apiPatch, apiPost } from '../../lib/api';
 import { formatInstanceStatus } from './model';
 import { type HostManageOperationContext, type HostManageRuntime } from './hostManageShared';
 

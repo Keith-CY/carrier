@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { LOG_FILTER_LEVELS, type LogLevel } from './model';
+import { type LogLevel } from './model';
 import { useLogStream } from './useLogStream';
 import { useLogTargets } from './useLogTargets';
 

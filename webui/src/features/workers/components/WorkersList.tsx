@@ -1,4 +1,3 @@
-import { formatAgeSeconds, formatDateTime } from '../../../lib/format';
 import type { WorkersData } from '../useWorkersData';
 
 function workerStateBadgeClass(state: unknown): string {
