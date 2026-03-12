@@ -1,9 +1,11 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -154,5 +156,73 @@ func TestTelegramWebhook_NonCommandRoutesToBaseAgentChat(t *testing.T) {
 	text, _ := resp["text"].(string)
 	if !strings.Contains(text, "E_SESSION_REQUIRED") {
 		t.Fatalf("expected E_SESSION_REQUIRED for unpaired base-agent chat, got %q", text)
+	}
+}
+
+func TestTelegramWebhook_HydratesInboundAttachmentBeforeDaemonChat(t *testing.T) {
+	artifactRoot, err := os.MkdirTemp(".", "telegram-webhook-artifacts-*")
+	if err != nil {
+		t.Fatalf("mkdir artifact root: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(artifactRoot) })
+
+	origFactory := newTelegramAPIClient
+	t.Cleanup(func() { newTelegramAPIClient = origFactory })
+	newTelegramAPIClient = func(token, baseURL string, client *http.Client) telegramAPI {
+		return &fakeTelegramAPI{
+			fileInfo: telegramFileInfo{
+				FileID:       "tg-file-1",
+				FileUniqueID: "tg-uniq-1",
+				FilePath:     "documents/file_1/report.pdf",
+			},
+			fileData: []byte("%PDF-1.7"),
+		}
+	}
+
+	var seenAttachment baseagent.AttachmentRef
+	srv := newMockDaemon(map[string]http.HandlerFunc{
+		"POST /api/v1/base-agent/chat": func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Message     string                    `json:"message"`
+				Attachments []baseagent.AttachmentRef `json:"attachments"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode base-agent chat body: %v", err)
+			}
+			if len(body.Attachments) != 1 {
+				t.Fatalf("attachments len=%d want 1 body=%+v", len(body.Attachments), body)
+			}
+			seenAttachment = body.Attachments[0]
+			_ = json.NewEncoder(w).Encode(baseagent.ChatResponse{Message: "ok", Action: "chat"})
+		},
+	})
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "test-token", 5*time.Second)
+	sessions := NewSessionStore("", 0, nil)
+	t.Cleanup(sessions.Stop)
+	sessions.CreateSession("telegram", "123")
+	downloads := NewDownloadStore(artifactRoot, nil)
+	rl := NewGatewayRateLimiter(100, 1000, 1*time.Minute, nil)
+	onboard := NewOnboardStore()
+	setup := NewSetupStore()
+	cfg := &GatewayConfig{
+		MaxCommandBodyBytes:   64 * 1024,
+		TelegramBotToken:      "TOKEN",
+		TelegramWebhookSecret: "expected-secret",
+		TelegramAPIBaseURL:    "https://api.telegram.org",
+		ArtifactRoot:          artifactRoot,
+	}
+	mux := buildGatewayMux(cfg, dc, sessions, downloads, rl, onboard, setup)
+
+	w := postTelegramWebhook(t, mux, `{"update_id":2,"message":{"message_id":100,"chat":{"id":123},"caption":"see file","document":{"file_id":"tg-file-1","file_unique_id":"tg-uniq-1","file_name":"report.pdf","mime_type":"application/pdf","file_size":1234}}}`, "expected-secret")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if seenAttachment.Path == "" || seenAttachment.ArtifactID == "" || seenAttachment.DownloadURL == "" {
+		t.Fatalf("expected hydrated attachment, got %+v", seenAttachment)
+	}
+	if seenAttachment.SourceMetadata["telegram_file_path"] != "documents/file_1/report.pdf" {
+		t.Fatalf("unexpected telegram file path metadata: %+v", seenAttachment.SourceMetadata)
 	}
 }

@@ -785,6 +785,7 @@ func cloneAttachmentRefs(attachments []AttachmentRef) []AttachmentRef {
 			Source:         strings.TrimSpace(attachment.Source),
 			ExternalID:     strings.TrimSpace(attachment.ExternalID),
 			ArtifactID:     strings.TrimSpace(attachment.ArtifactID),
+			DownloadURL:    strings.TrimSpace(attachment.DownloadURL),
 			SourceMetadata: cloneStringStringMap(attachment.SourceMetadata),
 		}
 		if out[i].MediaType == "" {

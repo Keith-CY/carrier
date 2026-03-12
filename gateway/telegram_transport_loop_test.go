@@ -12,10 +12,12 @@ import (
 )
 
 type scriptedTelegramAPI struct {
-	getUpdatesFn    func(ctx context.Context, offset int64, timeoutSec int) ([]map[string]interface{}, error)
-	sendMessageFn   func(ctx context.Context, chatID, text string, disableWebPagePreview bool) error
-	sendPhotoFn     func(ctx context.Context, chatID, photo, caption string) error
-	sendDocumentFn  func(ctx context.Context, chatID, document, caption string) error
+	getUpdatesFn   func(ctx context.Context, offset int64, timeoutSec int) ([]map[string]interface{}, error)
+	sendMessageFn  func(ctx context.Context, chatID, text string, disableWebPagePreview bool) error
+	sendPhotoFn    func(ctx context.Context, chatID, photo, caption string) error
+	sendDocumentFn func(ctx context.Context, chatID, document, caption string) error
+	getFileFn      func(ctx context.Context, fileID string) (telegramFileInfo, error)
+	downloadFileFn func(ctx context.Context, filePath string) ([]byte, error)
 }
 
 func (s *scriptedTelegramAPI) SetWebhook(_ context.Context, _ string, _ string) error {
@@ -35,6 +37,20 @@ func (s *scriptedTelegramAPI) GetUpdates(ctx context.Context, offset int64, time
 		return s.getUpdatesFn(ctx, offset, timeoutSec)
 	}
 	return nil, nil
+}
+
+func (s *scriptedTelegramAPI) GetFile(ctx context.Context, fileID string) (telegramFileInfo, error) {
+	if s.getFileFn != nil {
+		return s.getFileFn(ctx, fileID)
+	}
+	return telegramFileInfo{}, errors.New("unexpected GetFile call")
+}
+
+func (s *scriptedTelegramAPI) DownloadFile(ctx context.Context, filePath string) ([]byte, error) {
+	if s.downloadFileFn != nil {
+		return s.downloadFileFn(ctx, filePath)
+	}
+	return nil, errors.New("unexpected DownloadFile call")
 }
 
 func (s *scriptedTelegramAPI) SendMessage(ctx context.Context, chatID, text string, disableWebPagePreview bool) error {

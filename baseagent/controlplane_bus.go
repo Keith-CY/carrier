@@ -24,6 +24,7 @@ type AttachmentRef struct {
 	Source         string            `json:"source,omitempty"`
 	ExternalID     string            `json:"externalId,omitempty"`
 	ArtifactID     string            `json:"artifactId,omitempty"`
+	DownloadURL    string            `json:"downloadUrl,omitempty"`
 	SourceMetadata map[string]string `json:"sourceMetadata,omitempty"`
 }
 

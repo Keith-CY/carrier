@@ -662,6 +662,12 @@ func handleTelegramWebhook(w http.ResponseWriter, r *http.Request, cfg *GatewayC
 		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "message": "ignored non-command telegram update"})
 		return
 	}
+	if strings.TrimSpace(cfg.TelegramBotToken) != "" {
+		api := newTelegramAPIClient(cfg.TelegramBotToken, cfg.TelegramAPIBaseURL, nil)
+		if err := hydrateTelegramInboundAttachments(r.Context(), envelope, cfg, downloads, api); err != nil {
+			log.Printf("[gateway/telegram] warning: hydrate inbound attachments failed: %v", err)
+		}
+	}
 
 	resp := RouteInboundChannel(r.Context(), envelope, daemon, sessions, downloads, rl, onboard)
 	writeJSON(w, http.StatusOK, RenderTelegramWebhookResponse(resp, envelope.ChatID))

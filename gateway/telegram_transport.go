@@ -11,6 +11,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +42,8 @@ type telegramAPI interface {
 	GetWebhookInfo(ctx context.Context) (telegramWebhookInfo, error)
 	DeleteWebhook(ctx context.Context) error
 	GetUpdates(ctx context.Context, offset int64, timeoutSec int) ([]map[string]interface{}, error)
+	GetFile(ctx context.Context, fileID string) (telegramFileInfo, error)
+	DownloadFile(ctx context.Context, filePath string) ([]byte, error)
 	SendMessage(ctx context.Context, chatID, text string, disableWebPagePreview bool) error
 	SendPhoto(ctx context.Context, chatID, photo, caption string) error
 	SendDocument(ctx context.Context, chatID, document, caption string) error
@@ -48,6 +52,13 @@ type telegramAPI interface {
 
 type telegramWebhookInfo struct {
 	URL string `json:"url"`
+}
+
+type telegramFileInfo struct {
+	FileID       string `json:"file_id,omitempty"`
+	FileUniqueID string `json:"file_unique_id,omitempty"`
+	FilePath     string `json:"file_path,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
 }
 
 type telegramBotCommand struct {
@@ -59,6 +70,10 @@ type telegramBotAPI struct {
 	baseURL string
 	token   string
 	client  *http.Client
+}
+
+var newTelegramAPIClient = func(token, baseURL string, client *http.Client) telegramAPI {
+	return newTelegramBotAPI(token, baseURL, client)
 }
 
 func newTelegramBotAPI(token, baseURL string, client *http.Client) *telegramBotAPI {
@@ -115,6 +130,42 @@ func (a *telegramBotAPI) GetUpdates(ctx context.Context, offset int64, timeoutSe
 		return nil, err
 	}
 	return updates, nil
+}
+
+func (a *telegramBotAPI) GetFile(ctx context.Context, fileID string) (telegramFileInfo, error) {
+	payload := map[string]interface{}{
+		"file_id": strings.TrimSpace(fileID),
+	}
+	var info telegramFileInfo
+	if err := a.call(ctx, "getFile", payload, &info); err != nil {
+		return telegramFileInfo{}, err
+	}
+	return info, nil
+}
+
+func (a *telegramBotAPI) DownloadFile(ctx context.Context, filePath string) ([]byte, error) {
+	if strings.TrimSpace(a.token) == "" {
+		return nil, errors.New("telegram bot token is empty")
+	}
+	urlStr := fmt.Sprintf("%s/file/bot%s/%s", a.baseURL, a.token, strings.TrimLeft(strings.TrimSpace(filePath), "/"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build telegram file request: %w", err)
+	}
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("telegram file request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return nil, fmt.Errorf("telegram file HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read telegram file response: %w", err)
+	}
+	return data, nil
 }
 
 func (a *telegramBotAPI) SendMessage(ctx context.Context, chatID, text string, disableWebPagePreview bool) error {
@@ -251,7 +302,7 @@ func startTelegramTransport(
 		return fmt.Errorf("telegram transport mode %q requires CARRIER_TELEGRAM_BOT_TOKEN", mode)
 	}
 
-	api := newTelegramBotAPI(token, cfg.TelegramAPIBaseURL, nil)
+	api := newTelegramAPIClient(token, cfg.TelegramAPIBaseURL, nil)
 	if err := api.SetMyCommands(ctx, carrierTelegramDefaultCommands()); err != nil {
 		// Command menu is UX-only; transport should continue even if this fails.
 		log.Printf("[gateway/telegram] warning: setMyCommands failed: %v", err)
@@ -419,12 +470,129 @@ func runTelegramPollingLoop(
 			if envelope == nil {
 				continue
 			}
+			if err := hydrateTelegramInboundAttachments(ctx, envelope, cfg, downloads, api); err != nil {
+				log.Printf("[gateway/telegram] warning: hydrate inbound attachments failed: %v", err)
+			}
 			resp := RouteInboundChannel(ctx, envelope, daemon, sessions, downloads, rl, onboard)
 			if err := sendTelegramGatewayResponse(ctx, api, envelope.ChatID, resp); err != nil {
 				log.Printf("[gateway/telegram] sendMessage failed (chat=%s request=%s): %v", envelope.ChatID, envelope.RequestID, err)
 			}
 		}
 	}
+}
+
+func hydrateTelegramInboundAttachments(ctx context.Context, envelope *InboundChannelEnvelope, cfg *GatewayConfig, downloads *DownloadStore, api telegramAPI) error {
+	if envelope == nil || len(envelope.Attachments) == 0 || cfg == nil || downloads == nil || api == nil {
+		return nil
+	}
+	if strings.TrimSpace(cfg.ArtifactRoot) == "" {
+		return nil
+	}
+	artifactRoot, err := ValidateArtifactRoot(cfg.ArtifactRoot)
+	if err != nil {
+		return err
+	}
+	requestID := sanitizeTelegramArtifactComponent(envelope.RequestID)
+	if requestID == "" {
+		requestID = "request"
+	}
+	targetDir := filepath.Join(artifactRoot, "telegram-inbound", requestID)
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return fmt.Errorf("create telegram inbound artifact dir: %w", err)
+	}
+
+	for i := range envelope.Attachments {
+		attachment := envelope.Attachments[i]
+		fileID := strings.TrimSpace(attachment.SourceMetadata["telegram_file_id"])
+		if fileID == "" {
+			fileID = strings.TrimSpace(attachment.ExternalID)
+		}
+		if fileID == "" {
+			continue
+		}
+		fileInfo, err := api.GetFile(ctx, fileID)
+		if err != nil {
+			return fmt.Errorf("get telegram file %s: %w", fileID, err)
+		}
+		if strings.TrimSpace(fileInfo.FilePath) == "" {
+			return fmt.Errorf("telegram file %s returned empty file path", fileID)
+		}
+		data, err := api.DownloadFile(ctx, fileInfo.FilePath)
+		if err != nil {
+			return fmt.Errorf("download telegram file %s: %w", fileID, err)
+		}
+		filename := safeTelegramArtifactFilename(attachment.Name, fileInfo.FilePath)
+		targetPath := filepath.Join(targetDir, filename)
+		if err := os.WriteFile(targetPath, data, 0o600); err != nil {
+			return fmt.Errorf("persist telegram file %s: %w", fileID, err)
+		}
+
+		if attachment.ID == "" {
+			attachment.ID = strings.TrimSpace(firstString(fileInfo.FileUniqueID, fileInfo.FileID, fileID))
+		}
+		if attachment.MediaType == "" {
+			attachment.MediaType = attachment.MIMEType
+		}
+		if attachment.MIMEType == "" {
+			attachment.MIMEType = attachment.MediaType
+		}
+		attachment.Path = targetPath
+		attachment.ArtifactID = buildTelegramInboundArtifactID(envelope.RequestID, attachment.ID, filename)
+		attachment.SizeBytes = int64(len(data))
+		tok := downloads.Issue(targetPath, 30*time.Minute, false)
+		if tok != nil {
+			attachment.DownloadURL = downloads.ToDownloadURL(tok)
+		}
+		if attachment.SourceMetadata == nil {
+			attachment.SourceMetadata = map[string]string{}
+		}
+		attachment.SourceMetadata["telegram_file_path"] = strings.TrimSpace(fileInfo.FilePath)
+		attachment.SourceMetadata["artifact_id"] = attachment.ArtifactID
+		if attachment.DownloadURL != "" {
+			attachment.SourceMetadata["download_url"] = attachment.DownloadURL
+		}
+		envelope.Attachments[i] = attachment
+	}
+	return nil
+}
+
+func safeTelegramArtifactFilename(name, filePath string) string {
+	candidate := strings.TrimSpace(name)
+	if candidate == "" {
+		candidate = filepath.Base(strings.TrimSpace(filePath))
+	}
+	candidate = filepath.Base(candidate)
+	if candidate == "" || candidate == "." || candidate == string(filepath.Separator) {
+		return "telegram-attachment.bin"
+	}
+	return candidate
+}
+
+func sanitizeTelegramArtifactComponent(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer("/", "-", "\\", "-", " ", "-", ":", "-", "..", "-")
+	value = replacer.Replace(value)
+	value = strings.Trim(value, "-_.")
+	return value
+}
+
+func buildTelegramInboundArtifactID(requestID, attachmentID, filename string) string {
+	requestID = sanitizeTelegramArtifactComponent(requestID)
+	attachmentID = sanitizeTelegramArtifactComponent(attachmentID)
+	filename = sanitizeTelegramArtifactComponent(filename)
+	if requestID == "" {
+		requestID = "request"
+	}
+	if attachmentID == "" {
+		attachmentID = "attachment"
+	}
+	if filename == "" {
+		filename = "file"
+	}
+	return strings.Join([]string{"telegram", requestID, attachmentID, filename}, ":")
 }
 
 func sendTelegramGatewayResponse(ctx context.Context, api telegramAPI, chatID string, resp GatewayResponse) error {

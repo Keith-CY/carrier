@@ -5,23 +5,25 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 type fakeTelegramAPI struct {
-	setWebhookCalls int
-	getInfoCalls    int
-	deleteCalls     int
-	setCmdCalls     int
-	sendMessageCalls int
-	sendPhotoCalls   int
+	setWebhookCalls   int
+	getInfoCalls      int
+	deleteCalls       int
+	setCmdCalls       int
+	sendMessageCalls  int
+	sendPhotoCalls    int
 	sendDocumentCalls int
 
-	lastSendMessageText string
-	lastSendPhotoRef    string
-	lastSendPhotoCaption string
-	lastSendDocumentRef string
+	lastSendMessageText     string
+	lastSendPhotoRef        string
+	lastSendPhotoCaption    string
+	lastSendDocumentRef     string
 	lastSendDocumentCaption string
 
 	setWebhookErr error
@@ -29,6 +31,10 @@ type fakeTelegramAPI struct {
 	deleteErr     error
 
 	webhookInfo telegramWebhookInfo
+	fileInfo    telegramFileInfo
+	fileData    []byte
+	getFileErr  error
+	downloadErr error
 }
 
 func (f *fakeTelegramAPI) SetWebhook(_ context.Context, _ string, _ string) error {
@@ -75,6 +81,20 @@ func (f *fakeTelegramAPI) SendDocument(_ context.Context, _ string, document str
 func (f *fakeTelegramAPI) SetMyCommands(_ context.Context, _ []telegramBotCommand) error {
 	f.setCmdCalls++
 	return nil
+}
+
+func (f *fakeTelegramAPI) GetFile(_ context.Context, _ string) (telegramFileInfo, error) {
+	if f.getFileErr != nil {
+		return telegramFileInfo{}, f.getFileErr
+	}
+	return f.fileInfo, nil
+}
+
+func (f *fakeTelegramAPI) DownloadFile(_ context.Context, _ string) ([]byte, error) {
+	if f.downloadErr != nil {
+		return nil, f.downloadErr
+	}
+	return append([]byte(nil), f.fileData...), nil
 }
 
 func TestNormalizeTelegramWebhookURL(t *testing.T) {
@@ -352,7 +372,7 @@ func TestResolveTelegramTransportMode_WebhookSetupAndVerifyErrors(t *testing.T) 
 func TestTelegramSendRenderedAttachment_PrefersDocument(t *testing.T) {
 	api := &fakeTelegramAPI{}
 	resp := GatewayResponse{
-		Result: "ok",
+		Result:  "ok",
 		Message: "download complete",
 		RichContent: &baseagent.RichOutboundMessage{
 			Text: "download complete",
@@ -395,6 +415,71 @@ func TestTelegramSendRenderedAttachment_FallsBackToTextForUnsupportedAttachment(
 	}
 	if api.sendPhotoCalls != 0 || api.sendDocumentCalls != 0 {
 		t.Fatalf("expected unsupported attachment to avoid rich media send, got photo=%d document=%d", api.sendPhotoCalls, api.sendDocumentCalls)
+	}
+}
+
+func TestHydrateTelegramInboundAttachments_DownloadsToArtifactRoot(t *testing.T) {
+	artifactRoot, err := os.MkdirTemp(".", "telegram-inbound-artifacts-*")
+	if err != nil {
+		t.Fatalf("mkdir artifact root: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(artifactRoot) })
+	downloads := NewDownloadStore(artifactRoot, nil)
+	api := &fakeTelegramAPI{
+		fileInfo: telegramFileInfo{
+			FileID:       "tg-file-1",
+			FileUniqueID: "tg-uniq-1",
+			FilePath:     "documents/file_1/report.pdf",
+		},
+		fileData: []byte("%PDF-1.7"),
+	}
+	envelope := &InboundChannelEnvelope{
+		RequestID: "req-telegram-1",
+		Attachments: []baseagent.AttachmentRef{{
+			ID:         "tg-uniq-1",
+			Kind:       "document",
+			Name:       "report.pdf",
+			MediaType:  "application/pdf",
+			ExternalID: "tg-file-1",
+			Source:     "telegram",
+			SourceMetadata: map[string]string{
+				"telegram_file_id": "tg-file-1",
+				"chat_id":          "123",
+				"message_id":       "456",
+			},
+		}},
+	}
+	cfg := &GatewayConfig{
+		ArtifactRoot:       artifactRoot,
+		TelegramBotToken:   "TOKEN",
+		TelegramAPIBaseURL: "https://api.telegram.org",
+	}
+
+	if err := hydrateTelegramInboundAttachments(context.Background(), envelope, cfg, downloads, api); err != nil {
+		t.Fatalf("hydrateTelegramInboundAttachments error: %v", err)
+	}
+	if len(envelope.Attachments) != 1 {
+		t.Fatalf("attachments len=%d want 1", len(envelope.Attachments))
+	}
+	attachment := envelope.Attachments[0]
+	if attachment.Path == "" {
+		t.Fatalf("expected persisted attachment path, got %+v", attachment)
+	}
+	if got := filepath.Base(attachment.Path); got != "report.pdf" {
+		t.Fatalf("attachment path base=%q want report.pdf path=%q", got, attachment.Path)
+	}
+	if attachment.ArtifactID == "" {
+		t.Fatalf("expected artifact id, got %+v", attachment)
+	}
+	if attachment.DownloadURL == "" || !strings.HasPrefix(attachment.DownloadURL, "/downloads/") {
+		t.Fatalf("expected download URL, got %+v", attachment)
+	}
+	data, err := os.ReadFile(attachment.Path)
+	if err != nil {
+		t.Fatalf("read persisted attachment: %v", err)
+	}
+	if string(data) != "%PDF-1.7" {
+		t.Fatalf("unexpected persisted data %q", string(data))
 	}
 }
 
