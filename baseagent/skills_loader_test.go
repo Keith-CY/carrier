@@ -129,3 +129,56 @@ func TestStructuredLoopCarriesSkillSummaryAcrossTurns(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeCapabilitySummaryIncludesSkillsAndMCP(t *testing.T) {
+	ctx := context.Background()
+	registry := NewSkillsRegistry(NewMemorySkillsStore(), testSkillCatalog())
+	if _, err := registry.InstallSkill(ctx, "go-testing"); err != nil {
+		t.Fatalf("install skill: %v", err)
+	}
+
+	cfg := MCPConfig{
+		Servers: []MCPServerConfig{
+			{
+				Name: "repo",
+				Tools: []MCPToolConfig{
+					{
+						Name:        "repo_search",
+						Description: "Search the repository index.",
+					},
+				},
+			},
+		},
+	}
+	manager, err := NewManagedMCPManager(cfg, ManagedMCPManagerOptions{
+		ServerHooks: map[string]MCPServerHooks{
+			"repo": {
+				Start: func(context.Context) error { return nil },
+			},
+		},
+		ToolRunners: map[string]MCPToolRunner{
+			"repo_search": func(context.Context, map[string]any) ExecutionToolResult {
+				return ExecutionToolResult{Output: "found"}
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new managed mcp manager: %v", err)
+	}
+	if err := manager.Start(ctx); err != nil {
+		t.Fatalf("start manager: %v", err)
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, nil, WithSkillsLoader(registry), WithMCPManager(manager))
+	summary := rt.CapabilitySummary(ctx)
+
+	if len(summary.Skills) != 1 || summary.Skills[0].Name != "go-testing" || !summary.Skills[0].Enabled {
+		t.Fatalf("unexpected runtime skill summary: %+v", summary.Skills)
+	}
+	if len(summary.MCP.Servers) != 1 || summary.MCP.Servers[0].Name != "repo" {
+		t.Fatalf("unexpected runtime mcp summary: %+v", summary.MCP)
+	}
+	if len(summary.MCP.VisibleTools) != 1 || summary.MCP.VisibleTools[0].Name != "repo_search" {
+		t.Fatalf("unexpected runtime visible tools: %+v", summary.MCP.VisibleTools)
+	}
+}

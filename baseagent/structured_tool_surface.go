@@ -321,10 +321,18 @@ func (s *structuredToolSurface) registerSubagentStructuredTools(manager Subagent
 	if s == nil || manager == nil {
 		return
 	}
+	s.registerSubagentStatusTool(manager, "subagent_status", "Read the current status and result of a delegated subagent job.")
+	s.registerSubagentStatusTool(manager, "subagent_result", "Read the current status and result of a delegated subagent job.")
+}
+
+func (s *structuredToolSurface) registerSubagentStatusTool(manager SubagentManager, name, description string) {
+	if s == nil || manager == nil {
+		return
+	}
 	s.register(structuredToolDefinition{
 		descriptor: StructuredToolDescriptor{
-			Name:        "subagent_result",
-			Description: "Read the current status and result of a delegated subagent job.",
+			Name:        name,
+			Description: description,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -358,7 +366,12 @@ func (s *structuredToolSurface) registerSubagentStructuredTools(manager Subagent
 			return ExecutionToolResult{
 				Output: output,
 				Metadata: map[string]any{
-					"delegation": job,
+					"delegation":  job,
+					"job_id":      strings.TrimSpace(job.JobID),
+					"job_status":  strings.TrimSpace(string(job.Status)),
+					"job_summary": strings.TrimSpace(job.Summary),
+					"job_result":  strings.TrimSpace(job.Result),
+					"job_error":   strings.TrimSpace(job.Error),
 				},
 			}
 		},

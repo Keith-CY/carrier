@@ -41,6 +41,8 @@ type telegramAPI interface {
 	DeleteWebhook(ctx context.Context) error
 	GetUpdates(ctx context.Context, offset int64, timeoutSec int) ([]map[string]interface{}, error)
 	SendMessage(ctx context.Context, chatID, text string, disableWebPagePreview bool) error
+	SendPhoto(ctx context.Context, chatID, photo, caption string) error
+	SendDocument(ctx context.Context, chatID, document, caption string) error
 	SetMyCommands(ctx context.Context, commands []telegramBotCommand) error
 }
 
@@ -124,6 +126,28 @@ func (a *telegramBotAPI) SendMessage(ctx context.Context, chatID, text string, d
 		payload["disable_web_page_preview"] = true
 	}
 	return a.call(ctx, "sendMessage", payload, nil)
+}
+
+func (a *telegramBotAPI) SendPhoto(ctx context.Context, chatID, photo, caption string) error {
+	payload := map[string]interface{}{
+		"chat_id": chatID,
+		"photo":   photo,
+	}
+	if strings.TrimSpace(caption) != "" {
+		payload["caption"] = strings.TrimSpace(caption)
+	}
+	return a.call(ctx, "sendPhoto", payload, nil)
+}
+
+func (a *telegramBotAPI) SendDocument(ctx context.Context, chatID, document, caption string) error {
+	payload := map[string]interface{}{
+		"chat_id":  chatID,
+		"document": document,
+	}
+	if strings.TrimSpace(caption) != "" {
+		payload["caption"] = strings.TrimSpace(caption)
+	}
+	return a.call(ctx, "sendDocument", payload, nil)
 }
 
 func (a *telegramBotAPI) SetMyCommands(ctx context.Context, commands []telegramBotCommand) error {
@@ -396,17 +420,55 @@ func runTelegramPollingLoop(
 				continue
 			}
 			resp := RouteInboundChannel(ctx, envelope, daemon, sessions, downloads, rl, onboard)
-			rendered := RenderTelegramResponse(resp)
-			text, _ := rendered["text"].(string)
-			if strings.TrimSpace(text) == "" {
-				continue
-			}
-			disableWebPagePreview, _ := rendered["disable_web_page_preview"].(bool)
-			if err := api.SendMessage(ctx, envelope.ChatID, text, disableWebPagePreview); err != nil {
+			if err := sendTelegramGatewayResponse(ctx, api, envelope.ChatID, resp); err != nil {
 				log.Printf("[gateway/telegram] sendMessage failed (chat=%s request=%s): %v", envelope.ChatID, envelope.RequestID, err)
 			}
 		}
 	}
+}
+
+func sendTelegramGatewayResponse(ctx context.Context, api telegramAPI, chatID string, resp GatewayResponse) error {
+	if mediaKind, mediaRef, caption, ok := selectTelegramRichAttachment(resp); ok {
+		switch mediaKind {
+		case "image":
+			return api.SendPhoto(ctx, chatID, mediaRef, caption)
+		case "document":
+			return api.SendDocument(ctx, chatID, mediaRef, caption)
+		}
+	}
+
+	rendered := RenderTelegramResponse(resp)
+	text, _ := rendered["text"].(string)
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	disableWebPagePreview, _ := rendered["disable_web_page_preview"].(bool)
+	return api.SendMessage(ctx, chatID, text, disableWebPagePreview)
+}
+
+func selectTelegramRichAttachment(resp GatewayResponse) (kind string, ref string, caption string, ok bool) {
+	if resp.Result != "ok" || resp.RichContent == nil {
+		return "", "", "", false
+	}
+	caption = strings.TrimSpace(resp.RichContent.PlainTextFallback())
+	for _, attachment := range resp.RichContent.Attachments {
+		ref = strings.TrimSpace(attachment.ExternalID)
+		if ref == "" {
+			if u := strings.TrimSpace(attachment.Path); strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "http://") {
+				ref = u
+			}
+		}
+		if ref == "" {
+			continue
+		}
+		switch strings.TrimSpace(attachment.Kind) {
+		case "image":
+			return "image", ref, caption, true
+		case "document":
+			return "document", ref, caption, true
+		}
+	}
+	return "", "", "", false
 }
 
 func telegramUpdateID(update map[string]interface{}) int64 {

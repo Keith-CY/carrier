@@ -1450,6 +1450,7 @@ func streamLocalChatResponse(w http.ResponseWriter, r *http.Request, requestID s
 			chatID,
 			requestID,
 			req.Message,
+			nil,
 			"webui:local-chat",
 		)
 		if err != nil {

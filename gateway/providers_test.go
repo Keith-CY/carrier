@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
@@ -467,6 +468,22 @@ func TestRenderTelegramResponse_ErrorDefaultCode(t *testing.T) {
 	text, _ := rendered["text"].(string)
 	if !strings.Contains(text, "E_UNKNOWN") {
 		t.Fatalf("expected E_UNKNOWN default code, got %q", text)
+	}
+}
+
+func TestTelegramTransportStructuredOutboundTextFallback(t *testing.T) {
+	resp := GatewayResponse{
+		Result: "ok",
+		RichContent: &baseagent.RichOutboundMessage{
+			Blocks: []baseagent.ContentBlock{
+				{Type: "text", Text: "rendered from rich block"},
+			},
+		},
+	}
+	rendered := RenderTelegramResponse(resp)
+	text, _ := rendered["text"].(string)
+	if !strings.Contains(text, "rendered from rich block") {
+		t.Fatalf("expected structured outbound fallback text, got %q", text)
 	}
 }
 

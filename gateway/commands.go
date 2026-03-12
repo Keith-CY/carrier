@@ -73,14 +73,15 @@ type GatewayCommand struct {
 
 // GatewayResponse is the result of a command.
 type GatewayResponse struct {
-	RequestID     string `json:"requestId"`
-	Result        string `json:"result"` // "ok" or "error"
-	Message       string `json:"message"`
-	ErrorCode     string `json:"errorCode,omitempty"`
-	SessionToken  string `json:"sessionToken,omitempty"`
-	DownloadURL   string `json:"downloadUrl,omitempty"`
-	HandoffID     string `json:"handoffId,omitempty"`
-	HandoffStatus string `json:"handoffStatus,omitempty"`
+	RequestID     string                         `json:"requestId"`
+	Result        string                         `json:"result"` // "ok" or "error"
+	Message       string                         `json:"message"`
+	RichContent   *baseagent.RichOutboundMessage `json:"richContent,omitempty"`
+	ErrorCode     string                         `json:"errorCode,omitempty"`
+	SessionToken  string                         `json:"sessionToken,omitempty"`
+	DownloadURL   string                         `json:"downloadUrl,omitempty"`
+	HandoffID     string                         `json:"handoffId,omitempty"`
+	HandoffStatus string                         `json:"handoffStatus,omitempty"`
 }
 
 // ParseError is returned when command input cannot be parsed.
@@ -284,18 +285,22 @@ func handleBaseAgentMeta(ctx context.Context, cmd *GatewayCommand, daemon *Daemo
 }
 
 func handleBaseAgentMessage(ctx context.Context, cmd *GatewayCommand, daemon *DaemonClient, actor, message string) GatewayResponse {
-	chatResult, err := daemon.ChatBaseAgent(ctx, cmd.Provider, cmd.ChatID, cmd.RequestID, message, actor)
+	chatResult, err := daemon.ChatBaseAgent(ctx, cmd.Provider, cmd.ChatID, cmd.RequestID, message, nil, actor)
 	if err != nil {
 		return daemonErrResp(cmd.RequestID, err)
 	}
 	respMessage := strings.TrimSpace(chatResult.Message)
+	if respMessage == "" && chatResult.RichContent != nil {
+		respMessage = strings.TrimSpace(chatResult.RichContent.PlainTextFallback())
+	}
 	if respMessage == "" {
 		respMessage = "base agent completed with no output"
 	}
 	return GatewayResponse{
-		RequestID: cmd.RequestID,
-		Result:    "ok",
-		Message:   respMessage,
+		RequestID:   cmd.RequestID,
+		Result:      "ok",
+		Message:     respMessage,
+		RichContent: chatResult.RichContent,
 	}
 }
 

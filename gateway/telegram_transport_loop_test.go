@@ -12,8 +12,10 @@ import (
 )
 
 type scriptedTelegramAPI struct {
-	getUpdatesFn  func(ctx context.Context, offset int64, timeoutSec int) ([]map[string]interface{}, error)
-	sendMessageFn func(ctx context.Context, chatID, text string, disableWebPagePreview bool) error
+	getUpdatesFn    func(ctx context.Context, offset int64, timeoutSec int) ([]map[string]interface{}, error)
+	sendMessageFn   func(ctx context.Context, chatID, text string, disableWebPagePreview bool) error
+	sendPhotoFn     func(ctx context.Context, chatID, photo, caption string) error
+	sendDocumentFn  func(ctx context.Context, chatID, document, caption string) error
 }
 
 func (s *scriptedTelegramAPI) SetWebhook(_ context.Context, _ string, _ string) error {
@@ -38,6 +40,20 @@ func (s *scriptedTelegramAPI) GetUpdates(ctx context.Context, offset int64, time
 func (s *scriptedTelegramAPI) SendMessage(ctx context.Context, chatID, text string, disableWebPagePreview bool) error {
 	if s.sendMessageFn != nil {
 		return s.sendMessageFn(ctx, chatID, text, disableWebPagePreview)
+	}
+	return nil
+}
+
+func (s *scriptedTelegramAPI) SendPhoto(ctx context.Context, chatID, photo, caption string) error {
+	if s.sendPhotoFn != nil {
+		return s.sendPhotoFn(ctx, chatID, photo, caption)
+	}
+	return nil
+}
+
+func (s *scriptedTelegramAPI) SendDocument(ctx context.Context, chatID, document, caption string) error {
+	if s.sendDocumentFn != nil {
+		return s.sendDocumentFn(ctx, chatID, document, caption)
 	}
 	return nil
 }

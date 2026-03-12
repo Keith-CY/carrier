@@ -42,6 +42,43 @@ func TestChannelRouterTelegramEnvelope(t *testing.T) {
 	}
 }
 
+func TestChannelRouterTelegramEnvelopeCarriesAttachmentMetadata(t *testing.T) {
+	sessions := NewSessionStore("", 0, nil)
+	t.Cleanup(sessions.Stop)
+
+	payload := map[string]interface{}{
+		"update_id": float64(1002),
+		"message": map[string]interface{}{
+			"message_id": float64(100),
+			"caption":    "please inspect attached file",
+			"chat": map[string]interface{}{
+				"id": float64(123),
+			},
+			"document": map[string]interface{}{
+				"file_id":        "doc-1",
+				"file_name":      "incident.txt",
+				"mime_type":      "text/plain",
+				"file_size":      float64(42),
+				"file_unique_id": "doc-1-uniq",
+			},
+		},
+	}
+
+	envelope := NormalizeTelegramInboundEnvelope(payload, sessions)
+	if envelope == nil {
+		t.Fatal("expected telegram envelope")
+	}
+	if envelope.Kind != InboundEnvelopeKindChat || envelope.Text != "please inspect attached file" {
+		t.Fatalf("unexpected telegram chat envelope: %+v", envelope)
+	}
+	if len(envelope.Attachments) != 1 {
+		t.Fatalf("expected attachment metadata, got %+v", envelope)
+	}
+	if envelope.Attachments[0].Name != "incident.txt" || envelope.Attachments[0].Kind != "document" {
+		t.Fatalf("unexpected attachment metadata: %+v", envelope.Attachments)
+	}
+}
+
 func TestChannelRouterDiscordEnvelope(t *testing.T) {
 	sessions := NewSessionStore("", 0, nil)
 	t.Cleanup(sessions.Stop)

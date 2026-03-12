@@ -54,6 +54,35 @@ func TestSubagentManagerSpawn(t *testing.T) {
 	}
 }
 
+func TestSubagentManagerCancelLifecycle(t *testing.T) {
+	manager := NewInMemorySubagentManager(func(ctx context.Context, _ SubagentRequest) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	})
+
+	handle, err := manager.Spawn(context.Background(), SubagentRequest{Task: "watch logs"})
+	if err != nil {
+		t.Fatalf("spawn job: %v", err)
+	}
+
+	if err := manager.Cancel(context.Background(), handle.JobID); err != nil {
+		t.Fatalf("cancel job: %v", err)
+	}
+
+	job := waitForSubagentJobState(t, manager, handle.JobID, SubagentJobStatusCancelled)
+	if job.Error == "" {
+		t.Fatalf("expected cancelled job error message, got %+v", job)
+	}
+
+	polled, err := manager.Job(context.Background(), handle.JobID)
+	if err != nil {
+		t.Fatalf("lookup cancelled job: %v", err)
+	}
+	if polled.Status != SubagentJobStatusCancelled {
+		t.Fatalf("expected stable cancelled job status, got %+v", polled)
+	}
+}
+
 func waitForSubagentJobState(t *testing.T, manager *InMemorySubagentManager, jobID string, want SubagentJobStatus) SubagentJob {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

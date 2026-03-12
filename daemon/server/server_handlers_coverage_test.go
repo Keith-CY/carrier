@@ -157,6 +157,30 @@ func TestHandleAgentChatBranches(t *testing.T) {
 	}
 }
 
+func TestHandleAgentChat_PassesAttachmentMetadataToRuntime(t *testing.T) {
+	runtime := &fakeAgentChatRuntime{
+		resp: baseagent.ChatResponse{Message: "accepted", Action: "chat"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{
+		"message":"hello with attachment",
+		"sessionId":"sess-a",
+		"attachments":[
+			{"kind":"audio","name":"voice.ogg","mimeType":"audio/ogg","externalId":"tg-audio-1"}
+		]
+	}`))
+	rr := httptest.NewRecorder()
+	handleAgentChat(nil, runtime, "openclaw", rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("chat status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(runtime.lastReq.Attachments) != 1 {
+		t.Fatalf("expected one attachment, got %+v", runtime.lastReq.Attachments)
+	}
+	if runtime.lastReq.Attachments[0].Kind != "audio" || runtime.lastReq.Attachments[0].ExternalID != "tg-audio-1" {
+		t.Fatalf("unexpected runtime attachments: %+v", runtime.lastReq.Attachments)
+	}
+}
+
 func TestHandleAgentChat_ProxiesManagedZeroClawGateway(t *testing.T) {
 	origHome := userHomeDirFunc
 	t.Cleanup(func() {

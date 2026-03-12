@@ -20,6 +20,7 @@ import (
 
 type fakeBaseAgentRuntime struct {
 	resp         baseagent.ChatResponse
+	capabilities baseagent.RuntimeCapabilitySummary
 	approvalResp baseagent.ChatResponse
 	approvalErr  error
 	cronJob      baseagent.CronJob
@@ -38,6 +39,10 @@ func (f *fakeBaseAgentRuntime) Chat(_ context.Context, req baseagent.ChatRequest
 	f.callCount++
 	f.lastReq = req
 	return f.resp, nil
+}
+
+func (f *fakeBaseAgentRuntime) CapabilitySummary(_ context.Context) baseagent.RuntimeCapabilitySummary {
+	return f.capabilities
 }
 
 func (f *fakeBaseAgentRuntime) RespondPendingApproval(_ context.Context, sessionKey, approvalID string, decision baseagent.ApprovalDecision) (baseagent.ChatResponse, error) {
@@ -109,6 +114,39 @@ func TestHealthz(t *testing.T) {
 	}
 	if body["status"] != "ok" {
 		t.Errorf("expected ok, got %q", body["status"])
+	}
+}
+
+func TestBaseAgentCapabilitiesEndpoint(t *testing.T) {
+	svc := newTestService()
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		capabilities: baseagent.RuntimeCapabilitySummary{
+			Skills: []baseagent.RuntimeSkillCapability{
+				{Name: "go-testing", Enabled: true},
+			},
+			MCP: baseagent.MCPCapabilitySummary{
+				Servers: []baseagent.MCPServerCapability{
+					{Name: "repo", Health: "healthy", VisibleToolCount: 1},
+				},
+				VisibleTools: []baseagent.MCPToolCapability{
+					{Name: "repo_search"},
+				},
+			},
+		},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/base-agent/capabilities", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"go-testing"`) || !strings.Contains(w.Body.String(), `"repo_search"`) {
+		t.Fatalf("unexpected capabilities body: %s", w.Body.String())
 	}
 }
 

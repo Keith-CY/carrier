@@ -2,6 +2,7 @@ package baseagent
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -51,5 +52,45 @@ func TestSkillsRegistrySearch(t *testing.T) {
 	}
 	if results[0].Name != "workspace-inspection" {
 		t.Fatalf("expected workspace-inspection to rank first, got %+v", results)
+	}
+}
+
+func TestSkillsRegistryRuntimeCapabilitiesAndEnablement(t *testing.T) {
+	ctx := context.Background()
+	registry := NewSkillsRegistry(NewMemorySkillsStore(), testSkillCatalog())
+
+	if _, err := registry.InstallSkill(ctx, "go-testing"); err != nil {
+		t.Fatalf("install go-testing: %v", err)
+	}
+	if _, err := registry.InstallSkill(ctx, "workspace-inspection"); err != nil {
+		t.Fatalf("install workspace-inspection: %v", err)
+	}
+
+	caps := registry.ListRuntimeSkillCapabilities(ctx)
+	if len(caps) != 2 {
+		t.Fatalf("expected 2 runtime capabilities, got %+v", caps)
+	}
+	if !caps[0].Enabled || !caps[1].Enabled {
+		t.Fatalf("expected installed skills to default enabled, got %+v", caps)
+	}
+
+	if err := registry.SetSkillEnabled(ctx, "go-testing", false); err != nil {
+		t.Fatalf("disable go-testing: %v", err)
+	}
+
+	disabled := registry.ListRuntimeSkillCapabilities(ctx)
+	if len(disabled) != 2 {
+		t.Fatalf("expected 2 runtime capabilities after disable, got %+v", disabled)
+	}
+	if disabled[0].Name != "go-testing" || disabled[0].Enabled {
+		t.Fatalf("expected go-testing disabled, got %+v", disabled)
+	}
+	if !disabled[1].Enabled {
+		t.Fatalf("expected workspace-inspection to stay enabled, got %+v", disabled)
+	}
+
+	summary := registry.RelevantSkillsSummary(ctx, "run repository diagnostics and verify with go test")
+	if strings.Contains(summary, "go-testing") {
+		t.Fatalf("disabled skill should not appear in relevant summary, got %q", summary)
 	}
 }

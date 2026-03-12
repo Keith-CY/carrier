@@ -17,6 +17,11 @@ type stubWebToolBackend struct {
 	searchErr error
 }
 
+type stubExecutionSubagentSpawner struct {
+	handle SubagentJobHandle
+	err    error
+}
+
 func (b *stubWebToolBackend) Fetch(_ context.Context, _ string) (string, error) {
 	if b.fetchErr != nil {
 		return "", b.fetchErr
@@ -29,6 +34,13 @@ func (b *stubWebToolBackend) Search(_ context.Context, _ string, _ int) ([]WebSe
 		return nil, b.searchErr
 	}
 	return append([]WebSearchHit(nil), b.searchHit...), nil
+}
+
+func (s *stubExecutionSubagentSpawner) Spawn(_ context.Context, _ SubagentRequest) (SubagentJobHandle, error) {
+	if s.err != nil {
+		return SubagentJobHandle{}, s.err
+	}
+	return s.handle, nil
 }
 
 func TestExecutionToolRegistryFileRoundTrip(t *testing.T) {
@@ -403,6 +415,44 @@ func TestExecutionToolsSendFile(t *testing.T) {
 	attachment, _ := result.Metadata["attachment"].(ExecutionAttachment)
 	if attachment.Name != "artifact.log" || attachment.Path != filepath.Join(root, "artifact.log") {
 		t.Fatalf("unexpected attachment metadata: %+v", result.Metadata)
+	}
+	if len(result.Attachments) != 1 {
+		t.Fatalf("expected first-class attachment ref, got %+v", result)
+	}
+	if result.Attachments[0].Name != "artifact.log" || result.Attachments[0].Path != filepath.Join(root, "artifact.log") {
+		t.Fatalf("unexpected attachment refs: %+v", result.Attachments)
+	}
+	if len(result.ContentBlocks) != 1 {
+		t.Fatalf("expected structured content block, got %+v", result)
+	}
+	if result.ContentBlocks[0].Type != "file" || result.ContentBlocks[0].Name != "artifact.log" {
+		t.Fatalf("unexpected content blocks: %+v", result.ContentBlocks)
+	}
+}
+
+func TestExecutionToolsSpawnSubagentIncludesDelegationMetadata(t *testing.T) {
+	registry := NewExecutionToolRegistry(t.TempDir(), WithExecutionToolSubagentSpawner(&stubExecutionSubagentSpawner{
+		handle: SubagentJobHandle{
+			JobID:   "job-7",
+			Status:  "running",
+			Summary: "collect dependency graph",
+		},
+	}))
+
+	result := registry.Execute(context.Background(), "spawn_subagent", map[string]any{
+		"task": "collect dependency graph",
+	})
+	if result.IsError {
+		t.Fatalf("expected spawn_subagent to succeed, got %+v", result)
+	}
+	if result.Metadata["job_id"] != "job-7" {
+		t.Fatalf("expected job_id metadata, got %+v", result.Metadata)
+	}
+	if result.Metadata["job_status"] != "running" {
+		t.Fatalf("expected job_status metadata, got %+v", result.Metadata)
+	}
+	if result.Metadata["job_summary"] != "collect dependency graph" {
+		t.Fatalf("expected job_summary metadata, got %+v", result.Metadata)
 	}
 }
 

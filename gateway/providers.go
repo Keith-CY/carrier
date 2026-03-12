@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -30,11 +31,12 @@ type NormalizedCommand struct {
 // NormalizedMessage is a platform-agnostic parsed inbound message.
 // Command is nil when the message is plain chat text (non-slash command).
 type NormalizedMessage struct {
-	Provider  string
-	ChatID    string
-	RequestID string
-	RawText   string
-	Command   *NormalizedCommand
+	Provider    string
+	ChatID      string
+	RequestID   string
+	RawText     string
+	Attachments []baseagent.AttachmentRef
+	Command     *NormalizedCommand
 }
 
 // ToGatewayInput converts a normalized command to the gateway input string.
@@ -62,16 +64,18 @@ func ParseTelegramMessage(payload map[string]interface{}) *NormalizedMessage {
 	chat, _ := asMap(message["chat"])
 	chatID := toID(chat["id"])
 	rawText := firstString(message["text"], message["caption"])
-	if chatID == "" || rawText == "" {
+	attachments := extractTelegramAttachments(message)
+	if chatID == "" || (rawText == "" && len(attachments) == 0) {
 		return nil
 	}
 
 	requestID := buildRequestID("tg", toID(payload["update_id"]), toID(message["message_id"]))
 	out := &NormalizedMessage{
-		Provider:  "telegram",
-		ChatID:    chatID,
-		RequestID: requestID,
-		RawText:   rawText,
+		Provider:    "telegram",
+		ChatID:      chatID,
+		RequestID:   requestID,
+		RawText:     rawText,
+		Attachments: attachments,
 	}
 	if parsed := parseCommandText(rawText); parsed != nil {
 		out.Command = &NormalizedCommand{
@@ -113,7 +117,14 @@ func VerifyTelegramSecret(provided, expected string) bool {
 func RenderTelegramResponse(resp GatewayResponse) map[string]interface{} {
 	var lines []string
 	if resp.Result == "ok" {
-		lines = append(lines, "✅ "+resp.Message)
+		message := strings.TrimSpace(resp.Message)
+		if message == "" && resp.RichContent != nil {
+			message = strings.TrimSpace(resp.RichContent.PlainTextFallback())
+		}
+		if message == "" {
+			message = "completed"
+		}
+		lines = append(lines, "✅ "+message)
 		if resp.SessionToken != "" {
 			lines = append(lines, "Session token: "+resp.SessionToken)
 		}
@@ -141,6 +152,75 @@ func RenderTelegramResponse(resp GatewayResponse) map[string]interface{} {
 		result["disable_web_page_preview"] = true
 	}
 	return result
+}
+
+func extractTelegramAttachments(message map[string]interface{}) []baseagent.AttachmentRef {
+	if len(message) == 0 {
+		return nil
+	}
+	var attachments []baseagent.AttachmentRef
+	appendAttachment := func(ref baseagent.AttachmentRef) {
+		if strings.TrimSpace(ref.Name) == "" && strings.TrimSpace(ref.ExternalID) == "" && strings.TrimSpace(ref.Path) == "" {
+			return
+		}
+		attachments = append(attachments, ref)
+	}
+
+	if document, ok := asMap(message["document"]); ok {
+		appendAttachment(telegramAttachmentRef("document", document))
+	}
+	if audio, ok := asMap(message["audio"]); ok {
+		appendAttachment(telegramAttachmentRef("audio", audio))
+	}
+	if voice, ok := asMap(message["voice"]); ok {
+		appendAttachment(telegramAttachmentRef("voice", voice))
+	}
+	if video, ok := asMap(message["video"]); ok {
+		appendAttachment(telegramAttachmentRef("video", video))
+	}
+	if photos, ok := message["photo"].([]interface{}); ok && len(photos) > 0 {
+		best := map[string]interface{}{}
+		bestSize := float64(-1)
+		for _, raw := range photos {
+			photo, ok := asMap(raw)
+			if !ok {
+				continue
+			}
+			size := toFloat(photo["file_size"])
+			if size >= bestSize {
+				best = photo
+				bestSize = size
+			}
+		}
+		appendAttachment(telegramAttachmentRef("image", best))
+	}
+	return attachments
+}
+
+func telegramAttachmentRef(kind string, payload map[string]interface{}) baseagent.AttachmentRef {
+	ref := baseagent.AttachmentRef{
+		Kind:       strings.TrimSpace(kind),
+		Name:       firstString(payload["file_name"]),
+		MIMEType:   firstString(payload["mime_type"]),
+		SizeBytes:  int64(toFloat(payload["file_size"])),
+		ExternalID: firstString(payload["file_id"], payload["file_unique_id"]),
+		Source:     "telegram",
+	}
+	if ref.Name == "" {
+		switch ref.Kind {
+		case "voice":
+			ref.Name = "voice-message.ogg"
+		case "image":
+			ref.Name = "telegram-photo.jpg"
+		case "audio":
+			ref.Name = "telegram-audio"
+		case "video":
+			ref.Name = "telegram-video"
+		case "document":
+			ref.Name = "telegram-document"
+		}
+	}
+	return ref
 }
 
 // RenderTelegramWebhookResponse wraps a gateway response as a Telegram Bot API

@@ -67,7 +67,7 @@ export function useOnboardingStepData(args: {
         if (valid.length === 1 && !args.channelChatId) {
           const chatId = String(valid[0].chatId).trim();
           args.setChannelChatId(chatId);
-          setPairMsg(`Auto-selected Carrier paired user: ${chatId}`);
+          setPairMsg(`Auto-selected Carrier paired ${selectedChannelStatus?.displayName || 'channel'} user: ${chatId}`);
         }
       })
       .catch(() => {});

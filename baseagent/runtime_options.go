@@ -46,6 +46,12 @@ func WithSkillsLoader(loader SkillsLoader) RuntimeOption {
 	}
 }
 
+func WithMediaRuntime(media MediaRuntime) RuntimeOption {
+	return func(r *Runtime) {
+		r.mediaRuntime = media
+	}
+}
+
 func WithWebToolBackend(backend WebToolBackend) RuntimeOption {
 	return func(r *Runtime) {
 		r.webBackend = backend

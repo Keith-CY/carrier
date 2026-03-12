@@ -7,6 +7,14 @@ import (
 	"strings"
 )
 
+type RuntimeSkillCapability struct {
+	Name     string   `json:"name"`
+	Summary  string   `json:"summary,omitempty"`
+	Keywords []string `json:"keywords,omitempty"`
+	Tags     []string `json:"tags,omitempty"`
+	Enabled  bool     `json:"enabled"`
+}
+
 type SkillsRegistry struct {
 	store   SkillsStore
 	catalog map[string]SkillDefinition
@@ -105,7 +113,90 @@ func (r *SkillsRegistry) InstallSkill(ctx context.Context, name string) (SkillDe
 	if err := r.store.SetInstalledSkillNames(ctx, names); err != nil {
 		return SkillDefinition{}, err
 	}
+	enabledNames, err := r.store.ListEnabledSkillNames(ctx)
+	if err != nil {
+		return SkillDefinition{}, err
+	}
+	enabledNames = append(enabledNames, name)
+	if err := r.store.SetEnabledSkillNames(ctx, enabledNames); err != nil {
+		return SkillDefinition{}, err
+	}
 	return cloneSkillDefinition(skill), nil
+}
+
+func (r *SkillsRegistry) ListRuntimeSkillCapabilities(ctx context.Context) []RuntimeSkillCapability {
+	if r == nil {
+		return nil
+	}
+	names, err := r.store.ListInstalledSkillNames(ctx)
+	if err != nil {
+		return nil
+	}
+	enabledNames, err := r.store.ListEnabledSkillNames(ctx)
+	if err != nil {
+		return nil
+	}
+	enabledSet := map[string]struct{}{}
+	for _, name := range enabledNames {
+		enabledSet[name] = struct{}{}
+	}
+	out := make([]RuntimeSkillCapability, 0, len(names))
+	for _, name := range names {
+		skill, ok := r.catalog[name]
+		if !ok {
+			continue
+		}
+		_, enabled := enabledSet[name]
+		out = append(out, RuntimeSkillCapability{
+			Name:     skill.Name,
+			Summary:  skill.Summary,
+			Keywords: append([]string(nil), skill.Keywords...),
+			Tags:     append([]string(nil), skill.Tags...),
+			Enabled:  enabled,
+		})
+	}
+	return out
+}
+
+func (r *SkillsRegistry) SetSkillEnabled(ctx context.Context, name string, enabled bool) error {
+	if r == nil {
+		return fmt.Errorf("skills registry is unavailable")
+	}
+	name = strings.TrimSpace(strings.ToLower(name))
+	if name == "" {
+		return fmt.Errorf("skill name is required")
+	}
+	if _, ok := r.catalog[name]; !ok {
+		return fmt.Errorf("skill %q is not available", name)
+	}
+	installedNames, err := r.store.ListInstalledSkillNames(ctx)
+	if err != nil {
+		return err
+	}
+	installedSet := map[string]struct{}{}
+	for _, installed := range installedNames {
+		installedSet[installed] = struct{}{}
+	}
+	if _, ok := installedSet[name]; !ok {
+		return fmt.Errorf("skill %q is not installed", name)
+	}
+
+	enabledNames, err := r.store.ListEnabledSkillNames(ctx)
+	if err != nil {
+		return err
+	}
+	if enabled {
+		enabledNames = append(enabledNames, name)
+		return r.store.SetEnabledSkillNames(ctx, enabledNames)
+	}
+	filtered := make([]string, 0, len(enabledNames))
+	for _, enabledName := range enabledNames {
+		if enabledName == name {
+			continue
+		}
+		filtered = append(filtered, enabledName)
+	}
+	return r.store.SetEnabledSkillNames(ctx, filtered)
 }
 
 func (r *SkillsRegistry) RelevantSkillsSummary(ctx context.Context, message string) string {
@@ -113,18 +204,26 @@ func (r *SkillsRegistry) RelevantSkillsSummary(ctx context.Context, message stri
 	if r == nil || message == "" {
 		return ""
 	}
-	installed := r.ListInstalledSkills(ctx)
+	installed := r.ListRuntimeSkillCapabilities(ctx)
 	if len(installed) == 0 {
 		return ""
 	}
 
 	type scoredSkill struct {
-		skill SkillDefinition
+		skill RuntimeSkillCapability
 		score int
 	}
 	scored := make([]scoredSkill, 0, len(installed))
 	for _, skill := range installed {
-		score := scoreSkillMatch(skill, message)
+		if !skill.Enabled {
+			continue
+		}
+		score := scoreSkillMatch(SkillDefinition{
+			Name:     skill.Name,
+			Summary:  skill.Summary,
+			Keywords: skill.Keywords,
+			Tags:     skill.Tags,
+		}, message)
 		if score <= 0 {
 			continue
 		}

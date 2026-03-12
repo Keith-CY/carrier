@@ -699,6 +699,8 @@ func normalizeLoadedConversationSession(session *ConversationSession) {
 func normalizeStructuredToolMessage(msg StructuredToolMessage) StructuredToolMessage {
 	msg.Role = strings.TrimSpace(strings.ToLower(msg.Role))
 	msg.Content = strings.TrimSpace(msg.Content)
+	msg.Attachments = cloneAttachmentRefs(msg.Attachments)
+	msg.ContentBlocks = cloneContentBlocks(msg.ContentBlocks)
 	msg.ToolCallID = strings.TrimSpace(msg.ToolCallID)
 	msg.ToolName = strings.TrimSpace(msg.ToolName)
 	msg.ToolPolicyReason = strings.TrimSpace(msg.ToolPolicyReason)
@@ -761,6 +763,44 @@ func cloneStructuredToolCalls(calls []StructuredToolCall) []StructuredToolCall {
 			ID:        strings.TrimSpace(call.ID),
 			Name:      strings.TrimSpace(call.Name),
 			Arguments: cloneToolSchema(call.Arguments),
+		}
+	}
+	return out
+}
+
+func cloneAttachmentRefs(attachments []AttachmentRef) []AttachmentRef {
+	if len(attachments) == 0 {
+		return nil
+	}
+	out := make([]AttachmentRef, len(attachments))
+	for i, attachment := range attachments {
+		out[i] = AttachmentRef{
+			Kind:       strings.TrimSpace(strings.ToLower(attachment.Kind)),
+			Path:       strings.TrimSpace(attachment.Path),
+			Name:       strings.TrimSpace(attachment.Name),
+			MIMEType:   strings.TrimSpace(attachment.MIMEType),
+			SizeBytes:  attachment.SizeBytes,
+			Source:     strings.TrimSpace(attachment.Source),
+			ExternalID: strings.TrimSpace(attachment.ExternalID),
+		}
+	}
+	return out
+}
+
+func cloneContentBlocks(blocks []ContentBlock) []ContentBlock {
+	if len(blocks) == 0 {
+		return nil
+	}
+	out := make([]ContentBlock, len(blocks))
+	for i, block := range blocks {
+		out[i] = ContentBlock{
+			Type:      strings.TrimSpace(strings.ToLower(block.Type)),
+			Text:      strings.TrimSpace(block.Text),
+			Name:      strings.TrimSpace(block.Name),
+			Path:      strings.TrimSpace(block.Path),
+			MIMEType:  strings.TrimSpace(block.MIMEType),
+			URL:       strings.TrimSpace(block.URL),
+			SizeBytes: block.SizeBytes,
 		}
 	}
 	return out

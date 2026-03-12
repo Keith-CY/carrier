@@ -392,6 +392,68 @@ func TestRuntimeChatUsesToolAwareProviderLoop(t *testing.T) {
 	}
 }
 
+func TestRuntimeChatStructuredLoopCarriesAttachmentMetadata(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "artifact.log"), []byte("hello attachment"), 0o600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	policy := ActiveBoundarySpec().StructuredToolPolicy
+	policy.HighRiskDecision = string(structuredToolDecisionAllow)
+	provider := &scriptedToolAwareProvider{
+		name: "attachment-aware",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "send_file",
+						Arguments: map[string]any{
+							"path": "artifact.log",
+						},
+					},
+				},
+			},
+			{
+				Content: "attachment prepared",
+			},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, nil, WithWorkspaceRoot(root), WithMaxToolIterations(4), WithStructuredToolPolicy(policy))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "attachment-loop",
+		Message:  "send artifact.log",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "attachment prepared" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.Role != "tool" || last.ToolCallID != "call-1" {
+		t.Fatalf("unexpected final tool message: %+v", last)
+	}
+	if len(last.Attachments) != 1 {
+		t.Fatalf("expected first-class attachment metadata, got %+v", last)
+	}
+	if last.Attachments[0].Name != "artifact.log" {
+		t.Fatalf("unexpected attachment refs: %+v", last.Attachments)
+	}
+	if len(last.ContentBlocks) != 1 || last.ContentBlocks[0].Type != "file" {
+		t.Fatalf("unexpected content blocks: %+v", last.ContentBlocks)
+	}
+}
+
 func TestRuntimeChatUsesTextProviderStructuredFallback(t *testing.T) {
 	root := t.TempDir()
 	provider := &scriptedTextProvider{
@@ -1314,5 +1376,74 @@ func TestStructuredLoopReadsSubagentResult(t *testing.T) {
 	}
 	if !strings.Contains(last.Content, handle.JobID) || !strings.Contains(last.Content, "result: collect dependency graph") {
 		t.Fatalf("expected delegated result in tool output, got %+v", last)
+	}
+}
+
+func TestStructuredLoopReadsSubagentStatus(t *testing.T) {
+	policy := ActiveBoundarySpec().StructuredToolPolicy
+	policy.HighRiskDecision = string(structuredToolDecisionAllow)
+
+	manager := NewInMemorySubagentManager(func(_ context.Context, req SubagentRequest) (string, error) {
+		return "result: " + req.Task, nil
+	})
+	handle, err := manager.Spawn(context.Background(), SubagentRequest{Task: "collect dependency graph"})
+	if err != nil {
+		t.Fatalf("spawn delegated job: %v", err)
+	}
+	_ = waitForSubagentJobState(t, manager, handle.JobID, SubagentJobStatusCompleted)
+
+	provider := &scriptedToolAwareProvider{
+		name: "delegate-status",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-2",
+						Name: "subagent_status",
+						Arguments: map[string]any{
+							"job_id": handle.JobID,
+						},
+					},
+				},
+			},
+			{
+				Content: "delegated status collected",
+			},
+		},
+	}
+
+	rt := NewRuntime(
+		&runtimeServiceFake{},
+		nil,
+		WithWorkspaceRoot(t.TempDir()),
+		WithMaxToolIterations(5),
+		WithStructuredToolPolicy(policy),
+		WithSubagentManager(manager),
+	)
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider: "cli",
+		ChatID:   "delegate-status",
+		Message:  "check delegated dependency graph status",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "delegated status collected" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if last.Role != "tool" || last.ToolName != "subagent_status" {
+		t.Fatalf("unexpected final tool callback message: %+v", last)
+	}
+	if !strings.Contains(last.Content, handle.JobID) || !strings.Contains(last.Content, "result: collect dependency graph") {
+		t.Fatalf("expected delegated status in tool output, got %+v", last)
 	}
 }

@@ -16,6 +16,8 @@ type StructuredToolCall struct {
 type StructuredToolMessage struct {
 	Role             string                    `json:"role"`
 	Content          string                    `json:"content,omitempty"`
+	Attachments      []AttachmentRef           `json:"attachments,omitempty"`
+	ContentBlocks    []ContentBlock            `json:"contentBlocks,omitempty"`
 	ToolCallID       string                    `json:"toolCallId,omitempty"`
 	ToolName         string                    `json:"toolName,omitempty"`
 	ToolResultStatus ExecutionToolResultStatus `json:"toolResultStatus,omitempty"`

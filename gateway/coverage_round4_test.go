@@ -176,7 +176,7 @@ func TestProviderPayloadHelpers(t *testing.T) {
 func TestProcessBaseAgentChatPaths(t *testing.T) {
 	t.Run("empty message ignored", func(t *testing.T) {
 		_, dc, sessions, _, _ := setupTestEnv(t, nil)
-		resp := processBaseAgentChat(context.Background(), "telegram", "100", "r1", "   ", dc, sessions, nil)
+		resp := processBaseAgentChat(context.Background(), "telegram", "100", "r1", "   ", nil, dc, sessions, nil)
 		if resp.Result != "ok" || !strings.Contains(resp.Message, "empty message ignored") {
 			t.Fatalf("unexpected response: %+v", resp)
 		}
@@ -184,7 +184,7 @@ func TestProcessBaseAgentChatPaths(t *testing.T) {
 
 	t.Run("requires pairing session", func(t *testing.T) {
 		_, dc, sessions, _, _ := setupTestEnv(t, nil)
-		resp := processBaseAgentChat(context.Background(), "telegram", "101", "r2", "hello", dc, sessions, nil)
+		resp := processBaseAgentChat(context.Background(), "telegram", "101", "r2", "hello", nil, dc, sessions, nil)
 		if resp.Result != "error" || resp.ErrorCode != "E_SESSION_REQUIRED" {
 			t.Fatalf("unexpected response: %+v", resp)
 		}
@@ -195,7 +195,7 @@ func TestProcessBaseAgentChatPaths(t *testing.T) {
 		_ = pairAndGetSession(sessions, "telegram", "102")
 		rl := NewGatewayRateLimiter(0, 100, time.Minute, nil)
 
-		resp := processBaseAgentChat(context.Background(), "telegram", "102", "r3", "hello", dc, sessions, rl)
+		resp := processBaseAgentChat(context.Background(), "telegram", "102", "r3", "hello", nil, dc, sessions, rl)
 		if resp.Result != "error" || resp.ErrorCode != "E_RATE_LIMITED" {
 			t.Fatalf("unexpected response: %+v", resp)
 		}
@@ -212,7 +212,7 @@ func TestProcessBaseAgentChatPaths(t *testing.T) {
 		})
 		_ = pairAndGetSession(sessions, "telegram", "103")
 
-		resp := processBaseAgentChat(context.Background(), "telegram", "103", "r4", "hello", dc, sessions, nil)
+		resp := processBaseAgentChat(context.Background(), "telegram", "103", "r4", "hello", nil, dc, sessions, nil)
 		if resp.Result != "error" || resp.ErrorCode != "E_USAGE" {
 			t.Fatalf("unexpected response: %+v", resp)
 		}
@@ -227,7 +227,7 @@ func TestProcessBaseAgentChatPaths(t *testing.T) {
 		})
 		_ = pairAndGetSession(sessions, "telegram", "104")
 
-		resp := processBaseAgentChat(context.Background(), "telegram", "104", "r5", "hello", dc, sessions, nil)
+		resp := processBaseAgentChat(context.Background(), "telegram", "104", "r5", "hello", nil, dc, sessions, nil)
 		if resp.Result != "ok" || resp.Message != "base agent completed with no output" {
 			t.Fatalf("unexpected response: %+v", resp)
 		}

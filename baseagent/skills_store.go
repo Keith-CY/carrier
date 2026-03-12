@@ -13,11 +13,15 @@ import (
 type SkillsStore interface {
 	ListInstalledSkillNames(ctx context.Context) ([]string, error)
 	SetInstalledSkillNames(ctx context.Context, names []string) error
+	ListEnabledSkillNames(ctx context.Context) ([]string, error)
+	SetEnabledSkillNames(ctx context.Context, names []string) error
 }
 
 type MemorySkillsStore struct {
 	mu        sync.RWMutex
 	installed []string
+	enabled   []string
+	configured bool
 }
 
 func NewMemorySkillsStore() *MemorySkillsStore {
@@ -40,6 +44,29 @@ func (s *MemorySkillsStore) SetInstalledSkillNames(_ context.Context, names []st
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.installed = normalizeSkillNames(names)
+	return nil
+}
+
+func (s *MemorySkillsStore) ListEnabledSkillNames(_ context.Context) ([]string, error) {
+	if s == nil {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.configured {
+		return append([]string(nil), s.installed...), nil
+	}
+	return append([]string(nil), s.enabled...), nil
+}
+
+func (s *MemorySkillsStore) SetEnabledSkillNames(_ context.Context, names []string) error {
+	if s == nil {
+		return fmt.Errorf("skills store is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.enabled = normalizeSkillNames(names)
+	s.configured = true
 	return nil
 }
 
@@ -76,6 +103,52 @@ func (s *FileSkillsStore) SetInstalledSkillNames(_ context.Context, names []stri
 	state := fileSkillsStoreState{
 		Installed: normalizeSkillNames(names),
 	}
+	existing, err := s.load()
+	if err != nil {
+		return err
+	}
+	state.Enabled = append([]string(nil), existing.Enabled...)
+	state.EnabledConfigured = existing.EnabledConfigured
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+		return fmt.Errorf("create skills store directory: %w", err)
+	}
+	raw, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal skills store: %w", err)
+	}
+	if err := os.WriteFile(s.path, raw, 0o600); err != nil {
+		return fmt.Errorf("write skills store: %w", err)
+	}
+	return nil
+}
+
+func (s *FileSkillsStore) ListEnabledSkillNames(_ context.Context) ([]string, error) {
+	if s == nil || strings.TrimSpace(s.path) == "" {
+		return nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	return append([]string(nil), state.Enabled...), nil
+}
+
+func (s *FileSkillsStore) SetEnabledSkillNames(_ context.Context, names []string) error {
+	if s == nil || strings.TrimSpace(s.path) == "" {
+		return fmt.Errorf("skills store path is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, err := s.load()
+	if err != nil {
+		return err
+	}
+	state.Enabled = normalizeSkillNames(names)
+	state.EnabledConfigured = true
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return fmt.Errorf("create skills store directory: %w", err)
 	}
@@ -90,7 +163,9 @@ func (s *FileSkillsStore) SetInstalledSkillNames(_ context.Context, names []stri
 }
 
 type fileSkillsStoreState struct {
-	Installed []string `json:"installed"`
+	Installed         []string `json:"installed"`
+	Enabled           []string `json:"enabled"`
+	EnabledConfigured bool     `json:"enabledConfigured,omitempty"`
 }
 
 func (s *FileSkillsStore) load() (fileSkillsStoreState, error) {
@@ -106,6 +181,10 @@ func (s *FileSkillsStore) load() (fileSkillsStoreState, error) {
 		return fileSkillsStoreState{}, fmt.Errorf("parse skills store: %w", err)
 	}
 	state.Installed = normalizeSkillNames(state.Installed)
+	state.Enabled = normalizeSkillNames(state.Enabled)
+	if !state.EnabledConfigured {
+		state.Enabled = append([]string(nil), state.Installed...)
+	}
 	return state, nil
 }
 

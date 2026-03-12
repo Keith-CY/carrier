@@ -169,3 +169,61 @@ func TestStructuredSurfaceRegistersVisibleMCPTools(t *testing.T) {
 		t.Fatalf("did not expect hidden MCP tool descriptor, got %+v", got)
 	}
 }
+
+func TestManagedMCPManagerVisibleCapabilitySummary(t *testing.T) {
+	cfg := MCPConfig{
+		Servers: []MCPServerConfig{
+			{
+				Name: "repo",
+				Tools: []MCPToolConfig{
+					{
+						Name:        "repo_search",
+						Description: "Search the repository index.",
+					},
+					{
+						Name:        "repo_write",
+						Description: "Write to the repository index.",
+						Hidden:      true,
+					},
+				},
+			},
+		},
+	}
+
+	manager, err := NewManagedMCPManager(cfg, ManagedMCPManagerOptions{
+		ServerHooks: map[string]MCPServerHooks{
+			"repo": {
+				Start: func(context.Context) error { return nil },
+			},
+		},
+		ToolRunners: map[string]MCPToolRunner{
+			"repo_search": func(context.Context, map[string]any) ExecutionToolResult {
+				return ExecutionToolResult{Output: "found"}
+			},
+			"repo_write": func(context.Context, map[string]any) ExecutionToolResult {
+				return ExecutionToolResult{Output: "wrote"}
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new managed mcp manager: %v", err)
+	}
+
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("start manager: %v", err)
+	}
+
+	summary := manager.CapabilitySummary()
+	if len(summary.Servers) != 1 {
+		t.Fatalf("expected 1 server in capability summary, got %+v", summary)
+	}
+	if summary.Servers[0].Name != "repo" || summary.Servers[0].Health != "healthy" {
+		t.Fatalf("unexpected server summary: %+v", summary.Servers[0])
+	}
+	if summary.Servers[0].VisibleToolCount != 1 || summary.Servers[0].HiddenToolCount != 1 {
+		t.Fatalf("unexpected tool counts: %+v", summary.Servers[0])
+	}
+	if len(summary.VisibleTools) != 1 || summary.VisibleTools[0].Name != "repo_search" {
+		t.Fatalf("unexpected visible tool summary: %+v", summary.VisibleTools)
+	}
+}

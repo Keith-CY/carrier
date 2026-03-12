@@ -203,6 +203,8 @@ func (l *AgentLoop) processStructuredChat(
 			messages = append(messages, StructuredToolMessage{
 				Role:             "tool",
 				Content:          toolOutput,
+				Attachments:      cloneAttachmentRefs(result.Attachments),
+				ContentBlocks:    cloneContentBlocks(result.ContentBlocks),
 				ToolCallID:       call.ID,
 				ToolName:         strings.TrimSpace(call.Name),
 				ToolResultStatus: status,
@@ -213,6 +215,8 @@ func (l *AgentLoop) processStructuredChat(
 				l.sessions.AddStructuredToolMessage(sessionKey, StructuredToolMessage{
 					Role:             "tool",
 					Content:          toolOutput,
+					Attachments:      cloneAttachmentRefs(result.Attachments),
+					ContentBlocks:    cloneContentBlocks(result.ContentBlocks),
 					ToolCallID:       call.ID,
 					ToolName:         strings.TrimSpace(call.Name),
 					ToolResultStatus: status,

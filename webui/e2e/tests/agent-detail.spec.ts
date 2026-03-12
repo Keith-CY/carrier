@@ -26,7 +26,9 @@ test.describe('Agent Detail', () => {
     await expect.poll(() => startCalls).toBe(1);
     await expect(page.locator('#agent-detail-content')).toContainText('Agent start requested.');
 
-    await page.getByRole('button', { name: '⏹ Stop' }).evaluate((element: HTMLButtonElement) => element.click());
+    const stopButton = page.getByRole('button', { name: '⏹ Stop' });
+    await expect(stopButton).toBeEnabled();
+    await stopButton.evaluate((element: HTMLButtonElement) => element.click());
     await expect.poll(() => stopCalls).toBe(1);
     await expect(page.locator('#agent-detail-content')).toContainText('Agent stop requested.');
 

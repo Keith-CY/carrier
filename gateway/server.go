@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -753,6 +754,7 @@ func processBaseAgentChat(
 	chatID string,
 	requestID string,
 	message string,
+	attachments []baseagent.AttachmentRef,
 	daemon *DaemonClient,
 	sessions *SessionStore,
 	rl *GatewayRateLimiter,
@@ -774,18 +776,22 @@ func processBaseAgentChat(
 	sessions.Touch(provider, chatID)
 
 	actor := fmt.Sprintf("%s:%s", provider, chatID)
-	chatResult, err := daemon.ChatBaseAgent(ctx, provider, chatID, requestID, trimmed, actor)
+	chatResult, err := daemon.ChatBaseAgent(ctx, provider, chatID, requestID, trimmed, attachments, actor)
 	if err != nil {
 		return daemonErrResp(requestID, err)
 	}
 	respMessage := strings.TrimSpace(chatResult.Message)
+	if respMessage == "" && chatResult.RichContent != nil {
+		respMessage = strings.TrimSpace(chatResult.RichContent.PlainTextFallback())
+	}
 	if respMessage == "" {
 		respMessage = "base agent completed with no output"
 	}
 	return GatewayResponse{
-		RequestID: requestID,
-		Result:    "ok",
-		Message:   respMessage,
+		RequestID:   requestID,
+		Result:      "ok",
+		Message:     respMessage,
+		RichContent: chatResult.RichContent,
 	}
 }
 

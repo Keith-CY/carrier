@@ -2,6 +2,7 @@ package baseagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ const (
 	SubagentJobStatusQueued    SubagentJobStatus = "queued"
 	SubagentJobStatusRunning   SubagentJobStatus = "running"
 	SubagentJobStatusCompleted SubagentJobStatus = "completed"
+	SubagentJobStatusCancelled SubagentJobStatus = "cancelled"
 	SubagentJobStatusFailed    SubagentJobStatus = "failed"
 )
 
@@ -33,12 +35,14 @@ type SubagentExecutor func(context.Context, SubagentRequest) (string, error)
 type SubagentManager interface {
 	SubagentSpawner
 	Job(ctx context.Context, jobID string) (SubagentJob, error)
+	Cancel(ctx context.Context, jobID string) error
 }
 
 type InMemorySubagentManager struct {
 	mu       sync.RWMutex
 	next     int
 	jobs     map[string]SubagentJob
+	cancels  map[string]context.CancelFunc
 	executor SubagentExecutor
 }
 
@@ -54,6 +58,7 @@ func NewInMemorySubagentManager(executor SubagentExecutor) *InMemorySubagentMana
 	}
 	return &InMemorySubagentManager{
 		jobs:     map[string]SubagentJob{},
+		cancels:  map[string]context.CancelFunc{},
 		executor: executor,
 	}
 }
@@ -83,10 +88,15 @@ func (m *InMemorySubagentManager) Spawn(ctx context.Context, req SubagentRequest
 	m.jobs[jobID] = job
 	m.mu.Unlock()
 
-	execCtx := context.Background()
+	execBase := context.Background()
 	if ctx != nil {
-		execCtx = context.WithoutCancel(ctx)
+		execBase = context.WithoutCancel(ctx)
 	}
+	execCtx, cancel := context.WithCancel(execBase)
+
+	m.mu.Lock()
+	m.cancels[jobID] = cancel
+	m.mu.Unlock()
 	go m.runJob(execCtx, jobID, req)
 
 	return SubagentJobHandle{
@@ -122,13 +132,19 @@ func (m *InMemorySubagentManager) runJob(ctx context.Context, jobID string, req 
 	}
 	job.UpdatedAt = time.Now().UTC()
 	if err != nil {
-		job.Status = SubagentJobStatusFailed
-		job.Error = strings.TrimSpace(err.Error())
+		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+			job.Status = SubagentJobStatusCancelled
+			job.Error = "subagent job cancelled"
+		} else {
+			job.Status = SubagentJobStatusFailed
+			job.Error = strings.TrimSpace(err.Error())
+		}
 	} else {
 		job.Status = SubagentJobStatusCompleted
 		job.Result = strings.TrimSpace(result)
 	}
 	m.jobs[jobID] = job
+	delete(m.cancels, jobID)
 	m.mu.Unlock()
 }
 
@@ -148,4 +164,30 @@ func (m *InMemorySubagentManager) Job(_ context.Context, jobID string) (Subagent
 		return SubagentJob{}, fmt.Errorf("subagent job %s not found", jobID)
 	}
 	return job, nil
+}
+
+func (m *InMemorySubagentManager) Cancel(_ context.Context, jobID string) error {
+	if m == nil {
+		return fmt.Errorf("subagent manager is unavailable")
+	}
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return fmt.Errorf("job_id is required")
+	}
+
+	m.mu.RLock()
+	job, ok := m.jobs[jobID]
+	cancel := m.cancels[jobID]
+	m.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("subagent job %s not found", jobID)
+	}
+	if job.Status == SubagentJobStatusCompleted || job.Status == SubagentJobStatusFailed || job.Status == SubagentJobStatusCancelled {
+		return nil
+	}
+	if cancel == nil {
+		return fmt.Errorf("subagent job %s is not cancellable", jobID)
+	}
+	cancel()
+	return nil
 }

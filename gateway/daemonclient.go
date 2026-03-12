@@ -85,6 +85,8 @@ type AgentChatResult struct {
 	Message   string `json:"message"`
 }
 
+type AgentCapabilitySummary = baseagent.RuntimeCapabilitySummary
+
 // DaemonClientError is returned when the daemon returns a non-2xx response.
 type DaemonClientError struct {
 	Code    string
@@ -244,6 +246,18 @@ func (c *DaemonClient) GetStatus(ctx context.Context, agentID, actor, requestID 
 	return []AgentState{}, nil
 }
 
+func (c *DaemonClient) GetAgentCapabilities(ctx context.Context, agentID, actor, requestID string) (AgentCapabilitySummary, error) {
+	raw, err := c.request(ctx, http.MethodGet, "/api/v1/agents/"+url.PathEscape(agentID)+"/capabilities", nil, actor, requestID)
+	if err != nil {
+		return AgentCapabilitySummary{}, err
+	}
+	var summary AgentCapabilitySummary
+	if err := json.Unmarshal(raw, &summary); err != nil {
+		return AgentCapabilitySummary{}, fmt.Errorf("capabilities response: %w", err)
+	}
+	return summary, nil
+}
+
 // GetLogs returns agent logs.
 func (c *DaemonClient) GetLogs(ctx context.Context, agentID string, tail int, actor, requestID string) (*LogsResult, error) {
 	safeTail := tail
@@ -344,13 +358,15 @@ func (c *DaemonClient) ChatBaseAgent(
 	chatID string,
 	requestID string,
 	message string,
+	attachments []baseagent.AttachmentRef,
 	actor string,
 ) (*BaseAgentChatResult, error) {
 	body := baseagent.ChatRequest{
-		Provider:  provider,
-		ChatID:    chatID,
-		RequestID: requestID,
-		Message:   message,
+		Provider:    provider,
+		ChatID:      chatID,
+		RequestID:   requestID,
+		Message:     message,
+		Attachments: append([]baseagent.AttachmentRef(nil), attachments...),
 	}
 	raw, err := c.request(ctx, http.MethodPost, "/api/v1/base-agent/chat", body, actor, requestID)
 	if err != nil {

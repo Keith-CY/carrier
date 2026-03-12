@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"context"
 	"strings"
 )
@@ -19,6 +20,7 @@ type InboundChannelEnvelope struct {
 	Command      string
 	Args         []string
 	Text         string
+	Attachments  []baseagent.AttachmentRef
 	Kind         string
 	Metadata     map[string]string
 }
@@ -63,7 +65,7 @@ func RouteInboundChannel(
 		input = InjectSessionToken(input, envelope.SessionToken)
 		return SafeHandleCommand(ctx, input, daemon, sessions, downloads, rl, onboard)
 	case InboundEnvelopeKindChat:
-		return processBaseAgentChat(ctx, envelope.Channel, envelope.ChatID, envelope.RequestID, envelope.Text, daemon, sessions, rl)
+		return processBaseAgentChat(ctx, envelope.Channel, envelope.ChatID, envelope.RequestID, envelope.Text, envelope.Attachments, daemon, sessions, rl)
 	default:
 		return errResp(envelope.RequestID, "E_USAGE", "unsupported inbound channel envelope")
 	}
@@ -75,10 +77,11 @@ func normalizeInboundEnvelope(msg *NormalizedMessage, sessions *SessionStore, tr
 	}
 
 	envelope := &InboundChannelEnvelope{
-		Channel:   msg.Provider,
-		ChatID:    msg.ChatID,
-		RequestID: msg.RequestID,
-		Metadata:  map[string]string{"transport": transport},
+		Channel:     msg.Provider,
+		ChatID:      msg.ChatID,
+		RequestID:   msg.RequestID,
+		Attachments: append([]baseagent.AttachmentRef(nil), msg.Attachments...),
+		Metadata:    map[string]string{"transport": transport},
 	}
 	if sessions != nil {
 		if session := sessions.GetSession(msg.Provider, msg.ChatID); session != nil {

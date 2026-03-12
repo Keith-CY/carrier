@@ -31,6 +31,26 @@ test.describe('Add PicoClaw (WebUI)', () => {
       }),
     );
 
+    await page.route('**/api/v1/channels', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          channels: [
+            {
+              id: 'telegram',
+              displayName: 'Telegram',
+              supportsProviderSetup: true,
+              supportsPairing: true,
+              requiresBotToken: true,
+              requiresWebhookSecret: false,
+              configured: true,
+            },
+          ],
+        }),
+      }),
+    );
+
     await page.route('**/api/v1/providers', (route) =>
       route.fulfill({
         status: 200,

@@ -71,6 +71,7 @@ type agentChatRuntime interface {
 
 type baseAgentRuntime interface {
 	Chat(ctx context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error)
+	CapabilitySummary(ctx context.Context) baseagent.RuntimeCapabilitySummary
 	RespondPendingApproval(ctx context.Context, sessionKey, approvalID string, decision baseagent.ApprovalDecision) (baseagent.ChatResponse, error)
 	ScheduleJob(ctx context.Context, job baseagent.CronJob) (baseagent.CronJob, error)
 }
@@ -410,6 +411,18 @@ func buildHTTPMuxWithBaseAgent(
 			return
 		}
 		writeJSON(w, http.StatusOK, resp)
+	})
+
+	register("/api/base-agent/capabilities", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if baseRuntime == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime is unavailable")
+			return
+		}
+		writeJSON(w, http.StatusOK, baseRuntime.CapabilitySummary(r.Context()))
 	})
 
 	register("/api/base-agent/approvals/consume", func(w http.ResponseWriter, r *http.Request) {
@@ -1089,6 +1102,8 @@ func buildHTTPMuxWithBaseAgent(
 			handleDiagnose(svc, agentID, w, r)
 		case "chat":
 			handleAgentChat(svc, baseRuntime, agentID, w, r)
+		case "capabilities":
+			handleAgentCapabilities(svc, baseRuntime, agentID, w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -1482,6 +1497,22 @@ func handleStatus(svc *lifecycle.Service, agentID string, w http.ResponseWriter,
 	writeJSON(w, http.StatusOK, state)
 }
 
+func handleAgentCapabilities(svc *lifecycle.Service, runtime baseAgentRuntime, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
+		return
+	}
+	if _, err := svc.Status(agentID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, runtime.CapabilitySummary(r.Context()))
+}
+
 func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID string, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1492,11 +1523,12 @@ func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID s
 		return
 	}
 	var body struct {
-		Provider  string `json:"provider"`
-		ChatID    string `json:"chatId"`
-		RequestID string `json:"requestId"`
-		SessionID string `json:"sessionId"`
-		Message   string `json:"message"`
+		Provider    string                    `json:"provider"`
+		ChatID      string                    `json:"chatId"`
+		RequestID   string                    `json:"requestId"`
+		SessionID   string                    `json:"sessionId"`
+		Message     string                    `json:"message"`
+		Attachments []baseagent.AttachmentRef `json:"attachments,omitempty"`
 	}
 	if !decodeBody(w, r, &body) {
 		return
@@ -1531,10 +1563,11 @@ func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID s
 		return
 	}
 	resp, err := runtime.Chat(r.Context(), baseagent.ChatRequest{
-		Provider:  strings.TrimSpace(body.Provider),
-		ChatID:    chatID,
-		RequestID: strings.TrimSpace(body.RequestID),
-		Message:   message,
+		Provider:    strings.TrimSpace(body.Provider),
+		ChatID:      chatID,
+		RequestID:   strings.TrimSpace(body.RequestID),
+		Message:     message,
+		Attachments: body.Attachments,
 	})
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())

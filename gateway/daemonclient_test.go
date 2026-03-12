@@ -253,6 +253,37 @@ func TestDaemonClient_GetStatus_AllAgents(t *testing.T) {
 	}
 }
 
+func TestDaemonClient_GetAgentCapabilities(t *testing.T) {
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents/a1/capabilities" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+			"skills": []map[string]interface{}{
+				{"name": "go-testing", "enabled": true},
+			},
+			"mcp": map[string]interface{}{
+				"servers": []map[string]interface{}{
+					{"name": "repo", "health": "healthy"},
+				},
+			},
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	summary, err := dc.GetAgentCapabilities(context.Background(), "a1", "actor", "req")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(summary.Skills) != 1 || summary.Skills[0].Name != "go-testing" {
+		t.Fatalf("unexpected capabilities: %+v", summary)
+	}
+}
+
 func TestDaemonClient_GetLogs(t *testing.T) {
 	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewEncoder(w).Encode(map[string]interface{}{
@@ -735,7 +766,7 @@ func TestDaemonClient_UpgradeDiagnoseAndChatParseErrors(t *testing.T) {
 			name: "chat parse error",
 			path: "/api/v1/base-agent/chat",
 			run: func(c *DaemonClient) error {
-				_, err := c.ChatBaseAgent(context.Background(), "openai", "chat-1", "req", "hello", "actor")
+				_, err := c.ChatBaseAgent(context.Background(), "openai", "chat-1", "req", "hello", nil, "actor")
 				return err
 			},
 			want: "base-agent chat response",

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -13,6 +14,15 @@ type fakeTelegramAPI struct {
 	getInfoCalls    int
 	deleteCalls     int
 	setCmdCalls     int
+	sendMessageCalls int
+	sendPhotoCalls   int
+	sendDocumentCalls int
+
+	lastSendMessageText string
+	lastSendPhotoRef    string
+	lastSendPhotoCaption string
+	lastSendDocumentRef string
+	lastSendDocumentCaption string
 
 	setWebhookErr error
 	getInfoErr    error
@@ -44,6 +54,21 @@ func (f *fakeTelegramAPI) GetUpdates(_ context.Context, _ int64, _ int) ([]map[s
 }
 
 func (f *fakeTelegramAPI) SendMessage(_ context.Context, _ string, _ string, _ bool) error {
+	f.sendMessageCalls++
+	return nil
+}
+
+func (f *fakeTelegramAPI) SendPhoto(_ context.Context, _ string, photo string, caption string) error {
+	f.sendPhotoCalls++
+	f.lastSendPhotoRef = photo
+	f.lastSendPhotoCaption = caption
+	return nil
+}
+
+func (f *fakeTelegramAPI) SendDocument(_ context.Context, _ string, document string, caption string) error {
+	f.sendDocumentCalls++
+	f.lastSendDocumentRef = document
+	f.lastSendDocumentCaption = caption
 	return nil
 }
 
@@ -322,6 +347,55 @@ func TestResolveTelegramTransportMode_WebhookSetupAndVerifyErrors(t *testing.T) 
 			t.Fatalf("expected mismatch error, got %v", err)
 		}
 	})
+}
+
+func TestTelegramSendRenderedAttachment_PrefersDocument(t *testing.T) {
+	api := &fakeTelegramAPI{}
+	resp := GatewayResponse{
+		Result: "ok",
+		Message: "download complete",
+		RichContent: &baseagent.RichOutboundMessage{
+			Text: "download complete",
+			Attachments: []baseagent.AttachmentRef{
+				{Kind: "document", ExternalID: "tg-file-1", Name: "report.pdf"},
+			},
+		},
+	}
+
+	if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+		t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+	}
+	if api.sendDocumentCalls != 1 || api.lastSendDocumentRef != "tg-file-1" {
+		t.Fatalf("expected sendDocument with tg-file-1, got calls=%d ref=%q", api.sendDocumentCalls, api.lastSendDocumentRef)
+	}
+	if api.sendMessageCalls != 0 {
+		t.Fatalf("expected no text fallback send, got %d", api.sendMessageCalls)
+	}
+}
+
+func TestTelegramSendRenderedAttachment_FallsBackToTextForUnsupportedAttachment(t *testing.T) {
+	api := &fakeTelegramAPI{}
+	resp := GatewayResponse{
+		Result: "ok",
+		RichContent: &baseagent.RichOutboundMessage{
+			Blocks: []baseagent.ContentBlock{
+				{Type: "audio", Text: "voice note"},
+			},
+			Attachments: []baseagent.AttachmentRef{
+				{Kind: "audio", Name: "voice.ogg"},
+			},
+		},
+	}
+
+	if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+		t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+	}
+	if api.sendMessageCalls != 1 {
+		t.Fatalf("expected text fallback send, got %d", api.sendMessageCalls)
+	}
+	if api.sendPhotoCalls != 0 || api.sendDocumentCalls != 0 {
+		t.Fatalf("expected unsupported attachment to avoid rich media send, got photo=%d document=%d", api.sendPhotoCalls, api.sendDocumentCalls)
+	}
 }
 
 func TestTelegramBotAPI_MethodWrappers(t *testing.T) {

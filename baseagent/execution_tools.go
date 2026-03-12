@@ -33,16 +33,18 @@ const (
 )
 
 type ExecutionToolResult struct {
-	Output       string
-	FilesTouched []string
-	Stdout       string
-	Stderr       string
-	ExitCode     int
-	IsError      bool
-	Status       ExecutionToolResultStatus
-	PolicyReason string
-	PolicyRuleID string
-	Metadata     map[string]any
+	Output        string
+	Attachments   []AttachmentRef
+	ContentBlocks []ContentBlock
+	FilesTouched  []string
+	Stdout        string
+	Stderr        string
+	ExitCode      int
+	IsError       bool
+	Status        ExecutionToolResultStatus
+	PolicyReason  string
+	PolicyRuleID  string
+	Metadata      map[string]any
 }
 
 type WebSearchHit struct {
@@ -51,11 +53,7 @@ type WebSearchHit struct {
 	Snippet string
 }
 
-type ExecutionAttachment struct {
-	Path      string
-	Name      string
-	SizeBytes int64
-}
+type ExecutionAttachment = AttachmentRef
 
 type SubagentRequest struct {
 	Task string
@@ -661,12 +659,23 @@ func (r *ExecutionToolRegistry) sendFile(_ context.Context, args map[string]any)
 		return executionError("path must point to a file")
 	}
 	attachment := ExecutionAttachment{
+		Kind:      "file",
 		Path:      resolved,
 		Name:      info.Name(),
 		SizeBytes: info.Size(),
+		Source:    "workspace",
 	}
 	return ExecutionToolResult{
-		Output: fmt.Sprintf("prepared attachment %s (%d bytes)", attachment.Name, attachment.SizeBytes),
+		Output:      fmt.Sprintf("prepared attachment %s (%d bytes)", attachment.Name, attachment.SizeBytes),
+		Attachments: []AttachmentRef{attachment},
+		ContentBlocks: []ContentBlock{
+			{
+				Type:      "file",
+				Name:      attachment.Name,
+				Path:      attachment.Path,
+				SizeBytes: attachment.SizeBytes,
+			},
+		},
 		Metadata: map[string]any{
 			"attachment": attachment,
 		},
@@ -696,7 +705,10 @@ func (r *ExecutionToolRegistry) spawnSubagent(ctx context.Context, args map[stri
 	return ExecutionToolResult{
 		Output: output,
 		Metadata: map[string]any{
-			"delegation": handle,
+			"delegation":  handle,
+			"job_id":      strings.TrimSpace(handle.JobID),
+			"job_status":  status,
+			"job_summary": strings.TrimSpace(handle.Summary),
 		},
 	}
 }

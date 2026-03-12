@@ -11,6 +11,7 @@ import (
 type MCPManager interface {
 	ListStructuredTools() []StructuredToolDescriptor
 	ExecuteTool(ctx context.Context, name string, args map[string]any) ExecutionToolResult
+	CapabilitySummary() MCPCapabilitySummary
 }
 
 type staticMCPTool struct {
@@ -77,6 +78,32 @@ func (m *StaticMCPManager) ExecuteTool(ctx context.Context, name string, args ma
 		return executionError("unknown mcp tool")
 	}
 	return tool.run(ctx, args)
+}
+
+func (m *StaticMCPManager) CapabilitySummary() MCPCapabilitySummary {
+	if m == nil {
+		return MCPCapabilitySummary{}
+	}
+	visible := m.ListStructuredTools()
+	summary := MCPCapabilitySummary{
+		Servers: []MCPServerCapability{
+			{
+				Name:             "static",
+				Health:           "healthy",
+				VisibleToolCount: len(visible),
+				HiddenToolCount:  0,
+			},
+		},
+		VisibleTools: make([]MCPToolCapability, 0, len(visible)),
+	}
+	for _, tool := range visible {
+		summary.VisibleTools = append(summary.VisibleTools, MCPToolCapability{
+			Name:        tool.Name,
+			Description: tool.Description,
+		})
+	}
+	sortMCPCapabilitySummary(&summary)
+	return summary
 }
 
 type MCPServerHooks struct {
@@ -250,4 +277,44 @@ func (m *ManagedMCPManager) SortedVisibleToolNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func (m *ManagedMCPManager) CapabilitySummary() MCPCapabilitySummary {
+	if m == nil {
+		return MCPCapabilitySummary{}
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	summary := MCPCapabilitySummary{
+		Servers:      make([]MCPServerCapability, 0, len(m.serverOrder)),
+		VisibleTools: []MCPToolCapability{},
+	}
+	for _, serverName := range m.serverOrder {
+		serverSummary := MCPServerCapability{
+			Name:   serverName,
+			Health: "stopped",
+		}
+		if m.serverState[serverName] {
+			serverSummary.Health = "healthy"
+		}
+		for _, toolName := range m.toolOrder {
+			tool := m.tools[toolName]
+			if tool.serverName != serverName {
+				continue
+			}
+			if tool.config.Hidden {
+				serverSummary.HiddenToolCount++
+				continue
+			}
+			serverSummary.VisibleToolCount++
+			summary.VisibleTools = append(summary.VisibleTools, MCPToolCapability{
+				Name:        tool.descriptor.Name,
+				Description: tool.descriptor.Description,
+			})
+		}
+		summary.Servers = append(summary.Servers, serverSummary)
+	}
+	sortMCPCapabilitySummary(&summary)
+	return summary
 }

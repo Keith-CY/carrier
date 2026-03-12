@@ -315,6 +315,54 @@ func TestHandleWebUIAgent_Branches(t *testing.T) {
 		}
 	})
 
+	t.Run("capabilities action", func(t *testing.T) {
+		_, daemonErr, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+			"GET /api/v1/agents/picoclaw/capabilities": func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"error": map[string]string{"code": "E_COMMAND_FAILED", "message": "boom"},
+				})
+			},
+		})
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/capabilities", nil)
+		handleWebUIAgent(rec, req, "req-capabilities-method", daemonErr)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("expected 405, got %d", rec.Code)
+		}
+
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/agents/picoclaw/capabilities", nil)
+		handleWebUIAgent(rec, req, "req-capabilities-daemon-error", daemonErr)
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("expected 502, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		_, daemonOK, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+			"GET /api/v1/agents/picoclaw/capabilities": func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"skills": []map[string]interface{}{
+						{"name": "go-testing", "enabled": true},
+					},
+					"mcp": map[string]interface{}{
+						"servers": []map[string]interface{}{
+							{"name": "repo", "health": "healthy", "visibleToolCount": 1},
+						},
+					},
+				})
+			},
+		})
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/agents/picoclaw/capabilities", nil)
+		handleWebUIAgent(rec, req, "req-capabilities-ok", daemonOK)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"go-testing"`) {
+			t.Fatalf("expected capability payload, got %s", rec.Body.String())
+		}
+	})
+
 	t.Run("unsupported action", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/picoclaw/unknown", nil)

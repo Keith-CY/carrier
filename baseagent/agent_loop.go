@@ -87,10 +87,11 @@ func (l *AgentLoop) ProcessChat(ctx context.Context, req ChatRequest) (ChatRespo
 	sessionKey := resolveSessionKey(channel, chatID)
 
 	l.bus.PublishInbound(InboundEnvelope{
-		Channel:    channel,
-		ChatID:     chatID,
-		Content:    message,
-		SessionKey: sessionKey,
+		Channel:     channel,
+		ChatID:      chatID,
+		Content:     message,
+		Attachments: cloneAttachmentRefs(req.Attachments),
+		SessionKey:  sessionKey,
 		Metadata: map[string]string{
 			"request_id": requestID,
 		},
@@ -239,6 +240,14 @@ func isApprovalRejection(message string) bool {
 }
 
 func (l *AgentLoop) finalizeResponse(sessionKey, channel, chatID, requestID string, resp ChatResponse) ChatResponse {
+	if resp.RichContent != nil {
+		if strings.TrimSpace(resp.RichContent.Text) == "" {
+			resp.RichContent.Text = strings.TrimSpace(resp.Message)
+		}
+		if strings.TrimSpace(resp.Message) == "" {
+			resp.Message = strings.TrimSpace(resp.RichContent.PlainTextFallback())
+		}
+	}
 	if strings.TrimSpace(resp.Message) == "" {
 		resp.Message = "Done."
 	}
@@ -246,9 +255,10 @@ func (l *AgentLoop) finalizeResponse(sessionKey, channel, chatID, requestID stri
 
 	if !isInternalChannelName(channel) {
 		l.bus.PublishOutbound(OutboundEnvelope{
-			Channel: channel,
-			ChatID:  chatID,
-			Content: resp.Message,
+			Channel:     channel,
+			ChatID:      chatID,
+			Content:     resp.Message,
+			RichContent: resp.RichContent,
 			Metadata: map[string]string{
 				"request_id": requestID,
 				"action":     strings.TrimSpace(resp.Action),

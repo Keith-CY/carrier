@@ -29,17 +29,19 @@ func mustRegisterProvider(pm *ProviderManager, provider Provider) {
 }
 
 type ChatRequest struct {
-	Provider  string `json:"provider"`
-	ChatID    string `json:"chatId"`
-	RequestID string `json:"requestId"`
-	Message   string `json:"message"`
+	Provider    string          `json:"provider"`
+	ChatID      string          `json:"chatId"`
+	RequestID   string          `json:"requestId"`
+	Message     string          `json:"message"`
+	Attachments []AttachmentRef `json:"attachments,omitempty"`
 }
 
 type ChatResponse struct {
-	Message    string `json:"message"`
-	Action     string `json:"action,omitempty"`
-	SelfHealed bool   `json:"selfHealed,omitempty"`
-	BackupRef  string `json:"backupRef,omitempty"`
+	Message     string               `json:"message"`
+	RichContent *RichOutboundMessage `json:"richContent,omitempty"`
+	Action      string               `json:"action,omitempty"`
+	SelfHealed  bool                 `json:"selfHealed,omitempty"`
+	BackupRef   string               `json:"backupRef,omitempty"`
 }
 
 type AgentState struct {
@@ -88,6 +90,7 @@ type Runtime struct {
 	structuredToolPolicyOverride *StructuredToolPolicySpec
 	mcpManager                   MCPManager
 	skillsLoader                 SkillsLoader
+	mediaRuntime                 MediaRuntime
 	webBackend                   WebToolBackend
 	subagentSpawner              SubagentSpawner
 	subagentManager              SubagentManager
@@ -250,6 +253,14 @@ func (r *Runtime) StopMCP(ctx context.Context) error {
 }
 
 func (r *Runtime) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+	preparedReq, boundedResp, err := r.prepareMediaRequest(ctx, req)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	if boundedResp != nil {
+		return *boundedResp, nil
+	}
+	req = preparedReq
 	msg := strings.TrimSpace(req.Message)
 	if msg == "" {
 		return ChatResponse{Message: baseAgentHelpText()}, nil
