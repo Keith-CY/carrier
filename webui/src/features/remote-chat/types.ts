@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from 'react';
 
-export type RemoteChatMessage = {
+type RemoteChatMessage = {
   id: string;
   role: 'user' | 'assistant' | 'system';
   text: string;
