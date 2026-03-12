@@ -33,6 +33,7 @@ type providerProfilePatch struct {
 }
 
 var remoteControlStoreMu sync.Mutex
+var writeRemoteControlStoreFile = os.WriteFile
 
 func remoteControlStorePath() (string, error) {
 	if custom := strings.TrimSpace(os.Getenv("CARRIER_REMOTE_CONTROL_STORE")); custom != "" {
@@ -111,7 +112,7 @@ func saveRemoteControlState(path string, state *remoteControlState) error {
 	if err != nil {
 		return fmt.Errorf("marshal remote control store: %w", err)
 	}
-	if err := os.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
+	if err := writeRemoteControlStoreFile(path, append(raw, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write remote control store: %w", err)
 	}
 	return nil
