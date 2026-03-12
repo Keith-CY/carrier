@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import { useRemoteChatStatus } from './useRemoteChatStatus';
 import { useRemoteChatTargetData } from './useRemoteChatTargetData';
 import { useRemoteChatStream } from './useRemoteChatStream';
-import type { RemoteChatData, RemoteChatStatusType } from './types';
+import type { RemoteChatData } from './types';
 
 export function useRemoteChatData() {
   const statusState = useRemoteChatStatus();

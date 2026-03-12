@@ -1,6 +1,5 @@
 import { apiGet } from '../../lib/api';
 import {
-  formatConfigText,
   formatInstanceStatus,
   formatInstances,
   formatLogs,
