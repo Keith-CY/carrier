@@ -1,7 +1,9 @@
 package baseagent
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -24,6 +26,15 @@ func (f *mediaRuntimeFake) Transcribe(_ context.Context, attachment AttachmentRe
 		return "", f.err
 	}
 	return f.transcription, nil
+}
+
+func mediaAnyToString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	default:
+		return ""
+	}
 }
 
 func TestMediaRuntimeUnsupportedWithoutRuntime(t *testing.T) {
@@ -200,5 +211,126 @@ func TestOpenAICompatibleMediaRuntimeTranscribePostsMultipartRequest(t *testing.
 	}
 	if string(seenBytes) != "OggS" {
 		t.Fatalf("file bytes=%q want OggS", string(seenBytes))
+	}
+}
+
+func TestOpenAICompatibleChatMediaRuntimeTranscribePostsInputAudioRequest(t *testing.T) {
+	audioDir := t.TempDir()
+	audioPath := filepath.Join(audioDir, "voice.wav")
+	if err := os.WriteFile(audioPath, []byte("RIFFdemoWAVE"), 0o600); err != nil {
+		t.Fatalf("write audio fixture: %v", err)
+	}
+
+	var seenAuth string
+	var seenModel string
+	var seenPrompt string
+	var seenAudioData string
+	var seenAudioFormat string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("path=%q want /chat/completions", r.URL.Path)
+		}
+		seenAuth = r.Header.Get("Authorization")
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		seenModel = strings.TrimSpace(mediaAnyToString(body["model"]))
+		messages, ok := body["messages"].([]any)
+		if !ok || len(messages) != 1 {
+			t.Fatalf("messages=%#v", body["messages"])
+		}
+		first, ok := messages[0].(map[string]any)
+		if !ok {
+			t.Fatalf("first message=%#v", messages[0])
+		}
+		content, ok := first["content"].([]any)
+		if !ok || len(content) != 2 {
+			t.Fatalf("content=%#v", first["content"])
+		}
+		textBlock, ok := content[0].(map[string]any)
+		if !ok {
+			t.Fatalf("text block=%#v", content[0])
+		}
+		seenPrompt = strings.TrimSpace(mediaAnyToString(textBlock["text"]))
+		audioBlock, ok := content[1].(map[string]any)
+		if !ok {
+			t.Fatalf("audio block=%#v", content[1])
+		}
+		inputAudio, ok := audioBlock["input_audio"].(map[string]any)
+		if !ok {
+			t.Fatalf("input_audio=%#v", audioBlock["input_audio"])
+		}
+		seenAudioData = strings.TrimSpace(mediaAnyToString(inputAudio["data"]))
+		seenAudioFormat = strings.TrimSpace(mediaAnyToString(inputAudio["format"]))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{
+				map[string]any{
+					"message": map[string]any{
+						"content": "transcribed via chat completions",
+					},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	runtime := NewOpenAICompatibleChatMediaRuntime(OpenAICompatibleChatMediaRuntimeConfig{
+		BaseURL: srv.URL,
+		Token:   "TOKEN",
+		Model:   "google/gemini-2.0-flash-001",
+		Client:  srv.Client(),
+	})
+
+	text, err := runtime.Transcribe(context.Background(), AttachmentRef{
+		Kind:      "audio",
+		Name:      "voice.wav",
+		Path:      audioPath,
+		MediaType: "audio/wav",
+	})
+	if err != nil {
+		t.Fatalf("Transcribe error: %v", err)
+	}
+	if text != "transcribed via chat completions" {
+		t.Fatalf("text=%q want transcribed via chat completions", text)
+	}
+	if seenAuth != "Bearer TOKEN" {
+		t.Fatalf("Authorization=%q want Bearer TOKEN", seenAuth)
+	}
+	if seenModel != "google/gemini-2.0-flash-001" {
+		t.Fatalf("model=%q want google/gemini-2.0-flash-001", seenModel)
+	}
+	if seenPrompt == "" || !strings.Contains(strings.ToLower(seenPrompt), "transcribe") {
+		t.Fatalf("prompt=%q want transcription instruction", seenPrompt)
+	}
+	if seenAudioFormat != "wav" {
+		t.Fatalf("format=%q want wav", seenAudioFormat)
+	}
+	gotBytes, err := base64.StdEncoding.DecodeString(seenAudioData)
+	if err != nil {
+		t.Fatalf("decode audio data: %v", err)
+	}
+	if !bytes.Equal(gotBytes, []byte("RIFFdemoWAVE")) {
+		t.Fatalf("audio bytes=%q want RIFFdemoWAVE", string(gotBytes))
+	}
+}
+
+func TestNewConfiguredMediaRuntimeUsesChatCompletionsForOpenRouter(t *testing.T) {
+	writeDefaultModelConfigWithBaseURL(t, "openrouter", "openrouter/google/gemini-2.0-flash-001", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1")
+	t.Setenv("OPENROUTER_API_KEY", "sk-openrouter")
+	t.Setenv("CARRIER_TRANSCRIPTION_PROVIDER", "openrouter")
+
+	runtime := NewConfiguredMediaRuntime()
+	if runtime == nil {
+		t.Fatal("expected configured media runtime")
+	}
+	typed, ok := runtime.(*openAICompatibleChatMediaRuntime)
+	if !ok {
+		t.Fatalf("runtime type = %T, want *openAICompatibleChatMediaRuntime", runtime)
+	}
+	if typed.model != "openrouter/healer-alpha" {
+		t.Fatalf("runtime model = %q, want %q", typed.model, "openrouter/healer-alpha")
 	}
 }

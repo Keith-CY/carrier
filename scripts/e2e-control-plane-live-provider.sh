@@ -14,6 +14,8 @@ Environment:
   CARRIER_LIVE_API_KEY    Required provider credential.
   CARRIER_LIVE_MODEL      Optional model label for audit/profile metadata.
   CARRIER_LIVE_BASE_URL   Optional provider base URL for profile metadata.
+  CARRIER_LIVE_TRANSCRIPTION_MODEL Optional transcription model override for media smoke.
+  CARRIER_LIVE_REQUIRE_TRANSCRIPTION When set to 1, fail if live transcription cannot run.
   CARRIER_E2E_STATE_DIR   Optional persistent state root. When set, Carrier's HOME, Lima cache,
                           and managed-instance records are reused across runs, while each run still
                           writes logs/artifacts into a fresh subdirectory under <state>/runs/.
@@ -21,12 +23,14 @@ Environment:
   CARRIER_E2E_GATEWAY_PORT Optional gateway port. Default: 8787
 
 What this script verifies:
-  1) real local daemon + gateway boot
-  2) real provider onboarding into Carrier config/credential store
+  1) real provider onboarding into Carrier config/credential store
+  2) real local daemon + gateway boot
   3) real isolation install/start for zeroclaw
-  4) real execution completion through orchestrator
-  5) real memory contract/provenance + evidence/audit export
-  6) real CLI derived execution flows (rerun/clone)
+  4) real launcher/run/heartbeat/cron surfaces
+  5) real media transcription through a live provider
+  6) real execution completion through orchestrator
+  7) real memory contract/provenance + evidence/audit export
+  8) real CLI derived execution flows (rerun/clone)
 EOF
 }
 
@@ -41,6 +45,17 @@ require_cmd() {
     echo "error: required command not found: $cmd" >&2
     exit 1
   fi
+}
+
+transcription_skip_allowed() {
+  local message="$1"
+  if printf '%s' "$message" | grep -qi 'No endpoints found that support input audio'; then
+    return 0
+  fi
+  if printf '%s' "$message" | grep -qi 'in balance for audio'; then
+    return 0
+  fi
+  return 1
 }
 
 wait_for_http_ok() {
@@ -157,6 +172,8 @@ PROVIDER="$(printf '%s' "${CARRIER_LIVE_PROVIDER:-openrouter}" | tr '[:upper:]' 
 API_KEY="$(printf '%s' "${CARRIER_LIVE_API_KEY:-}" | xargs)"
 MODEL="$(printf '%s' "${CARRIER_LIVE_MODEL:-}" | xargs)"
 BASE_URL="$(printf '%s' "${CARRIER_LIVE_BASE_URL:-}" | xargs)"
+TRANSCRIPTION_MODEL="$(printf '%s' "${CARRIER_LIVE_TRANSCRIPTION_MODEL:-}" | xargs)"
+REQUIRE_TRANSCRIPTION="$(printf '%s' "${CARRIER_LIVE_REQUIRE_TRANSCRIPTION:-}" | xargs)"
 STATE_ROOT="$(printf '%s' "${CARRIER_E2E_STATE_DIR:-}" | xargs)"
 DAEMON_PORT="$(printf '%s' "${CARRIER_E2E_DAEMON_PORT:-}" | xargs)"
 GATEWAY_PORT="$(printf '%s' "${CARRIER_E2E_GATEWAY_PORT:-}" | xargs)"
@@ -230,12 +247,14 @@ LAUNCHER_JSON="${TMP_DIR}/agent-launcher.json"
 LAUNCHER_CRON_JSON="${TMP_DIR}/agent-launcher-after-cron.json"
 HEARTBEAT_JSON="${TMP_DIR}/agent-heartbeat.json"
 AGENT_RUN_JSON="${TMP_DIR}/agent-run.json"
+AGENT_TRANSCRIPTION_JSON="${TMP_DIR}/agent-transcription.json"
 AGENT_CRON_SCHEDULE_JSON="${TMP_DIR}/agent-cron-schedule.json"
 AGENT_CRON_LIST_JSON="${TMP_DIR}/agent-cron-list.json"
 AGENT_CRON_CANCEL_JSON="${TMP_DIR}/agent-cron-cancel.json"
 RERUN_JSON="${TMP_DIR}/rerun.json"
 CLONE_JSON="${TMP_DIR}/clone.json"
 EVIDENCE_ZIP="${TMP_DIR}/execution-evidence.zip"
+TRANSCRIPTION_AUDIO_FIXTURE="${ROOT_DIR}/scripts/testdata/transcription-smoke.wav"
 
 export HOME="$HOME_DIR"
 export CARRIER_CONFIG="${TMP_DIR}/config.v2.json"
@@ -255,6 +274,10 @@ export CARRIER_GATEWAY_PORT="${GATEWAY_PORT}"
 export CARRIER_DAEMON_BASE_URL="http://127.0.0.1:${DAEMON_PORT}"
 export CARRIER_SERVER_API_TOKEN=""
 export CARRIER_GATEWAY_API_TOKEN=""
+export CARRIER_TRANSCRIPTION_PROVIDER="${PROVIDER}"
+if [[ -n "$TRANSCRIPTION_MODEL" ]]; then
+  export CARRIER_TRANSCRIPTION_MODEL="${TRANSCRIPTION_MODEL}"
+fi
 export "${PROVIDER_ENV_VAR}=${API_KEY}"
 
 cleanup() {
@@ -285,25 +308,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "[1/9] build carrier binary"
+echo "[1/10] build carrier binary"
 (
   cd "$ROOT_DIR"
   go build -o "$BIN_PATH" ./cmd/carrier
 )
 
-echo "[2/9] start daemon + gateway"
-echo "  daemon_port=${DAEMON_PORT} gateway_port=${GATEWAY_PORT}"
-"$BIN_PATH" daemon >"$DAEMON_LOG" 2>&1 &
-DAEMON_PID=$!
-"$BIN_PATH" gateway >"$GATEWAY_LOG" 2>&1 &
-GATEWAY_PID=$!
-
-wait_for_http_ok "http://127.0.0.1:${DAEMON_PORT}/readyz" "daemon"
-wait_for_http_ok "http://127.0.0.1:${GATEWAY_PORT}/healthz" "gateway"
-
-"$BIN_PATH" stop zeroclaw >/dev/null 2>&1 || true
-
-echo "[3/9] onboard live provider (${PROVIDER}) in WebUI-only mode"
+echo "[2/10] onboard live provider (${PROVIDER}) in WebUI-only mode"
 printf '\n%s\n%s\n' "$PROVIDER" "$API_KEY" | "$BIN_PATH" onboard >"$ONBOARD_LOG" 2>&1
 
 if [[ -n "$MODEL" || -n "$BASE_URL" ]]; then
@@ -341,7 +352,24 @@ jq -e \
     ($base_url == "" or .model_list[0].base_url == $base_url)
   ' "$CARRIER_CONFIG" >/dev/null
 
-echo "[4/9] install local zeroclaw with isolation"
+if [[ ! -f "$TRANSCRIPTION_AUDIO_FIXTURE" ]]; then
+  echo "error: missing transcription audio fixture: ${TRANSCRIPTION_AUDIO_FIXTURE}" >&2
+  exit 1
+fi
+
+echo "[3/10] start daemon + gateway"
+echo "  daemon_port=${DAEMON_PORT} gateway_port=${GATEWAY_PORT}"
+"$BIN_PATH" daemon >"$DAEMON_LOG" 2>&1 &
+DAEMON_PID=$!
+"$BIN_PATH" gateway >"$GATEWAY_LOG" 2>&1 &
+GATEWAY_PID=$!
+
+wait_for_http_ok "http://127.0.0.1:${DAEMON_PORT}/readyz" "daemon"
+wait_for_http_ok "http://127.0.0.1:${GATEWAY_PORT}/healthz" "gateway"
+
+"$BIN_PATH" stop zeroclaw >/dev/null 2>&1 || true
+
+echo "[4/10] install local zeroclaw with isolation"
 printf '\n\n' | "$BIN_PATH" add zeroclaw --isolation >"$ADD_LOG" 2>&1
 
 ZERO_INSTANCE_ID="$(jq -r '.instances | map(select((.agent_id // .agentId // .agentID // .type // "") == "zeroclaw")) | first | .id // empty' "$CARRIER_INSTANCE_STORE")"
@@ -355,7 +383,7 @@ if [[ -n "$ZERO_GATEWAY_PORT" && "$ZERO_GATEWAY_PORT" != "null" ]]; then
   wait_for_http_ok "http://127.0.0.1:${ZERO_GATEWAY_PORT}/health" "zeroclaw gateway" 60
 fi
 
-echo "[5/9] validate standalone managed-agent launcher/run/heartbeat/cron surfaces"
+echo "[5/10] validate standalone managed-agent launcher/run/heartbeat/cron surfaces"
 capture_json_output "$LAUNCHER_JSON" "$BIN_PATH" agent launcher zeroclaw --json
 jq -e --arg provider "$PROVIDER" '
   (.agentId == "zeroclaw") and
@@ -405,13 +433,71 @@ jq -e --arg job_id "$AGENT_CRON_JOB_ID" '
 capture_json_output "$AGENT_CRON_CANCEL_JSON" "$BIN_PATH" agent cron cancel zeroclaw "$AGENT_CRON_JOB_ID" --json
 jq -e '.lastResult == "cancelled"' "$AGENT_CRON_CANCEL_JSON" >/dev/null
 
-echo "[6/9] attach/distill memory against the real instance"
+echo "[6/10] transcribe a real audio fixture through the live provider"
+curl -fsS -X POST \
+  -H 'Content-Type: application/json' \
+  "http://127.0.0.1:${DAEMON_PORT}/api/v1/agents/picoclaw/chat" \
+  --data @- >"$AGENT_TRANSCRIPTION_JSON" <<EOF
+{
+  "provider": "${PROVIDER}",
+  "chatId": "live-media-transcription",
+  "requestId": "live-media-transcription",
+  "message": "Transcribe the attached audio and reply with only the transcription text.",
+  "attachments": [
+    {
+      "kind": "audio",
+      "name": "transcription-smoke.wav",
+      "path": "${TRANSCRIPTION_AUDIO_FIXTURE}",
+      "mediaType": "audio/wav",
+      "externalId": "live-audio-smoke"
+    }
+  ]
+}
+EOF
+if ! jq -e '(.agentId == "picoclaw") and (.message | type == "string" and length > 0)' "$AGENT_TRANSCRIPTION_JSON" >/dev/null; then
+  echo "error: live transcription returned malformed payload" >&2
+  cat "$AGENT_TRANSCRIPTION_JSON" >&2
+  exit 1
+fi
+TRANSCRIPTION_OUTPUT="$(jq -r '.message // ""' "$AGENT_TRANSCRIPTION_JSON")"
+TRANSCRIPTION_ACTION="$(jq -r '.action // ""' "$AGENT_TRANSCRIPTION_JSON")"
+if [[ -z "$TRANSCRIPTION_OUTPUT" ]]; then
+  echo "error: live transcription returned empty output" >&2
+  cat "$AGENT_TRANSCRIPTION_JSON" >&2
+  exit 1
+fi
+TRANSCRIPTION_STATUS="passed"
+if [[ -n "$TRANSCRIPTION_ACTION" ]]; then
+  if transcription_skip_allowed "$TRANSCRIPTION_OUTPUT"; then
+    if [[ "$REQUIRE_TRANSCRIPTION" == "1" ]]; then
+      echo "error: live transcription is unavailable for the configured provider/model and strict mode is enabled" >&2
+      printf '%s\n' "$TRANSCRIPTION_OUTPUT" >&2
+      exit 1
+    fi
+    TRANSCRIPTION_STATUS="skipped"
+    echo "  transcription skipped: ${TRANSCRIPTION_OUTPUT}"
+  else
+    echo "error: live transcription returned unsupported action unexpectedly" >&2
+    cat "$AGENT_TRANSCRIPTION_JSON" >&2
+    exit 1
+  fi
+else
+  for expected_token in carrier transcription smoke works; do
+    if ! printf '%s' "$TRANSCRIPTION_OUTPUT" | grep -qi "$expected_token"; then
+      echo "error: live transcription output missing token: ${expected_token}" >&2
+      printf '%s\n' "$TRANSCRIPTION_OUTPUT" >&2
+      exit 1
+    fi
+  done
+fi
+
+echo "[7/10] attach/distill memory against the real instance"
 "$BIN_PATH" memory attach --instance "$ZERO_INSTANCE_ID" --scope shared:incident-response >/dev/null
 "$BIN_PATH" memory attach --instance "$ZERO_INSTANCE_ID" --scope shared:service-catalog >/dev/null
 capture_json_output "$DISTILL_JSON" "$BIN_PATH" memory distill --instance "$ZERO_INSTANCE_ID" --dry-run --json
 json_get "$DISTILL_JSON" '.result.runId // .run.runId // empty' >/dev/null
 
-echo "[7/9] create and authorize a real execution"
+echo "[8/10] create and authorize a real execution"
 curl -fsS -X POST \
   -H 'Content-Type: application/json' \
   "http://127.0.0.1:${GATEWAY_PORT}/api/v1/orchestrator/executions" \
@@ -496,7 +582,7 @@ if ! printf '%s' "$FINAL_OUTPUT" | grep -Eq '[.!?]$'; then
   exit 1
 fi
 
-echo "[8/9] export evidence, audit, metrics, and derived executions"
+echo "[9/10] export evidence, audit, metrics, and derived executions"
 capture_json_output "$EVIDENCE_JSON" "$BIN_PATH" executions evidence "$EXECUTION_ID" --format json --json
 "$BIN_PATH" executions evidence "$EXECUTION_ID" --format zip --output "$EVIDENCE_ZIP" >/dev/null
 capture_json_output "$AUDIT_JSON" "$BIN_PATH" executions audit "$EXECUTION_ID" --json
@@ -522,12 +608,14 @@ printf '%s\n' "$ZIP_ENTRIES" | grep -Fxq 'provider-attribution.json'
 printf '%s\n' "$ZIP_ENTRIES" | grep -Fxq 'plan.json'
 printf '%s\n' "$ZIP_ENTRIES" | grep -Fxq 'audit.json'
 
-echo "[9/9] summarize"
+echo "[10/10] summarize"
 echo "execution_id=${EXECUTION_ID}"
 echo "provider=${PROVIDER}"
 echo "model=${MODEL}"
 echo "instance_id=${ZERO_INSTANCE_ID}"
 echo "agent_cron_job_id=${AGENT_CRON_JOB_ID}"
+echo "transcription_status=${TRANSCRIPTION_STATUS}"
+echo "transcription_output=${TRANSCRIPTION_OUTPUT}"
 echo "output=${FINAL_OUTPUT}"
 echo "evidence_zip=${EVIDENCE_ZIP}"
 echo "live provider control-plane smoke passed"
