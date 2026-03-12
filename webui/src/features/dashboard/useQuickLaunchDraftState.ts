@@ -37,5 +37,3 @@ export function useQuickLaunchDraftState() {
     clearQuickLaunchPreview: () => setQuickLaunchPlan(null),
   };
 }
-
-export type QuickLaunchDraftState = ReturnType<typeof useQuickLaunchDraftState>;

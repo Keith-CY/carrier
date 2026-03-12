@@ -5,7 +5,7 @@ import {
   isExecutionTerminalStatus,
 } from './ExecutionDetailContent';
 
-export type ExecutionFilters = {
+type ExecutionFilters = {
   searchValue: string;
   statusFilter: string;
   templateFilter: string;
