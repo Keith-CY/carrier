@@ -485,7 +485,7 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
       contentType: 'application/json',
       body: JSON.stringify({
         skillSummary: { installedCount: 1, enabledCount: 1, disabledCount: 0 },
-        skills: [{ name: 'toolbox', enabled: true }],
+        skills: [{ name: 'toolbox', enabled: true, source: 'catalog', version: 'builtin' }],
         mcp: {
           servers: [{ name: 'repo', health: 'healthy', enabled: true, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
           visibleTools: [{ name: 'repo_search', description: 'Search code' }],
@@ -534,7 +534,7 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
         },
           capabilities: {
             skillSummary: { installedCount: 1, enabledCount: 1, disabledCount: 0 },
-            skills: [{ name: 'toolbox', enabled: true }],
+            skills: [{ name: 'toolbox', enabled: true, source: 'catalog', version: 'builtin' }],
             mcp: {
               servers: [{ name: 'repo', health: 'healthy', enabled: true, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
               visibleTools: [{ name: 'repo_search', description: 'Search code' }],

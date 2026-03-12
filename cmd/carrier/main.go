@@ -3298,7 +3298,7 @@ func parseMemoryCommandArgs(args []string) (memoryCommandOptions, error) {
 
 func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 	if len(args) == 0 {
-		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills> ...")
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills|models> ...")
 	}
 	opts := agentCommandOptions{}
 	startIdx := 0
@@ -3311,6 +3311,22 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 		opts.Action = mode
 		opts.AgentID = strings.TrimSpace(args[1])
 		startIdx = 2
+	case "models":
+		if len(args) < 2 {
+			return agentCommandOptions{}, errors.New("usage: carrier agent models [sync] <agent_id> [--json]")
+		}
+		if strings.EqualFold(strings.TrimSpace(args[1]), "sync") {
+			if len(args) < 3 {
+				return agentCommandOptions{}, errors.New("usage: carrier agent models sync <agent_id> [--json]")
+			}
+			opts.Action = "models-sync"
+			opts.AgentID = strings.TrimSpace(args[2])
+			startIdx = 3
+		} else {
+			opts.Action = "models"
+			opts.AgentID = strings.TrimSpace(args[1])
+			startIdx = 2
+		}
 	case "cron":
 		if len(args) < 3 {
 			return agentCommandOptions{}, errors.New("usage: carrier agent cron <schedule|list|cancel> <agent_id> [job_id] [flags]")
@@ -3328,24 +3344,24 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 		}
 	case "skills":
 		if len(args) < 3 {
-			return agentCommandOptions{}, errors.New("usage: carrier agent skills <search|install> <agent_id> [args] [--json]")
+			return agentCommandOptions{}, errors.New("usage: carrier agent skills <search|install|uninstall> <agent_id> [args] [--json]")
 		}
 		subaction := strings.ToLower(strings.TrimSpace(args[1]))
 		opts.Action = "skills-" + subaction
 		opts.AgentID = strings.TrimSpace(args[2])
 		startIdx = 3
-		if subaction == "install" {
+		if subaction == "install" || subaction == "uninstall" {
 			if len(args) < 4 {
-				return agentCommandOptions{}, errors.New("usage: carrier agent skills install <agent_id> <skill_name> [--json]")
+				return agentCommandOptions{}, fmt.Errorf("usage: carrier agent skills %s <agent_id> <skill_name> [--json]", subaction)
 			}
 			opts.SkillName = strings.TrimSpace(args[3])
 			startIdx = 4
 		}
 	default:
-		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills> ...")
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills|models> ...")
 	}
 	if opts.AgentID == "" {
-		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills> ...")
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills|models> ...")
 	}
 	for i := startIdx; i < len(args); i++ {
 		raw := strings.TrimSpace(args[i])
@@ -3424,13 +3440,13 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 			return agentCommandOptions{}, errors.New("usage: carrier agent cron cancel <agent_id> <job_id> [--json]")
 		}
 	case "skills-search":
-	case "skills-install":
+	case "skills-install", "skills-uninstall":
 		if strings.TrimSpace(opts.SkillName) == "" {
-			return agentCommandOptions{}, errors.New("usage: carrier agent skills install <agent_id> <skill_name> [--json]")
+			return agentCommandOptions{}, fmt.Errorf("usage: carrier agent skills %s <agent_id> <skill_name> [--json]", strings.TrimPrefix(opts.Action, "skills-"))
 		}
-	case "shell", "launcher", "heartbeat":
+	case "shell", "launcher", "heartbeat", "models", "models-sync":
 	default:
-		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills> ...")
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills|models> ...")
 	}
 	return opts, nil
 }
@@ -4753,10 +4769,35 @@ type agentSkillCLIResponse struct {
 	Summary  string   `json:"summary,omitempty"`
 	Keywords []string `json:"keywords,omitempty"`
 	Tags     []string `json:"tags,omitempty"`
+	Source   string   `json:"source,omitempty"`
+	Version  string   `json:"version,omitempty"`
 }
 
 type agentSkillsSearchCLIResponse struct {
 	Skills []agentSkillCLIResponse `json:"skills"`
+}
+
+type agentModelsCLIResponse struct {
+	AgentID    string `json:"agentId"`
+	InstanceID string `json:"instanceId,omitempty"`
+	ConfigPath string `json:"configPath,omitempty"`
+	Synced     bool   `json:"synced,omitempty"`
+	ModelSurface *struct {
+		DefaultProfile string `json:"defaultProfile,omitempty"`
+		Profiles       []struct {
+			ProfileName    string `json:"profileName,omitempty"`
+			ModelAlias     string `json:"modelAlias,omitempty"`
+			ModelID        string `json:"modelId,omitempty"`
+			ProviderID     string `json:"providerId,omitempty"`
+			ProviderKey    string `json:"providerKey,omitempty"`
+			ProtocolFamily string `json:"protocolFamily,omitempty"`
+			BaseURL        string `json:"baseUrl,omitempty"`
+			AuthMethod     string `json:"authMethod,omitempty"`
+			FallbackGroup  string `json:"fallbackGroup,omitempty"`
+			AliasGroupSize int    `json:"aliasGroupSize,omitempty"`
+			Primary        bool   `json:"primary,omitempty"`
+		} `json:"profiles,omitempty"`
+	} `json:"modelSurface,omitempty"`
 }
 
 func runMemoryCommand(out io.Writer, opts memoryCommandOptions) error {
@@ -4913,6 +4954,36 @@ func runAgentCommand(in io.Reader, out io.Writer, opts agentCommandOptions) erro
 		}
 		_, _ = fmt.Fprintln(out, renderManagedAgentInstalledSkill(resp))
 		return nil
+	case "skills-uninstall":
+		resp, raw, err := uninstallManagedAgentSkill(opts.AgentID, opts.SkillName)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentRemovedSkill(resp))
+		return nil
+	case "models":
+		resp, raw, err := fetchManagedAgentModels(opts.AgentID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentModels(resp))
+		return nil
+	case "models-sync":
+		resp, raw, err := syncManagedAgentModels(opts.AgentID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentModels(resp))
+		return nil
 	case "shell":
 		return runManagedAgentShell(in, out, opts)
 	default:
@@ -5047,6 +5118,45 @@ func installManagedAgentSkill(agentID, skillName string) (*agentSkillCLIResponse
 	return &resp, raw, nil
 }
 
+func uninstallManagedAgentSkill(agentID, skillName string) (*agentSkillCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/skills/uninstall", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]string{"name": strings.TrimSpace(skillName)})
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentSkillCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent skill uninstall response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func fetchManagedAgentModels(agentID string) (*agentModelsCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/models", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentModelsCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent models response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func syncManagedAgentModels(agentID string) (*agentModelsCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/models/sync", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]any{})
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentModelsCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent model sync response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
 func runManagedAgentShell(in io.Reader, out io.Writer, opts agentCommandOptions) error {
 	reader := bufio.NewReader(in)
 	sessionID := strings.TrimSpace(opts.SessionID)
@@ -5164,6 +5274,16 @@ func renderManagedAgentSkillSearch(resp *agentSkillsSearchCLIResponse) string {
 		if strings.TrimSpace(skill.Summary) != "" {
 			line += " · " + strings.TrimSpace(skill.Summary)
 		}
+		meta := []string{}
+		if strings.TrimSpace(skill.Source) != "" {
+			meta = append(meta, strings.TrimSpace(skill.Source))
+		}
+		if strings.TrimSpace(skill.Version) != "" {
+			meta = append(meta, strings.TrimSpace(skill.Version))
+		}
+		if len(meta) > 0 {
+			line += " · " + strings.Join(meta, " ")
+		}
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
@@ -5177,10 +5297,89 @@ func renderManagedAgentInstalledSkill(resp *agentSkillCLIResponse) string {
 	if label == "" {
 		label = "unknown-skill"
 	}
+	line := "installed " + label
 	if strings.TrimSpace(resp.Summary) != "" {
-		return fmt.Sprintf("installed %s · %s", label, strings.TrimSpace(resp.Summary))
+		line += " · " + strings.TrimSpace(resp.Summary)
 	}
-	return "installed " + label
+	meta := []string{}
+	if strings.TrimSpace(resp.Source) != "" {
+		meta = append(meta, strings.TrimSpace(resp.Source))
+	}
+	if strings.TrimSpace(resp.Version) != "" {
+		meta = append(meta, strings.TrimSpace(resp.Version))
+	}
+	if len(meta) > 0 {
+		line += " · " + strings.Join(meta, " ")
+	}
+	return line
+}
+
+func renderManagedAgentRemovedSkill(resp *agentSkillCLIResponse) string {
+	if resp == nil {
+		return ""
+	}
+	label := strings.TrimSpace(resp.Name)
+	if label == "" {
+		label = "unknown-skill"
+	}
+	line := "removed " + label
+	if strings.TrimSpace(resp.Summary) != "" {
+		line += " · " + strings.TrimSpace(resp.Summary)
+	}
+	meta := []string{}
+	if strings.TrimSpace(resp.Source) != "" {
+		meta = append(meta, strings.TrimSpace(resp.Source))
+	}
+	if strings.TrimSpace(resp.Version) != "" {
+		meta = append(meta, strings.TrimSpace(resp.Version))
+	}
+	if len(meta) > 0 {
+		line += " · " + strings.Join(meta, " ")
+	}
+	return line
+}
+
+func renderManagedAgentModels(resp *agentModelsCLIResponse) string {
+	if resp == nil {
+		return ""
+	}
+	lines := []string{fmt.Sprintf("agent=%s", strings.TrimSpace(resp.AgentID))}
+	if strings.TrimSpace(resp.InstanceID) != "" {
+		lines = append(lines, fmt.Sprintf("instance=%s", strings.TrimSpace(resp.InstanceID)))
+	}
+	if strings.TrimSpace(resp.ConfigPath) != "" {
+		lines = append(lines, fmt.Sprintf("config=%s", strings.TrimSpace(resp.ConfigPath)))
+	}
+	if resp.Synced {
+		lines = append(lines, "synced=true")
+	}
+	if resp.ModelSurface == nil {
+		lines = append(lines, "models=unavailable")
+		return strings.Join(lines, "\n")
+	}
+	defaultProfile := strings.TrimSpace(resp.ModelSurface.DefaultProfile)
+	for _, profile := range resp.ModelSurface.Profiles {
+		if profile.Primary || (defaultProfile != "" && strings.EqualFold(strings.TrimSpace(profile.ProfileName), defaultProfile)) {
+			label := firstNonEmpty(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(profile.ProfileName))
+			lines = append(lines, fmt.Sprintf("default=%s -> %s", label, strings.TrimSpace(profile.ModelID)))
+			break
+		}
+	}
+	for _, profile := range resp.ModelSurface.Profiles {
+		label := firstNonEmpty(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(profile.ProfileName))
+		entry := fmt.Sprintf("profile=%s model=%s", label, strings.TrimSpace(profile.ModelID))
+		if strings.TrimSpace(profile.ProviderID) != "" {
+			entry += " provider=" + strings.TrimSpace(profile.ProviderID)
+		}
+		if strings.TrimSpace(profile.ProtocolFamily) != "" {
+			entry += " protocol=" + strings.TrimSpace(profile.ProtocolFamily)
+		}
+		if profile.Primary {
+			entry += " primary=true"
+		}
+		lines = append(lines, entry)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderManagedAgentHeartbeat(resp *agentLauncherCLIResponse) string {

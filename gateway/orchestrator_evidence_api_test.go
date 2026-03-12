@@ -101,6 +101,7 @@ func TestHandleOrchestratorExecutionEvidenceJSONAndAuditExport(t *testing.T) {
 			FailureCategory: "worker_failed",
 			Artifacts: []OrchestratorArtifact{{
 				ID:          "artifact-1",
+				AttachmentID:"attach-1",
 				TaskID:      "task-1",
 				Name:        "release-notes.txt",
 				Kind:        "text",
@@ -110,6 +111,7 @@ func TestHandleOrchestratorExecutionEvidenceJSONAndAuditExport(t *testing.T) {
 				Path:        artifactPath,
 				Source:      "telegram",
 				ExternalID:  "tg-doc-1",
+				DownloadURL: "/downloads/tok-1/release-notes.txt",
 				CreatedAt:   "2026-03-09T09:01:00Z",
 			}},
 		},
@@ -203,6 +205,12 @@ func TestHandleOrchestratorExecutionEvidenceJSONAndAuditExport(t *testing.T) {
 	if got := strings.TrimSpace(anyToString(manifestEntry["externalId"])); got != "tg-doc-1" {
 		t.Fatalf("artifactManifest.externalId=%q want tg-doc-1 entry=%+v", got, manifestEntry)
 	}
+	if got := strings.TrimSpace(anyToString(manifestEntry["attachmentId"])); got != "attach-1" {
+		t.Fatalf("artifactManifest.attachmentId=%q want attach-1 entry=%+v", got, manifestEntry)
+	}
+	if got := strings.TrimSpace(anyToString(manifestEntry["downloadUrl"])); got != "/downloads/tok-1/release-notes.txt" {
+		t.Fatalf("artifactManifest.downloadUrl=%q want /downloads/tok-1/release-notes.txt entry=%+v", got, manifestEntry)
+	}
 	audit, _ := evidence["audit"].([]interface{})
 	if len(audit) != 2 {
 		t.Fatalf("audit len=%d want 2 evidence=%+v", len(audit), evidence)
@@ -273,12 +281,17 @@ func TestHandleOrchestratorExecutionEvidenceZipAndNegativeCases(t *testing.T) {
 		Outcome: OrchestratorExecutionOutcome{
 			Artifacts: []OrchestratorArtifact{{
 				ID:          "artifact-zip",
+				AttachmentID:"attach-zip",
 				TaskID:      "task-zip",
 				Name:        "summary.json",
 				Kind:        "json",
+				MediaType:   "application/json",
 				ContentType: "application/json",
 				SizeBytes:   11,
 				Path:        artifactPath,
+				Source:      "telegram",
+				ExternalID:  "tg-file-zip",
+				DownloadURL: "/downloads/tok-zip/summary.json",
 			}},
 		},
 	})
@@ -346,6 +359,12 @@ func TestHandleOrchestratorExecutionEvidenceZipAndNegativeCases(t *testing.T) {
 	}
 	if len(manifest) != 1 || strings.TrimSpace(anyToString(manifest[0]["id"])) != "artifact-zip" {
 		t.Fatalf("unexpected artifact manifest: %+v", manifest)
+	}
+	if got := strings.TrimSpace(anyToString(manifest[0]["attachmentId"])); got != "attach-zip" {
+		t.Fatalf("artifact-manifest attachmentId=%q want attach-zip manifest=%+v", got, manifest)
+	}
+	if got := strings.TrimSpace(anyToString(manifest[0]["downloadUrl"])); got != "/downloads/tok-zip/summary.json" {
+		t.Fatalf("artifact-manifest downloadUrl=%q want /downloads/tok-zip/summary.json manifest=%+v", got, manifest)
 	}
 
 	methodRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions/"+seed.ID+"/evidence", `{}`)

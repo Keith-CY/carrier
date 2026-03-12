@@ -650,7 +650,7 @@ func selectTelegramRichAttachment(resp GatewayResponse) (kind string, ref string
 		}
 		if attachmentID := strings.TrimSpace(block.AttachmentID); attachmentID != "" {
 			if attachment, ok := attachmentsByID[attachmentID]; ok {
-				if mediaKind, mediaRef, ok := selectTelegramAttachmentKindAndRef(attachment); ok {
+				if mediaKind, mediaRef, ok := selectTelegramAttachmentForBlock(blockType, attachment); ok {
 					return mediaKind, mediaRef, caption, true
 				}
 			}
@@ -664,10 +664,28 @@ func selectTelegramRichAttachment(resp GatewayResponse) (kind string, ref string
 	return "", "", "", false
 }
 
+func selectTelegramAttachmentForBlock(blockType string, attachment baseagent.AttachmentRef) (kind string, ref string, ok bool) {
+	ref = resolveTelegramRichRef(attachment)
+	if ref == "" {
+		return "", "", false
+	}
+	switch strings.ToLower(strings.TrimSpace(blockType)) {
+	case "image":
+		return "image", ref, true
+	case "file", "document":
+		return "document", ref, true
+	default:
+		return selectTelegramAttachmentKindAndRef(attachment)
+	}
+}
+
 func selectTelegramAttachmentKindAndRef(attachment baseagent.AttachmentRef) (kind string, ref string, ok bool) {
 	ref = resolveTelegramRichRef(attachment)
 	if ref == "" {
 		return "", "", false
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(firstString(attachment.MediaType, attachment.MIMEType))), "image/") {
+		return "image", ref, true
 	}
 	switch strings.ToLower(strings.TrimSpace(attachment.Kind)) {
 	case "image":

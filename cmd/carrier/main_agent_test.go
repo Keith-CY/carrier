@@ -95,6 +95,30 @@ func TestParseAgentCommandArgs(t *testing.T) {
 	if skillInstallOpts.Action != "skills-install" || skillInstallOpts.AgentID != "picoclaw" || skillInstallOpts.SkillName != "workspace-inspection" || !skillInstallOpts.JSON {
 		t.Fatalf("unexpected skills install opts: %+v", skillInstallOpts)
 	}
+
+	skillUninstallOpts, err := parseAgentCommandArgs([]string{"skills", "uninstall", "picoclaw", "workspace-inspection", "--json"})
+	if err != nil {
+		t.Fatalf("parseAgentCommandArgs(skills uninstall) error: %v", err)
+	}
+	if skillUninstallOpts.Action != "skills-uninstall" || skillUninstallOpts.AgentID != "picoclaw" || skillUninstallOpts.SkillName != "workspace-inspection" || !skillUninstallOpts.JSON {
+		t.Fatalf("unexpected skills uninstall opts: %+v", skillUninstallOpts)
+	}
+
+	modelsOpts, err := parseAgentCommandArgs([]string{"models", "picoclaw", "--json"})
+	if err != nil {
+		t.Fatalf("parseAgentCommandArgs(models) error: %v", err)
+	}
+	if modelsOpts.Action != "models" || modelsOpts.AgentID != "picoclaw" || !modelsOpts.JSON {
+		t.Fatalf("unexpected models opts: %+v", modelsOpts)
+	}
+
+	modelsSyncOpts, err := parseAgentCommandArgs([]string{"models", "sync", "picoclaw", "--json"})
+	if err != nil {
+		t.Fatalf("parseAgentCommandArgs(models sync) error: %v", err)
+	}
+	if modelsSyncOpts.Action != "models-sync" || modelsSyncOpts.AgentID != "picoclaw" || !modelsSyncOpts.JSON {
+		t.Fatalf("unexpected models sync opts: %+v", modelsSyncOpts)
+	}
 }
 
 func TestRunAgentCommand(t *testing.T) {
@@ -142,7 +166,7 @@ func TestRunAgentCommand(t *testing.T) {
 			}
 			_, _ = w.Write([]byte(`{"id":"cron-1","agentId":"picoclaw","prompt":"check launcher","lastResult":"cancelled","cancelledAt":"2026-03-12T00:40:00Z"}`))
 		case "/api/v1/agents/picoclaw/skills/search":
-			_, _ = w.Write([]byte(`{"skills":[{"name":"workspace-inspection","summary":"Inspect workspace state."}]}`))
+			_, _ = w.Write([]byte(`{"skills":[{"name":"workspace-inspection","summary":"Inspect workspace state.","source":"catalog","version":"v1.2.3"}]}`))
 		case "/api/v1/agents/picoclaw/skills/install":
 			if r.Method != http.MethodPost {
 				http.NotFound(w, r)
@@ -153,7 +177,30 @@ func TestRunAgentCommand(t *testing.T) {
 			if body["name"] != "workspace-inspection" {
 				t.Fatalf("skill install name=%v want workspace-inspection", body["name"])
 			}
-			_, _ = w.Write([]byte(`{"name":"workspace-inspection","summary":"Inspect workspace state."}`))
+			_, _ = w.Write([]byte(`{"name":"workspace-inspection","summary":"Inspect workspace state.","source":"catalog","version":"v1.2.3"}`))
+		case "/api/v1/agents/picoclaw/skills/uninstall":
+			if r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["name"] != "workspace-inspection" {
+				t.Fatalf("skill uninstall name=%v want workspace-inspection", body["name"])
+			}
+			_, _ = w.Write([]byte(`{"name":"workspace-inspection","summary":"Inspect workspace state.","source":"catalog","version":"v1.2.3"}`))
+		case "/api/v1/agents/picoclaw/models":
+			if r.Method != http.MethodGet {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write([]byte(`{"agentId":"picoclaw","instanceId":"picoclaw-main","configPath":"/tmp/picoclaw/config.json","modelSurface":{"defaultProfile":"openrouter-fast","profiles":[{"profileName":"openrouter-fast","modelAlias":"flash","modelId":"google/gemini-2.0-flash-001","providerId":"openrouter","protocolFamily":"openai-compatible","primary":true},{"profileName":"openrouter-safe","modelAlias":"flash","modelId":"deepseek/deepseek-chat-v3-0324","providerId":"openrouter","protocolFamily":"openai-compatible","primary":false}]}}`))
+		case "/api/v1/agents/picoclaw/models/sync":
+			if r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write([]byte(`{"agentId":"picoclaw","instanceId":"picoclaw-main","configPath":"/tmp/picoclaw/config.json","synced":true,"modelSurface":{"defaultProfile":"openrouter-fast","profiles":[{"profileName":"openrouter-fast","modelAlias":"flash","modelId":"google/gemini-2.0-flash-001","providerId":"openrouter","protocolFamily":"openai-compatible","primary":true}]}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -214,7 +261,7 @@ func TestRunAgentCommand(t *testing.T) {
 	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "skills-search", AgentID: "picoclaw", Query: "workspace"}); err != nil {
 		t.Fatalf("runAgentCommand(skills search) error: %v", err)
 	}
-	if !strings.Contains(out.String(), "workspace-inspection") {
+	if !strings.Contains(out.String(), "workspace-inspection") || !strings.Contains(out.String(), "catalog v1.2.3") {
 		t.Fatalf("skills search output=%s", out.String())
 	}
 
@@ -222,8 +269,32 @@ func TestRunAgentCommand(t *testing.T) {
 	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "skills-install", AgentID: "picoclaw", SkillName: "workspace-inspection"}); err != nil {
 		t.Fatalf("runAgentCommand(skills install) error: %v", err)
 	}
-	if !strings.Contains(out.String(), "workspace-inspection") {
+	if !strings.Contains(out.String(), "workspace-inspection") || !strings.Contains(out.String(), "catalog v1.2.3") {
 		t.Fatalf("skills install output=%s", out.String())
+	}
+
+	out.Reset()
+	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "skills-uninstall", AgentID: "picoclaw", SkillName: "workspace-inspection"}); err != nil {
+		t.Fatalf("runAgentCommand(skills uninstall) error: %v", err)
+	}
+	if !strings.Contains(out.String(), "removed workspace-inspection") || !strings.Contains(out.String(), "catalog v1.2.3") {
+		t.Fatalf("skills uninstall output=%s", out.String())
+	}
+
+	out.Reset()
+	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "models", AgentID: "picoclaw"}); err != nil {
+		t.Fatalf("runAgentCommand(models) error: %v", err)
+	}
+	if !strings.Contains(out.String(), "default=flash -> google/gemini-2.0-flash-001") || !strings.Contains(out.String(), "profile=flash model=deepseek/deepseek-chat-v3-0324") {
+		t.Fatalf("models output=%s", out.String())
+	}
+
+	out.Reset()
+	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "models-sync", AgentID: "picoclaw"}); err != nil {
+		t.Fatalf("runAgentCommand(models sync) error: %v", err)
+	}
+	if !strings.Contains(out.String(), "synced=true") || !strings.Contains(out.String(), "default=flash -> google/gemini-2.0-flash-001") {
+		t.Fatalf("models sync output=%s", out.String())
 	}
 }
 

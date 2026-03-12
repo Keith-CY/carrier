@@ -40,6 +40,8 @@ type orchestratorProviderMetricsSnapshot struct {
 	RequestedFailures     map[string]int                               `json:"requestedFailures"`
 	ResolvedFailures      map[string]int                               `json:"resolvedFailures"`
 	DriftStates           map[string]int                               `json:"driftStates,omitempty"`
+	ManagedOverrideHits   int                                          `json:"managedOverrideHits,omitempty"`
+	ManagedFallbackHits   int                                          `json:"managedFallbackHits,omitempty"`
 	Attribution           orchestratorProviderAttributionSnapshot      `json:"attribution,omitempty"`
 	Aggregates            []orchestratorProviderAggregateSnapshot      `json:"aggregates,omitempty"`
 	Models                []orchestratorProviderModelAggregateSnapshot `json:"models,omitempty"`
@@ -283,6 +285,21 @@ func buildOrchestratorMetricsSnapshot(executions []OrchestratorExecution, leases
 			providerMetrics.ResolvedFailures[provider]++
 		}
 	}
+
+	if managedInstances, _, err := loadManagedInstances(); err == nil {
+		for _, inst := range managedInstances {
+			if inst.ModelRuntime == nil {
+				continue
+			}
+			if inst.ModelRuntime.OverrideHit {
+				providerMetrics.ManagedOverrideHits++
+			}
+			if inst.ModelRuntime.FallbackHit {
+				providerMetrics.ManagedFallbackHits++
+			}
+		}
+	}
+
 	if latencyCount > 0 {
 		executionMetrics.AvgLatencyMs = latencyTotal / latencyCount
 	}

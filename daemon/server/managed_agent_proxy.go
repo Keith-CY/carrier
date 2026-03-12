@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"carrier/daemon/internal/lifecycle"
@@ -26,7 +27,28 @@ var (
 	managedLookPath           = exec.LookPath
 	managedANSISequence       = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 	managedStructuredLogLine  = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO|WARN|ERROR)\b`)
+	managedInstanceStoreMu    sync.Mutex
 )
+
+type managedAgentModelRuntimeRecord struct {
+	RequestedAlias string `json:"requested_alias,omitempty"`
+	RequestedModel string `json:"requested_model,omitempty"`
+	ResolvedModel  string `json:"resolved_model,omitempty"`
+	FallbackGroup  string `json:"fallback_group,omitempty"`
+	OverrideHit    bool   `json:"override_hit,omitempty"`
+	FallbackHit    bool   `json:"fallback_hit,omitempty"`
+	LastRunAt      string `json:"last_run_at,omitempty"`
+}
+
+type managedAgentInstanceRecord struct {
+	AgentID      string                         `json:"agent_id"`
+	ModelRuntime *managedAgentModelRuntimeRecord `json:"model_runtime,omitempty"`
+	UpdatedAt    string                         `json:"updated_at,omitempty"`
+}
+
+type managedAgentInstanceFileRecord struct {
+	Instances []managedAgentInstanceRecord `json:"instances"`
+}
 
 type zeroclawGatewayConfig struct {
 	Host           string
@@ -48,6 +70,15 @@ type zeroclawLocalConfig struct {
 	DefaultModel    string
 	Gateway         zeroclawGatewayConfig
 	Profiles        []zeroclawProviderProfile
+}
+
+type managedZeroClawModelSelection struct {
+	RequestedAlias string
+	RequestedModel string
+	ResolvedModel  string
+	FallbackGroup  string
+	OverrideHit    bool
+	FallbackHit    bool
 }
 
 func maybeProxyManagedAgentChat(ctx context.Context, svc *lifecycle.Service, agentID string, provider string, modelAlias string, model string, message string) (string, bool, error) {
@@ -92,6 +123,10 @@ func maybeProxyManagedZeroClawAgentCLI(ctx context.Context, state lifecycle.Agen
 	if instanceName == "" {
 		return "", false, nil
 	}
+	selection, err := resolveManagedZeroClawModelSelection(cfg, provider, modelAlias, model)
+	if err != nil {
+		return "", true, err
+	}
 	overrideConfig, err := buildManagedZeroClawModelOverride(cfg, provider, modelAlias, model)
 	if err != nil {
 		return "", true, err
@@ -100,7 +135,15 @@ func maybeProxyManagedZeroClawAgentCLI(ctx context.Context, state lifecycle.Agen
 	if err != nil {
 		return "", true, err
 	}
+	_ = persistManagedAgentModelRuntime(agentIDFromStateOrDefault(state, "zeroclaw"), selection)
 	return reply, true, nil
+}
+
+func agentIDFromStateOrDefault(state lifecycle.AgentState, fallback string) string {
+	if id := strings.TrimSpace(state.ID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(fallback)
 }
 
 func runManagedZeroClawAgentCLI(ctx context.Context, instanceName string, provider string, message string, overrideConfigB64 string) (string, error) {
@@ -223,6 +266,74 @@ func loadLocalZeroClawConfig() (zeroclawLocalConfig, error) {
 	return parseZeroClawLocalConfig(raw), nil
 }
 
+func managedInstanceStorePath() (string, error) {
+	if custom := strings.TrimSpace(os.Getenv("CARRIER_INSTANCE_STORE")); custom != "" {
+		return custom, nil
+	}
+	home, err := userHomeDirFunc()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".carrier", "instances.json"), nil
+}
+
+func persistManagedAgentModelRuntime(agentID string, selection managedZeroClawModelSelection) error {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil
+	}
+	storePath, err := managedInstanceStorePath()
+	if err != nil {
+		return err
+	}
+	managedInstanceStoreMu.Lock()
+	defer managedInstanceStoreMu.Unlock()
+	raw, err := os.ReadFile(storePath)
+	if err != nil {
+		return err
+	}
+	var store map[string]any
+	if err := json.Unmarshal(raw, &store); err != nil {
+		return err
+	}
+	instances, _ := store["instances"].([]any)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	updated := false
+	for i := range instances {
+		entry, _ := instances[i].(map[string]any)
+		if !strings.EqualFold(strings.TrimSpace(anyString(entry["agent_id"])), agentID) {
+			continue
+		}
+		entry["model_runtime"] = map[string]any{
+			"requested_alias": strings.TrimSpace(selection.RequestedAlias),
+			"requested_model": strings.TrimSpace(selection.RequestedModel),
+			"resolved_model":  strings.TrimSpace(selection.ResolvedModel),
+			"fallback_group":  strings.TrimSpace(selection.FallbackGroup),
+			"override_hit":    selection.OverrideHit,
+			"fallback_hit":    selection.FallbackHit,
+			"last_run_at":     now,
+		}
+		entry["updated_at"] = now
+		instances[i] = entry
+		updated = true
+		break
+	}
+	if !updated {
+		return nil
+	}
+	store["instances"] = instances
+	encoded, err := json.MarshalIndent(store, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(storePath, append(encoded, '\n'), 0o600)
+}
+
+func anyString(value any) string {
+	text, _ := value.(string)
+	return text
+}
+
 func parseZeroClawLocalConfig(raw []byte) zeroclawLocalConfig {
 	cfg := zeroclawLocalConfig{
 		Raw: raw,
@@ -330,6 +441,89 @@ func buildManagedZeroClawModelOverride(cfg zeroclawLocalConfig, provider, modelA
 	}
 	rewritten := rewriteZeroClawDefaultModel(cfg.Raw, selectedModel)
 	return base64.StdEncoding.EncodeToString(rewritten), nil
+}
+
+func resolveManagedZeroClawModelSelection(cfg zeroclawLocalConfig, provider, modelAlias, model string) (managedZeroClawModelSelection, error) {
+	selectedModel, err := resolveManagedZeroClawSelectedModel(cfg, provider, modelAlias, model)
+	if err != nil {
+		return managedZeroClawModelSelection{}, err
+	}
+	selection := managedZeroClawModelSelection{
+		RequestedAlias: strings.TrimSpace(modelAlias),
+		RequestedModel: strings.TrimSpace(model),
+		ResolvedModel:  strings.TrimSpace(selectedModel),
+	}
+	if selection.RequestedAlias != "" || selection.RequestedModel != "" {
+		selection.OverrideHit = true
+	}
+	if profile, primary, ok := findManagedZeroClawProfile(cfg, provider, selection.RequestedAlias, selection.ResolvedModel); ok {
+		selection.FallbackGroup = managedZeroClawFallbackGroup(profile)
+		selection.FallbackHit = !primary
+	}
+	return selection, nil
+}
+
+func findManagedZeroClawProfile(cfg zeroclawLocalConfig, provider, alias, model string) (zeroclawProviderProfile, bool, bool) {
+	matchProvider := strings.ToLower(strings.TrimSpace(provider))
+	if matchProvider == "" {
+		matchProvider = strings.ToLower(strings.TrimSpace(cfg.DefaultProvider))
+	}
+	groupPrimaryModel := map[string]string{}
+	for _, profile := range cfg.Profiles {
+		group := managedZeroClawFallbackGroup(profile)
+		if group == "" {
+			continue
+		}
+		if _, seen := groupPrimaryModel[group]; !seen {
+			groupPrimaryModel[group] = strings.TrimSpace(profile.Model)
+		}
+	}
+	for _, profile := range cfg.Profiles {
+		if model != "" && !strings.EqualFold(strings.TrimSpace(profile.Model), strings.TrimSpace(model)) {
+			continue
+		}
+		if alias != "" && !strings.EqualFold(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(alias)) {
+			continue
+		}
+		profileProvider := strings.ToLower(strings.TrimSpace(firstNonEmpty(profile.ProviderID, profile.Provider)))
+		if matchProvider != "" && profileProvider != "" && profileProvider != matchProvider {
+			continue
+		}
+		group := managedZeroClawFallbackGroup(profile)
+		return profile, strings.EqualFold(strings.TrimSpace(profile.Model), strings.TrimSpace(groupPrimaryModel[group])), true
+	}
+	for _, profile := range cfg.Profiles {
+		if model != "" && !strings.EqualFold(strings.TrimSpace(profile.Model), strings.TrimSpace(model)) {
+			continue
+		}
+		if alias != "" && !strings.EqualFold(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(alias)) {
+			continue
+		}
+		group := managedZeroClawFallbackGroup(profile)
+		return profile, strings.EqualFold(strings.TrimSpace(profile.Model), strings.TrimSpace(groupPrimaryModel[group])), true
+	}
+	return zeroclawProviderProfile{}, false, false
+}
+
+func managedZeroClawFallbackGroup(profile zeroclawProviderProfile) string {
+	alias := strings.TrimSpace(profile.ModelAlias)
+	if alias == "" {
+		return ""
+	}
+	provider := strings.TrimSpace(firstNonEmpty(profile.ProviderID, profile.Provider))
+	if provider == "" {
+		return strings.ToLower(alias)
+	}
+	return strings.ToLower(provider) + ":" + strings.ToLower(alias)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func resolveManagedZeroClawSelectedModel(cfg zeroclawLocalConfig, provider, modelAlias, model string) (string, error) {

@@ -328,13 +328,14 @@ func TestDaemonClient_SetAgentSkillEnabled(t *testing.T) {
 func TestDaemonClient_SearchAndInstallAgentSkills(t *testing.T) {
 	var paths []string
 	var installBody map[string]any
+	var uninstallBody map[string]any
 	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.RequestURI())
 		switch r.URL.Path {
 		case "/api/v1/agents/a1/skills/search":
 			if err := json.NewEncoder(w).Encode(map[string]any{
 				"skills": []map[string]any{
-					{"name": "workspace-inspection", "summary": "Inspect workspace state."},
+					{"name": "workspace-inspection", "summary": "Inspect workspace state.", "source": "catalog", "version": "v1.2.3"},
 				},
 			}); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -346,6 +347,20 @@ func TestDaemonClient_SearchAndInstallAgentSkills(t *testing.T) {
 			if err := json.NewEncoder(w).Encode(map[string]any{
 				"name":    "workspace-inspection",
 				"summary": "Inspect workspace state.",
+				"source":  "catalog",
+				"version": "v1.2.3",
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+		case "/api/v1/agents/a1/skills/uninstall":
+			if err := json.NewDecoder(r.Body).Decode(&uninstallBody); err != nil {
+				t.Fatalf("decode uninstall body: %v", err)
+			}
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"name":    "workspace-inspection",
+				"summary": "Inspect workspace state.",
+				"source":  "catalog",
+				"version": "v1.2.3",
 			}); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 			}
@@ -363,6 +378,9 @@ func TestDaemonClient_SearchAndInstallAgentSkills(t *testing.T) {
 	if len(skills) != 1 || skills[0].Name != "workspace-inspection" {
 		t.Fatalf("unexpected skills: %+v", skills)
 	}
+	if skills[0].Source != "catalog" || skills[0].Version != "v1.2.3" {
+		t.Fatalf("unexpected skill metadata: %+v", skills[0])
+	}
 
 	installed, err := dc.InstallAgentSkill(context.Background(), "a1", "workspace-inspection", "actor", "req")
 	if err != nil {
@@ -371,11 +389,26 @@ func TestDaemonClient_SearchAndInstallAgentSkills(t *testing.T) {
 	if installed.Name != "workspace-inspection" {
 		t.Fatalf("unexpected installed skill: %+v", installed)
 	}
-	if len(paths) != 2 || paths[0] != "/api/v1/agents/a1/skills/search?q=workspace" || paths[1] != "/api/v1/agents/a1/skills/install" {
+	if installed.Source != "catalog" || installed.Version != "v1.2.3" {
+		t.Fatalf("unexpected installed metadata: %+v", installed)
+	}
+
+	removed, err := dc.UninstallAgentSkill(context.Background(), "a1", "workspace-inspection", "actor", "req")
+	if err != nil {
+		t.Fatalf("UninstallAgentSkill error: %v", err)
+	}
+	if removed.Name != "workspace-inspection" || removed.Source != "catalog" || removed.Version != "v1.2.3" {
+		t.Fatalf("unexpected removed skill: %+v", removed)
+	}
+
+	if len(paths) != 3 || paths[0] != "/api/v1/agents/a1/skills/search?q=workspace" || paths[1] != "/api/v1/agents/a1/skills/install" || paths[2] != "/api/v1/agents/a1/skills/uninstall" {
 		t.Fatalf("unexpected paths: %+v", paths)
 	}
 	if installBody["name"] != "workspace-inspection" {
 		t.Fatalf("unexpected install body: %+v", installBody)
+	}
+	if uninstallBody["name"] != "workspace-inspection" {
+		t.Fatalf("unexpected uninstall body: %+v", uninstallBody)
 	}
 }
 

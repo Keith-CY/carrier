@@ -62,6 +62,8 @@ func (r *Runtime) CapabilitySummary(ctx context.Context) RuntimeCapabilitySummar
 				Summary:  skill.Summary,
 				Keywords: append([]string(nil), skill.Keywords...),
 				Tags:     append([]string(nil), skill.Tags...),
+				Source:   skill.Source,
+				Version:  skill.Version,
 				Enabled:  true,
 			})
 		}

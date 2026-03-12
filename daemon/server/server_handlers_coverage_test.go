@@ -371,6 +371,129 @@ printf 'Tokyo weather is mild with a chance of rain.\n'
 	}
 }
 
+func TestHandleAgentChat_PersistsManagedZeroClawModelRuntimeTelemetry(t *testing.T) {
+	origHome := userHomeDirFunc
+	origLookPath := managedLookPath
+	t.Cleanup(func() {
+		userHomeDirFunc = origHome
+		managedLookPath = origLookPath
+	})
+
+	home := t.TempDir()
+	userHomeDirFunc = func() (string, error) { return home, nil }
+	storePath := filepath.Join(home, ".carrier", "instances.json")
+	t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+	if err := os.MkdirAll(filepath.Dir(storePath), 0o700); err != nil {
+		t.Fatalf("mkdir carrier dir: %v", err)
+	}
+	if err := os.WriteFile(storePath, []byte(`{"instances":[{"id":"zeroclaw-local","agent_id":"zeroclaw","updated_at":"2026-03-13T00:00:00Z"}]}`), 0o600); err != nil {
+		t.Fatalf("write managed instance store: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".zeroclaw"), 0o700); err != nil {
+		t.Fatalf("mkdir zeroclaw dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".zeroclaw", "config.toml"), []byte(`
+default_provider = "openrouter"
+default_model = "google/gemini-2.0-flash-001"
+
+[provider_profiles.openrouter-fast]
+model_alias = "flash"
+model = "google/gemini-2.0-flash-001"
+provider = "openrouter"
+provider_id = "openrouter"
+
+[provider_profiles.openrouter-safe]
+model_alias = "flash"
+model = "deepseek/deepseek-chat-v3-0324"
+provider = "openrouter"
+provider_id = "openrouter"
+
+[gateway]
+host = "127.0.0.1"
+port = 9091
+require_pairing = false
+`), 0o600); err != nil {
+		t.Fatalf("write zeroclaw config: %v", err)
+	}
+
+	statePath := filepath.Join(t.TempDir(), "lifecycle-state.json")
+	persisted := map[string]lifecycle.PersistedAgentState{
+		"zeroclaw": {
+			ID:               "zeroclaw",
+			Installed:        true,
+			RuntimeState:     string(lifecycle.RuntimeStateStopped),
+			Isolated:         true,
+			LimaInstanceName: "carrier-zeroclaw-a3f2",
+			LastTransition:   time.Now().UTC(),
+		},
+	}
+	raw, err := json.MarshalIndent(persisted, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal persisted state: %v", err)
+	}
+	if err := os.WriteFile(statePath, raw, 0o600); err != nil {
+		t.Fatalf("write persisted state: %v", err)
+	}
+
+	svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithStateFile(statePath))
+	if err := svc.RegisterManifest(catalog.ZeroClawManifest()); err != nil {
+		t.Fatalf("register zeroclaw manifest: %v", err)
+	}
+
+	limactlDir := t.TempDir()
+	limactlPath := filepath.Join(limactlDir, "limactl")
+	if err := os.WriteFile(limactlPath, []byte(`#!/bin/sh
+printf 'managed reply\n'
+`), 0o755); err != nil {
+		t.Fatalf("write fake limactl: %v", err)
+	}
+	managedLookPath = func(file string) (string, error) {
+		if file == "limactl" {
+			return limactlPath, nil
+		}
+		return "", fmt.Errorf("unexpected executable lookup: %s", file)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"summarize","sessionId":"sess-z","provider":"openrouter","modelAlias":"flash","model":"deepseek/deepseek-chat-v3-0324"}`))
+	rr := httptest.NewRecorder()
+	handleAgentChat(svc, &fakeAgentChatRuntime{}, "zeroclaw", rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("chat status=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	storeRaw, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatalf("read managed instance store: %v", err)
+	}
+	var store struct {
+		Instances []struct {
+			AgentID      string `json:"agent_id"`
+			ModelRuntime struct {
+				RequestedAlias string `json:"requested_alias"`
+				RequestedModel string `json:"requested_model"`
+				ResolvedModel  string `json:"resolved_model"`
+				FallbackGroup  string `json:"fallback_group"`
+				OverrideHit    bool   `json:"override_hit"`
+				FallbackHit    bool   `json:"fallback_hit"`
+				LastRunAt      string `json:"last_run_at"`
+			} `json:"model_runtime"`
+		} `json:"instances"`
+	}
+	if err := json.Unmarshal(storeRaw, &store); err != nil {
+		t.Fatalf("unmarshal managed instance store: %v raw=%s", err, string(storeRaw))
+	}
+	if len(store.Instances) != 1 {
+		t.Fatalf("expected one managed instance, got %+v", store.Instances)
+	}
+	runtimeMeta := store.Instances[0].ModelRuntime
+	if runtimeMeta.RequestedAlias != "flash" || runtimeMeta.RequestedModel != "deepseek/deepseek-chat-v3-0324" || runtimeMeta.ResolvedModel != "deepseek/deepseek-chat-v3-0324" {
+		t.Fatalf("unexpected model runtime metadata: %+v", runtimeMeta)
+	}
+	if runtimeMeta.FallbackGroup != "openrouter:flash" || !runtimeMeta.OverrideHit || !runtimeMeta.FallbackHit || strings.TrimSpace(runtimeMeta.LastRunAt) == "" {
+		t.Fatalf("unexpected model runtime flags: %+v", runtimeMeta)
+	}
+}
+
 func TestResolveManagedZeroClawSelectedModel_UsesAliasProfile(t *testing.T) {
 	cfg := zeroclawLocalConfig{
 		DefaultProvider: "openrouter",

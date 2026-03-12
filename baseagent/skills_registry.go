@@ -12,6 +12,8 @@ type RuntimeSkillCapability struct {
 	Summary  string   `json:"summary,omitempty"`
 	Keywords []string `json:"keywords,omitempty"`
 	Tags     []string `json:"tags,omitempty"`
+	Source   string   `json:"source,omitempty"`
+	Version  string   `json:"version,omitempty"`
 	Enabled  bool     `json:"enabled"`
 }
 
@@ -124,6 +126,54 @@ func (r *SkillsRegistry) InstallSkill(ctx context.Context, name string) (SkillDe
 	return cloneSkillDefinition(skill), nil
 }
 
+func (r *SkillsRegistry) UninstallSkill(ctx context.Context, name string) (SkillDefinition, error) {
+	if r == nil {
+		return SkillDefinition{}, fmt.Errorf("skills registry is unavailable")
+	}
+	name = strings.TrimSpace(strings.ToLower(name))
+	if name == "" {
+		return SkillDefinition{}, fmt.Errorf("skill name is required")
+	}
+	skill, ok := r.catalog[name]
+	if !ok {
+		return SkillDefinition{}, fmt.Errorf("skill %q is not available", name)
+	}
+	installedNames, err := r.store.ListInstalledSkillNames(ctx)
+	if err != nil {
+		return SkillDefinition{}, err
+	}
+	found := false
+	filteredInstalled := make([]string, 0, len(installedNames))
+	for _, installed := range installedNames {
+		if installed == name {
+			found = true
+			continue
+		}
+		filteredInstalled = append(filteredInstalled, installed)
+	}
+	if !found {
+		return SkillDefinition{}, fmt.Errorf("skill %q is not installed", name)
+	}
+	if err := r.store.SetInstalledSkillNames(ctx, filteredInstalled); err != nil {
+		return SkillDefinition{}, err
+	}
+	enabledNames, err := r.store.ListEnabledSkillNames(ctx)
+	if err != nil {
+		return SkillDefinition{}, err
+	}
+	filteredEnabled := make([]string, 0, len(enabledNames))
+	for _, enabled := range enabledNames {
+		if enabled == name {
+			continue
+		}
+		filteredEnabled = append(filteredEnabled, enabled)
+	}
+	if err := r.store.SetEnabledSkillNames(ctx, filteredEnabled); err != nil {
+		return SkillDefinition{}, err
+	}
+	return cloneSkillDefinition(skill), nil
+}
+
 func (r *SkillsRegistry) ListRuntimeSkillCapabilities(ctx context.Context) []RuntimeSkillCapability {
 	if r == nil {
 		return nil
@@ -152,6 +202,8 @@ func (r *SkillsRegistry) ListRuntimeSkillCapabilities(ctx context.Context) []Run
 			Summary:  skill.Summary,
 			Keywords: append([]string(nil), skill.Keywords...),
 			Tags:     append([]string(nil), skill.Tags...),
+			Source:   skill.Source,
+			Version:  skill.Version,
 			Enabled:  enabled,
 		})
 	}
@@ -223,6 +275,8 @@ func (r *SkillsRegistry) RelevantSkillsSummary(ctx context.Context, message stri
 			Summary:  skill.Summary,
 			Keywords: skill.Keywords,
 			Tags:     skill.Tags,
+			Source:   skill.Source,
+			Version:  skill.Version,
 		}, message)
 		if score <= 0 {
 			continue
@@ -253,6 +307,14 @@ func normalizeSkillDefinition(skill SkillDefinition) SkillDefinition {
 	skill.Summary = strings.TrimSpace(skill.Summary)
 	skill.Keywords = normalizeSkillValues(skill.Keywords)
 	skill.Tags = normalizeSkillValues(skill.Tags)
+	skill.Source = strings.TrimSpace(skill.Source)
+	skill.Version = strings.TrimSpace(skill.Version)
+	if skill.Source == "" {
+		skill.Source = "catalog"
+	}
+	if skill.Version == "" {
+		skill.Version = "builtin"
+	}
 	return skill
 }
 
@@ -282,6 +344,8 @@ func cloneSkillDefinition(skill SkillDefinition) SkillDefinition {
 		Summary:  skill.Summary,
 		Keywords: append([]string(nil), skill.Keywords...),
 		Tags:     append([]string(nil), skill.Tags...),
+		Source:   skill.Source,
+		Version:  skill.Version,
 	}
 }
 

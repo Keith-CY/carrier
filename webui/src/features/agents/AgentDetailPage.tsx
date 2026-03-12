@@ -13,6 +13,8 @@ type AgentCapabilities = {
   skills?: Array<{
     name?: string;
     summary?: string;
+    source?: string;
+    version?: string;
     enabled?: boolean;
   }>;
   mcp?: {
@@ -34,6 +36,8 @@ type AgentCapabilities = {
 type AgentSkillCatalogEntry = {
   name?: string;
   summary?: string;
+  source?: string;
+  version?: string;
   keywords?: string[];
   tags?: string[];
 };
@@ -105,6 +109,36 @@ type AgentLauncherSummary = {
   capabilities?: AgentCapabilities;
 };
 
+type AgentModelsSummary = {
+  agentId?: string;
+  instanceId?: string;
+  configPath?: string;
+  synced?: boolean;
+  modelSurface?: AgentLauncherSummary['modelSurface'];
+};
+
+function buildLauncherRemediationMessages(launcher: AgentLauncherSummary | undefined): string[] {
+  if (!launcher) return [];
+  let messages: string[] = [];
+  if (launcher.providerReadiness && launcher.providerReadiness.ready === false) {
+    messages = appendUniqueMessage(messages, 'Provider authentication is not ready. Reconfigure credentials or switch to a ready profile.');
+  }
+  if (launcher.heartbeat && (launcher.heartbeat.state === 'stale' || launcher.heartbeat.state === 'expired')) {
+    messages = appendUniqueMessage(messages, 'Launcher heartbeat is stale. Restart the agent or inspect the managed runtime.');
+  }
+  if (Array.isArray(launcher.cron?.jobs) && launcher.cron?.jobs.some((job) => !!job.paused)) {
+    messages = appendUniqueMessage(messages, 'One or more cron jobs are paused. Resume or cancel them to restore scheduled automation.');
+  }
+  return messages;
+}
+
+function appendUniqueMessage(messages: string[], message: string): string[] {
+  if (messages.includes(message)) {
+    return messages;
+  }
+  return [...messages, message];
+}
+
 export function AgentDetailPage() {
   const navigate = useNavigate();
   const params = useParams<{ agentId: string }>();
@@ -128,6 +162,12 @@ export function AgentDetailPage() {
   const launcherQuery = useQuery({
     queryKey: ['agent-launcher', agentId],
     queryFn: () => apiGet<AgentLauncherSummary>(`/api/v1/agents/${encodeURIComponent(agentId)}/launcher`),
+    enabled: !!agentId,
+    retry: false,
+  });
+  const modelsQuery = useQuery({
+    queryKey: ['agent-models', agentId],
+    queryFn: () => apiGet<AgentModelsSummary>(`/api/v1/agents/${encodeURIComponent(agentId)}/models`),
     enabled: !!agentId,
     retry: false,
   });
@@ -195,6 +235,21 @@ export function AgentDetailPage() {
     },
   });
 
+  const skillUninstallMutation = useMutation({
+    mutationFn: async (skillName: string) => {
+      return apiPost<AgentSkillCatalogEntry>(`/api/v1/agents/${encodeURIComponent(agentId)}/skills/uninstall`, { name: skillName });
+    },
+    onSuccess: async (removed) => {
+      const removedName = String(removed.name || '').trim() || 'unknown-skill';
+      setLastActionMessage(`Removed skill ${removedName}.`);
+      await capabilitiesQuery.refetch();
+      await launcherQuery.refetch();
+    },
+    onError: (error) => {
+      setLastActionMessage((error as Error).message);
+    },
+  });
+
   const mcpToggleMutation = useMutation({
     mutationFn: async ({ serverName, enabled }: { serverName: string; enabled: boolean }) => {
       await apiPost(`/api/v1/agents/${encodeURIComponent(agentId)}/mcp/${encodeURIComponent(serverName)}`, { enabled });
@@ -225,6 +280,18 @@ export function AgentDetailPage() {
     },
   });
 
+  const modelSyncMutation = useMutation({
+    mutationFn: async () => apiPost<AgentModelsSummary>(`/api/v1/agents/${encodeURIComponent(agentId)}/models/sync`, {}),
+    onSuccess: async () => {
+      setLastActionMessage('Model surface synced.');
+      await modelsQuery.refetch();
+      await launcherQuery.refetch();
+    },
+    onError: (error) => {
+      setLastActionMessage((error as Error).message);
+    },
+  });
+
   const content = useMemo(() => {
     if (!agentId) return { state: 'error', message: 'Error: missing agent id.' } as const;
     const launcherPayload = launcherQuery.data || {};
@@ -239,7 +306,13 @@ export function AgentDetailPage() {
     if (capabilitiesQuery.isError && !launcherPayload.capabilities) {
       return { state: 'error', message: `Error: ${(capabilitiesQuery.error as Error).message}` } as const;
     }
-    return { state: 'ready', payload: statusPayload, capabilities: capabilitiesPayload, launcher: launcherPayload } as const;
+    return {
+      state: 'ready',
+      payload: statusPayload,
+      capabilities: capabilitiesPayload,
+      launcher: launcherPayload,
+      models: modelsQuery.data || {},
+    } as const;
   }, [
     agentId,
     capabilitiesQuery.data,
@@ -248,11 +321,16 @@ export function AgentDetailPage() {
     capabilitiesQuery.isLoading,
     launcherQuery.data,
     launcherQuery.isLoading,
+    modelsQuery.data,
     statusQuery.data,
     statusQuery.error,
     statusQuery.isError,
     statusQuery.isLoading,
   ]);
+  const remediationMessages = useMemo(
+    () => (content.state === 'ready' ? buildLauncherRemediationMessages(content.launcher) : []),
+    [content],
+  );
 
   return (
     <section id="view-agent-detail" className="view">
@@ -263,6 +341,18 @@ export function AgentDetailPage() {
           <div className="card">
             <h3>{`Agent: ${agentId}`}</h3>
             <div className="card-subtitle">Runtime Capabilities</div>
+            {remediationMessages.length ? (
+              <div>
+                <strong>Remediation</strong>
+                <ul className="compact-list">
+                  {remediationMessages.map((message) => (
+                    <li key={message}>
+                      <span className="text-dim">{message}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             {content.launcher && (content.launcher.heartbeat || content.launcher.providerReadiness || content.launcher.memory || content.launcher.session || content.launcher.cron) ? (
               <div className="kv-grid">
                 <div>
@@ -373,14 +463,27 @@ export function AgentDetailPage() {
                 </ul>
               </div>
             ) : null}
-            {content.launcher?.modelSurface?.profiles && content.launcher.modelSurface.profiles.length ? (
+            {((content.models?.modelSurface && content.models.modelSurface.profiles) || content.launcher?.modelSurface?.profiles)?.length ? (
               <div>
                 <strong>Model Surface</strong>
                 <div className="text-dim">
-                  {content.launcher.modelSurface.defaultProfile ? `default=${content.launcher.modelSurface.defaultProfile}` : 'default=unconfigured'}
+                  {(content.models?.modelSurface?.defaultProfile || content.launcher?.modelSurface?.defaultProfile)
+                    ? `default=${content.models?.modelSurface?.defaultProfile || content.launcher?.modelSurface?.defaultProfile}`
+                    : 'default=unconfigured'}
+                  {content.models?.configPath ? ` · ${content.models.configPath}` : ''}
+                </div>
+                <div className="btn-row">
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    disabled={modelSyncMutation.isPending}
+                    onClick={() => modelSyncMutation.mutate()}
+                  >
+                    Sync models
+                  </button>
                 </div>
                 <ul className="compact-list">
-                  {content.launcher.modelSurface.profiles.map((profile, index) => {
+                  {(content.models?.modelSurface?.profiles || content.launcher?.modelSurface?.profiles || []).map((profile, index) => {
                     const label = String(profile.modelAlias || profile.profileName || `profile-${index + 1}`).trim();
                     return (
                       <li key={String(profile.profileName || label || index)}>
@@ -416,16 +519,28 @@ export function AgentDetailPage() {
                       <span className="text-dim">
                         {skill.enabled ? 'enabled' : 'disabled'}
                         {skill.summary ? ` · ${skill.summary}` : ''}
+                        {skill.source ? ` · ${skill.source}` : ''}
+                        {skill.version ? ` · ${skill.version}` : ''}
                       </span>
                       {skill.name ? (
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          disabled={skillToggleMutation.isPending}
-                          onClick={() => skillToggleMutation.mutate({ skillName: String(skill.name), enabled: !skill.enabled })}
-                        >
-                          {skill.enabled ? 'Disable' : 'Enable'}
-                        </button>
+                        <div className="btn-row">
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={skillToggleMutation.isPending}
+                            onClick={() => skillToggleMutation.mutate({ skillName: String(skill.name), enabled: !skill.enabled })}
+                          >
+                            {skill.enabled ? 'Disable' : 'Enable'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={skillUninstallMutation.isPending}
+                            onClick={() => skillUninstallMutation.mutate(String(skill.name))}
+                          >
+                            Uninstall
+                          </button>
+                        </div>
                       ) : null}
                     </li>
                   ))}
@@ -456,6 +571,8 @@ export function AgentDetailPage() {
                           <span className="text-dim">
                             {skill.summary || 'no summary'}
                             {skill.tags?.length ? ` · tags=${skill.tags.join(', ')}` : ''}
+                            {skill.source ? ` · ${skill.source}` : ''}
+                            {skill.version ? ` · ${skill.version}` : ''}
                           </span>
                           {skillName ? (
                             <button

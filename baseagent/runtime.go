@@ -218,6 +218,20 @@ func (r *Runtime) ListInstalledSkills(ctx context.Context) []SkillDefinition {
 	return r.skillsLoader.ListInstalledSkills(ctx)
 }
 
+func (r *Runtime) RecentSubagentJobs(ctx context.Context, limit int) []SubagentJob {
+	if r == nil || r.subagentManager == nil {
+		return nil
+	}
+	return r.subagentManager.RecentJobs(ctx, limit)
+}
+
+func (r *Runtime) SubagentJob(ctx context.Context, jobID string) (SubagentJob, error) {
+	if r == nil || r.subagentManager == nil {
+		return SubagentJob{}, fmt.Errorf("subagent manager is unavailable")
+	}
+	return r.subagentManager.Job(ctx, jobID)
+}
+
 func (r *Runtime) SearchSkills(ctx context.Context, query string) []SkillDefinition {
 	if r == nil || r.skillsLoader == nil {
 		return nil
@@ -230,6 +244,13 @@ func (r *Runtime) InstallSkill(ctx context.Context, name string) (SkillDefinitio
 		return SkillDefinition{}, fmt.Errorf("skills loader is unavailable")
 	}
 	return r.skillsLoader.InstallSkill(ctx, name)
+}
+
+func (r *Runtime) UninstallSkill(ctx context.Context, name string) (SkillDefinition, error) {
+	if r == nil || r.skillsLoader == nil {
+		return SkillDefinition{}, fmt.Errorf("skills loader is unavailable")
+	}
+	return r.skillsLoader.UninstallSkill(ctx, name)
 }
 
 func (r *Runtime) StartMCP(ctx context.Context) error {

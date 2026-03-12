@@ -6,10 +6,12 @@ import (
 )
 
 type SkillDefinition struct {
-	Name     string
-	Summary  string
-	Keywords []string
-	Tags     []string
+	Name     string   `json:"name"`
+	Summary  string   `json:"summary,omitempty"`
+	Keywords []string `json:"keywords,omitempty"`
+	Tags     []string `json:"tags,omitempty"`
+	Source   string   `json:"source,omitempty"`
+	Version  string   `json:"version,omitempty"`
 }
 
 type SkillsLoader interface {
@@ -17,6 +19,7 @@ type SkillsLoader interface {
 	ListInstalledSkills(ctx context.Context) []SkillDefinition
 	SearchSkills(ctx context.Context, query string) []SkillDefinition
 	InstallSkill(ctx context.Context, name string) (SkillDefinition, error)
+	UninstallSkill(ctx context.Context, name string) (SkillDefinition, error)
 }
 
 func composeSkillAwareSystemPrompt(basePrompt, skillSummary string) string {

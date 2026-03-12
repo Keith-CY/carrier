@@ -28,6 +28,7 @@ function renderAgentDetailPage() {
 describe('AgentDetailPage', () => {
   beforeEach(() => {
     let cronPaused = false;
+    let syncedModels = false;
     localStorage.clear();
     localStorage.setItem('carrier_token', 'test-token');
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -46,7 +47,7 @@ describe('AgentDetailPage', () => {
             disabledCount: 0,
           },
           skills: [
-            { name: 'go-testing', enabled: true, summary: 'Use go test before claiming success.' },
+            { name: 'go-testing', enabled: true, summary: 'Use go test before claiming success.', source: 'catalog', version: 'builtin' },
           ],
           mcp: {
             servers: [
@@ -88,6 +89,47 @@ describe('AgentDetailPage', () => {
           headers: { 'Content-Type': 'application/json' },
         });
       }
+      if (url.endsWith('/api/v1/agents/agent-alpha/models')) {
+        return new Response(JSON.stringify({
+          agentId: 'agent-alpha',
+          instanceId: 'agent-alpha-main',
+          configPath: '/tmp/agent-alpha/config.toml',
+          modelSurface: {
+            defaultProfile: syncedModels ? 'openrouter-safe' : 'openrouter-fast',
+            profiles: syncedModels
+              ? [
+                  { profileName: 'openrouter-safe', modelAlias: 'flash', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
+                  { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: false },
+                ]
+              : [
+                  { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
+                  { profileName: 'openrouter-safe', modelAlias: 'flash', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: false },
+                ],
+          },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/v1/agents/agent-alpha/models/sync')) {
+        syncedModels = true;
+        return new Response(JSON.stringify({
+          agentId: 'agent-alpha',
+          instanceId: 'agent-alpha-main',
+          configPath: '/tmp/agent-alpha/config.toml',
+          synced: true,
+          modelSurface: {
+            defaultProfile: 'openrouter-safe',
+            profiles: [
+              { profileName: 'openrouter-safe', modelAlias: 'flash', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
+              { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: false },
+            ],
+          },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       if (url.endsWith('/api/v1/agents/agent-alpha/skills/go-testing')) {
         return new Response(JSON.stringify({
           skillSummary: {
@@ -96,7 +138,7 @@ describe('AgentDetailPage', () => {
             disabledCount: 1,
           },
           skills: [
-            { name: 'go-testing', enabled: false, summary: 'Use go test before claiming success.' },
+            { name: 'go-testing', enabled: false, summary: 'Use go test before claiming success.', source: 'catalog', version: 'builtin' },
           ],
         }), {
           status: 200,
@@ -106,7 +148,7 @@ describe('AgentDetailPage', () => {
       if (url.includes('/api/v1/agents/agent-alpha/skills/search')) {
         return new Response(JSON.stringify({
           skills: [
-            { name: 'workspace-inspection', summary: 'Inspect workspace state.' },
+            { name: 'workspace-inspection', summary: 'Inspect workspace state.', source: 'catalog', version: 'v1.2.3' },
           ],
         }), {
           status: 200,
@@ -117,6 +159,19 @@ describe('AgentDetailPage', () => {
         return new Response(JSON.stringify({
           name: 'workspace-inspection',
           summary: 'Inspect workspace state.',
+          source: 'catalog',
+          version: 'v1.2.3',
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/v1/agents/agent-alpha/skills/uninstall')) {
+        return new Response(JSON.stringify({
+          name: 'go-testing',
+          summary: 'Use go test before claiming success.',
+          source: 'catalog',
+          version: 'builtin',
         }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -180,6 +235,8 @@ describe('AgentDetailPage', () => {
     expect(screen.getAllByText(/openrouter:flash/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/group=2/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/1 installed · 1 enabled · 0 disabled/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/catalog/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/builtin/i).length).toBeGreaterThan(0);
   });
 
   test('toggles skill state through the agent skill endpoint', async () => {
@@ -218,6 +275,23 @@ describe('AgentDetailPage', () => {
         method: 'POST',
       }),
     );
+    expect(screen.getAllByText(/catalog/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/v1.2.3/i).length).toBeGreaterThan(0);
+  });
+
+  test('uninstalls skills through managed skill endpoint', async () => {
+    renderAgentDetailPage();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Uninstall' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Uninstall' }));
+
+    await waitFor(() => expect(screen.getByText(/Removed skill go-testing\./i)).toBeInTheDocument());
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/skills/uninstall'),
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    );
   });
 
   test('toggles MCP server state through the agent MCP endpoint', async () => {
@@ -244,6 +318,9 @@ describe('AgentDetailPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Pause cron-1/i }));
     await waitFor(() => expect(screen.getByText(/Cron job cron-1 paused\./i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/One or more cron jobs are paused\. Resume or cancel them to restore scheduled automation\./i)).toBeInTheDocument(),
+    );
 
     fireEvent.click(screen.getByRole('button', { name: /Resume cron-1/i }));
     await waitFor(() => expect(screen.getByText(/Cron job cron-1 resumed\./i)).toBeInTheDocument());
@@ -259,6 +336,74 @@ describe('AgentDetailPage', () => {
     expect(globalThis.fetch).toHaveBeenCalledWith(
       expect.stringContaining('/api/v1/agents/agent-alpha/cron/cron-1/resume'),
       expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  test('renders remediation callouts for stale heartbeat and provider readiness', async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url);
+      if (url.endsWith('/api/v1/agents/agent-alpha/status')) {
+        return new Response(JSON.stringify({ id: 'agent-alpha', runtimeState: 'running' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/v1/agents/agent-alpha/capabilities')) {
+        return new Response(JSON.stringify({
+          skillSummary: { installedCount: 0, enabledCount: 0, disabledCount: 0 },
+          skills: [],
+          mcp: { servers: [], visibleTools: [] },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/v1/agents/agent-alpha/launcher')) {
+        return new Response(JSON.stringify({
+          agentId: 'agent-alpha',
+          heartbeat: { state: 'stale', ageSeconds: 240 },
+          providerReadiness: { provider: 'openrouter', ready: false, authMode: 'api_key' },
+          cron: {
+            count: 1,
+            jobs: [{ id: 'cron-1', prompt: 'check launcher', paused: true, lastResult: 'paused' }],
+          },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/v1/agents/agent-alpha/models')) {
+        return new Response(JSON.stringify({ agentId: 'agent-alpha', modelSurface: { profiles: [] } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+
+    renderAgentDetailPage();
+
+    await waitFor(() => expect(screen.getByText(/Remediation/i)).toBeInTheDocument());
+    expect(screen.getByText(/Provider authentication is not ready\. Reconfigure credentials or switch to a ready profile\./i)).toBeInTheDocument();
+    expect(screen.getByText(/Launcher heartbeat is stale\. Restart the agent or inspect the managed runtime\./i)).toBeInTheDocument();
+    expect(screen.getByText(/One or more cron jobs are paused\. Resume or cancel them to restore scheduled automation\./i)).toBeInTheDocument();
+  });
+
+  test('loads dedicated model surface and syncs it on demand', async () => {
+    renderAgentDetailPage();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /sync models/i })).toBeInTheDocument());
+    expect(screen.getByText(/\/tmp\/agent-alpha\/config.toml/i)).toBeInTheDocument();
+    expect(screen.getByText(/openrouter-fast/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /sync models/i }));
+
+    await waitFor(() => expect(screen.getByText(/Model surface synced\./i)).toBeInTheDocument());
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/models/sync'),
+      expect.objectContaining({
+        method: 'POST',
+      }),
     );
   });
 });

@@ -83,6 +83,54 @@ func TestSubagentManagerCancelLifecycle(t *testing.T) {
 	}
 }
 
+func TestSubagentManagerRecentJobsRetainsBoundedTerminalHistory(t *testing.T) {
+	releases := map[string]chan struct{}{
+		"first":  make(chan struct{}),
+		"second": make(chan struct{}),
+		"third":  make(chan struct{}),
+	}
+	manager := NewInMemorySubagentManager(func(_ context.Context, req SubagentRequest) (string, error) {
+		if release, ok := releases[req.Task]; ok {
+			<-release
+		}
+		return "completed: " + req.Task, nil
+	})
+	manager.maxHistory = 2
+
+	first, err := manager.Spawn(context.Background(), SubagentRequest{Task: "first"})
+	if err != nil {
+		t.Fatalf("spawn first job: %v", err)
+	}
+	close(releases["first"])
+	waitForSubagentJobState(t, manager, first.JobID, SubagentJobStatusCompleted)
+
+	second, err := manager.Spawn(context.Background(), SubagentRequest{Task: "second"})
+	if err != nil {
+		t.Fatalf("spawn second job: %v", err)
+	}
+	close(releases["second"])
+	waitForSubagentJobState(t, manager, second.JobID, SubagentJobStatusCompleted)
+
+	third, err := manager.Spawn(context.Background(), SubagentRequest{Task: "third"})
+	if err != nil {
+		t.Fatalf("spawn third job: %v", err)
+	}
+	close(releases["third"])
+	waitForSubagentJobState(t, manager, third.JobID, SubagentJobStatusCompleted)
+
+	jobs := manager.RecentJobs(context.Background(), 10)
+	if len(jobs) != 2 {
+		t.Fatalf("expected bounded recent jobs, got %+v", jobs)
+	}
+	if jobs[0].JobID != third.JobID || jobs[1].JobID != second.JobID {
+		t.Fatalf("expected newest-first recent jobs, got %+v", jobs)
+	}
+
+	if _, err := manager.Job(context.Background(), first.JobID); err == nil {
+		t.Fatalf("expected oldest terminal job to be pruned from lookup")
+	}
+}
+
 func waitForSubagentJobState(t *testing.T, manager *InMemorySubagentManager, jobID string, want SubagentJobStatus) SubagentJob {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

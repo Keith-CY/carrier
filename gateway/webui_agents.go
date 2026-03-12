@@ -3,6 +3,7 @@ package gateway
 import (
 	"carrier/baseagent"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -132,6 +133,29 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 			}
 			writeJSON(w, http.StatusOK, installed)
 			return
+		case strings.EqualFold(skillAction, "uninstall"):
+			if r.Method != http.MethodPost {
+				writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+				return
+			}
+			if daemon == nil {
+				writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_COMMAND_FAILED", "daemon client is unavailable"))
+				return
+			}
+			var body struct {
+				Name string `json:"name"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid JSON body"))
+				return
+			}
+			removed, err := daemon.UninstallAgentSkill(r.Context(), agentID, strings.TrimSpace(body.Name), "webui:agents:skills:uninstall", requestID)
+			if err != nil {
+				writeDaemonAPIError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, removed)
+			return
 		}
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
@@ -155,6 +179,36 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 		}
 		writeJSON(w, http.StatusOK, summary)
 		return
+	case "models":
+		switch {
+		case len(parts) == 2 && r.Method == http.MethodGet:
+			summary, err := currentManagedAgentModelsSummary(agentID)
+			if err != nil {
+				if errors.Is(err, errManagedAgentInstanceNotFound) {
+					writeJSON(w, http.StatusNotFound, gatewayErrBody("E_AGENT_NOT_FOUND", fmt.Sprintf("managed agent %s not found", agentID)))
+					return
+				}
+				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load managed agent models", "load managed agent models", err)
+				return
+			}
+			writeJSON(w, http.StatusOK, summary)
+			return
+		case len(parts) == 3 && strings.EqualFold(strings.TrimSpace(parts[2]), "sync") && r.Method == http.MethodPost:
+			summary, err := syncManagedAgentModelsSummary(agentID)
+			if err != nil {
+				if errors.Is(err, errManagedAgentInstanceNotFound) {
+					writeJSON(w, http.StatusNotFound, gatewayErrBody("E_AGENT_NOT_FOUND", fmt.Sprintf("managed agent %s not found", agentID)))
+					return
+				}
+				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to sync managed agent models", "sync managed agent models", err)
+				return
+			}
+			writeJSON(w, http.StatusOK, summary)
+			return
+		default:
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
 	case "mcp":
 		if len(parts) != 3 {
 			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "mcp server name is required"))

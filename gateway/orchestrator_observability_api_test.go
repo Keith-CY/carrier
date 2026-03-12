@@ -19,6 +19,43 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 		WorkerLeaseStaleAfter:     5 * time.Minute,
 		WorkerHeartbeatTimeout:    2 * time.Minute,
 	}, nil)
+	storePath := os.Getenv("CARRIER_INSTANCE_STORE")
+	nowStore := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := saveManagedInstances(storePath, []managedAgentInstance{
+		{
+			ID:      "picoclaw-prod",
+			Type:    "picoclaw",
+			AgentID: "picoclaw",
+			ModelRuntime: &managedAgentModelRuntime{
+				RequestedAlias: "flash",
+				ResolvedModel:  "google/gemini-2.0-flash-001",
+				FallbackGroup:  "openrouter:flash",
+				OverrideHit:    true,
+				FallbackHit:    false,
+				LastRunAt:      nowStore,
+			},
+			CreatedAt: nowStore,
+			UpdatedAt: nowStore,
+		},
+		{
+			ID:      "zeroclaw-local",
+			Type:    "zeroclaw",
+			AgentID: "zeroclaw",
+			ModelRuntime: &managedAgentModelRuntime{
+				RequestedAlias: "flash",
+				RequestedModel: "deepseek/deepseek-chat-v3-0324",
+				ResolvedModel:  "deepseek/deepseek-chat-v3-0324",
+				FallbackGroup:  "openrouter:flash",
+				OverrideHit:    true,
+				FallbackHit:    true,
+				LastRunAt:      nowStore,
+			},
+			CreatedAt: nowStore,
+			UpdatedAt: nowStore,
+		},
+	}); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
 	hostID := createRemoteHostForTests(t, mux)
 
 	if _, err := upsertOrchestratorExecution(OrchestratorExecution{
@@ -245,6 +282,12 @@ func TestOrchestratorMetricsSummary(t *testing.T) {
 	}
 	if got := anyToFloat(providers["totalEstimatedCostUsd"]); got <= 0 {
 		t.Fatalf("providers.totalEstimatedCostUsd=%f want > 0 providers=%+v", got, providers)
+	}
+	if got := int(anyToFloat(providers["managedOverrideHits"])); got != 2 {
+		t.Fatalf("providers.managedOverrideHits=%d want 2 providers=%+v", got, providers)
+	}
+	if got := int(anyToFloat(providers["managedFallbackHits"])); got != 1 {
+		t.Fatalf("providers.managedFallbackHits=%d want 1 providers=%+v", got, providers)
 	}
 	aggregates, _ := providers["aggregates"].([]interface{})
 	if len(aggregates) < 2 {

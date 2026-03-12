@@ -25,7 +25,10 @@ type fakeBaseAgentRuntime struct {
 	approvalResp        baseagent.ChatResponse
 	approvalErr         error
 	installSkill        baseagent.SkillDefinition
+	uninstallSkill      baseagent.SkillDefinition
 	searchSkills        []baseagent.SkillDefinition
+	subagentJobs        []baseagent.SubagentJob
+	subagentJob         baseagent.SubagentJob
 	cronJob             baseagent.CronJob
 	cronJobs            []baseagent.CronJob
 	cancelledCronJob    baseagent.CronJob
@@ -47,6 +50,7 @@ type fakeBaseAgentRuntime struct {
 	mcpToggleCall       int
 	searchSkillsCall    int
 	installSkillCall    int
+	uninstallSkillCall  int
 	lastReq             baseagent.ChatRequest
 	lastSession         string
 	lastApproval        string
@@ -59,7 +63,10 @@ type fakeBaseAgentRuntime struct {
 	lastMCPServerName   string
 	lastMCPEnabled      bool
 	lastInstallSkill    string
+	lastUninstallSkill  string
 	lastSkillSearch     string
+	lastSubagentJobID   string
+	lastSubagentLimit   int
 }
 
 func (f *fakeBaseAgentRuntime) Chat(_ context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error) {
@@ -109,6 +116,28 @@ func (f *fakeBaseAgentRuntime) InstallSkill(_ context.Context, name string) (bas
 		f.installSkill = baseagent.SkillDefinition{Name: name, Summary: "installed skill"}
 	}
 	return f.installSkill, nil
+}
+
+func (f *fakeBaseAgentRuntime) UninstallSkill(_ context.Context, name string) (baseagent.SkillDefinition, error) {
+	f.uninstallSkillCall++
+	f.lastUninstallSkill = name
+	if f.uninstallSkill.Name == "" {
+		f.uninstallSkill = baseagent.SkillDefinition{Name: name, Summary: "removed skill"}
+	}
+	return f.uninstallSkill, nil
+}
+
+func (f *fakeBaseAgentRuntime) RecentSubagentJobs(_ context.Context, limit int) []baseagent.SubagentJob {
+	f.lastSubagentLimit = limit
+	return append([]baseagent.SubagentJob(nil), f.subagentJobs...)
+}
+
+func (f *fakeBaseAgentRuntime) SubagentJob(_ context.Context, jobID string) (baseagent.SubagentJob, error) {
+	f.lastSubagentJobID = jobID
+	if f.subagentJob.JobID == "" {
+		return baseagent.SubagentJob{}, fmt.Errorf("subagent job %s not found", jobID)
+	}
+	return f.subagentJob, nil
 }
 
 func (f *fakeBaseAgentRuntime) SetMCPServerEnabled(_ context.Context, name string, enabled bool) error {
@@ -332,10 +361,11 @@ func TestAgentSkillSearchAndInstallEndpoints(t *testing.T) {
 	ready.Store(true)
 	rt := &fakeBaseAgentRuntime{
 		searchSkills: []baseagent.SkillDefinition{
-			{Name: "go-testing", Summary: "Use go test before claiming success."},
-			{Name: "workspace-inspection", Summary: "Inspect workspace state."},
+			{Name: "go-testing", Summary: "Use go test before claiming success.", Source: "catalog", Version: "builtin"},
+			{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3"},
 		},
-		installSkill: baseagent.SkillDefinition{Name: "workspace-inspection", Summary: "Inspect workspace state."},
+		installSkill:   baseagent.SkillDefinition{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3"},
+		uninstallSkill: baseagent.SkillDefinition{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3"},
 	}
 	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
 
@@ -350,6 +380,9 @@ func TestAgentSkillSearchAndInstallEndpoints(t *testing.T) {
 	}
 	if !strings.Contains(searchRec.Body.String(), `"workspace-inspection"`) {
 		t.Fatalf("unexpected skill search body: %s", searchRec.Body.String())
+	}
+	if !strings.Contains(searchRec.Body.String(), `"source":"catalog"`) || !strings.Contains(searchRec.Body.String(), `"version":"v1.2.3"`) {
+		t.Fatalf("expected search metadata in body: %s", searchRec.Body.String())
 	}
 
 	installBadReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/install", strings.NewReader(`{}`))
@@ -371,6 +404,23 @@ func TestAgentSkillSearchAndInstallEndpoints(t *testing.T) {
 	}
 	if !strings.Contains(installRec.Body.String(), `"workspace-inspection"`) {
 		t.Fatalf("unexpected skill install body: %s", installRec.Body.String())
+	}
+	if !strings.Contains(installRec.Body.String(), `"source":"catalog"`) || !strings.Contains(installRec.Body.String(), `"version":"v1.2.3"`) {
+		t.Fatalf("expected install metadata in body: %s", installRec.Body.String())
+	}
+
+	uninstallReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/uninstall", strings.NewReader(`{"name":"workspace-inspection"}`))
+	uninstallReq.Header.Set("Content-Type", "application/json")
+	uninstallRec := httptest.NewRecorder()
+	mux.ServeHTTP(uninstallRec, uninstallReq)
+	if uninstallRec.Code != http.StatusOK {
+		t.Fatalf("expected uninstall 200, got %d body=%s", uninstallRec.Code, uninstallRec.Body.String())
+	}
+	if rt.uninstallSkillCall != 1 || rt.lastUninstallSkill != "workspace-inspection" {
+		t.Fatalf("unexpected skill uninstall state: %+v", rt)
+	}
+	if !strings.Contains(uninstallRec.Body.String(), `"workspace-inspection"`) || !strings.Contains(uninstallRec.Body.String(), `"version":"v1.2.3"`) {
+		t.Fatalf("unexpected skill uninstall body: %s", uninstallRec.Body.String())
 	}
 }
 
@@ -409,6 +459,53 @@ func TestAgentMCPServerToggleEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(okRec.Body.String(), `"name":"repo"`) || !strings.Contains(okRec.Body.String(), `"enabled":false`) {
 		t.Fatalf("unexpected mcp toggle body: %s", okRec.Body.String())
+	}
+}
+
+func TestAgentSubagentHistoryEndpoints(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		subagentJobs: []baseagent.SubagentJob{
+			{JobID: "subagent-2", Task: "summarize", Status: baseagent.SubagentJobStatusCancelled, Error: "subagent job cancelled"},
+			{JobID: "subagent-3", Task: "collect", Status: baseagent.SubagentJobStatusCompleted, Result: "done"},
+		},
+		subagentJob: baseagent.SubagentJob{JobID: "subagent-3", Task: "collect", Status: baseagent.SubagentJobStatusCompleted, Result: "done"},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/subagents?limit=2", nil)
+	listRec := httptest.NewRecorder()
+	mux.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("expected subagent list 200, got %d body=%s", listRec.Code, listRec.Body.String())
+	}
+	if rt.lastSubagentLimit != 2 {
+		t.Fatalf("expected limit to be forwarded, got %d", rt.lastSubagentLimit)
+	}
+	if !strings.Contains(listRec.Body.String(), `"subagent-2"`) || !strings.Contains(listRec.Body.String(), `"subagent-3"`) {
+		t.Fatalf("unexpected subagent list body: %s", listRec.Body.String())
+	}
+
+	jobReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/subagents/subagent-3", nil)
+	jobRec := httptest.NewRecorder()
+	mux.ServeHTTP(jobRec, jobReq)
+	if jobRec.Code != http.StatusOK {
+		t.Fatalf("expected subagent get 200, got %d body=%s", jobRec.Code, jobRec.Body.String())
+	}
+	if rt.lastSubagentJobID != "subagent-3" {
+		t.Fatalf("expected subagent job id to be forwarded, got %q", rt.lastSubagentJobID)
+	}
+	if !strings.Contains(jobRec.Body.String(), `"subagent-3"`) || !strings.Contains(jobRec.Body.String(), `"completed"`) {
+		t.Fatalf("unexpected subagent job body: %s", jobRec.Body.String())
+	}
+
+	badLimitReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/subagents?limit=0", nil)
+	badLimitRec := httptest.NewRecorder()
+	mux.ServeHTTP(badLimitRec, badLimitReq)
+	if badLimitRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid limit 400, got %d body=%s", badLimitRec.Code, badLimitRec.Body.String())
 	}
 }
 

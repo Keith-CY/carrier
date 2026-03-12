@@ -24,6 +24,7 @@ type managedAgentInstance struct {
 	Channel      string                    `json:"channel,omitempty"`
 	Provider     string                    `json:"provider,omitempty"`
 	ModelSurface *managedAgentModelSurface `json:"model_surface,omitempty"`
+	ModelRuntime *managedAgentModelRuntime `json:"model_runtime,omitempty"`
 	PairRequired bool                      `json:"pair_required,omitempty"`
 	PairCode     string                    `json:"pair_code,omitempty"`
 	PairedChatID string                    `json:"paired_chat_id,omitempty"`
@@ -35,6 +36,16 @@ type managedAgentInstance struct {
 type managedAgentModelSurface struct {
 	DefaultProfile string                     `json:"default_profile,omitempty"`
 	Profiles       []managedAgentModelProfile `json:"profiles,omitempty"`
+}
+
+type managedAgentModelRuntime struct {
+	RequestedAlias string `json:"requested_alias,omitempty"`
+	RequestedModel string `json:"requested_model,omitempty"`
+	ResolvedModel  string `json:"resolved_model,omitempty"`
+	FallbackGroup  string `json:"fallback_group,omitempty"`
+	OverrideHit    bool   `json:"override_hit,omitempty"`
+	FallbackHit    bool   `json:"fallback_hit,omitempty"`
+	LastRunAt      string `json:"last_run_at,omitempty"`
 }
 
 type managedAgentModelProfile struct {

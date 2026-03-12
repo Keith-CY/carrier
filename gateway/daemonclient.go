@@ -322,6 +322,19 @@ func (c *DaemonClient) InstallAgentSkill(ctx context.Context, agentID, skillName
 	return installed, nil
 }
 
+func (c *DaemonClient) UninstallAgentSkill(ctx context.Context, agentID, skillName, actor, requestID string) (baseagent.SkillDefinition, error) {
+	body := map[string]string{"name": strings.TrimSpace(skillName)}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/skills/uninstall", body, actor, requestID)
+	if err != nil {
+		return baseagent.SkillDefinition{}, err
+	}
+	var removed baseagent.SkillDefinition
+	if err := json.Unmarshal(raw, &removed); err != nil {
+		return baseagent.SkillDefinition{}, fmt.Errorf("skill uninstall response: %w", err)
+	}
+	return removed, nil
+}
+
 func (c *DaemonClient) SetAgentMCPServerEnabled(ctx context.Context, agentID, serverName string, enabled bool, actor, requestID string) (AgentCapabilitySummary, error) {
 	body := map[string]bool{"enabled": enabled}
 	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/mcp/"+url.PathEscape(serverName), body, actor, requestID)

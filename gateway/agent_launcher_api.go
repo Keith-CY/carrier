@@ -16,6 +16,7 @@ type agentLauncherSummary struct {
 	Capabilities      AgentCapabilitySummary     `json:"capabilities"`
 	ProviderReadiness agentProviderReadiness     `json:"providerReadiness"`
 	ModelSurface      *agentLauncherModelSurface `json:"modelSurface,omitempty"`
+	LastModelRun      *agentLauncherModelRuntime `json:"lastModelRun,omitempty"`
 	Cron              *agentLauncherCronSummary  `json:"cron,omitempty"`
 	Session           *agentLauncherSession      `json:"session,omitempty"`
 }
@@ -37,6 +38,16 @@ type agentLauncherModelSurfaceProfile struct {
 	FallbackGroup  string `json:"fallbackGroup,omitempty"`
 	AliasGroupSize int    `json:"aliasGroupSize,omitempty"`
 	Primary        bool   `json:"primary,omitempty"`
+}
+
+type agentLauncherModelRuntime struct {
+	RequestedAlias string `json:"requestedAlias,omitempty"`
+	RequestedModel string `json:"requestedModel,omitempty"`
+	ResolvedModel  string `json:"resolvedModel,omitempty"`
+	FallbackGroup  string `json:"fallbackGroup,omitempty"`
+	OverrideHit    bool   `json:"overrideHit,omitempty"`
+	FallbackHit    bool   `json:"fallbackHit,omitempty"`
+	LastRunAt      string `json:"lastRunAt,omitempty"`
 }
 
 type agentLauncherCronSummary struct {
@@ -100,6 +111,7 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 	var session *agentLauncherSession
 	var readiness agentProviderReadiness
 	var modelSurface *agentLauncherModelSurface
+	var lastModelRun *agentLauncherModelRuntime
 	if inst, ok := latestManagedInstanceForAgent(agentID); ok {
 		session = &agentLauncherSession{
 			InstanceID:   strings.TrimSpace(inst.ID),
@@ -119,6 +131,7 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 		}
 		readiness = buildAgentProviderReadiness(inst.Provider)
 		modelSurface = buildAgentLauncherModelSurface(inst.ModelSurface)
+		lastModelRun = buildAgentLauncherModelRuntime(inst.ModelRuntime)
 	}
 	var cronSummary *agentLauncherCronSummary
 	if jobs, err := daemon.ListCronJobs(r.Context(), agentID, "", "webui:agents:launcher", requestID); err == nil && len(jobs) > 0 {
@@ -138,9 +151,25 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 		Capabilities:      capabilities,
 		ProviderReadiness: readiness,
 		ModelSurface:      modelSurface,
+		LastModelRun:      lastModelRun,
 		Cron:              cronSummary,
 		Session:           session,
 	})
+}
+
+func buildAgentLauncherModelRuntime(runtime *managedAgentModelRuntime) *agentLauncherModelRuntime {
+	if runtime == nil {
+		return nil
+	}
+	return &agentLauncherModelRuntime{
+		RequestedAlias: strings.TrimSpace(runtime.RequestedAlias),
+		RequestedModel: strings.TrimSpace(runtime.RequestedModel),
+		ResolvedModel:  strings.TrimSpace(runtime.ResolvedModel),
+		FallbackGroup:  strings.TrimSpace(runtime.FallbackGroup),
+		OverrideHit:    runtime.OverrideHit,
+		FallbackHit:    runtime.FallbackHit,
+		LastRunAt:      strings.TrimSpace(runtime.LastRunAt),
+	}
 }
 
 func buildAgentLauncherModelSurface(surface *managedAgentModelSurface) *agentLauncherModelSurface {

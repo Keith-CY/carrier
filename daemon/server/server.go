@@ -75,6 +75,9 @@ type baseAgentRuntime interface {
 	CapabilitySummary(ctx context.Context) baseagent.RuntimeCapabilitySummary
 	SearchSkills(ctx context.Context, query string) []baseagent.SkillDefinition
 	InstallSkill(ctx context.Context, name string) (baseagent.SkillDefinition, error)
+	UninstallSkill(ctx context.Context, name string) (baseagent.SkillDefinition, error)
+	RecentSubagentJobs(ctx context.Context, limit int) []baseagent.SubagentJob
+	SubagentJob(ctx context.Context, jobID string) (baseagent.SubagentJob, error)
 	SetSkillEnabled(ctx context.Context, name string, enabled bool) error
 	SetMCPServerEnabled(ctx context.Context, name string, enabled bool) error
 	RespondPendingApproval(ctx context.Context, sessionKey, approvalID string, decision baseagent.ApprovalDecision) (baseagent.ChatResponse, error)
@@ -1206,6 +1209,10 @@ func buildHTTPMuxWithBaseAgent(
 			handleAgentSkill(svc, baseRuntime, agentID, skillName, w, r)
 			return
 		}
+		if agentID, jobID, ok := parseAgentSubagentPath(r.URL.Path); ok {
+			handleAgentSubagent(svc, baseRuntime, agentID, jobID, w, r)
+			return
+		}
 		if agentID, serverName, ok := parseAgentMCPServerPath(r.URL.Path); ok {
 			handleAgentMCPServer(svc, baseRuntime, agentID, serverName, w, r)
 			return
@@ -1725,6 +1732,29 @@ func handleAgentSkill(svc *lifecycle.Service, runtime baseAgentRuntime, agentID,
 		}
 		writeJSON(w, http.StatusOK, installed)
 		return
+	case "uninstall":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body struct {
+			Name string `json:"name"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		name := strings.TrimSpace(body.Name)
+		if name == "" {
+			writeJSONError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		removed, err := runtime.UninstallSkill(r.Context(), name)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, removed)
+		return
 	default:
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1769,6 +1799,46 @@ func handleAgentMCPServer(svc *lifecycle.Service, runtime baseAgentRuntime, agen
 		return
 	}
 	writeJSON(w, http.StatusOK, runtime.CapabilitySummary(r.Context()))
+}
+
+func handleAgentSubagent(svc *lifecycle.Service, runtime baseAgentRuntime, agentID, jobID string, w http.ResponseWriter, r *http.Request) {
+	if svc == nil {
+		writeJSONError(w, http.StatusInternalServerError, "service unavailable")
+		return
+	}
+	if _, err := svc.Status(agentID); err != nil {
+		writeJSONError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime unavailable")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if jobID == "" {
+		limit := 20
+		if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+			parsed, err := strconv.Atoi(rawLimit)
+			if err != nil || parsed <= 0 {
+				writeJSONError(w, http.StatusBadRequest, "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"jobs": runtime.RecentSubagentJobs(r.Context(), limit),
+		})
+		return
+	}
+	job, err := runtime.SubagentJob(r.Context(), jobID)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
 }
 
 func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID string, w http.ResponseWriter, r *http.Request) {
@@ -2132,6 +2202,58 @@ func parseAgentSkillPath(path string) (agentID string, skillName string, ok bool
 		return "", "", false
 	}
 	return decodedAgentID, decodedSkillName, true
+}
+
+func parseAgentSubagentPath(path string) (agentID string, jobID string, ok bool) {
+	const prefix = "/api/v1/agents/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	rest := path[len(prefix):]
+	if strings.Contains(rest, "//") {
+		return "", "", false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 && len(parts) != 3 {
+		return "", "", false
+	}
+	if strings.TrimSpace(parts[1]) != "subagents" {
+		return "", "", false
+	}
+	rawAgentID := strings.TrimSpace(parts[0])
+	if rawAgentID == "" {
+		return "", "", false
+	}
+	decodedAgentID, err := url.PathUnescape(rawAgentID)
+	if err != nil {
+		return "", "", false
+	}
+	decodedAgentID = strings.TrimSpace(decodedAgentID)
+	if decodedAgentID == "" || strings.Contains(decodedAgentID, "/") || strings.Contains(decodedAgentID, "\\") || strings.Contains(decodedAgentID, "..") {
+		return "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedAgentID) {
+		return "", "", false
+	}
+	if len(parts) == 2 {
+		return decodedAgentID, "", true
+	}
+	rawJobID := strings.TrimSpace(parts[2])
+	if rawJobID == "" {
+		return "", "", false
+	}
+	decodedJobID, err := url.PathUnescape(rawJobID)
+	if err != nil {
+		return "", "", false
+	}
+	decodedJobID = strings.TrimSpace(decodedJobID)
+	if decodedJobID == "" || strings.Contains(decodedJobID, "/") || strings.Contains(decodedJobID, "\\") || strings.Contains(decodedJobID, "..") {
+		return "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedJobID) {
+		return "", "", false
+	}
+	return decodedAgentID, decodedJobID, true
 }
 
 func parseAgentMCPServerPath(path string) (agentID string, serverName string, ok bool) {

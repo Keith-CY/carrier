@@ -120,6 +120,7 @@ type OrchestratorTaskResult struct {
 
 type OrchestratorArtifact struct {
 	ID          string `json:"id"`
+	AttachmentID string `json:"attachmentId,omitempty"`
 	TaskID      string `json:"taskId,omitempty"`
 	Name        string `json:"name"`
 	Kind        string `json:"kind,omitempty"`
@@ -129,6 +130,7 @@ type OrchestratorArtifact struct {
 	Path        string `json:"path,omitempty"`
 	Source      string `json:"source,omitempty"`
 	ExternalID  string `json:"externalId,omitempty"`
+	DownloadURL string `json:"downloadUrl,omitempty"`
 	CreatedAt   string `json:"createdAt,omitempty"`
 }
 
@@ -500,6 +502,7 @@ func normalizeOrchestratorTaskResult(in OrchestratorTaskResult) OrchestratorTask
 func normalizeOrchestratorArtifact(in OrchestratorArtifact) OrchestratorArtifact {
 	out := in
 	out.ID = strings.TrimSpace(out.ID)
+	out.AttachmentID = strings.TrimSpace(out.AttachmentID)
 	out.TaskID = strings.TrimSpace(out.TaskID)
 	out.Name = strings.TrimSpace(out.Name)
 	out.Kind = strings.TrimSpace(out.Kind)
@@ -508,6 +511,7 @@ func normalizeOrchestratorArtifact(in OrchestratorArtifact) OrchestratorArtifact
 	out.Path = strings.TrimSpace(out.Path)
 	out.Source = strings.TrimSpace(out.Source)
 	out.ExternalID = strings.TrimSpace(out.ExternalID)
+	out.DownloadURL = strings.TrimSpace(out.DownloadURL)
 	out.CreatedAt = strings.TrimSpace(out.CreatedAt)
 	if out.MediaType == "" {
 		out.MediaType = out.ContentType

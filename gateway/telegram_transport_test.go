@@ -441,6 +441,70 @@ func TestTelegramSendRenderedAttachment_PrefersImageBlockURL(t *testing.T) {
 	}
 }
 
+func TestTelegramSendRenderedAttachment_UsesBlockAttachmentIDForImageRender(t *testing.T) {
+	api := &fakeTelegramAPI{}
+	resp := GatewayResponse{
+		Result: "ok",
+		RichContent: &baseagent.RichOutboundMessage{
+			Text: "generated image",
+			Blocks: []baseagent.ContentBlock{
+				{Type: "image", AttachmentID: "artifact-image-1"},
+			},
+			Attachments: []baseagent.AttachmentRef{
+				{
+					ID:          "artifact-image-1",
+					Kind:        "file",
+					Name:        "render.png",
+					MediaType:   "image/png",
+					DownloadURL: "https://downloads.example.com/render.png",
+				},
+			},
+		},
+	}
+
+	if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+		t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+	}
+	if api.sendPhotoCalls != 1 || api.lastSendPhotoRef != "https://downloads.example.com/render.png" {
+		t.Fatalf("expected sendPhoto with attachment download url, got calls=%d ref=%q", api.sendPhotoCalls, api.lastSendPhotoRef)
+	}
+	if api.sendDocumentCalls != 0 || api.sendMessageCalls != 0 {
+		t.Fatalf("expected image block to avoid document/text fallback, got document=%d message=%d", api.sendDocumentCalls, api.sendMessageCalls)
+	}
+}
+
+func TestTelegramSendRenderedAttachment_UsesBlockAttachmentIDForDocumentRender(t *testing.T) {
+	api := &fakeTelegramAPI{}
+	resp := GatewayResponse{
+		Result: "ok",
+		RichContent: &baseagent.RichOutboundMessage{
+			Text: "report ready",
+			Blocks: []baseagent.ContentBlock{
+				{Type: "file", AttachmentID: "artifact-doc-1"},
+			},
+			Attachments: []baseagent.AttachmentRef{
+				{
+					ID:          "artifact-doc-1",
+					Kind:        "image",
+					Name:        "report.pdf",
+					MediaType:   "application/pdf",
+					DownloadURL: "https://downloads.example.com/report.pdf",
+				},
+			},
+		},
+	}
+
+	if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+		t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+	}
+	if api.sendDocumentCalls != 1 || api.lastSendDocumentRef != "https://downloads.example.com/report.pdf" {
+		t.Fatalf("expected sendDocument with attachment download url, got calls=%d ref=%q", api.sendDocumentCalls, api.lastSendDocumentRef)
+	}
+	if api.sendPhotoCalls != 0 || api.sendMessageCalls != 0 {
+		t.Fatalf("expected document block to avoid photo/text fallback, got photo=%d message=%d", api.sendPhotoCalls, api.sendMessageCalls)
+	}
+}
+
 func TestTelegramSendRenderedAttachment_UsesAttachmentDownloadURLForDocument(t *testing.T) {
 	api := &fakeTelegramAPI{}
 	resp := GatewayResponse{

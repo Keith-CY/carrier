@@ -35,15 +35,18 @@ type SubagentExecutor func(context.Context, SubagentRequest) (string, error)
 type SubagentManager interface {
 	SubagentSpawner
 	Job(ctx context.Context, jobID string) (SubagentJob, error)
+	RecentJobs(ctx context.Context, limit int) []SubagentJob
 	Cancel(ctx context.Context, jobID string) error
 }
 
 type InMemorySubagentManager struct {
-	mu       sync.RWMutex
-	next     int
-	jobs     map[string]SubagentJob
-	cancels  map[string]context.CancelFunc
-	executor SubagentExecutor
+	mu         sync.RWMutex
+	next       int
+	jobs       map[string]SubagentJob
+	order      []string
+	maxHistory int
+	cancels    map[string]context.CancelFunc
+	executor   SubagentExecutor
 }
 
 func NewInMemorySubagentManager(executor SubagentExecutor) *InMemorySubagentManager {
@@ -57,9 +60,11 @@ func NewInMemorySubagentManager(executor SubagentExecutor) *InMemorySubagentMana
 		}
 	}
 	return &InMemorySubagentManager{
-		jobs:     map[string]SubagentJob{},
-		cancels:  map[string]context.CancelFunc{},
-		executor: executor,
+		jobs:       map[string]SubagentJob{},
+		order:      nil,
+		maxHistory: 32,
+		cancels:    map[string]context.CancelFunc{},
+		executor:   executor,
 	}
 }
 
@@ -86,6 +91,7 @@ func (m *InMemorySubagentManager) Spawn(ctx context.Context, req SubagentRequest
 		UpdatedAt: now,
 	}
 	m.jobs[jobID] = job
+	m.order = append(m.order, jobID)
 	m.mu.Unlock()
 
 	execBase := context.Background()
@@ -145,6 +151,7 @@ func (m *InMemorySubagentManager) runJob(ctx context.Context, jobID string, req 
 	}
 	m.jobs[jobID] = job
 	delete(m.cancels, jobID)
+	m.pruneLocked()
 	m.mu.Unlock()
 }
 
@@ -164,6 +171,29 @@ func (m *InMemorySubagentManager) Job(_ context.Context, jobID string) (Subagent
 		return SubagentJob{}, fmt.Errorf("subagent job %s not found", jobID)
 	}
 	return job, nil
+}
+
+func (m *InMemorySubagentManager) RecentJobs(_ context.Context, limit int) []SubagentJob {
+	if m == nil {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	jobs := make([]SubagentJob, 0, min(limit, len(m.order)))
+	for idx := len(m.order) - 1; idx >= 0 && len(jobs) < limit; idx-- {
+		jobID := m.order[idx]
+		job, ok := m.jobs[jobID]
+		if !ok {
+			continue
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs
 }
 
 func (m *InMemorySubagentManager) Cancel(_ context.Context, jobID string) error {
@@ -190,4 +220,35 @@ func (m *InMemorySubagentManager) Cancel(_ context.Context, jobID string) error 
 	}
 	cancel()
 	return nil
+}
+
+func (m *InMemorySubagentManager) pruneLocked() {
+	if m == nil || m.maxHistory <= 0 {
+		return
+	}
+	for len(m.order) > m.maxHistory {
+		oldestID := m.order[0]
+		job, ok := m.jobs[oldestID]
+		if !ok {
+			m.order = m.order[1:]
+			continue
+		}
+		if !isTerminalSubagentJobStatus(job.Status) {
+			return
+		}
+		delete(m.jobs, oldestID)
+		delete(m.cancels, oldestID)
+		m.order = m.order[1:]
+	}
+}
+
+func isTerminalSubagentJobStatus(status SubagentJobStatus) bool {
+	return status == SubagentJobStatusCompleted || status == SubagentJobStatusFailed || status == SubagentJobStatusCancelled
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
