@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -83,6 +84,36 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 			return
 		}
 		writeJSON(w, http.StatusOK, summary)
+		return
+	case "chat":
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if daemon == nil {
+			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_COMMAND_FAILED", "daemon client is unavailable"))
+			return
+		}
+		var body struct {
+			Provider  string `json:"provider"`
+			Message   string `json:"message"`
+			SessionID string `json:"sessionId"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid JSON body"))
+			return
+		}
+		message := strings.TrimSpace(body.Message)
+		if message == "" {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "message is required"))
+			return
+		}
+		result, err := daemon.ChatAgent(r.Context(), agentID, strings.TrimSpace(body.Provider), message, strings.TrimSpace(body.SessionID), "webui:agents:chat", requestID)
+		if err != nil {
+			writeDaemonAPIError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
 		return
 	case "launcher":
 		handleAgentLauncher(w, r, requestID, agentID, daemon)

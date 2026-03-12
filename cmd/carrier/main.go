@@ -283,6 +283,15 @@ type memoryCommandOptions struct {
 	JSON       bool
 }
 
+type agentCommandOptions struct {
+	Action    string
+	AgentID   string
+	Message   string
+	Provider  string
+	SessionID string
+	JSON      bool
+}
+
 type versionInfo struct {
 	Version   string `json:"version"`
 	Commit    string `json:"commit"`
@@ -525,6 +534,10 @@ Core workflows:
                         Decompose goal with base agent, then run orchestration
   carrier executions [list] [--limit <n>] [--json]
                         List orchestration executions
+  carrier agent launcher <agent_id> [--json]
+                        Show managed-agent launcher summary
+  carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--session-id <id>] [--json]
+                        Run one managed-agent prompt through the gateway
   carrier memory [list] [--subject <subject>] [--json]
                         List memory packages, attachments, grants, and audit snapshot
   carrier templates [list] [--json]
@@ -633,6 +646,10 @@ Usage:
                         Show orchestration execution status/results
   carrier executions cancel <execution_id> [--json]
                         Cancel orchestration execution
+  carrier agent shell <agent_id> [--provider <provider-id>] [--session-id <id>]
+                        Run an interactive managed-agent shell
+  carrier agent heartbeat <agent_id> [--json]
+                        Show managed-agent heartbeat summary
   carrier memory search --subject <subject> --query <query> [--limit <n>] [--min-score <f>] [--json]
                         Search curated memory records through the gateway knowledge facade
   carrier memory attach --instance <id> --scope <scope> [--json]
@@ -952,6 +969,18 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "agent":
+			opts, err := parseAgentCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "agent failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runAgentCommand(os.Stdin, os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "agent failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "onboard":
 			opts, err := parseOnboardCommandArgs(commandArgs)
 			if err != nil {
@@ -1091,6 +1120,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "triggers", args[2:], nil
 	case "memory":
 		return "memory", args[2:], nil
+	case "agent":
+		return "agent", args[2:], nil
 	case "--help", "-h", "help":
 		return "help", nil, nil
 	case "version", "--version", "-v", "-V":
@@ -3234,6 +3265,59 @@ func parseMemoryCommandArgs(args []string) (memoryCommandOptions, error) {
 	return opts, nil
 }
 
+func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
+	if len(args) < 2 {
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat> <agent_id> [flags]")
+	}
+	opts := agentCommandOptions{
+		Action:  strings.ToLower(strings.TrimSpace(args[0])),
+		AgentID: strings.TrimSpace(args[1]),
+	}
+	if opts.AgentID == "" {
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat> <agent_id> [flags]")
+	}
+	for i := 2; i < len(args); i++ {
+		raw := strings.TrimSpace(args[i])
+		switch strings.ToLower(raw) {
+		case "-m", "--message":
+			value, next, err := parseRequiredFlagValue(args, i, raw)
+			if err != nil {
+				return agentCommandOptions{}, errors.New("usage: carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--session-id <id>] [--json]")
+			}
+			opts.Message = strings.TrimSpace(value)
+			i = next
+		case "--provider":
+			value, next, err := parseRequiredFlagValue(args, i, "--provider")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.Provider = strings.TrimSpace(value)
+			i = next
+		case "--session-id":
+			value, next, err := parseRequiredFlagValue(args, i, "--session-id")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.SessionID = strings.TrimSpace(value)
+			i = next
+		case "--json":
+			opts.JSON = true
+		default:
+			return agentCommandOptions{}, fmt.Errorf("unknown agent option: %s", raw)
+		}
+	}
+	switch opts.Action {
+	case "run":
+		if opts.Message == "" {
+			return agentCommandOptions{}, errors.New("usage: carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--session-id <id>] [--json]")
+		}
+	case "shell", "launcher", "heartbeat":
+	default:
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat> <agent_id> [flags]")
+	}
+	return opts, nil
+}
+
 func dedupeStringSlice(values []string) []string {
 	out := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
@@ -4480,6 +4564,37 @@ type memoryDistillResponse struct {
 	Run       memoryDistillRunSnapshot `json:"-"`
 }
 
+type agentLauncherCLIResponse struct {
+	Result            string `json:"result,omitempty"`
+	AgentID           string `json:"agentId"`
+	Status            struct {
+		RuntimeState string `json:"runtimeState,omitempty"`
+		InstallState string `json:"installState,omitempty"`
+		Health       string `json:"health,omitempty"`
+	} `json:"status"`
+	Heartbeat         *struct {
+		State          string `json:"state"`
+		AgeSeconds     int64  `json:"ageSeconds"`
+		LastActivityAt string `json:"lastActivityAt,omitempty"`
+	} `json:"heartbeat,omitempty"`
+	Memory            *struct {
+		ContractID     string `json:"contractId,omitempty"`
+		ContractDigest string `json:"contractDigest,omitempty"`
+		SyncState      string `json:"syncState,omitempty"`
+	} `json:"memory,omitempty"`
+	ProviderReadiness *struct {
+		Provider string `json:"provider,omitempty"`
+		Ready    bool   `json:"ready"`
+		AuthMode string `json:"authMode,omitempty"`
+	} `json:"providerReadiness,omitempty"`
+	Session *struct {
+		InstanceID   string `json:"instanceId,omitempty"`
+		RuntimeMode  string `json:"runtimeMode,omitempty"`
+		RuntimeState string `json:"runtimeState,omitempty"`
+		UpdatedAt    string `json:"updatedAt,omitempty"`
+	} `json:"session,omitempty"`
+}
+
 func runMemoryCommand(out io.Writer, opts memoryCommandOptions) error {
 	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
 		return err
@@ -4544,6 +4659,164 @@ func runMemoryCommand(out io.Writer, opts memoryCommandOptions) error {
 	default:
 		return fmt.Errorf("unsupported memory action: %s", opts.Action)
 	}
+}
+
+func runAgentCommand(in io.Reader, out io.Writer, opts agentCommandOptions) error {
+	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+	switch opts.Action {
+	case "run":
+		resp, raw, err := runManagedAgentPrompt(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		if strings.TrimSpace(resp.SessionID) != "" {
+			_, _ = fmt.Fprintf(out, "session=%s\n", strings.TrimSpace(resp.SessionID))
+		}
+		_, _ = fmt.Fprintln(out, strings.TrimSpace(resp.Message))
+		return nil
+	case "launcher":
+		resp, raw, err := fetchManagedAgentLauncher(opts.AgentID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentLauncher(resp))
+		return nil
+	case "heartbeat":
+		resp, raw, err := fetchManagedAgentLauncher(opts.AgentID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentHeartbeat(resp))
+		return nil
+	case "shell":
+		return runManagedAgentShell(in, out, opts)
+	default:
+		return fmt.Errorf("unsupported agent action: %s", opts.Action)
+	}
+}
+
+func runManagedAgentPrompt(opts agentCommandOptions) (*gatewayruntime.AgentChatResult, []byte, error) {
+	payload := map[string]interface{}{
+		"message": strings.TrimSpace(opts.Message),
+	}
+	if strings.TrimSpace(opts.Provider) != "" {
+		payload["provider"] = strings.TrimSpace(opts.Provider)
+	}
+	if strings.TrimSpace(opts.SessionID) != "" {
+		payload["sessionId"] = strings.TrimSpace(opts.SessionID)
+	}
+	path := fmt.Sprintf("/api/v1/agents/%s/chat", neturl.PathEscape(strings.TrimSpace(opts.AgentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp gatewayruntime.AgentChatResult
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent chat response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func fetchManagedAgentLauncher(agentID string) (*agentLauncherCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/launcher", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentLauncherCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent launcher response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func runManagedAgentShell(in io.Reader, out io.Writer, opts agentCommandOptions) error {
+	reader := bufio.NewReader(in)
+	sessionID := strings.TrimSpace(opts.SessionID)
+	_, _ = fmt.Fprintf(out, "Interactive shell for %s. Type /exit to quit.\n", strings.TrimSpace(opts.AgentID))
+	for {
+		_, _ = fmt.Fprint(out, "> ")
+		line, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		line = strings.TrimSpace(line)
+		if line != "" {
+			switch strings.ToLower(line) {
+			case "/exit", "exit", "/quit", "quit":
+				return nil
+			default:
+				resp, _, runErr := runManagedAgentPrompt(agentCommandOptions{
+					Action:    "run",
+					AgentID:   opts.AgentID,
+					Message:   line,
+					Provider:  opts.Provider,
+					SessionID: sessionID,
+				})
+				if runErr != nil {
+					return runErr
+				}
+				if strings.TrimSpace(resp.SessionID) != "" {
+					sessionID = strings.TrimSpace(resp.SessionID)
+				}
+				_, _ = fmt.Fprintln(out, strings.TrimSpace(resp.Message))
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+	}
+}
+
+func renderManagedAgentLauncher(resp *agentLauncherCLIResponse) string {
+	if resp == nil {
+		return ""
+	}
+	lines := []string{
+		fmt.Sprintf("agent=%s", strings.TrimSpace(resp.AgentID)),
+		fmt.Sprintf("runtime=%s", strings.TrimSpace(resp.Status.RuntimeState)),
+		fmt.Sprintf("install=%s", strings.TrimSpace(resp.Status.InstallState)),
+		fmt.Sprintf("health=%s", strings.TrimSpace(resp.Status.Health)),
+	}
+	if resp.Heartbeat != nil {
+		lines = append(lines, fmt.Sprintf("heartbeat=%s age=%s", strings.TrimSpace(resp.Heartbeat.State), (time.Duration(resp.Heartbeat.AgeSeconds) * time.Second).String()))
+	}
+	if resp.Memory != nil && strings.TrimSpace(resp.Memory.ContractID) != "" {
+		lines = append(lines, fmt.Sprintf("memory=%s sync=%s", strings.TrimSpace(resp.Memory.ContractID), strings.TrimSpace(resp.Memory.SyncState)))
+	}
+	if resp.ProviderReadiness != nil && strings.TrimSpace(resp.ProviderReadiness.Provider) != "" {
+		lines = append(lines, fmt.Sprintf("provider=%s ready=%t auth=%s", strings.TrimSpace(resp.ProviderReadiness.Provider), resp.ProviderReadiness.Ready, strings.TrimSpace(resp.ProviderReadiness.AuthMode)))
+	}
+	if resp.Session != nil && strings.TrimSpace(resp.Session.InstanceID) != "" {
+		lines = append(lines, fmt.Sprintf("instance=%s state=%s", strings.TrimSpace(resp.Session.InstanceID), firstNonEmpty(strings.TrimSpace(resp.Session.RuntimeState), strings.TrimSpace(resp.Status.RuntimeState))))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderManagedAgentHeartbeat(resp *agentLauncherCLIResponse) string {
+	if resp == nil || resp.Heartbeat == nil {
+		return "heartbeat=unknown"
+	}
+	lines := []string{
+		fmt.Sprintf("agent=%s", strings.TrimSpace(resp.AgentID)),
+		fmt.Sprintf("heartbeat=%s", strings.TrimSpace(resp.Heartbeat.State)),
+		fmt.Sprintf("age=%s", (time.Duration(resp.Heartbeat.AgeSeconds) * time.Second).String()),
+	}
+	if trimmed := strings.TrimSpace(resp.Heartbeat.LastActivityAt); trimmed != "" {
+		lines = append(lines, fmt.Sprintf("lastActivityAt=%s", trimmed))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func runTemplatesCommand(out io.Writer, opts templatesCommandOptions) error {

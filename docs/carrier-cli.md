@@ -62,6 +62,17 @@ All command blocks below assume `carrier` is installed and available in `PATH`.
 - `carrier memory distill --instance <id> [--scope <scope>] [--dry-run] [--force] [--reason <text>] [--json]`
   - Distill instance learnings back into the base knowledge plane.
 
+### Managed agent direct surface
+
+- `carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--session-id <id>] [--json]`
+  - Send one prompt to a managed agent through the gateway-managed runtime surface.
+- `carrier agent shell <agent_id> [--provider <provider-id>] [--session-id <id>]`
+  - Open a local interactive shell backed by the managed agent chat surface.
+- `carrier agent launcher <agent_id> [--json]`
+  - Show launcher summary with runtime, provider, memory, and session details.
+- `carrier agent heartbeat <agent_id> [--json]`
+  - Show heartbeat age and last activity for one managed agent.
+
 ### Bootstrap and runtime
 
 - `carrier`
@@ -321,6 +332,24 @@ carrier memory attach --instance picoclaw-main --scope shared:profile
 
 ```bash
 carrier memory distill --instance picoclaw-main --dry-run --reason "promote learnings"
+```
+
+### Managed PicoClaw direct run
+
+```bash
+carrier agent run picoclaw -m "Summarize the latest deployment risks" --provider openrouter
+```
+
+```bash
+carrier agent shell picoclaw --provider openrouter
+```
+
+```bash
+carrier agent launcher picoclaw
+```
+
+```bash
+carrier agent heartbeat picoclaw
 ```
 
 ### Install OpenClaw on VPS
