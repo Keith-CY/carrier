@@ -2,6 +2,12 @@ package baseagent
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -107,5 +113,92 @@ func TestRuntimeChatTranscribesAudioAttachmentByMediaType(t *testing.T) {
 	}
 	if len(provider.requests) != 1 || !strings.Contains(provider.requests[0].UserMessage, "voice memo transcript") {
 		t.Fatalf("expected provider to receive transcription, got %+v", provider.requests)
+	}
+}
+
+func TestOpenAICompatibleMediaRuntimeTranscribePostsMultipartRequest(t *testing.T) {
+	audioDir := t.TempDir()
+	audioPath := filepath.Join(audioDir, "voice.ogg")
+	if err := os.WriteFile(audioPath, []byte("OggS"), 0o600); err != nil {
+		t.Fatalf("write audio fixture: %v", err)
+	}
+
+	var seenAuth string
+	var seenModel string
+	var seenLanguage string
+	var seenFilename string
+	var seenBytes []byte
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/audio/transcriptions" {
+			t.Fatalf("path=%q want /audio/transcriptions", r.URL.Path)
+		}
+		seenAuth = r.Header.Get("Authorization")
+		reader, err := r.MultipartReader()
+		if err != nil {
+			t.Fatalf("MultipartReader: %v", err)
+		}
+		for {
+			part, err := reader.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("NextPart: %v", err)
+			}
+			body, err := io.ReadAll(part)
+			if err != nil {
+				t.Fatalf("ReadAll(%s): %v", part.FormName(), err)
+			}
+			switch part.FormName() {
+			case "model":
+				seenModel = string(body)
+			case "language":
+				seenLanguage = string(body)
+			case "file":
+				seenFilename = part.FileName()
+				seenBytes = append([]byte(nil), body...)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"text": "transcribed speech"})
+	}))
+	defer srv.Close()
+
+	runtime := NewOpenAICompatibleMediaRuntime(OpenAICompatibleMediaRuntimeConfig{
+		BaseURL:  srv.URL,
+		Token:    "TOKEN",
+		Model:    "whisper-1",
+		Language: "en",
+		Client:   srv.Client(),
+	})
+
+	text, err := runtime.Transcribe(context.Background(), AttachmentRef{
+		Kind:       "audio",
+		Name:       "voice.ogg",
+		Path:       audioPath,
+		MediaType:  "audio/ogg",
+		ExternalID: "tg-audio-9",
+	})
+	if err != nil {
+		t.Fatalf("Transcribe error: %v", err)
+	}
+	if text != "transcribed speech" {
+		t.Fatalf("text=%q want transcribed speech", text)
+	}
+	if seenAuth != "Bearer TOKEN" {
+		t.Fatalf("Authorization=%q want Bearer TOKEN", seenAuth)
+	}
+	if seenModel != "whisper-1" {
+		t.Fatalf("model=%q want whisper-1", seenModel)
+	}
+	if seenLanguage != "en" {
+		t.Fatalf("language=%q want en", seenLanguage)
+	}
+	if seenFilename != "voice.ogg" {
+		t.Fatalf("filename=%q want voice.ogg", seenFilename)
+	}
+	if string(seenBytes) != "OggS" {
+		t.Fatalf("file bytes=%q want OggS", string(seenBytes))
 	}
 }

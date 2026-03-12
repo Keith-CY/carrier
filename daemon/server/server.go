@@ -73,6 +73,8 @@ type agentChatRuntime interface {
 type baseAgentRuntime interface {
 	Chat(ctx context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error)
 	CapabilitySummary(ctx context.Context) baseagent.RuntimeCapabilitySummary
+	SearchSkills(ctx context.Context, query string) []baseagent.SkillDefinition
+	InstallSkill(ctx context.Context, name string) (baseagent.SkillDefinition, error)
 	SetSkillEnabled(ctx context.Context, name string, enabled bool) error
 	SetMCPServerEnabled(ctx context.Context, name string, enabled bool) error
 	RespondPendingApproval(ctx context.Context, sessionKey, approvalID string, decision baseagent.ApprovalDecision) (baseagent.ChatResponse, error)
@@ -143,6 +145,7 @@ func Run() {
 		newLifecycleAgentServiceAdapter(svc),
 		baseMemoryStore,
 		baseagent.WithWorkspaceRoot(workspaceRoot),
+		baseagent.WithMediaRuntime(baseagent.NewConfiguredMediaRuntime()),
 	)
 	stopBaseAgentDistill := startBaseAgentDistillScheduler(memStore)
 	if stopBaseAgentDistill != nil {
@@ -1680,10 +1683,6 @@ func handleAgentCapabilities(svc *lifecycle.Service, runtime baseAgentRuntime, a
 }
 
 func handleAgentSkill(svc *lifecycle.Service, runtime baseAgentRuntime, agentID, skillName string, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
 	if runtime == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
 		return
@@ -1692,17 +1691,58 @@ func handleAgentSkill(svc *lifecycle.Service, runtime baseAgentRuntime, agentID,
 		writeServiceError(w, err)
 		return
 	}
-	var body struct {
-		Enabled bool `json:"enabled"`
-	}
-	if !decodeBody(w, r, &body) {
+
+	switch skillName {
+	case "search":
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"skills": runtime.SearchSkills(r.Context(), strings.TrimSpace(r.URL.Query().Get("q"))),
+		})
+		return
+	case "install":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body struct {
+			Name string `json:"name"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		name := strings.TrimSpace(body.Name)
+		if name == "" {
+			writeJSONError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		installed, err := runtime.InstallSkill(r.Context(), name)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, installed)
+		return
+	default:
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := runtime.SetSkillEnabled(r.Context(), skillName, body.Enabled); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, runtime.CapabilitySummary(r.Context()))
 		return
 	}
-	if err := runtime.SetSkillEnabled(r.Context(), skillName, body.Enabled); err != nil {
-		writeJSONError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, runtime.CapabilitySummary(r.Context()))
 }
 
 func handleAgentMCPServer(svc *lifecycle.Service, runtime baseAgentRuntime, agentID, serverName string, w http.ResponseWriter, r *http.Request) {

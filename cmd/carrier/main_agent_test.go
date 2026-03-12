@@ -79,6 +79,22 @@ func TestParseAgentCommandArgs(t *testing.T) {
 	if cronCancelOpts.Action != "cron-cancel" || cronCancelOpts.AgentID != "picoclaw" || cronCancelOpts.CronJobID != "cron-1" || !cronCancelOpts.JSON {
 		t.Fatalf("unexpected cron cancel opts: %+v", cronCancelOpts)
 	}
+
+	skillSearchOpts, err := parseAgentCommandArgs([]string{"skills", "search", "picoclaw", "--query", "workspace", "--json"})
+	if err != nil {
+		t.Fatalf("parseAgentCommandArgs(skills search) error: %v", err)
+	}
+	if skillSearchOpts.Action != "skills-search" || skillSearchOpts.AgentID != "picoclaw" || skillSearchOpts.Query != "workspace" || !skillSearchOpts.JSON {
+		t.Fatalf("unexpected skills search opts: %+v", skillSearchOpts)
+	}
+
+	skillInstallOpts, err := parseAgentCommandArgs([]string{"skills", "install", "picoclaw", "workspace-inspection", "--json"})
+	if err != nil {
+		t.Fatalf("parseAgentCommandArgs(skills install) error: %v", err)
+	}
+	if skillInstallOpts.Action != "skills-install" || skillInstallOpts.AgentID != "picoclaw" || skillInstallOpts.SkillName != "workspace-inspection" || !skillInstallOpts.JSON {
+		t.Fatalf("unexpected skills install opts: %+v", skillInstallOpts)
+	}
 }
 
 func TestRunAgentCommand(t *testing.T) {
@@ -125,6 +141,19 @@ func TestRunAgentCommand(t *testing.T) {
 				return
 			}
 			_, _ = w.Write([]byte(`{"id":"cron-1","agentId":"picoclaw","prompt":"check launcher","lastResult":"cancelled","cancelledAt":"2026-03-12T00:40:00Z"}`))
+		case "/api/v1/agents/picoclaw/skills/search":
+			_, _ = w.Write([]byte(`{"skills":[{"name":"workspace-inspection","summary":"Inspect workspace state."}]}`))
+		case "/api/v1/agents/picoclaw/skills/install":
+			if r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["name"] != "workspace-inspection" {
+				t.Fatalf("skill install name=%v want workspace-inspection", body["name"])
+			}
+			_, _ = w.Write([]byte(`{"name":"workspace-inspection","summary":"Inspect workspace state."}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -179,6 +208,22 @@ func TestRunAgentCommand(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "cron-1") || !strings.Contains(out.String(), "cancelled") {
 		t.Fatalf("cron cancel output=%s", out.String())
+	}
+
+	out.Reset()
+	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "skills-search", AgentID: "picoclaw", Query: "workspace"}); err != nil {
+		t.Fatalf("runAgentCommand(skills search) error: %v", err)
+	}
+	if !strings.Contains(out.String(), "workspace-inspection") {
+		t.Fatalf("skills search output=%s", out.String())
+	}
+
+	out.Reset()
+	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "skills-install", AgentID: "picoclaw", SkillName: "workspace-inspection"}); err != nil {
+		t.Fatalf("runAgentCommand(skills install) error: %v", err)
+	}
+	if !strings.Contains(out.String(), "workspace-inspection") {
+		t.Fatalf("skills install output=%s", out.String())
 	}
 }
 

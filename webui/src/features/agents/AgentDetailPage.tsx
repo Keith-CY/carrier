@@ -31,6 +31,13 @@ type AgentCapabilities = {
   };
 };
 
+type AgentSkillCatalogEntry = {
+  name?: string;
+  summary?: string;
+  keywords?: string[];
+  tags?: string[];
+};
+
 type AgentLauncherSummary = {
   agentId?: string;
   status?: AgentStatus;
@@ -103,6 +110,8 @@ export function AgentDetailPage() {
   const params = useParams<{ agentId: string }>();
   const agentId = String(params.agentId || '').trim();
   const [lastActionMessage, setLastActionMessage] = useState('');
+  const [skillSearchQuery, setSkillSearchQuery] = useState('');
+  const [skillSearchResults, setSkillSearchResults] = useState<AgentSkillCatalogEntry[]>([]);
 
   const statusQuery = useQuery({
     queryKey: ['agent-detail', agentId],
@@ -146,6 +155,38 @@ export function AgentDetailPage() {
     },
     onSuccess: async ({ skillName, enabled }) => {
       setLastActionMessage(`Skill ${skillName} ${enabled ? 'enabled' : 'disabled'}.`);
+      await capabilitiesQuery.refetch();
+      await launcherQuery.refetch();
+    },
+    onError: (error) => {
+      setLastActionMessage((error as Error).message);
+    },
+  });
+
+  const skillSearchMutation = useMutation({
+    mutationFn: async (query: string) => {
+      const trimmed = query.trim();
+      const suffix = trimmed ? `?q=${encodeURIComponent(trimmed)}` : '';
+      return apiGet<{ skills?: AgentSkillCatalogEntry[] }>(`/api/v1/agents/${encodeURIComponent(agentId)}/skills/search${suffix}`);
+    },
+    onSuccess: (payload) => {
+      const skills = Array.isArray(payload.skills) ? payload.skills : [];
+      setSkillSearchResults(skills);
+      setLastActionMessage(skills.length ? `Found ${skills.length} skill result(s).` : 'No matching skills found.');
+    },
+    onError: (error) => {
+      setSkillSearchResults([]);
+      setLastActionMessage((error as Error).message);
+    },
+  });
+
+  const skillInstallMutation = useMutation({
+    mutationFn: async (skillName: string) => {
+      return apiPost<AgentSkillCatalogEntry>(`/api/v1/agents/${encodeURIComponent(agentId)}/skills/install`, { name: skillName });
+    },
+    onSuccess: async (installed) => {
+      const installedName = String(installed.name || '').trim() || 'unknown-skill';
+      setLastActionMessage(`Installed skill ${installedName}.`);
       await capabilitiesQuery.refetch();
       await launcherQuery.refetch();
     },
@@ -389,6 +430,48 @@ export function AgentDetailPage() {
                     </li>
                   ))}
                 </ul>
+                <div className="btn-row">
+                  <input
+                    type="text"
+                    placeholder="Search skills"
+                    value={skillSearchQuery}
+                    onChange={(event) => setSkillSearchQuery(event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    disabled={skillSearchMutation.isPending}
+                    onClick={() => skillSearchMutation.mutate(skillSearchQuery)}
+                  >
+                    Search Skills
+                  </button>
+                </div>
+                {skillSearchResults.length ? (
+                  <ul className="compact-list">
+                    {skillSearchResults.map((skill, index) => {
+                      const skillName = String(skill.name || '').trim();
+                      return (
+                        <li key={skillName || `skill-search-${index}`}>
+                          <span>{skillName || 'unknown-skill'}</span>
+                          <span className="text-dim">
+                            {skill.summary || 'no summary'}
+                            {skill.tags?.length ? ` · tags=${skill.tags.join(', ')}` : ''}
+                          </span>
+                          {skillName ? (
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              disabled={skillInstallMutation.isPending}
+                              onClick={() => skillInstallMutation.mutate(skillName)}
+                            >
+                              {`Install ${skillName}`}
+                            </button>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : null}
               </div>
               <div>
                 <strong>MCP Servers</strong>

@@ -24,6 +24,8 @@ type fakeBaseAgentRuntime struct {
 	capabilities        baseagent.RuntimeCapabilitySummary
 	approvalResp        baseagent.ChatResponse
 	approvalErr         error
+	installSkill        baseagent.SkillDefinition
+	searchSkills        []baseagent.SkillDefinition
 	cronJob             baseagent.CronJob
 	cronJobs            []baseagent.CronJob
 	cancelledCronJob    baseagent.CronJob
@@ -43,6 +45,8 @@ type fakeBaseAgentRuntime struct {
 	runCronCall         int
 	skillToggleCall     int
 	mcpToggleCall       int
+	searchSkillsCall    int
+	installSkillCall    int
 	lastReq             baseagent.ChatRequest
 	lastSession         string
 	lastApproval        string
@@ -54,6 +58,8 @@ type fakeBaseAgentRuntime struct {
 	lastSkillEnabled    bool
 	lastMCPServerName   string
 	lastMCPEnabled      bool
+	lastInstallSkill    string
+	lastSkillSearch     string
 }
 
 func (f *fakeBaseAgentRuntime) Chat(_ context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error) {
@@ -88,6 +94,21 @@ func (f *fakeBaseAgentRuntime) SetSkillEnabled(_ context.Context, name string, e
 		f.capabilities.SkillSummary.DisabledCount++
 	}
 	return nil
+}
+
+func (f *fakeBaseAgentRuntime) SearchSkills(_ context.Context, query string) []baseagent.SkillDefinition {
+	f.searchSkillsCall++
+	f.lastSkillSearch = query
+	return append([]baseagent.SkillDefinition(nil), f.searchSkills...)
+}
+
+func (f *fakeBaseAgentRuntime) InstallSkill(_ context.Context, name string) (baseagent.SkillDefinition, error) {
+	f.installSkillCall++
+	f.lastInstallSkill = name
+	if f.installSkill.Name == "" {
+		f.installSkill = baseagent.SkillDefinition{Name: name, Summary: "installed skill"}
+	}
+	return f.installSkill, nil
 }
 
 func (f *fakeBaseAgentRuntime) SetMCPServerEnabled(_ context.Context, name string, enabled bool) error {
@@ -302,6 +323,54 @@ func TestAgentSkillToggleEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(okRec.Body.String(), `"disabledCount":2`) || !strings.Contains(okRec.Body.String(), `"enabled":false`) {
 		t.Fatalf("unexpected skill toggle body: %s", okRec.Body.String())
+	}
+}
+
+func TestAgentSkillSearchAndInstallEndpoints(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		searchSkills: []baseagent.SkillDefinition{
+			{Name: "go-testing", Summary: "Use go test before claiming success."},
+			{Name: "workspace-inspection", Summary: "Inspect workspace state."},
+		},
+		installSkill: baseagent.SkillDefinition{Name: "workspace-inspection", Summary: "Inspect workspace state."},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	searchReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/skills/search?q=workspace", nil)
+	searchRec := httptest.NewRecorder()
+	mux.ServeHTTP(searchRec, searchReq)
+	if searchRec.Code != http.StatusOK {
+		t.Fatalf("expected search 200, got %d body=%s", searchRec.Code, searchRec.Body.String())
+	}
+	if rt.searchSkillsCall != 1 || rt.lastSkillSearch != "workspace" {
+		t.Fatalf("unexpected skill search state: %+v", rt)
+	}
+	if !strings.Contains(searchRec.Body.String(), `"workspace-inspection"`) {
+		t.Fatalf("unexpected skill search body: %s", searchRec.Body.String())
+	}
+
+	installBadReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/install", strings.NewReader(`{}`))
+	installBadRec := httptest.NewRecorder()
+	mux.ServeHTTP(installBadRec, installBadReq)
+	if installBadRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected install 400 for missing name, got %d", installBadRec.Code)
+	}
+
+	installReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/install", strings.NewReader(`{"name":"workspace-inspection"}`))
+	installReq.Header.Set("Content-Type", "application/json")
+	installRec := httptest.NewRecorder()
+	mux.ServeHTTP(installRec, installReq)
+	if installRec.Code != http.StatusOK {
+		t.Fatalf("expected install 200, got %d body=%s", installRec.Code, installRec.Body.String())
+	}
+	if rt.installSkillCall != 1 || rt.lastInstallSkill != "workspace-inspection" {
+		t.Fatalf("unexpected skill install state: %+v", rt)
+	}
+	if !strings.Contains(installRec.Body.String(), `"workspace-inspection"`) {
+		t.Fatalf("unexpected skill install body: %s", installRec.Body.String())
 	}
 }
 

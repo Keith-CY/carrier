@@ -8,6 +8,8 @@ test.describe('Agent Detail', () => {
     let stopCalls = 0;
     let skillToggleCalls = 0;
     let skillEnabled = true;
+    let skillSearchCalls = 0;
+    let skillInstallCalls = 0;
     let mcpToggleCalls = 0;
     let mcpEnabled = true;
     let cronRunCalls = 0;
@@ -86,6 +88,24 @@ test.describe('Agent Detail', () => {
         }),
       });
     });
+    await page.route('**/api/v1/agents/agent-alpha/skills/search**', async (route) => {
+      skillSearchCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          skills: [{ name: 'workspace-inspection', summary: 'Inspect workspace state.' }],
+        }),
+      });
+    });
+    await page.route('**/api/v1/agents/agent-alpha/skills/install', async (route) => {
+      skillInstallCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ name: 'workspace-inspection', summary: 'Inspect workspace state.' }),
+      });
+    });
     await page.route('**/api/v1/agents/agent-alpha/mcp/repo', async (route) => {
       mcpToggleCalls += 1;
       mcpEnabled = false;
@@ -145,6 +165,15 @@ test.describe('Agent Detail', () => {
     await page.getByRole('button', { name: 'Disable', exact: true }).click();
     await expect.poll(() => skillToggleCalls).toBe(1);
     await expect(page.locator('#agent-detail-content')).toContainText('Skill toolbox disabled.');
+
+    await page.getByPlaceholder('Search skills').fill('workspace');
+    await page.getByRole('button', { name: 'Search Skills' }).click();
+    await expect.poll(() => skillSearchCalls).toBe(1);
+    await expect(page.locator('#agent-detail-content')).toContainText('workspace-inspection');
+
+    await page.getByRole('button', { name: 'Install workspace-inspection' }).click();
+    await expect.poll(() => skillInstallCalls).toBe(1);
+    await expect(page.locator('#agent-detail-content')).toContainText('Installed skill workspace-inspection.');
 
     await page.getByRole('button', { name: 'Disable MCP' }).click();
     await expect.poll(() => mcpToggleCalls).toBe(1);

@@ -288,6 +288,40 @@ func (c *DaemonClient) SetAgentSkillEnabled(ctx context.Context, agentID, skillN
 	return summary, nil
 }
 
+func (c *DaemonClient) SearchAgentSkills(ctx context.Context, agentID, query, actor, requestID string) ([]baseagent.SkillDefinition, error) {
+	path := "/api/v1/agents/" + url.PathEscape(agentID) + "/skills/search"
+	if trimmed := strings.TrimSpace(query); trimmed != "" {
+		path += "?q=" + url.QueryEscape(trimmed)
+	}
+	raw, err := c.request(ctx, http.MethodGet, path, nil, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var wrapped struct {
+		Skills []baseagent.SkillDefinition `json:"skills"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("skill search response: %w", err)
+	}
+	if wrapped.Skills == nil {
+		return []baseagent.SkillDefinition{}, nil
+	}
+	return wrapped.Skills, nil
+}
+
+func (c *DaemonClient) InstallAgentSkill(ctx context.Context, agentID, skillName, actor, requestID string) (baseagent.SkillDefinition, error) {
+	body := map[string]string{"name": strings.TrimSpace(skillName)}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/skills/install", body, actor, requestID)
+	if err != nil {
+		return baseagent.SkillDefinition{}, err
+	}
+	var installed baseagent.SkillDefinition
+	if err := json.Unmarshal(raw, &installed); err != nil {
+		return baseagent.SkillDefinition{}, fmt.Errorf("skill install response: %w", err)
+	}
+	return installed, nil
+}
+
 func (c *DaemonClient) SetAgentMCPServerEnabled(ctx context.Context, agentID, serverName string, enabled bool, actor, requestID string) (AgentCapabilitySummary, error) {
 	body := map[string]bool{"enabled": enabled}
 	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/mcp/"+url.PathEscape(serverName), body, actor, requestID)

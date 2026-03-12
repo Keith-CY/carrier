@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -619,24 +620,82 @@ func selectTelegramRichAttachment(resp GatewayResponse) (kind string, ref string
 		return "", "", "", false
 	}
 	caption = strings.TrimSpace(resp.RichContent.PlainTextFallback())
+	attachmentsByID := map[string]baseagent.AttachmentRef{}
 	for _, attachment := range resp.RichContent.Attachments {
-		ref = strings.TrimSpace(attachment.ExternalID)
-		if ref == "" {
-			if u := strings.TrimSpace(attachment.Path); strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "http://") {
-				ref = u
+		if id := strings.TrimSpace(attachment.ID); id != "" {
+			attachmentsByID[id] = attachment
+		}
+	}
+	for _, block := range resp.RichContent.Blocks {
+		blockType := strings.ToLower(strings.TrimSpace(block.Type))
+		switch blockType {
+		case "image":
+			if mediaRef := resolveTelegramRichRef(baseagent.AttachmentRef{
+				Kind:        "image",
+				Path:        block.Path,
+				MediaType:   block.MediaType,
+				DownloadURL: block.URL,
+			}); mediaRef != "" {
+				return "image", mediaRef, caption, true
+			}
+		case "file", "document":
+			if mediaRef := resolveTelegramRichRef(baseagent.AttachmentRef{
+				Kind:        "document",
+				Path:        block.Path,
+				MediaType:   block.MediaType,
+				DownloadURL: block.URL,
+			}); mediaRef != "" {
+				return "document", mediaRef, caption, true
 			}
 		}
-		if ref == "" {
-			continue
+		if attachmentID := strings.TrimSpace(block.AttachmentID); attachmentID != "" {
+			if attachment, ok := attachmentsByID[attachmentID]; ok {
+				if mediaKind, mediaRef, ok := selectTelegramAttachmentKindAndRef(attachment); ok {
+					return mediaKind, mediaRef, caption, true
+				}
+			}
 		}
-		switch strings.TrimSpace(attachment.Kind) {
-		case "image":
-			return "image", ref, caption, true
-		case "document":
-			return "document", ref, caption, true
+	}
+	for _, attachment := range resp.RichContent.Attachments {
+		if mediaKind, mediaRef, ok := selectTelegramAttachmentKindAndRef(attachment); ok {
+			return mediaKind, mediaRef, caption, true
 		}
 	}
 	return "", "", "", false
+}
+
+func selectTelegramAttachmentKindAndRef(attachment baseagent.AttachmentRef) (kind string, ref string, ok bool) {
+	ref = resolveTelegramRichRef(attachment)
+	if ref == "" {
+		return "", "", false
+	}
+	switch strings.ToLower(strings.TrimSpace(attachment.Kind)) {
+	case "image":
+		return "image", ref, true
+	case "document", "file":
+		return "document", ref, true
+	default:
+		return "", "", false
+	}
+}
+
+func resolveTelegramRichRef(attachment baseagent.AttachmentRef) string {
+	for _, candidate := range []string{
+		strings.TrimSpace(attachment.ExternalID),
+		strings.TrimSpace(attachment.DownloadURL),
+		strings.TrimSpace(attachment.Path),
+	} {
+		if candidate == "" {
+			continue
+		}
+		if candidate == attachment.ExternalID {
+			return candidate
+		}
+		if strings.HasPrefix(candidate, "https://") || strings.HasPrefix(candidate, "http://") {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func telegramUpdateID(update map[string]interface{}) int64 {

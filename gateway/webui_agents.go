@@ -88,7 +88,49 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 		return
 	case "skills":
 		if len(parts) != 3 {
-			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "skill name is required"))
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "skill action or name is required"))
+			return
+		}
+		skillAction := strings.TrimSpace(parts[2])
+		switch {
+		case strings.EqualFold(skillAction, "search"):
+			if r.Method != http.MethodGet {
+				writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+				return
+			}
+			if daemon == nil {
+				writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_COMMAND_FAILED", "daemon client is unavailable"))
+				return
+			}
+			skills, err := daemon.SearchAgentSkills(r.Context(), agentID, strings.TrimSpace(r.URL.Query().Get("q")), "webui:agents:skills:search", requestID)
+			if err != nil {
+				writeDaemonAPIError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"skills": skills})
+			return
+		case strings.EqualFold(skillAction, "install"):
+			if r.Method != http.MethodPost {
+				writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+				return
+			}
+			if daemon == nil {
+				writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_COMMAND_FAILED", "daemon client is unavailable"))
+				return
+			}
+			var body struct {
+				Name string `json:"name"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid JSON body"))
+				return
+			}
+			installed, err := daemon.InstallAgentSkill(r.Context(), agentID, strings.TrimSpace(body.Name), "webui:agents:skills:install", requestID)
+			if err != nil {
+				writeDaemonAPIError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, installed)
 			return
 		}
 		if r.Method != http.MethodPost {
@@ -106,7 +148,7 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid JSON body"))
 			return
 		}
-		summary, err := daemon.SetAgentSkillEnabled(r.Context(), agentID, strings.TrimSpace(parts[2]), body.Enabled, "webui:agents:skills", requestID)
+		summary, err := daemon.SetAgentSkillEnabled(r.Context(), agentID, skillAction, body.Enabled, "webui:agents:skills", requestID)
 		if err != nil {
 			writeDaemonAPIError(w, err)
 			return

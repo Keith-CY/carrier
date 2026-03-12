@@ -418,6 +418,52 @@ func TestTelegramSendRenderedAttachment_FallsBackToTextForUnsupportedAttachment(
 	}
 }
 
+func TestTelegramSendRenderedAttachment_PrefersImageBlockURL(t *testing.T) {
+	api := &fakeTelegramAPI{}
+	resp := GatewayResponse{
+		Result: "ok",
+		RichContent: &baseagent.RichOutboundMessage{
+			Text: "generated image",
+			Blocks: []baseagent.ContentBlock{
+				{Type: "image", URL: "https://files.example.com/generated.png", Name: "generated.png"},
+			},
+		},
+	}
+
+	if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+		t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+	}
+	if api.sendPhotoCalls != 1 || api.lastSendPhotoRef != "https://files.example.com/generated.png" {
+		t.Fatalf("expected sendPhoto with block url, got calls=%d ref=%q", api.sendPhotoCalls, api.lastSendPhotoRef)
+	}
+	if api.sendMessageCalls != 0 {
+		t.Fatalf("expected no text fallback send, got %d", api.sendMessageCalls)
+	}
+}
+
+func TestTelegramSendRenderedAttachment_UsesAttachmentDownloadURLForDocument(t *testing.T) {
+	api := &fakeTelegramAPI{}
+	resp := GatewayResponse{
+		Result: "ok",
+		RichContent: &baseagent.RichOutboundMessage{
+			Text: "report ready",
+			Attachments: []baseagent.AttachmentRef{
+				{Kind: "document", Name: "report.pdf", DownloadURL: "https://downloads.example.com/report.pdf"},
+			},
+		},
+	}
+
+	if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+		t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+	}
+	if api.sendDocumentCalls != 1 || api.lastSendDocumentRef != "https://downloads.example.com/report.pdf" {
+		t.Fatalf("expected sendDocument with download url, got calls=%d ref=%q", api.sendDocumentCalls, api.lastSendDocumentRef)
+	}
+	if api.sendMessageCalls != 0 {
+		t.Fatalf("expected no text fallback send, got %d", api.sendMessageCalls)
+	}
+}
+
 func TestHydrateTelegramInboundAttachments_DownloadsToArtifactRoot(t *testing.T) {
 	artifactRoot, err := os.MkdirTemp(".", "telegram-inbound-artifacts-*")
 	if err != nil {

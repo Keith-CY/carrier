@@ -325,6 +325,60 @@ func TestDaemonClient_SetAgentSkillEnabled(t *testing.T) {
 	}
 }
 
+func TestDaemonClient_SearchAndInstallAgentSkills(t *testing.T) {
+	var paths []string
+	var installBody map[string]any
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.RequestURI())
+		switch r.URL.Path {
+		case "/api/v1/agents/a1/skills/search":
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"skills": []map[string]any{
+					{"name": "workspace-inspection", "summary": "Inspect workspace state."},
+				},
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+		case "/api/v1/agents/a1/skills/install":
+			if err := json.NewDecoder(r.Body).Decode(&installBody); err != nil {
+				t.Fatalf("decode install body: %v", err)
+			}
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"name":    "workspace-inspection",
+				"summary": "Inspect workspace state.",
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	skills, err := dc.SearchAgentSkills(context.Background(), "a1", "workspace", "actor", "req")
+	if err != nil {
+		t.Fatalf("SearchAgentSkills error: %v", err)
+	}
+	if len(skills) != 1 || skills[0].Name != "workspace-inspection" {
+		t.Fatalf("unexpected skills: %+v", skills)
+	}
+
+	installed, err := dc.InstallAgentSkill(context.Background(), "a1", "workspace-inspection", "actor", "req")
+	if err != nil {
+		t.Fatalf("InstallAgentSkill error: %v", err)
+	}
+	if installed.Name != "workspace-inspection" {
+		t.Fatalf("unexpected installed skill: %+v", installed)
+	}
+	if len(paths) != 2 || paths[0] != "/api/v1/agents/a1/skills/search?q=workspace" || paths[1] != "/api/v1/agents/a1/skills/install" {
+		t.Fatalf("unexpected paths: %+v", paths)
+	}
+	if installBody["name"] != "workspace-inspection" {
+		t.Fatalf("unexpected install body: %+v", installBody)
+	}
+}
+
 func TestDaemonClient_SetAgentMCPServerEnabled(t *testing.T) {
 	var gotPath string
 	var gotBody map[string]any

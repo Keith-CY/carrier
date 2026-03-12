@@ -103,6 +103,25 @@ describe('AgentDetailPage', () => {
           headers: { 'Content-Type': 'application/json' },
         });
       }
+      if (url.includes('/api/v1/agents/agent-alpha/skills/search')) {
+        return new Response(JSON.stringify({
+          skills: [
+            { name: 'workspace-inspection', summary: 'Inspect workspace state.' },
+          ],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/v1/agents/agent-alpha/skills/install')) {
+        return new Response(JSON.stringify({
+          name: 'workspace-inspection',
+          summary: 'Inspect workspace state.',
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       if (url.endsWith('/api/v1/agents/agent-alpha/mcp/repo')) {
         return new Response(JSON.stringify({
           mcp: {
@@ -172,6 +191,29 @@ describe('AgentDetailPage', () => {
     await waitFor(() => expect(screen.getByText(/Skill go-testing disabled\./i)).toBeInTheDocument());
     expect(globalThis.fetch).toHaveBeenCalledWith(
       expect.stringContaining('/api/v1/agents/agent-alpha/skills/go-testing'),
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    );
+  });
+
+  test('searches and installs skills through managed skill endpoints', async () => {
+    renderAgentDetailPage();
+
+    await waitFor(() => expect(screen.getByPlaceholderText(/search skills/i)).toBeInTheDocument());
+    fireEvent.change(screen.getByPlaceholderText(/search skills/i), { target: { value: 'workspace' } });
+    fireEvent.click(screen.getByRole('button', { name: /search skills/i }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /install workspace-inspection/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /install workspace-inspection/i }));
+
+    await waitFor(() => expect(screen.getByText(/Installed skill workspace-inspection\./i)).toBeInTheDocument());
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/skills/search?q=workspace'),
+      expect.anything(),
+    );
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/skills/install'),
       expect.objectContaining({
         method: 'POST',
       }),
