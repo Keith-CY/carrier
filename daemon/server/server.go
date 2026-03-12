@@ -1645,7 +1645,15 @@ func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID s
 			chatID = fmt.Sprintf("%s-%d", strings.TrimSpace(agentID), time.Now().UnixNano())
 		}
 	}
-	if proxied, handled, err := maybeProxyManagedAgentChat(r.Context(), svc, agentID, strings.TrimSpace(body.Provider), message); handled {
+	if proxied, handled, err := maybeProxyManagedAgentChat(
+		r.Context(),
+		svc,
+		agentID,
+		strings.TrimSpace(body.Provider),
+		strings.TrimSpace(body.ModelAlias),
+		strings.TrimSpace(body.Model),
+		message,
+	); handled {
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return

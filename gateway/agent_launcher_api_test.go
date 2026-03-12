@@ -210,3 +210,83 @@ func TestHandleAgentLauncherTreatsEnvCredentialAsReady(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleAgentLauncherReturnsModelSurfaceFallbackMetadata(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	storePath := filepath.Join(tmp, ".carrier", "instances.json")
+	t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := saveManagedInstances(storePath, []managedAgentInstance{{
+		ID:         "picoclaw-prod",
+		Type:       "picoclaw",
+		AgentID:    "picoclaw",
+		Isolation:  true,
+		GatewayURL: "http://127.0.0.1:8787",
+		Provider:   "openrouter",
+		ModelSurface: &managedAgentModelSurface{
+			DefaultProfile: "openrouter-fast",
+			Profiles: []managedAgentModelProfile{
+				{
+					ProfileName:    "openrouter-fast",
+					ModelAlias:     "flash",
+					ModelID:        "google/gemini-2.0-flash-001",
+					ProviderID:     "openrouter",
+					ProviderKey:    "openrouter",
+					ProtocolFamily: "openai-compatible",
+					Primary:        true,
+				},
+				{
+					ProfileName:    "openrouter-safe",
+					ModelAlias:     "flash",
+					ModelID:        "deepseek/deepseek-chat-v3-0324",
+					ProviderID:     "openrouter",
+					ProviderKey:    "openrouter",
+					ProtocolFamily: "openai-compatible",
+				},
+			},
+		},
+		RuntimeState: "running",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}}); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+		"GET /api/v1/agents/picoclaw/status": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":           "picoclaw",
+				"runtimeState": "running",
+				"health":       "healthy",
+				"updatedAt":    now,
+			})
+		},
+		"GET /api/v1/agents/picoclaw/capabilities": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{})
+		},
+		"GET /api/base-agent/cron/jobs": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"jobs": []map[string]interface{}{}})
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/picoclaw/launcher", nil)
+	handleWebUIAgent(rec, req, "req-launcher-fallback", daemon)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, needle := range []string{
+		`"fallbackGroup":"openrouter:flash"`,
+		`"aliasGroupSize":2`,
+		`"primary":true`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("expected response to contain %s, got %s", needle, body)
+		}
+	}
+}

@@ -52,7 +52,22 @@ func buildManagedModelSurface(profiles []managedModelProfile) managedAgentModelS
 		return surface
 	}
 	surface.DefaultProfile = strings.TrimSpace(profiles[0].ProfileName)
+	groupSizes := map[string]int{}
+	groupPrimaries := map[string]bool{}
+	for _, profile := range profiles {
+		group := managedModelFallbackGroup(profile)
+		if group == "" {
+			continue
+		}
+		groupSizes[group]++
+	}
 	for i, profile := range profiles {
+		group := managedModelFallbackGroup(profile)
+		primary := i == 0
+		if group != "" && !groupPrimaries[group] {
+			primary = true
+			groupPrimaries[group] = true
+		}
 		surface.Profiles = append(surface.Profiles, managedAgentModelProfile{
 			ProfileName:    strings.TrimSpace(profile.ProfileName),
 			ModelAlias:     strings.TrimSpace(profile.ModelAlias),
@@ -62,10 +77,27 @@ func buildManagedModelSurface(profiles []managedModelProfile) managedAgentModelS
 			ProtocolFamily: strings.TrimSpace(profile.ProtocolFamily),
 			BaseURL:        strings.TrimSpace(profile.BaseURL),
 			AuthMethod:     strings.TrimSpace(profile.AuthMethod),
-			Primary:        i == 0,
+			FallbackGroup:  group,
+			AliasGroupSize: groupSizes[group],
+			Primary:        primary,
 		})
 	}
 	return surface
+}
+
+func managedModelFallbackGroup(profile managedModelProfile) string {
+	alias := strings.ToLower(strings.TrimSpace(profile.ModelAlias))
+	if alias == "" {
+		return ""
+	}
+	provider := strings.ToLower(strings.TrimSpace(profile.ProviderID))
+	if provider == "" {
+		provider = strings.ToLower(strings.TrimSpace(profile.ProviderKey))
+	}
+	if provider == "" {
+		return alias
+	}
+	return provider + ":" + alias
 }
 
 var managedAgents = map[string]managedAgentConfig{

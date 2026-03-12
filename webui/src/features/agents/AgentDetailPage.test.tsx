@@ -64,8 +64,8 @@ describe('AgentDetailPage', () => {
           modelSurface: {
             defaultProfile: 'openrouter-fast',
             profiles: [
-              { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', primary: true },
-              { profileName: 'openrouter-safe', modelAlias: 'flash', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', primary: false },
+              { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
+              { profileName: 'openrouter-safe', modelAlias: 'flash', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: false },
             ],
           },
           cron: {
@@ -104,5 +104,7 @@ describe('AgentDetailPage', () => {
     expect(screen.getByText(/openrouter-fast/i)).toBeInTheDocument();
     expect(screen.getByText(/google\/gemini-2.0-flash-001/i)).toBeInTheDocument();
     expect(screen.getAllByText(/flash/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/openrouter:flash/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/group=2/i).length).toBeGreaterThan(0);
   });
 });

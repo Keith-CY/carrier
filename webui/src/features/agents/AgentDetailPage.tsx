@@ -55,6 +55,8 @@ type AgentLauncherSummary = {
       protocolFamily?: string;
       baseUrl?: string;
       authMethod?: string;
+      fallbackGroup?: string;
+      aliasGroupSize?: number;
       primary?: boolean;
     }>;
   };
@@ -243,6 +245,8 @@ export function AgentDetailPage() {
                           {profile.providerId ? ` · ${profile.providerId}` : ''}
                           {profile.protocolFamily ? ` · ${profile.protocolFamily}` : ''}
                           {profile.primary ? ' · primary' : ''}
+                          {profile.fallbackGroup ? ` · ${profile.fallbackGroup}` : ''}
+                          {profile.aliasGroupSize ? ` · group=${profile.aliasGroupSize}` : ''}
                         </span>
                       </li>
                     );

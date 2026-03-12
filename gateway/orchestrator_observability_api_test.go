@@ -427,4 +427,13 @@ func TestOrchestratorMetricsSummaryUsesResolvedProviderModelFromAlias(t *testing
 	if got := strings.TrimSpace(anyToString(first["model"])); got != "openrouter/google/gemini-2.0-flash-001" {
 		t.Fatalf("providers.models[0].model = %q, want %q", got, "openrouter/google/gemini-2.0-flash-001")
 	}
+	if got := strings.TrimSpace(anyToString(first["modelAlias"])); got != "flash" {
+		t.Fatalf("providers.models[0].modelAlias = %q, want %q", got, "flash")
+	}
+	if got := strings.TrimSpace(anyToString(first["fallbackGroup"])); got != "openrouter:flash" {
+		t.Fatalf("providers.models[0].fallbackGroup = %q, want %q", got, "openrouter:flash")
+	}
+	if got := int(anyToFloat(first["aliasGroupSize"])); got != 2 {
+		t.Fatalf("providers.models[0].aliasGroupSize = %d, want %d", got, 2)
+	}
 }

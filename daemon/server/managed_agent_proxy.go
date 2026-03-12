@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,23 +34,39 @@ type zeroclawGatewayConfig struct {
 	RequirePairing bool
 }
 
-func maybeProxyManagedAgentChat(ctx context.Context, svc *lifecycle.Service, agentID string, provider string, message string) (string, bool, error) {
+type zeroclawProviderProfile struct {
+	SectionName string
+	ModelAlias  string
+	Model       string
+	Provider    string
+	ProviderID  string
+}
+
+type zeroclawLocalConfig struct {
+	Raw             []byte
+	DefaultProvider string
+	DefaultModel    string
+	Gateway         zeroclawGatewayConfig
+	Profiles        []zeroclawProviderProfile
+}
+
+func maybeProxyManagedAgentChat(ctx context.Context, svc *lifecycle.Service, agentID string, provider string, modelAlias string, model string, message string) (string, bool, error) {
 	switch strings.ToLower(strings.TrimSpace(agentID)) {
 	case "zeroclaw":
-		cfg, err := loadLocalZeroClawGatewayConfig()
+		cfg, err := loadLocalZeroClawConfig()
 		if err != nil {
 			if os.IsNotExist(err) {
 				return "", false, nil
 			}
 			return "", true, err
 		}
-		if cfg.RequirePairing {
+		if cfg.Gateway.RequirePairing {
 			return "", true, fmt.Errorf("zeroclaw local gateway still requires pairing")
 		}
 		var cliErr error
 		if svc != nil {
 			if state, stateErr := svc.Status(agentID); stateErr == nil {
-				if reply, handled, err := maybeProxyManagedZeroClawAgentCLI(ctx, state, provider, message); handled {
+				if reply, handled, err := maybeProxyManagedZeroClawAgentCLI(ctx, state, cfg, provider, modelAlias, model, message); handled {
 					if err == nil {
 						return reply, true, nil
 					}
@@ -57,7 +74,7 @@ func maybeProxyManagedAgentChat(ctx context.Context, svc *lifecycle.Service, age
 				}
 			}
 		}
-		reply, err := proxyZeroClawWebhook(ctx, cfg, message)
+		reply, err := proxyZeroClawWebhook(ctx, cfg.Gateway, message)
 		if err != nil && cliErr != nil {
 			return "", true, fmt.Errorf("%v; webhook fallback failed: %w", cliErr, err)
 		}
@@ -67,7 +84,7 @@ func maybeProxyManagedAgentChat(ctx context.Context, svc *lifecycle.Service, age
 	}
 }
 
-func maybeProxyManagedZeroClawAgentCLI(ctx context.Context, state lifecycle.AgentState, provider string, message string) (string, bool, error) {
+func maybeProxyManagedZeroClawAgentCLI(ctx context.Context, state lifecycle.AgentState, cfg zeroclawLocalConfig, provider string, modelAlias string, model string, message string) (string, bool, error) {
 	if !state.Isolated {
 		return "", false, nil
 	}
@@ -75,14 +92,18 @@ func maybeProxyManagedZeroClawAgentCLI(ctx context.Context, state lifecycle.Agen
 	if instanceName == "" {
 		return "", false, nil
 	}
-	reply, err := runManagedZeroClawAgentCLI(ctx, instanceName, provider, message)
+	overrideConfig, err := buildManagedZeroClawModelOverride(cfg, provider, modelAlias, model)
+	if err != nil {
+		return "", true, err
+	}
+	reply, err := runManagedZeroClawAgentCLI(ctx, instanceName, provider, message, overrideConfig)
 	if err != nil {
 		return "", true, err
 	}
 	return reply, true, nil
 }
 
-func runManagedZeroClawAgentCLI(ctx context.Context, instanceName string, provider string, message string) (string, error) {
+func runManagedZeroClawAgentCLI(ctx context.Context, instanceName string, provider string, message string, overrideConfigB64 string) (string, error) {
 	limactlPath, err := resolveManagedLimaCtlPath()
 	if err != nil {
 		return "", err
@@ -97,10 +118,22 @@ if [ -x "$HOME/.local/bin/zeroclaw" ]; then
 else
   ZC="zeroclaw"
 fi
-if [ -n "$2" ]; then
-  exec "$ZC" agent --config-dir "$HOME/.zeroclaw" -p "$2" -m "$1"
+CONFIG_DIR="$HOME/.zeroclaw"
+if [ -n "$3" ]; then
+  TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/carrier-zc-XXXXXX")"
+  mkdir -p "$TMP_DIR"
+  if [ -d "$HOME/.zeroclaw" ]; then
+    cp -R "$HOME/.zeroclaw/." "$TMP_DIR/" 2>/dev/null || true
+  fi
+  if ! printf '%s' "$3" | base64 -d >"$TMP_DIR/config.toml" 2>/dev/null; then
+    printf '%s' "$3" | base64 -D >"$TMP_DIR/config.toml"
+  fi
+  CONFIG_DIR="$TMP_DIR"
 fi
-exec "$ZC" agent --config-dir "$HOME/.zeroclaw" -m "$1"`
+if [ -n "$2" ]; then
+  exec "$ZC" agent --config-dir "$CONFIG_DIR" -p "$2" -m "$1"
+fi
+exec "$ZC" agent --config-dir "$CONFIG_DIR" -m "$1"`
 	cmd := managedExecCommandContext(
 		ctx,
 		limactlPath,
@@ -113,6 +146,7 @@ exec "$ZC" agent --config-dir "$HOME/.zeroclaw" -m "$1"`
 		"carrier-managed-proxy",
 		strings.TrimSpace(message),
 		strings.TrimSpace(provider),
+		strings.TrimSpace(overrideConfigB64),
 	)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -170,24 +204,43 @@ func resolveManagedLimaCtlPath() (string, error) {
 }
 
 func loadLocalZeroClawGatewayConfig() (zeroclawGatewayConfig, error) {
-	home, err := userHomeDirFunc()
+	cfg, err := loadLocalZeroClawConfig()
 	if err != nil {
 		return zeroclawGatewayConfig{}, err
+	}
+	return cfg.Gateway, nil
+}
+
+func loadLocalZeroClawConfig() (zeroclawLocalConfig, error) {
+	home, err := userHomeDirFunc()
+	if err != nil {
+		return zeroclawLocalConfig{}, err
 	}
 	raw, err := os.ReadFile(filepath.Join(home, ".zeroclaw", "config.toml"))
 	if err != nil {
-		return zeroclawGatewayConfig{}, err
+		return zeroclawLocalConfig{}, err
 	}
-	return parseZeroClawGatewayConfig(raw), nil
+	return parseZeroClawLocalConfig(raw), nil
 }
 
-func parseZeroClawGatewayConfig(raw []byte) zeroclawGatewayConfig {
-	cfg := zeroclawGatewayConfig{
-		Host:           "127.0.0.1",
-		Port:           9091,
-		RequirePairing: true,
+func parseZeroClawLocalConfig(raw []byte) zeroclawLocalConfig {
+	cfg := zeroclawLocalConfig{
+		Raw: raw,
+		Gateway: zeroclawGatewayConfig{
+			Host:           "127.0.0.1",
+			Port:           9091,
+			RequirePairing: true,
+		},
 	}
 	section := ""
+	currentProfile := zeroclawProviderProfile{}
+	flushProfile := func() {
+		if strings.TrimSpace(currentProfile.SectionName) == "" {
+			return
+		}
+		cfg.Profiles = append(cfg.Profiles, currentProfile)
+		currentProfile = zeroclawProviderProfile{}
+	}
 	for _, line := range strings.Split(string(raw), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
@@ -200,10 +253,11 @@ func parseZeroClawGatewayConfig(raw []byte) zeroclawGatewayConfig {
 			continue
 		}
 		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			flushProfile()
 			section = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]"))
-			continue
-		}
-		if section != "gateway" {
+			if strings.HasPrefix(section, "provider_profiles.") {
+				currentProfile.SectionName = strings.TrimSpace(strings.TrimPrefix(section, "provider_profiles."))
+			}
 			continue
 		}
 		key, value, ok := strings.Cut(trimmed, "=")
@@ -212,20 +266,145 @@ func parseZeroClawGatewayConfig(raw []byte) zeroclawGatewayConfig {
 		}
 		key = strings.ToLower(strings.TrimSpace(key))
 		value = strings.TrimSpace(value)
-		switch key {
-		case "host":
-			if unquoted, err := strconv.Unquote(value); err == nil && strings.TrimSpace(unquoted) != "" {
-				cfg.Host = strings.TrimSpace(unquoted)
+		switch {
+		case section == "":
+			switch key {
+			case "default_provider":
+				if unquoted, err := strconv.Unquote(value); err == nil {
+					cfg.DefaultProvider = strings.TrimSpace(unquoted)
+				}
+			case "default_model":
+				if unquoted, err := strconv.Unquote(value); err == nil {
+					cfg.DefaultModel = strings.TrimSpace(unquoted)
+				}
 			}
-		case "port":
-			if port, err := strconv.Atoi(value); err == nil && port > 0 {
-				cfg.Port = port
+		case section == "gateway":
+			switch key {
+			case "host":
+				if unquoted, err := strconv.Unquote(value); err == nil && strings.TrimSpace(unquoted) != "" {
+					cfg.Gateway.Host = strings.TrimSpace(unquoted)
+				}
+			case "port":
+				if port, err := strconv.Atoi(value); err == nil && port > 0 {
+					cfg.Gateway.Port = port
+				}
+			case "require_pairing":
+				cfg.Gateway.RequirePairing = strings.EqualFold(value, "true")
 			}
-		case "require_pairing":
-			cfg.RequirePairing = strings.EqualFold(value, "true")
+		case strings.HasPrefix(section, "provider_profiles."):
+			switch key {
+			case "model_alias":
+				if unquoted, err := strconv.Unquote(value); err == nil {
+					currentProfile.ModelAlias = strings.TrimSpace(unquoted)
+				}
+			case "model":
+				if unquoted, err := strconv.Unquote(value); err == nil {
+					currentProfile.Model = strings.TrimSpace(unquoted)
+				}
+			case "provider":
+				if unquoted, err := strconv.Unquote(value); err == nil {
+					currentProfile.Provider = strings.TrimSpace(unquoted)
+				}
+			case "provider_id":
+				if unquoted, err := strconv.Unquote(value); err == nil {
+					currentProfile.ProviderID = strings.TrimSpace(unquoted)
+				}
+			}
 		}
 	}
+	flushProfile()
 	return cfg
+}
+
+func parseZeroClawGatewayConfig(raw []byte) zeroclawGatewayConfig {
+	return parseZeroClawLocalConfig(raw).Gateway
+}
+
+func buildManagedZeroClawModelOverride(cfg zeroclawLocalConfig, provider, modelAlias, model string) (string, error) {
+	selectedModel, err := resolveManagedZeroClawSelectedModel(cfg, provider, modelAlias, model)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(selectedModel) == "" {
+		return "", nil
+	}
+	rewritten := rewriteZeroClawDefaultModel(cfg.Raw, selectedModel)
+	return base64.StdEncoding.EncodeToString(rewritten), nil
+}
+
+func resolveManagedZeroClawSelectedModel(cfg zeroclawLocalConfig, provider, modelAlias, model string) (string, error) {
+	if trimmedModel := strings.TrimSpace(model); trimmedModel != "" {
+		return trimmedModel, nil
+	}
+	alias := strings.TrimSpace(modelAlias)
+	if alias == "" {
+		return "", nil
+	}
+	requestedProvider := strings.ToLower(strings.TrimSpace(provider))
+	defaultProvider := strings.ToLower(strings.TrimSpace(cfg.DefaultProvider))
+	for _, profile := range cfg.Profiles {
+		if !strings.EqualFold(strings.TrimSpace(profile.ModelAlias), alias) {
+			continue
+		}
+		candidateProviders := []string{
+			strings.ToLower(strings.TrimSpace(profile.Provider)),
+			strings.ToLower(strings.TrimSpace(profile.ProviderID)),
+		}
+		if requestedProvider != "" {
+			if requestedProvider != candidateProviders[0] && requestedProvider != candidateProviders[1] {
+				continue
+			}
+		} else if defaultProvider != "" {
+			if defaultProvider != candidateProviders[0] && defaultProvider != candidateProviders[1] {
+				continue
+			}
+		}
+		if strings.TrimSpace(profile.Model) != "" {
+			return strings.TrimSpace(profile.Model), nil
+		}
+	}
+	for _, profile := range cfg.Profiles {
+		if strings.EqualFold(strings.TrimSpace(profile.ModelAlias), alias) && strings.TrimSpace(profile.Model) != "" {
+			return strings.TrimSpace(profile.Model), nil
+		}
+	}
+	return "", fmt.Errorf("zeroclaw config does not define model alias %q", alias)
+}
+
+func rewriteZeroClawDefaultModel(raw []byte, model string) []byte {
+	lines := strings.Split(string(raw), "\n")
+	replaced := false
+	insertAt := -1
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			if insertAt < 0 {
+				insertAt = i
+			}
+			continue
+		}
+		key, _, ok := strings.Cut(trimmed, "=")
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(key), "default_model") {
+			lines[i] = fmt.Sprintf("default_model = %s", strconv.Quote(strings.TrimSpace(model)))
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		if insertAt < 0 {
+			insertAt = len(lines)
+		}
+		newLine := fmt.Sprintf("default_model = %s", strconv.Quote(strings.TrimSpace(model)))
+		lines = append(lines[:insertAt], append([]string{newLine}, lines[insertAt:]...)...)
+	}
+	text := strings.Join(lines, "\n")
+	if !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	return []byte(text)
 }
 
 func proxyZeroClawWebhook(ctx context.Context, cfg zeroclawGatewayConfig, message string) (string, error) {

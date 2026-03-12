@@ -256,6 +256,16 @@ func TestHandleAgentChat_ProxiesManagedZeroClawAgentCLIForIsolatedInstance(t *te
 	}
 	if err := os.WriteFile(filepath.Join(home, ".zeroclaw", "config.toml"), []byte(`
 default_provider = "openrouter"
+default_model = "deepseek/deepseek-chat-v3-0324"
+
+[provider_profiles.openrouter-fast]
+model_alias = "flash"
+model = "google/gemini-2.0-flash-001"
+
+[provider_profiles.openrouter-safe]
+model_alias = "flash"
+model = "deepseek/deepseek-chat-v3-0324"
+
 [gateway]
 host = "127.0.0.1"
 port = 9091
@@ -291,9 +301,19 @@ require_pairing = false
 	limactlDir := t.TempDir()
 	limactlPath := filepath.Join(limactlDir, "limactl")
 	argsPath := filepath.Join(limactlDir, "args.txt")
+	configPath := filepath.Join(limactlDir, "config.toml")
 	t.Setenv("TEST_ZEROCLAW_ARGS_PATH", argsPath)
+	t.Setenv("TEST_ZEROCLAW_CONFIG_PATH", configPath)
 	if err := os.WriteFile(limactlPath, []byte(`#!/bin/sh
 printf '%s\n' "$@" >"$TEST_ZEROCLAW_ARGS_PATH"
+for arg in "$@"; do
+  LAST_ARG="$arg"
+done
+if [ -n "$LAST_ARG" ]; then
+  if ! printf '%s' "$LAST_ARG" | base64 -d >"$TEST_ZEROCLAW_CONFIG_PATH" 2>/dev/null; then
+    printf '%s' "$LAST_ARG" | base64 -D >"$TEST_ZEROCLAW_CONFIG_PATH"
+  fi
+fi
 printf '\033[2m2026-03-10T07:00:16.309574Z\033[0m \033[32mINFO\033[0m zeroclaw::config::schema: Config loaded\n'
 printf 'Tokyo weather is mild with a chance of rain.\n'
 `), 0o755); err != nil {
@@ -309,7 +329,7 @@ printf 'Tokyo weather is mild with a chance of rain.\n'
 	runtime := &fakeAgentChatRuntime{
 		resp: baseagent.ChatResponse{Message: "should not be used", Action: "chat"},
 	}
-	req := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"weather please","sessionId":"sess-z","provider":"openrouter"}`))
+	req := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"weather please","sessionId":"sess-z","provider":"openrouter","modelAlias":"flash","model":"google/gemini-2.0-flash-001"}`))
 	rr := httptest.NewRecorder()
 	handleAgentChat(svc, runtime, "zeroclaw", rr, req)
 	if rr.Code != http.StatusOK {
@@ -335,6 +355,43 @@ printf 'Tokyo weather is mild with a chance of rain.\n'
 	}
 	if !strings.Contains(argsText, "agent") || !strings.Contains(argsText, "-m") || !strings.Contains(argsText, "weather please") {
 		t.Fatalf("expected zeroclaw agent single-shot args, got %q", argsText)
+	}
+	cfgRaw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read rendered zeroclaw config: %v", err)
+	}
+	if cfgText := string(cfgRaw); !strings.Contains(cfgText, `default_model = "google/gemini-2.0-flash-001"`) {
+		t.Fatalf("expected selected model in override config, got:\n%s", cfgText)
+	}
+}
+
+func TestResolveManagedZeroClawSelectedModel_UsesAliasProfile(t *testing.T) {
+	cfg := zeroclawLocalConfig{
+		DefaultProvider: "openrouter",
+		Profiles: []zeroclawProviderProfile{
+			{
+				SectionName: "openrouter-fast",
+				ModelAlias:  "flash",
+				Model:       "google/gemini-2.0-flash-001",
+				Provider:    "openrouter",
+				ProviderID:  "openrouter",
+			},
+			{
+				SectionName: "openrouter-safe",
+				ModelAlias:  "flash",
+				Model:       "deepseek/deepseek-chat-v3-0324",
+				Provider:    "openrouter",
+				ProviderID:  "openrouter",
+			},
+		},
+	}
+
+	got, err := resolveManagedZeroClawSelectedModel(cfg, "openrouter", "flash", "")
+	if err != nil {
+		t.Fatalf("resolveManagedZeroClawSelectedModel returned error: %v", err)
+	}
+	if got != "google/gemini-2.0-flash-001" {
+		t.Fatalf("selected model = %q, want %q", got, "google/gemini-2.0-flash-001")
 	}
 }
 

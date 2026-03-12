@@ -34,6 +34,8 @@ type agentLauncherModelSurfaceProfile struct {
 	ProtocolFamily string `json:"protocolFamily,omitempty"`
 	BaseURL        string `json:"baseUrl,omitempty"`
 	AuthMethod     string `json:"authMethod,omitempty"`
+	FallbackGroup  string `json:"fallbackGroup,omitempty"`
+	AliasGroupSize int    `json:"aliasGroupSize,omitempty"`
 	Primary        bool   `json:"primary,omitempty"`
 }
 
@@ -145,11 +147,41 @@ func buildAgentLauncherModelSurface(surface *managedAgentModelSurface) *agentLau
 	if surface == nil {
 		return nil
 	}
+	groupSizes := map[string]int{}
+	groupPrimaries := map[string]bool{}
+	for _, profile := range surface.Profiles {
+		group := strings.TrimSpace(profile.FallbackGroup)
+		if group == "" {
+			group = strings.TrimSpace(managedAgentModelSurfaceFallbackGroup(profile))
+		}
+		if group == "" {
+			continue
+		}
+		groupSizes[group]++
+	}
 	result := &agentLauncherModelSurface{
 		DefaultProfile: strings.TrimSpace(surface.DefaultProfile),
 		Profiles:       make([]agentLauncherModelSurfaceProfile, 0, len(surface.Profiles)),
 	}
-	for _, profile := range surface.Profiles {
+	for index, profile := range surface.Profiles {
+		group := strings.TrimSpace(profile.FallbackGroup)
+		if group == "" {
+			group = strings.TrimSpace(managedAgentModelSurfaceFallbackGroup(profile))
+		}
+		aliasGroupSize := profile.AliasGroupSize
+		if aliasGroupSize == 0 {
+			aliasGroupSize = groupSizes[group]
+		}
+		primary := profile.Primary
+		if !primary && group != "" && !groupPrimaries[group] {
+			primary = true
+		}
+		if group != "" && primary {
+			groupPrimaries[group] = true
+		}
+		if group == "" && index == 0 && !primary {
+			primary = true
+		}
 		result.Profiles = append(result.Profiles, agentLauncherModelSurfaceProfile{
 			ProfileName:    strings.TrimSpace(profile.ProfileName),
 			ModelAlias:     strings.TrimSpace(profile.ModelAlias),
@@ -159,10 +191,27 @@ func buildAgentLauncherModelSurface(surface *managedAgentModelSurface) *agentLau
 			ProtocolFamily: strings.TrimSpace(profile.ProtocolFamily),
 			BaseURL:        strings.TrimSpace(profile.BaseURL),
 			AuthMethod:     strings.TrimSpace(profile.AuthMethod),
-			Primary:        profile.Primary,
+			FallbackGroup:  group,
+			AliasGroupSize: aliasGroupSize,
+			Primary:        primary,
 		})
 	}
 	return result
+}
+
+func managedAgentModelSurfaceFallbackGroup(profile managedAgentModelProfile) string {
+	alias := strings.ToLower(strings.TrimSpace(profile.ModelAlias))
+	if alias == "" {
+		return ""
+	}
+	provider := strings.ToLower(strings.TrimSpace(profile.ProviderID))
+	if provider == "" {
+		provider = strings.ToLower(strings.TrimSpace(profile.ProviderKey))
+	}
+	if provider == "" {
+		return alias
+	}
+	return provider + ":" + alias
 }
 
 func buildAgentProviderReadiness(providerID string) agentProviderReadiness {

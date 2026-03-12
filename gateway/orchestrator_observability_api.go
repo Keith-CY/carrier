@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	sharedconfig "carrier/shared/config"
 )
 
 type orchestratorExecutionMetricsSnapshot struct {
@@ -72,6 +74,9 @@ type orchestratorProviderAggregateSnapshot struct {
 type orchestratorProviderModelAggregateSnapshot struct {
 	Provider         string  `json:"provider"`
 	Model            string  `json:"model"`
+	ModelAlias       string  `json:"modelAlias,omitempty"`
+	FallbackGroup    string  `json:"fallbackGroup,omitempty"`
+	AliasGroupSize   int     `json:"aliasGroupSize,omitempty"`
 	Successes        int     `json:"successes"`
 	Failures         int     `json:"failures"`
 	AvgLatencyMs     int64   `json:"avgLatencyMs,omitempty"`
@@ -232,9 +237,13 @@ func buildOrchestratorMetricsSnapshot(executions []OrchestratorExecution, leases
 				modelKey := provider + "\x00" + strings.ToLower(model)
 				modelAggregate := modelAggregates[modelKey]
 				if modelAggregate == nil {
+					modelAlias, fallbackGroup, aliasGroupSize := resolveProviderModelAliasMetadata(provider, model)
 					modelAggregate = &orchestratorProviderModelAggregateSnapshot{
-						Provider: provider,
-						Model:    model,
+						Provider:       provider,
+						Model:          model,
+						ModelAlias:     modelAlias,
+						FallbackGroup:  fallbackGroup,
+						AliasGroupSize: aliasGroupSize,
 					}
 					modelAggregates[modelKey] = modelAggregate
 				}
@@ -345,6 +354,44 @@ func buildOrchestratorMetricsSnapshot(executions []OrchestratorExecution, leases
 		Policies:   policyMetrics,
 		Queue:      buildOrchestratorWorkerQueueSummary(executions, markedLeases, cfg, now),
 	}
+}
+
+func resolveProviderModelAliasMetadata(provider, model string) (string, string, int) {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if provider == "" || model == "" {
+		return "", "", 0
+	}
+	profiles, err := sharedconfig.LoadCarrierModelProfilesForProvider(provider)
+	if err != nil || len(profiles) == 0 {
+		return "", "", 0
+	}
+	targetModel := strings.ToLower(model)
+	var alias string
+	for _, profile := range profiles {
+		if strings.EqualFold(strings.TrimSpace(profile.ModelID), targetModel) || strings.EqualFold(strings.TrimSpace(profile.ModelID), model) {
+			alias = strings.TrimSpace(profile.ModelAlias)
+			if alias == "" {
+				alias = strings.TrimSpace(profile.ModelName)
+			}
+			break
+		}
+	}
+	if alias == "" {
+		return "", "", 0
+	}
+	group := strings.ToLower(strings.TrimSpace(provider)) + ":" + strings.ToLower(alias)
+	count := 0
+	for _, profile := range profiles {
+		candidate := strings.TrimSpace(profile.ModelAlias)
+		if candidate == "" {
+			candidate = strings.TrimSpace(profile.ModelName)
+		}
+		if strings.EqualFold(candidate, alias) {
+			count++
+		}
+	}
+	return alias, group, count
 }
 
 func roundProviderAggregateCost(value float64) float64 {
