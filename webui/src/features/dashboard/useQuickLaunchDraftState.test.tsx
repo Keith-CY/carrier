@@ -1,0 +1,54 @@
+import { act, renderHook } from '@testing-library/react';
+import { afterEach, describe, expect, test } from 'vitest';
+import { useQuickLaunchDraftState } from './useQuickLaunchDraftState';
+
+describe('useQuickLaunchDraftState', () => {
+  afterEach(() => {
+    // hook state is instance-local; no global cleanup needed beyond unmount
+  });
+
+  test('updates quick launch draft fields and resets to defaults', () => {
+    const { result } = renderHook(() => useQuickLaunchDraftState());
+
+    act(() => {
+      result.current.setQuickLaunchMode('template');
+      result.current.setQuickLaunchGoal('Investigate checkout latency');
+      result.current.setQuickLaunchProvider('openrouter');
+      result.current.setQuickLaunchTemplateId('incident-diagnosis');
+      result.current.setQuickLaunchTemplateInput('service', 'checkout');
+      result.current.setQuickLaunchHostLabels('prod,gpu');
+      result.current.setQuickLaunchMaxConcurrency('2');
+      result.current.toggleQuickLaunchHost('prod-host-1');
+      result.current.setQuickLaunchAdvancedVisible(true);
+      result.current.setQuickLaunchMessage({ type: 'info', text: 'Preview ready.' });
+      result.current.setQuickLaunchPlan({ goal: 'Investigate checkout latency' });
+    });
+
+    expect(result.current.quickLaunchDraft.mode).toBe('template');
+    expect(result.current.quickLaunchDraft.goal).toBe('Investigate checkout latency');
+    expect(result.current.quickLaunchDraft.provider).toBe('openrouter');
+    expect(result.current.quickLaunchDraft.templateId).toBe('incident-diagnosis');
+    expect(result.current.quickLaunchDraft.templateInputs.service).toBe('checkout');
+    expect(result.current.quickLaunchDraft.hostLabels).toBe('prod,gpu');
+    expect(result.current.quickLaunchDraft.maxConcurrency).toBe('2');
+    expect(result.current.quickLaunchDraft.selectedHosts).toContain('prod-host-1');
+    expect(result.current.quickLaunchAdvancedVisible).toBe(true);
+    expect(result.current.quickLaunchMessage.text).toBe('Preview ready.');
+    expect(result.current.quickLaunchPlan).toEqual({ goal: 'Investigate checkout latency' });
+
+    act(() => {
+      result.current.resetQuickLaunch();
+    });
+
+    expect(result.current.quickLaunchDraft.mode).toBe('goal');
+    expect(result.current.quickLaunchDraft.goal).toBe('');
+    expect(result.current.quickLaunchDraft.templateId).toBe('');
+    expect(result.current.quickLaunchDraft.templateInputs).toEqual({});
+    expect(result.current.quickLaunchDraft.provider).toBe('');
+    expect(result.current.quickLaunchDraft.maxConcurrency).toBe('');
+    expect(result.current.quickLaunchDraft.hostLabels).toBe('');
+    expect(result.current.quickLaunchDraft.selectedHosts).toEqual(['local']);
+    expect(result.current.quickLaunchPlan).toBeNull();
+    expect(result.current.quickLaunchMessage.text).toBe('');
+  });
+});
