@@ -266,6 +266,15 @@ func defaultTelegramMediaType(kind string) string {
 func RenderTelegramWebhookResponse(resp GatewayResponse, chatID string) map[string]interface{} {
 	base := RenderTelegramResponse(resp)
 	text, _ := base["text"].(string)
+	caption := strings.TrimSpace(text)
+	if mediaKind, mediaRef, _, ok := selectTelegramRichAttachment(resp); ok {
+		if rendered := buildTelegramWebhookMediaResponse(mediaKind, chatID, mediaRef, caption); rendered != nil {
+			return rendered
+		}
+	}
+	if strings.TrimSpace(resp.DownloadURL) != "" {
+		return buildTelegramWebhookMediaResponse("document", chatID, strings.TrimSpace(resp.DownloadURL), caption)
+	}
 	out := map[string]interface{}{
 		"method":  "sendMessage",
 		"chat_id": chatID,
@@ -273,6 +282,43 @@ func RenderTelegramWebhookResponse(resp GatewayResponse, chatID string) map[stri
 	}
 	if v, ok := base["disable_web_page_preview"]; ok {
 		out["disable_web_page_preview"] = v
+	}
+	return out
+}
+
+func buildTelegramWebhookMediaResponse(kind string, chatID string, ref string, caption string) map[string]interface{} {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil
+	}
+	method := ""
+	field := ""
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "image":
+		method = "sendPhoto"
+		field = "photo"
+	case "document":
+		method = "sendDocument"
+		field = "document"
+	case "audio":
+		method = "sendAudio"
+		field = "audio"
+	case "voice":
+		method = "sendVoice"
+		field = "voice"
+	case "video":
+		method = "sendVideo"
+		field = "video"
+	default:
+		return nil
+	}
+	out := map[string]interface{}{
+		"method":  method,
+		"chat_id": chatID,
+		field:     ref,
+	}
+	if caption != "" {
+		out["caption"] = caption
 	}
 	return out
 }

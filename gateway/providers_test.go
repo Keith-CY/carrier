@@ -457,6 +457,54 @@ func TestRenderTelegramWebhookResponse_OK(t *testing.T) {
 	}
 }
 
+func TestRenderTelegramWebhookResponse_PrefersNativeMediaMethods(t *testing.T) {
+	t.Run("rich voice output uses sendVoice", func(t *testing.T) {
+		resp := GatewayResponse{
+			Result: "ok",
+			RichContent: &baseagent.RichOutboundMessage{
+				Text: "voice note ready",
+				Blocks: []baseagent.ContentBlock{
+					{Type: "voice", AttachmentID: "voice-1"},
+				},
+				Attachments: []baseagent.AttachmentRef{
+					{
+						ID:          "voice-1",
+						Kind:        "voice",
+						MediaType:   "audio/ogg",
+						DownloadURL: "https://downloads.example.com/voice.ogg",
+					},
+				},
+			},
+		}
+		rendered := RenderTelegramWebhookResponse(resp, "123")
+		if rendered["method"] != "sendVoice" {
+			t.Fatalf("expected method sendVoice, got %v", rendered["method"])
+		}
+		if rendered["voice"] != "https://downloads.example.com/voice.ogg" {
+			t.Fatalf("expected voice ref, got %v", rendered["voice"])
+		}
+	})
+
+	t.Run("download fallback uses sendDocument", func(t *testing.T) {
+		resp := GatewayResponse{
+			Result:      "ok",
+			Message:     "artifact ready",
+			DownloadURL: "/downloads/dl-2/file.zip",
+		}
+		rendered := RenderTelegramWebhookResponse(resp, "123")
+		if rendered["method"] != "sendDocument" {
+			t.Fatalf("expected method sendDocument, got %v", rendered["method"])
+		}
+		if rendered["document"] != "/downloads/dl-2/file.zip" {
+			t.Fatalf("expected document ref, got %v", rendered["document"])
+		}
+		caption, _ := rendered["caption"].(string)
+		if !strings.Contains(caption, "artifact ready") {
+			t.Fatalf("expected caption to include message, got %q", caption)
+		}
+	})
+}
+
 func TestRenderDiscordResponse(t *testing.T) {
 	resp := GatewayResponse{Result: "ok", Message: "ok msg", DownloadURL: "/downloads/dl-1/file.zip"}
 	rendered := RenderDiscordResponse(resp)
