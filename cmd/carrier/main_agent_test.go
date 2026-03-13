@@ -173,6 +173,22 @@ func TestParseAgentCommandArgs(t *testing.T) {
 		!modelsUpdateProfileOpts.JSON {
 		t.Fatalf("unexpected models update-profile opts: %+v", modelsUpdateProfileOpts)
 	}
+
+	subagentsListOpts, err := parseAgentCommandArgs([]string{"subagents", "list", "picoclaw", "--limit", "3", "--json"})
+	if err != nil {
+		t.Fatalf("parseAgentCommandArgs(subagents list) error: %v", err)
+	}
+	if subagentsListOpts.Action != "subagents-list" || subagentsListOpts.AgentID != "picoclaw" || subagentsListOpts.Limit != 3 || !subagentsListOpts.JSON {
+		t.Fatalf("unexpected subagents list opts: %+v", subagentsListOpts)
+	}
+
+	subagentsShowOpts, err := parseAgentCommandArgs([]string{"subagents", "show", "picoclaw", "subagent-1", "--json"})
+	if err != nil {
+		t.Fatalf("parseAgentCommandArgs(subagents show) error: %v", err)
+	}
+	if subagentsShowOpts.Action != "subagents-show" || subagentsShowOpts.AgentID != "picoclaw" || subagentsShowOpts.SubagentJobID != "subagent-1" || !subagentsShowOpts.JSON {
+		t.Fatalf("unexpected subagents show opts: %+v", subagentsShowOpts)
+	}
 }
 
 func TestRunAgentCommand(t *testing.T) {
@@ -321,6 +337,21 @@ func TestRunAgentCommand(t *testing.T) {
 				t.Fatalf("fallbackStrategy=%v want round_robin", body["fallbackStrategy"])
 			}
 			_, _ = w.Write([]byte(`{"agentId":"picoclaw","instanceId":"picoclaw-main","configPath":"/tmp/picoclaw/config.json","modelSurface":{"defaultProfile":"openrouter-safe","profiles":[{"profileName":"openrouter-fast","modelAlias":"flash","modelId":"google/gemini-2.0-flash-001","providerId":"openrouter","protocolFamily":"openai-compatible","primary":true},{"profileName":"openrouter-safe","modelAlias":"flash-safe-v2","modelId":"anthropic/claude-sonnet-4.6","providerId":"anthropic","protocolFamily":"anthropic","baseUrl":"https://api.anthropic.com/v1","authMethod":"api_key","timeoutMs":60000,"retryBudget":4,"fallbackStrategy":"round_robin","primary":false}]}}`))
+		case "/api/v1/agents/picoclaw/subagents":
+			if r.Method != http.MethodGet {
+				http.NotFound(w, r)
+				return
+			}
+			if got := r.URL.Query().Get("limit"); got != "3" {
+				t.Fatalf("subagents limit=%q want 3", got)
+			}
+			_, _ = w.Write([]byte(`{"jobs":[{"jobId":"subagent-1","task":"collect diagnostics","status":"failed","summary":"timed out","error":"provider timeout"}]}`))
+		case "/api/v1/agents/picoclaw/subagents/subagent-1":
+			if r.Method != http.MethodGet {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write([]byte(`{"jobId":"subagent-1","task":"collect diagnostics","status":"failed","summary":"timed out","error":"provider timeout"}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -459,6 +490,22 @@ func TestRunAgentCommand(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "profile=flash-safe-v2 model=anthropic/claude-sonnet-4.6") || !strings.Contains(out.String(), "fallback=round_robin") {
 		t.Fatalf("models update-profile output=%s", out.String())
+	}
+
+	out.Reset()
+	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "subagents-list", AgentID: "picoclaw", Limit: 3}); err != nil {
+		t.Fatalf("runAgentCommand(subagents list) error: %v", err)
+	}
+	if !strings.Contains(out.String(), "subagent-1") || !strings.Contains(out.String(), "provider timeout") {
+		t.Fatalf("subagents list output=%s", out.String())
+	}
+
+	out.Reset()
+	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "subagents-show", AgentID: "picoclaw", SubagentJobID: "subagent-1"}); err != nil {
+		t.Fatalf("runAgentCommand(subagents show) error: %v", err)
+	}
+	if !strings.Contains(out.String(), "job=subagent-1") || !strings.Contains(out.String(), "summary=timed out") {
+		t.Fatalf("subagents show output=%s", out.String())
 	}
 }
 

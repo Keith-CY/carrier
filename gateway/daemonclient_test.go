@@ -587,6 +587,14 @@ func TestDaemonClient_GetAgentSessionsAndSubagentJobs(t *testing.T) {
 					{"jobId": "subagent-1", "task": "collect", "status": "completed", "result": "done"},
 				},
 			})
+		case "/api/v1/agents/a1/subagents/subagent-1":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jobId":   "subagent-1",
+				"task":    "collect",
+				"status":  "completed",
+				"summary": "collection done",
+				"result":  "done",
+			})
 		default:
 			http.NotFound(w, r)
 		}
@@ -607,6 +615,13 @@ func TestDaemonClient_GetAgentSessionsAndSubagentJobs(t *testing.T) {
 	}
 	if len(jobs) != 1 || jobs[0].JobID != "subagent-1" {
 		t.Fatalf("unexpected jobs: %+v", jobs)
+	}
+	job, err := dc.GetAgentSubagentJob(context.Background(), "a1", "subagent-1", "actor", "req")
+	if err != nil {
+		t.Fatalf("GetAgentSubagentJob error: %v", err)
+	}
+	if job.JobID != "subagent-1" || job.Summary != "collection done" {
+		t.Fatalf("unexpected job detail: %+v", job)
 	}
 }
 

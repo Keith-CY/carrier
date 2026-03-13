@@ -415,6 +415,40 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
 		return
+	case "subagents":
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if daemon == nil {
+			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_COMMAND_FAILED", "daemon client is unavailable"))
+			return
+		}
+		if len(parts) == 2 {
+			jobs, err := daemon.GetAgentSubagentJobs(r.Context(), agentID, parsePositiveInt(r.URL.Query().Get("limit"), 10), "webui:agents:subagents:list", requestID)
+			if err != nil {
+				writeDaemonAPIError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
+			return
+		}
+		if len(parts) == 3 {
+			jobID := strings.TrimSpace(parts[2])
+			if jobID == "" {
+				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "delegation job id is required"))
+				return
+			}
+			job, err := daemon.GetAgentSubagentJob(r.Context(), agentID, jobID, "webui:agents:subagents:detail", requestID)
+			if err != nil {
+				writeDaemonAPIError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, job)
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "unsupported delegation job path"))
+		return
 	case "chat":
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))

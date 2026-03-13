@@ -77,6 +77,17 @@ type AgentMCPServerDetail = {
   }>;
 };
 
+type AgentDelegationJobDetail = {
+  jobId?: string;
+  task?: string;
+  status?: string;
+  summary?: string;
+  result?: string;
+  error?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 type AgentModelSurfaceProfile = {
   profileName?: string;
   modelAlias?: string;
@@ -137,6 +148,11 @@ type AgentLauncherSummary = {
     summary?: string;
     detail?: string;
     remediationHint?: string;
+    action?: {
+      kind?: string;
+      label?: string;
+      target?: string;
+    };
   }>;
   modelSurface?: {
     defaultProfile?: string;
@@ -242,6 +258,11 @@ function buildLauncherRemediations(launcher: AgentLauncherSummary | undefined): 
   summary: string;
   detail: string;
   remediationHint: string;
+  action?: {
+    kind: string;
+    label: string;
+    target: string;
+  };
 }> {
   if (!launcher) return [];
   const structured = Array.isArray(launcher.remediations) ? launcher.remediations : [];
@@ -252,16 +273,30 @@ function buildLauncherRemediations(launcher: AgentLauncherSummary | undefined): 
         summary: String(item?.summary || '').trim(),
         detail: String(item?.detail || '').trim(),
         remediationHint: String(item?.remediationHint || '').trim(),
+        action: item?.action?.kind && item?.action?.label
+          ? {
+              kind: String(item.action.kind || '').trim(),
+              label: String(item.action.label || '').trim(),
+              target: String(item.action.target || '').trim(),
+            }
+          : undefined,
       }))
       .filter((item) => item.summary);
   }
-  let remediations: Array<{ category: string; summary: string; detail: string; remediationHint: string }> = [];
+  let remediations: Array<{
+    category: string;
+    summary: string;
+    detail: string;
+    remediationHint: string;
+    action?: { kind: string; label: string; target: string };
+  }> = [];
   if (launcher.providerReadiness && launcher.providerReadiness.ready === false) {
     remediations = appendUniqueRemediation(remediations, {
       category: 'provider',
       summary: 'Provider authentication is not ready. Reconfigure credentials or switch to a ready profile.',
       detail: '',
       remediationHint: '',
+      action: { kind: 'sync-model-surface', label: 'Sync model surface', target: '' },
     });
   }
   if (launcher.heartbeat && (launcher.heartbeat.state === 'stale' || launcher.heartbeat.state === 'expired')) {
@@ -270,6 +305,7 @@ function buildLauncherRemediations(launcher: AgentLauncherSummary | undefined): 
       summary: 'Launcher heartbeat is stale. Restart the agent or inspect the managed runtime.',
       detail: '',
       remediationHint: '',
+      action: { kind: 'start-runtime', label: 'Start runtime', target: '' },
     });
   }
   if (Array.isArray(launcher.cron?.jobs) && launcher.cron?.jobs.some((job) => !!job.paused)) {
@@ -278,6 +314,7 @@ function buildLauncherRemediations(launcher: AgentLauncherSummary | undefined): 
       summary: 'One or more cron jobs are paused. Resume or cancel them to restore scheduled automation.',
       detail: '',
       remediationHint: '',
+      action: { kind: 'resume-cron', label: 'Resume paused cron', target: '' },
     });
   }
   if (Array.isArray(launcher.capabilities?.skills) && launcher.capabilities.skills.some((skill) => !!skill.updateAvailable)) {
@@ -294,6 +331,7 @@ function buildLauncherRemediations(launcher: AgentLauncherSummary | undefined): 
       summary: 'One or more MCP servers are detached. Re-attach them before expecting tools to appear in runtime.',
       detail: '',
       remediationHint: '',
+      action: { kind: 'attach-mcp', label: 'Attach MCP', target: '' },
     });
   }
   if (launcher.session && String(launcher.session.runtimeState || '').trim() && String(launcher.session.runtimeState || '').trim() !== 'running') {
@@ -302,14 +340,27 @@ function buildLauncherRemediations(launcher: AgentLauncherSummary | undefined): 
       summary: 'Managed runtime is not running. Start the agent or inspect the launcher session.',
       detail: '',
       remediationHint: '',
+      action: { kind: 'start-runtime', label: 'Start runtime', target: '' },
     });
   }
   return remediations;
 }
 
 function appendUniqueRemediation(
-  items: Array<{ category: string; summary: string; detail: string; remediationHint: string }>,
-  item: { category: string; summary: string; detail: string; remediationHint: string },
+  items: Array<{
+    category: string;
+    summary: string;
+    detail: string;
+    remediationHint: string;
+    action?: { kind: string; label: string; target: string };
+  }>,
+  item: {
+    category: string;
+    summary: string;
+    detail: string;
+    remediationHint: string;
+    action?: { kind: string; label: string; target: string };
+  },
 ) {
   if (items.some((existing) => existing.summary === item.summary)) {
     return items;
@@ -326,6 +377,7 @@ export function AgentDetailPage() {
   const [skillSearchResults, setSkillSearchResults] = useState<AgentSkillCatalogEntry[]>([]);
   const [skillVersionDrafts, setSkillVersionDrafts] = useState<Record<string, string>>({});
   const [selectedMCPServerName, setSelectedMCPServerName] = useState('');
+  const [selectedDelegationJobID, setSelectedDelegationJobID] = useState('');
   const [mcpConfigDraft, setMcpConfigDraft] = useState('');
   const [editingProfileName, setEditingProfileName] = useState('');
   const [profileDraft, setProfileDraft] = useState<AgentModelProfileDraft | null>(null);
@@ -461,6 +513,12 @@ export function AgentDetailPage() {
     queryKey: ['agent-mcp-detail', agentId, selectedMCPServerName],
     queryFn: () => apiGet<AgentMCPServerDetail>(`/api/v1/agents/${encodeURIComponent(agentId)}/mcp/${encodeURIComponent(selectedMCPServerName)}`),
     enabled: !!agentId && !!selectedMCPServerName,
+    retry: false,
+  });
+  const delegationJobQuery = useQuery({
+    queryKey: ['agent-delegation-job', agentId, selectedDelegationJobID],
+    queryFn: () => apiGet<AgentDelegationJobDetail>(`/api/v1/agents/${encodeURIComponent(agentId)}/subagents/${encodeURIComponent(selectedDelegationJobID)}`),
+    enabled: !!agentId && !!selectedDelegationJobID,
     retry: false,
   });
 
@@ -643,6 +701,10 @@ export function AgentDetailPage() {
     () => (content.state === 'ready' ? buildLauncherRemediations(content.launcher) : []),
     [content],
   );
+  const hasStructuredRemediationActions = useMemo(
+    () => remediationItems.some((item) => !!item.action?.label),
+    [remediationItems],
+  );
   const firstDetachedMCPServer = useMemo(() => {
     if (content.state !== 'ready') return '';
     const detached = (content.capabilities.mcp?.servers || []).find((server) => server.attached === false && server.name);
@@ -653,6 +715,60 @@ export function AgentDetailPage() {
     const paused = (content.launcher?.cron?.jobs || []).find((job) => job.paused && job.id);
     return String(paused?.id || '').trim();
   }, [content]);
+  const heartbeatRestartCount = useMemo(() => {
+    const raw = content.state === 'ready' ? content.launcher?.status?.restartCount : undefined;
+    return typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+  }, [content]);
+  const heartbeatLastError = useMemo(() => {
+    if (content.state !== 'ready') return '';
+    return String(content.launcher?.status?.lastError || '').trim();
+  }, [content]);
+  const heartbeatLastTriageSummary = useMemo(() => {
+    if (content.state !== 'ready') return '';
+    return String(content.launcher?.status?.lastTriageSummary || '').trim();
+  }, [content]);
+
+  async function runLauncherRemediation(action?: { kind: string; label: string; target: string }) {
+    if (!action) return;
+    switch (action.kind) {
+      case 'sync-model-surface':
+        modelSyncMutation.mutate();
+        return;
+      case 'start-runtime':
+        actionMutation.mutate('start');
+        return;
+      case 'restart-runtime':
+        try {
+          await apiPost(`/api/v1/agents/${encodeURIComponent(agentId)}/stop`, {});
+          await apiPost(`/api/v1/agents/${encodeURIComponent(agentId)}/start`, {});
+          setLastActionMessage('Agent restart requested.');
+          await statusQuery.refetch();
+          await capabilitiesQuery.refetch();
+          await launcherQuery.refetch();
+        } catch (error) {
+          setLastActionMessage((error as Error).message);
+        }
+        return;
+      case 'resume-cron': {
+        const jobId = action.target || firstPausedCronJobID;
+        if (jobId) cronMutation.mutate({ jobId, action: 'resume' });
+        return;
+      }
+      case 'inspect-delegation':
+        setSelectedDelegationJobID(action.target);
+        return;
+      case 'attach-mcp': {
+        const serverName = action.target || firstDetachedMCPServer;
+        if (serverName) mcpAttachMutation.mutate({ serverName, attached: true });
+        return;
+      }
+      case 'inspect-mcp':
+        setSelectedMCPServerName(action.target);
+        return;
+      default:
+        return;
+    }
+  }
 
   return (
     <section id="view-agent-detail" className="view">
@@ -672,51 +788,60 @@ export function AgentDetailPage() {
                       <div className="text-dim">{item.summary}</div>
                       {item.detail ? <div className="text-dim">{item.detail}</div> : null}
                       {item.remediationHint ? <div className="text-dim">{item.remediationHint}</div> : null}
+                      {item.action?.label ? (
+                        <div className="btn-row">
+                          <button type="button" className="btn-secondary" onClick={() => void runLauncherRemediation(item.action)}>
+                            {item.action.label}
+                          </button>
+                        </div>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
-                <div className="btn-row">
-                  {content.launcher?.providerReadiness?.ready === false ? (
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      disabled={modelSyncMutation.isPending}
-                      onClick={() => modelSyncMutation.mutate()}
-                    >
-                      Sync model surface
-                    </button>
-                  ) : null}
-                  {content.launcher?.session?.runtimeState && content.launcher.session.runtimeState !== 'running' ? (
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      disabled={actionMutation.isPending}
-                      onClick={() => actionMutation.mutate('start')}
-                    >
-                      Start runtime
-                    </button>
-                  ) : null}
-                  {firstPausedCronJobID ? (
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      disabled={cronMutation.isPending}
-                      onClick={() => cronMutation.mutate({ jobId: firstPausedCronJobID, action: 'resume' })}
-                    >
-                      Resume paused cron
-                    </button>
-                  ) : null}
-                  {firstDetachedMCPServer ? (
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      disabled={mcpAttachMutation.isPending}
-                      onClick={() => mcpAttachMutation.mutate({ serverName: firstDetachedMCPServer, attached: true })}
-                    >
-                      {`Attach ${firstDetachedMCPServer} MCP`}
-                    </button>
-                  ) : null}
-                </div>
+                {!hasStructuredRemediationActions ? (
+                  <div className="btn-row">
+                    {content.launcher?.providerReadiness?.ready === false ? (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        disabled={modelSyncMutation.isPending}
+                        onClick={() => modelSyncMutation.mutate()}
+                      >
+                        Sync model surface
+                      </button>
+                    ) : null}
+                    {content.launcher?.session?.runtimeState && content.launcher.session.runtimeState !== 'running' ? (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        disabled={actionMutation.isPending}
+                        onClick={() => actionMutation.mutate('start')}
+                      >
+                        Start runtime
+                      </button>
+                    ) : null}
+                    {firstPausedCronJobID ? (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        disabled={cronMutation.isPending}
+                        onClick={() => cronMutation.mutate({ jobId: firstPausedCronJobID, action: 'resume' })}
+                      >
+                        Resume paused cron
+                      </button>
+                    ) : null}
+                    {firstDetachedMCPServer ? (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        disabled={mcpAttachMutation.isPending}
+                        onClick={() => mcpAttachMutation.mutate({ serverName: firstDetachedMCPServer, attached: true })}
+                      >
+                        {`Attach ${firstDetachedMCPServer} MCP`}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             {content.launcher && (content.launcher.heartbeat || content.launcher.providerReadiness || content.launcher.mediaRuntime || content.launcher.memory || content.launcher.session || content.launcher.cron) ? (
@@ -727,7 +852,10 @@ export function AgentDetailPage() {
                     {content.launcher.heartbeat?.state || 'unknown'}
                     {typeof content.launcher.heartbeat?.ageSeconds === 'number' ? ` · age=${content.launcher.heartbeat.ageSeconds}s` : ''}
                     {content.launcher.heartbeat?.lastActivityAt ? ` · last=${content.launcher.heartbeat.lastActivityAt}` : ''}
+                    {Number.isFinite(heartbeatRestartCount) ? ` · restarts=${heartbeatRestartCount}` : ''}
                   </div>
+                  {heartbeatLastError ? <div className="text-dim">{`lastError=${heartbeatLastError}`}</div> : null}
+                  {heartbeatLastTriageSummary ? <div className="text-dim">{`triage=${heartbeatLastTriageSummary}`}</div> : null}
                 </div>
                 <div>
                   <strong>Provider</strong>
@@ -864,9 +992,43 @@ export function AgentDetailPage() {
                         {job.error ? ` · ${job.error}` : ''}
                         {job.updatedAt ? ` · ${job.updatedAt}` : ''}
                       </span>
+                      {job.jobId ? (
+                        <div className="btn-row">
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={delegationJobQuery.isFetching && selectedDelegationJobID === String(job.jobId)}
+                            onClick={() => setSelectedDelegationJobID(String(job.jobId))}
+                          >
+                            {`Inspect ${String(job.jobId)} delegation`}
+                          </button>
+                        </div>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
+                {selectedDelegationJobID ? (
+                  <div className="card">
+                    <strong>{`${selectedDelegationJobID} Delegation Detail`}</strong>
+                    {delegationJobQuery.isLoading ? (
+                      <div className="text-dim">Loading delegation detail…</div>
+                    ) : delegationJobQuery.isError ? (
+                      <div className="text-dim">{(delegationJobQuery.error as Error).message}</div>
+                    ) : delegationJobQuery.data ? (
+                      <>
+                        <div className="text-dim">
+                          {delegationJobQuery.data.status || 'unknown'}
+                          {delegationJobQuery.data.updatedAt ? ` · ${delegationJobQuery.data.updatedAt}` : ''}
+                          {delegationJobQuery.data.createdAt ? ` · created=${delegationJobQuery.data.createdAt}` : ''}
+                        </div>
+                        {delegationJobQuery.data.task ? <div className="text-dim">{delegationJobQuery.data.task}</div> : null}
+                        {delegationJobQuery.data.summary ? <div className="text-dim">{delegationJobQuery.data.summary}</div> : null}
+                        {delegationJobQuery.data.result ? <div className="text-dim">{delegationJobQuery.data.result}</div> : null}
+                        {delegationJobQuery.data.error ? <div className="text-dim">{delegationJobQuery.data.error}</div> : null}
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             {content.launcher?.sessions?.sessions && content.launcher.sessions.sessions.length ? (

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -138,6 +138,19 @@ describe('AgentDetailPage', () => {
             sessions: [{ key: 'telegram:alpha', messageCount: 8, summaryLength: 64, updatedAt: '2026-03-12T00:07:00Z' }],
           },
           remediations: [],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/v1/agents/agent-alpha/subagents/subagent-1')) {
+        return new Response(JSON.stringify({
+          jobId: 'subagent-1',
+          task: 'collect diagnostics',
+          status: 'completed',
+          summary: 'summary-ready',
+          result: 'done',
+          updatedAt: '2026-03-12T00:06:00Z',
         }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -502,7 +515,7 @@ describe('AgentDetailPage', () => {
     expect(screen.getByText(/Update skill to v2.0.0 or clear the target pin\./i)).toBeInTheDocument();
     expect(screen.getByText(/update_available/i)).toBeInTheDocument();
     expect(screen.getByText(/Recent Delegation Jobs/i)).toBeInTheDocument();
-    expect(screen.getByText(/subagent-1/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Inspect subagent-1 delegation/i })).toBeInTheDocument();
     expect(screen.getByText(/Recent Sessions/i)).toBeInTheDocument();
     expect(screen.getByText(/telegram:alpha/i)).toBeInTheDocument();
   });
@@ -611,6 +624,23 @@ describe('AgentDetailPage', () => {
     );
   });
 
+  test('loads delegated job detail from the managed endpoint', async () => {
+    renderAgentDetailPage();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Inspect subagent-1 delegation/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Inspect subagent-1 delegation/i }));
+
+    await waitFor(() => expect(screen.getByText(/subagent-1 Delegation Detail/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/summary-ready/i)).toBeInTheDocument());
+    const detailCard = screen.getByText(/subagent-1 Delegation Detail/i).closest('.card');
+    expect(detailCard).not.toBeNull();
+    await waitFor(() => expect(within(detailCard as HTMLElement).getByText(/^done$/i)).toBeInTheDocument());
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/subagents/subagent-1'),
+      expect.anything(),
+    );
+  });
+
   test('attaches and updates MCP server config through managed endpoints', async () => {
     renderAgentDetailPage();
 
@@ -697,6 +727,7 @@ describe('AgentDetailPage', () => {
       if (url.endsWith('/api/v1/agents/agent-alpha/launcher')) {
         return new Response(JSON.stringify({
           agentId: 'agent-alpha',
+          status: { restartCount: 3, lastError: 'provider timeout', lastTriageSummary: 'restart via launcher' },
           heartbeat: { state: 'stale', ageSeconds: 240 },
           providerReadiness: { provider: 'openrouter', ready: false, authMode: 'api_key' },
           mediaRuntime: { provider: 'openrouter', status: 'unavailable', detail: 'provider=openrouter runtime unavailable', remediationHint: 'Configure transcription credentials or switch providers.' },
@@ -705,9 +736,9 @@ describe('AgentDetailPage', () => {
             jobs: [{ id: 'cron-1', prompt: 'check launcher', paused: true, lastResult: 'paused' }],
           },
           remediations: [
-            { category: 'provider', summary: 'Provider authentication is not ready. Reconfigure credentials or switch to a ready profile.', detail: 'provider=openrouter auth=api_key' },
-            { category: 'heartbeat', summary: 'Launcher heartbeat is stale. Restart the agent or inspect the managed runtime.', detail: 'state=stale age=240s' },
-            { category: 'cron', summary: 'One or more cron jobs are paused. Resume or cancel them to restore scheduled automation.', detail: 'job=cron-1 last=paused' },
+            { category: 'provider', summary: 'Provider authentication is not ready. Reconfigure credentials or switch to a ready profile.', detail: 'provider=openrouter auth=api_key', action: { kind: 'sync-model-surface', label: 'Sync model surface' } },
+            { category: 'heartbeat', summary: 'Launcher heartbeat is stale. Restart the agent or inspect the managed runtime.', detail: 'state=stale age=240s', action: { kind: 'start-runtime', label: 'Start runtime' } },
+            { category: 'cron', summary: 'One or more cron jobs are paused. Resume or cancel them to restore scheduled automation.', detail: 'job=cron-1 last=paused', action: { kind: 'resume-cron', label: 'Resume cron-1', target: 'cron-1' } },
           ],
         }), {
           status: 200,
@@ -732,8 +763,14 @@ describe('AgentDetailPage', () => {
     expect(screen.getByText(/provider=openrouter auth=api_key/i)).toBeInTheDocument();
     expect(screen.getByText(/state=stale age=240s/i)).toBeInTheDocument();
     expect(screen.getByText(/job=cron-1 last=paused/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Sync model surface/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Resume paused cron/i })).toBeInTheDocument();
+    expect(screen.getByText(/restarts=3/i)).toBeInTheDocument();
+    expect(screen.getByText(/lastError=provider timeout/i)).toBeInTheDocument();
+    expect(screen.getByText(/triage=restart via launcher/i)).toBeInTheDocument();
+    const remediationContainer = screen.getByText(/Remediation/i).parentElement;
+    expect(remediationContainer).not.toBeNull();
+    expect(within(remediationContainer as HTMLElement).getByRole('button', { name: /Sync model surface/i })).toBeInTheDocument();
+    expect(within(remediationContainer as HTMLElement).getByRole('button', { name: /Start runtime/i })).toBeInTheDocument();
+    expect(within(remediationContainer as HTMLElement).getByRole('button', { name: /Resume cron-1/i })).toBeInTheDocument();
   });
 
   test('loads dedicated model surface and syncs it on demand', async () => {

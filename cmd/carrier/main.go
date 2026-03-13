@@ -287,6 +287,7 @@ type agentCommandOptions struct {
 	Action      string
 	AgentID     string
 	CronJobID   string
+	SubagentJobID string
 	ProfileName string
 	Query       string
 	SkillName   string
@@ -302,6 +303,7 @@ type agentCommandOptions struct {
 	TimeoutMs   int
 	RetryBudget int
 	FallbackStrategy string
+	Limit       int
 	JSON        bool
 }
 
@@ -3390,11 +3392,26 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 			opts.SkillName = strings.TrimSpace(args[3])
 			startIdx = 4
 		}
+	case "subagents":
+		if len(args) < 3 {
+			return agentCommandOptions{}, errors.New("usage: carrier agent subagents <list|show> <agent_id> [job_id] [--limit <n>] [--json]")
+		}
+		subaction := strings.ToLower(strings.TrimSpace(args[1]))
+		opts.Action = "subagents-" + subaction
+		opts.AgentID = strings.TrimSpace(args[2])
+		startIdx = 3
+		if subaction == "show" {
+			if len(args) < 4 {
+				return agentCommandOptions{}, errors.New("usage: carrier agent subagents show <agent_id> <job_id> [--json]")
+			}
+			opts.SubagentJobID = strings.TrimSpace(args[3])
+			startIdx = 4
+		}
 	default:
-		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills|models> ...")
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills|models|subagents> ...")
 	}
 	if opts.AgentID == "" {
-		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills|models> ...")
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills|models|subagents> ...")
 	}
 	for i := startIdx; i < len(args); i++ {
 		raw := strings.TrimSpace(args[i])
@@ -3502,6 +3519,17 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 			}
 			opts.FallbackStrategy = strings.TrimSpace(value)
 			i = next
+		case "--limit":
+			value, next, err := parseRequiredFlagValue(args, i, "--limit")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			parsed, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || parsed <= 0 {
+				return agentCommandOptions{}, fmt.Errorf("invalid --limit value: %s", value)
+			}
+			opts.Limit = parsed
+			i = next
 		case "--json":
 			opts.JSON = true
 		default:
@@ -3527,6 +3555,11 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 		if strings.TrimSpace(opts.SkillName) == "" {
 			return agentCommandOptions{}, fmt.Errorf("usage: carrier agent skills %s <agent_id> <skill_name> [--json]", strings.TrimPrefix(opts.Action, "skills-"))
 		}
+	case "subagents-list":
+	case "subagents-show":
+		if strings.TrimSpace(opts.SubagentJobID) == "" {
+			return agentCommandOptions{}, errors.New("usage: carrier agent subagents show <agent_id> <job_id> [--json]")
+		}
 	case "shell", "launcher", "heartbeat", "models", "models-discover", "models-sync":
 	case "models-default":
 		if strings.TrimSpace(opts.ProfileName) == "" {
@@ -3537,7 +3570,7 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 			return agentCommandOptions{}, errors.New("usage: carrier agent models update-profile <agent_id> <profile_name> [--model-alias <alias>] [--model <model-id>] [--provider <provider-id>] [--base-url <url>] [--auth-method <method>] [--timeout-ms <ms>] [--retry-budget <n>] [--fallback-strategy <name>] [--json]")
 		}
 	default:
-		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills|models> ...")
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills|models|subagents> ...")
 	}
 	return opts, nil
 }
@@ -4867,6 +4900,21 @@ type agentCronListCLIResponse struct {
 	Jobs []agentCronJobCLIResponse `json:"jobs"`
 }
 
+type agentSubagentJobCLIResponse struct {
+	JobID     string `json:"jobId"`
+	Task      string `json:"task"`
+	Status    string `json:"status"`
+	Summary   string `json:"summary,omitempty"`
+	Result    string `json:"result,omitempty"`
+	Error     string `json:"error,omitempty"`
+	CreatedAt string `json:"createdAt,omitempty"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
+}
+
+type agentSubagentListCLIResponse struct {
+	Jobs []agentSubagentJobCLIResponse `json:"jobs"`
+}
+
 type agentSkillCLIResponse struct {
 	Name          string   `json:"name"`
 	Summary       string   `json:"summary,omitempty"`
@@ -5088,6 +5136,26 @@ func runAgentCommand(in io.Reader, out io.Writer, opts agentCommandOptions) erro
 		}
 		_, _ = fmt.Fprintln(out, renderManagedAgentRemovedSkill(resp))
 		return nil
+	case "subagents-list":
+		resp, raw, err := listManagedAgentSubagents(opts.AgentID, opts.Limit)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentSubagentList(resp))
+		return nil
+	case "subagents-show":
+		resp, raw, err := fetchManagedAgentSubagent(opts.AgentID, opts.SubagentJobID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentSubagent(resp))
+		return nil
 	case "models":
 		resp, raw, err := fetchManagedAgentModels(opts.AgentID)
 		if err != nil {
@@ -5236,6 +5304,38 @@ func cancelManagedAgentCron(agentID, jobID string) (*agentCronJobCLIResponse, []
 	var resp agentCronJobCLIResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, nil, fmt.Errorf("decode agent cron cancel response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func listManagedAgentSubagents(agentID string, limit int) (*agentSubagentListCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/subagents", neturl.PathEscape(strings.TrimSpace(agentID)))
+	if limit > 0 {
+		path += "?limit=" + neturl.QueryEscape(strconv.Itoa(limit))
+	}
+	raw, _, err := gatewayRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentSubagentListCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent subagent list response: %w", err)
+	}
+	if resp.Jobs == nil {
+		resp.Jobs = []agentSubagentJobCLIResponse{}
+	}
+	return &resp, raw, nil
+}
+
+func fetchManagedAgentSubagent(agentID, jobID string) (*agentSubagentJobCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/subagents/%s", neturl.PathEscape(strings.TrimSpace(agentID)), neturl.PathEscape(strings.TrimSpace(jobID)))
+	raw, _, err := gatewayRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentSubagentJobCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent subagent response: %w", err)
 	}
 	return &resp, raw, nil
 }
@@ -5784,6 +5884,69 @@ func renderManagedAgentCronList(resp *agentCronListCLIResponse) string {
 			line += " (" + strings.Join(details, ", ") + ")"
 		}
 		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderManagedAgentSubagentList(resp *agentSubagentListCLIResponse) string {
+	if resp == nil || len(resp.Jobs) == 0 {
+		return "no delegation jobs"
+	}
+	lines := make([]string, 0, len(resp.Jobs))
+	for _, job := range resp.Jobs {
+		line := strings.TrimSpace(job.JobID)
+		if line == "" {
+			line = "unknown-job"
+		}
+		if trimmed := strings.TrimSpace(job.Task); trimmed != "" {
+			line += " · " + trimmed
+		}
+		details := make([]string, 0, 4)
+		if trimmed := strings.TrimSpace(job.Status); trimmed != "" {
+			details = append(details, "status="+trimmed)
+		}
+		if trimmed := strings.TrimSpace(job.Summary); trimmed != "" {
+			details = append(details, "summary="+trimmed)
+		}
+		if trimmed := strings.TrimSpace(job.Error); trimmed != "" {
+			details = append(details, "error="+trimmed)
+		}
+		if trimmed := strings.TrimSpace(job.UpdatedAt); trimmed != "" {
+			details = append(details, "updated="+trimmed)
+		}
+		if len(details) > 0 {
+			line += " (" + strings.Join(details, ", ") + ")"
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderManagedAgentSubagent(resp *agentSubagentJobCLIResponse) string {
+	if resp == nil {
+		return ""
+	}
+	lines := []string{fmt.Sprintf("job=%s", strings.TrimSpace(resp.JobID))}
+	if trimmed := strings.TrimSpace(resp.Task); trimmed != "" {
+		lines = append(lines, "task="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.Status); trimmed != "" {
+		lines = append(lines, "status="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.Summary); trimmed != "" {
+		lines = append(lines, "summary="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.Result); trimmed != "" {
+		lines = append(lines, "result="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.Error); trimmed != "" {
+		lines = append(lines, "error="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.CreatedAt); trimmed != "" {
+		lines = append(lines, "createdAt="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.UpdatedAt); trimmed != "" {
+		lines = append(lines, "updatedAt="+trimmed)
 	}
 	return strings.Join(lines, "\n")
 }

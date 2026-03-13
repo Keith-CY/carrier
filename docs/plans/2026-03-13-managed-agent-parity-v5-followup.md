@@ -88,7 +88,7 @@ Extend managed MCP controls beyond enable/disable/detail:
 
 ### Task 49: Make Delegated Job History Durable
 
-**Status:** pending
+**Status:** completed on 2026-03-13
 
 Persist recent delegated job history so runtime and launcher views survive process restart and expose:
 - recent jobs
@@ -98,7 +98,7 @@ Persist recent delegated job history so runtime and launcher views survive proce
 
 ### Task 50: Add Launcher Operator Actions
 
-**Status:** pending
+**Status:** completed on 2026-03-13
 
 Deepen the operator console with:
 - direct remediation actions from launcher detail

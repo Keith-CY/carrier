@@ -112,6 +112,20 @@ test.describe('Agent Detail', () => {
         }),
       });
     });
+    await page.route('**/api/v1/agents/agent-alpha/subagents/subagent-1', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          jobId: 'subagent-1',
+          task: 'collect diagnostics',
+          status: 'completed',
+          summary: 'summary-ready',
+          result: 'done',
+          updatedAt: '2026-03-12T00:06:00Z',
+        }),
+      });
+    });
     await page.route('**/api/v1/agents/agent-alpha/models', async (route) => {
       await route.fulfill({
         status: 200,
@@ -453,6 +467,9 @@ test.describe('Agent Detail', () => {
     await expect(page.locator('#agent-detail-content')).toContainText('last=2026-03-12T00:05:00Z');
     await expect(page.locator('#agent-detail-content')).toContainText('Recent Delegation Jobs');
     await expect(page.locator('#agent-detail-content')).toContainText('subagent-1');
+    await page.getByRole('button', { name: 'Inspect subagent-1 delegation' }).click();
+    await expect(page.locator('#agent-detail-content')).toContainText('subagent-1 Delegation Detail');
+    await expect(page.locator('#agent-detail-content')).toContainText('summary-ready');
     await expect(page.locator('#agent-detail-content')).toContainText('Recent Sessions');
     await expect(page.locator('#agent-detail-content')).toContainText('telegram:prod');
 

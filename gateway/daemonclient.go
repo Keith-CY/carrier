@@ -449,6 +449,18 @@ func (c *DaemonClient) GetAgentSubagentJobs(ctx context.Context, agentID string,
 	return wrapped.Jobs, nil
 }
 
+func (c *DaemonClient) GetAgentSubagentJob(ctx context.Context, agentID, jobID, actor, requestID string) (baseagent.SubagentJob, error) {
+	raw, err := c.request(ctx, http.MethodGet, "/api/v1/agents/"+url.PathEscape(agentID)+"/subagents/"+url.PathEscape(jobID), nil, actor, requestID)
+	if err != nil {
+		return baseagent.SubagentJob{}, err
+	}
+	var job baseagent.SubagentJob
+	if err := json.Unmarshal(raw, &job); err != nil {
+		return baseagent.SubagentJob{}, fmt.Errorf("agent subagent job response: %w", err)
+	}
+	return job, nil
+}
+
 // GetLogs returns agent logs.
 func (c *DaemonClient) GetLogs(ctx context.Context, agentID string, tail int, actor, requestID string) (*LogsResult, error) {
 	safeTail := tail

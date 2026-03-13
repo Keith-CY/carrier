@@ -957,3 +957,47 @@ func TestHandleWebUIAgent_StartReplaysPersistedMCPState(t *testing.T) {
 		t.Fatalf("unexpected persisted replayed mcp state: %+v", instances[idx].MCPServers)
 	}
 }
+
+func TestHandleWebUIAgent_SubagentListAndDetail(t *testing.T) {
+	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+		"GET /api/v1/agents/agent-alpha/subagents": func(w http.ResponseWriter, r *http.Request) {
+			if got := r.URL.Query().Get("limit"); got != "10" {
+				t.Fatalf("limit=%q want 10", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jobs": []map[string]any{
+					{"jobId": "subagent-1", "task": "collect diagnostics", "status": "failed", "error": "provider timeout"},
+				},
+			})
+		},
+		"GET /api/v1/agents/agent-alpha/subagents/subagent-1": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jobId":   "subagent-1",
+				"task":    "collect diagnostics",
+				"status":  "failed",
+				"summary": "timed out during delegated run",
+				"error":   "provider timeout",
+			})
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/agent-alpha/subagents", nil)
+	handleWebUIAgent(rec, req, "req-subagents-list", daemon)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"subagent-1"`) {
+		t.Fatalf("expected subagent list body, got %s", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/agents/agent-alpha/subagents/subagent-1", nil)
+	handleWebUIAgent(rec, req, "req-subagents-detail", daemon)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"summary":"timed out during delegated run"`) {
+		t.Fatalf("expected subagent detail body, got %s", rec.Body.String())
+	}
+}

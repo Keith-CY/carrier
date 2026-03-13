@@ -233,6 +233,13 @@ func TestHandleAgentLauncherReturnsStructuredRemediations(t *testing.T) {
 				},
 			})
 		},
+		"GET /api/v1/agents/agent-alpha/subagents": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"jobs": []map[string]interface{}{
+					{"jobId": "subagent-1", "task": "collect diagnostics", "status": "failed", "error": "provider timeout"},
+				},
+			})
+		},
 	})
 
 	rec := httptest.NewRecorder()
@@ -249,10 +256,17 @@ func TestHandleAgentLauncherReturnsStructuredRemediations(t *testing.T) {
 		`"category":"heartbeat"`,
 		`"category":"cron"`,
 		`"category":"mcp"`,
+		`"category":"delegation"`,
 		`"detail":"provider=openrouter auth=api_key"`,
 		`"detail":"state=stale age=240s"`,
 		`"detail":"job=cron-1 last=paused"`,
 		`"detail":"server=repo health=degraded"`,
+		`"detail":"job=subagent-1 status=failed"`,
+		`"action":{"kind":"sync-model-surface","label":"Sync model surface"}`,
+		`"action":{"kind":"start-runtime","label":"Start runtime"}`,
+		`"action":{"kind":"resume-cron","label":"Resume cron-1","target":"cron-1"}`,
+		`"action":{"kind":"attach-mcp","label":"Attach repo MCP","target":"repo"}`,
+		`"action":{"kind":"inspect-delegation","label":"Inspect subagent-1","target":"subagent-1"}`,
 		`"mediaRuntime":{"provider":"openrouter","status":"unavailable"`,
 	} {
 		if !strings.Contains(body, needle) {

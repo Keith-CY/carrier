@@ -23,14 +23,14 @@ const (
 )
 
 type SubagentJob struct {
-	JobID     string
-	Task      string
-	Status    SubagentJobStatus
-	Summary   string
-	Result    string
-	Error     string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	JobID     string            `json:"jobId"`
+	Task      string            `json:"task"`
+	Status    SubagentJobStatus `json:"status"`
+	Summary   string            `json:"summary"`
+	Result    string            `json:"result"`
+	Error     string            `json:"error"`
+	CreatedAt time.Time         `json:"createdAt"`
+	UpdatedAt time.Time         `json:"updatedAt"`
 }
 
 type SubagentExecutor func(context.Context, SubagentRequest) (string, error)

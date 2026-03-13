@@ -39,6 +39,13 @@ type agentLauncherRemediation struct {
 	Summary         string `json:"summary,omitempty"`
 	Detail          string `json:"detail,omitempty"`
 	RemediationHint string `json:"remediationHint,omitempty"`
+	Action          *agentLauncherRemediationAction `json:"action,omitempty"`
+}
+
+type agentLauncherRemediationAction struct {
+	Kind   string `json:"kind,omitempty"`
+	Label  string `json:"label,omitempty"`
+	Target string `json:"target,omitempty"`
 }
 
 type agentLauncherModelSurface struct {
@@ -187,7 +194,7 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 		readiness = buildAgentProviderReadiness(agentProviderFromStatus(status))
 	}
 	mediaRuntime := buildAgentMediaRuntime(firstNonEmptyAgentProvider(strings.TrimSpace(os.Getenv("CARRIER_TRANSCRIPTION_PROVIDER")), readiness.Provider, agentProviderFromStatus(status)))
-	remediations := buildAgentLauncherRemediations(readiness, status.Heartbeat, cronSummary, capabilities, session, mediaRuntime)
+	remediations := buildAgentLauncherRemediations(readiness, status.Heartbeat, cronSummary, delegationSummary, capabilities, session, mediaRuntime)
 
 	writeJSON(w, http.StatusOK, agentLauncherSummary{
 		AgentID:           agentID,
@@ -366,6 +373,7 @@ func buildAgentLauncherRemediations(
 	readiness agentProviderReadiness,
 	heartbeat *AgentHeartbeat,
 	cronSummary *agentLauncherCronSummary,
+	delegationSummary *agentLauncherDelegationSummary,
 	capabilities AgentCapabilitySummary,
 	session *agentLauncherSession,
 	mediaRuntime *agentLauncherMediaRuntime,
@@ -376,13 +384,28 @@ func buildAgentLauncherRemediations(
 			Category: "provider",
 			Summary:  "Provider authentication is not ready. Reconfigure credentials or switch to a ready profile.",
 			Detail:   fmt.Sprintf("provider=%s auth=%s", readiness.Provider, strings.TrimSpace(readiness.AuthMode)),
+			Action: &agentLauncherRemediationAction{
+				Kind:  "sync-model-surface",
+				Label: "Sync model surface",
+			},
 		})
 	}
 	if heartbeat != nil && (strings.EqualFold(strings.TrimSpace(heartbeat.State), "stale") || strings.EqualFold(strings.TrimSpace(heartbeat.State), "expired")) {
+		action := &agentLauncherRemediationAction{
+			Kind:  "start-runtime",
+			Label: "Start runtime",
+		}
+		if session != nil && strings.EqualFold(strings.TrimSpace(session.RuntimeState), "running") {
+			action = &agentLauncherRemediationAction{
+				Kind:  "restart-runtime",
+				Label: "Restart runtime",
+			}
+		}
 		remediations = append(remediations, agentLauncherRemediation{
 			Category: "heartbeat",
 			Summary:  "Launcher heartbeat is stale. Restart the agent or inspect the managed runtime.",
 			Detail:   fmt.Sprintf("state=%s age=%ds", strings.TrimSpace(heartbeat.State), heartbeat.AgeSeconds),
+			Action:   action,
 		})
 	}
 	if cronSummary != nil {
@@ -394,6 +417,31 @@ func buildAgentLauncherRemediations(
 				Category: "cron",
 				Summary:  "One or more cron jobs are paused. Resume or cancel them to restore scheduled automation.",
 				Detail:   fmt.Sprintf("job=%s last=%s", strings.TrimSpace(job.ID), strings.TrimSpace(job.LastResult)),
+				Action: &agentLauncherRemediationAction{
+					Kind:   "resume-cron",
+					Label:  fmt.Sprintf("Resume %s", strings.TrimSpace(job.ID)),
+					Target: strings.TrimSpace(job.ID),
+				},
+			})
+			break
+		}
+	}
+	if delegationSummary != nil {
+		for _, job := range delegationSummary.Jobs {
+			status := strings.TrimSpace(string(job.Status))
+			if !strings.EqualFold(status, string(baseagent.SubagentJobStatusFailed)) && !strings.EqualFold(status, string(baseagent.SubagentJobStatusCancelled)) {
+				continue
+			}
+			remediations = append(remediations, agentLauncherRemediation{
+				Category:        "delegation",
+				Summary:         "One or more delegated jobs ended unsuccessfully. Inspect delegation detail before trusting downstream results.",
+				Detail:          fmt.Sprintf("job=%s status=%s", strings.TrimSpace(job.JobID), status),
+				RemediationHint: firstNonEmpty(strings.TrimSpace(job.Error), strings.TrimSpace(job.Summary), "Inspect the recent delegation jobs to review failure detail."),
+				Action: &agentLauncherRemediationAction{
+					Kind:   "inspect-delegation",
+					Label:  fmt.Sprintf("Inspect %s", strings.TrimSpace(job.JobID)),
+					Target: strings.TrimSpace(job.JobID),
+				},
 			})
 			break
 		}
@@ -407,6 +455,11 @@ func buildAgentLauncherRemediations(
 				Summary:         "One or more MCP servers are detached. Re-attach them before expecting tools to appear.",
 				Detail:          fmt.Sprintf("server=%s health=%s", strings.TrimSpace(server.Name), health),
 				RemediationHint: firstNonEmpty(strings.TrimSpace(server.RemediationHint), "Attach the MCP server to restore its tool surface."),
+				Action: &agentLauncherRemediationAction{
+					Kind:   "attach-mcp",
+					Label:  fmt.Sprintf("Attach %s MCP", strings.TrimSpace(server.Name)),
+					Target: strings.TrimSpace(server.Name),
+				},
 			})
 			goto runtimeRemediations
 		case strings.EqualFold(health, "degraded") || strings.EqualFold(health, "error"):
@@ -415,6 +468,11 @@ func buildAgentLauncherRemediations(
 				Summary:         "One or more MCP servers are unhealthy. Inspect server detail and refresh its config before expecting tools to appear.",
 				Detail:          fmt.Sprintf("server=%s health=%s", strings.TrimSpace(server.Name), health),
 				RemediationHint: firstNonEmpty(strings.TrimSpace(server.RemediationHint), "Inspect MCP detail to refresh configuration or disable the server."),
+				Action: &agentLauncherRemediationAction{
+					Kind:   "inspect-mcp",
+					Label:  fmt.Sprintf("Inspect %s MCP", strings.TrimSpace(server.Name)),
+					Target: strings.TrimSpace(server.Name),
+				},
 			})
 			goto runtimeRemediations
 		}
@@ -427,6 +485,10 @@ runtimeRemediations:
 				Category: "runtime",
 				Summary:  "Managed runtime is not running. Start the agent or inspect the launcher session.",
 				Detail:   fmt.Sprintf("state=%s", runtimeState),
+				Action: &agentLauncherRemediationAction{
+					Kind:  "start-runtime",
+					Label: "Start runtime",
+				},
 			})
 		}
 	}
