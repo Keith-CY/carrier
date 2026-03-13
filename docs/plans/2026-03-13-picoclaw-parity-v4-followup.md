@@ -12,7 +12,7 @@
 
 ### Task 40: Add Managed Model Discovery / Drift Inspect Surface
 
-**Status:** in progress on 2026-03-13
+**Status:** completed on 2026-03-13
 
 **Files:**
 - Modify: `gateway/managed_model_surface.go`
@@ -58,6 +58,8 @@ Run:
 - `cd webui/e2e && bunx playwright test tests/agent-detail.spec.ts --config playwright.config.ts --project=chromium --workers=1`
 
 ### Task 41: Tighten Provider-Specific Live Transcription Matrix
+
+**Status:** in progress on 2026-03-13
 
 Expand live-provider smoke so OpenAI-capable environments hard-pass transcription by default while OpenRouter remains soft-fail unless explicitly required.
 

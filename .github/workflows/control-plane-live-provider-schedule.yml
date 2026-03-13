@@ -37,16 +37,17 @@ jobs:
           provider=""
           key=""
           model=""
-          require_transcription=""
+          transcription_mode=""
           if [[ -n "${OPENAI_API_KEY:-}" ]]; then
             provider="openai"
             key="${OPENAI_API_KEY}"
             model="${CARRIER_LIVE_MODEL_OPENAI:-openai/gpt-4o-mini}"
-            require_transcription="1"
+            transcription_mode="hard_required"
           elif [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
             provider="openrouter"
             key="${OPENROUTER_API_KEY}"
             model="${CARRIER_LIVE_MODEL_OPENROUTER:-openai/gpt-4o-mini}"
+            transcription_mode="soft_optional"
           fi
           if [[ -z "$key" ]]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -63,8 +64,8 @@ jobs:
           printf 'CARRIER_LIVE_PROVIDER=%s\n' "$provider" >> "$GITHUB_ENV"
           printf 'CARRIER_LIVE_MODEL=%s\n' "$model" >> "$GITHUB_ENV"
           printf 'CARRIER_LIVE_API_KEY=%s\n' "$key" >> "$GITHUB_ENV"
-          if [[ -n "$require_transcription" ]]; then
-            printf 'CARRIER_LIVE_REQUIRE_TRANSCRIPTION=%s\n' "$require_transcription" >> "$GITHUB_ENV"
+          if [[ -n "$transcription_mode" ]]; then
+            printf 'CARRIER_LIVE_TRANSCRIPTION_MODE=%s\n' "$transcription_mode" >> "$GITHUB_ENV"
           fi
 
       - name: Run live-provider control plane E2E

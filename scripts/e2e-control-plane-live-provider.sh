@@ -15,6 +15,7 @@ Environment:
   CARRIER_LIVE_MODEL      Optional model label for audit/profile metadata.
   CARRIER_LIVE_BASE_URL   Optional provider base URL for profile metadata.
   CARRIER_LIVE_TRANSCRIPTION_MODEL Optional transcription model override for media smoke.
+  CARRIER_LIVE_TRANSCRIPTION_MODE Optional mode override: hard_required, soft_optional, unsupported.
   CARRIER_LIVE_REQUIRE_TRANSCRIPTION When set to 1, fail if live transcription cannot run.
   CARRIER_E2E_STATE_DIR   Optional persistent state root. When set, Carrier's HOME, Lima cache,
                           and managed-instance records are reused across runs, while each run still
@@ -56,6 +57,18 @@ transcription_skip_allowed() {
     return 0
   fi
   return 1
+}
+
+provider_transcription_mode() {
+  case "$1" in
+    openai) printf '%s' 'hard_required' ;;
+    openrouter) printf '%s' 'soft_optional' ;;
+    anthropic) printf '%s' 'unsupported' ;;
+    *)
+      echo "error: unsupported provider for transcription mode mapping: $1" >&2
+      exit 2
+      ;;
+  esac
 }
 
 wait_for_http_ok() {
@@ -173,6 +186,7 @@ API_KEY="$(printf '%s' "${CARRIER_LIVE_API_KEY:-}" | xargs)"
 MODEL="$(printf '%s' "${CARRIER_LIVE_MODEL:-}" | xargs)"
 BASE_URL="$(printf '%s' "${CARRIER_LIVE_BASE_URL:-}" | xargs)"
 TRANSCRIPTION_MODEL="$(printf '%s' "${CARRIER_LIVE_TRANSCRIPTION_MODEL:-}" | xargs)"
+TRANSCRIPTION_MODE="$(printf '%s' "${CARRIER_LIVE_TRANSCRIPTION_MODE:-}" | xargs)"
 REQUIRE_TRANSCRIPTION="$(printf '%s' "${CARRIER_LIVE_REQUIRE_TRANSCRIPTION:-}" | xargs)"
 STATE_ROOT="$(printf '%s' "${CARRIER_E2E_STATE_DIR:-}" | xargs)"
 DAEMON_PORT="$(printf '%s' "${CARRIER_E2E_DAEMON_PORT:-}" | xargs)"
@@ -191,8 +205,23 @@ case "$PROVIDER" in
     ;;
 esac
 
-if [[ -z "$REQUIRE_TRANSCRIPTION" && "$PROVIDER" == "openai" ]]; then
-  REQUIRE_TRANSCRIPTION="1"
+if [[ -z "$TRANSCRIPTION_MODE" ]]; then
+  TRANSCRIPTION_MODE="$(provider_transcription_mode "$PROVIDER")"
+fi
+case "$TRANSCRIPTION_MODE" in
+  hard_required|soft_optional|unsupported) ;;
+  *)
+    echo "error: unsupported CARRIER_LIVE_TRANSCRIPTION_MODE: ${TRANSCRIPTION_MODE}" >&2
+    exit 2
+    ;;
+esac
+
+if [[ -z "$REQUIRE_TRANSCRIPTION" ]]; then
+  if [[ "$TRANSCRIPTION_MODE" == "hard_required" ]]; then
+    REQUIRE_TRANSCRIPTION="1"
+  else
+    REQUIRE_TRANSCRIPTION="0"
+  fi
 fi
 
 if [[ -z "$API_KEY" ]]; then
@@ -438,10 +467,17 @@ capture_json_output "$AGENT_CRON_CANCEL_JSON" "$BIN_PATH" agent cron cancel zero
 jq -e '.lastResult == "cancelled"' "$AGENT_CRON_CANCEL_JSON" >/dev/null
 
 echo "[6/10] transcribe a real audio fixture through the live provider"
-curl -fsS -X POST \
-  -H 'Content-Type: application/json' \
-  "http://127.0.0.1:${DAEMON_PORT}/api/v1/agents/picoclaw/chat" \
-  --data @- >"$AGENT_TRANSCRIPTION_JSON" <<EOF
+TRANSCRIPTION_STATUS="passed"
+TRANSCRIPTION_OUTPUT=""
+if [[ "$TRANSCRIPTION_MODE" == "unsupported" ]]; then
+  TRANSCRIPTION_STATUS="skipped"
+  TRANSCRIPTION_OUTPUT="provider ${PROVIDER} is marked unsupported for live transcription smoke"
+  echo "  transcription skipped: ${TRANSCRIPTION_OUTPUT}"
+else
+  curl -fsS -X POST \
+    -H 'Content-Type: application/json' \
+    "http://127.0.0.1:${DAEMON_PORT}/api/v1/agents/picoclaw/chat" \
+    --data @- >"$AGENT_TRANSCRIPTION_JSON" <<EOF
 {
   "provider": "${PROVIDER}",
   "chatId": "live-media-transcription",
@@ -458,41 +494,41 @@ curl -fsS -X POST \
   ]
 }
 EOF
-if ! jq -e '(.agentId == "picoclaw") and (.message | type == "string" and length > 0)' "$AGENT_TRANSCRIPTION_JSON" >/dev/null; then
-  echo "error: live transcription returned malformed payload" >&2
-  cat "$AGENT_TRANSCRIPTION_JSON" >&2
-  exit 1
-fi
-TRANSCRIPTION_OUTPUT="$(jq -r '.message // ""' "$AGENT_TRANSCRIPTION_JSON")"
-TRANSCRIPTION_ACTION="$(jq -r '.action // ""' "$AGENT_TRANSCRIPTION_JSON")"
-if [[ -z "$TRANSCRIPTION_OUTPUT" ]]; then
-  echo "error: live transcription returned empty output" >&2
-  cat "$AGENT_TRANSCRIPTION_JSON" >&2
-  exit 1
-fi
-TRANSCRIPTION_STATUS="passed"
-if [[ -n "$TRANSCRIPTION_ACTION" ]]; then
-  if transcription_skip_allowed "$TRANSCRIPTION_OUTPUT"; then
-    if [[ "$REQUIRE_TRANSCRIPTION" == "1" ]]; then
-      echo "error: live transcription is unavailable for the configured provider/model and strict mode is enabled" >&2
-      printf '%s\n' "$TRANSCRIPTION_OUTPUT" >&2
-      exit 1
-    fi
-    TRANSCRIPTION_STATUS="skipped"
-    echo "  transcription skipped: ${TRANSCRIPTION_OUTPUT}"
-  else
-    echo "error: live transcription returned unsupported action unexpectedly" >&2
+  if ! jq -e '(.agentId == "picoclaw") and (.message | type == "string" and length > 0)' "$AGENT_TRANSCRIPTION_JSON" >/dev/null; then
+    echo "error: live transcription returned malformed payload" >&2
     cat "$AGENT_TRANSCRIPTION_JSON" >&2
     exit 1
   fi
-else
-  for expected_token in carrier transcription smoke works; do
-    if ! printf '%s' "$TRANSCRIPTION_OUTPUT" | grep -qi "$expected_token"; then
-      echo "error: live transcription output missing token: ${expected_token}" >&2
-      printf '%s\n' "$TRANSCRIPTION_OUTPUT" >&2
+  TRANSCRIPTION_OUTPUT="$(jq -r '.message // ""' "$AGENT_TRANSCRIPTION_JSON")"
+  TRANSCRIPTION_ACTION="$(jq -r '.action // ""' "$AGENT_TRANSCRIPTION_JSON")"
+  if [[ -z "$TRANSCRIPTION_OUTPUT" ]]; then
+    echo "error: live transcription returned empty output" >&2
+    cat "$AGENT_TRANSCRIPTION_JSON" >&2
+    exit 1
+  fi
+  if [[ -n "$TRANSCRIPTION_ACTION" ]]; then
+    if transcription_skip_allowed "$TRANSCRIPTION_OUTPUT"; then
+      if [[ "$REQUIRE_TRANSCRIPTION" == "1" ]]; then
+        echo "error: live transcription is unavailable for the configured provider/model and strict mode is enabled" >&2
+        printf '%s\n' "$TRANSCRIPTION_OUTPUT" >&2
+        exit 1
+      fi
+      TRANSCRIPTION_STATUS="skipped"
+      echo "  transcription skipped: ${TRANSCRIPTION_OUTPUT}"
+    else
+      echo "error: live transcription returned unsupported action unexpectedly" >&2
+      cat "$AGENT_TRANSCRIPTION_JSON" >&2
       exit 1
     fi
-  done
+  else
+    for expected_token in carrier transcription smoke works; do
+      if ! printf '%s' "$TRANSCRIPTION_OUTPUT" | grep -qi "$expected_token"; then
+        echo "error: live transcription output missing token: ${expected_token}" >&2
+        printf '%s\n' "$TRANSCRIPTION_OUTPUT" >&2
+        exit 1
+      fi
+    done
+  fi
 fi
 
 echo "[7/10] attach/distill memory against the real instance"
@@ -616,6 +652,7 @@ echo "[10/10] summarize"
 echo "execution_id=${EXECUTION_ID}"
 echo "provider=${PROVIDER}"
 echo "model=${MODEL}"
+echo "transcription_mode=${TRANSCRIPTION_MODE}"
 echo "instance_id=${ZERO_INSTANCE_ID}"
 echo "agent_cron_job_id=${AGENT_CRON_JOB_ID}"
 echo "transcription_status=${TRANSCRIPTION_STATUS}"
