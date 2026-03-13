@@ -194,7 +194,13 @@ type AgentModelsSummary = {
   instanceId?: string;
   configPath?: string;
   synced?: boolean;
+  driftState?: string;
+  driftReason?: string;
   modelSurface?: {
+    defaultProfile?: string;
+    profiles?: AgentModelSurfaceProfile[];
+  };
+  discoveredModelSurface?: {
     defaultProfile?: string;
     profiles?: AgentModelSurfaceProfile[];
   };
@@ -257,6 +263,7 @@ export function AgentDetailPage() {
   const [mcpConfigDraft, setMcpConfigDraft] = useState('');
   const [editingProfileName, setEditingProfileName] = useState('');
   const [profileDraft, setProfileDraft] = useState<AgentModelProfileDraft | null>(null);
+  const [modelDiscoverySummary, setModelDiscoverySummary] = useState<AgentModelsSummary | null>(null);
 
   const statusQuery = useQuery({
     queryKey: ['agent-detail', agentId],
@@ -467,6 +474,7 @@ export function AgentDetailPage() {
   const modelSyncMutation = useMutation({
     mutationFn: async () => apiPost<AgentModelsSummary>(`/api/v1/agents/${encodeURIComponent(agentId)}/models/sync`, {}),
     onSuccess: async () => {
+      setModelDiscoverySummary(null);
       setLastActionMessage('Model surface synced.');
       await modelsQuery.refetch();
       await launcherQuery.refetch();
@@ -480,6 +488,7 @@ export function AgentDetailPage() {
     mutationFn: async (profileName: string) =>
       apiPost<AgentModelsSummary>(`/api/v1/agents/${encodeURIComponent(agentId)}/models/default`, { profileName }),
     onSuccess: async (updated) => {
+      setModelDiscoverySummary(null);
       const updatedProfile = String(updated.modelSurface?.defaultProfile || '').trim();
       setLastActionMessage(updatedProfile ? `Default model profile set to ${updatedProfile}.` : 'Default model profile updated.');
       await modelsQuery.refetch();
@@ -504,12 +513,25 @@ export function AgentDetailPage() {
         fallbackStrategy: draft.fallbackStrategy,
       }),
     onSuccess: async (updated) => {
+      setModelDiscoverySummary(null);
       const updatedProfile = String(profileDraft?.profileName || updated.modelSurface?.defaultProfile || '').trim();
       setLastActionMessage(updatedProfile ? `Model profile ${updatedProfile} updated.` : 'Model profile updated.');
       setEditingProfileName('');
       setProfileDraft(null);
       await modelsQuery.refetch();
       await launcherQuery.refetch();
+    },
+    onError: (error) => {
+      setLastActionMessage((error as Error).message);
+    },
+  });
+
+  const modelDiscoverMutation = useMutation({
+    mutationFn: async () => apiGet<AgentModelsSummary>(`/api/v1/agents/${encodeURIComponent(agentId)}/models/discover`),
+    onSuccess: (discovery) => {
+      setModelDiscoverySummary(discovery);
+      const driftState = String(discovery.driftState || '').trim();
+      setLastActionMessage(driftState ? `Model discovery ${driftState}.` : 'Model discovery loaded.');
     },
     onError: (error) => {
       setLastActionMessage((error as Error).message);
@@ -811,6 +833,14 @@ export function AgentDetailPage() {
                   >
                     Sync models
                   </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    disabled={modelDiscoverMutation.isPending}
+                    onClick={() => modelDiscoverMutation.mutate()}
+                  >
+                    Inspect model drift
+                  </button>
                 </div>
                 <ul className="compact-list">
                   {profiles.map((profile, index) => {
@@ -955,6 +985,44 @@ export function AgentDetailPage() {
                     );
                   })}
                 </ul>
+                {modelDiscoverySummary ? (
+                  <div>
+                    <strong>Model Discovery</strong>
+                    <div className="text-dim">
+                      {modelDiscoverySummary.driftState ? `state=${modelDiscoverySummary.driftState}` : 'state=unknown'}
+                      {modelDiscoverySummary.driftReason ? ` · ${modelDiscoverySummary.driftReason}` : ''}
+                    </div>
+                    {(() => {
+                      const discoveredSurface = modelDiscoverySummary.discoveredModelSurface;
+                      if (!discoveredSurface || !Array.isArray(discoveredSurface.profiles) || discoveredSurface.profiles.length === 0) {
+                        return null;
+                      }
+                      const discoveredDefaultProfile = String(discoveredSurface.defaultProfile || '').trim();
+                      const discoveredDefaultEntry = discoveredSurface.profiles.find((profile) => String(profile.profileName || '').trim() === discoveredDefaultProfile);
+                      return (
+                        <>
+                          {discoveredDefaultEntry ? (
+                            <div className="text-dim">
+                              {`discovered-default=${String(discoveredDefaultEntry.modelAlias || discoveredDefaultEntry.profileName || discoveredDefaultProfile).trim()} -> ${String(discoveredDefaultEntry.modelId || '').trim()}`}
+                            </div>
+                          ) : null}
+                          <ul className="compact-list">
+                            {discoveredSurface.profiles.map((profile, index) => (
+                              <li key={`discovered-${String(profile.profileName || profile.modelAlias || index)}`}>
+                                <span>{String(profile.modelAlias || profile.profileName || `profile-${index + 1}`).trim()}</span>
+                                <span className="text-dim">
+                                  {profile.modelId || 'unknown-model'}
+                                  {profile.providerId ? ` · ${profile.providerId}` : ''}
+                                  {profile.protocolFamily ? ` · ${profile.protocolFamily}` : ''}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      );
+                    })()}
+                  </div>
+                ) : null}
                     </>
                   );
                 })()}

@@ -167,6 +167,32 @@ describe('AgentDetailPage', () => {
           headers: { 'Content-Type': 'application/json' },
         });
       }
+      if (url.endsWith('/api/v1/agents/agent-alpha/models/discover')) {
+        return new Response(JSON.stringify({
+          agentId: 'agent-alpha',
+          instanceId: 'agent-alpha-main',
+          configPath: '/tmp/agent-alpha/config.toml',
+          driftState: 'drifted',
+          driftReason: 'stored model surface differs from config-discovered model surface',
+          modelSurface: {
+            defaultProfile,
+            profiles: [
+              { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
+              updatedProfile,
+            ],
+          },
+          discoveredModelSurface: {
+            defaultProfile: 'openrouter-safe',
+            profiles: [
+              { profileName: 'openrouter-safe', modelAlias: 'flash-safe', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
+              { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: false },
+            ],
+          },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       if (url.endsWith('/api/v1/agents/agent-alpha/models/default')) {
         defaultProfile = 'openrouter-safe';
         return new Response(JSON.stringify({
@@ -695,6 +721,22 @@ describe('AgentDetailPage', () => {
         method: 'POST',
       }),
     );
+  });
+
+  test('discovers managed model drift on demand', async () => {
+    renderAgentDetailPage();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /inspect model drift/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /inspect model drift/i }));
+
+    await waitFor(() => expect(screen.getByText(/Model discovery drifted\./i)).toBeInTheDocument());
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/models/discover'),
+      expect.objectContaining({
+        method: 'GET',
+      }),
+    );
+    expect(screen.getByText(/discovered-default=flash-safe -> deepseek\/deepseek-chat-v3-0324/i)).toBeInTheDocument();
   });
 
   test('switches default profile and refetches launcher/models', async () => {

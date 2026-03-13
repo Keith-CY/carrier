@@ -229,6 +229,18 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 			}
 			writeJSON(w, http.StatusOK, summary)
 			return
+		case len(parts) == 3 && strings.EqualFold(strings.TrimSpace(parts[2]), "discover") && r.Method == http.MethodGet:
+			summary, err := discoverManagedAgentModelsSummary(agentID)
+			if err != nil {
+				if errors.Is(err, errManagedAgentInstanceNotFound) {
+					writeJSON(w, http.StatusNotFound, gatewayErrBody("E_AGENT_NOT_FOUND", fmt.Sprintf("managed agent %s not found", agentID)))
+					return
+				}
+				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to discover managed agent models", "discover managed agent models", err)
+				return
+			}
+			writeJSON(w, http.StatusOK, summary)
+			return
 		case len(parts) == 3 && strings.EqualFold(strings.TrimSpace(parts[2]), "default") && r.Method == http.MethodPost:
 			var body struct {
 				ProfileName string `json:"profileName"`

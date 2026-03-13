@@ -156,6 +156,33 @@ test.describe('Agent Detail', () => {
         }),
       });
     });
+    await page.route('**/api/v1/agents/agent-alpha/models/discover', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          agentId: 'agent-alpha',
+          instanceId: 'instance-1',
+          configPath: '/tmp/agent-alpha/config.toml',
+          driftState: 'drifted',
+          driftReason: 'stored model surface differs from config-discovered model surface',
+          modelSurface: {
+            defaultProfile,
+            profiles: [
+              { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
+              updatedProfile,
+            ],
+          },
+          discoveredModelSurface: {
+            defaultProfile: 'openrouter-safe',
+            profiles: [
+              { profileName: 'openrouter-safe', modelAlias: 'flash-safe', modelId: 'deepseek/deepseek-chat-v3-0324', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: true },
+              { profileName: 'openrouter-fast', modelAlias: 'flash', modelId: 'google/gemini-2.0-flash-001', providerId: 'openrouter', protocolFamily: 'openai-compatible', fallbackGroup: 'openrouter:flash', aliasGroupSize: 2, primary: false },
+            ],
+          },
+        }),
+      });
+    });
     await page.route('**/api/v1/agents/agent-alpha/models/default', async (route) => {
       setDefaultCalls += 1;
       defaultProfile = 'openrouter-safe';
@@ -490,6 +517,10 @@ test.describe('Agent Detail', () => {
     await page.getByRole('button', { name: /Sync models/i }).click();
     await expect(page.locator('#agent-detail-content')).toContainText('Model surface synced.');
     await expect(page.locator('#agent-detail-content')).toContainText('openrouter-safe');
+
+    await page.getByRole('button', { name: 'Inspect model drift' }).click();
+    await expect(page.locator('#agent-detail-content')).toContainText('Model discovery drifted.');
+    await expect(page.locator('#agent-detail-content')).toContainText('discovered-default=flash-safe -> deepseek/deepseek-chat-v3-0324');
 
     await page.getByRole('button', { name: 'Edit profile openrouter-safe' }).click();
     await page.getByLabel('Model alias for openrouter-safe').fill('flash-safe-v2');

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,11 +18,14 @@ import (
 var errManagedAgentInstanceNotFound = errors.New("managed agent instance not found")
 
 type agentModelsSummary struct {
-	AgentID     string                     `json:"agentId"`
-	InstanceID  string                     `json:"instanceId,omitempty"`
-	ConfigPath  string                     `json:"configPath,omitempty"`
-	Synced      bool                       `json:"synced,omitempty"`
-	ModelSurface *agentLauncherModelSurface `json:"modelSurface,omitempty"`
+	AgentID              string                   `json:"agentId"`
+	InstanceID           string                   `json:"instanceId,omitempty"`
+	ConfigPath           string                   `json:"configPath,omitempty"`
+	Synced               bool                     `json:"synced,omitempty"`
+	DriftState           string                   `json:"driftState,omitempty"`
+	DriftReason          string                   `json:"driftReason,omitempty"`
+	ModelSurface         *agentLauncherModelSurface `json:"modelSurface,omitempty"`
+	DiscoveredModelSurface *agentLauncherModelSurface `json:"discoveredModelSurface,omitempty"`
 }
 
 type managedConfigJSON struct {
@@ -127,6 +131,23 @@ func syncManagedAgentModelsSummary(agentID string) (*agentModelsSummary, error) 
 		}
 	}
 	return buildAgentModelsSummary(instances[idx], updated), nil
+}
+
+func discoverManagedAgentModelsSummary(agentID string) (*agentModelsSummary, error) {
+	instances, _, err := loadManagedInstances()
+	if err != nil {
+		return nil, err
+	}
+	idx := findManagedInstanceIndexByAgentID(instances, agentID)
+	if idx < 0 {
+		return nil, errManagedAgentInstanceNotFound
+	}
+	discoveredSurface, available, err := discoverManagedModelSurfaceFromConfig(instances[idx])
+	if err != nil {
+		return nil, err
+	}
+	driftState, driftReason := managedModelSurfaceDrift(instances[idx].ModelSurface, discoveredSurface, available)
+	return buildAgentModelsSummaryWithDiscovery(instances[idx], false, discoveredSurface, driftState, driftReason), nil
 }
 
 func updateManagedAgentModelsDefaultSummary(agentID, profileName string) (*agentModelsSummary, error) {
@@ -249,12 +270,19 @@ func updateManagedAgentModelProfileSummary(agentID string, update managedAgentMo
 }
 
 func buildAgentModelsSummary(inst managedAgentInstance, synced bool) *agentModelsSummary {
+	return buildAgentModelsSummaryWithDiscovery(inst, synced, nil, "", "")
+}
+
+func buildAgentModelsSummaryWithDiscovery(inst managedAgentInstance, synced bool, discoveredSurface *managedAgentModelSurface, driftState, driftReason string) *agentModelsSummary {
 	return &agentModelsSummary{
-		AgentID:      strings.TrimSpace(inst.AgentID),
-		InstanceID:   strings.TrimSpace(inst.ID),
-		ConfigPath:   strings.TrimSpace(inst.ConfigPath),
-		Synced:       synced,
-		ModelSurface: buildAgentLauncherModelSurface(inst.ModelSurface),
+		AgentID:               strings.TrimSpace(inst.AgentID),
+		InstanceID:            strings.TrimSpace(inst.ID),
+		ConfigPath:            strings.TrimSpace(inst.ConfigPath),
+		Synced:                synced,
+		DriftState:            strings.TrimSpace(driftState),
+		DriftReason:           strings.TrimSpace(driftReason),
+		ModelSurface:          buildAgentLauncherModelSurface(inst.ModelSurface),
+		DiscoveredModelSurface: buildAgentLauncherModelSurface(discoveredSurface),
 	}
 }
 
@@ -539,9 +567,20 @@ func cloneStringAnyMap(value any) map[string]any {
 }
 
 func readManagedModelSurfaceFromConfig(inst managedAgentInstance) (*managedAgentModelSurface, bool, error) {
+	surface, available, err := discoverManagedModelSurfaceFromConfig(inst)
+	if err != nil {
+		return nil, false, err
+	}
+	if !available || surface == nil {
+		return inst.ModelSurface, false, nil
+	}
+	return surface, true, nil
+}
+
+func discoverManagedModelSurfaceFromConfig(inst managedAgentInstance) (*managedAgentModelSurface, bool, error) {
 	configPath := strings.TrimSpace(inst.ConfigPath)
 	if configPath == "" {
-		return inst.ModelSurface, false, nil
+		return nil, false, nil
 	}
 	raw, err := os.ReadFile(configPath)
 	if err != nil {
@@ -551,18 +590,47 @@ func readManagedModelSurfaceFromConfig(inst managedAgentInstance) (*managedAgent
 	case "zeroclaw":
 		surface := parseManagedZeroClawModelSurface(raw)
 		if surface == nil {
-			return inst.ModelSurface, false, nil
+			return nil, false, nil
 		}
 		return surface, true, nil
 	case "picoclaw", "openclaw":
 		surface := parseManagedJSONModelSurface(raw)
 		if surface == nil {
-			return inst.ModelSurface, false, nil
+			return nil, false, nil
 		}
 		return surface, true, nil
 	default:
-		return inst.ModelSurface, false, nil
+		return nil, false, nil
 	}
+}
+
+func managedModelSurfaceDrift(stored, discovered *managedAgentModelSurface, discoveredAvailable bool) (string, string) {
+	if !discoveredAvailable {
+		return "config_unavailable", "config-discovered model surface is unavailable"
+	}
+	if managedModelSurfacesEqual(stored, discovered) {
+		return "in_sync", "stored model surface matches config-discovered model surface"
+	}
+	return "drifted", "stored model surface differs from config-discovered model surface"
+}
+
+func managedModelSurfacesEqual(a, b *managedAgentModelSurface) bool {
+	return reflect.DeepEqual(buildAgentLauncherModelSurface(normalizeManagedModelSurface(a)), buildAgentLauncherModelSurface(normalizeManagedModelSurface(b)))
+}
+
+func normalizeManagedModelSurface(surface *managedAgentModelSurface) *managedAgentModelSurface {
+	if surface == nil {
+		return nil
+	}
+	profiles := managedModelProfilesFromSurface(surface)
+	if len(profiles) == 0 {
+		return nil
+	}
+	defaultProfile := strings.TrimSpace(surface.DefaultProfile)
+	if defaultProfile == "" {
+		defaultProfile = strings.TrimSpace(profiles[0].ProfileName)
+	}
+	return buildManagedModelSurfaceWithDefault(profiles, defaultProfile)
 }
 
 func parseManagedJSONModelSurface(raw []byte) *managedAgentModelSurface {

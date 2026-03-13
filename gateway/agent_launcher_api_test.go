@@ -538,6 +538,77 @@ base_url = "https://openrouter.ai/api/v1"
 	}
 }
 
+func TestHandleAgentModelsDiscoverShowsDriftFromManagedConfig(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	storePath := filepath.Join(tmp, ".carrier", "instances.json")
+	t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+
+	cfgDir := filepath.Join(tmp, ".zeroclaw")
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configPath := filepath.Join(cfgDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(`
+default_provider = "openrouter"
+default_model = "google/gemini-2.0-flash-001"
+
+[provider_profiles.openrouter_fast]
+protocol_family = "openai-compatible"
+provider = "openrouter"
+provider_id = "openrouter"
+model_alias = "flash"
+model = "google/gemini-2.0-flash-001"
+base_url = "https://openrouter.ai/api/v1"
+`), 0o600); err != nil {
+		t.Fatalf("write zeroclaw config: %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := saveManagedInstances(storePath, []managedAgentInstance{{
+		ID:         "zeroclaw-local",
+		Type:       "zeroclaw",
+		AgentID:    "zeroclaw",
+		ConfigPath: configPath,
+		ModelSurface: &managedAgentModelSurface{
+			DefaultProfile: "stale",
+			Profiles: []managedAgentModelProfile{{
+				ProfileName: "stale",
+				ModelAlias:  "stale",
+				ModelID:     "old/model",
+				ProviderID:  "openrouter",
+				ProviderKey: "openrouter",
+				Primary:     true,
+			}},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}}); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/zeroclaw/models/discover", nil)
+	handleWebUIAgent(rec, req, "req-models-discover", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, needle := range []string{
+		`"agentId":"zeroclaw"`,
+		`"driftState":"drifted"`,
+		`"driftReason":"stored model surface differs from config-discovered model surface"`,
+		`"modelSurface":{"defaultProfile":"stale"`,
+		`"discoveredModelSurface":{"defaultProfile":"openrouter_fast"`,
+		`"modelId":"google/gemini-2.0-flash-001"`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("expected response to contain %s, got %s", needle, body)
+		}
+	}
+}
+
 func TestHandleAgentModelsUpdatesDefaultProfile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)

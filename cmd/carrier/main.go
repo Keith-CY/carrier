@@ -3323,9 +3323,16 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 		startIdx = 2
 	case "models":
 		if len(args) < 2 {
-			return agentCommandOptions{}, errors.New("usage: carrier agent models [sync|default|update-profile] <agent_id> [profile_name] [flags]")
+			return agentCommandOptions{}, errors.New("usage: carrier agent models [discover|sync|default|update-profile] <agent_id> [profile_name] [flags]")
 		}
-		if strings.EqualFold(strings.TrimSpace(args[1]), "sync") {
+		if strings.EqualFold(strings.TrimSpace(args[1]), "discover") {
+			if len(args) < 3 {
+				return agentCommandOptions{}, errors.New("usage: carrier agent models discover <agent_id> [--json]")
+			}
+			opts.Action = "models-discover"
+			opts.AgentID = strings.TrimSpace(args[2])
+			startIdx = 3
+		} else if strings.EqualFold(strings.TrimSpace(args[1]), "sync") {
 			if len(args) < 3 {
 				return agentCommandOptions{}, errors.New("usage: carrier agent models sync <agent_id> [--json]")
 			}
@@ -3520,7 +3527,7 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 		if strings.TrimSpace(opts.SkillName) == "" {
 			return agentCommandOptions{}, fmt.Errorf("usage: carrier agent skills %s <agent_id> <skill_name> [--json]", strings.TrimPrefix(opts.Action, "skills-"))
 		}
-	case "shell", "launcher", "heartbeat", "models", "models-sync":
+	case "shell", "launcher", "heartbeat", "models", "models-discover", "models-sync":
 	case "models-default":
 		if strings.TrimSpace(opts.ProfileName) == "" {
 			return agentCommandOptions{}, errors.New("usage: carrier agent models default <agent_id> <profile_name> [--json]")
@@ -4874,30 +4881,37 @@ type agentSkillsSearchCLIResponse struct {
 	Skills []agentSkillCLIResponse `json:"skills"`
 }
 
+type agentModelSurfaceCLIProfile struct {
+	ProfileName      string `json:"profileName,omitempty"`
+	ModelAlias       string `json:"modelAlias,omitempty"`
+	ModelID          string `json:"modelId,omitempty"`
+	ProviderID       string `json:"providerId,omitempty"`
+	ProviderKey      string `json:"providerKey,omitempty"`
+	ProtocolFamily   string `json:"protocolFamily,omitempty"`
+	BaseURL          string `json:"baseUrl,omitempty"`
+	AuthMethod       string `json:"authMethod,omitempty"`
+	TimeoutMs        int    `json:"timeoutMs,omitempty"`
+	RetryBudget      int    `json:"retryBudget,omitempty"`
+	FallbackStrategy string `json:"fallbackStrategy,omitempty"`
+	FallbackGroup    string `json:"fallbackGroup,omitempty"`
+	AliasGroupSize   int    `json:"aliasGroupSize,omitempty"`
+	Primary          bool   `json:"primary,omitempty"`
+}
+
+type agentModelSurfaceCLI struct {
+	DefaultProfile string                       `json:"defaultProfile,omitempty"`
+	Profiles       []agentModelSurfaceCLIProfile `json:"profiles,omitempty"`
+}
+
 type agentModelsCLIResponse struct {
-	AgentID    string `json:"agentId"`
-	InstanceID string `json:"instanceId,omitempty"`
-	ConfigPath string `json:"configPath,omitempty"`
-	Synced     bool   `json:"synced,omitempty"`
-	ModelSurface *struct {
-		DefaultProfile string `json:"defaultProfile,omitempty"`
-		Profiles       []struct {
-			ProfileName    string `json:"profileName,omitempty"`
-			ModelAlias     string `json:"modelAlias,omitempty"`
-			ModelID        string `json:"modelId,omitempty"`
-			ProviderID     string `json:"providerId,omitempty"`
-			ProviderKey    string `json:"providerKey,omitempty"`
-			ProtocolFamily string `json:"protocolFamily,omitempty"`
-			BaseURL        string `json:"baseUrl,omitempty"`
-			AuthMethod     string `json:"authMethod,omitempty"`
-			TimeoutMs      int    `json:"timeoutMs,omitempty"`
-			RetryBudget    int    `json:"retryBudget,omitempty"`
-			FallbackStrategy string `json:"fallbackStrategy,omitempty"`
-			FallbackGroup  string `json:"fallbackGroup,omitempty"`
-			AliasGroupSize int    `json:"aliasGroupSize,omitempty"`
-			Primary        bool   `json:"primary,omitempty"`
-		} `json:"profiles,omitempty"`
-	} `json:"modelSurface,omitempty"`
+	AgentID               string                `json:"agentId"`
+	InstanceID            string                `json:"instanceId,omitempty"`
+	ConfigPath            string                `json:"configPath,omitempty"`
+	Synced                bool                  `json:"synced,omitempty"`
+	DriftState            string                `json:"driftState,omitempty"`
+	DriftReason           string                `json:"driftReason,omitempty"`
+	ModelSurface          *agentModelSurfaceCLI `json:"modelSurface,omitempty"`
+	DiscoveredModelSurface *agentModelSurfaceCLI `json:"discoveredModelSurface,omitempty"`
 }
 
 func runMemoryCommand(out io.Writer, opts memoryCommandOptions) error {
@@ -5076,6 +5090,16 @@ func runAgentCommand(in io.Reader, out io.Writer, opts agentCommandOptions) erro
 		return nil
 	case "models":
 		resp, raw, err := fetchManagedAgentModels(opts.AgentID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentModels(resp))
+		return nil
+	case "models-discover":
+		resp, raw, err := discoverManagedAgentModels(opts.AgentID)
 		if err != nil {
 			return err
 		}
@@ -5286,6 +5310,19 @@ func fetchManagedAgentModels(agentID string) (*agentModelsCLIResponse, []byte, e
 	var resp agentModelsCLIResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, nil, fmt.Errorf("decode agent models response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func discoverManagedAgentModels(agentID string) (*agentModelsCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/models/discover", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentModelsCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent model discovery response: %w", err)
 	}
 	return &resp, raw, nil
 }
@@ -5596,6 +5633,13 @@ func renderManagedAgentModels(resp *agentModelsCLIResponse) string {
 	if resp.Synced {
 		lines = append(lines, "synced=true")
 	}
+	if strings.TrimSpace(resp.DriftState) != "" {
+		line := "discovery=" + strings.TrimSpace(resp.DriftState)
+		if strings.TrimSpace(resp.DriftReason) != "" {
+			line += " reason=" + strings.TrimSpace(resp.DriftReason)
+		}
+		lines = append(lines, line)
+	}
 	if resp.ModelSurface == nil {
 		lines = append(lines, "models=unavailable")
 		return strings.Join(lines, "\n")
@@ -5640,6 +5684,29 @@ renderProfiles:
 			entry += " primary=true"
 		}
 		lines = append(lines, entry)
+	}
+	if resp.DiscoveredModelSurface != nil {
+		discoveredDefault := strings.TrimSpace(resp.DiscoveredModelSurface.DefaultProfile)
+		if discoveredDefault != "" {
+			for _, profile := range resp.DiscoveredModelSurface.Profiles {
+				if strings.EqualFold(strings.TrimSpace(profile.ProfileName), discoveredDefault) {
+					label := firstNonEmpty(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(profile.ProfileName))
+					lines = append(lines, fmt.Sprintf("discovered-default=%s -> %s", label, strings.TrimSpace(profile.ModelID)))
+					break
+				}
+			}
+		}
+		for _, profile := range resp.DiscoveredModelSurface.Profiles {
+			label := firstNonEmpty(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(profile.ProfileName))
+			entry := fmt.Sprintf("discovered-profile=%s model=%s", label, strings.TrimSpace(profile.ModelID))
+			if strings.TrimSpace(profile.ProviderID) != "" {
+				entry += " provider=" + strings.TrimSpace(profile.ProviderID)
+			}
+			if strings.TrimSpace(profile.ProtocolFamily) != "" {
+				entry += " protocol=" + strings.TrimSpace(profile.ProtocolFamily)
+			}
+			lines = append(lines, entry)
+		}
 	}
 	return strings.Join(lines, "\n")
 }

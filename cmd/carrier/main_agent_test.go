@@ -128,6 +128,14 @@ func TestParseAgentCommandArgs(t *testing.T) {
 		t.Fatalf("unexpected models sync opts: %+v", modelsSyncOpts)
 	}
 
+	modelsDiscoverOpts, err := parseAgentCommandArgs([]string{"models", "discover", "picoclaw", "--json"})
+	if err != nil {
+		t.Fatalf("parseAgentCommandArgs(models discover) error: %v", err)
+	}
+	if modelsDiscoverOpts.Action != "models-discover" || modelsDiscoverOpts.AgentID != "picoclaw" || !modelsDiscoverOpts.JSON {
+		t.Fatalf("unexpected models discover opts: %+v", modelsDiscoverOpts)
+	}
+
 	modelsDefaultOpts, err := parseAgentCommandArgs([]string{"models", "default", "picoclaw", "openrouter-safe", "--json"})
 	if err != nil {
 		t.Fatalf("parseAgentCommandArgs(models default) error: %v", err)
@@ -261,6 +269,12 @@ func TestRunAgentCommand(t *testing.T) {
 				return
 			}
 			_, _ = w.Write([]byte(`{"agentId":"picoclaw","instanceId":"picoclaw-main","configPath":"/tmp/picoclaw/config.json","synced":true,"modelSurface":{"defaultProfile":"openrouter-fast","profiles":[{"profileName":"openrouter-fast","modelAlias":"flash","modelId":"google/gemini-2.0-flash-001","providerId":"openrouter","protocolFamily":"openai-compatible","primary":true}]}}`))
+		case "/api/v1/agents/picoclaw/models/discover":
+			if r.Method != http.MethodGet {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write([]byte(`{"agentId":"picoclaw","instanceId":"picoclaw-main","configPath":"/tmp/picoclaw/config.json","driftState":"drifted","driftReason":"stored model surface differs from config-discovered model surface","modelSurface":{"defaultProfile":"openrouter-fast","profiles":[{"profileName":"openrouter-fast","modelAlias":"flash","modelId":"google/gemini-2.0-flash-001","providerId":"openrouter","protocolFamily":"openai-compatible","primary":true}]},"discoveredModelSurface":{"defaultProfile":"openrouter-safe","profiles":[{"profileName":"openrouter-safe","modelAlias":"flash-safe","modelId":"deepseek/deepseek-chat-v3-0324","providerId":"openrouter","protocolFamily":"openai-compatible","primary":true}]}}`))
 		case "/api/v1/agents/picoclaw/models/default":
 			if r.Method != http.MethodPost {
 				http.NotFound(w, r)
@@ -409,6 +423,14 @@ func TestRunAgentCommand(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "synced=true") || !strings.Contains(out.String(), "default=flash -> google/gemini-2.0-flash-001") {
 		t.Fatalf("models sync output=%s", out.String())
+	}
+
+	out.Reset()
+	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "models-discover", AgentID: "picoclaw"}); err != nil {
+		t.Fatalf("runAgentCommand(models discover) error: %v", err)
+	}
+	if !strings.Contains(out.String(), "discovery=drifted") || !strings.Contains(out.String(), "discovered-default=flash-safe -> deepseek/deepseek-chat-v3-0324") {
+		t.Fatalf("models discover output=%s", out.String())
 	}
 
 	out.Reset()
