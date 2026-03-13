@@ -661,6 +661,35 @@ func (c *DaemonClient) ChatAgent(
 	return &result, nil
 }
 
+func (c *DaemonClient) SpeakAgentMedia(
+	ctx context.Context,
+	agentID string,
+	text string,
+	voice string,
+	format string,
+	actor string,
+	requestID string,
+) (*AgentChatResult, error) {
+	payload := map[string]any{
+		"text": strings.TrimSpace(text),
+	}
+	if trimmed := strings.TrimSpace(voice); trimmed != "" {
+		payload["voice"] = trimmed
+	}
+	if trimmed := strings.TrimSpace(format); trimmed != "" {
+		payload["format"] = trimmed
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/media/speak", payload, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result AgentChatResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("agent media response: %w", err)
+	}
+	return &result, nil
+}
+
 func (c *DaemonClient) ScheduleCronJob(
 	ctx context.Context,
 	job baseagent.CronJob,

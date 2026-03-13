@@ -70,8 +70,13 @@ type agentChatRuntime interface {
 	Chat(ctx context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error)
 }
 
+type agentMediaRuntime interface {
+	SpeakMedia(ctx context.Context, req baseagent.SpeechSynthesisRequest) (baseagent.ChatResponse, error)
+}
+
 type baseAgentRuntime interface {
 	Chat(ctx context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error)
+	SpeakMedia(ctx context.Context, req baseagent.SpeechSynthesisRequest) (baseagent.ChatResponse, error)
 	CapabilitySummary(ctx context.Context) baseagent.RuntimeCapabilitySummary
 	SearchSkills(ctx context.Context, query string) []baseagent.SkillDefinition
 	InstallSkill(ctx context.Context, name string) (baseagent.SkillDefinition, error)
@@ -1214,6 +1219,10 @@ func buildHTTPMuxWithBaseAgent(
 			handleAgentSkill(svc, baseRuntime, agentID, skillName, w, r)
 			return
 		}
+		if agentID, mediaAction, ok := parseAgentMediaPath(r.URL.Path); ok {
+			handleAgentMedia(baseRuntime, agentID, mediaAction, w, r)
+			return
+		}
 		if agentID, jobID, ok := parseAgentSubagentPath(r.URL.Path); ok {
 			handleAgentSubagent(svc, baseRuntime, agentID, jobID, w, r)
 			return
@@ -2071,6 +2080,52 @@ func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID s
 	})
 }
 
+func handleAgentMedia(runtime agentMediaRuntime, agentID string, action string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "speak":
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	var body struct {
+		Text   string `json:"text"`
+		Voice  string `json:"voice,omitempty"`
+		Format string `json:"format,omitempty"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(body.Text) == "" {
+		writeJSONError(w, http.StatusBadRequest, "text is required")
+		return
+	}
+	resp, err := runtime.SpeakMedia(r.Context(), baseagent.SpeechSynthesisRequest{
+		Text:   strings.TrimSpace(body.Text),
+		Voice:  strings.TrimSpace(body.Voice),
+		Format: strings.TrimSpace(body.Format),
+	})
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"agentId":     strings.TrimSpace(agentID),
+		"message":     resp.Message,
+		"richContent": resp.RichContent,
+		"action":      resp.Action,
+		"selfHealed":  resp.SelfHealed,
+		"backupRef":   resp.BackupRef,
+	})
+}
+
 func handleLogs(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -2399,6 +2454,48 @@ func parseAgentSubagentPath(path string) (agentID string, jobID string, ok bool)
 		return "", "", false
 	}
 	return decodedAgentID, decodedJobID, true
+}
+
+func parseAgentMediaPath(path string) (agentID string, action string, ok bool) {
+	const prefix = "/api/v1/agents/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	rest := path[len(prefix):]
+	if strings.Contains(rest, "//") {
+		return "", "", false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 3 || strings.TrimSpace(parts[1]) != "media" {
+		return "", "", false
+	}
+	rawAgentID := strings.TrimSpace(parts[0])
+	rawAction := strings.TrimSpace(parts[2])
+	if rawAgentID == "" || rawAction == "" {
+		return "", "", false
+	}
+	decodedAgentID, err := url.PathUnescape(rawAgentID)
+	if err != nil {
+		return "", "", false
+	}
+	decodedAgentID = strings.TrimSpace(decodedAgentID)
+	if decodedAgentID == "" || strings.Contains(decodedAgentID, "/") || strings.Contains(decodedAgentID, "\\") || strings.Contains(decodedAgentID, "..") {
+		return "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedAgentID) {
+		return "", "", false
+	}
+	decodedAction, err := url.PathUnescape(rawAction)
+	if err != nil {
+		return "", "", false
+	}
+	decodedAction = strings.TrimSpace(strings.ToLower(decodedAction))
+	switch decodedAction {
+	case "speak":
+		return decodedAgentID, decodedAction, true
+	default:
+		return "", "", false
+	}
 }
 
 func parseAgentMCPServerPath(path string) (agentID string, serverName string, ok bool) {

@@ -17,6 +17,8 @@ Environment:
   CARRIER_LIVE_TRANSCRIPTION_MODEL Optional transcription model override for media smoke.
   CARRIER_LIVE_TRANSCRIPTION_MODE Optional mode override: hard_required, soft_optional, unsupported.
   CARRIER_LIVE_REQUIRE_TRANSCRIPTION When set to 1, fail if live transcription cannot run.
+  CARRIER_LIVE_NATIVE_MEDIA_MODE Optional native media output mode override: hard_required, soft_optional, unsupported.
+  CARRIER_LIVE_REQUIRE_NATIVE_MEDIA When set to 1, fail if native media output cannot run.
   CARRIER_E2E_STATE_DIR   Optional persistent state root. When set, Carrier's HOME, Lima cache,
                           and managed-instance records are reused across runs, while each run still
                           writes logs/artifacts into a fresh subdirectory under <state>/runs/.
@@ -28,7 +30,7 @@ What this script verifies:
   2) real local daemon + gateway boot
   3) real isolation install/start for zeroclaw
   4) real launcher/run/heartbeat/cron surfaces
-  5) real media transcription through a live provider
+  5) real media transcription and native speech output through a live provider
   6) real execution completion through orchestrator
   7) real memory contract/provenance + evidence/audit export
   8) real CLI derived execution flows (rerun/clone)
@@ -66,6 +68,18 @@ provider_transcription_mode() {
     anthropic) printf '%s' 'unsupported' ;;
     *)
       echo "error: unsupported provider for transcription mode mapping: $1" >&2
+      exit 2
+      ;;
+  esac
+}
+
+provider_native_media_mode() {
+  case "$1" in
+    openai) printf '%s' 'hard_required' ;;
+    openrouter) printf '%s' 'soft_optional' ;;
+    anthropic) printf '%s' 'unsupported' ;;
+    *)
+      echo "error: unsupported provider for native media mode mapping: $1" >&2
       exit 2
       ;;
   esac
@@ -188,6 +202,8 @@ BASE_URL="$(printf '%s' "${CARRIER_LIVE_BASE_URL:-}" | xargs)"
 TRANSCRIPTION_MODEL="$(printf '%s' "${CARRIER_LIVE_TRANSCRIPTION_MODEL:-}" | xargs)"
 TRANSCRIPTION_MODE="$(printf '%s' "${CARRIER_LIVE_TRANSCRIPTION_MODE:-}" | xargs)"
 REQUIRE_TRANSCRIPTION="$(printf '%s' "${CARRIER_LIVE_REQUIRE_TRANSCRIPTION:-}" | xargs)"
+NATIVE_MEDIA_MODE="$(printf '%s' "${CARRIER_LIVE_NATIVE_MEDIA_MODE:-}" | xargs)"
+REQUIRE_NATIVE_MEDIA="$(printf '%s' "${CARRIER_LIVE_REQUIRE_NATIVE_MEDIA:-}" | xargs)"
 STATE_ROOT="$(printf '%s' "${CARRIER_E2E_STATE_DIR:-}" | xargs)"
 DAEMON_PORT="$(printf '%s' "${CARRIER_E2E_DAEMON_PORT:-}" | xargs)"
 GATEWAY_PORT="$(printf '%s' "${CARRIER_E2E_GATEWAY_PORT:-}" | xargs)"
@@ -216,11 +232,30 @@ case "$TRANSCRIPTION_MODE" in
     ;;
 esac
 
+if [[ -z "$NATIVE_MEDIA_MODE" ]]; then
+  NATIVE_MEDIA_MODE="$(provider_native_media_mode "$PROVIDER")"
+fi
+case "$NATIVE_MEDIA_MODE" in
+  hard_required|soft_optional|unsupported) ;;
+  *)
+    echo "error: unsupported CARRIER_LIVE_NATIVE_MEDIA_MODE: ${NATIVE_MEDIA_MODE}" >&2
+    exit 2
+    ;;
+esac
+
 if [[ -z "$REQUIRE_TRANSCRIPTION" ]]; then
   if [[ "$TRANSCRIPTION_MODE" == "hard_required" ]]; then
     REQUIRE_TRANSCRIPTION="1"
   else
     REQUIRE_TRANSCRIPTION="0"
+  fi
+fi
+
+if [[ -z "$REQUIRE_NATIVE_MEDIA" ]]; then
+  if [[ "$NATIVE_MEDIA_MODE" == "hard_required" ]]; then
+    REQUIRE_NATIVE_MEDIA="1"
+  else
+    REQUIRE_NATIVE_MEDIA="0"
   fi
 fi
 
@@ -281,6 +316,7 @@ LAUNCHER_CRON_JSON="${TMP_DIR}/agent-launcher-after-cron.json"
 HEARTBEAT_JSON="${TMP_DIR}/agent-heartbeat.json"
 AGENT_RUN_JSON="${TMP_DIR}/agent-run.json"
 AGENT_TRANSCRIPTION_JSON="${TMP_DIR}/agent-transcription.json"
+AGENT_MEDIA_SPEAK_JSON="${TMP_DIR}/agent-media-speak.json"
 AGENT_CRON_SCHEDULE_JSON="${TMP_DIR}/agent-cron-schedule.json"
 AGENT_CRON_LIST_JSON="${TMP_DIR}/agent-cron-list.json"
 AGENT_CRON_CANCEL_JSON="${TMP_DIR}/agent-cron-cancel.json"
@@ -466,7 +502,7 @@ jq -e --arg job_id "$AGENT_CRON_JOB_ID" '
 capture_json_output "$AGENT_CRON_CANCEL_JSON" "$BIN_PATH" agent cron cancel zeroclaw "$AGENT_CRON_JOB_ID" --json
 jq -e '.lastResult == "cancelled"' "$AGENT_CRON_CANCEL_JSON" >/dev/null
 
-echo "[6/10] transcribe a real audio fixture through the live provider"
+echo "[6/10] transcribe a real audio fixture and verify native speech output"
 TRANSCRIPTION_STATUS="passed"
 TRANSCRIPTION_OUTPUT=""
 if [[ "$TRANSCRIPTION_MODE" == "unsupported" ]]; then
@@ -529,6 +565,54 @@ EOF
       fi
     done
   fi
+fi
+
+NATIVE_MEDIA_STATUS="passed"
+NATIVE_MEDIA_OUTPUT=""
+if [[ "$NATIVE_MEDIA_MODE" == "unsupported" ]]; then
+  NATIVE_MEDIA_STATUS="skipped"
+  NATIVE_MEDIA_OUTPUT="provider ${PROVIDER} is marked unsupported for native media smoke"
+  echo "  native media skipped: ${NATIVE_MEDIA_OUTPUT}"
+else
+  capture_json_output "$AGENT_MEDIA_SPEAK_JSON" "$BIN_PATH" agent media speak zeroclaw --text "Carrier native media smoke works." --voice alloy --format mp3 --json
+  if ! jq -e '(.agentId == "zeroclaw") and (.message | type == "string" and length > 0)' "$AGENT_MEDIA_SPEAK_JSON" >/dev/null; then
+    echo "error: native media speak returned malformed payload" >&2
+    cat "$AGENT_MEDIA_SPEAK_JSON" >&2
+    exit 1
+  fi
+  NATIVE_MEDIA_OUTPUT="$(jq -r '.message // ""' "$AGENT_MEDIA_SPEAK_JSON")"
+  NATIVE_MEDIA_ACTION="$(jq -r '.action // ""' "$AGENT_MEDIA_SPEAK_JSON")"
+  if [[ -n "$NATIVE_MEDIA_ACTION" ]]; then
+    if [[ "$NATIVE_MEDIA_ACTION" == "unsupported" && "$REQUIRE_NATIVE_MEDIA" != "1" ]]; then
+      NATIVE_MEDIA_STATUS="skipped"
+      echo "  native media skipped: ${NATIVE_MEDIA_OUTPUT}"
+    else
+      echo "error: native media output is unavailable for the configured provider/model" >&2
+      cat "$AGENT_MEDIA_SPEAK_JSON" >&2
+      exit 1
+    fi
+  else
+    jq -e '
+      (.richContent.renderMode == "rich_media") and
+      (.richContent.attachments | length >= 1) and
+      ((.richContent.attachments | map(select(.kind == "audio" and (.outputRole // "") == "generated")) | length) >= 1) and
+      ((.richContent.blocks | map(select((.type == "audio" or .type == "voice") and (.outputRole // "") == "generated")) | length) >= 1)
+    ' "$AGENT_MEDIA_SPEAK_JSON" >/dev/null
+    NATIVE_MEDIA_PATH="$(jq -r '.richContent.attachments | map(select(.kind == "audio")) | .[0].path // empty' "$AGENT_MEDIA_SPEAK_JSON")"
+    if [[ -z "$NATIVE_MEDIA_PATH" || ! -f "$NATIVE_MEDIA_PATH" ]]; then
+      echo "error: native media output did not persist an audio attachment on disk" >&2
+      cat "$AGENT_MEDIA_SPEAK_JSON" >&2
+      exit 1
+    fi
+  fi
+fi
+
+MEDIA_VERIFICATION_STATUS="passed"
+if [[ "$TRANSCRIPTION_STATUS" == "skipped" || "$NATIVE_MEDIA_STATUS" == "skipped" ]]; then
+  MEDIA_VERIFICATION_STATUS="partial"
+fi
+if [[ "$TRANSCRIPTION_STATUS" == "skipped" && "$NATIVE_MEDIA_STATUS" == "skipped" ]]; then
+  MEDIA_VERIFICATION_STATUS="skipped"
 fi
 
 echo "[7/10] attach/distill memory against the real instance"
@@ -653,11 +737,14 @@ echo "execution_id=${EXECUTION_ID}"
 echo "provider=${PROVIDER}"
 echo "model=${MODEL}"
 echo "transcription_mode=${TRANSCRIPTION_MODE}"
-echo "media_verification_status=${TRANSCRIPTION_STATUS}"
+echo "native_media_mode=${NATIVE_MEDIA_MODE}"
+echo "media_verification_status=${MEDIA_VERIFICATION_STATUS}"
 echo "instance_id=${ZERO_INSTANCE_ID}"
 echo "agent_cron_job_id=${AGENT_CRON_JOB_ID}"
 echo "transcription_status=${TRANSCRIPTION_STATUS}"
 echo "transcription_output=${TRANSCRIPTION_OUTPUT}"
+echo "native_media_status=${NATIVE_MEDIA_STATUS}"
+echo "native_media_output=${NATIVE_MEDIA_OUTPUT}"
 echo "output=${FINAL_OUTPUT}"
 echo "evidence_zip=${EVIDENCE_ZIP}"
 echo "live provider control-plane smoke passed"

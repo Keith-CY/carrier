@@ -40,6 +40,14 @@ func TestParseAgentCommandArgs(t *testing.T) {
 		t.Fatalf("unexpected shell opts: %+v", shellOpts)
 	}
 
+	mediaSpeakOpts, err := parseAgentCommandArgs([]string{"media", "speak", "zeroclaw", "--text", "Carrier speech smoke works.", "--voice", "alloy", "--format", "mp3", "--json"})
+	if err != nil {
+		t.Fatalf("parseAgentCommandArgs(media speak) error: %v", err)
+	}
+	if mediaSpeakOpts.Action != "media-speak" || mediaSpeakOpts.AgentID != "zeroclaw" || mediaSpeakOpts.Message != "Carrier speech smoke works." || mediaSpeakOpts.Voice != "alloy" || mediaSpeakOpts.MediaFormat != "mp3" || !mediaSpeakOpts.JSON {
+		t.Fatalf("unexpected media speak opts: %+v", mediaSpeakOpts)
+	}
+
 	launcherOpts, err := parseAgentCommandArgs([]string{"launcher", "picoclaw", "--json"})
 	if err != nil {
 		t.Fatalf("parseAgentCommandArgs(launcher) error: %v", err)
@@ -214,6 +222,23 @@ func TestRunAgentCommand(t *testing.T) {
 				t.Fatalf("model=%v want google/gemini-2.0-flash-001", body["model"])
 			}
 			_, _ = w.Write([]byte(`{"agentId":"picoclaw","sessionId":"sess-run","message":"pong","richContent":{"text":"pong","renderMode":"rich_media","blocks":[{"type":"audio","outputRole":"generated","name":"reply.ogg","mediaType":"audio/ogg","url":"https://downloads.example.com/reply.ogg"}]}}`))
+		case "/api/v1/agents/zeroclaw/media/speak":
+			if r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["text"] != "Carrier speech smoke works." {
+				t.Fatalf("media text=%v want Carrier speech smoke works.", body["text"])
+			}
+			if body["voice"] != "alloy" {
+				t.Fatalf("media voice=%v want alloy", body["voice"])
+			}
+			if body["format"] != "mp3" {
+				t.Fatalf("media format=%v want mp3", body["format"])
+			}
+			_, _ = w.Write([]byte(`{"agentId":"zeroclaw","message":"Generated audio: speech.mp3","richContent":{"text":"Generated audio: speech.mp3","renderMode":"rich_media","attachments":[{"id":"speech-1","kind":"audio","outputRole":"generated","name":"speech.mp3","path":"/tmp/speech.mp3","mediaType":"audio/mpeg"}],"blocks":[{"type":"audio","outputRole":"generated","name":"speech.mp3","attachmentId":"speech-1","mediaType":"audio/mpeg"}]}}`))
 		case "/api/v1/agents/picoclaw/launcher":
 			if r.Method != http.MethodGet {
 				http.NotFound(w, r)
@@ -374,6 +399,14 @@ func TestRunAgentCommand(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"richContent"`) || !strings.Contains(out.String(), `rich_media`) {
 		t.Fatalf("run json output=%s", out.String())
+	}
+
+	out.Reset()
+	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "media-speak", AgentID: "zeroclaw", Message: "Carrier speech smoke works.", Voice: "alloy", MediaFormat: "mp3", JSON: true}); err != nil {
+		t.Fatalf("runAgentCommand(media-speak json) error: %v", err)
+	}
+	if !strings.Contains(out.String(), `"richContent"`) || !strings.Contains(out.String(), `"speech.mp3"`) {
+		t.Fatalf("media speak json output=%s", out.String())
 	}
 
 	out.Reset()

@@ -53,6 +53,48 @@ func TestHandleWebUIAgentChatPassesThroughToDaemon(t *testing.T) {
 	}
 }
 
+func TestHandleWebUIAgentMediaSpeakPassesThroughToDaemon(t *testing.T) {
+	var gotActor string
+	var gotRequestID string
+	var gotBody map[string]any
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents/zeroclaw/media/speak" {
+			http.NotFound(w, r)
+			return
+		}
+		gotActor = r.Header.Get("X-Carrier-Actor")
+		gotRequestID = r.Header.Get("X-Carrier-Request-Id")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"agentId":"zeroclaw","message":"Generated audio: speech.mp3","richContent":{"text":"Generated audio: speech.mp3","renderMode":"rich_media","attachments":[{"id":"speech-1","kind":"audio","outputRole":"generated","name":"speech.mp3","path":"/tmp/speech.mp3","mediaType":"audio/mpeg"}],"blocks":[{"type":"audio","outputRole":"generated","name":"speech.mp3","attachmentId":"speech-1","mediaType":"audio/mpeg"}]}}`))
+	}))
+	defer daemon.Close()
+
+	client := NewDaemonClient(daemon.URL, "", 0)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/zeroclaw/media/speak", strings.NewReader(`{"text":"Carrier speech smoke works.","voice":"alloy","format":"mp3"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	handleWebUIAgent(rec, req, "req-media-ok", client)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"richContent"`) || !strings.Contains(rec.Body.String(), `"speech.mp3"`) {
+		t.Fatalf("expected rich media passthrough body=%s", rec.Body.String())
+	}
+	if gotActor != "webui:agents:media:speak" {
+		t.Fatalf("actor=%q want webui:agents:media:speak", gotActor)
+	}
+	if gotRequestID != "req-media-ok" {
+		t.Fatalf("request id=%q want req-media-ok", gotRequestID)
+	}
+	if gotBody["text"] != "Carrier speech smoke works." || gotBody["voice"] != "alloy" || gotBody["format"] != "mp3" {
+		t.Fatalf("unexpected forwarded body: %#v", gotBody)
+	}
+}
+
 func TestHandleWebUIAgentCronPassesThroughToDaemon(t *testing.T) {
 	var gotSchedule map[string]any
 	var gotActor string

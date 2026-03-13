@@ -378,6 +378,59 @@ func (r *Runtime) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 	return withMemoryNote(resp, healNote, healed, backupRef), nil
 }
 
+func (r *Runtime) SpeakMedia(ctx context.Context, req SpeechSynthesisRequest) (ChatResponse, error) {
+	if strings.TrimSpace(req.Text) == "" {
+		return ChatResponse{}, fmt.Errorf("speech text is required")
+	}
+	if r == nil || r.mediaRuntime == nil {
+		return ChatResponse{
+			Message: "speech output is not supported by the configured media runtime",
+			Action:  "unsupported",
+		}, nil
+	}
+	attachment, err := r.mediaRuntime.SynthesizeSpeech(ctx, req)
+	if err != nil {
+		if isMediaUnsupportedError(err) {
+			return ChatResponse{
+				Message: strings.TrimSpace(err.Error()),
+				Action:  "unsupported",
+			}, nil
+		}
+		return ChatResponse{}, err
+	}
+	preview := strings.TrimSpace("Generated audio: " + strings.TrimSpace(attachment.Name))
+	if preview == "Generated audio:" {
+		preview = "Generated audio output."
+	}
+	return ChatResponse{
+		Message: preview,
+		RichContent: &RichOutboundMessage{
+			Text:       preview,
+			RenderMode: "rich_media",
+			Attachments: []AttachmentRef{
+				attachment,
+			},
+			Blocks: []ContentBlock{{
+				Type:         "audio",
+				OutputRole:   normalizedAttachmentOutputRole(attachment),
+				Name:         strings.TrimSpace(attachment.Name),
+				Path:         strings.TrimSpace(attachment.Path),
+				MIMEType:     strings.TrimSpace(attachment.MIMEType),
+				MediaType:    strings.TrimSpace(attachment.MediaType),
+				AttachmentID: strings.TrimSpace(attachment.ID),
+				SizeBytes:    attachment.SizeBytes,
+			}},
+		},
+	}, nil
+}
+
+func normalizedAttachmentOutputRole(attachment AttachmentRef) string {
+	if role := strings.TrimSpace(attachment.OutputRole); role != "" {
+		return role
+	}
+	return "generated"
+}
+
 func (r *Runtime) ScheduleJob(ctx context.Context, job CronJob) (CronJob, error) {
 	if r == nil || r.cron == nil {
 		return CronJob{}, fmt.Errorf("cron service is unavailable")

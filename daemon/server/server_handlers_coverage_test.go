@@ -98,12 +98,22 @@ type fakeAgentChatRuntime struct {
 	resp      baseagent.ChatResponse
 	err       error
 	callCount int
+	lastSpeak baseagent.SpeechSynthesisRequest
+	speakResp baseagent.ChatResponse
+	speakErr  error
+	speakCalls int
 }
 
 func (f *fakeAgentChatRuntime) Chat(_ context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error) {
 	f.lastReq = req
 	f.callCount++
 	return f.resp, f.err
+}
+
+func (f *fakeAgentChatRuntime) SpeakMedia(_ context.Context, req baseagent.SpeechSynthesisRequest) (baseagent.ChatResponse, error) {
+	f.lastSpeak = req
+	f.speakCalls++
+	return f.speakResp, f.speakErr
 }
 
 func TestHandleAgentChatBranches(t *testing.T) {
@@ -391,6 +401,72 @@ printf '{"message":"Tokyo weather is mild with a chance of rain.","richContent":
 	}
 	if cfgText := string(cfgRaw); !strings.Contains(cfgText, `default_model = "google/gemini-2.0-flash-001"`) {
 		t.Fatalf("expected selected model in override config, got:\n%s", cfgText)
+	}
+}
+
+func TestHandleAgentMediaSpeak_Branches(t *testing.T) {
+	notAllowedRR := httptest.NewRecorder()
+	handleAgentMedia(nil, "zeroclaw", "speak", notAllowedRR, httptest.NewRequest(http.MethodGet, "/media/speak", nil))
+	if notAllowedRR.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("media speak method status=%d body=%s", notAllowedRR.Code, notAllowedRR.Body.String())
+	}
+
+	unavailableRR := httptest.NewRecorder()
+	handleAgentMedia(nil, "zeroclaw", "speak", unavailableRR, httptest.NewRequest(http.MethodPost, "/media/speak", strings.NewReader(`{"text":"hello"}`)))
+	if unavailableRR.Code != http.StatusServiceUnavailable {
+		t.Fatalf("media speak unavailable status=%d body=%s", unavailableRR.Code, unavailableRR.Body.String())
+	}
+
+	badBodyRR := httptest.NewRecorder()
+	handleAgentMedia(&fakeAgentChatRuntime{}, "zeroclaw", "speak", badBodyRR, httptest.NewRequest(http.MethodPost, "/media/speak", strings.NewReader(`{"text"`)))
+	if badBodyRR.Code != http.StatusBadRequest {
+		t.Fatalf("media speak bad body status=%d body=%s", badBodyRR.Code, badBodyRR.Body.String())
+	}
+
+	missingTextRR := httptest.NewRecorder()
+	handleAgentMedia(&fakeAgentChatRuntime{}, "zeroclaw", "speak", missingTextRR, httptest.NewRequest(http.MethodPost, "/media/speak", strings.NewReader(`{"text":"   "}`)))
+	if missingTextRR.Code != http.StatusBadRequest {
+		t.Fatalf("media speak missing text status=%d body=%s", missingTextRR.Code, missingTextRR.Body.String())
+	}
+
+	runtime := &fakeAgentChatRuntime{
+		speakResp: baseagent.ChatResponse{
+			Message: "Generated audio: speech.mp3",
+			RichContent: &baseagent.RichOutboundMessage{
+				Text:       "Generated audio: speech.mp3",
+				RenderMode: "rich_media",
+				Attachments: []baseagent.AttachmentRef{{
+					ID:         "speech-1",
+					Kind:       "audio",
+					OutputRole: "generated",
+					Name:       "speech.mp3",
+					Path:       "/tmp/speech.mp3",
+					MediaType:  "audio/mpeg",
+				}},
+				Blocks: []baseagent.ContentBlock{{
+					Type:         "audio",
+					OutputRole:   "generated",
+					Name:         "speech.mp3",
+					AttachmentID: "speech-1",
+					MediaType:    "audio/mpeg",
+				}},
+			},
+		},
+	}
+	okReq := httptest.NewRequest(http.MethodPost, "/media/speak", strings.NewReader(`{"text":"Carrier speech smoke works.","voice":"alloy","format":"mp3"}`))
+	okRR := httptest.NewRecorder()
+	handleAgentMedia(runtime, "zeroclaw", "speak", okRR, okReq)
+	if okRR.Code != http.StatusOK {
+		t.Fatalf("media speak status=%d body=%s", okRR.Code, okRR.Body.String())
+	}
+	if runtime.speakCalls != 1 {
+		t.Fatalf("expected one speak call, got %d", runtime.speakCalls)
+	}
+	if runtime.lastSpeak.Text != "Carrier speech smoke works." || runtime.lastSpeak.Voice != "alloy" || runtime.lastSpeak.Format != "mp3" {
+		t.Fatalf("unexpected speak request: %+v", runtime.lastSpeak)
+	}
+	if !strings.Contains(okRR.Body.String(), `"richContent"`) || !strings.Contains(okRR.Body.String(), `"renderMode":"rich_media"`) {
+		t.Fatalf("expected rich content in media speak response body=%s", okRR.Body.String())
 	}
 }
 

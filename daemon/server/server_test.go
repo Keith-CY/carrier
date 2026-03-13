@@ -21,9 +21,11 @@ import (
 
 type fakeBaseAgentRuntime struct {
 	resp                baseagent.ChatResponse
+	speakResp           baseagent.ChatResponse
 	capabilities        baseagent.RuntimeCapabilitySummary
 	approvalResp        baseagent.ChatResponse
 	approvalErr         error
+	speakErr            error
 	installSkill        baseagent.SkillDefinition
 	updateSkill         baseagent.SkillDefinition
 	uninstallSkill      baseagent.SkillDefinition
@@ -42,6 +44,7 @@ type fakeBaseAgentRuntime struct {
 	skillToggleErr      error
 	mcpToggleErr        error
 	callCount           int
+	speakCallCount      int
 	approvalCall        int
 	cronCall            int
 	listCronCall        int
@@ -56,6 +59,7 @@ type fakeBaseAgentRuntime struct {
 	updateSkillCall     int
 	uninstallSkillCall  int
 	lastReq             baseagent.ChatRequest
+	lastSpeakReq        baseagent.SpeechSynthesisRequest
 	lastSession         string
 	lastApproval        string
 	lastDecision        string
@@ -81,6 +85,12 @@ func (f *fakeBaseAgentRuntime) Chat(_ context.Context, req baseagent.ChatRequest
 	f.callCount++
 	f.lastReq = req
 	return f.resp, nil
+}
+
+func (f *fakeBaseAgentRuntime) SpeakMedia(_ context.Context, req baseagent.SpeechSynthesisRequest) (baseagent.ChatResponse, error) {
+	f.speakCallCount++
+	f.lastSpeakReq = req
+	return f.speakResp, f.speakErr
 }
 
 func (f *fakeBaseAgentRuntime) CapabilitySummary(_ context.Context) baseagent.RuntimeCapabilitySummary {

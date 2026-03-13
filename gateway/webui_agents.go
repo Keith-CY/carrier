@@ -481,6 +481,35 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 		}
 		writeJSON(w, http.StatusOK, result)
 		return
+	case "media":
+		if len(parts) != 3 || !strings.EqualFold(strings.TrimSpace(parts[2]), "speak") {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "unsupported media action"))
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if daemon == nil {
+			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_COMMAND_FAILED", "daemon client is unavailable"))
+			return
+		}
+		var body struct {
+			Text   string `json:"text"`
+			Voice  string `json:"voice,omitempty"`
+			Format string `json:"format,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_BAD_REQUEST", "invalid JSON body"))
+			return
+		}
+		result, err := daemon.SpeakAgentMedia(r.Context(), agentID, strings.TrimSpace(body.Text), strings.TrimSpace(body.Voice), strings.TrimSpace(body.Format), "webui:agents:media:speak", requestID)
+		if err != nil {
+			writeDaemonAPIError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
 	case "cron":
 		if daemon == nil {
 			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_COMMAND_FAILED", "daemon client is unavailable"))

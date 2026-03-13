@@ -232,6 +232,39 @@ func TestDaemonClient_GetStatus_SingleObject(t *testing.T) {
 	}
 }
 
+func TestDaemonClient_SpeakAgentMedia(t *testing.T) {
+	var gotActor string
+	var gotRequestID string
+	var gotBody map[string]any
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents/zeroclaw/media/speak" || r.Method != http.MethodPost {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		gotActor = r.Header.Get("X-Carrier-Actor")
+		gotRequestID = r.Header.Get("X-Carrier-Request-Id")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"agentId":"zeroclaw","message":"Generated audio: speech.mp3","richContent":{"text":"Generated audio: speech.mp3","renderMode":"rich_media","attachments":[{"id":"speech-1","kind":"audio","outputRole":"generated","name":"speech.mp3","path":"/tmp/speech.mp3","mediaType":"audio/mpeg"}]}}`))
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	result, err := dc.SpeakAgentMedia(context.Background(), "zeroclaw", "Carrier speech smoke works.", "alloy", "mp3", "actor1", "req1")
+	if err != nil {
+		t.Fatalf("SpeakAgentMedia error: %v", err)
+	}
+	if gotActor != "actor1" || gotRequestID != "req1" {
+		t.Fatalf("unexpected headers actor=%q requestID=%q", gotActor, gotRequestID)
+	}
+	if gotBody["text"] != "Carrier speech smoke works." || gotBody["voice"] != "alloy" || gotBody["format"] != "mp3" {
+		t.Fatalf("unexpected request body: %#v", gotBody)
+	}
+	if result == nil || result.RichContent == nil || strings.TrimSpace(result.RichContent.RenderMode) != "rich_media" {
+		t.Fatalf("unexpected media speak result: %+v", result)
+	}
+}
+
 func TestDaemonClient_GetStatus_AllAgents(t *testing.T) {
 	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/agents/status" {

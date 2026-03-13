@@ -298,6 +298,8 @@ type agentCommandOptions struct {
 	AuthMethod  string
 	ModelAlias  string
 	Model       string
+	Voice       string
+	MediaFormat string
 	SessionID   string
 	NextRunAt   time.Time
 	TimeoutMs   int
@@ -3310,7 +3312,7 @@ func parseMemoryCommandArgs(args []string) (memoryCommandOptions, error) {
 
 func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 	if len(args) == 0 {
-		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills|models> ...")
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|media|cron|skills|models> ...")
 	}
 	opts := agentCommandOptions{}
 	startIdx := 0
@@ -3323,6 +3325,14 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 		opts.Action = mode
 		opts.AgentID = strings.TrimSpace(args[1])
 		startIdx = 2
+	case "media":
+		if len(args) < 3 {
+			return agentCommandOptions{}, errors.New("usage: carrier agent media speak <agent_id> --text <text> [--voice <voice>] [--format <format>] [--json]")
+		}
+		subaction := strings.ToLower(strings.TrimSpace(args[1]))
+		opts.Action = "media-" + subaction
+		opts.AgentID = strings.TrimSpace(args[2])
+		startIdx = 3
 	case "models":
 		if len(args) < 2 {
 			return agentCommandOptions{}, errors.New("usage: carrier agent models [discover|sync|default|update-profile] <agent_id> [profile_name] [flags]")
@@ -3408,10 +3418,10 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 			startIdx = 4
 		}
 	default:
-		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills|models|subagents> ...")
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|media|cron|skills|models|subagents> ...")
 	}
 	if opts.AgentID == "" {
-		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills|models|subagents> ...")
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|media|cron|skills|models|subagents> ...")
 	}
 	for i := startIdx; i < len(args); i++ {
 		raw := strings.TrimSpace(args[i])
@@ -3464,6 +3474,27 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 				return agentCommandOptions{}, err
 			}
 			opts.Model = strings.TrimSpace(value)
+			i = next
+		case "--text":
+			value, next, err := parseRequiredFlagValue(args, i, "--text")
+			if err != nil {
+				return agentCommandOptions{}, errors.New("usage: carrier agent media speak <agent_id> --text <text> [--voice <voice>] [--format <format>] [--json]")
+			}
+			opts.Message = strings.TrimSpace(value)
+			i = next
+		case "--voice":
+			value, next, err := parseRequiredFlagValue(args, i, "--voice")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.Voice = strings.TrimSpace(value)
+			i = next
+		case "--format":
+			value, next, err := parseRequiredFlagValue(args, i, "--format")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.MediaFormat = strings.TrimSpace(value)
 			i = next
 		case "--next-run-at":
 			value, next, err := parseRequiredFlagValue(args, i, "--next-run-at")
@@ -3541,6 +3572,10 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 		if opts.Message == "" {
 			return agentCommandOptions{}, errors.New("usage: carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--model-alias <alias>] [--model <model-id>] [--session-id <id>] [--json]")
 		}
+	case "media-speak":
+		if opts.Message == "" {
+			return agentCommandOptions{}, errors.New("usage: carrier agent media speak <agent_id> --text <text> [--voice <voice>] [--format <format>] [--json]")
+		}
 	case "cron-schedule":
 		if opts.Message == "" {
 			return agentCommandOptions{}, errors.New("usage: carrier agent cron schedule <agent_id> -m <message> [--provider <provider-id>] [--session-id <id>] [--next-run-at <rfc3339>] [--json]")
@@ -3570,7 +3605,7 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 			return agentCommandOptions{}, errors.New("usage: carrier agent models update-profile <agent_id> <profile_name> [--model-alias <alias>] [--model <model-id>] [--provider <provider-id>] [--base-url <url>] [--auth-method <method>] [--timeout-ms <ms>] [--retry-budget <n>] [--fallback-strategy <name>] [--json]")
 		}
 	default:
-		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|cron|skills|models|subagents> ...")
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|media|cron|skills|models|subagents> ...")
 	}
 	return opts, nil
 }
@@ -5046,6 +5081,22 @@ func runAgentCommand(in io.Reader, out io.Writer, opts agentCommandOptions) erro
 		}
 		_, _ = fmt.Fprintln(out, strings.TrimSpace(resp.Message))
 		return nil
+	case "media-speak":
+		resp, raw, err := runManagedAgentMediaSpeak(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		if resp != nil && resp.RichContent != nil && len(resp.RichContent.Attachments) > 0 {
+			attachment := resp.RichContent.Attachments[0]
+			if path := strings.TrimSpace(attachment.Path); path != "" {
+				_, _ = fmt.Fprintf(out, "path=%s\n", path)
+			}
+		}
+		_, _ = fmt.Fprintln(out, strings.TrimSpace(resp.Message))
+		return nil
 	case "launcher":
 		resp, raw, err := fetchManagedAgentLauncher(opts.AgentID)
 		if err != nil {
@@ -5237,6 +5288,28 @@ func runManagedAgentPrompt(opts agentCommandOptions) (*gatewayruntime.AgentChatR
 	var resp gatewayruntime.AgentChatResult
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, nil, fmt.Errorf("decode agent chat response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func runManagedAgentMediaSpeak(opts agentCommandOptions) (*gatewayruntime.AgentChatResult, []byte, error) {
+	payload := map[string]any{
+		"text": strings.TrimSpace(opts.Message),
+	}
+	if trimmed := strings.TrimSpace(opts.Voice); trimmed != "" {
+		payload["voice"] = trimmed
+	}
+	if trimmed := strings.TrimSpace(opts.MediaFormat); trimmed != "" {
+		payload["format"] = trimmed
+	}
+	path := fmt.Sprintf("/api/v1/agents/%s/media/speak", neturl.PathEscape(strings.TrimSpace(opts.AgentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp gatewayruntime.AgentChatResult
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent media response: %w", err)
 	}
 	return &resp, raw, nil
 }
