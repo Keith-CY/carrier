@@ -52,7 +52,7 @@ Run:
 
 ### Task 45: Tighten Live Media Verification
 
-**Status:** pending
+**Status:** in progress on 2026-03-13
 
 Strengthen the live-provider smoke so media capability assertions are explicit:
 - OpenAI-capable environments: transcription hard-pass

@@ -10,11 +10,15 @@ permissions:
 
 jobs:
   control-plane-live-provider:
-    name: Control Plane Live-Provider E2E
+    name: Control Plane Live-Provider E2E (${{ matrix.provider }})
     runs-on: ubuntu-latest
     timeout-minutes: 35
     environment:
       name: live_smoke
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [openai, openrouter]
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -28,34 +32,41 @@ jobs:
         id: resolve
         shell: bash
         env:
+          LIVE_PROVIDER: ${{ matrix.provider }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           CARRIER_LIVE_MODEL_OPENAI: ${{ vars.CARRIER_LIVE_MODEL_OPENAI }}
           CARRIER_LIVE_MODEL_OPENROUTER: ${{ vars.CARRIER_LIVE_MODEL_OPENROUTER }}
         run: |
           set -euo pipefail
-          provider=""
+          provider="${LIVE_PROVIDER}"
           key=""
           model=""
           transcription_mode=""
-          if [[ -n "${OPENAI_API_KEY:-}" ]]; then
-            provider="openai"
-            key="${OPENAI_API_KEY}"
-            model="${CARRIER_LIVE_MODEL_OPENAI:-openai/gpt-4o-mini}"
-            transcription_mode="hard_required"
-          elif [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
-            provider="openrouter"
-            key="${OPENROUTER_API_KEY}"
-            model="${CARRIER_LIVE_MODEL_OPENROUTER:-openai/gpt-4o-mini}"
-            transcription_mode="soft_optional"
-          fi
+          case "$provider" in
+            openai)
+              key="${OPENAI_API_KEY:-}"
+              model="${CARRIER_LIVE_MODEL_OPENAI:-openai/gpt-4o-mini}"
+              transcription_mode="hard_required"
+              ;;
+            openrouter)
+              key="${OPENROUTER_API_KEY:-}"
+              model="${CARRIER_LIVE_MODEL_OPENROUTER:-openai/gpt-4o-mini}"
+              transcription_mode="soft_optional"
+              ;;
+            *)
+              echo "unsupported live provider: $provider" >&2
+              exit 1
+              ;;
+          esac
           if [[ -z "$key" ]]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "skip_reason=missing_live_provider_secret" >> "$GITHUB_OUTPUT"
             {
               echo "### Control Plane Live-Provider E2E"
-              echo "- provider: \`unresolved\`"
-              echo "- status: skipped (missing OPENAI_API_KEY or OPENROUTER_API_KEY)"
+              echo "- provider: \`${provider}\`"
+              echo "- transcription mode: \`${transcription_mode}\`"
+              echo "- status: skipped (missing provider secret)"
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
@@ -79,7 +90,7 @@ jobs:
           set -euo pipefail
           {
             echo "### Control Plane Live-Provider E2E"
-            echo "- provider: \`${CARRIER_LIVE_PROVIDER:-unresolved}\`"
+            echo "- provider: \`${{ matrix.provider }}\`"
             echo "- status: skipped"
             echo "- reason: \`${{ steps.resolve.outputs.skip_reason }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -88,7 +99,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: control-plane-live-provider-artifacts
+          name: control-plane-live-provider-artifacts-${{ matrix.provider }}
           retention-days: 7
           if-no-files-found: ignore
           path: |
