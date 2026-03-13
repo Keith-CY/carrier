@@ -291,25 +291,8 @@ func buildTelegramWebhookMediaResponse(kind string, chatID string, ref string, c
 	if ref == "" {
 		return nil
 	}
-	method := ""
-	field := ""
-	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case "image":
-		method = "sendPhoto"
-		field = "photo"
-	case "document":
-		method = "sendDocument"
-		field = "document"
-	case "audio":
-		method = "sendAudio"
-		field = "audio"
-	case "voice":
-		method = "sendVoice"
-		field = "voice"
-	case "video":
-		method = "sendVideo"
-		field = "video"
-	default:
+	method, field := telegramMediaMethodAndField(kind)
+	if method == "" || field == "" {
 		return nil
 	}
 	out := map[string]interface{}{
@@ -321,6 +304,23 @@ func buildTelegramWebhookMediaResponse(kind string, chatID string, ref string, c
 		out["caption"] = caption
 	}
 	return out
+}
+
+func telegramMediaMethodAndField(kind string) (method string, field string) {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "image":
+		return "sendPhoto", "photo"
+	case "document":
+		return "sendDocument", "document"
+	case "audio":
+		return "sendAudio", "audio"
+	case "voice":
+		return "sendVoice", "voice"
+	case "video":
+		return "sendVideo", "video"
+	default:
+		return "", ""
+	}
 }
 
 // --- Discord ---

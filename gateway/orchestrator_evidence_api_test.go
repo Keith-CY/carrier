@@ -101,20 +101,23 @@ func TestHandleOrchestratorExecutionEvidenceJSONAndAuditExport(t *testing.T) {
 			FailureCategory: "worker_failed",
 			RenderMode:      "rich_media",
 			Artifacts: []OrchestratorArtifact{{
-				ID:          "artifact-1",
-				AttachmentID:"attach-1",
-				TaskID:      "task-1",
-				Name:        "release-notes.txt",
-				Kind:        "text",
-				OutputRole:  "generated",
-				MediaType:   "text/plain",
-				ContentType: "text/plain",
-				SizeBytes:   13,
-				Path:        artifactPath,
-				Source:      "telegram",
-				ExternalID:  "tg-doc-1",
-				DownloadURL: "/downloads/tok-1/release-notes.txt",
-				CreatedAt:   "2026-03-09T09:01:00Z",
+				ID:             "artifact-1",
+				AttachmentID:   "attach-1",
+				TaskID:         "task-1",
+				Name:           "release-notes.txt",
+				Kind:           "text",
+				OutputRole:     "generated",
+				MediaType:      "text/plain",
+				ContentType:    "text/plain",
+				SizeBytes:      13,
+				Path:           artifactPath,
+				Source:         "telegram",
+				ExternalID:     "tg-doc-1",
+				DownloadURL:    "/downloads/tok-1/release-notes.txt",
+				Transport:      "telegram",
+				DeliveryMethod: "sendDocument",
+				PreviewText:    "Attachment: release-notes.txt",
+				CreatedAt:      "2026-03-09T09:01:00Z",
 			}},
 		},
 	})
@@ -219,6 +222,15 @@ func TestHandleOrchestratorExecutionEvidenceJSONAndAuditExport(t *testing.T) {
 	if got := strings.TrimSpace(anyToString(manifestEntry["downloadUrl"])); got != "/downloads/tok-1/release-notes.txt" {
 		t.Fatalf("artifactManifest.downloadUrl=%q want /downloads/tok-1/release-notes.txt entry=%+v", got, manifestEntry)
 	}
+	if got := strings.TrimSpace(anyToString(manifestEntry["transport"])); got != "telegram" {
+		t.Fatalf("artifactManifest.transport=%q want telegram entry=%+v", got, manifestEntry)
+	}
+	if got := strings.TrimSpace(anyToString(manifestEntry["deliveryMethod"])); got != "sendDocument" {
+		t.Fatalf("artifactManifest.deliveryMethod=%q want sendDocument entry=%+v", got, manifestEntry)
+	}
+	if got := strings.TrimSpace(anyToString(manifestEntry["previewText"])); got != "Attachment: release-notes.txt" {
+		t.Fatalf("artifactManifest.previewText=%q want Attachment: release-notes.txt entry=%+v", got, manifestEntry)
+	}
 	mediaOutputs, _ := evidence["mediaOutputs"].([]interface{})
 	if len(mediaOutputs) != 1 {
 		t.Fatalf("mediaOutputs len=%d want 1 evidence=%+v", len(mediaOutputs), evidence)
@@ -232,6 +244,15 @@ func TestHandleOrchestratorExecutionEvidenceJSONAndAuditExport(t *testing.T) {
 	}
 	if got := strings.TrimSpace(anyToString(mediaEntry["renderMode"])); got != "rich_media" {
 		t.Fatalf("mediaOutputs.renderMode=%q want rich_media entry=%+v", got, mediaEntry)
+	}
+	if got := strings.TrimSpace(anyToString(mediaEntry["transport"])); got != "telegram" {
+		t.Fatalf("mediaOutputs.transport=%q want telegram entry=%+v", got, mediaEntry)
+	}
+	if got := strings.TrimSpace(anyToString(mediaEntry["deliveryMethod"])); got != "sendDocument" {
+		t.Fatalf("mediaOutputs.deliveryMethod=%q want sendDocument entry=%+v", got, mediaEntry)
+	}
+	if got := strings.TrimSpace(anyToString(mediaEntry["previewText"])); got != "Attachment: release-notes.txt" {
+		t.Fatalf("mediaOutputs.previewText=%q want Attachment: release-notes.txt entry=%+v", got, mediaEntry)
 	}
 	audit, _ := evidence["audit"].([]interface{})
 	if len(audit) != 2 {
@@ -303,19 +324,22 @@ func TestHandleOrchestratorExecutionEvidenceZipAndNegativeCases(t *testing.T) {
 		Outcome: OrchestratorExecutionOutcome{
 			RenderMode: "text_fallback",
 			Artifacts: []OrchestratorArtifact{{
-				ID:          "artifact-zip",
-				AttachmentID:"attach-zip",
-				TaskID:      "task-zip",
-				Name:        "summary.json",
-				Kind:        "json",
-				OutputRole:  "fallback",
-				MediaType:   "application/json",
-				ContentType: "application/json",
-				SizeBytes:   11,
-				Path:        artifactPath,
-				Source:      "telegram",
-				ExternalID:  "tg-file-zip",
-				DownloadURL: "/downloads/tok-zip/summary.json",
+				ID:             "artifact-zip",
+				AttachmentID:   "attach-zip",
+				TaskID:         "task-zip",
+				Name:           "summary.json",
+				Kind:           "json",
+				OutputRole:     "fallback",
+				MediaType:      "application/json",
+				ContentType:    "application/json",
+				SizeBytes:      11,
+				Path:           artifactPath,
+				Source:         "telegram",
+				ExternalID:     "tg-file-zip",
+				DownloadURL:    "/downloads/tok-zip/summary.json",
+				Transport:      "telegram",
+				DeliveryMethod: "sendDocument",
+				PreviewText:    "Attachment: summary.json",
 			}},
 		},
 	})
@@ -394,6 +418,15 @@ func TestHandleOrchestratorExecutionEvidenceZipAndNegativeCases(t *testing.T) {
 	if got := strings.TrimSpace(anyToString(manifest[0]["downloadUrl"])); got != "/downloads/tok-zip/summary.json" {
 		t.Fatalf("artifact-manifest downloadUrl=%q want /downloads/tok-zip/summary.json manifest=%+v", got, manifest)
 	}
+	if got := strings.TrimSpace(anyToString(manifest[0]["transport"])); got != "telegram" {
+		t.Fatalf("artifact-manifest transport=%q want telegram manifest=%+v", got, manifest)
+	}
+	if got := strings.TrimSpace(anyToString(manifest[0]["deliveryMethod"])); got != "sendDocument" {
+		t.Fatalf("artifact-manifest deliveryMethod=%q want sendDocument manifest=%+v", got, manifest)
+	}
+	if got := strings.TrimSpace(anyToString(manifest[0]["previewText"])); got != "Attachment: summary.json" {
+		t.Fatalf("artifact-manifest previewText=%q want Attachment: summary.json manifest=%+v", got, manifest)
+	}
 	var mediaOutputs []map[string]interface{}
 	if err := json.Unmarshal([]byte(entries["media-outputs.json"]), &mediaOutputs); err != nil {
 		t.Fatalf("decode media outputs: %v", err)
@@ -403,6 +436,15 @@ func TestHandleOrchestratorExecutionEvidenceZipAndNegativeCases(t *testing.T) {
 	}
 	if got := strings.TrimSpace(anyToString(mediaOutputs[0]["deliveryKind"])); got != "document" {
 		t.Fatalf("media-outputs deliveryKind=%q want document outputs=%+v", got, mediaOutputs)
+	}
+	if got := strings.TrimSpace(anyToString(mediaOutputs[0]["transport"])); got != "telegram" {
+		t.Fatalf("media-outputs transport=%q want telegram outputs=%+v", got, mediaOutputs)
+	}
+	if got := strings.TrimSpace(anyToString(mediaOutputs[0]["deliveryMethod"])); got != "sendDocument" {
+		t.Fatalf("media-outputs deliveryMethod=%q want sendDocument outputs=%+v", got, mediaOutputs)
+	}
+	if got := strings.TrimSpace(anyToString(mediaOutputs[0]["previewText"])); got != "Attachment: summary.json" {
+		t.Fatalf("media-outputs previewText=%q want Attachment: summary.json outputs=%+v", got, mediaOutputs)
 	}
 
 	methodRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions/"+seed.ID+"/evidence", `{}`)

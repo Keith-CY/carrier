@@ -56,16 +56,19 @@ type OrchestratorEvidenceProviderAttribution struct {
 }
 
 type OrchestratorEvidenceMediaOutput struct {
-	ArtifactID   string `json:"artifactId,omitempty"`
-	AttachmentID string `json:"attachmentId,omitempty"`
-	Name         string `json:"name,omitempty"`
-	Kind         string `json:"kind,omitempty"`
-	OutputRole   string `json:"outputRole,omitempty"`
-	MediaType    string `json:"mediaType,omitempty"`
-	RenderMode   string `json:"renderMode,omitempty"`
-	DeliveryKind string `json:"deliveryKind,omitempty"`
-	DeliveryRef  string `json:"deliveryRef,omitempty"`
-	Source       string `json:"source,omitempty"`
+	ArtifactID     string `json:"artifactId,omitempty"`
+	AttachmentID   string `json:"attachmentId,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Kind           string `json:"kind,omitempty"`
+	OutputRole     string `json:"outputRole,omitempty"`
+	MediaType      string `json:"mediaType,omitempty"`
+	RenderMode     string `json:"renderMode,omitempty"`
+	Transport      string `json:"transport,omitempty"`
+	DeliveryMethod string `json:"deliveryMethod,omitempty"`
+	DeliveryKind   string `json:"deliveryKind,omitempty"`
+	DeliveryRef    string `json:"deliveryRef,omitempty"`
+	PreviewText    string `json:"previewText,omitempty"`
+	Source         string `json:"source,omitempty"`
 }
 
 type OrchestratorEvidenceBundle struct {
@@ -470,16 +473,19 @@ func buildOrchestratorEvidenceMediaOutputs(execution OrchestratorExecution) []Or
 		}
 		deliveryRef := strings.TrimSpace(firstString(artifact.DownloadURL, artifact.ExternalID, artifact.Path))
 		out = append(out, OrchestratorEvidenceMediaOutput{
-			ArtifactID:   strings.TrimSpace(artifact.ID),
-			AttachmentID: strings.TrimSpace(artifact.AttachmentID),
-			Name:         strings.TrimSpace(artifact.Name),
-			Kind:         strings.TrimSpace(artifact.Kind),
-			OutputRole:   outputRole,
-			MediaType:    mediaType,
-			RenderMode:   renderMode,
-			DeliveryKind: evidenceMediaDeliveryKind(artifact),
-			DeliveryRef:  deliveryRef,
-			Source:       strings.TrimSpace(artifact.Source),
+			ArtifactID:     strings.TrimSpace(artifact.ID),
+			AttachmentID:   strings.TrimSpace(artifact.AttachmentID),
+			Name:           strings.TrimSpace(artifact.Name),
+			Kind:           strings.TrimSpace(artifact.Kind),
+			OutputRole:     outputRole,
+			MediaType:      mediaType,
+			RenderMode:     renderMode,
+			Transport:      resolveEvidenceMediaTransport(artifact),
+			DeliveryMethod: resolveEvidenceMediaDeliveryMethod(artifact),
+			DeliveryKind:   evidenceMediaDeliveryKind(artifact),
+			DeliveryRef:    deliveryRef,
+			PreviewText:    resolveEvidenceMediaPreviewText(artifact),
+			Source:         strings.TrimSpace(artifact.Source),
 		})
 	}
 	return out
@@ -501,5 +507,47 @@ func evidenceMediaDeliveryKind(artifact OrchestratorArtifact) string {
 		return "document"
 	default:
 		return "unknown"
+	}
+}
+
+func resolveEvidenceMediaTransport(artifact OrchestratorArtifact) string {
+	return strings.TrimSpace(firstString(artifact.Transport, artifact.Source))
+}
+
+func resolveEvidenceMediaDeliveryMethod(artifact OrchestratorArtifact) string {
+	if method := strings.TrimSpace(artifact.DeliveryMethod); method != "" {
+		return method
+	}
+	kind := evidenceMediaDeliveryKind(artifact)
+	switch strings.TrimSpace(resolveEvidenceMediaTransport(artifact)) {
+	case "telegram":
+		method, _ := telegramMediaMethodAndField(kind)
+		if method != "" {
+			return method
+		}
+	}
+	if kind == "unknown" {
+		return ""
+	}
+	return kind
+}
+
+func resolveEvidenceMediaPreviewText(artifact OrchestratorArtifact) string {
+	if preview := strings.TrimSpace(artifact.PreviewText); preview != "" {
+		return preview
+	}
+	name := strings.TrimSpace(artifact.Name)
+	if name == "" {
+		return ""
+	}
+	switch evidenceMediaDeliveryKind(artifact) {
+	case "image":
+		return "Image: " + name
+	case "audio", "voice":
+		return "Audio: " + name
+	case "video":
+		return "Video: " + name
+	default:
+		return "Attachment: " + name
 	}
 }

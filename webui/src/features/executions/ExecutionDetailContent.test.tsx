@@ -84,6 +84,9 @@ describe('ExecutionDetailContent', () => {
               contentType: 'text/plain',
               mediaType: 'audio/wav',
               source: 'telegram',
+              transport: 'telegram',
+              deliveryMethod: 'sendAudio',
+              previewText: 'Audio: summary.txt',
               externalId: 'tg-file-1',
               attachmentId: 'attachment-1',
               downloadUrl: '/downloads/artifact-1',
@@ -122,6 +125,9 @@ describe('ExecutionDetailContent', () => {
     expect(screen.getByText(/Render mode:\s*rich_media/i)).toBeInTheDocument();
     expect(screen.getByText(/media=audio\/wav/i)).toBeInTheDocument();
     expect(screen.getAllByText(/role=generated/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/transport=telegram/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/method=sendAudio/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/preview=Audio: summary.txt/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/delivery=\/downloads\/artifact-1/i)).toBeInTheDocument();
     expect(screen.getByText(/source=telegram/i)).toBeInTheDocument();
     expect(screen.getByText(/external=tg-file-1/i)).toBeInTheDocument();

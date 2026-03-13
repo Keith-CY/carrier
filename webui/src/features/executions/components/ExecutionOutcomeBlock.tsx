@@ -29,6 +29,9 @@ export function ExecutionOutcomeBlock({
         const mediaParts = [];
         if (String(item?.mediaType || '').trim()) mediaParts.push(String(item.mediaType).trim());
         if (String(item?.outputRole || '').trim()) mediaParts.push(`role=${String(item.outputRole).trim()}`);
+        if (String(item?.transport || '').trim()) mediaParts.push(`transport=${String(item.transport).trim()}`);
+        if (String(item?.deliveryMethod || '').trim()) mediaParts.push(`method=${String(item.deliveryMethod).trim()}`);
+        if (String(item?.previewText || '').trim()) mediaParts.push(`preview=${String(item.previewText).trim()}`);
         if (String(item?.downloadUrl || '').trim()) mediaParts.push(`delivery=${String(item.downloadUrl).trim()}`);
         else if (String(item?.externalId || '').trim()) mediaParts.push(`delivery=${String(item.externalId).trim()}`);
         else if (String(item?.path || '').trim()) mediaParts.push(`delivery=${String(item.path).trim()}`);
@@ -49,6 +52,9 @@ export function ExecutionOutcomeBlock({
         if (String(item?.contentType || '').trim()) metaParts.push(String(item.contentType).trim());
         if (String(item?.mediaType || '').trim()) metaParts.push(`media=${String(item.mediaType).trim()}`);
         if (String(item?.source || '').trim()) metaParts.push(`source=${String(item.source).trim()}`);
+        if (String(item?.transport || '').trim()) metaParts.push(`transport=${String(item.transport).trim()}`);
+        if (String(item?.deliveryMethod || '').trim()) metaParts.push(`method=${String(item.deliveryMethod).trim()}`);
+        if (String(item?.previewText || '').trim()) metaParts.push(`preview=${String(item.previewText).trim()}`);
         if (String(item?.externalId || '').trim()) metaParts.push(`external=${String(item.externalId).trim()}`);
         if (String(item?.attachmentId || '').trim()) metaParts.push(`attachment=${String(item.attachmentId).trim()}`);
         if (String(item?.downloadUrl || '').trim()) metaParts.push(String(item.downloadUrl).trim());

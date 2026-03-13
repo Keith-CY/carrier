@@ -119,20 +119,23 @@ type OrchestratorTaskResult struct {
 }
 
 type OrchestratorArtifact struct {
-	ID          string `json:"id"`
-	AttachmentID string `json:"attachmentId,omitempty"`
-	TaskID      string `json:"taskId,omitempty"`
-	Name        string `json:"name"`
-	Kind        string `json:"kind,omitempty"`
-	OutputRole  string `json:"outputRole,omitempty"`
-	MediaType   string `json:"mediaType,omitempty"`
-	ContentType string `json:"contentType,omitempty"`
-	SizeBytes   int64  `json:"sizeBytes,omitempty"`
-	Path        string `json:"path,omitempty"`
-	Source      string `json:"source,omitempty"`
-	ExternalID  string `json:"externalId,omitempty"`
-	DownloadURL string `json:"downloadUrl,omitempty"`
-	CreatedAt   string `json:"createdAt,omitempty"`
+	ID             string `json:"id"`
+	AttachmentID   string `json:"attachmentId,omitempty"`
+	TaskID         string `json:"taskId,omitempty"`
+	Name           string `json:"name"`
+	Kind           string `json:"kind,omitempty"`
+	OutputRole     string `json:"outputRole,omitempty"`
+	MediaType      string `json:"mediaType,omitempty"`
+	ContentType    string `json:"contentType,omitempty"`
+	SizeBytes      int64  `json:"sizeBytes,omitempty"`
+	Path           string `json:"path,omitempty"`
+	Source         string `json:"source,omitempty"`
+	Transport      string `json:"transport,omitempty"`
+	DeliveryMethod string `json:"deliveryMethod,omitempty"`
+	PreviewText    string `json:"previewText,omitempty"`
+	ExternalID     string `json:"externalId,omitempty"`
+	DownloadURL    string `json:"downloadUrl,omitempty"`
+	CreatedAt      string `json:"createdAt,omitempty"`
 }
 
 type OrchestratorExecutionOutcome struct {
@@ -513,11 +516,17 @@ func normalizeOrchestratorArtifact(in OrchestratorArtifact) OrchestratorArtifact
 	out.ContentType = strings.TrimSpace(out.ContentType)
 	out.Path = strings.TrimSpace(out.Path)
 	out.Source = strings.TrimSpace(out.Source)
+	out.Transport = strings.TrimSpace(out.Transport)
+	out.DeliveryMethod = strings.TrimSpace(out.DeliveryMethod)
+	out.PreviewText = strings.TrimSpace(out.PreviewText)
 	out.ExternalID = strings.TrimSpace(out.ExternalID)
 	out.DownloadURL = strings.TrimSpace(out.DownloadURL)
 	out.CreatedAt = strings.TrimSpace(out.CreatedAt)
 	if out.MediaType == "" {
 		out.MediaType = out.ContentType
+	}
+	if out.Transport == "" {
+		out.Transport = out.Source
 	}
 	if out.SizeBytes < 0 {
 		out.SizeBytes = 0
