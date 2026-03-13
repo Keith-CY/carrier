@@ -70,7 +70,7 @@ Extend evidence and WebUI detail surfaces so operators can tell:
 
 ### Task 47: Add Skill Provenance And Health Detail
 
-**Status:** pending
+**Status:** completed on 2026-03-13
 
 Extend the managed skill lifecycle with:
 - source/provenance summary

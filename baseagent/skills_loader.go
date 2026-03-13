@@ -11,9 +11,14 @@ type SkillDefinition struct {
 	Keywords        []string `json:"keywords,omitempty"`
 	Tags            []string `json:"tags,omitempty"`
 	Source          string   `json:"source,omitempty"`
+	Provenance      string   `json:"provenance,omitempty"`
 	Version         string   `json:"version,omitempty"`
 	TargetVersion   string   `json:"targetVersion,omitempty"`
+	InstalledAt     string   `json:"installedAt,omitempty"`
+	UpdatedAt       string   `json:"updatedAt,omitempty"`
 	Health          string   `json:"health,omitempty"`
+	HealthDetail    string   `json:"healthDetail,omitempty"`
+	RemediationHint string   `json:"remediationHint,omitempty"`
 	UpdateStatus    string   `json:"updateStatus,omitempty"`
 	UpdateAvailable bool     `json:"updateAvailable,omitempty"`
 }

@@ -14,9 +14,14 @@ type AgentCapabilities = {
     name?: string;
     summary?: string;
     source?: string;
+    provenance?: string;
     version?: string;
     targetVersion?: string;
+    installedAt?: string;
+    updatedAt?: string;
     health?: string;
+    healthDetail?: string;
+    remediationHint?: string;
     updateStatus?: string;
     updateAvailable?: boolean;
     enabled?: boolean;
@@ -1135,12 +1140,17 @@ export function AgentDetailPage() {
                         {skill.enabled ? 'enabled' : 'disabled'}
                         {skill.summary ? ` · ${skill.summary}` : ''}
                         {skill.source ? ` · ${skill.source}` : ''}
+                        {skill.provenance ? ` · ${skill.provenance}` : ''}
                         {skill.version ? ` · ${skill.version}` : ''}
                         {skill.targetVersion ? ` · target=${skill.targetVersion}` : ''}
+                        {skill.installedAt ? ` · installed=${skill.installedAt}` : ''}
+                        {skill.updatedAt ? ` · updated=${skill.updatedAt}` : ''}
                         {skill.health ? ` · health=${skill.health}` : ''}
                         {skill.updateStatus ? ` · ${skill.updateStatus}` : ''}
                         {skill.updateAvailable ? ' · update available' : ''}
                       </span>
+                      {skill.healthDetail ? <div className="text-dim">{skill.healthDetail}</div> : null}
+                      {skill.remediationHint ? <div className="text-dim">{skill.remediationHint}</div> : null}
                       {skill.name ? (
                         <div className="btn-row">
                           <button

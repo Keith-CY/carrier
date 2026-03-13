@@ -64,7 +64,22 @@ describe('AgentDetailPage', () => {
             disabledCount: 0,
           },
           skills: [
-            { name: 'go-testing', enabled: true, summary: 'Use go test before claiming success.', source: 'catalog', version: 'builtin', targetVersion: 'v2.0.0', health: 'degraded', updateStatus: 'update_available', updateAvailable: true },
+            {
+              name: 'go-testing',
+              enabled: true,
+              summary: 'Use go test before claiming success.',
+              source: 'catalog',
+              provenance: 'managed update via catalog',
+              version: 'builtin',
+              targetVersion: 'v2.0.0',
+              installedAt: '2026-03-12T00:00:00Z',
+              updatedAt: '2026-03-12T00:04:00Z',
+              health: 'degraded',
+              healthDetail: 'Installed version builtin differs from target version v2.0.0.',
+              remediationHint: 'Update skill to v2.0.0 or clear the target pin.',
+              updateStatus: 'update_available',
+              updateAvailable: true,
+            },
           ],
           mcp: {
             servers: [
@@ -477,9 +492,14 @@ describe('AgentDetailPage', () => {
     expect(screen.getByText(/last=2026-03-12T00:05:00Z/i)).toBeInTheDocument();
     expect(screen.getByText(/1 installed · 1 enabled · 0 disabled/i)).toBeInTheDocument();
     expect(screen.getAllByText(/catalog/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/managed update via catalog/i)).toBeInTheDocument();
     expect(screen.getAllByText(/builtin/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/target=v2.0.0/i)).toBeInTheDocument();
+    expect(screen.getByText(/installed=2026-03-12T00:00:00Z/i)).toBeInTheDocument();
+    expect(screen.getByText(/updated=2026-03-12T00:04:00Z/i)).toBeInTheDocument();
     expect(screen.getByText(/health=degraded/i)).toBeInTheDocument();
+    expect(screen.getByText(/Installed version builtin differs from target version v2.0.0\./i)).toBeInTheDocument();
+    expect(screen.getByText(/Update skill to v2.0.0 or clear the target pin\./i)).toBeInTheDocument();
     expect(screen.getByText(/update_available/i)).toBeInTheDocument();
     expect(screen.getByText(/Recent Delegation Jobs/i)).toBeInTheDocument();
     expect(screen.getByText(/subagent-1/i)).toBeInTheDocument();

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 type RuntimeSkillCapability struct {
@@ -13,13 +14,20 @@ type RuntimeSkillCapability struct {
 	Keywords        []string `json:"keywords,omitempty"`
 	Tags            []string `json:"tags,omitempty"`
 	Source          string   `json:"source,omitempty"`
+	Provenance      string   `json:"provenance,omitempty"`
 	Version         string   `json:"version,omitempty"`
 	TargetVersion   string   `json:"targetVersion,omitempty"`
+	InstalledAt     string   `json:"installedAt,omitempty"`
+	UpdatedAt       string   `json:"updatedAt,omitempty"`
 	Health          string   `json:"health,omitempty"`
+	HealthDetail    string   `json:"healthDetail,omitempty"`
+	RemediationHint string   `json:"remediationHint,omitempty"`
 	UpdateStatus    string   `json:"updateStatus,omitempty"`
 	UpdateAvailable bool     `json:"updateAvailable,omitempty"`
 	Enabled         bool     `json:"enabled"`
 }
+
+var skillsRegistryNow = time.Now
 
 type SkillsRegistry struct {
 	store   SkillsStore
@@ -56,13 +64,17 @@ func (r *SkillsRegistry) ListInstalledSkills(ctx context.Context) []SkillDefinit
 	if err != nil {
 		return nil
 	}
+	metadataByName, err := r.store.ListSkillMetadata(ctx)
+	if err != nil {
+		return nil
+	}
 	out := make([]SkillDefinition, 0, len(names))
 	for _, name := range names {
 		skill, ok := r.catalog[name]
 		if !ok {
 			continue
 		}
-		out = append(out, hydrateSkillDefinitionTargetVersion(skill, versionPins))
+		out = append(out, hydrateSkillDefinition(skill, versionPins, metadataByName, true))
 	}
 	return out
 }
@@ -73,10 +85,11 @@ func (r *SkillsRegistry) SearchSkills(ctx context.Context, query string) []Skill
 	}
 	query = strings.TrimSpace(query)
 	versionPins, _ := r.store.ListSkillVersionPins(ctx)
+	metadataByName, _ := r.store.ListSkillMetadata(ctx)
 	if query == "" {
 		out := make([]SkillDefinition, 0, len(r.catalog))
 		for _, skill := range r.catalog {
-			out = append(out, hydrateSkillDefinitionTargetVersion(skill, versionPins))
+			out = append(out, hydrateSkillDefinition(skill, versionPins, metadataByName, false))
 		}
 		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 		return out
@@ -102,7 +115,7 @@ func (r *SkillsRegistry) SearchSkills(ctx context.Context, query string) []Skill
 	})
 	out := make([]SkillDefinition, 0, len(scored))
 	for _, item := range scored {
-		out = append(out, hydrateSkillDefinitionTargetVersion(item.skill, versionPins))
+		out = append(out, hydrateSkillDefinition(item.skill, versionPins, metadataByName, false))
 	}
 	return out
 }
@@ -132,7 +145,24 @@ func (r *SkillsRegistry) InstallSkill(ctx context.Context, name string) (SkillDe
 	if err := r.store.SetEnabledSkillNames(ctx, enabledNames); err != nil {
 		return SkillDefinition{}, err
 	}
-	return hydrateSkillDefinitionTargetVersion(skill, nil), nil
+	metadataByName, err := r.store.ListSkillMetadata(ctx)
+	if err != nil {
+		return SkillDefinition{}, err
+	}
+	if metadataByName == nil {
+		metadataByName = map[string]SkillLifecycleMetadata{}
+	}
+	meta := metadataByName[name]
+	now := skillsRegistryNow().UTC().Format(time.RFC3339)
+	if strings.TrimSpace(meta.InstalledAt) == "" {
+		meta.InstalledAt = now
+	}
+	meta.Provenance = buildSkillProvenanceSummary("install", skill)
+	metadataByName[name] = normalizeSkillLifecycleMetadata(meta)
+	if err := r.store.SetSkillMetadata(ctx, metadataByName); err != nil {
+		return SkillDefinition{}, err
+	}
+	return hydrateSkillDefinition(skill, nil, metadataByName, true), nil
 }
 
 func (r *SkillsRegistry) UpdateSkill(ctx context.Context, name, version string) (SkillDefinition, error) {
@@ -174,7 +204,25 @@ func (r *SkillsRegistry) UpdateSkill(ctx context.Context, name, version string) 
 	if err := r.store.SetSkillVersionPins(ctx, versionPins); err != nil {
 		return SkillDefinition{}, err
 	}
-	return hydrateSkillDefinitionTargetVersion(skill, versionPins), nil
+	metadataByName, err := r.store.ListSkillMetadata(ctx)
+	if err != nil {
+		return SkillDefinition{}, err
+	}
+	if metadataByName == nil {
+		metadataByName = map[string]SkillLifecycleMetadata{}
+	}
+	meta := metadataByName[name]
+	now := skillsRegistryNow().UTC().Format(time.RFC3339)
+	if strings.TrimSpace(meta.InstalledAt) == "" {
+		meta.InstalledAt = now
+	}
+	meta.UpdatedAt = now
+	meta.Provenance = buildSkillProvenanceSummary("update", skill)
+	metadataByName[name] = normalizeSkillLifecycleMetadata(meta)
+	if err := r.store.SetSkillMetadata(ctx, metadataByName); err != nil {
+		return SkillDefinition{}, err
+	}
+	return hydrateSkillDefinition(skill, versionPins, metadataByName, true), nil
 }
 
 func (r *SkillsRegistry) UninstallSkill(ctx context.Context, name string) (SkillDefinition, error) {
@@ -230,7 +278,15 @@ func (r *SkillsRegistry) UninstallSkill(ctx context.Context, name string) (Skill
 	if err := r.store.SetSkillVersionPins(ctx, versionPins); err != nil {
 		return SkillDefinition{}, err
 	}
-	return hydrateSkillDefinitionTargetVersion(skill, versionPins), nil
+	metadataByName, err := r.store.ListSkillMetadata(ctx)
+	if err != nil {
+		return SkillDefinition{}, err
+	}
+	delete(metadataByName, name)
+	if err := r.store.SetSkillMetadata(ctx, metadataByName); err != nil {
+		return SkillDefinition{}, err
+	}
+	return hydrateSkillDefinition(skill, versionPins, metadataByName, true), nil
 }
 
 func (r *SkillsRegistry) ListRuntimeSkillCapabilities(ctx context.Context) []RuntimeSkillCapability {
@@ -253,26 +309,37 @@ func (r *SkillsRegistry) ListRuntimeSkillCapabilities(ctx context.Context) []Run
 	if err != nil {
 		return nil
 	}
+	metadataByName, err := r.store.ListSkillMetadata(ctx)
+	if err != nil {
+		return nil
+	}
 	out := make([]RuntimeSkillCapability, 0, len(names))
 	for _, name := range names {
 		skill, ok := r.catalog[name]
 		if !ok {
 			continue
 		}
-		hydrated := hydrateSkillDefinitionTargetVersion(skill, versionPins)
-		health, updateStatus, updateAvailable := deriveSkillLifecycleStatus(hydrated)
+		hydrated := hydrateSkillDefinition(skill, versionPins, metadataByName, true)
 		_, enabled := enabledSet[name]
+		if !enabled {
+			hydrated = applyDisabledSkillHints(hydrated)
+		}
 		out = append(out, RuntimeSkillCapability{
 			Name:            hydrated.Name,
 			Summary:         hydrated.Summary,
 			Keywords:        append([]string(nil), hydrated.Keywords...),
 			Tags:            append([]string(nil), hydrated.Tags...),
 			Source:          hydrated.Source,
+			Provenance:      hydrated.Provenance,
 			Version:         hydrated.Version,
 			TargetVersion:   hydrated.TargetVersion,
-			Health:          health,
-			UpdateStatus:    updateStatus,
-			UpdateAvailable: updateAvailable,
+			InstalledAt:     hydrated.InstalledAt,
+			UpdatedAt:       hydrated.UpdatedAt,
+			Health:          hydrated.Health,
+			HealthDetail:    hydrated.HealthDetail,
+			RemediationHint: hydrated.RemediationHint,
+			UpdateStatus:    hydrated.UpdateStatus,
+			UpdateAvailable: hydrated.UpdateAvailable,
 			Enabled:         enabled,
 		})
 	}
@@ -377,9 +444,14 @@ func normalizeSkillDefinition(skill SkillDefinition) SkillDefinition {
 	skill.Keywords = normalizeSkillValues(skill.Keywords)
 	skill.Tags = normalizeSkillValues(skill.Tags)
 	skill.Source = strings.TrimSpace(skill.Source)
+	skill.Provenance = strings.TrimSpace(skill.Provenance)
 	skill.Version = strings.TrimSpace(skill.Version)
 	skill.TargetVersion = strings.TrimSpace(skill.TargetVersion)
+	skill.InstalledAt = strings.TrimSpace(skill.InstalledAt)
+	skill.UpdatedAt = strings.TrimSpace(skill.UpdatedAt)
 	skill.Health = strings.TrimSpace(strings.ToLower(skill.Health))
+	skill.HealthDetail = strings.TrimSpace(skill.HealthDetail)
+	skill.RemediationHint = strings.TrimSpace(skill.RemediationHint)
 	skill.UpdateStatus = strings.TrimSpace(strings.ToLower(skill.UpdateStatus))
 	if skill.Source == "" {
 		skill.Source = "catalog"
@@ -387,13 +459,19 @@ func normalizeSkillDefinition(skill SkillDefinition) SkillDefinition {
 	if skill.Version == "" {
 		skill.Version = "builtin"
 	}
-	if skill.Health == "" || skill.UpdateStatus == "" {
-		health, updateStatus, updateAvailable := deriveSkillLifecycleStatus(skill)
+	if skill.Health == "" || skill.UpdateStatus == "" || skill.HealthDetail == "" || skill.RemediationHint == "" {
+		health, updateStatus, updateAvailable, healthDetail, remediationHint := deriveSkillLifecycleStatus(skill)
 		if skill.Health == "" {
 			skill.Health = health
 		}
 		if skill.UpdateStatus == "" {
 			skill.UpdateStatus = updateStatus
+		}
+		if skill.HealthDetail == "" {
+			skill.HealthDetail = healthDetail
+		}
+		if skill.RemediationHint == "" {
+			skill.RemediationHint = remediationHint
 		}
 		skill.UpdateAvailable = updateAvailable
 	}
@@ -427,35 +505,79 @@ func cloneSkillDefinition(skill SkillDefinition) SkillDefinition {
 		Keywords:        append([]string(nil), skill.Keywords...),
 		Tags:            append([]string(nil), skill.Tags...),
 		Source:          skill.Source,
+		Provenance:      skill.Provenance,
 		Version:         skill.Version,
 		TargetVersion:   skill.TargetVersion,
+		InstalledAt:     skill.InstalledAt,
+		UpdatedAt:       skill.UpdatedAt,
 		Health:          skill.Health,
+		HealthDetail:    skill.HealthDetail,
+		RemediationHint: skill.RemediationHint,
 		UpdateStatus:    skill.UpdateStatus,
 		UpdateAvailable: skill.UpdateAvailable,
 	}
 }
 
-func hydrateSkillDefinitionTargetVersion(skill SkillDefinition, versionPins map[string]string) SkillDefinition {
+func hydrateSkillDefinition(skill SkillDefinition, versionPins map[string]string, metadataByName map[string]SkillLifecycleMetadata, installed bool) SkillDefinition {
 	cloned := cloneSkillDefinition(skill)
 	if len(versionPins) != 0 {
 		cloned.TargetVersion = strings.TrimSpace(versionPins[strings.TrimSpace(strings.ToLower(skill.Name))])
 	}
-	cloned.Health, cloned.UpdateStatus, cloned.UpdateAvailable = deriveSkillLifecycleStatus(cloned)
+	if meta, ok := metadataByName[strings.TrimSpace(strings.ToLower(cloned.Name))]; ok {
+		cloned.Provenance = strings.TrimSpace(meta.Provenance)
+		cloned.InstalledAt = strings.TrimSpace(meta.InstalledAt)
+		cloned.UpdatedAt = strings.TrimSpace(meta.UpdatedAt)
+	}
+	if installed && strings.TrimSpace(cloned.Provenance) == "" {
+		cloned.Provenance = buildSkillProvenanceSummary("catalog", cloned)
+	}
+	cloned.Health, cloned.UpdateStatus, cloned.UpdateAvailable, cloned.HealthDetail, cloned.RemediationHint = deriveSkillLifecycleStatus(cloned)
 	return cloned
 }
 
-func deriveSkillLifecycleStatus(skill SkillDefinition) (health string, updateStatus string, updateAvailable bool) {
+func deriveSkillLifecycleStatus(skill SkillDefinition) (health string, updateStatus string, updateAvailable bool, healthDetail string, remediationHint string) {
 	currentVersion := strings.TrimSpace(skill.Version)
 	targetVersion := strings.TrimSpace(skill.TargetVersion)
 	switch {
 	case targetVersion == "":
-		return "healthy", "current", false
+		return "healthy", "current", false, "Skill is aligned with its current catalog version.", ""
 	case currentVersion == "":
-		return "degraded", "unknown_current_version", true
+		return "degraded", "unknown_current_version", true, fmt.Sprintf("Current installed version is unknown while target version %s is pinned.", targetVersion), fmt.Sprintf("Reinstall or update the skill to %s to restore version tracking.", targetVersion)
 	case targetVersion == currentVersion:
-		return "healthy", "pinned_current", false
+		return "healthy", "pinned_current", false, fmt.Sprintf("Installed version %s matches the pinned target version.", currentVersion), "Clear the target pin if this skill should follow the catalog default."
 	default:
-		return "degraded", "update_available", true
+		return "degraded", "update_available", true, fmt.Sprintf("Installed version %s differs from target version %s.", currentVersion, targetVersion), fmt.Sprintf("Update skill to %s or clear the target pin.", targetVersion)
+	}
+}
+
+func applyDisabledSkillHints(skill SkillDefinition) SkillDefinition {
+	detail := "Skill is installed but disabled in runtime."
+	if strings.TrimSpace(skill.HealthDetail) != "" {
+		skill.HealthDetail = detail + " " + strings.TrimSpace(skill.HealthDetail)
+	} else {
+		skill.HealthDetail = detail
+	}
+	hint := "Enable the skill to expose its guidance and tools in runtime."
+	if strings.TrimSpace(skill.RemediationHint) != "" {
+		skill.RemediationHint = hint + " " + strings.TrimSpace(skill.RemediationHint)
+	} else {
+		skill.RemediationHint = hint
+	}
+	return skill
+}
+
+func buildSkillProvenanceSummary(action string, skill SkillDefinition) string {
+	source := strings.TrimSpace(skill.Source)
+	if source == "" {
+		source = "catalog"
+	}
+	switch strings.TrimSpace(strings.ToLower(action)) {
+	case "install":
+		return "managed install via " + source
+	case "update":
+		return "managed update via " + source
+	default:
+		return source
 	}
 }
 

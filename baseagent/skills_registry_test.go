@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testSkillCatalog() []SkillDefinition {
@@ -115,5 +116,46 @@ func TestSkillsRegistryRuntimeCapabilitiesExposePendingUpdateStatus(t *testing.T
 	}
 	if caps[0].Health != "degraded" || caps[0].UpdateStatus != "update_available" || !caps[0].UpdateAvailable {
 		t.Fatalf("expected pending update lifecycle metadata, got %+v", caps[0])
+	}
+}
+
+func TestSkillsRegistryRuntimeCapabilitiesExposeProvenanceAndTimestamps(t *testing.T) {
+	ctx := context.Background()
+	registry := NewSkillsRegistry(NewMemorySkillsStore(), testSkillCatalog())
+
+	restoreNow := skillsRegistryNow
+	t.Cleanup(func() { skillsRegistryNow = restoreNow })
+
+	installAt := time.Date(2026, 3, 13, 3, 4, 5, 0, time.UTC)
+	updateAt := installAt.Add(2 * time.Hour)
+	skillsRegistryNow = func() time.Time { return installAt }
+
+	if _, err := registry.InstallSkill(ctx, "workspace-inspection"); err != nil {
+		t.Fatalf("install workspace-inspection: %v", err)
+	}
+
+	skillsRegistryNow = func() time.Time { return updateAt }
+	if _, err := registry.UpdateSkill(ctx, "workspace-inspection", "v2.0.0"); err != nil {
+		t.Fatalf("update workspace-inspection: %v", err)
+	}
+
+	caps := registry.ListRuntimeSkillCapabilities(ctx)
+	if len(caps) != 1 {
+		t.Fatalf("expected 1 runtime capability, got %+v", caps)
+	}
+	if caps[0].Provenance != "managed update via catalog" {
+		t.Fatalf("expected provenance summary, got %+v", caps[0])
+	}
+	if caps[0].InstalledAt != installAt.Format(time.RFC3339) {
+		t.Fatalf("expected install timestamp %q, got %+v", installAt.Format(time.RFC3339), caps[0])
+	}
+	if caps[0].UpdatedAt != updateAt.Format(time.RFC3339) {
+		t.Fatalf("expected update timestamp %q, got %+v", updateAt.Format(time.RFC3339), caps[0])
+	}
+	if !strings.Contains(caps[0].HealthDetail, "target version") {
+		t.Fatalf("expected health detail to explain target version drift, got %+v", caps[0])
+	}
+	if !strings.Contains(strings.ToLower(caps[0].RemediationHint), "update skill") {
+		t.Fatalf("expected remediation hint to mention update action, got %+v", caps[0])
 	}
 }
