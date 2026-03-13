@@ -16,6 +16,9 @@ type scriptedTelegramAPI struct {
 	sendMessageFn  func(ctx context.Context, chatID, text string, disableWebPagePreview bool) error
 	sendPhotoFn    func(ctx context.Context, chatID, photo, caption string) error
 	sendDocumentFn func(ctx context.Context, chatID, document, caption string) error
+	sendAudioFn    func(ctx context.Context, chatID, audio, caption string) error
+	sendVoiceFn    func(ctx context.Context, chatID, voice, caption string) error
+	sendVideoFn    func(ctx context.Context, chatID, video, caption string) error
 	getFileFn      func(ctx context.Context, fileID string) (telegramFileInfo, error)
 	downloadFileFn func(ctx context.Context, filePath string) ([]byte, error)
 }
@@ -70,6 +73,27 @@ func (s *scriptedTelegramAPI) SendPhoto(ctx context.Context, chatID, photo, capt
 func (s *scriptedTelegramAPI) SendDocument(ctx context.Context, chatID, document, caption string) error {
 	if s.sendDocumentFn != nil {
 		return s.sendDocumentFn(ctx, chatID, document, caption)
+	}
+	return nil
+}
+
+func (s *scriptedTelegramAPI) SendAudio(ctx context.Context, chatID, audio, caption string) error {
+	if s.sendAudioFn != nil {
+		return s.sendAudioFn(ctx, chatID, audio, caption)
+	}
+	return nil
+}
+
+func (s *scriptedTelegramAPI) SendVoice(ctx context.Context, chatID, voice, caption string) error {
+	if s.sendVoiceFn != nil {
+		return s.sendVoiceFn(ctx, chatID, voice, caption)
+	}
+	return nil
+}
+
+func (s *scriptedTelegramAPI) SendVideo(ctx context.Context, chatID, video, caption string) error {
+	if s.sendVideoFn != nil {
+		return s.sendVideoFn(ctx, chatID, video, caption)
 	}
 	return nil
 }

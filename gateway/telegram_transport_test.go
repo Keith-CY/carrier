@@ -19,12 +19,21 @@ type fakeTelegramAPI struct {
 	sendMessageCalls  int
 	sendPhotoCalls    int
 	sendDocumentCalls int
+	sendAudioCalls    int
+	sendVoiceCalls    int
+	sendVideoCalls    int
 
 	lastSendMessageText     string
 	lastSendPhotoRef        string
 	lastSendPhotoCaption    string
 	lastSendDocumentRef     string
 	lastSendDocumentCaption string
+	lastSendAudioRef        string
+	lastSendAudioCaption    string
+	lastSendVoiceRef        string
+	lastSendVoiceCaption    string
+	lastSendVideoRef        string
+	lastSendVideoCaption    string
 
 	setWebhookErr error
 	getInfoErr    error
@@ -75,6 +84,27 @@ func (f *fakeTelegramAPI) SendDocument(_ context.Context, _ string, document str
 	f.sendDocumentCalls++
 	f.lastSendDocumentRef = document
 	f.lastSendDocumentCaption = caption
+	return nil
+}
+
+func (f *fakeTelegramAPI) SendAudio(_ context.Context, _ string, audio string, caption string) error {
+	f.sendAudioCalls++
+	f.lastSendAudioRef = audio
+	f.lastSendAudioCaption = caption
+	return nil
+}
+
+func (f *fakeTelegramAPI) SendVoice(_ context.Context, _ string, voice string, caption string) error {
+	f.sendVoiceCalls++
+	f.lastSendVoiceRef = voice
+	f.lastSendVoiceCaption = caption
+	return nil
+}
+
+func (f *fakeTelegramAPI) SendVideo(_ context.Context, _ string, video string, caption string) error {
+	f.sendVideoCalls++
+	f.lastSendVideoRef = video
+	f.lastSendVideoCaption = caption
 	return nil
 }
 
@@ -393,61 +423,96 @@ func TestTelegramSendRenderedAttachment_PrefersDocument(t *testing.T) {
 	}
 }
 
-func TestTelegramSendRenderedAttachment_RendersAudioAttachmentAsDocument(t *testing.T) {
-	api := &fakeTelegramAPI{}
-	resp := GatewayResponse{
-		Result: "ok",
-		RichContent: &baseagent.RichOutboundMessage{
-			Blocks: []baseagent.ContentBlock{
-				{Type: "audio", Text: "voice note"},
-			},
-			Attachments: []baseagent.AttachmentRef{
-				{Kind: "audio", Name: "voice.ogg", DownloadURL: "https://downloads.example.com/voice.ogg"},
-			},
-		},
-	}
-
-	if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
-		t.Fatalf("sendTelegramGatewayResponse error: %v", err)
-	}
-	if api.sendDocumentCalls != 1 || api.lastSendDocumentRef != "https://downloads.example.com/voice.ogg" {
-		t.Fatalf("expected document send for audio attachment, got calls=%d ref=%q", api.sendDocumentCalls, api.lastSendDocumentRef)
-	}
-	if api.sendPhotoCalls != 0 || api.sendMessageCalls != 0 {
-		t.Fatalf("expected audio attachment to avoid photo/text fallback, got photo=%d message=%d", api.sendPhotoCalls, api.sendMessageCalls)
-	}
-}
-
-func TestTelegramSendRenderedAttachment_UsesBlockAttachmentIDForVideoRender(t *testing.T) {
-	api := &fakeTelegramAPI{}
-	resp := GatewayResponse{
-		Result: "ok",
-		RichContent: &baseagent.RichOutboundMessage{
-			Text: "video ready",
-			Blocks: []baseagent.ContentBlock{
-				{Type: "video", AttachmentID: "artifact-video-1"},
-			},
-			Attachments: []baseagent.AttachmentRef{
-				{
-					ID:          "artifact-video-1",
-					Kind:        "video",
-					Name:        "clip.mp4",
-					MediaType:   "video/mp4",
-					DownloadURL: "https://downloads.example.com/clip.mp4",
+func TestTelegramTransportSendRichOutboundMessageAudioAndVideoPreferNativeRender(t *testing.T) {
+	t.Run("audio attachment uses sendAudio", func(t *testing.T) {
+		api := &fakeTelegramAPI{}
+		resp := GatewayResponse{
+			Result: "ok",
+			RichContent: &baseagent.RichOutboundMessage{
+				Blocks: []baseagent.ContentBlock{
+					{Type: "audio", Text: "voice note"},
+				},
+				Attachments: []baseagent.AttachmentRef{
+					{Kind: "audio", Name: "voice.ogg", DownloadURL: "https://downloads.example.com/voice.ogg"},
 				},
 			},
-		},
-	}
+		}
 
-	if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
-		t.Fatalf("sendTelegramGatewayResponse error: %v", err)
-	}
-	if api.sendDocumentCalls != 1 || api.lastSendDocumentRef != "https://downloads.example.com/clip.mp4" {
-		t.Fatalf("expected sendDocument with attachment download url, got calls=%d ref=%q", api.sendDocumentCalls, api.lastSendDocumentRef)
-	}
-	if api.sendPhotoCalls != 0 || api.sendMessageCalls != 0 {
-		t.Fatalf("expected video block to avoid photo/text fallback, got photo=%d message=%d", api.sendPhotoCalls, api.sendMessageCalls)
-	}
+		if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+			t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+		}
+		if api.sendAudioCalls != 1 || api.lastSendAudioRef != "https://downloads.example.com/voice.ogg" {
+			t.Fatalf("expected sendAudio for audio attachment, got calls=%d ref=%q", api.sendAudioCalls, api.lastSendAudioRef)
+		}
+		if api.sendDocumentCalls != 0 || api.sendPhotoCalls != 0 || api.sendMessageCalls != 0 {
+			t.Fatalf("expected audio attachment to avoid document/photo/text fallback, got document=%d photo=%d message=%d", api.sendDocumentCalls, api.sendPhotoCalls, api.sendMessageCalls)
+		}
+
+	})
+
+	t.Run("voice attachment uses sendVoice", func(t *testing.T) {
+		api := &fakeTelegramAPI{}
+		resp := GatewayResponse{
+			Result: "ok",
+			RichContent: &baseagent.RichOutboundMessage{
+				Blocks: []baseagent.ContentBlock{
+					{Type: "voice", AttachmentID: "artifact-voice-1"},
+				},
+				Attachments: []baseagent.AttachmentRef{
+					{
+						ID:          "artifact-voice-1",
+						Kind:        "voice",
+						Name:        "voice-note.ogg",
+						MediaType:   "audio/ogg",
+						DownloadURL: "https://downloads.example.com/voice-note.ogg",
+					},
+				},
+			},
+		}
+
+		if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+			t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+		}
+		if api.sendVoiceCalls != 1 || api.lastSendVoiceRef != "https://downloads.example.com/voice-note.ogg" {
+			t.Fatalf("expected sendVoice with attachment download url, got calls=%d ref=%q", api.sendVoiceCalls, api.lastSendVoiceRef)
+		}
+		if api.sendDocumentCalls != 0 || api.sendAudioCalls != 0 || api.sendPhotoCalls != 0 || api.sendMessageCalls != 0 {
+			t.Fatalf("expected voice block to avoid fallback paths, got document=%d audio=%d photo=%d message=%d", api.sendDocumentCalls, api.sendAudioCalls, api.sendPhotoCalls, api.sendMessageCalls)
+		}
+
+	})
+
+	t.Run("video attachment uses sendVideo", func(t *testing.T) {
+		api := &fakeTelegramAPI{}
+		resp := GatewayResponse{
+			Result: "ok",
+			RichContent: &baseagent.RichOutboundMessage{
+				Text: "video ready",
+				Blocks: []baseagent.ContentBlock{
+					{Type: "video", AttachmentID: "artifact-video-1"},
+				},
+				Attachments: []baseagent.AttachmentRef{
+					{
+						ID:          "artifact-video-1",
+						Kind:        "video",
+						Name:        "clip.mp4",
+						MediaType:   "video/mp4",
+						DownloadURL: "https://downloads.example.com/clip.mp4",
+					},
+				},
+			},
+		}
+
+		if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+			t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+		}
+		if api.sendVideoCalls != 1 || api.lastSendVideoRef != "https://downloads.example.com/clip.mp4" {
+			t.Fatalf("expected sendVideo with attachment download url, got calls=%d ref=%q", api.sendVideoCalls, api.lastSendVideoRef)
+		}
+		if api.sendDocumentCalls != 0 || api.sendPhotoCalls != 0 || api.sendMessageCalls != 0 {
+			t.Fatalf("expected video block to avoid document/photo/text fallback, got document=%d photo=%d message=%d", api.sendDocumentCalls, api.sendPhotoCalls, api.sendMessageCalls)
+		}
+	})
 }
 
 func TestTelegramSendRenderedAttachment_PrefersImageBlockURL(t *testing.T) {

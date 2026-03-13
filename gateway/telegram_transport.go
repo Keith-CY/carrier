@@ -48,6 +48,9 @@ type telegramAPI interface {
 	SendMessage(ctx context.Context, chatID, text string, disableWebPagePreview bool) error
 	SendPhoto(ctx context.Context, chatID, photo, caption string) error
 	SendDocument(ctx context.Context, chatID, document, caption string) error
+	SendAudio(ctx context.Context, chatID, audio, caption string) error
+	SendVoice(ctx context.Context, chatID, voice, caption string) error
+	SendVideo(ctx context.Context, chatID, video, caption string) error
 	SetMyCommands(ctx context.Context, commands []telegramBotCommand) error
 }
 
@@ -200,6 +203,39 @@ func (a *telegramBotAPI) SendDocument(ctx context.Context, chatID, document, cap
 		payload["caption"] = strings.TrimSpace(caption)
 	}
 	return a.call(ctx, "sendDocument", payload, nil)
+}
+
+func (a *telegramBotAPI) SendAudio(ctx context.Context, chatID, audio, caption string) error {
+	payload := map[string]interface{}{
+		"chat_id": chatID,
+		"audio":   audio,
+	}
+	if strings.TrimSpace(caption) != "" {
+		payload["caption"] = strings.TrimSpace(caption)
+	}
+	return a.call(ctx, "sendAudio", payload, nil)
+}
+
+func (a *telegramBotAPI) SendVoice(ctx context.Context, chatID, voice, caption string) error {
+	payload := map[string]interface{}{
+		"chat_id": chatID,
+		"voice":   voice,
+	}
+	if strings.TrimSpace(caption) != "" {
+		payload["caption"] = strings.TrimSpace(caption)
+	}
+	return a.call(ctx, "sendVoice", payload, nil)
+}
+
+func (a *telegramBotAPI) SendVideo(ctx context.Context, chatID, video, caption string) error {
+	payload := map[string]interface{}{
+		"chat_id": chatID,
+		"video":   video,
+	}
+	if strings.TrimSpace(caption) != "" {
+		payload["caption"] = strings.TrimSpace(caption)
+	}
+	return a.call(ctx, "sendVideo", payload, nil)
 }
 
 func (a *telegramBotAPI) SetMyCommands(ctx context.Context, commands []telegramBotCommand) error {
@@ -603,6 +639,12 @@ func sendTelegramGatewayResponse(ctx context.Context, api telegramAPI, chatID st
 			return api.SendPhoto(ctx, chatID, mediaRef, caption)
 		case "document":
 			return api.SendDocument(ctx, chatID, mediaRef, caption)
+		case "audio":
+			return api.SendAudio(ctx, chatID, mediaRef, caption)
+		case "voice":
+			return api.SendVoice(ctx, chatID, mediaRef, caption)
+		case "video":
+			return api.SendVideo(ctx, chatID, mediaRef, caption)
 		}
 	}
 
@@ -647,14 +689,14 @@ func selectTelegramRichAttachment(resp GatewayResponse) (kind string, ref string
 			}); mediaRef != "" {
 				return "document", mediaRef, caption, true
 			}
-		case "audio", "video":
+		case "audio", "voice", "video":
 			if mediaRef := resolveTelegramRichRef(baseagent.AttachmentRef{
-				Kind:        "document",
+				Kind:        blockType,
 				Path:        block.Path,
 				MediaType:   block.MediaType,
 				DownloadURL: block.URL,
 			}); mediaRef != "" {
-				return "document", mediaRef, caption, true
+				return blockType, mediaRef, caption, true
 			}
 		}
 		if attachmentID := strings.TrimSpace(block.AttachmentID); attachmentID != "" {
@@ -681,8 +723,14 @@ func selectTelegramAttachmentForBlock(blockType string, attachment baseagent.Att
 	switch strings.ToLower(strings.TrimSpace(blockType)) {
 	case "image":
 		return "image", ref, true
-	case "file", "document", "audio", "video":
+	case "file", "document":
 		return "document", ref, true
+	case "audio":
+		return "audio", ref, true
+	case "voice":
+		return "voice", ref, true
+	case "video":
+		return "video", ref, true
 	default:
 		return selectTelegramAttachmentKindAndRef(attachment)
 	}
@@ -693,17 +741,53 @@ func selectTelegramAttachmentKindAndRef(attachment baseagent.AttachmentRef) (kin
 	if ref == "" {
 		return "", "", false
 	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(firstString(attachment.MediaType, attachment.MIMEType))), "image/") {
-		return "image", ref, true
+	if derived := telegramAttachmentKind(attachment); derived != "" {
+		return derived, ref, true
+	}
+	return "", "", false
+}
+
+func telegramAttachmentKind(attachment baseagent.AttachmentRef) string {
+	mediaType := strings.ToLower(strings.TrimSpace(firstString(attachment.MediaType, attachment.MIMEType)))
+	if strings.HasPrefix(mediaType, "image/") {
+		return "image"
 	}
 	switch strings.ToLower(strings.TrimSpace(attachment.Kind)) {
 	case "image":
-		return "image", ref, true
-	case "document", "file", "audio", "video":
-		return "document", ref, true
+		return "image"
+	case "document", "file":
+		return "document"
+	case "voice":
+		return "voice"
+	case "audio":
+		if isTelegramVoiceMediaType(mediaType) {
+			return "voice"
+		}
+		return "audio"
+	case "video":
+		return "video"
 	default:
-		return "", "", false
+		switch {
+		case isTelegramVoiceMediaType(mediaType):
+			return "voice"
+		case strings.HasPrefix(mediaType, "audio/"):
+			return "audio"
+		case strings.HasPrefix(mediaType, "video/"):
+			return "video"
+		case mediaType != "":
+			return "document"
+		default:
+			return ""
+		}
 	}
+}
+
+func isTelegramVoiceMediaType(mediaType string) bool {
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	if mediaType == "" {
+		return false
+	}
+	return strings.HasPrefix(mediaType, "audio/ogg") || strings.Contains(mediaType, "opus")
 }
 
 func resolveTelegramRichRef(attachment baseagent.AttachmentRef) string {
