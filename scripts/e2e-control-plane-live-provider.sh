@@ -695,7 +695,7 @@ if [[ -z "$FINAL_OUTPUT" ]]; then
   cat "$EXEC_STATUS_JSON" >&2
   exit 1
 fi
-if printf '%s' "$FINAL_OUTPUT" | grep -Eiq '<tool_call>|</tool_call>|<tool_name>|```tool_call|```'; then
+if printf '%s' "$FINAL_OUTPUT" | grep -Eiq "<tool_call>|</tool_call>|<tool_name>|\`\`\`tool_call|\`\`\`"; then
   echo "error: live provider execution returned raw tool-call output instead of a final answer" >&2
   printf '%s\n' "$FINAL_OUTPUT" >&2
   exit 1
