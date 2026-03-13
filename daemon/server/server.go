@@ -2034,9 +2034,13 @@ func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID s
 			sessionID = chatID
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"agentId":   strings.TrimSpace(agentID),
-			"sessionId": sessionID,
-			"message":   proxied,
+			"agentId":     strings.TrimSpace(agentID),
+			"sessionId":   sessionID,
+			"message":     proxied.Message,
+			"richContent": proxied.RichContent,
+			"action":      proxied.Action,
+			"selfHealed":  proxied.SelfHealed,
+			"backupRef":   proxied.BackupRef,
 		})
 		return
 	}
@@ -2057,12 +2061,13 @@ func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID s
 		sessionID = chatID
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"agentId":    strings.TrimSpace(agentID),
-		"sessionId":  sessionID,
-		"message":    resp.Message,
-		"action":     resp.Action,
-		"selfHealed": resp.SelfHealed,
-		"backupRef":  resp.BackupRef,
+		"agentId":     strings.TrimSpace(agentID),
+		"sessionId":   sessionID,
+		"message":     resp.Message,
+		"richContent": resp.RichContent,
+		"action":      resp.Action,
+		"selfHealed":  resp.SelfHealed,
+		"backupRef":   resp.BackupRef,
 	})
 }
 

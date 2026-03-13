@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"carrier/baseagent"
 	"carrier/daemon/internal/lifecycle"
 )
 
@@ -31,22 +32,22 @@ var (
 )
 
 type managedAgentModelRuntimeRecord struct {
-	RequestedAlias   string `json:"requested_alias,omitempty"`
-	RequestedModel   string `json:"requested_model,omitempty"`
-	ResolvedModel    string `json:"resolved_model,omitempty"`
-	ResolvedProfile  string `json:"resolved_profile,omitempty"`
-	FallbackGroup    string `json:"fallback_group,omitempty"`
+	RequestedAlias    string `json:"requested_alias,omitempty"`
+	RequestedModel    string `json:"requested_model,omitempty"`
+	ResolvedModel     string `json:"resolved_model,omitempty"`
+	ResolvedProfile   string `json:"resolved_profile,omitempty"`
+	FallbackGroup     string `json:"fallback_group,omitempty"`
 	SelectionStrategy string `json:"selection_strategy,omitempty"`
-	SelectionOrdinal int    `json:"selection_ordinal,omitempty"`
-	OverrideHit      bool   `json:"override_hit,omitempty"`
-	FallbackHit      bool   `json:"fallback_hit,omitempty"`
-	LastRunAt        string `json:"last_run_at,omitempty"`
+	SelectionOrdinal  int    `json:"selection_ordinal,omitempty"`
+	OverrideHit       bool   `json:"override_hit,omitempty"`
+	FallbackHit       bool   `json:"fallback_hit,omitempty"`
+	LastRunAt         string `json:"last_run_at,omitempty"`
 }
 
 type managedAgentInstanceRecord struct {
-	AgentID      string                         `json:"agent_id"`
+	AgentID      string                          `json:"agent_id"`
 	ModelRuntime *managedAgentModelRuntimeRecord `json:"model_runtime,omitempty"`
-	UpdatedAt    string                         `json:"updated_at,omitempty"`
+	UpdatedAt    string                          `json:"updated_at,omitempty"`
 }
 
 type managedAgentInstanceFileRecord struct {
@@ -76,31 +77,31 @@ type zeroclawLocalConfig struct {
 }
 
 type managedZeroClawModelSelection struct {
-	RequestedAlias string
-	RequestedModel string
-	ResolvedModel  string
-	ResolvedProfile string
-	FallbackGroup  string
+	RequestedAlias    string
+	RequestedModel    string
+	ResolvedModel     string
+	ResolvedProfile   string
+	FallbackGroup     string
 	SelectionStrategy string
-	SelectionOrdinal int
-	OverrideHit    bool
-	FallbackHit    bool
-	cursorGroup    string
-	nextCursor     int
+	SelectionOrdinal  int
+	OverrideHit       bool
+	FallbackHit       bool
+	cursorGroup       string
+	nextCursor        int
 }
 
-func maybeProxyManagedAgentChat(ctx context.Context, svc *lifecycle.Service, agentID string, provider string, modelAlias string, model string, message string) (string, bool, error) {
+func maybeProxyManagedAgentChat(ctx context.Context, svc *lifecycle.Service, agentID string, provider string, modelAlias string, model string, message string) (baseagent.ChatResponse, bool, error) {
 	switch strings.ToLower(strings.TrimSpace(agentID)) {
 	case "zeroclaw":
 		cfg, err := loadLocalZeroClawConfig()
 		if err != nil {
 			if os.IsNotExist(err) {
-				return "", false, nil
+				return baseagent.ChatResponse{}, false, nil
 			}
-			return "", true, err
+			return baseagent.ChatResponse{}, true, err
 		}
 		if cfg.Gateway.RequirePairing {
-			return "", true, fmt.Errorf("zeroclaw local gateway still requires pairing")
+			return baseagent.ChatResponse{}, true, fmt.Errorf("zeroclaw local gateway still requires pairing")
 		}
 		var cliErr error
 		if svc != nil {
@@ -115,33 +116,33 @@ func maybeProxyManagedAgentChat(ctx context.Context, svc *lifecycle.Service, age
 		}
 		reply, err := proxyZeroClawWebhook(ctx, cfg.Gateway, message)
 		if err != nil && cliErr != nil {
-			return "", true, fmt.Errorf("%v; webhook fallback failed: %w", cliErr, err)
+			return baseagent.ChatResponse{}, true, fmt.Errorf("%v; webhook fallback failed: %w", cliErr, err)
 		}
 		return reply, true, err
 	default:
-		return "", false, nil
+		return baseagent.ChatResponse{}, false, nil
 	}
 }
 
-func maybeProxyManagedZeroClawAgentCLI(ctx context.Context, state lifecycle.AgentState, cfg zeroclawLocalConfig, provider string, modelAlias string, model string, message string) (string, bool, error) {
+func maybeProxyManagedZeroClawAgentCLI(ctx context.Context, state lifecycle.AgentState, cfg zeroclawLocalConfig, provider string, modelAlias string, model string, message string) (baseagent.ChatResponse, bool, error) {
 	if !state.Isolated {
-		return "", false, nil
+		return baseagent.ChatResponse{}, false, nil
 	}
 	instanceName := strings.TrimSpace(state.LimaInstanceName)
 	if instanceName == "" {
-		return "", false, nil
+		return baseagent.ChatResponse{}, false, nil
 	}
 	selection, err := resolveManagedZeroClawModelSelection(agentIDFromStateOrDefault(state, "zeroclaw"), cfg, provider, modelAlias, model)
 	if err != nil {
-		return "", true, err
+		return baseagent.ChatResponse{}, true, err
 	}
 	overrideConfig, err := buildManagedZeroClawModelOverride(cfg, selection.ResolvedModel)
 	if err != nil {
-		return "", true, err
+		return baseagent.ChatResponse{}, true, err
 	}
 	reply, err := runManagedZeroClawAgentCLI(ctx, instanceName, provider, message, overrideConfig)
 	if err != nil {
-		return "", true, err
+		return baseagent.ChatResponse{}, true, err
 	}
 	_ = persistManagedAgentModelRuntime(agentIDFromStateOrDefault(state, "zeroclaw"), selection)
 	return reply, true, nil
@@ -154,14 +155,14 @@ func agentIDFromStateOrDefault(state lifecycle.AgentState, fallback string) stri
 	return strings.TrimSpace(fallback)
 }
 
-func runManagedZeroClawAgentCLI(ctx context.Context, instanceName string, provider string, message string, overrideConfigB64 string) (string, error) {
+func runManagedZeroClawAgentCLI(ctx context.Context, instanceName string, provider string, message string, overrideConfigB64 string) (baseagent.ChatResponse, error) {
 	limactlPath, err := resolveManagedLimaCtlPath()
 	if err != nil {
-		return "", err
+		return baseagent.ChatResponse{}, err
 	}
 	safeInstance := strings.TrimSpace(instanceName)
 	if safeInstance == "" {
-		return "", fmt.Errorf("zeroclaw managed instance name is empty")
+		return baseagent.ChatResponse{}, fmt.Errorf("zeroclaw managed instance name is empty")
 	}
 	guestScript := `set -e
 if [ -x "$HOME/.local/bin/zeroclaw" ]; then
@@ -182,9 +183,9 @@ if [ -n "$3" ]; then
   CONFIG_DIR="$TMP_DIR"
 fi
 if [ -n "$2" ]; then
-  exec "$ZC" agent --config-dir "$CONFIG_DIR" -p "$2" -m "$1"
+  exec "$ZC" agent --config-dir "$CONFIG_DIR" --json --no-color -p "$2" -m "$1"
 fi
-exec "$ZC" agent --config-dir "$CONFIG_DIR" -m "$1"`
+exec "$ZC" agent --config-dir "$CONFIG_DIR" --json --no-color -m "$1"`
 	cmd := managedExecCommandContext(
 		ctx,
 		limactlPath,
@@ -206,17 +207,17 @@ exec "$ZC" agent --config-dir "$CONFIG_DIR" -m "$1"`
 	if err := cmd.Run(); err != nil {
 		errText := strings.TrimSpace(stderr.String())
 		if errText != "" {
-			return "", fmt.Errorf("zeroclaw agent command failed: %w: %s", err, errText)
+			return baseagent.ChatResponse{}, fmt.Errorf("zeroclaw agent command failed: %w: %s", err, errText)
 		}
-		return "", fmt.Errorf("zeroclaw agent command failed: %w", err)
+		return baseagent.ChatResponse{}, fmt.Errorf("zeroclaw agent command failed: %w", err)
 	}
-	if out := normalizeManagedAgentCLIOutput(stdout.String()); out != "" {
-		return out, nil
+	if resp := parseManagedAgentCLIResponse(stdout.String()); strings.TrimSpace(resp.Message) != "" || resp.RichContent != nil {
+		return resp, nil
 	}
 	if errText := strings.TrimSpace(stderr.String()); errText != "" {
-		return "", fmt.Errorf("zeroclaw agent command returned empty output: %s", errText)
+		return baseagent.ChatResponse{}, fmt.Errorf("zeroclaw agent command returned empty output: %s", errText)
 	}
-	return "", fmt.Errorf("zeroclaw agent command returned empty output")
+	return baseagent.ChatResponse{}, fmt.Errorf("zeroclaw agent command returned empty output")
 }
 
 func normalizeManagedAgentCLIOutput(raw string) string {
@@ -238,6 +239,48 @@ func normalizeManagedAgentCLIOutput(raw string) string {
 		return strings.TrimSpace(strings.Join(filtered, "\n"))
 	}
 	return strings.TrimSpace(strings.Join(all, "\n"))
+}
+
+func parseManagedAgentCLIResponse(raw string) baseagent.ChatResponse {
+	payload := strings.TrimSpace(extractManagedJSONObject(raw))
+	if payload != "" {
+		var resp baseagent.ChatResponse
+		if err := json.Unmarshal([]byte(payload), &resp); err == nil {
+			if strings.TrimSpace(resp.Message) != "" || resp.RichContent != nil {
+				return resp
+			}
+		}
+	}
+	if out := normalizeManagedAgentCLIOutput(raw); out != "" {
+		return baseagent.ChatResponse{Message: out}
+	}
+	return baseagent.ChatResponse{}
+}
+
+func extractManagedJSONObject(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	if json.Valid([]byte(trimmed)) {
+		return trimmed
+	}
+	start := strings.Index(trimmed, "{")
+	if start < 0 {
+		return ""
+	}
+	candidate := strings.TrimSpace(trimmed[start:])
+	if json.Valid([]byte(candidate)) {
+		return candidate
+	}
+	end := strings.LastIndex(candidate, "}")
+	if end >= 0 {
+		maybe := strings.TrimSpace(candidate[:end+1])
+		if json.Valid([]byte(maybe)) {
+			return maybe
+		}
+	}
+	return ""
 }
 
 func resolveManagedLimaCtlPath() (string, error) {
@@ -712,43 +755,56 @@ func rewriteZeroClawDefaultModel(raw []byte, model string) []byte {
 	return []byte(text)
 }
 
-func proxyZeroClawWebhook(ctx context.Context, cfg zeroclawGatewayConfig, message string) (string, error) {
+func proxyZeroClawWebhook(ctx context.Context, cfg zeroclawGatewayConfig, message string) (baseagent.ChatResponse, error) {
 	host := strings.TrimSpace(cfg.Host)
 	if host == "" {
 		host = "127.0.0.1"
 	}
 	if cfg.Port <= 0 {
-		return "", fmt.Errorf("zeroclaw gateway port is not configured")
+		return baseagent.ChatResponse{}, fmt.Errorf("zeroclaw gateway port is not configured")
 	}
 	endpoint := "http://" + net.JoinHostPort(host, strconv.Itoa(cfg.Port)) + "/webhook"
 	rawBody, err := json.Marshal(map[string]string{"message": strings.TrimSpace(message)})
 	if err != nil {
-		return "", fmt.Errorf("marshal zeroclaw webhook payload: %w", err)
+		return baseagent.ChatResponse{}, fmt.Errorf("marshal zeroclaw webhook payload: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(rawBody))
 	if err != nil {
-		return "", fmt.Errorf("build zeroclaw webhook request: %w", err)
+		return baseagent.ChatResponse{}, fmt.Errorf("build zeroclaw webhook request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := managedAgentHTTPClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("zeroclaw webhook request failed: %w", err)
+		return baseagent.ChatResponse{}, fmt.Errorf("zeroclaw webhook request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	respRaw, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if readErr != nil {
-		return "", fmt.Errorf("read zeroclaw webhook response: %w", readErr)
+		return baseagent.ChatResponse{}, fmt.Errorf("read zeroclaw webhook response: %w", readErr)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("zeroclaw webhook status=%d: %s", resp.StatusCode, strings.TrimSpace(string(respRaw)))
+		return baseagent.ChatResponse{}, fmt.Errorf("zeroclaw webhook status=%d: %s", resp.StatusCode, strings.TrimSpace(string(respRaw)))
 	}
-	if msg := extractManagedAgentMessage(respRaw); msg != "" {
-		return msg, nil
+	if structured := extractManagedAgentWebhookResponse(respRaw); strings.TrimSpace(structured.Message) != "" || structured.RichContent != nil {
+		return structured, nil
 	}
 	if trimmed := strings.TrimSpace(string(respRaw)); trimmed != "" {
-		return trimmed, nil
+		return baseagent.ChatResponse{Message: trimmed}, nil
 	}
-	return "", fmt.Errorf("zeroclaw webhook returned empty response")
+	return baseagent.ChatResponse{}, fmt.Errorf("zeroclaw webhook returned empty response")
+}
+
+func extractManagedAgentWebhookResponse(raw []byte) baseagent.ChatResponse {
+	var resp baseagent.ChatResponse
+	if err := json.Unmarshal(raw, &resp); err == nil {
+		if strings.TrimSpace(resp.Message) != "" || resp.RichContent != nil {
+			return resp
+		}
+	}
+	if msg := extractManagedAgentMessage(raw); msg != "" {
+		return baseagent.ChatResponse{Message: msg}
+	}
+	return baseagent.ChatResponse{}
 }
 
 func extractManagedAgentMessage(raw []byte) string {

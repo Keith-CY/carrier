@@ -138,7 +138,21 @@ func TestHandleAgentChatBranches(t *testing.T) {
 	}
 
 	runtime := &fakeAgentChatRuntime{
-		resp: baseagent.ChatResponse{Message: "hello from local runtime", Action: "chat"},
+		resp: baseagent.ChatResponse{
+			Message: "hello from local runtime",
+			Action:  "chat",
+			RichContent: &baseagent.RichOutboundMessage{
+				Text:       "hello from local runtime",
+				RenderMode: "rich_media",
+				Blocks: []baseagent.ContentBlock{{
+					Type:       "audio",
+					OutputRole: "generated",
+					Name:       "voice-note.ogg",
+					MediaType:  "audio/ogg",
+					URL:        "https://downloads.example.com/voice-note.ogg",
+				}},
+			},
+		},
 	}
 	okReq := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"hello","sessionId":"sess-1","provider":"openrouter","modelAlias":"flash","model":"google/gemini-2.0-flash-001"}`))
 	okRR := httptest.NewRecorder()
@@ -154,6 +168,9 @@ func TestHandleAgentChatBranches(t *testing.T) {
 	}
 	if !strings.Contains(okRR.Body.String(), `"agentId":"zeroclaw"`) || !strings.Contains(okRR.Body.String(), `"sessionId":"sess-1"`) {
 		t.Fatalf("unexpected chat response body=%s", okRR.Body.String())
+	}
+	if !strings.Contains(okRR.Body.String(), `"richContent"`) || !strings.Contains(okRR.Body.String(), `"renderMode":"rich_media"`) {
+		t.Fatalf("expected rich content in chat response body=%s", okRR.Body.String())
 	}
 }
 
@@ -200,7 +217,7 @@ func TestHandleAgentChat_ProxiesManagedZeroClawGateway(t *testing.T) {
 		raw, _ := io.ReadAll(r.Body)
 		seenBody = string(raw)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"message":"proxied from zeroclaw"}`))
+		_, _ = w.Write([]byte(`{"message":"proxied from zeroclaw","richContent":{"text":"proxied from zeroclaw","renderMode":"rich_media","blocks":[{"type":"audio","outputRole":"generated","name":"proxy-note.ogg","mediaType":"audio/ogg","url":"https://downloads.example.com/proxy-note.ogg"}]}}`))
 	}))
 	defer srv.Close()
 
@@ -244,6 +261,9 @@ require_pairing = false
 	}
 	if !strings.Contains(rr.Body.String(), `"message":"proxied from zeroclaw"`) {
 		t.Fatalf("unexpected proxy response body=%s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"richContent"`) || !strings.Contains(rr.Body.String(), `"renderMode":"rich_media"`) {
+		t.Fatalf("expected structured proxy response body=%s", rr.Body.String())
 	}
 }
 
@@ -321,7 +341,7 @@ if [ -n "$LAST_ARG" ]; then
   fi
 fi
 printf '\033[2m2026-03-10T07:00:16.309574Z\033[0m \033[32mINFO\033[0m zeroclaw::config::schema: Config loaded\n'
-printf 'Tokyo weather is mild with a chance of rain.\n'
+printf '{"message":"Tokyo weather is mild with a chance of rain.","richContent":{"text":"Tokyo weather is mild with a chance of rain.","renderMode":"rich_media","blocks":[{"type":"audio","outputRole":"generated","name":"weather-note.ogg","mediaType":"audio/ogg","url":"https://downloads.example.com/weather-note.ogg"}]}}\n'
 `), 0o755); err != nil {
 		t.Fatalf("write fake limactl: %v", err)
 	}
@@ -347,6 +367,9 @@ printf 'Tokyo weather is mild with a chance of rain.\n'
 	if !strings.Contains(rr.Body.String(), `Tokyo weather is mild with a chance of rain.`) {
 		t.Fatalf("unexpected cli proxy response body=%s", rr.Body.String())
 	}
+	if !strings.Contains(rr.Body.String(), `"richContent"`) || !strings.Contains(rr.Body.String(), `"renderMode":"rich_media"`) {
+		t.Fatalf("expected structured cli proxy response body=%s", rr.Body.String())
+	}
 	if strings.Contains(rr.Body.String(), `Config loaded`) || strings.Contains(rr.Body.String(), `zeroclaw::config::schema`) {
 		t.Fatalf("expected cli proxy response to strip zeroclaw log lines, got %s", rr.Body.String())
 	}
@@ -359,7 +382,7 @@ printf 'Tokyo weather is mild with a chance of rain.\n'
 	if !strings.Contains(argsText, "shell") || !strings.Contains(argsText, "carrier-zeroclaw-a3f2") {
 		t.Fatalf("unexpected limactl args=%q", argsText)
 	}
-	if !strings.Contains(argsText, "agent") || !strings.Contains(argsText, "-m") || !strings.Contains(argsText, "weather please") {
+	if !strings.Contains(argsText, "agent") || !strings.Contains(argsText, "-m") || !strings.Contains(argsText, "--json") || !strings.Contains(argsText, "--no-color") || !strings.Contains(argsText, "weather please") {
 		t.Fatalf("expected zeroclaw agent single-shot args, got %q", argsText)
 	}
 	cfgRaw, err := os.ReadFile(configPath)
@@ -467,19 +490,19 @@ printf 'managed reply\n'
 	}
 	var store struct {
 		Instances []struct {
-			AgentID      string `json:"agent_id"`
+			AgentID               string         `json:"agent_id"`
 			ModelSelectionCursors map[string]int `json:"model_selection_cursors"`
-			ModelRuntime struct {
-				RequestedAlias   string `json:"requested_alias"`
-				RequestedModel   string `json:"requested_model"`
-				ResolvedModel    string `json:"resolved_model"`
-				ResolvedProfile  string `json:"resolved_profile"`
-				FallbackGroup    string `json:"fallback_group"`
+			ModelRuntime          struct {
+				RequestedAlias    string `json:"requested_alias"`
+				RequestedModel    string `json:"requested_model"`
+				ResolvedModel     string `json:"resolved_model"`
+				ResolvedProfile   string `json:"resolved_profile"`
+				FallbackGroup     string `json:"fallback_group"`
 				SelectionStrategy string `json:"selection_strategy"`
-				SelectionOrdinal int    `json:"selection_ordinal"`
-				OverrideHit      bool   `json:"override_hit"`
-				FallbackHit      bool   `json:"fallback_hit"`
-				LastRunAt        string `json:"last_run_at"`
+				SelectionOrdinal  int    `json:"selection_ordinal"`
+				OverrideHit       bool   `json:"override_hit"`
+				FallbackHit       bool   `json:"fallback_hit"`
+				LastRunAt         string `json:"last_run_at"`
 			} `json:"model_runtime"`
 		} `json:"instances"`
 	}

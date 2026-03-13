@@ -213,7 +213,7 @@ func TestRunAgentCommand(t *testing.T) {
 			if body["model"] != "google/gemini-2.0-flash-001" {
 				t.Fatalf("model=%v want google/gemini-2.0-flash-001", body["model"])
 			}
-			_, _ = w.Write([]byte(`{"agentId":"picoclaw","sessionId":"sess-run","message":"pong"}`))
+			_, _ = w.Write([]byte(`{"agentId":"picoclaw","sessionId":"sess-run","message":"pong","richContent":{"text":"pong","renderMode":"rich_media","blocks":[{"type":"audio","outputRole":"generated","name":"reply.ogg","mediaType":"audio/ogg","url":"https://downloads.example.com/reply.ogg"}]}}`))
 		case "/api/v1/agents/picoclaw/launcher":
 			if r.Method != http.MethodGet {
 				http.NotFound(w, r)
@@ -366,6 +366,14 @@ func TestRunAgentCommand(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "pong") || !strings.Contains(out.String(), "sess-run") {
 		t.Fatalf("run output=%s", out.String())
+	}
+
+	out.Reset()
+	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "run", AgentID: "picoclaw", Message: "hello launcher", ModelAlias: "flash", Model: "google/gemini-2.0-flash-001", JSON: true}); err != nil {
+		t.Fatalf("runAgentCommand(run json) error: %v", err)
+	}
+	if !strings.Contains(out.String(), `"richContent"`) || !strings.Contains(out.String(), `rich_media`) {
+		t.Fatalf("run json output=%s", out.String())
 	}
 
 	out.Reset()

@@ -97,9 +97,13 @@ type BaseAgentChatResult = baseagent.ChatResponse
 type BaseAgentDecomposeTask = baseagent.DecomposeTask
 
 type AgentChatResult struct {
-	AgentID   string `json:"agentId"`
-	SessionID string `json:"sessionId,omitempty"`
-	Message   string `json:"message"`
+	AgentID     string                         `json:"agentId"`
+	SessionID   string                         `json:"sessionId,omitempty"`
+	Message     string                         `json:"message"`
+	RichContent *baseagent.RichOutboundMessage `json:"richContent,omitempty"`
+	Action      string                         `json:"action,omitempty"`
+	SelfHealed  bool                           `json:"selfHealed,omitempty"`
+	BackupRef   string                         `json:"backupRef,omitempty"`
 }
 
 type AgentCapabilitySummary = baseagent.RuntimeCapabilitySummary

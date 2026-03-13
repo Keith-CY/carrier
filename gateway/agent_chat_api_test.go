@@ -22,7 +22,7 @@ func TestHandleWebUIAgentChatPassesThroughToDaemon(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
-		_, _ = w.Write([]byte(`{"agentId":"picoclaw","sessionId":"sess-1","message":"pong"}`))
+		_, _ = w.Write([]byte(`{"agentId":"picoclaw","sessionId":"sess-1","message":"pong","richContent":{"text":"pong","renderMode":"rich_media","blocks":[{"type":"audio","outputRole":"generated","name":"voice-note.ogg","mediaType":"audio/ogg","url":"https://downloads.example.com/voice-note.ogg"}]}}`))
 	}))
 	defer daemon.Close()
 
@@ -38,6 +38,9 @@ func TestHandleWebUIAgentChatPassesThroughToDaemon(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"message":"pong"`) {
 		t.Fatalf("body=%s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"richContent"`) || !strings.Contains(rec.Body.String(), `"renderMode":"rich_media"`) {
+		t.Fatalf("expected rich content passthrough body=%s", rec.Body.String())
 	}
 	if gotActor != "webui:agents:chat" {
 		t.Fatalf("actor=%q want webui:agents:chat", gotActor)
