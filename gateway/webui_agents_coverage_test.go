@@ -436,7 +436,11 @@ func TestHandleWebUIAgent_Branches(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected reinstall 200, got %d: %s", rec.Code, rec.Body.String())
 		}
-		if !strings.Contains(rec.Body.String(), `"provenance":"managed install via catalog -> managed reinstall via catalog"`) {
+		var reinstallResp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &reinstallResp); err != nil {
+			t.Fatalf("decode reinstall response: %v", err)
+		}
+		if reinstallResp["provenance"] != "managed install via catalog -> managed reinstall via catalog" {
 			t.Fatalf("expected reinstall payload, got %s", rec.Body.String())
 		}
 	})
