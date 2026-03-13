@@ -143,7 +143,7 @@ func TestSkillsRegistryRuntimeCapabilitiesExposeProvenanceAndTimestamps(t *testi
 	if len(caps) != 1 {
 		t.Fatalf("expected 1 runtime capability, got %+v", caps)
 	}
-	if caps[0].Provenance != "managed update via catalog" {
+	if caps[0].Provenance != "managed install via catalog -> managed update via catalog" {
 		t.Fatalf("expected provenance summary, got %+v", caps[0])
 	}
 	if caps[0].InstalledAt != installAt.Format(time.RFC3339) {
@@ -157,5 +157,58 @@ func TestSkillsRegistryRuntimeCapabilitiesExposeProvenanceAndTimestamps(t *testi
 	}
 	if !strings.Contains(strings.ToLower(caps[0].RemediationHint), "update skill") {
 		t.Fatalf("expected remediation hint to mention update action, got %+v", caps[0])
+	}
+}
+
+func TestSkillsRegistryReinstallAndToggleLifecycle(t *testing.T) {
+	ctx := context.Background()
+	registry := NewSkillsRegistry(NewMemorySkillsStore(), testSkillCatalog())
+
+	restoreNow := skillsRegistryNow
+	t.Cleanup(func() { skillsRegistryNow = restoreNow })
+
+	installAt := time.Date(2026, 3, 13, 10, 0, 0, 0, time.UTC)
+	reinstallAt := installAt.Add(30 * time.Minute)
+	skillsRegistryNow = func() time.Time { return installAt }
+
+	if _, err := registry.InstallSkill(ctx, "go-testing"); err != nil {
+		t.Fatalf("install go-testing: %v", err)
+	}
+	if err := registry.SetSkillEnabled(ctx, "go-testing", false); err != nil {
+		t.Fatalf("disable go-testing: %v", err)
+	}
+
+	skillsRegistryNow = func() time.Time { return reinstallAt }
+	reinstalled, err := registry.ReinstallSkill(ctx, "go-testing")
+	if err != nil {
+		t.Fatalf("reinstall go-testing: %v", err)
+	}
+	if !strings.Contains(reinstalled.Provenance, "managed install via catalog") || !strings.Contains(reinstalled.Provenance, "managed reinstall via catalog") {
+		t.Fatalf("expected reinstall provenance history, got %+v", reinstalled)
+	}
+	if reinstalled.InstalledAt != installAt.Format(time.RFC3339) {
+		t.Fatalf("expected install timestamp to be preserved, got %+v", reinstalled)
+	}
+	if reinstalled.UpdatedAt != reinstallAt.Format(time.RFC3339) {
+		t.Fatalf("expected reinstall timestamp to update, got %+v", reinstalled)
+	}
+
+	caps := registry.ListRuntimeSkillCapabilities(ctx)
+	if len(caps) != 1 {
+		t.Fatalf("expected 1 runtime capability, got %+v", caps)
+	}
+	if caps[0].Enabled {
+		t.Fatalf("expected reinstall to preserve disabled state, got %+v", caps[0])
+	}
+	if !strings.Contains(strings.ToLower(caps[0].RemediationHint), "enable the skill") {
+		t.Fatalf("expected disabled remediation hint after reinstall, got %+v", caps[0])
+	}
+
+	if err := registry.SetSkillEnabled(ctx, "go-testing", true); err != nil {
+		t.Fatalf("enable go-testing: %v", err)
+	}
+	caps = registry.ListRuntimeSkillCapabilities(ctx)
+	if len(caps) != 1 || !caps[0].Enabled {
+		t.Fatalf("expected go-testing enabled after toggle, got %+v", caps)
 	}
 }

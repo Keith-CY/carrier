@@ -409,6 +409,36 @@ func TestHandleWebUIAgent_Branches(t *testing.T) {
 		if !strings.Contains(rec.Body.String(), `"disabledCount":1`) {
 			t.Fatalf("expected toggled skill summary, got %s", rec.Body.String())
 		}
+
+		_, daemonReinstall, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+			"POST /api/v1/agents/picoclaw/skills/reinstall": func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatalf("decode reinstall body: %v", err)
+				}
+				if body["name"] != "go-testing" {
+					t.Fatalf("unexpected reinstall body: %+v", body)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"name":        "go-testing",
+					"summary":     "Use go test before claiming success.",
+					"source":      "catalog",
+					"version":     "builtin",
+					"provenance":  "managed install via catalog -> managed reinstall via catalog",
+					"installedAt": "2026-03-13T10:00:00Z",
+					"updatedAt":   "2026-03-13T10:30:00Z",
+				})
+			},
+		})
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/skills/reinstall", strings.NewReader(`{"name":"go-testing"}`))
+		handleWebUIAgent(rec, req, "req-skills-reinstall", daemonReinstall)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected reinstall 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"provenance":"managed install via catalog -> managed reinstall via catalog"`) {
+			t.Fatalf("expected reinstall payload, got %s", rec.Body.String())
+		}
 	})
 
 	t.Run("mcp action", func(t *testing.T) {

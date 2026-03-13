@@ -257,6 +257,13 @@ func (r *Runtime) InstallSkill(ctx context.Context, name string) (SkillDefinitio
 	return r.skillsLoader.InstallSkill(ctx, name)
 }
 
+func (r *Runtime) ReinstallSkill(ctx context.Context, name string) (SkillDefinition, error) {
+	if r == nil || r.skillsLoader == nil {
+		return SkillDefinition{}, fmt.Errorf("skills loader is unavailable")
+	}
+	return r.skillsLoader.ReinstallSkill(ctx, name)
+}
+
 func (r *Runtime) UpdateSkill(ctx context.Context, name, version string) (SkillDefinition, error) {
 	if r == nil || r.skillsLoader == nil {
 		return SkillDefinition{}, fmt.Errorf("skills loader is unavailable")

@@ -55,6 +55,7 @@ import (
 	"syscall"
 	"time"
 
+	"carrier/baseagent"
 	"carrier/configv2"
 	"carrier/daemon/credentialstore"
 	"carrier/daemon/server"
@@ -284,29 +285,29 @@ type memoryCommandOptions struct {
 }
 
 type agentCommandOptions struct {
-	Action      string
-	AgentID     string
-	CronJobID   string
-	SubagentJobID string
-	ProfileName string
-	Query       string
-	SkillName   string
-	Version     string
-	Message     string
-	Provider    string
-	BaseURL     string
-	AuthMethod  string
-	ModelAlias  string
-	Model       string
-	Voice       string
-	MediaFormat string
-	SessionID   string
-	NextRunAt   time.Time
-	TimeoutMs   int
-	RetryBudget int
+	Action           string
+	AgentID          string
+	CronJobID        string
+	SubagentJobID    string
+	ProfileName      string
+	Query            string
+	SkillName        string
+	Version          string
+	Message          string
+	Provider         string
+	BaseURL          string
+	AuthMethod       string
+	ModelAlias       string
+	Model            string
+	Voice            string
+	MediaFormat      string
+	SessionID        string
+	NextRunAt        time.Time
+	TimeoutMs        int
+	RetryBudget      int
 	FallbackStrategy string
-	Limit       int
-	JSON        bool
+	Limit            int
+	JSON             bool
 }
 
 type versionInfo struct {
@@ -371,18 +372,18 @@ type managedAgentModelSurface struct {
 }
 
 type managedAgentModelProfile struct {
-	ProfileName    string `json:"profile_name,omitempty"`
-	ModelAlias     string `json:"model_alias,omitempty"`
-	ModelID        string `json:"model_id,omitempty"`
-	ProviderID     string `json:"provider_id,omitempty"`
-	ProviderKey    string `json:"provider_key,omitempty"`
-	ProtocolFamily string `json:"protocol_family,omitempty"`
-	BaseURL        string `json:"base_url,omitempty"`
-	AuthMethod     string `json:"auth_method,omitempty"`
-	TimeoutMs      int    `json:"timeout_ms,omitempty"`
-	RetryBudget    int    `json:"retry_budget,omitempty"`
+	ProfileName      string `json:"profile_name,omitempty"`
+	ModelAlias       string `json:"model_alias,omitempty"`
+	ModelID          string `json:"model_id,omitempty"`
+	ProviderID       string `json:"provider_id,omitempty"`
+	ProviderKey      string `json:"provider_key,omitempty"`
+	ProtocolFamily   string `json:"protocol_family,omitempty"`
+	BaseURL          string `json:"base_url,omitempty"`
+	AuthMethod       string `json:"auth_method,omitempty"`
+	TimeoutMs        int    `json:"timeout_ms,omitempty"`
+	RetryBudget      int    `json:"retry_budget,omitempty"`
 	FallbackStrategy string `json:"fallback_strategy,omitempty"`
-	Primary        bool   `json:"primary,omitempty"`
+	Primary          bool   `json:"primary,omitempty"`
 }
 
 type managedAgentConfig struct {
@@ -3389,13 +3390,13 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 		}
 	case "skills":
 		if len(args) < 3 {
-			return agentCommandOptions{}, errors.New("usage: carrier agent skills <search|install|update|uninstall> <agent_id> [args] [--json]")
+			return agentCommandOptions{}, errors.New("usage: carrier agent skills <search|install|reinstall|update|uninstall|enable|disable> <agent_id> [args] [--json]")
 		}
 		subaction := strings.ToLower(strings.TrimSpace(args[1]))
 		opts.Action = "skills-" + subaction
 		opts.AgentID = strings.TrimSpace(args[2])
 		startIdx = 3
-		if subaction == "install" || subaction == "update" || subaction == "uninstall" {
+		if subaction == "install" || subaction == "reinstall" || subaction == "update" || subaction == "uninstall" || subaction == "enable" || subaction == "disable" {
 			if len(args) < 4 {
 				return agentCommandOptions{}, fmt.Errorf("usage: carrier agent skills %s <agent_id> <skill_name> [--json]", subaction)
 			}
@@ -3586,7 +3587,7 @@ func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
 			return agentCommandOptions{}, errors.New("usage: carrier agent cron cancel <agent_id> <job_id> [--json]")
 		}
 	case "skills-search":
-	case "skills-install", "skills-update", "skills-uninstall":
+	case "skills-install", "skills-reinstall", "skills-update", "skills-uninstall", "skills-enable", "skills-disable":
 		if strings.TrimSpace(opts.SkillName) == "" {
 			return agentCommandOptions{}, fmt.Errorf("usage: carrier agent skills %s <agent_id> <skill_name> [--json]", strings.TrimPrefix(opts.Action, "skills-"))
 		}
@@ -4882,18 +4883,18 @@ type agentLauncherCLIResponse struct {
 	ModelSurface *struct {
 		DefaultProfile string `json:"defaultProfile,omitempty"`
 		Profiles       []struct {
-			ProfileName    string `json:"profileName,omitempty"`
-			ModelAlias     string `json:"modelAlias,omitempty"`
-			ModelID        string `json:"modelId,omitempty"`
-			ProviderID     string `json:"providerId,omitempty"`
-			ProviderKey    string `json:"providerKey,omitempty"`
-			ProtocolFamily string `json:"protocolFamily,omitempty"`
-			BaseURL        string `json:"baseUrl,omitempty"`
-			AuthMethod     string `json:"authMethod,omitempty"`
-			TimeoutMs      int    `json:"timeoutMs,omitempty"`
-			RetryBudget    int    `json:"retryBudget,omitempty"`
+			ProfileName      string `json:"profileName,omitempty"`
+			ModelAlias       string `json:"modelAlias,omitempty"`
+			ModelID          string `json:"modelId,omitempty"`
+			ProviderID       string `json:"providerId,omitempty"`
+			ProviderKey      string `json:"providerKey,omitempty"`
+			ProtocolFamily   string `json:"protocolFamily,omitempty"`
+			BaseURL          string `json:"baseUrl,omitempty"`
+			AuthMethod       string `json:"authMethod,omitempty"`
+			TimeoutMs        int    `json:"timeoutMs,omitempty"`
+			RetryBudget      int    `json:"retryBudget,omitempty"`
 			FallbackStrategy string `json:"fallbackStrategy,omitempty"`
-			Primary        bool   `json:"primary,omitempty"`
+			Primary          bool   `json:"primary,omitempty"`
 		} `json:"profiles,omitempty"`
 	} `json:"modelSurface,omitempty"`
 	LastModelRun *struct {
@@ -4951,13 +4952,20 @@ type agentSubagentListCLIResponse struct {
 }
 
 type agentSkillCLIResponse struct {
-	Name          string   `json:"name"`
-	Summary       string   `json:"summary,omitempty"`
-	Keywords      []string `json:"keywords,omitempty"`
-	Tags          []string `json:"tags,omitempty"`
-	Source        string   `json:"source,omitempty"`
-	Version       string   `json:"version,omitempty"`
-	TargetVersion string   `json:"targetVersion,omitempty"`
+	Name            string   `json:"name"`
+	Summary         string   `json:"summary,omitempty"`
+	Keywords        []string `json:"keywords,omitempty"`
+	Tags            []string `json:"tags,omitempty"`
+	Source          string   `json:"source,omitempty"`
+	Provenance      string   `json:"provenance,omitempty"`
+	Version         string   `json:"version,omitempty"`
+	TargetVersion   string   `json:"targetVersion,omitempty"`
+	InstalledAt     string   `json:"installedAt,omitempty"`
+	UpdatedAt       string   `json:"updatedAt,omitempty"`
+	Enabled         bool     `json:"enabled,omitempty"`
+	Health          string   `json:"health,omitempty"`
+	HealthDetail    string   `json:"healthDetail,omitempty"`
+	RemediationHint string   `json:"remediationHint,omitempty"`
 }
 
 type agentSkillsSearchCLIResponse struct {
@@ -4982,18 +4990,18 @@ type agentModelSurfaceCLIProfile struct {
 }
 
 type agentModelSurfaceCLI struct {
-	DefaultProfile string                       `json:"defaultProfile,omitempty"`
+	DefaultProfile string                        `json:"defaultProfile,omitempty"`
 	Profiles       []agentModelSurfaceCLIProfile `json:"profiles,omitempty"`
 }
 
 type agentModelsCLIResponse struct {
-	AgentID               string                `json:"agentId"`
-	InstanceID            string                `json:"instanceId,omitempty"`
-	ConfigPath            string                `json:"configPath,omitempty"`
-	Synced                bool                  `json:"synced,omitempty"`
-	DriftState            string                `json:"driftState,omitempty"`
-	DriftReason           string                `json:"driftReason,omitempty"`
-	ModelSurface          *agentModelSurfaceCLI `json:"modelSurface,omitempty"`
+	AgentID                string                `json:"agentId"`
+	InstanceID             string                `json:"instanceId,omitempty"`
+	ConfigPath             string                `json:"configPath,omitempty"`
+	Synced                 bool                  `json:"synced,omitempty"`
+	DriftState             string                `json:"driftState,omitempty"`
+	DriftReason            string                `json:"driftReason,omitempty"`
+	ModelSurface           *agentModelSurfaceCLI `json:"modelSurface,omitempty"`
 	DiscoveredModelSurface *agentModelSurfaceCLI `json:"discoveredModelSurface,omitempty"`
 }
 
@@ -5167,6 +5175,16 @@ func runAgentCommand(in io.Reader, out io.Writer, opts agentCommandOptions) erro
 		}
 		_, _ = fmt.Fprintln(out, renderManagedAgentInstalledSkill(resp))
 		return nil
+	case "skills-reinstall":
+		resp, raw, err := reinstallManagedAgentSkill(opts.AgentID, opts.SkillName)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentReinstalledSkill(resp))
+		return nil
 	case "skills-update":
 		resp, raw, err := updateManagedAgentSkill(opts.AgentID, opts.SkillName, opts.Version)
 		if err != nil {
@@ -5186,6 +5204,17 @@ func runAgentCommand(in io.Reader, out io.Writer, opts agentCommandOptions) erro
 			return writePrettyJSON(out, raw)
 		}
 		_, _ = fmt.Fprintln(out, renderManagedAgentRemovedSkill(resp))
+		return nil
+	case "skills-enable", "skills-disable":
+		enabled := opts.Action == "skills-enable"
+		resp, raw, err := setManagedAgentSkillEnabled(opts.AgentID, opts.SkillName, enabled)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentSkillToggle(opts.SkillName, enabled, resp))
 		return nil
 	case "subagents-list":
 		resp, raw, err := listManagedAgentSubagents(opts.AgentID, opts.Limit)
@@ -5445,6 +5474,19 @@ func installManagedAgentSkill(agentID, skillName string) (*agentSkillCLIResponse
 	return &resp, raw, nil
 }
 
+func reinstallManagedAgentSkill(agentID, skillName string) (*agentSkillCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/skills/reinstall", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]string{"name": strings.TrimSpace(skillName)})
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentSkillCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent skill reinstall response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
 func updateManagedAgentSkill(agentID, skillName, version string) (*agentSkillCLIResponse, []byte, error) {
 	path := fmt.Sprintf("/api/v1/agents/%s/skills/update", neturl.PathEscape(strings.TrimSpace(agentID)))
 	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]string{
@@ -5470,6 +5512,19 @@ func uninstallManagedAgentSkill(agentID, skillName string) (*agentSkillCLIRespon
 	var resp agentSkillCLIResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, nil, fmt.Errorf("decode agent skill uninstall response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func setManagedAgentSkillEnabled(agentID, skillName string, enabled bool) (*baseagent.RuntimeCapabilitySummary, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/skills/%s", neturl.PathEscape(strings.TrimSpace(agentID)), neturl.PathEscape(strings.TrimSpace(skillName)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]bool{"enabled": enabled})
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp baseagent.RuntimeCapabilitySummary
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent skill toggle response: %w", err)
 	}
 	return &resp, raw, nil
 }
@@ -5529,14 +5584,14 @@ func updateManagedAgentModelsDefault(agentID, profileName string) (*agentModelsC
 func updateManagedAgentModelProfile(opts agentCommandOptions) (*agentModelsCLIResponse, []byte, error) {
 	path := fmt.Sprintf("/api/v1/agents/%s/models/profile", neturl.PathEscape(strings.TrimSpace(opts.AgentID)))
 	payload := map[string]any{
-		"profileName": strings.TrimSpace(opts.ProfileName),
-		"modelAlias": strings.TrimSpace(opts.ModelAlias),
-		"modelId": strings.TrimSpace(opts.Model),
-		"providerId": strings.TrimSpace(opts.Provider),
-		"baseUrl": strings.TrimSpace(opts.BaseURL),
-		"authMethod": strings.TrimSpace(opts.AuthMethod),
-		"timeoutMs": opts.TimeoutMs,
-		"retryBudget": opts.RetryBudget,
+		"profileName":      strings.TrimSpace(opts.ProfileName),
+		"modelAlias":       strings.TrimSpace(opts.ModelAlias),
+		"modelId":          strings.TrimSpace(opts.Model),
+		"providerId":       strings.TrimSpace(opts.Provider),
+		"baseUrl":          strings.TrimSpace(opts.BaseURL),
+		"authMethod":       strings.TrimSpace(opts.AuthMethod),
+		"timeoutMs":        opts.TimeoutMs,
+		"retryBudget":      opts.RetryBudget,
 		"fallbackStrategy": strings.TrimSpace(opts.FallbackStrategy),
 	}
 	raw, _, err := gatewayRequest(http.MethodPost, path, payload)
@@ -5712,34 +5767,22 @@ func renderManagedAgentSkillSearch(resp *agentSkillsSearchCLIResponse) string {
 }
 
 func renderManagedAgentInstalledSkill(resp *agentSkillCLIResponse) string {
-	if resp == nil {
-		return ""
-	}
-	label := strings.TrimSpace(resp.Name)
-	if label == "" {
-		label = "unknown-skill"
-	}
-	line := "installed " + label
-	if strings.TrimSpace(resp.Summary) != "" {
-		line += " · " + strings.TrimSpace(resp.Summary)
-	}
-	meta := []string{}
-	if strings.TrimSpace(resp.Source) != "" {
-		meta = append(meta, strings.TrimSpace(resp.Source))
-	}
-	if strings.TrimSpace(resp.Version) != "" {
-		meta = append(meta, strings.TrimSpace(resp.Version))
-	}
-	if len(meta) > 0 {
-		line += " · " + strings.Join(meta, " ")
-	}
-	if strings.TrimSpace(resp.TargetVersion) != "" {
-		line += " · target=" + strings.TrimSpace(resp.TargetVersion)
-	}
-	return line
+	return renderManagedAgentSkillLifecycle("installed", resp)
+}
+
+func renderManagedAgentReinstalledSkill(resp *agentSkillCLIResponse) string {
+	return renderManagedAgentSkillLifecycle("reinstalled", resp)
 }
 
 func renderManagedAgentUpdatedSkill(resp *agentSkillCLIResponse) string {
+	return renderManagedAgentSkillLifecycle("updated", resp)
+}
+
+func renderManagedAgentRemovedSkill(resp *agentSkillCLIResponse) string {
+	return renderManagedAgentSkillLifecycle("removed", resp)
+}
+
+func renderManagedAgentSkillLifecycle(action string, resp *agentSkillCLIResponse) string {
 	if resp == nil {
 		return ""
 	}
@@ -5747,7 +5790,7 @@ func renderManagedAgentUpdatedSkill(resp *agentSkillCLIResponse) string {
 	if label == "" {
 		label = "unknown-skill"
 	}
-	line := "updated " + label
+	line := strings.TrimSpace(action) + " " + label
 	if strings.TrimSpace(resp.Summary) != "" {
 		line += " · " + strings.TrimSpace(resp.Summary)
 	}
@@ -5764,30 +5807,42 @@ func renderManagedAgentUpdatedSkill(resp *agentSkillCLIResponse) string {
 	if strings.TrimSpace(resp.TargetVersion) != "" {
 		line += " · target=" + strings.TrimSpace(resp.TargetVersion)
 	}
+	if strings.TrimSpace(resp.Provenance) != "" {
+		line += " · provenance=" + strings.TrimSpace(resp.Provenance)
+	}
+	if strings.TrimSpace(resp.InstalledAt) != "" {
+		line += " · installed=" + strings.TrimSpace(resp.InstalledAt)
+	}
+	if strings.TrimSpace(resp.UpdatedAt) != "" {
+		line += " · updated=" + strings.TrimSpace(resp.UpdatedAt)
+	}
 	return line
 }
 
-func renderManagedAgentRemovedSkill(resp *agentSkillCLIResponse) string {
-	if resp == nil {
-		return ""
-	}
-	label := strings.TrimSpace(resp.Name)
+func renderManagedAgentSkillToggle(skillName string, enabled bool, summary *baseagent.RuntimeCapabilitySummary) string {
+	label := strings.TrimSpace(skillName)
 	if label == "" {
 		label = "unknown-skill"
 	}
-	line := "removed " + label
-	if strings.TrimSpace(resp.Summary) != "" {
-		line += " · " + strings.TrimSpace(resp.Summary)
+	state := "disabled"
+	if enabled {
+		state = "enabled"
 	}
-	meta := []string{}
-	if strings.TrimSpace(resp.Source) != "" {
-		meta = append(meta, strings.TrimSpace(resp.Source))
+	line := fmt.Sprintf("%s %s", state, label)
+	if summary == nil {
+		return line
 	}
-	if strings.TrimSpace(resp.Version) != "" {
-		meta = append(meta, strings.TrimSpace(resp.Version))
-	}
-	if len(meta) > 0 {
-		line += " · " + strings.Join(meta, " ")
+	line += fmt.Sprintf(" · installed=%d enabled=%d disabled=%d", summary.SkillSummary.InstalledCount, summary.SkillSummary.EnabledCount, summary.SkillSummary.DisabledCount)
+	for _, skill := range summary.Skills {
+		if strings.EqualFold(strings.TrimSpace(skill.Name), label) {
+			if strings.TrimSpace(skill.Health) != "" {
+				line += " · health=" + strings.TrimSpace(skill.Health)
+			}
+			if strings.TrimSpace(skill.RemediationHint) != "" {
+				line += " · hint=" + strings.TrimSpace(skill.RemediationHint)
+			}
+			break
+		}
 	}
 	return line
 }

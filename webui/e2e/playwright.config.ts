@@ -9,7 +9,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: process.env.CI ? 'github' : 'list',
   use: {
-    baseURL: 'http://localhost:9090',
+    baseURL: 'http://localhost:19090',
     trace: 'on-first-retry',
   },
   projects: [
@@ -19,8 +19,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'bunx serve ../static -l 9090 -s',
-    port: 9090,
+    command: 'bunx serve -l 19090 -s ../static',
+    port: 19090,
     reuseExistingServer: !process.env.CI,
   },
 });

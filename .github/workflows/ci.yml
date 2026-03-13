@@ -734,19 +734,24 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
+        with:
+          bun-version: latest
+
       - name: Install dependencies
         working-directory: webui/e2e
         run: npm ci
 
       - name: Install Playwright browsers
         working-directory: webui/e2e
-        run: npx playwright install --with-deps chromium
+        run: bunx playwright install --with-deps chromium
 
       - name: Run Playwright tests
         working-directory: webui/e2e
         env:
           SKIP_REAL_API: '1'
-        run: npx playwright test --update-snapshots
+        run: bunx playwright test --update-snapshots
 
       - name: Upload visual snapshots
         if: always()

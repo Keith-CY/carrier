@@ -328,6 +328,19 @@ func (c *DaemonClient) InstallAgentSkill(ctx context.Context, agentID, skillName
 	return installed, nil
 }
 
+func (c *DaemonClient) ReinstallAgentSkill(ctx context.Context, agentID, skillName, actor, requestID string) (baseagent.SkillDefinition, error) {
+	body := map[string]string{"name": strings.TrimSpace(skillName)}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/skills/reinstall", body, actor, requestID)
+	if err != nil {
+		return baseagent.SkillDefinition{}, err
+	}
+	var reinstalled baseagent.SkillDefinition
+	if err := json.Unmarshal(raw, &reinstalled); err != nil {
+		return baseagent.SkillDefinition{}, fmt.Errorf("skill reinstall response: %w", err)
+	}
+	return reinstalled, nil
+}
+
 func (c *DaemonClient) UpdateAgentSkill(ctx context.Context, agentID, skillName, version, actor, requestID string) (baseagent.SkillDefinition, error) {
 	body := map[string]string{
 		"name":    strings.TrimSpace(skillName),

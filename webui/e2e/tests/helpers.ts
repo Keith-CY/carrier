@@ -1428,8 +1428,17 @@ export async function loginWithToken(page: Page, url = '/', waitUntil: 'load' | 
     localStorage.setItem('carrier_token', token);
   }, TEST_TOKEN);
   const targetPath = normalizeTestRoute(url);
-  await page.goto('/', { waitUntil });
-  await page.locator('#logout-btn').waitFor({ state: 'visible' });
+  await page.goto('/index.html', { waitUntil });
+  await page.locator('#header').waitFor({ state: 'visible' });
+  await page.waitForFunction(() => {
+    const overlay = document.querySelector('#login-overlay');
+    const logout = document.querySelector('#logout-btn');
+    const nav = document.querySelector('#nav');
+    const overlayHidden = !!overlay && overlay.classList.contains('hidden');
+    const logoutReady = !!logout && !logout.classList.contains('hidden');
+    const navReady = !!nav && !nav.classList.contains('hidden');
+    return overlayHidden && (logoutReady || navReady);
+  });
   if (targetPath !== '/') {
     await pushHistoryRoute(page, targetPath);
   }

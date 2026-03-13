@@ -80,6 +80,7 @@ type baseAgentRuntime interface {
 	CapabilitySummary(ctx context.Context) baseagent.RuntimeCapabilitySummary
 	SearchSkills(ctx context.Context, query string) []baseagent.SkillDefinition
 	InstallSkill(ctx context.Context, name string) (baseagent.SkillDefinition, error)
+	ReinstallSkill(ctx context.Context, name string) (baseagent.SkillDefinition, error)
 	UpdateSkill(ctx context.Context, name, version string) (baseagent.SkillDefinition, error)
 	UninstallSkill(ctx context.Context, name string) (baseagent.SkillDefinition, error)
 	RecentSubagentJobs(ctx context.Context, limit int) []baseagent.SubagentJob
@@ -1751,6 +1752,29 @@ func handleAgentSkill(svc *lifecycle.Service, runtime baseAgentRuntime, agentID,
 			return
 		}
 		writeJSON(w, http.StatusOK, installed)
+		return
+	case "reinstall":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body struct {
+			Name string `json:"name"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		name := strings.TrimSpace(body.Name)
+		if name == "" {
+			writeJSONError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		reinstalled, err := runtime.ReinstallSkill(r.Context(), name)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, reinstalled)
 		return
 	case "update":
 		if r.Method != http.MethodPost {

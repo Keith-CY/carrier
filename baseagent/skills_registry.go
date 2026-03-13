@@ -157,12 +157,60 @@ func (r *SkillsRegistry) InstallSkill(ctx context.Context, name string) (SkillDe
 	if strings.TrimSpace(meta.InstalledAt) == "" {
 		meta.InstalledAt = now
 	}
-	meta.Provenance = buildSkillProvenanceSummary("install", skill)
+	meta.Provenance = appendSkillProvenanceHistory(meta.Provenance, buildSkillProvenanceSummary("install", skill))
 	metadataByName[name] = normalizeSkillLifecycleMetadata(meta)
 	if err := r.store.SetSkillMetadata(ctx, metadataByName); err != nil {
 		return SkillDefinition{}, err
 	}
 	return hydrateSkillDefinition(skill, nil, metadataByName, true), nil
+}
+
+func (r *SkillsRegistry) ReinstallSkill(ctx context.Context, name string) (SkillDefinition, error) {
+	if r == nil {
+		return SkillDefinition{}, fmt.Errorf("skills registry is unavailable")
+	}
+	name = strings.TrimSpace(strings.ToLower(name))
+	if name == "" {
+		return SkillDefinition{}, fmt.Errorf("skill name is required")
+	}
+	skill, ok := r.catalog[name]
+	if !ok {
+		return SkillDefinition{}, fmt.Errorf("skill %q is not available", name)
+	}
+	installedNames, err := r.store.ListInstalledSkillNames(ctx)
+	if err != nil {
+		return SkillDefinition{}, err
+	}
+	installedSet := map[string]struct{}{}
+	for _, installed := range installedNames {
+		installedSet[installed] = struct{}{}
+	}
+	if _, ok := installedSet[name]; !ok {
+		return SkillDefinition{}, fmt.Errorf("skill %q is not installed", name)
+	}
+	metadataByName, err := r.store.ListSkillMetadata(ctx)
+	if err != nil {
+		return SkillDefinition{}, err
+	}
+	if metadataByName == nil {
+		metadataByName = map[string]SkillLifecycleMetadata{}
+	}
+	meta := metadataByName[name]
+	now := skillsRegistryNow().UTC().Format(time.RFC3339)
+	if strings.TrimSpace(meta.InstalledAt) == "" {
+		meta.InstalledAt = now
+	}
+	meta.UpdatedAt = now
+	meta.Provenance = appendSkillProvenanceHistory(meta.Provenance, buildSkillProvenanceSummary("reinstall", skill))
+	metadataByName[name] = normalizeSkillLifecycleMetadata(meta)
+	if err := r.store.SetSkillMetadata(ctx, metadataByName); err != nil {
+		return SkillDefinition{}, err
+	}
+	versionPins, err := r.store.ListSkillVersionPins(ctx)
+	if err != nil {
+		return SkillDefinition{}, err
+	}
+	return hydrateSkillDefinition(skill, versionPins, metadataByName, true), nil
 }
 
 func (r *SkillsRegistry) UpdateSkill(ctx context.Context, name, version string) (SkillDefinition, error) {
@@ -217,7 +265,7 @@ func (r *SkillsRegistry) UpdateSkill(ctx context.Context, name, version string) 
 		meta.InstalledAt = now
 	}
 	meta.UpdatedAt = now
-	meta.Provenance = buildSkillProvenanceSummary("update", skill)
+	meta.Provenance = appendSkillProvenanceHistory(meta.Provenance, buildSkillProvenanceSummary("update", skill))
 	metadataByName[name] = normalizeSkillLifecycleMetadata(meta)
 	if err := r.store.SetSkillMetadata(ctx, metadataByName); err != nil {
 		return SkillDefinition{}, err
@@ -574,10 +622,27 @@ func buildSkillProvenanceSummary(action string, skill SkillDefinition) string {
 	switch strings.TrimSpace(strings.ToLower(action)) {
 	case "install":
 		return "managed install via " + source
+	case "reinstall":
+		return "managed reinstall via " + source
 	case "update":
 		return "managed update via " + source
 	default:
 		return source
+	}
+}
+
+func appendSkillProvenanceHistory(existing, next string) string {
+	existing = strings.TrimSpace(existing)
+	next = strings.TrimSpace(next)
+	switch {
+	case existing == "":
+		return next
+	case next == "":
+		return existing
+	case strings.Contains(existing, next):
+		return existing
+	default:
+		return existing + " -> " + next
 	}
 }
 

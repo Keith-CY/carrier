@@ -35,10 +35,10 @@ type agentLauncherMediaRuntime struct {
 }
 
 type agentLauncherRemediation struct {
-	Category        string `json:"category,omitempty"`
-	Summary         string `json:"summary,omitempty"`
-	Detail          string `json:"detail,omitempty"`
-	RemediationHint string `json:"remediationHint,omitempty"`
+	Category        string                          `json:"category,omitempty"`
+	Summary         string                          `json:"summary,omitempty"`
+	Detail          string                          `json:"detail,omitempty"`
+	RemediationHint string                          `json:"remediationHint,omitempty"`
 	Action          *agentLauncherRemediationAction `json:"action,omitempty"`
 }
 
@@ -478,6 +478,40 @@ func buildAgentLauncherRemediations(
 		}
 	}
 runtimeRemediations:
+	for _, skill := range capabilities.Skills {
+		name := strings.TrimSpace(skill.Name)
+		if name == "" {
+			continue
+		}
+		if !skill.Enabled {
+			remediations = append(remediations, agentLauncherRemediation{
+				Category:        "skills",
+				Summary:         "One or more installed skills are disabled. Enable them to restore runtime guidance and tools.",
+				Detail:          fmt.Sprintf("skill=%s state=disabled", name),
+				RemediationHint: firstNonEmpty(strings.TrimSpace(skill.RemediationHint), "Enable the skill to expose its runtime guidance and tools."),
+				Action: &agentLauncherRemediationAction{
+					Kind:   "enable-skill",
+					Label:  fmt.Sprintf("Enable %s", name),
+					Target: name,
+				},
+			})
+			break
+		}
+		if strings.EqualFold(strings.TrimSpace(skill.Health), "degraded") || skill.UpdateAvailable {
+			remediations = append(remediations, agentLauncherRemediation{
+				Category:        "skills",
+				Summary:         "One or more installed skills are degraded. Reinstall them to restore a healthy runtime surface.",
+				Detail:          fmt.Sprintf("skill=%s health=%s", name, firstNonEmpty(strings.TrimSpace(skill.Health), "unknown")),
+				RemediationHint: firstNonEmpty(strings.TrimSpace(skill.RemediationHint), "Reinstall the skill to restore a healthy runtime surface."),
+				Action: &agentLauncherRemediationAction{
+					Kind:   "reinstall-skill",
+					Label:  fmt.Sprintf("Reinstall %s", name),
+					Target: name,
+				},
+			})
+			break
+		}
+	}
 	if session != nil {
 		runtimeState := strings.TrimSpace(session.RuntimeState)
 		if runtimeState != "" && runtimeState != "running" {

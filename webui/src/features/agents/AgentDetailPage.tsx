@@ -317,13 +317,27 @@ function buildLauncherRemediations(launcher: AgentLauncherSummary | undefined): 
       action: { kind: 'resume-cron', label: 'Resume paused cron', target: '' },
     });
   }
-  if (Array.isArray(launcher.capabilities?.skills) && launcher.capabilities.skills.some((skill) => !!skill.updateAvailable)) {
-    remediations = appendUniqueRemediation(remediations, {
-      category: 'skills',
-      summary: 'One or more installed skills have updates pending. Review version drift and update pinned skills.',
-      detail: '',
-      remediationHint: '',
-    });
+  if (Array.isArray(launcher.capabilities?.skills)) {
+    const disabledSkill = launcher.capabilities.skills.find((skill) => skill.name && skill.enabled === false);
+    if (disabledSkill?.name) {
+      remediations = appendUniqueRemediation(remediations, {
+        category: 'skills',
+        summary: 'One or more installed skills are disabled. Enable them to restore runtime guidance and tools.',
+        detail: `skill=${String(disabledSkill.name)}`,
+        remediationHint: String(disabledSkill.remediationHint || '').trim(),
+        action: { kind: 'enable-skill', label: `Enable ${String(disabledSkill.name)}`, target: String(disabledSkill.name) },
+      });
+    }
+    const degradedSkill = launcher.capabilities.skills.find((skill) => skill.name && (String(skill.health || '').trim() === 'degraded' || !!skill.updateAvailable));
+    if (degradedSkill?.name) {
+      remediations = appendUniqueRemediation(remediations, {
+        category: 'skills',
+        summary: 'One or more installed skills are degraded. Reinstall them to restore a healthy runtime surface.',
+        detail: `skill=${String(degradedSkill.name)} health=${String(degradedSkill.health || 'unknown')}`,
+        remediationHint: String(degradedSkill.remediationHint || '').trim(),
+        action: { kind: 'reinstall-skill', label: `Reinstall ${String(degradedSkill.name)}`, target: String(degradedSkill.name) },
+      });
+    }
   }
   if (Array.isArray(launcher.capabilities?.mcp?.servers) && launcher.capabilities.mcp.servers.some((server) => server.attached === false)) {
     remediations = appendUniqueRemediation(remediations, {
@@ -463,6 +477,21 @@ export function AgentDetailPage() {
     onSuccess: async (installed) => {
       const installedName = String(installed.name || '').trim() || 'unknown-skill';
       setLastActionMessage(`Installed skill ${installedName}.`);
+      await capabilitiesQuery.refetch();
+      await launcherQuery.refetch();
+    },
+    onError: (error) => {
+      setLastActionMessage((error as Error).message);
+    },
+  });
+
+  const skillReinstallMutation = useMutation({
+    mutationFn: async (skillName: string) => {
+      return apiPost<AgentSkillCatalogEntry>(`/api/v1/agents/${encodeURIComponent(agentId)}/skills/reinstall`, { name: skillName });
+    },
+    onSuccess: async (reinstalled) => {
+      const reinstalledName = String(reinstalled.name || '').trim() || 'unknown-skill';
+      setLastActionMessage(`Reinstalled skill ${reinstalledName}.`);
       await capabilitiesQuery.refetch();
       await launcherQuery.refetch();
     },
@@ -762,6 +791,16 @@ export function AgentDetailPage() {
         if (serverName) mcpAttachMutation.mutate({ serverName, attached: true });
         return;
       }
+      case 'enable-skill':
+        if (action.target) {
+          skillToggleMutation.mutate({ skillName: action.target, enabled: true });
+        }
+        return;
+      case 'reinstall-skill':
+        if (action.target) {
+          skillReinstallMutation.mutate(action.target);
+        }
+        return;
       case 'inspect-mcp':
         setSelectedMCPServerName(action.target);
         return;
@@ -1322,6 +1361,14 @@ export function AgentDetailPage() {
                             onClick={() => skillToggleMutation.mutate({ skillName: String(skill.name), enabled: !skill.enabled })}
                           >
                             {skill.enabled ? 'Disable' : 'Enable'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={skillReinstallMutation.isPending}
+                            onClick={() => skillReinstallMutation.mutate(String(skill.name))}
+                          >
+                            Reinstall
                           </button>
                           <button
                             type="button"

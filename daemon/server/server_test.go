@@ -27,6 +27,7 @@ type fakeBaseAgentRuntime struct {
 	approvalErr         error
 	speakErr            error
 	installSkill        baseagent.SkillDefinition
+	reinstallSkill      baseagent.SkillDefinition
 	updateSkill         baseagent.SkillDefinition
 	uninstallSkill      baseagent.SkillDefinition
 	searchSkills        []baseagent.SkillDefinition
@@ -56,6 +57,7 @@ type fakeBaseAgentRuntime struct {
 	mcpToggleCall       int
 	searchSkillsCall    int
 	installSkillCall    int
+	reinstallSkillCall  int
 	updateSkillCall     int
 	uninstallSkillCall  int
 	lastReq             baseagent.ChatRequest
@@ -73,6 +75,7 @@ type fakeBaseAgentRuntime struct {
 	lastMCPAttached     bool
 	lastMCPConfig       string
 	lastInstallSkill    string
+	lastReinstallSkill  string
 	lastUpdateSkill     string
 	lastUpdateVersion   string
 	lastUninstallSkill  string
@@ -134,6 +137,15 @@ func (f *fakeBaseAgentRuntime) InstallSkill(_ context.Context, name string) (bas
 		f.installSkill = baseagent.SkillDefinition{Name: name, Summary: "installed skill"}
 	}
 	return f.installSkill, nil
+}
+
+func (f *fakeBaseAgentRuntime) ReinstallSkill(_ context.Context, name string) (baseagent.SkillDefinition, error) {
+	f.reinstallSkillCall++
+	f.lastReinstallSkill = name
+	if f.reinstallSkill.Name == "" {
+		f.reinstallSkill = baseagent.SkillDefinition{Name: name, Summary: "reinstalled skill"}
+	}
+	return f.reinstallSkill, nil
 }
 
 func (f *fakeBaseAgentRuntime) UpdateSkill(_ context.Context, name, version string) (baseagent.SkillDefinition, error) {
@@ -450,6 +462,7 @@ func TestAgentSkillSearchAndInstallEndpoints(t *testing.T) {
 			{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3"},
 		},
 		installSkill:   baseagent.SkillDefinition{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3"},
+		reinstallSkill: baseagent.SkillDefinition{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3"},
 		updateSkill:    baseagent.SkillDefinition{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3", TargetVersion: "v2.0.0"},
 		uninstallSkill: baseagent.SkillDefinition{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3"},
 	}
@@ -493,6 +506,20 @@ func TestAgentSkillSearchAndInstallEndpoints(t *testing.T) {
 	}
 	if !strings.Contains(installRec.Body.String(), `"source":"catalog"`) || !strings.Contains(installRec.Body.String(), `"version":"v1.2.3"`) {
 		t.Fatalf("expected install metadata in body: %s", installRec.Body.String())
+	}
+
+	reinstallReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/reinstall", strings.NewReader(`{"name":"workspace-inspection"}`))
+	reinstallReq.Header.Set("Content-Type", "application/json")
+	reinstallRec := httptest.NewRecorder()
+	mux.ServeHTTP(reinstallRec, reinstallReq)
+	if reinstallRec.Code != http.StatusOK {
+		t.Fatalf("expected reinstall 200, got %d body=%s", reinstallRec.Code, reinstallRec.Body.String())
+	}
+	if rt.reinstallSkillCall != 1 || rt.lastReinstallSkill != "workspace-inspection" {
+		t.Fatalf("unexpected skill reinstall state: %+v", rt)
+	}
+	if !strings.Contains(reinstallRec.Body.String(), `"workspace-inspection"`) || !strings.Contains(reinstallRec.Body.String(), `"version":"v1.2.3"`) {
+		t.Fatalf("unexpected skill reinstall body: %s", reinstallRec.Body.String())
 	}
 
 	updateReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/update", strings.NewReader(`{"name":"workspace-inspection","version":"v2.0.0"}`))

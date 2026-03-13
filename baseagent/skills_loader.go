@@ -28,6 +28,7 @@ type SkillsLoader interface {
 	ListInstalledSkills(ctx context.Context) []SkillDefinition
 	SearchSkills(ctx context.Context, query string) []SkillDefinition
 	InstallSkill(ctx context.Context, name string) (SkillDefinition, error)
+	ReinstallSkill(ctx context.Context, name string) (SkillDefinition, error)
 	UpdateSkill(ctx context.Context, name, version string) (SkillDefinition, error)
 	UninstallSkill(ctx context.Context, name string) (SkillDefinition, error)
 }

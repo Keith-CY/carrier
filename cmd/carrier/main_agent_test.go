@@ -104,6 +104,14 @@ func TestParseAgentCommandArgs(t *testing.T) {
 		t.Fatalf("unexpected skills install opts: %+v", skillInstallOpts)
 	}
 
+	skillReinstallOpts, err := parseAgentCommandArgs([]string{"skills", "reinstall", "picoclaw", "workspace-inspection", "--json"})
+	if err != nil {
+		t.Fatalf("parseAgentCommandArgs(skills reinstall) error: %v", err)
+	}
+	if skillReinstallOpts.Action != "skills-reinstall" || skillReinstallOpts.AgentID != "picoclaw" || skillReinstallOpts.SkillName != "workspace-inspection" || !skillReinstallOpts.JSON {
+		t.Fatalf("unexpected skills reinstall opts: %+v", skillReinstallOpts)
+	}
+
 	skillUninstallOpts, err := parseAgentCommandArgs([]string{"skills", "uninstall", "picoclaw", "workspace-inspection", "--json"})
 	if err != nil {
 		t.Fatalf("parseAgentCommandArgs(skills uninstall) error: %v", err)
@@ -118,6 +126,22 @@ func TestParseAgentCommandArgs(t *testing.T) {
 	}
 	if skillUpdateOpts.Action != "skills-update" || skillUpdateOpts.AgentID != "picoclaw" || skillUpdateOpts.SkillName != "workspace-inspection" || skillUpdateOpts.Version != "v2.0.0" || !skillUpdateOpts.JSON {
 		t.Fatalf("unexpected skills update opts: %+v", skillUpdateOpts)
+	}
+
+	skillEnableOpts, err := parseAgentCommandArgs([]string{"skills", "enable", "picoclaw", "workspace-inspection", "--json"})
+	if err != nil {
+		t.Fatalf("parseAgentCommandArgs(skills enable) error: %v", err)
+	}
+	if skillEnableOpts.Action != "skills-enable" || skillEnableOpts.AgentID != "picoclaw" || skillEnableOpts.SkillName != "workspace-inspection" || !skillEnableOpts.JSON {
+		t.Fatalf("unexpected skills enable opts: %+v", skillEnableOpts)
+	}
+
+	skillDisableOpts, err := parseAgentCommandArgs([]string{"skills", "disable", "picoclaw", "workspace-inspection", "--json"})
+	if err != nil {
+		t.Fatalf("parseAgentCommandArgs(skills disable) error: %v", err)
+	}
+	if skillDisableOpts.Action != "skills-disable" || skillDisableOpts.AgentID != "picoclaw" || skillDisableOpts.SkillName != "workspace-inspection" || !skillDisableOpts.JSON {
+		t.Fatalf("unexpected skills disable opts: %+v", skillDisableOpts)
 	}
 
 	modelsOpts, err := parseAgentCommandArgs([]string{"models", "picoclaw", "--json"})
@@ -273,6 +297,17 @@ func TestRunAgentCommand(t *testing.T) {
 				t.Fatalf("skill install name=%v want workspace-inspection", body["name"])
 			}
 			_, _ = w.Write([]byte(`{"name":"workspace-inspection","summary":"Inspect workspace state.","source":"catalog","version":"v1.2.3"}`))
+		case "/api/v1/agents/picoclaw/skills/reinstall":
+			if r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["name"] != "workspace-inspection" {
+				t.Fatalf("skill reinstall name=%v want workspace-inspection", body["name"])
+			}
+			_, _ = w.Write([]byte(`{"name":"workspace-inspection","summary":"Inspect workspace state.","source":"catalog","version":"v1.2.3","provenance":"managed install via catalog -> managed reinstall via catalog","installedAt":"2026-03-13T10:00:00Z","updatedAt":"2026-03-13T10:30:00Z"}`))
 		case "/api/v1/agents/picoclaw/skills/update":
 			if r.Method != http.MethodPost {
 				http.NotFound(w, r)
@@ -298,6 +333,19 @@ func TestRunAgentCommand(t *testing.T) {
 				t.Fatalf("skill uninstall name=%v want workspace-inspection", body["name"])
 			}
 			_, _ = w.Write([]byte(`{"name":"workspace-inspection","summary":"Inspect workspace state.","source":"catalog","version":"v1.2.3"}`))
+		case "/api/v1/agents/picoclaw/skills/workspace-inspection":
+			if r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			enabled, _ := body["enabled"].(bool)
+			if enabled {
+				_, _ = w.Write([]byte(`{"skillSummary":{"installedCount":1,"enabledCount":1,"disabledCount":0},"skills":[{"name":"workspace-inspection","enabled":true,"health":"healthy"}]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"skillSummary":{"installedCount":1,"enabledCount":0,"disabledCount":1},"skills":[{"name":"workspace-inspection","enabled":false,"health":"healthy","remediationHint":"Enable the skill to expose its runtime guidance and tools."}]}`))
 		case "/api/v1/agents/picoclaw/models":
 			if r.Method != http.MethodGet {
 				http.NotFound(w, r)
@@ -466,11 +514,35 @@ func TestRunAgentCommand(t *testing.T) {
 	}
 
 	out.Reset()
+	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "skills-reinstall", AgentID: "picoclaw", SkillName: "workspace-inspection"}); err != nil {
+		t.Fatalf("runAgentCommand(skills reinstall) error: %v", err)
+	}
+	if !strings.Contains(out.String(), "reinstalled workspace-inspection") || !strings.Contains(out.String(), "managed reinstall via catalog") {
+		t.Fatalf("skills reinstall output=%s", out.String())
+	}
+
+	out.Reset()
 	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "skills-update", AgentID: "picoclaw", SkillName: "workspace-inspection", Version: "v2.0.0"}); err != nil {
 		t.Fatalf("runAgentCommand(skills update) error: %v", err)
 	}
 	if !strings.Contains(out.String(), "updated workspace-inspection") || !strings.Contains(out.String(), "target=v2.0.0") {
 		t.Fatalf("skills update output=%s", out.String())
+	}
+
+	out.Reset()
+	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "skills-enable", AgentID: "picoclaw", SkillName: "workspace-inspection"}); err != nil {
+		t.Fatalf("runAgentCommand(skills enable) error: %v", err)
+	}
+	if !strings.Contains(out.String(), "enabled workspace-inspection") || !strings.Contains(out.String(), "enabled=1") {
+		t.Fatalf("skills enable output=%s", out.String())
+	}
+
+	out.Reset()
+	if err := runAgentCommand(strings.NewReader(""), &out, agentCommandOptions{Action: "skills-disable", AgentID: "picoclaw", SkillName: "workspace-inspection"}); err != nil {
+		t.Fatalf("runAgentCommand(skills disable) error: %v", err)
+	}
+	if !strings.Contains(out.String(), "disabled workspace-inspection") || !strings.Contains(out.String(), "disabled=1") {
+		t.Fatalf("skills disable output=%s", out.String())
 	}
 
 	out.Reset()

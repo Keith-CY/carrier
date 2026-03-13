@@ -325,6 +325,24 @@ describe('AgentDetailPage', () => {
           headers: { 'Content-Type': 'application/json' },
         });
       }
+      if (url.endsWith('/api/v1/agents/agent-alpha/skills/reinstall')) {
+        return new Response(JSON.stringify({
+          name: 'go-testing',
+          summary: 'Use go test before claiming success.',
+          source: 'catalog',
+          provenance: 'managed install via catalog -> managed reinstall via catalog',
+          version: 'builtin',
+          targetVersion: 'v2.0.0',
+          installedAt: '2026-03-12T00:00:00Z',
+          updatedAt: '2026-03-12T00:10:00Z',
+          health: 'healthy',
+          updateStatus: 'current',
+          updateAvailable: false,
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       if (url.endsWith('/api/v1/agents/agent-alpha/skills/uninstall')) {
         return new Response(JSON.stringify({
           name: 'go-testing',
@@ -592,6 +610,22 @@ describe('AgentDetailPage', () => {
     );
   });
 
+  test('reinstalls degraded skills through managed skill endpoint', async () => {
+    renderAgentDetailPage();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reinstall' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Reinstall' }));
+
+    await waitFor(() => expect(screen.getByText(/Reinstalled skill go-testing\./i)).toBeInTheDocument());
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/skills/reinstall'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ name: 'go-testing' }),
+      }),
+    );
+  });
+
   test('toggles MCP server state through the agent MCP endpoint', async () => {
     renderAgentDetailPage();
 
@@ -739,6 +773,8 @@ describe('AgentDetailPage', () => {
             { category: 'provider', summary: 'Provider authentication is not ready. Reconfigure credentials or switch to a ready profile.', detail: 'provider=openrouter auth=api_key', action: { kind: 'sync-model-surface', label: 'Sync model surface' } },
             { category: 'heartbeat', summary: 'Launcher heartbeat is stale. Restart the agent or inspect the managed runtime.', detail: 'state=stale age=240s', action: { kind: 'start-runtime', label: 'Start runtime' } },
             { category: 'cron', summary: 'One or more cron jobs are paused. Resume or cancel them to restore scheduled automation.', detail: 'job=cron-1 last=paused', action: { kind: 'resume-cron', label: 'Resume cron-1', target: 'cron-1' } },
+            { category: 'skills', summary: 'One or more installed skills are disabled. Enable them to restore runtime guidance and tools.', detail: 'skill=go-testing', remediationHint: 'Enable the skill to restore runtime guidance.', action: { kind: 'enable-skill', label: 'Enable go-testing', target: 'go-testing' } },
+            { category: 'skills', summary: 'One or more installed skills are degraded. Reinstall them to restore a healthy runtime surface.', detail: 'skill=go-testing health=degraded', remediationHint: 'Reinstall the skill to restore runtime guidance.', action: { kind: 'reinstall-skill', label: 'Reinstall go-testing', target: 'go-testing' } },
           ],
         }), {
           status: 200,
@@ -747,6 +783,27 @@ describe('AgentDetailPage', () => {
       }
       if (url.endsWith('/api/v1/agents/agent-alpha/models')) {
         return new Response(JSON.stringify({ agentId: 'agent-alpha', modelSurface: { profiles: [] } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/v1/agents/agent-alpha/skills/reinstall')) {
+        return new Response(JSON.stringify({
+          name: 'go-testing',
+          summary: 'Use go test before claiming success.',
+          source: 'catalog',
+          provenance: 'managed reinstall via catalog',
+          version: 'builtin',
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/v1/agents/agent-alpha/skills/go-testing')) {
+        return new Response(JSON.stringify({
+          skillSummary: { installedCount: 1, enabledCount: 1, disabledCount: 0 },
+          skills: [{ name: 'go-testing', enabled: true, summary: 'Use go test before claiming success.', source: 'catalog', version: 'builtin', health: 'healthy' }],
+        }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
@@ -766,11 +823,16 @@ describe('AgentDetailPage', () => {
     expect(screen.getByText(/restarts=3/i)).toBeInTheDocument();
     expect(screen.getByText(/lastError=provider timeout/i)).toBeInTheDocument();
     expect(screen.getByText(/triage=restart via launcher/i)).toBeInTheDocument();
+    expect(screen.getByText(/skill=go-testing health=degraded/i)).toBeInTheDocument();
     const remediationContainer = screen.getByText(/Remediation/i).parentElement;
     expect(remediationContainer).not.toBeNull();
     expect(within(remediationContainer as HTMLElement).getByRole('button', { name: /Sync model surface/i })).toBeInTheDocument();
     expect(within(remediationContainer as HTMLElement).getByRole('button', { name: /Start runtime/i })).toBeInTheDocument();
     expect(within(remediationContainer as HTMLElement).getByRole('button', { name: /Resume cron-1/i })).toBeInTheDocument();
+    fireEvent.click(within(remediationContainer as HTMLElement).getByRole('button', { name: /Enable go-testing/i }));
+    await waitFor(() => expect(screen.getByText(/Skill go-testing enabled\./i)).toBeInTheDocument());
+    fireEvent.click(within(remediationContainer as HTMLElement).getByRole('button', { name: /Reinstall go-testing/i }));
+    await waitFor(() => expect(screen.getByText(/Reinstalled skill go-testing\./i)).toBeInTheDocument());
   });
 
   test('loads dedicated model surface and syncs it on demand', async () => {

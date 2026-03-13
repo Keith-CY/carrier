@@ -31,29 +31,6 @@ var (
 	managedInstanceStoreMu    sync.Mutex
 )
 
-type managedAgentModelRuntimeRecord struct {
-	RequestedAlias    string `json:"requested_alias,omitempty"`
-	RequestedModel    string `json:"requested_model,omitempty"`
-	ResolvedModel     string `json:"resolved_model,omitempty"`
-	ResolvedProfile   string `json:"resolved_profile,omitempty"`
-	FallbackGroup     string `json:"fallback_group,omitempty"`
-	SelectionStrategy string `json:"selection_strategy,omitempty"`
-	SelectionOrdinal  int    `json:"selection_ordinal,omitempty"`
-	OverrideHit       bool   `json:"override_hit,omitempty"`
-	FallbackHit       bool   `json:"fallback_hit,omitempty"`
-	LastRunAt         string `json:"last_run_at,omitempty"`
-}
-
-type managedAgentInstanceRecord struct {
-	AgentID      string                          `json:"agent_id"`
-	ModelRuntime *managedAgentModelRuntimeRecord `json:"model_runtime,omitempty"`
-	UpdatedAt    string                          `json:"updated_at,omitempty"`
-}
-
-type managedAgentInstanceFileRecord struct {
-	Instances []managedAgentInstanceRecord `json:"instances"`
-}
-
 type zeroclawGatewayConfig struct {
 	Host           string
 	Port           int
@@ -297,14 +274,6 @@ func resolveManagedLimaCtlPath() (string, error) {
 	return "", fmt.Errorf("limactl executable not found for managed zeroclaw proxy")
 }
 
-func loadLocalZeroClawGatewayConfig() (zeroclawGatewayConfig, error) {
-	cfg, err := loadLocalZeroClawConfig()
-	if err != nil {
-		return zeroclawGatewayConfig{}, err
-	}
-	return cfg.Gateway, nil
-}
-
 func loadLocalZeroClawConfig() (zeroclawLocalConfig, error) {
 	home, err := userHomeDirFunc()
 	if err != nil {
@@ -487,10 +456,6 @@ func parseZeroClawLocalConfig(raw []byte) zeroclawLocalConfig {
 	}
 	flushProfile()
 	return cfg
-}
-
-func parseZeroClawGatewayConfig(raw []byte) zeroclawGatewayConfig {
-	return parseZeroClawLocalConfig(raw).Gateway
 }
 
 func buildManagedZeroClawModelOverride(cfg zeroclawLocalConfig, selectedModel string) (string, error) {

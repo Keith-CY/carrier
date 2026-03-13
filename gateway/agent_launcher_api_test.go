@@ -219,6 +219,9 @@ func TestHandleAgentLauncherReturnsStructuredRemediations(t *testing.T) {
 		},
 		"GET /api/v1/agents/agent-alpha/capabilities": func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"skills": []map[string]interface{}{
+					{"name": "workspace-inspection", "enabled": false, "health": "healthy", "remediationHint": "Enable the skill to expose its runtime guidance and tools."},
+				},
 				"mcp": map[string]interface{}{
 					"servers": []map[string]interface{}{
 						{"name": "repo", "health": "degraded", "attached": false, "remediationHint": "Attach MCP before expecting tools to appear."},
@@ -255,16 +258,19 @@ func TestHandleAgentLauncherReturnsStructuredRemediations(t *testing.T) {
 		`"category":"provider"`,
 		`"category":"heartbeat"`,
 		`"category":"cron"`,
+		`"category":"skills"`,
 		`"category":"mcp"`,
 		`"category":"delegation"`,
 		`"detail":"provider=openrouter auth=api_key"`,
 		`"detail":"state=stale age=240s"`,
 		`"detail":"job=cron-1 last=paused"`,
+		`"detail":"skill=workspace-inspection state=disabled"`,
 		`"detail":"server=repo health=degraded"`,
 		`"detail":"job=subagent-1 status=failed"`,
 		`"action":{"kind":"sync-model-surface","label":"Sync model surface"}`,
 		`"action":{"kind":"start-runtime","label":"Start runtime"}`,
 		`"action":{"kind":"resume-cron","label":"Resume cron-1","target":"cron-1"}`,
+		`"action":{"kind":"enable-skill","label":"Enable workspace-inspection","target":"workspace-inspection"}`,
 		`"action":{"kind":"attach-mcp","label":"Attach repo MCP","target":"repo"}`,
 		`"action":{"kind":"inspect-delegation","label":"Inspect subagent-1","target":"subagent-1"}`,
 		`"mediaRuntime":{"provider":"openrouter","status":"unavailable"`,
