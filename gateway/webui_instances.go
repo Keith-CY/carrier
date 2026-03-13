@@ -265,18 +265,23 @@ func handleWebUIInstance(w http.ResponseWriter, r *http.Request, requestID strin
 			writeDaemonAPIError(w, err)
 			return
 		}
+		warning = managedAgentMCPReconcileWarning(reconcileManagedAgentMCPState(r.Context(), daemon, inst.AgentID, requestID))
 		instances[idx].RuntimeState = "running"
 		instances[idx].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		if err := saveManagedInstances(path, instances); err != nil {
 			writeStatePersistenceError(w, requestID, action, inst.AgentID, inst.ID, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{
+		payload := map[string]interface{}{
 			"requestId": requestID,
 			"result":    "ok",
 			"action":    action,
 			"instance":  instances[idx],
-		})
+		}
+		if warning != "" {
+			payload["warning"] = warning
+		}
+		writeJSON(w, http.StatusOK, payload)
 		return
 	case "stop":
 		if err := daemon.StopAgent(r.Context(), inst.AgentID, actor, requestID); err != nil {

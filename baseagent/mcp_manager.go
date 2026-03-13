@@ -427,14 +427,22 @@ func (m *ManagedMCPManager) ServerDetail(name string) (MCPServerCapability, erro
 	if !attached {
 		detail.Health = "detached"
 		detail.HealthDetail = "server is detached from the managed runtime"
-		detail.RemediationHint = "Attach the MCP server and enable it to expose its tool surface."
+		if detail.ConfigDigest != "" {
+			detail.RemediationHint = "Attach the MCP server to re-apply the saved config and expose its tool surface."
+		} else {
+			detail.RemediationHint = "Attach the MCP server and enable it to expose its tool surface."
+		}
 	} else if enabled {
 		detail.Health = "healthy"
 		detail.HealthDetail = "connected to managed tool runtime"
 		detail.RemediationHint = "Disable MCP if the tool surface becomes noisy or conflicts with local tools."
 	} else {
 		detail.HealthDetail = "server is disabled"
-		detail.RemediationHint = "Enable MCP to expose its tool surface to the agent runtime."
+		if detail.ConfigDigest != "" {
+			detail.RemediationHint = "Enable MCP to expose its tool surface; the saved config will be reused."
+		} else {
+			detail.RemediationHint = "Enable MCP to expose its tool surface to the agent runtime."
+		}
 	}
 	for _, toolName := range m.toolOrder {
 		tool := m.tools[toolName]

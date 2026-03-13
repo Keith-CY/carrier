@@ -335,6 +335,10 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 					writeDaemonAPIError(w, err)
 					return
 				}
+				if persistErr := persistManagedAgentMCPServerDetail(agentID, detail); persistErr != nil {
+					writeStatePersistenceError(w, requestID, "mcp_"+subaction, agentID, "", persistErr)
+					return
+				}
 				writeJSON(w, http.StatusOK, detail)
 				return
 			case "config":
@@ -352,6 +356,10 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 				detail, err := daemon.UpdateAgentMCPServerConfig(r.Context(), agentID, serverName, body.Config, "webui:agents:mcp:config", requestID)
 				if err != nil {
 					writeDaemonAPIError(w, err)
+					return
+				}
+				if persistErr := persistManagedAgentMCPServerDetail(agentID, detail); persistErr != nil {
+					writeStatePersistenceError(w, requestID, "mcp_config", agentID, "", persistErr)
 					return
 				}
 				writeJSON(w, http.StatusOK, detail)
@@ -380,6 +388,10 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 			summary, err := daemon.SetAgentMCPServerEnabled(r.Context(), agentID, serverName, body.Enabled, "webui:agents:mcp", requestID)
 			if err != nil {
 				writeDaemonAPIError(w, err)
+				return
+			}
+			if persistErr := persistManagedAgentMCPSummary(agentID, summary.MCP); persistErr != nil {
+				writeStatePersistenceError(w, requestID, "mcp_toggle", agentID, "", persistErr)
 				return
 			}
 			writeJSON(w, http.StatusOK, summary)
@@ -541,6 +553,7 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 			return
 		}
 		var err error
+		warning := ""
 		actor := "webui:agents:" + action
 		switch action {
 		case "install":
@@ -564,16 +577,23 @@ func handleWebUIAgent(w http.ResponseWriter, r *http.Request, requestID string, 
 			writeDaemonAPIError(w, err)
 			return
 		}
+		if action == "start" {
+			warning = managedAgentMCPReconcileWarning(reconcileManagedAgentMCPState(r.Context(), daemon, agentID, requestID))
+		}
 		if syncErr := syncManagedInstanceByAgentAction(r, agentID, action); syncErr != nil {
 			writeStatePersistenceError(w, requestID, action, agentID, "", syncErr)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{
+		payload := map[string]interface{}{
 			"requestId": requestID,
 			"result":    "ok",
 			"agentId":   agentID,
 			"action":    action,
-		})
+		}
+		if warning != "" {
+			payload["warning"] = warning
+		}
+		writeJSON(w, http.StatusOK, payload)
 		return
 	default:
 		writeJSON(w, http.StatusNotFound, gatewayErrBody("E_USAGE", "unsupported agent action"))

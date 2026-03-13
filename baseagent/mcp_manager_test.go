@@ -445,6 +445,9 @@ func TestManagedMCPManagerAttachDetachAndConfig(t *testing.T) {
 	if detail.ConfigDigest == "" || !strings.Contains(detail.ConfigSummary, `"mode":"read"`) {
 		t.Fatalf("expected config metadata in detail, got %+v", detail)
 	}
+	if !strings.Contains(detail.RemediationHint, "saved config") {
+		t.Fatalf("expected remediation hint to mention saved config, got %+v", detail)
+	}
 
 	if err := manager.SetServerAttached(context.Background(), "repo", true); err != nil {
 		t.Fatalf("attach server: %v", err)

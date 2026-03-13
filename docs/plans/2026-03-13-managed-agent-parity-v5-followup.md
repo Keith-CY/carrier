@@ -61,7 +61,7 @@ Strengthen the live-provider smoke so media capability assertions are explicit:
 
 ### Task 46: Add Media Output Drill-Down To Evidence And UI
 
-**Status:** pending
+**Status:** completed on 2026-03-13
 
 Extend evidence and WebUI detail surfaces so operators can tell:
 - which outputs were generated media vs plain text
@@ -79,7 +79,7 @@ Extend the managed skill lifecycle with:
 
 ### Task 48: Add MCP Attach/Detach Runtime Controls
 
-**Status:** pending
+**Status:** completed on 2026-03-13
 
 Extend managed MCP controls beyond enable/disable/detail:
 - attach/detach lifecycle

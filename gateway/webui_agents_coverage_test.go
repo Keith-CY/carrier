@@ -748,3 +748,212 @@ func TestSyncManagedInstanceByAgentAction_Branches(t *testing.T) {
 		}
 	})
 }
+
+func TestHandleWebUIAgent_MCPPersistsManagedState(t *testing.T) {
+	tmp := t.TempDir()
+	storePath := filepath.Join(tmp, "instances.json")
+	t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := saveManagedInstances(storePath, []managedAgentInstance{{
+		ID:           "agent-alpha-default",
+		Type:         "managed-agent",
+		AgentID:      "agent-alpha",
+		RuntimeState: "running",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}}); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/agent-alpha/mcp/repo/detach": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"name":            "repo",
+				"health":          "detached",
+				"enabled":         false,
+				"attached":        false,
+				"healthDetail":    "server is detached from the managed runtime",
+				"remediationHint": "Attach the MCP server to re-apply the saved config and expose its tool surface.",
+				"configDigest":    "sha256:test-config",
+				"configSummary":   `{"mode":"read"}`,
+			})
+		},
+		"POST /api/v1/agents/agent-alpha/mcp/repo/config": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"name":            "repo",
+				"health":          "detached",
+				"enabled":         false,
+				"attached":        false,
+				"healthDetail":    "server is detached from the managed runtime",
+				"remediationHint": "Attach the MCP server to re-apply the saved config and expose its tool surface.",
+				"configDigest":    "sha256:test-config",
+				"configSummary":   `{"mode":"write"}`,
+			})
+		},
+		"POST /api/v1/agents/agent-alpha/mcp/repo": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"skillSummary": map[string]any{},
+				"skills":       []any{},
+				"mcp": map[string]any{
+					"servers": []map[string]any{{
+						"name":          "repo",
+						"health":        "stopped",
+						"enabled":       false,
+						"attached":      false,
+						"configDigest":  "sha256:test-config",
+						"configSummary": `{"mode":"write"}`,
+					}},
+				},
+			})
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/agent-alpha/mcp/repo/detach", nil)
+	handleWebUIAgent(rec, req, "req-mcp-detach", daemon)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detach status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/agents/agent-alpha/mcp/repo/config", strings.NewReader(`{"config":"{\"mode\":\"write\"}"}`))
+	handleWebUIAgent(rec, req, "req-mcp-config", daemon)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("config status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/agents/agent-alpha/mcp/repo", strings.NewReader(`{"enabled":false}`))
+	handleWebUIAgent(rec, req, "req-mcp-toggle", daemon)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("toggle status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	instances := mustLoadManagedInstancesFile(t, storePath)
+	idx := findManagedInstanceIndexByAgentID(instances, "agent-alpha")
+	if idx < 0 {
+		t.Fatal("expected persisted managed instance")
+	}
+	if len(instances[idx].MCPServers) != 1 {
+		t.Fatalf("expected persisted mcp state, got %+v", instances[idx].MCPServers)
+	}
+	state := instances[idx].MCPServers[0]
+	if state.Name != "repo" || state.Attached || state.Enabled {
+		t.Fatalf("unexpected persisted mcp state: %+v", state)
+	}
+	if !strings.Contains(state.ConfigSummary, `"mode":"write"`) || state.ConfigDigest != "sha256:test-config" {
+		t.Fatalf("expected persisted config metadata, got %+v", state)
+	}
+}
+
+func TestHandleWebUIAgent_StartReplaysPersistedMCPState(t *testing.T) {
+	tmp := t.TempDir()
+	storePath := filepath.Join(tmp, "instances.json")
+	t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := saveManagedInstances(storePath, []managedAgentInstance{{
+		ID:           "agent-alpha-default",
+		Type:         "managed-agent",
+		AgentID:      "agent-alpha",
+		RuntimeState: "stopped",
+		MCPServers: []managedAgentMCPServerState{{
+			Name:          "repo",
+			Enabled:       false,
+			Attached:      true,
+			ConfigDigest:  "sha256:test-config",
+			ConfigSummary: `{"mode":"write"}`,
+			UpdatedAt:     now,
+		}},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}}); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	var calls []string
+	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/agent-alpha/start": func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, "start")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		},
+		"POST /api/v1/agents/agent-alpha/mcp/repo/config": func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, "config")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"name":          "repo",
+				"health":        "healthy",
+				"enabled":       true,
+				"attached":      true,
+				"configDigest":  "sha256:test-config",
+				"configSummary": `{"mode":"write"}`,
+			})
+		},
+		"POST /api/v1/agents/agent-alpha/mcp/repo/attach": func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, "attach")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"name":          "repo",
+				"health":        "healthy",
+				"enabled":       true,
+				"attached":      true,
+				"configDigest":  "sha256:test-config",
+				"configSummary": `{"mode":"write"}`,
+			})
+		},
+		"POST /api/v1/agents/agent-alpha/mcp/repo": func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, "toggle")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"skillSummary": map[string]any{},
+				"skills":       []any{},
+				"mcp": map[string]any{
+					"servers": []map[string]any{{
+						"name":          "repo",
+						"health":        "stopped",
+						"enabled":       false,
+						"attached":      true,
+						"configDigest":  "sha256:test-config",
+						"configSummary": `{"mode":"write"}`,
+					}},
+				},
+			})
+		},
+		"GET /api/v1/agents/agent-alpha/mcp/repo": func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, "detail")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"name":            "repo",
+				"health":          "stopped",
+				"enabled":         false,
+				"attached":        true,
+				"healthDetail":    "server is disabled",
+				"remediationHint": "Enable MCP to expose its tool surface; the saved config will be reused.",
+				"configDigest":    "sha256:test-config",
+				"configSummary":   `{"mode":"write"}`,
+			})
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/agent-alpha/start", nil)
+	handleWebUIAgent(rec, req, "req-start-replay", daemon)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("start status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"warning"`) {
+		t.Fatalf("expected clean replay without warning, got %s", rec.Body.String())
+	}
+	wantCalls := []string{"start", "config", "attach", "toggle", "detail"}
+	if strings.Join(calls, ",") != strings.Join(wantCalls, ",") {
+		t.Fatalf("unexpected replay calls: got=%v want=%v", calls, wantCalls)
+	}
+
+	instances := mustLoadManagedInstancesFile(t, storePath)
+	idx := findManagedInstanceIndexByAgentID(instances, "agent-alpha")
+	if idx < 0 {
+		t.Fatal("expected persisted managed instance")
+	}
+	if instances[idx].RuntimeState != "running" {
+		t.Fatalf("expected running state after start, got %+v", instances[idx])
+	}
+	if len(instances[idx].MCPServers) != 1 || instances[idx].MCPServers[0].Enabled || !instances[idx].MCPServers[0].Attached {
+		t.Fatalf("unexpected persisted replayed mcp state: %+v", instances[idx].MCPServers)
+	}
+}

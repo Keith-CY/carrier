@@ -400,17 +400,26 @@ func buildAgentLauncherRemediations(
 	}
 	for _, server := range capabilities.MCP.Servers {
 		health := strings.TrimSpace(server.Health)
-		if server.Attached && !strings.EqualFold(health, "degraded") && !strings.EqualFold(health, "error") {
-			continue
+		switch {
+		case !server.Attached:
+			remediations = append(remediations, agentLauncherRemediation{
+				Category:        "mcp",
+				Summary:         "One or more MCP servers are detached. Re-attach them before expecting tools to appear.",
+				Detail:          fmt.Sprintf("server=%s health=%s", strings.TrimSpace(server.Name), health),
+				RemediationHint: firstNonEmpty(strings.TrimSpace(server.RemediationHint), "Attach the MCP server to restore its tool surface."),
+			})
+			goto runtimeRemediations
+		case strings.EqualFold(health, "degraded") || strings.EqualFold(health, "error"):
+			remediations = append(remediations, agentLauncherRemediation{
+				Category:        "mcp",
+				Summary:         "One or more MCP servers are unhealthy. Inspect server detail and refresh its config before expecting tools to appear.",
+				Detail:          fmt.Sprintf("server=%s health=%s", strings.TrimSpace(server.Name), health),
+				RemediationHint: firstNonEmpty(strings.TrimSpace(server.RemediationHint), "Inspect MCP detail to refresh configuration or disable the server."),
+			})
+			goto runtimeRemediations
 		}
-		remediations = append(remediations, agentLauncherRemediation{
-			Category:        "mcp",
-			Summary:         "One or more MCP servers need attention. Re-attach or repair them before expecting tools to appear.",
-			Detail:          fmt.Sprintf("server=%s health=%s", strings.TrimSpace(server.Name), health),
-			RemediationHint: strings.TrimSpace(server.RemediationHint),
-		})
-		break
 	}
+runtimeRemediations:
 	if session != nil {
 		runtimeState := strings.TrimSpace(session.RuntimeState)
 		if runtimeState != "" && runtimeState != "running" {
