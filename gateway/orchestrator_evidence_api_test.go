@@ -219,6 +219,20 @@ func TestHandleOrchestratorExecutionEvidenceJSONAndAuditExport(t *testing.T) {
 	if got := strings.TrimSpace(anyToString(manifestEntry["downloadUrl"])); got != "/downloads/tok-1/release-notes.txt" {
 		t.Fatalf("artifactManifest.downloadUrl=%q want /downloads/tok-1/release-notes.txt entry=%+v", got, manifestEntry)
 	}
+	mediaOutputs, _ := evidence["mediaOutputs"].([]interface{})
+	if len(mediaOutputs) != 1 {
+		t.Fatalf("mediaOutputs len=%d want 1 evidence=%+v", len(mediaOutputs), evidence)
+	}
+	mediaEntry, _ := mediaOutputs[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(mediaEntry["deliveryKind"])); got != "document" {
+		t.Fatalf("mediaOutputs.deliveryKind=%q want document entry=%+v", got, mediaEntry)
+	}
+	if got := strings.TrimSpace(anyToString(mediaEntry["deliveryRef"])); got != "/downloads/tok-1/release-notes.txt" {
+		t.Fatalf("mediaOutputs.deliveryRef=%q want /downloads/tok-1/release-notes.txt entry=%+v", got, mediaEntry)
+	}
+	if got := strings.TrimSpace(anyToString(mediaEntry["renderMode"])); got != "rich_media" {
+		t.Fatalf("mediaOutputs.renderMode=%q want rich_media entry=%+v", got, mediaEntry)
+	}
 	audit, _ := evidence["audit"].([]interface{})
 	if len(audit) != 2 {
 		t.Fatalf("audit len=%d want 2 evidence=%+v", len(audit), evidence)
@@ -354,6 +368,7 @@ func TestHandleOrchestratorExecutionEvidenceZipAndNegativeCases(t *testing.T) {
 		"result-summary.json",
 		"provider-attribution.json",
 		"artifact-manifest.json",
+		"media-outputs.json",
 		"audit.json",
 		"artifacts/summary.json",
 	}
@@ -378,6 +393,16 @@ func TestHandleOrchestratorExecutionEvidenceZipAndNegativeCases(t *testing.T) {
 	}
 	if got := strings.TrimSpace(anyToString(manifest[0]["downloadUrl"])); got != "/downloads/tok-zip/summary.json" {
 		t.Fatalf("artifact-manifest downloadUrl=%q want /downloads/tok-zip/summary.json manifest=%+v", got, manifest)
+	}
+	var mediaOutputs []map[string]interface{}
+	if err := json.Unmarshal([]byte(entries["media-outputs.json"]), &mediaOutputs); err != nil {
+		t.Fatalf("decode media outputs: %v", err)
+	}
+	if len(mediaOutputs) != 1 || strings.TrimSpace(anyToString(mediaOutputs[0]["artifactId"])) != "artifact-zip" {
+		t.Fatalf("unexpected media outputs: %+v", mediaOutputs)
+	}
+	if got := strings.TrimSpace(anyToString(mediaOutputs[0]["deliveryKind"])); got != "document" {
+		t.Fatalf("media-outputs deliveryKind=%q want document outputs=%+v", got, mediaOutputs)
 	}
 
 	methodRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions/"+seed.ID+"/evidence", `{}`)

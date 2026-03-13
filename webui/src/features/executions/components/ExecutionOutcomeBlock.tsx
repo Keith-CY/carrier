@@ -10,6 +10,7 @@ export function ExecutionOutcomeBlock({
 }) {
   const outcome = execution?.outcome && typeof execution.outcome === 'object' ? execution.outcome : {};
   const artifacts = Array.isArray(outcome?.artifacts) ? outcome.artifacts : [];
+  const mediaArtifacts = artifacts.filter((item: any) => String(item?.mediaType || '').trim() || String(item?.outputRole || '').trim() === 'generated');
 
   if (!(String(outcome?.summary || '').trim() || String(outcome?.failureReason || '').trim() || String(outcome?.failureCategory || '').trim() || String(outcome?.renderMode || '').trim() || artifacts.length)) {
     return null;
@@ -22,6 +23,22 @@ export function ExecutionOutcomeBlock({
       {String(outcome?.failureReason || '').trim() ? <div className="execution-detail-line">Failure reason: {String(outcome.failureReason).trim()}</div> : null}
       {String(outcome?.failureCategory || '').trim() ? <div className="execution-detail-line">Failure category: {String(outcome.failureCategory).trim()}</div> : null}
       {String(outcome?.renderMode || '').trim() ? <div className="execution-detail-line">Render mode: {String(outcome.renderMode).trim()}</div> : null}
+      {mediaArtifacts.length ? <div className="execution-detail-line">Media Outputs</div> : null}
+      {mediaArtifacts.map((item: any) => {
+        const name = String(item?.name || item?.id || 'media output').trim();
+        const mediaParts = [];
+        if (String(item?.mediaType || '').trim()) mediaParts.push(String(item.mediaType).trim());
+        if (String(item?.outputRole || '').trim()) mediaParts.push(`role=${String(item.outputRole).trim()}`);
+        if (String(item?.downloadUrl || '').trim()) mediaParts.push(`delivery=${String(item.downloadUrl).trim()}`);
+        else if (String(item?.externalId || '').trim()) mediaParts.push(`delivery=${String(item.externalId).trim()}`);
+        else if (String(item?.path || '').trim()) mediaParts.push(`delivery=${String(item.path).trim()}`);
+        if (String(item?.attachmentId || '').trim()) mediaParts.push(`attachment=${String(item.attachmentId).trim()}`);
+        return (
+          <div key={`media-${String(item?.id || name)}`}>
+            <div className="execution-detail-line">{name}{mediaParts.length ? ` · ${mediaParts.join(' · ')}` : ''}</div>
+          </div>
+        );
+      })}
       {artifacts.length ? <div className="execution-detail-line">Artifacts</div> : null}
       {artifacts.map((item: any) => {
         const artifactID = String(item?.id || '').trim();

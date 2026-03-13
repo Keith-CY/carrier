@@ -114,17 +114,19 @@ describe('ExecutionDetailContent', () => {
     expect(screen.getByText('Trigger')).toBeInTheDocument();
     expect(screen.getByText('Execution Lineage')).toBeInTheDocument();
     expect(screen.getByText('Outcome')).toBeInTheDocument();
+    expect(screen.getByText('Media Outputs')).toBeInTheDocument();
     expect(screen.getByText('Execution Policy')).toBeInTheDocument();
     expect(screen.getByText('Approval & Governance')).toBeInTheDocument();
     expect(screen.getByText('Workers')).toBeInTheDocument();
     expect(screen.getByText('Task Results')).toBeInTheDocument();
     expect(screen.getByText(/Render mode:\s*rich_media/i)).toBeInTheDocument();
     expect(screen.getByText(/media=audio\/wav/i)).toBeInTheDocument();
-    expect(screen.getByText(/role=generated/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/role=generated/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/delivery=\/downloads\/artifact-1/i)).toBeInTheDocument();
     expect(screen.getByText(/source=telegram/i)).toBeInTheDocument();
     expect(screen.getByText(/external=tg-file-1/i)).toBeInTheDocument();
-    expect(screen.getByText(/attachment=attachment-1/i)).toBeInTheDocument();
-    expect(screen.getByText(/\/downloads\/artifact-1/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/attachment=attachment-1/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/\/downloads\/artifact-1/i).length).toBeGreaterThanOrEqual(1);
 
     fireEvent.click(screen.getByRole('link', { name: 'Download summary.txt' }));
     expect(onDownloadArtifact).toHaveBeenCalledWith('artifact-1', 'summary.txt');

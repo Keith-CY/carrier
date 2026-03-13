@@ -55,6 +55,19 @@ type OrchestratorEvidenceProviderAttribution struct {
 	Models                []orchestratorProviderModelAggregateSnapshot `json:"models,omitempty"`
 }
 
+type OrchestratorEvidenceMediaOutput struct {
+	ArtifactID   string `json:"artifactId,omitempty"`
+	AttachmentID string `json:"attachmentId,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Kind         string `json:"kind,omitempty"`
+	OutputRole   string `json:"outputRole,omitempty"`
+	MediaType    string `json:"mediaType,omitempty"`
+	RenderMode   string `json:"renderMode,omitempty"`
+	DeliveryKind string `json:"deliveryKind,omitempty"`
+	DeliveryRef  string `json:"deliveryRef,omitempty"`
+	Source       string `json:"source,omitempty"`
+}
+
 type OrchestratorEvidenceBundle struct {
 	GeneratedAt         string                                  `json:"generatedAt"`
 	RenderMode          string                                  `json:"renderMode,omitempty"`
@@ -68,6 +81,7 @@ type OrchestratorEvidenceBundle struct {
 	Results             []OrchestratorTaskResult                `json:"results,omitempty"`
 	ResultSummary       OrchestratorEvidenceResultSummary       `json:"resultSummary"`
 	ArtifactManifest    []OrchestratorArtifact                  `json:"artifactManifest,omitempty"`
+	MediaOutputs        []OrchestratorEvidenceMediaOutput       `json:"mediaOutputs,omitempty"`
 	Audit               []gatewayAuditEvent                     `json:"audit,omitempty"`
 }
 
@@ -195,6 +209,7 @@ func buildOrchestratorEvidenceBundle(execution OrchestratorExecution) (Orchestra
 		Results:             executionWithUsage.Results,
 		ResultSummary:       summarizeOrchestratorEvidenceResults(executionWithUsage.Results),
 		ArtifactManifest:    executionWithUsage.Outcome.Artifacts,
+		MediaOutputs:        buildOrchestratorEvidenceMediaOutputs(executionWithUsage),
 		Audit:               auditEvents,
 	}, nil
 }
@@ -287,6 +302,9 @@ func buildOrchestratorEvidenceArchive(bundle OrchestratorEvidenceBundle, cfg *Ga
 		return nil, err
 	}
 	if err := addJSON("artifact-manifest.json", bundle.ArtifactManifest); err != nil {
+		return nil, err
+	}
+	if err := addJSON("media-outputs.json", bundle.MediaOutputs); err != nil {
 		return nil, err
 	}
 	if err := addJSON("audit.json", bundle.Audit); err != nil {
@@ -439,4 +457,49 @@ func buildOrchestratorEvidenceProviderAttribution(execution OrchestratorExecutio
 
 	out.TotalEstimatedCostUSD = roundProviderAggregateCost(totalEstimatedCostUSD)
 	return out
+}
+
+func buildOrchestratorEvidenceMediaOutputs(execution OrchestratorExecution) []OrchestratorEvidenceMediaOutput {
+	renderMode := strings.TrimSpace(execution.Outcome.RenderMode)
+	out := make([]OrchestratorEvidenceMediaOutput, 0, len(execution.Outcome.Artifacts))
+	for _, artifact := range execution.Outcome.Artifacts {
+		mediaType := strings.TrimSpace(artifact.MediaType)
+		outputRole := strings.TrimSpace(artifact.OutputRole)
+		if mediaType == "" && outputRole != "generated" {
+			continue
+		}
+		deliveryRef := strings.TrimSpace(firstString(artifact.DownloadURL, artifact.ExternalID, artifact.Path))
+		out = append(out, OrchestratorEvidenceMediaOutput{
+			ArtifactID:   strings.TrimSpace(artifact.ID),
+			AttachmentID: strings.TrimSpace(artifact.AttachmentID),
+			Name:         strings.TrimSpace(artifact.Name),
+			Kind:         strings.TrimSpace(artifact.Kind),
+			OutputRole:   outputRole,
+			MediaType:    mediaType,
+			RenderMode:   renderMode,
+			DeliveryKind: evidenceMediaDeliveryKind(artifact),
+			DeliveryRef:  deliveryRef,
+			Source:       strings.TrimSpace(artifact.Source),
+		})
+	}
+	return out
+}
+
+func evidenceMediaDeliveryKind(artifact OrchestratorArtifact) string {
+	mediaType := strings.ToLower(strings.TrimSpace(artifact.MediaType))
+	kind := strings.ToLower(strings.TrimSpace(artifact.Kind))
+	switch {
+	case strings.HasPrefix(mediaType, "image/"):
+		return "image"
+	case strings.HasPrefix(mediaType, "audio/ogg") || strings.Contains(mediaType, "opus") || kind == "voice":
+		return "voice"
+	case strings.HasPrefix(mediaType, "audio/") || kind == "audio":
+		return "audio"
+	case strings.HasPrefix(mediaType, "video/") || kind == "video":
+		return "video"
+	case mediaType != "" || kind == "document" || kind == "file":
+		return "document"
+	default:
+		return "unknown"
+	}
 }
