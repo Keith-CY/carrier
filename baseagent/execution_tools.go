@@ -662,6 +662,7 @@ func (r *ExecutionToolRegistry) sendFile(_ context.Context, args map[string]any)
 	attachment := ExecutionAttachment{
 		ID:         resolved,
 		Kind:       "file",
+		OutputRole: "generated",
 		Path:       resolved,
 		Name:       info.Name(),
 		MIMEType:   mime.TypeByExtension(filepath.Ext(info.Name())),
@@ -676,6 +677,7 @@ func (r *ExecutionToolRegistry) sendFile(_ context.Context, args map[string]any)
 		ContentBlocks: []ContentBlock{
 			{
 				Type:         "file",
+				OutputRole:   "generated",
 				Name:         attachment.Name,
 				Path:         attachment.Path,
 				MIMEType:     attachment.MIMEType,

@@ -99,12 +99,14 @@ func TestHandleOrchestratorExecutionEvidenceJSONAndAuditExport(t *testing.T) {
 			Summary:         "incident evidence collection failed",
 			FailureReason:   "remote diagnostics upload failed",
 			FailureCategory: "worker_failed",
+			RenderMode:      "rich_media",
 			Artifacts: []OrchestratorArtifact{{
 				ID:          "artifact-1",
 				AttachmentID:"attach-1",
 				TaskID:      "task-1",
 				Name:        "release-notes.txt",
 				Kind:        "text",
+				OutputRole:  "generated",
 				MediaType:   "text/plain",
 				ContentType: "text/plain",
 				SizeBytes:   13,
@@ -191,6 +193,9 @@ func TestHandleOrchestratorExecutionEvidenceJSONAndAuditExport(t *testing.T) {
 	if got := int(anyToFloat(resultSummary["failed"])); got != 1 {
 		t.Fatalf("resultSummary.failed=%d want 1 summary=%+v", got, resultSummary)
 	}
+	if got := strings.TrimSpace(anyToString(evidence["renderMode"])); got != "rich_media" {
+		t.Fatalf("evidence.renderMode=%q want rich_media evidence=%+v", got, evidence)
+	}
 	manifest, _ := evidence["artifactManifest"].([]interface{})
 	if len(manifest) != 1 {
 		t.Fatalf("artifactManifest len=%d want 1 evidence=%+v", len(manifest), evidence)
@@ -207,6 +212,9 @@ func TestHandleOrchestratorExecutionEvidenceJSONAndAuditExport(t *testing.T) {
 	}
 	if got := strings.TrimSpace(anyToString(manifestEntry["attachmentId"])); got != "attach-1" {
 		t.Fatalf("artifactManifest.attachmentId=%q want attach-1 entry=%+v", got, manifestEntry)
+	}
+	if got := strings.TrimSpace(anyToString(manifestEntry["outputRole"])); got != "generated" {
+		t.Fatalf("artifactManifest.outputRole=%q want generated entry=%+v", got, manifestEntry)
 	}
 	if got := strings.TrimSpace(anyToString(manifestEntry["downloadUrl"])); got != "/downloads/tok-1/release-notes.txt" {
 		t.Fatalf("artifactManifest.downloadUrl=%q want /downloads/tok-1/release-notes.txt entry=%+v", got, manifestEntry)
@@ -279,12 +287,14 @@ func TestHandleOrchestratorExecutionEvidenceZipAndNegativeCases(t *testing.T) {
 			HostID:  hostID,
 		}},
 		Outcome: OrchestratorExecutionOutcome{
+			RenderMode: "text_fallback",
 			Artifacts: []OrchestratorArtifact{{
 				ID:          "artifact-zip",
 				AttachmentID:"attach-zip",
 				TaskID:      "task-zip",
 				Name:        "summary.json",
 				Kind:        "json",
+				OutputRole:  "fallback",
 				MediaType:   "application/json",
 				ContentType: "application/json",
 				SizeBytes:   11,
@@ -362,6 +372,9 @@ func TestHandleOrchestratorExecutionEvidenceZipAndNegativeCases(t *testing.T) {
 	}
 	if got := strings.TrimSpace(anyToString(manifest[0]["attachmentId"])); got != "attach-zip" {
 		t.Fatalf("artifact-manifest attachmentId=%q want attach-zip manifest=%+v", got, manifest)
+	}
+	if got := strings.TrimSpace(anyToString(manifest[0]["outputRole"])); got != "fallback" {
+		t.Fatalf("artifact-manifest outputRole=%q want fallback manifest=%+v", got, manifest)
 	}
 	if got := strings.TrimSpace(anyToString(manifest[0]["downloadUrl"])); got != "/downloads/tok-zip/summary.json" {
 		t.Fatalf("artifact-manifest downloadUrl=%q want /downloads/tok-zip/summary.json manifest=%+v", got, manifest)

@@ -16,6 +16,7 @@ const (
 type AttachmentRef struct {
 	ID             string            `json:"id,omitempty"`
 	Kind           string            `json:"kind,omitempty"`
+	OutputRole     string            `json:"outputRole,omitempty"`
 	Path           string            `json:"path,omitempty"`
 	Name           string            `json:"name,omitempty"`
 	MIMEType       string            `json:"mimeType,omitempty"`
@@ -30,6 +31,7 @@ type AttachmentRef struct {
 
 type ContentBlock struct {
 	Type         string `json:"type"`
+	OutputRole   string `json:"outputRole,omitempty"`
 	Text         string `json:"text,omitempty"`
 	Name         string `json:"name,omitempty"`
 	Path         string `json:"path,omitempty"`
@@ -42,6 +44,7 @@ type ContentBlock struct {
 
 type RichOutboundMessage struct {
 	Text        string          `json:"text,omitempty"`
+	RenderMode  string          `json:"renderMode,omitempty"`
 	Blocks      []ContentBlock  `json:"blocks,omitempty"`
 	Attachments []AttachmentRef `json:"attachments,omitempty"`
 }

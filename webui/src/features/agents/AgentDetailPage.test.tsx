@@ -85,6 +85,7 @@ describe('AgentDetailPage', () => {
           heartbeat: { state: 'fresh', ageSeconds: 12 },
           memory: { contractId: 'memory-alpha' },
           providerReadiness: { provider: 'openrouter', ready: true, authMode: 'api_key' },
+          mediaRuntime: { provider: 'openrouter', status: 'ready', detail: 'provider=openrouter runtime configured' },
         lastModelRun: {
           requestedAlias: 'flash-safe',
           requestedModel: 'deepseek/deepseek-chat-v3-0324',
@@ -121,6 +122,7 @@ describe('AgentDetailPage', () => {
             count: 1,
             sessions: [{ key: 'telegram:alpha', messageCount: 8, summaryLength: 64, updatedAt: '2026-03-12T00:07:00Z' }],
           },
+          remediations: [],
         }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -677,10 +679,16 @@ describe('AgentDetailPage', () => {
           agentId: 'agent-alpha',
           heartbeat: { state: 'stale', ageSeconds: 240 },
           providerReadiness: { provider: 'openrouter', ready: false, authMode: 'api_key' },
+          mediaRuntime: { provider: 'openrouter', status: 'unavailable', detail: 'provider=openrouter runtime unavailable', remediationHint: 'Configure transcription credentials or switch providers.' },
           cron: {
             count: 1,
             jobs: [{ id: 'cron-1', prompt: 'check launcher', paused: true, lastResult: 'paused' }],
           },
+          remediations: [
+            { category: 'provider', summary: 'Provider authentication is not ready. Reconfigure credentials or switch to a ready profile.', detail: 'provider=openrouter auth=api_key' },
+            { category: 'heartbeat', summary: 'Launcher heartbeat is stale. Restart the agent or inspect the managed runtime.', detail: 'state=stale age=240s' },
+            { category: 'cron', summary: 'One or more cron jobs are paused. Resume or cancel them to restore scheduled automation.', detail: 'job=cron-1 last=paused' },
+          ],
         }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -701,6 +709,9 @@ describe('AgentDetailPage', () => {
     expect(screen.getByText(/Provider authentication is not ready\. Reconfigure credentials or switch to a ready profile\./i)).toBeInTheDocument();
     expect(screen.getByText(/Launcher heartbeat is stale\. Restart the agent or inspect the managed runtime\./i)).toBeInTheDocument();
     expect(screen.getByText(/One or more cron jobs are paused\. Resume or cancel them to restore scheduled automation\./i)).toBeInTheDocument();
+    expect(screen.getByText(/provider=openrouter auth=api_key/i)).toBeInTheDocument();
+    expect(screen.getByText(/state=stale age=240s/i)).toBeInTheDocument();
+    expect(screen.getByText(/job=cron-1 last=paused/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Sync model surface/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Resume paused cron/i })).toBeInTheDocument();
   });

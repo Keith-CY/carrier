@@ -422,11 +422,17 @@ func TestExecutionToolsSendFile(t *testing.T) {
 	if result.Attachments[0].Name != "artifact.log" || result.Attachments[0].Path != filepath.Join(root, "artifact.log") {
 		t.Fatalf("unexpected attachment refs: %+v", result.Attachments)
 	}
+	if result.Attachments[0].OutputRole != "generated" {
+		t.Fatalf("expected generated output role on attachment, got %+v", result.Attachments[0])
+	}
 	if len(result.ContentBlocks) != 1 {
 		t.Fatalf("expected structured content block, got %+v", result)
 	}
 	if result.ContentBlocks[0].Type != "file" || result.ContentBlocks[0].Name != "artifact.log" {
 		t.Fatalf("unexpected content blocks: %+v", result.ContentBlocks)
+	}
+	if result.ContentBlocks[0].OutputRole != "generated" {
+		t.Fatalf("expected generated output role on block, got %+v", result.ContentBlocks[0])
 	}
 	if result.ContentBlocks[0].AttachmentID == "" || result.ContentBlocks[0].AttachmentID != result.Attachments[0].ID {
 		t.Fatalf("expected content block to link attachment, block=%+v attachment=%+v", result.ContentBlocks[0], result.Attachments[0])

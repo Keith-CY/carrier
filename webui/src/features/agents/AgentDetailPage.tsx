@@ -121,6 +121,18 @@ type AgentLauncherSummary = {
     ready?: boolean;
     credentialBackend?: string;
   };
+  mediaRuntime?: {
+    provider?: string;
+    status?: string;
+    detail?: string;
+    remediationHint?: string;
+  };
+  remediations?: Array<{
+    category?: string;
+    summary?: string;
+    detail?: string;
+    remediationHint?: string;
+  }>;
   modelSurface?: {
     defaultProfile?: string;
     profiles?: AgentModelSurfaceProfile[];
@@ -220,35 +232,84 @@ function buildProfileDraft(profile: AgentModelSurfaceProfile): AgentModelProfile
   };
 }
 
-function buildLauncherRemediationMessages(launcher: AgentLauncherSummary | undefined): string[] {
+function buildLauncherRemediations(launcher: AgentLauncherSummary | undefined): Array<{
+  category: string;
+  summary: string;
+  detail: string;
+  remediationHint: string;
+}> {
   if (!launcher) return [];
-  let messages: string[] = [];
+  const structured = Array.isArray(launcher.remediations) ? launcher.remediations : [];
+  if (structured.length) {
+    return structured
+      .map((item) => ({
+        category: String(item?.category || '').trim(),
+        summary: String(item?.summary || '').trim(),
+        detail: String(item?.detail || '').trim(),
+        remediationHint: String(item?.remediationHint || '').trim(),
+      }))
+      .filter((item) => item.summary);
+  }
+  let remediations: Array<{ category: string; summary: string; detail: string; remediationHint: string }> = [];
   if (launcher.providerReadiness && launcher.providerReadiness.ready === false) {
-    messages = appendUniqueMessage(messages, 'Provider authentication is not ready. Reconfigure credentials or switch to a ready profile.');
+    remediations = appendUniqueRemediation(remediations, {
+      category: 'provider',
+      summary: 'Provider authentication is not ready. Reconfigure credentials or switch to a ready profile.',
+      detail: '',
+      remediationHint: '',
+    });
   }
   if (launcher.heartbeat && (launcher.heartbeat.state === 'stale' || launcher.heartbeat.state === 'expired')) {
-    messages = appendUniqueMessage(messages, 'Launcher heartbeat is stale. Restart the agent or inspect the managed runtime.');
+    remediations = appendUniqueRemediation(remediations, {
+      category: 'heartbeat',
+      summary: 'Launcher heartbeat is stale. Restart the agent or inspect the managed runtime.',
+      detail: '',
+      remediationHint: '',
+    });
   }
   if (Array.isArray(launcher.cron?.jobs) && launcher.cron?.jobs.some((job) => !!job.paused)) {
-    messages = appendUniqueMessage(messages, 'One or more cron jobs are paused. Resume or cancel them to restore scheduled automation.');
+    remediations = appendUniqueRemediation(remediations, {
+      category: 'cron',
+      summary: 'One or more cron jobs are paused. Resume or cancel them to restore scheduled automation.',
+      detail: '',
+      remediationHint: '',
+    });
   }
   if (Array.isArray(launcher.capabilities?.skills) && launcher.capabilities.skills.some((skill) => !!skill.updateAvailable)) {
-    messages = appendUniqueMessage(messages, 'One or more installed skills have updates pending. Review version drift and update pinned skills.');
+    remediations = appendUniqueRemediation(remediations, {
+      category: 'skills',
+      summary: 'One or more installed skills have updates pending. Review version drift and update pinned skills.',
+      detail: '',
+      remediationHint: '',
+    });
   }
   if (Array.isArray(launcher.capabilities?.mcp?.servers) && launcher.capabilities.mcp.servers.some((server) => server.attached === false)) {
-    messages = appendUniqueMessage(messages, 'One or more MCP servers are detached. Re-attach them before expecting tools to appear in runtime.');
+    remediations = appendUniqueRemediation(remediations, {
+      category: 'mcp',
+      summary: 'One or more MCP servers are detached. Re-attach them before expecting tools to appear in runtime.',
+      detail: '',
+      remediationHint: '',
+    });
   }
   if (launcher.session && String(launcher.session.runtimeState || '').trim() && String(launcher.session.runtimeState || '').trim() !== 'running') {
-    messages = appendUniqueMessage(messages, 'Managed runtime is not running. Start the agent or inspect the launcher session.');
+    remediations = appendUniqueRemediation(remediations, {
+      category: 'runtime',
+      summary: 'Managed runtime is not running. Start the agent or inspect the launcher session.',
+      detail: '',
+      remediationHint: '',
+    });
   }
-  return messages;
+  return remediations;
 }
 
-function appendUniqueMessage(messages: string[], message: string): string[] {
-  if (messages.includes(message)) {
-    return messages;
+function appendUniqueRemediation(
+  items: Array<{ category: string; summary: string; detail: string; remediationHint: string }>,
+  item: { category: string; summary: string; detail: string; remediationHint: string },
+) {
+  if (items.some((existing) => existing.summary === item.summary)) {
+    return items;
   }
-  return [...messages, message];
+  return [...items, item];
 }
 
 export function AgentDetailPage() {
@@ -573,8 +634,8 @@ export function AgentDetailPage() {
     statusQuery.isError,
     statusQuery.isLoading,
   ]);
-  const remediationMessages = useMemo(
-    () => (content.state === 'ready' ? buildLauncherRemediationMessages(content.launcher) : []),
+  const remediationItems = useMemo(
+    () => (content.state === 'ready' ? buildLauncherRemediations(content.launcher) : []),
     [content],
   );
   const firstDetachedMCPServer = useMemo(() => {
@@ -597,13 +658,15 @@ export function AgentDetailPage() {
           <div className="card">
             <h3>{`Agent: ${agentId}`}</h3>
             <div className="card-subtitle">Runtime Capabilities</div>
-            {remediationMessages.length ? (
+            {remediationItems.length ? (
               <div>
                 <strong>Remediation</strong>
                 <ul className="compact-list">
-                  {remediationMessages.map((message) => (
-                    <li key={message}>
-                      <span className="text-dim">{message}</span>
+                  {remediationItems.map((item) => (
+                    <li key={`${item.category}:${item.summary}`}>
+                      <div className="text-dim">{item.summary}</div>
+                      {item.detail ? <div className="text-dim">{item.detail}</div> : null}
+                      {item.remediationHint ? <div className="text-dim">{item.remediationHint}</div> : null}
                     </li>
                   ))}
                 </ul>
@@ -651,7 +714,7 @@ export function AgentDetailPage() {
                 </div>
               </div>
             ) : null}
-            {content.launcher && (content.launcher.heartbeat || content.launcher.providerReadiness || content.launcher.memory || content.launcher.session || content.launcher.cron) ? (
+            {content.launcher && (content.launcher.heartbeat || content.launcher.providerReadiness || content.launcher.mediaRuntime || content.launcher.memory || content.launcher.session || content.launcher.cron) ? (
               <div className="kv-grid">
                 <div>
                   <strong>Heartbeat</strong>
@@ -668,6 +731,14 @@ export function AgentDetailPage() {
                     {content.launcher.providerReadiness?.authMode ? ` · ${content.launcher.providerReadiness.authMode}` : ''}
                     {typeof content.launcher.providerReadiness?.ready === 'boolean' ? ` · ${content.launcher.providerReadiness.ready ? 'ready' : 'not ready'}` : ''}
                     {content.launcher.providerReadiness?.credentialConfigured ? ` · ${content.launcher.providerReadiness.credentialBackend || 'credential configured'}` : ''}
+                  </div>
+                </div>
+                <div>
+                  <strong>Media Runtime</strong>
+                  <div className="text-dim">
+                    {content.launcher.mediaRuntime?.provider || 'unconfigured'}
+                    {content.launcher.mediaRuntime?.status ? ` · ${content.launcher.mediaRuntime.status}` : ''}
+                    {content.launcher.mediaRuntime?.detail ? ` · ${content.launcher.mediaRuntime.detail}` : ''}
                   </div>
                 </div>
                 <div>

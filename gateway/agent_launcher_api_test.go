@@ -174,6 +174,86 @@ func TestHandleAgentLauncherReturnsSummary(t *testing.T) {
 		`"timeoutMs":45000`,
 		`"retryBudget":2`,
 		`"fallbackStrategy":"ordered"`,
+		`"mediaRuntime":{"provider":"openrouter","status":"ready"`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("expected response to contain %s, got %s", needle, body)
+		}
+	}
+}
+
+func TestHandleAgentLauncherReturnsStructuredRemediations(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	storePath := filepath.Join(tmp, ".carrier", "instances.json")
+	t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+	t.Setenv("CARRIER_TRANSCRIPTION_PROVIDER", "openrouter")
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := saveManagedInstances(storePath, []managedAgentInstance{{
+		ID:           "agent-alpha",
+		Type:         "zeroclaw",
+		AgentID:      "agent-alpha",
+		Provider:     "openrouter",
+		RuntimeState: "stopped",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}}); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+		"GET /api/v1/agents/agent-alpha/status": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":           "agent-alpha",
+				"runtimeState": "stopped",
+				"health":       "degraded",
+				"heartbeat": map[string]interface{}{
+					"state":          "stale",
+					"ageSeconds":     240,
+					"lastActivityAt": now,
+				},
+				"updatedAt": now,
+			})
+		},
+		"GET /api/v1/agents/agent-alpha/capabilities": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"mcp": map[string]interface{}{
+					"servers": []map[string]interface{}{
+						{"name": "repo", "health": "degraded", "attached": false, "remediationHint": "Attach MCP before expecting tools to appear."},
+					},
+				},
+			})
+		},
+		"GET /api/base-agent/cron/jobs": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"jobs": []map[string]interface{}{
+					{"id": "cron-1", "prompt": "check launcher", "paused": true, "lastResult": "paused"},
+				},
+			})
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/agent-alpha/launcher", nil)
+	handleWebUIAgent(rec, req, "req-launcher-remediation", daemon)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, needle := range []string{
+		`"remediations":[`,
+		`"category":"provider"`,
+		`"category":"heartbeat"`,
+		`"category":"cron"`,
+		`"category":"mcp"`,
+		`"detail":"provider=openrouter auth=api_key"`,
+		`"detail":"state=stale age=240s"`,
+		`"detail":"job=cron-1 last=paused"`,
+		`"detail":"server=repo health=degraded"`,
+		`"mediaRuntime":{"provider":"openrouter","status":"unavailable"`,
 	} {
 		if !strings.Contains(body, needle) {
 			t.Fatalf("expected response to contain %s, got %s", needle, body)

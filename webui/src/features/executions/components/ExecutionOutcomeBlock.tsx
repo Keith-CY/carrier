@@ -11,7 +11,7 @@ export function ExecutionOutcomeBlock({
   const outcome = execution?.outcome && typeof execution.outcome === 'object' ? execution.outcome : {};
   const artifacts = Array.isArray(outcome?.artifacts) ? outcome.artifacts : [];
 
-  if (!(String(outcome?.summary || '').trim() || String(outcome?.failureReason || '').trim() || String(outcome?.failureCategory || '').trim() || artifacts.length)) {
+  if (!(String(outcome?.summary || '').trim() || String(outcome?.failureReason || '').trim() || String(outcome?.failureCategory || '').trim() || String(outcome?.renderMode || '').trim() || artifacts.length)) {
     return null;
   }
 
@@ -21,12 +21,14 @@ export function ExecutionOutcomeBlock({
       {String(outcome?.summary || '').trim() ? <div className="execution-detail-line">Summary: {String(outcome.summary).trim()}</div> : null}
       {String(outcome?.failureReason || '').trim() ? <div className="execution-detail-line">Failure reason: {String(outcome.failureReason).trim()}</div> : null}
       {String(outcome?.failureCategory || '').trim() ? <div className="execution-detail-line">Failure category: {String(outcome.failureCategory).trim()}</div> : null}
+      {String(outcome?.renderMode || '').trim() ? <div className="execution-detail-line">Render mode: {String(outcome.renderMode).trim()}</div> : null}
       {artifacts.length ? <div className="execution-detail-line">Artifacts</div> : null}
       {artifacts.map((item: any) => {
         const artifactID = String(item?.id || '').trim();
         const name = String(item?.name || artifactID).trim();
         const metaParts = [];
         if (String(item?.kind || '').trim()) metaParts.push(String(item.kind).trim());
+        if (String(item?.outputRole || '').trim()) metaParts.push(`role=${String(item.outputRole).trim()}`);
         if (String(item?.contentType || '').trim()) metaParts.push(String(item.contentType).trim());
         if (String(item?.mediaType || '').trim()) metaParts.push(`media=${String(item.mediaType).trim()}`);
         if (String(item?.source || '').trim()) metaParts.push(`source=${String(item.source).trim()}`);

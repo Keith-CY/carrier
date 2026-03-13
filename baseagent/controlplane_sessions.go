@@ -777,6 +777,7 @@ func cloneAttachmentRefs(attachments []AttachmentRef) []AttachmentRef {
 		out[i] = AttachmentRef{
 			ID:             strings.TrimSpace(attachment.ID),
 			Kind:           strings.TrimSpace(strings.ToLower(attachment.Kind)),
+			OutputRole:     strings.TrimSpace(strings.ToLower(attachment.OutputRole)),
 			Path:           strings.TrimSpace(attachment.Path),
 			Name:           strings.TrimSpace(attachment.Name),
 			MIMEType:       strings.TrimSpace(attachment.MIMEType),
@@ -833,6 +834,7 @@ func cloneContentBlocks(blocks []ContentBlock) []ContentBlock {
 	for i, block := range blocks {
 		out[i] = ContentBlock{
 			Type:         strings.TrimSpace(strings.ToLower(block.Type)),
+			OutputRole:   strings.TrimSpace(strings.ToLower(block.OutputRole)),
 			Text:         strings.TrimSpace(block.Text),
 			Name:         strings.TrimSpace(block.Name),
 			Path:         strings.TrimSpace(block.Path),

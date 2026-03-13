@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"carrier/baseagent"
+	"carrier/shared/catalog"
 	"fmt"
 	"net/http"
 	"os"
@@ -16,12 +17,28 @@ type agentLauncherSummary struct {
 	Memory            *AgentMemoryState               `json:"memory,omitempty"`
 	Capabilities      AgentCapabilitySummary          `json:"capabilities"`
 	ProviderReadiness agentProviderReadiness          `json:"providerReadiness"`
+	MediaRuntime      *agentLauncherMediaRuntime      `json:"mediaRuntime,omitempty"`
+	Remediations      []agentLauncherRemediation      `json:"remediations,omitempty"`
 	ModelSurface      *agentLauncherModelSurface      `json:"modelSurface,omitempty"`
 	LastModelRun      *agentLauncherModelRuntime      `json:"lastModelRun,omitempty"`
 	Cron              *agentLauncherCronSummary       `json:"cron,omitempty"`
 	Delegation        *agentLauncherDelegationSummary `json:"delegation,omitempty"`
 	Sessions          *agentLauncherSessionsSummary   `json:"sessions,omitempty"`
 	Session           *agentLauncherSession           `json:"session,omitempty"`
+}
+
+type agentLauncherMediaRuntime struct {
+	Provider        string `json:"provider,omitempty"`
+	Status          string `json:"status,omitempty"`
+	Detail          string `json:"detail,omitempty"`
+	RemediationHint string `json:"remediationHint,omitempty"`
+}
+
+type agentLauncherRemediation struct {
+	Category        string `json:"category,omitempty"`
+	Summary         string `json:"summary,omitempty"`
+	Detail          string `json:"detail,omitempty"`
+	RemediationHint string `json:"remediationHint,omitempty"`
 }
 
 type agentLauncherModelSurface struct {
@@ -169,6 +186,8 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 	if readiness.Provider == "" {
 		readiness = buildAgentProviderReadiness(agentProviderFromStatus(status))
 	}
+	mediaRuntime := buildAgentMediaRuntime(firstNonEmptyAgentProvider(strings.TrimSpace(os.Getenv("CARRIER_TRANSCRIPTION_PROVIDER")), readiness.Provider, agentProviderFromStatus(status)))
+	remediations := buildAgentLauncherRemediations(readiness, status.Heartbeat, cronSummary, capabilities, session, mediaRuntime)
 
 	writeJSON(w, http.StatusOK, agentLauncherSummary{
 		AgentID:           agentID,
@@ -177,6 +196,8 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 		Memory:            status.Memory,
 		Capabilities:      capabilities,
 		ProviderReadiness: readiness,
+		MediaRuntime:      mediaRuntime,
+		Remediations:      remediations,
 		ModelSurface:      modelSurface,
 		LastModelRun:      lastModelRun,
 		Cron:              cronSummary,
@@ -184,6 +205,15 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 		Sessions:          sessionsSummary,
 		Session:           session,
 	})
+}
+
+func firstNonEmptyAgentProvider(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func buildAgentLauncherModelRuntime(runtime *managedAgentModelRuntime) *agentLauncherModelRuntime {
@@ -303,6 +333,103 @@ func buildAgentProviderReadiness(providerID string) agentProviderReadiness {
 		readiness.Ready = true
 	}
 	return readiness
+}
+
+func buildAgentMediaRuntime(providerID string) *agentLauncherMediaRuntime {
+	providerID = strings.TrimSpace(providerID)
+	if providerID == "" {
+		return nil
+	}
+	summary := &agentLauncherMediaRuntime{
+		Provider: providerID,
+	}
+	protocolFamily := strings.TrimSpace(catalog.ProtocolFamilyForProvider(providerID))
+	if !strings.EqualFold(providerID, "openrouter") && !strings.EqualFold(protocolFamily, "openai-compatible") {
+		summary.Status = "unsupported"
+		summary.Detail = fmt.Sprintf("provider=%s runtime unsupported", providerID)
+		summary.RemediationHint = "Switch transcription to an OpenAI-compatible provider."
+		return summary
+	}
+	readiness := buildAgentProviderReadiness(providerID)
+	if readiness.Ready {
+		summary.Status = "ready"
+		summary.Detail = fmt.Sprintf("provider=%s runtime configured", providerID)
+		return summary
+	}
+	summary.Status = "unavailable"
+	summary.Detail = fmt.Sprintf("provider=%s runtime unavailable", providerID)
+	summary.RemediationHint = "Configure transcription credentials or switch providers."
+	return summary
+}
+
+func buildAgentLauncherRemediations(
+	readiness agentProviderReadiness,
+	heartbeat *AgentHeartbeat,
+	cronSummary *agentLauncherCronSummary,
+	capabilities AgentCapabilitySummary,
+	session *agentLauncherSession,
+	mediaRuntime *agentLauncherMediaRuntime,
+) []agentLauncherRemediation {
+	var remediations []agentLauncherRemediation
+	if readiness.Provider != "" && !readiness.Ready {
+		remediations = append(remediations, agentLauncherRemediation{
+			Category: "provider",
+			Summary:  "Provider authentication is not ready. Reconfigure credentials or switch to a ready profile.",
+			Detail:   fmt.Sprintf("provider=%s auth=%s", readiness.Provider, strings.TrimSpace(readiness.AuthMode)),
+		})
+	}
+	if heartbeat != nil && (strings.EqualFold(strings.TrimSpace(heartbeat.State), "stale") || strings.EqualFold(strings.TrimSpace(heartbeat.State), "expired")) {
+		remediations = append(remediations, agentLauncherRemediation{
+			Category: "heartbeat",
+			Summary:  "Launcher heartbeat is stale. Restart the agent or inspect the managed runtime.",
+			Detail:   fmt.Sprintf("state=%s age=%ds", strings.TrimSpace(heartbeat.State), heartbeat.AgeSeconds),
+		})
+	}
+	if cronSummary != nil {
+		for _, job := range cronSummary.Jobs {
+			if !job.Paused {
+				continue
+			}
+			remediations = append(remediations, agentLauncherRemediation{
+				Category: "cron",
+				Summary:  "One or more cron jobs are paused. Resume or cancel them to restore scheduled automation.",
+				Detail:   fmt.Sprintf("job=%s last=%s", strings.TrimSpace(job.ID), strings.TrimSpace(job.LastResult)),
+			})
+			break
+		}
+	}
+	for _, server := range capabilities.MCP.Servers {
+		health := strings.TrimSpace(server.Health)
+		if server.Attached && !strings.EqualFold(health, "degraded") && !strings.EqualFold(health, "error") {
+			continue
+		}
+		remediations = append(remediations, agentLauncherRemediation{
+			Category:        "mcp",
+			Summary:         "One or more MCP servers need attention. Re-attach or repair them before expecting tools to appear.",
+			Detail:          fmt.Sprintf("server=%s health=%s", strings.TrimSpace(server.Name), health),
+			RemediationHint: strings.TrimSpace(server.RemediationHint),
+		})
+		break
+	}
+	if session != nil {
+		runtimeState := strings.TrimSpace(session.RuntimeState)
+		if runtimeState != "" && runtimeState != "running" {
+			remediations = append(remediations, agentLauncherRemediation{
+				Category: "runtime",
+				Summary:  "Managed runtime is not running. Start the agent or inspect the launcher session.",
+				Detail:   fmt.Sprintf("state=%s", runtimeState),
+			})
+		}
+	}
+	if mediaRuntime != nil && mediaRuntime.Status == "unavailable" {
+		remediations = append(remediations, agentLauncherRemediation{
+			Category:        "media",
+			Summary:         "Media runtime is unavailable. Configure transcription credentials or switch providers.",
+			Detail:          strings.TrimSpace(mediaRuntime.Detail),
+			RemediationHint: strings.TrimSpace(mediaRuntime.RemediationHint),
+		})
+	}
+	return remediations
 }
 
 func agentProviderFromStatus(status AgentState) string {

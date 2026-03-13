@@ -75,10 +75,12 @@ describe('ExecutionDetailContent', () => {
             summary: 'weather summarized',
             failureReason: 'tool timeout',
             failureCategory: 'timeout',
+            renderMode: 'rich_media',
             artifacts: [{
               id: 'artifact-1',
               name: 'summary.txt',
               kind: 'text',
+              outputRole: 'generated',
               contentType: 'text/plain',
               mediaType: 'audio/wav',
               source: 'telegram',
@@ -116,7 +118,9 @@ describe('ExecutionDetailContent', () => {
     expect(screen.getByText('Approval & Governance')).toBeInTheDocument();
     expect(screen.getByText('Workers')).toBeInTheDocument();
     expect(screen.getByText('Task Results')).toBeInTheDocument();
+    expect(screen.getByText(/Render mode:\s*rich_media/i)).toBeInTheDocument();
     expect(screen.getByText(/media=audio\/wav/i)).toBeInTheDocument();
+    expect(screen.getByText(/role=generated/i)).toBeInTheDocument();
     expect(screen.getByText(/source=telegram/i)).toBeInTheDocument();
     expect(screen.getByText(/external=tg-file-1/i)).toBeInTheDocument();
     expect(screen.getByText(/attachment=attachment-1/i)).toBeInTheDocument();

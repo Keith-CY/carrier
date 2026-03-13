@@ -124,6 +124,7 @@ type OrchestratorArtifact struct {
 	TaskID      string `json:"taskId,omitempty"`
 	Name        string `json:"name"`
 	Kind        string `json:"kind,omitempty"`
+	OutputRole  string `json:"outputRole,omitempty"`
 	MediaType   string `json:"mediaType,omitempty"`
 	ContentType string `json:"contentType,omitempty"`
 	SizeBytes   int64  `json:"sizeBytes,omitempty"`
@@ -138,6 +139,7 @@ type OrchestratorExecutionOutcome struct {
 	Summary         string                 `json:"summary,omitempty"`
 	FailureReason   string                 `json:"failureReason,omitempty"`
 	FailureCategory string                 `json:"failureCategory,omitempty"`
+	RenderMode      string                 `json:"renderMode,omitempty"`
 	Artifacts       []OrchestratorArtifact `json:"artifacts,omitempty"`
 }
 
@@ -506,6 +508,7 @@ func normalizeOrchestratorArtifact(in OrchestratorArtifact) OrchestratorArtifact
 	out.TaskID = strings.TrimSpace(out.TaskID)
 	out.Name = strings.TrimSpace(out.Name)
 	out.Kind = strings.TrimSpace(out.Kind)
+	out.OutputRole = strings.TrimSpace(strings.ToLower(out.OutputRole))
 	out.MediaType = strings.TrimSpace(out.MediaType)
 	out.ContentType = strings.TrimSpace(out.ContentType)
 	out.Path = strings.TrimSpace(out.Path)
@@ -527,6 +530,7 @@ func normalizeOrchestratorExecutionOutcome(in OrchestratorExecutionOutcome) Orch
 	out.Summary = strings.TrimSpace(out.Summary)
 	out.FailureReason = strings.TrimSpace(out.FailureReason)
 	out.FailureCategory = strings.TrimSpace(out.FailureCategory)
+	out.RenderMode = strings.TrimSpace(strings.ToLower(out.RenderMode))
 	if out.Artifacts == nil {
 		out.Artifacts = []OrchestratorArtifact{}
 	} else {

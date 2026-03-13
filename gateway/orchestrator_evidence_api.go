@@ -57,6 +57,7 @@ type OrchestratorEvidenceProviderAttribution struct {
 
 type OrchestratorEvidenceBundle struct {
 	GeneratedAt         string                                  `json:"generatedAt"`
+	RenderMode          string                                  `json:"renderMode,omitempty"`
 	Execution           OrchestratorExecution                   `json:"execution"`
 	Plan                OrchestratorEvidencePlanSnapshot        `json:"plan"`
 	Policy              OrchestratorExecutionPolicySnapshot     `json:"policy,omitempty"`
@@ -183,6 +184,7 @@ func buildOrchestratorEvidenceBundle(execution OrchestratorExecution) (Orchestra
 	}
 	return OrchestratorEvidenceBundle{
 		GeneratedAt:         nowTimestamp(),
+		RenderMode:          strings.TrimSpace(executionWithUsage.Outcome.RenderMode),
 		Execution:           executionWithUsage,
 		Plan:                buildEvidencePlanSnapshot(executionWithUsage),
 		Policy:              executionWithUsage.Policy,
