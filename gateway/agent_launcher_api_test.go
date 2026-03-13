@@ -40,18 +40,18 @@ func TestHandleAgentLauncherReturnsSummary(t *testing.T) {
 			DefaultProfile: "openrouter-fast",
 			Profiles: []managedAgentModelProfile{
 				{
-					ProfileName:    "openrouter-fast",
-					ModelAlias:     "flash",
-					ModelID:        "google/gemini-2.0-flash-001",
-					ProviderID:     "openrouter",
-					ProviderKey:    "openrouter",
-					ProtocolFamily: "openai-compatible",
-					BaseURL:        "https://openrouter.ai/api/v1",
-					AuthMethod:     "api_key",
-					TimeoutMs:      45000,
-					RetryBudget:    2,
+					ProfileName:      "openrouter-fast",
+					ModelAlias:       "flash",
+					ModelID:          "google/gemini-2.0-flash-001",
+					ProviderID:       "openrouter",
+					ProviderKey:      "openrouter",
+					ProtocolFamily:   "openai-compatible",
+					BaseURL:          "https://openrouter.ai/api/v1",
+					AuthMethod:       "api_key",
+					TimeoutMs:        45000,
+					RetryBudget:      2,
 					FallbackStrategy: "ordered",
-					Primary:        true,
+					Primary:          true,
 				},
 				{
 					ProfileName:    "openrouter-safe",
@@ -130,6 +130,20 @@ func TestHandleAgentLauncherReturnsSummary(t *testing.T) {
 				},
 			})
 		},
+		"GET /api/v1/agents/picoclaw/subagents": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jobs": []map[string]any{
+					{"jobId": "subagent-1", "task": "collect diagnostics", "status": "completed", "result": "done"},
+				},
+			})
+		},
+		"GET /api/v1/agents/picoclaw/sessions": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"sessions": []map[string]any{
+					{"key": "telegram:prod", "messageCount": 12, "summaryLength": 128, "updatedAt": now},
+				},
+			})
+		},
 	})
 
 	rec := httptest.NewRecorder()
@@ -150,6 +164,8 @@ func TestHandleAgentLauncherReturnsSummary(t *testing.T) {
 		`"toolbox"`,
 		`"disabledCount":1`,
 		`"count":1`,
+		`"subagent-1"`,
+		`"telegram:prod"`,
 		`"lastResult":"succeeded"`,
 		`"defaultProfile":"openrouter-fast"`,
 		`"modelAlias":"flash"`,
@@ -321,13 +337,16 @@ func TestHandleAgentLauncherReturnsLastModelRunMetadata(t *testing.T) {
 		GatewayURL: "http://127.0.0.1:8787",
 		Provider:   "openrouter",
 		ModelRuntime: &managedAgentModelRuntime{
-			RequestedAlias: "flash",
-			RequestedModel: "deepseek/deepseek-chat-v3-0324",
-			ResolvedModel:  "deepseek/deepseek-chat-v3-0324",
-			FallbackGroup:  "openrouter:flash",
-			OverrideHit:    true,
-			FallbackHit:    true,
-			LastRunAt:      now,
+			RequestedAlias:    "flash",
+			RequestedModel:    "deepseek/deepseek-chat-v3-0324",
+			ResolvedModel:     "deepseek/deepseek-chat-v3-0324",
+			ResolvedProfile:   "openrouter-safe",
+			FallbackGroup:     "openrouter:flash",
+			SelectionStrategy: "explicit_model",
+			SelectionOrdinal:  1,
+			OverrideHit:       true,
+			FallbackHit:       true,
+			LastRunAt:         now,
 		},
 		RuntimeState: "running",
 		CreatedAt:    now,

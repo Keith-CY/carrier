@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPost } from '../../lib/api';
@@ -16,6 +16,9 @@ type AgentCapabilities = {
     source?: string;
     version?: string;
     targetVersion?: string;
+    health?: string;
+    updateStatus?: string;
+    updateAvailable?: boolean;
     enabled?: boolean;
   }>;
   mcp?: {
@@ -23,6 +26,7 @@ type AgentCapabilities = {
       name?: string;
       health?: string;
       enabled?: boolean;
+      attached?: boolean;
       manageable?: boolean;
       visibleToolCount?: number;
       hiddenToolCount?: number;
@@ -39,6 +43,9 @@ type AgentSkillCatalogEntry = {
   summary?: string;
   source?: string;
   version?: string;
+  health?: string;
+  updateStatus?: string;
+  updateAvailable?: boolean;
   keywords?: string[];
   tags?: string[];
 };
@@ -47,11 +54,14 @@ type AgentMCPServerDetail = {
   name?: string;
   health?: string;
   enabled?: boolean;
+  attached?: boolean;
   manageable?: boolean;
   visibleToolCount?: number;
   hiddenToolCount?: number;
   healthDetail?: string;
   remediationHint?: string;
+  configDigest?: string;
+  configSummary?: string;
   visibleTools?: Array<{
     name?: string;
     description?: string;
@@ -148,6 +158,27 @@ type AgentLauncherSummary = {
       }>;
     }>;
   };
+  delegation?: {
+    count?: number;
+    jobs?: Array<{
+      jobId?: string;
+      task?: string;
+      status?: string;
+      summary?: string;
+      result?: string;
+      error?: string;
+      updatedAt?: string;
+    }>;
+  };
+  sessions?: {
+    count?: number;
+    sessions?: Array<{
+      key?: string;
+      messageCount?: number;
+      summaryLength?: number;
+      updatedAt?: string;
+    }>;
+  };
   session?: {
     instanceId?: string;
     channel?: string;
@@ -195,6 +226,15 @@ function buildLauncherRemediationMessages(launcher: AgentLauncherSummary | undef
   if (Array.isArray(launcher.cron?.jobs) && launcher.cron?.jobs.some((job) => !!job.paused)) {
     messages = appendUniqueMessage(messages, 'One or more cron jobs are paused. Resume or cancel them to restore scheduled automation.');
   }
+  if (Array.isArray(launcher.capabilities?.skills) && launcher.capabilities.skills.some((skill) => !!skill.updateAvailable)) {
+    messages = appendUniqueMessage(messages, 'One or more installed skills have updates pending. Review version drift and update pinned skills.');
+  }
+  if (Array.isArray(launcher.capabilities?.mcp?.servers) && launcher.capabilities.mcp.servers.some((server) => server.attached === false)) {
+    messages = appendUniqueMessage(messages, 'One or more MCP servers are detached. Re-attach them before expecting tools to appear in runtime.');
+  }
+  if (launcher.session && String(launcher.session.runtimeState || '').trim() && String(launcher.session.runtimeState || '').trim() !== 'running') {
+    messages = appendUniqueMessage(messages, 'Managed runtime is not running. Start the agent or inspect the launcher session.');
+  }
   return messages;
 }
 
@@ -214,6 +254,7 @@ export function AgentDetailPage() {
   const [skillSearchResults, setSkillSearchResults] = useState<AgentSkillCatalogEntry[]>([]);
   const [skillVersionDrafts, setSkillVersionDrafts] = useState<Record<string, string>>({});
   const [selectedMCPServerName, setSelectedMCPServerName] = useState('');
+  const [mcpConfigDraft, setMcpConfigDraft] = useState('');
   const [editingProfileName, setEditingProfileName] = useState('');
   const [profileDraft, setProfileDraft] = useState<AgentModelProfileDraft | null>(null);
 
@@ -350,6 +391,12 @@ export function AgentDetailPage() {
     retry: false,
   });
 
+  useEffect(() => {
+    if (mcpDetailQuery.data && selectedMCPServerName) {
+      setMcpConfigDraft(String(mcpDetailQuery.data.configSummary || '').trim());
+    }
+  }, [mcpDetailQuery.data, selectedMCPServerName]);
+
   const mcpToggleMutation = useMutation({
     mutationFn: async ({ serverName, enabled }: { serverName: string; enabled: boolean }) => {
       await apiPost(`/api/v1/agents/${encodeURIComponent(agentId)}/mcp/${encodeURIComponent(serverName)}`, { enabled });
@@ -362,6 +409,40 @@ export function AgentDetailPage() {
       if (selectedMCPServerName === serverName) {
         await mcpDetailQuery.refetch();
       }
+    },
+    onError: (error) => {
+      setLastActionMessage((error as Error).message);
+    },
+  });
+
+  const mcpAttachMutation = useMutation({
+    mutationFn: async ({ serverName, attached }: { serverName: string; attached: boolean }) => {
+      const action = attached ? 'attach' : 'detach';
+      return apiPost<AgentMCPServerDetail>(`/api/v1/agents/${encodeURIComponent(agentId)}/mcp/${encodeURIComponent(serverName)}/${action}`, {});
+    },
+    onSuccess: async (detail) => {
+      const serverName = String(detail.name || selectedMCPServerName || 'unknown').trim();
+      setLastActionMessage(`MCP server ${serverName} ${detail.attached === false ? 'detached' : 'attached'}.`);
+      await capabilitiesQuery.refetch();
+      await launcherQuery.refetch();
+      if (selectedMCPServerName === serverName) {
+        await mcpDetailQuery.refetch();
+      }
+    },
+    onError: (error) => {
+      setLastActionMessage((error as Error).message);
+    },
+  });
+
+  const mcpConfigMutation = useMutation({
+    mutationFn: async ({ serverName, config }: { serverName: string; config: string }) => {
+      return apiPost<AgentMCPServerDetail>(`/api/v1/agents/${encodeURIComponent(agentId)}/mcp/${encodeURIComponent(serverName)}/config`, { config });
+    },
+    onSuccess: async (detail) => {
+      const serverName = String(detail.name || selectedMCPServerName || 'unknown').trim();
+      setLastActionMessage(`MCP config for ${serverName} updated.`);
+      setMcpConfigDraft(String(detail.configSummary || '').trim());
+      await mcpDetailQuery.refetch();
     },
     onError: (error) => {
       setLastActionMessage((error as Error).message);
@@ -474,6 +555,16 @@ export function AgentDetailPage() {
     () => (content.state === 'ready' ? buildLauncherRemediationMessages(content.launcher) : []),
     [content],
   );
+  const firstDetachedMCPServer = useMemo(() => {
+    if (content.state !== 'ready') return '';
+    const detached = (content.capabilities.mcp?.servers || []).find((server) => server.attached === false && server.name);
+    return String(detached?.name || '').trim();
+  }, [content]);
+  const firstPausedCronJobID = useMemo(() => {
+    if (content.state !== 'ready') return '';
+    const paused = (content.launcher?.cron?.jobs || []).find((job) => job.paused && job.id);
+    return String(paused?.id || '').trim();
+  }, [content]);
 
   return (
     <section id="view-agent-detail" className="view">
@@ -494,6 +585,48 @@ export function AgentDetailPage() {
                     </li>
                   ))}
                 </ul>
+                <div className="btn-row">
+                  {content.launcher?.providerReadiness?.ready === false ? (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={modelSyncMutation.isPending}
+                      onClick={() => modelSyncMutation.mutate()}
+                    >
+                      Sync model surface
+                    </button>
+                  ) : null}
+                  {content.launcher?.session?.runtimeState && content.launcher.session.runtimeState !== 'running' ? (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={actionMutation.isPending}
+                      onClick={() => actionMutation.mutate('start')}
+                    >
+                      Start runtime
+                    </button>
+                  ) : null}
+                  {firstPausedCronJobID ? (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={cronMutation.isPending}
+                      onClick={() => cronMutation.mutate({ jobId: firstPausedCronJobID, action: 'resume' })}
+                    >
+                      Resume paused cron
+                    </button>
+                  ) : null}
+                  {firstDetachedMCPServer ? (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={mcpAttachMutation.isPending}
+                      onClick={() => mcpAttachMutation.mutate({ serverName: firstDetachedMCPServer, attached: true })}
+                    >
+                      {`Attach ${firstDetachedMCPServer} MCP`}
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ) : null}
             {content.launcher && (content.launcher.heartbeat || content.launcher.providerReadiness || content.launcher.memory || content.launcher.session || content.launcher.cron) ? (
@@ -540,6 +673,18 @@ export function AgentDetailPage() {
                     {content.launcher.cron?.nextRunAt ? ` · next=${content.launcher.cron.nextRunAt}` : ''}
                     {content.launcher.cron?.lastRunAt ? ` · last=${content.launcher.cron.lastRunAt}` : ''}
                     {content.launcher.cron?.lastResult ? ` · ${content.launcher.cron.lastResult}` : ''}
+                  </div>
+                </div>
+                <div>
+                  <strong>Delegation</strong>
+                  <div className="text-dim">
+                    {typeof content.launcher.delegation?.count === 'number' ? `${content.launcher.delegation.count} job(s)` : 'none'}
+                  </div>
+                </div>
+                <div>
+                  <strong>Sessions</strong>
+                  <div className="text-dim">
+                    {typeof content.launcher.sessions?.count === 'number' ? `${content.launcher.sessions.count} session(s)` : 'none'}
                   </div>
                 </div>
               </div>
@@ -601,6 +746,43 @@ export function AgentDetailPage() {
                           ))}
                         </ul>
                       ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {content.launcher?.delegation?.jobs && content.launcher.delegation.jobs.length ? (
+              <div>
+                <strong>Recent Delegation Jobs</strong>
+                <ul className="compact-list">
+                  {content.launcher.delegation.jobs.map((job) => (
+                    <li key={String(job.jobId || '')}>
+                      <span>{job.jobId || 'unknown-job'}</span>
+                      <span className="text-dim">
+                        {job.task || 'no task'}
+                        {job.status ? ` · ${job.status}` : ''}
+                        {job.summary ? ` · ${job.summary}` : ''}
+                        {job.result ? ` · ${job.result}` : ''}
+                        {job.error ? ` · ${job.error}` : ''}
+                        {job.updatedAt ? ` · ${job.updatedAt}` : ''}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {content.launcher?.sessions?.sessions && content.launcher.sessions.sessions.length ? (
+              <div>
+                <strong>Recent Sessions</strong>
+                <ul className="compact-list">
+                  {content.launcher.sessions.sessions.map((session) => (
+                    <li key={String(session.key || '')}>
+                      <span>{session.key || 'unknown-session'}</span>
+                      <span className="text-dim">
+                        {typeof session.messageCount === 'number' ? `${session.messageCount} messages` : 'message count unavailable'}
+                        {typeof session.summaryLength === 'number' ? ` · summary=${session.summaryLength}` : ''}
+                        {session.updatedAt ? ` · ${session.updatedAt}` : ''}
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -816,6 +998,9 @@ export function AgentDetailPage() {
                         {skill.source ? ` · ${skill.source}` : ''}
                         {skill.version ? ` · ${skill.version}` : ''}
                         {skill.targetVersion ? ` · target=${skill.targetVersion}` : ''}
+                        {skill.health ? ` · health=${skill.health}` : ''}
+                        {skill.updateStatus ? ` · ${skill.updateStatus}` : ''}
+                        {skill.updateAvailable ? ' · update available' : ''}
                       </span>
                       {skill.name ? (
                         <div className="btn-row">
@@ -892,6 +1077,9 @@ export function AgentDetailPage() {
                             {skill.tags?.length ? ` · tags=${skill.tags.join(', ')}` : ''}
                             {skill.source ? ` · ${skill.source}` : ''}
                             {skill.version ? ` · ${skill.version}` : ''}
+                            {skill.health ? ` · health=${skill.health}` : ''}
+                            {skill.updateStatus ? ` · ${skill.updateStatus}` : ''}
+                            {skill.updateAvailable ? ' · update available' : ''}
                           </span>
                           {skillName ? (
                             <button
@@ -918,6 +1106,7 @@ export function AgentDetailPage() {
                       <span className="text-dim">
                         {server.health || 'unknown'}
                         {typeof server.enabled === 'boolean' ? ` · ${server.enabled ? 'enabled' : 'disabled'}` : ''}
+                        {typeof server.attached === 'boolean' ? ` · ${server.attached ? 'attached' : 'detached'}` : ''}
                         {` · visible=${server.visibleToolCount || 0} · hidden=${server.hiddenToolCount || 0}`}
                       </span>
                       {server.name && server.manageable ? (
@@ -955,10 +1144,50 @@ export function AgentDetailPage() {
                         <div className="text-dim">
                           {mcpDetailQuery.data.health || 'unknown'}
                           {typeof mcpDetailQuery.data.enabled === 'boolean' ? ` · ${mcpDetailQuery.data.enabled ? 'enabled' : 'disabled'}` : ''}
+                          {typeof mcpDetailQuery.data.attached === 'boolean' ? ` · ${mcpDetailQuery.data.attached ? 'attached' : 'detached'}` : ''}
                           {` · visible=${mcpDetailQuery.data.visibleToolCount || 0} · hidden=${mcpDetailQuery.data.hiddenToolCount || 0}`}
+                          {mcpDetailQuery.data.configDigest ? ` · ${mcpDetailQuery.data.configDigest}` : ''}
                         </div>
+                        {mcpDetailQuery.data.configSummary ? <div className="text-dim">{mcpDetailQuery.data.configSummary}</div> : null}
                         {mcpDetailQuery.data.healthDetail ? <div className="text-dim">{mcpDetailQuery.data.healthDetail}</div> : null}
                         {mcpDetailQuery.data.remediationHint ? <div className="text-dim">{mcpDetailQuery.data.remediationHint}</div> : null}
+                        <div className="btn-row">
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={mcpAttachMutation.isPending || mcpDetailQuery.data.attached === true}
+                            onClick={() => mcpAttachMutation.mutate({ serverName: selectedMCPServerName, attached: true })}
+                          >
+                            {`Attach ${selectedMCPServerName}`}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={mcpAttachMutation.isPending || mcpDetailQuery.data.attached === false}
+                            onClick={() => mcpAttachMutation.mutate({ serverName: selectedMCPServerName, attached: false })}
+                          >
+                            {`Detach ${selectedMCPServerName}`}
+                          </button>
+                        </div>
+                        <label>
+                          <strong>{`${selectedMCPServerName} MCP config`}</strong>
+                          <textarea
+                            aria-label={`${selectedMCPServerName} MCP config`}
+                            rows={4}
+                            value={mcpConfigDraft}
+                            onChange={(event) => setMcpConfigDraft(event.target.value)}
+                          />
+                        </label>
+                        <div className="btn-row">
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={mcpConfigMutation.isPending}
+                            onClick={() => mcpConfigMutation.mutate({ serverName: selectedMCPServerName, config: mcpConfigDraft })}
+                          >
+                            {`Save ${selectedMCPServerName} config`}
+                          </button>
+                        </div>
                         {mcpDetailQuery.data.visibleTools?.length ? (
                           <ul className="compact-list">
                             {mcpDetailQuery.data.visibleTools.map((tool) => (

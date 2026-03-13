@@ -134,7 +134,11 @@ func NewRuntime(svc AgentService, memStore MemoryStore, opts ...RuntimeOption) *
 	r.loop.SetSkillsLoader(r.skillsLoader)
 	effectiveSubagentManager := r.subagentManager
 	if effectiveSubagentManager == nil && r.subagentSpawner == nil {
-		effectiveSubagentManager = NewInMemorySubagentManager(nil)
+		if r.workspaceRoot != "" {
+			effectiveSubagentManager = NewInMemorySubagentManagerWithStorage(nil, filepath.Join(r.workspaceRoot, ".baseagent", "subagents.json"))
+		} else {
+			effectiveSubagentManager = NewInMemorySubagentManager(nil)
+		}
 	}
 	effectiveSubagentSpawner := r.subagentSpawner
 	if effectiveSubagentManager != nil {
@@ -225,6 +229,13 @@ func (r *Runtime) RecentSubagentJobs(ctx context.Context, limit int) []SubagentJ
 	return r.subagentManager.RecentJobs(ctx, limit)
 }
 
+func (r *Runtime) RecentSessionStats(limit int) []SessionStats {
+	if r == nil || r.sessions == nil {
+		return nil
+	}
+	return r.sessions.ListStats(limit)
+}
+
 func (r *Runtime) SubagentJob(ctx context.Context, jobID string) (SubagentJob, error) {
 	if r == nil || r.subagentManager == nil {
 		return SubagentJob{}, fmt.Errorf("subagent manager is unavailable")
@@ -287,6 +298,32 @@ func (r *Runtime) SetMCPServerEnabled(ctx context.Context, name string, enabled 
 		return fmt.Errorf("mcp manager is unavailable")
 	}
 	if err := r.mcpManager.SetServerEnabled(ctx, name, enabled); err != nil {
+		return err
+	}
+	if r.loop != nil {
+		r.loop.SetExecutionTools(r.loop.executionTools, r.loop.maxToolIterations, r.effectiveStructuredToolPolicy(), r.mcpManager, r.subagentManager)
+	}
+	return nil
+}
+
+func (r *Runtime) SetMCPServerAttached(ctx context.Context, name string, attached bool) error {
+	if r == nil || r.mcpManager == nil {
+		return fmt.Errorf("mcp manager is unavailable")
+	}
+	if err := r.mcpManager.SetServerAttached(ctx, name, attached); err != nil {
+		return err
+	}
+	if r.loop != nil {
+		r.loop.SetExecutionTools(r.loop.executionTools, r.loop.maxToolIterations, r.effectiveStructuredToolPolicy(), r.mcpManager, r.subagentManager)
+	}
+	return nil
+}
+
+func (r *Runtime) UpdateMCPServerConfig(ctx context.Context, name string, config string) error {
+	if r == nil || r.mcpManager == nil {
+		return fmt.Errorf("mcp manager is unavailable")
+	}
+	if err := r.mcpManager.UpdateServerConfig(ctx, name, config); err != nil {
 		return err
 	}
 	if r.loop != nil {

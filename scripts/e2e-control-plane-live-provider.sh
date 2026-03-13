@@ -191,6 +191,10 @@ case "$PROVIDER" in
     ;;
 esac
 
+if [[ -z "$REQUIRE_TRANSCRIPTION" && "$PROVIDER" == "openai" ]]; then
+  REQUIRE_TRANSCRIPTION="1"
+fi
+
 if [[ -z "$API_KEY" ]]; then
   echo "error: CARRIER_LIVE_API_KEY is required" >&2
   exit 2

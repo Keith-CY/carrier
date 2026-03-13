@@ -11,14 +11,17 @@ type MCPToolCapability struct {
 }
 
 type MCPServerCapability struct {
-	Name             string `json:"name"`
-	Health           string `json:"health"`
-	Enabled          bool   `json:"enabled"`
-	Manageable       bool   `json:"manageable,omitempty"`
-	VisibleToolCount int    `json:"visibleToolCount"`
-	HiddenToolCount  int    `json:"hiddenToolCount"`
-	HealthDetail     string `json:"healthDetail,omitempty"`
-	RemediationHint  string `json:"remediationHint,omitempty"`
+	Name             string              `json:"name"`
+	Health           string              `json:"health"`
+	Enabled          bool                `json:"enabled"`
+	Attached         bool                `json:"attached"`
+	Manageable       bool                `json:"manageable,omitempty"`
+	VisibleToolCount int                 `json:"visibleToolCount"`
+	HiddenToolCount  int                 `json:"hiddenToolCount"`
+	HealthDetail     string              `json:"healthDetail,omitempty"`
+	RemediationHint  string              `json:"remediationHint,omitempty"`
+	ConfigDigest     string              `json:"configDigest,omitempty"`
+	ConfigSummary    string              `json:"configSummary,omitempty"`
 	VisibleTools     []MCPToolCapability `json:"visibleTools,omitempty"`
 	HiddenTools      []MCPToolCapability `json:"hiddenTools,omitempty"`
 }
@@ -62,14 +65,17 @@ func (r *Runtime) CapabilitySummary(ctx context.Context) RuntimeCapabilitySummar
 		summary.Skills = make([]RuntimeSkillCapability, 0, len(installed))
 		for _, skill := range installed {
 			summary.Skills = append(summary.Skills, RuntimeSkillCapability{
-				Name:          skill.Name,
-				Summary:       skill.Summary,
-				Keywords:      append([]string(nil), skill.Keywords...),
-				Tags:          append([]string(nil), skill.Tags...),
-				Source:        skill.Source,
-				Version:       skill.Version,
-				TargetVersion: skill.TargetVersion,
-				Enabled:       true,
+				Name:            skill.Name,
+				Summary:         skill.Summary,
+				Keywords:        append([]string(nil), skill.Keywords...),
+				Tags:            append([]string(nil), skill.Tags...),
+				Source:          skill.Source,
+				Version:         skill.Version,
+				TargetVersion:   skill.TargetVersion,
+				Health:          skill.Health,
+				UpdateStatus:    skill.UpdateStatus,
+				UpdateAvailable: skill.UpdateAvailable,
+				Enabled:         true,
 			})
 		}
 	}

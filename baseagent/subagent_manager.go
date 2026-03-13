@@ -2,8 +2,11 @@ package baseagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -40,16 +43,21 @@ type SubagentManager interface {
 }
 
 type InMemorySubagentManager struct {
-	mu         sync.RWMutex
-	next       int
-	jobs       map[string]SubagentJob
-	order      []string
-	maxHistory int
-	cancels    map[string]context.CancelFunc
-	executor   SubagentExecutor
+	mu          sync.RWMutex
+	next        int
+	jobs        map[string]SubagentJob
+	order       []string
+	maxHistory  int
+	cancels     map[string]context.CancelFunc
+	executor    SubagentExecutor
+	storagePath string
 }
 
 func NewInMemorySubagentManager(executor SubagentExecutor) *InMemorySubagentManager {
+	return NewInMemorySubagentManagerWithStorage(executor, "")
+}
+
+func NewInMemorySubagentManagerWithStorage(executor SubagentExecutor, storagePath string) *InMemorySubagentManager {
 	if executor == nil {
 		executor = func(_ context.Context, req SubagentRequest) (string, error) {
 			task := strings.TrimSpace(req.Task)
@@ -59,13 +67,16 @@ func NewInMemorySubagentManager(executor SubagentExecutor) *InMemorySubagentMana
 			return "delegated task accepted: " + task, nil
 		}
 	}
-	return &InMemorySubagentManager{
-		jobs:       map[string]SubagentJob{},
-		order:      nil,
-		maxHistory: 32,
-		cancels:    map[string]context.CancelFunc{},
-		executor:   executor,
+	manager := &InMemorySubagentManager{
+		jobs:        map[string]SubagentJob{},
+		order:       nil,
+		maxHistory:  32,
+		cancels:     map[string]context.CancelFunc{},
+		executor:    executor,
+		storagePath: strings.TrimSpace(storagePath),
 	}
+	manager.loadPersistedJobs()
+	return manager
 }
 
 func (m *InMemorySubagentManager) Spawn(ctx context.Context, req SubagentRequest) (SubagentJobHandle, error) {
@@ -92,6 +103,7 @@ func (m *InMemorySubagentManager) Spawn(ctx context.Context, req SubagentRequest
 	}
 	m.jobs[jobID] = job
 	m.order = append(m.order, jobID)
+	m.persistLocked()
 	m.mu.Unlock()
 
 	execBase := context.Background()
@@ -152,6 +164,7 @@ func (m *InMemorySubagentManager) runJob(ctx context.Context, jobID string, req 
 	m.jobs[jobID] = job
 	delete(m.cancels, jobID)
 	m.pruneLocked()
+	m.persistLocked()
 	m.mu.Unlock()
 }
 
@@ -240,6 +253,65 @@ func (m *InMemorySubagentManager) pruneLocked() {
 		delete(m.cancels, oldestID)
 		m.order = m.order[1:]
 	}
+}
+
+type subagentManagerPersistedState struct {
+	Next  int           `json:"next"`
+	Order []string      `json:"order,omitempty"`
+	Jobs  []SubagentJob `json:"jobs,omitempty"`
+}
+
+func (m *InMemorySubagentManager) loadPersistedJobs() {
+	if m == nil || strings.TrimSpace(m.storagePath) == "" {
+		return
+	}
+	raw, err := os.ReadFile(m.storagePath)
+	if err != nil {
+		return
+	}
+	var state subagentManagerPersistedState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return
+	}
+	m.next = state.Next
+	m.order = append([]string(nil), state.Order...)
+	for _, job := range state.Jobs {
+		if strings.TrimSpace(job.JobID) == "" {
+			continue
+		}
+		m.jobs[job.JobID] = job
+	}
+	if len(m.order) == 0 && len(m.jobs) > 0 {
+		for jobID := range m.jobs {
+			m.order = append(m.order, jobID)
+		}
+	}
+}
+
+func (m *InMemorySubagentManager) persistLocked() {
+	if m == nil || strings.TrimSpace(m.storagePath) == "" {
+		return
+	}
+	state := subagentManagerPersistedState{
+		Next:  m.next,
+		Order: append([]string(nil), m.order...),
+		Jobs:  make([]SubagentJob, 0, len(m.order)),
+	}
+	for _, jobID := range m.order {
+		job, ok := m.jobs[jobID]
+		if !ok {
+			continue
+		}
+		state.Jobs = append(state.Jobs, job)
+	}
+	if err := os.MkdirAll(filepath.Dir(m.storagePath), 0o755); err != nil {
+		return
+	}
+	raw, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(m.storagePath, raw, 0o600)
 }
 
 func isTerminalSubagentJobStatus(status SubagentJobStatus) bool {

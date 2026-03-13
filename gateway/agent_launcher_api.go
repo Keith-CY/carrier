@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,16 +10,18 @@ import (
 )
 
 type agentLauncherSummary struct {
-	AgentID           string                     `json:"agentId"`
-	Status            AgentState                 `json:"status"`
-	Heartbeat         *AgentHeartbeat            `json:"heartbeat,omitempty"`
-	Memory            *AgentMemoryState          `json:"memory,omitempty"`
-	Capabilities      AgentCapabilitySummary     `json:"capabilities"`
-	ProviderReadiness agentProviderReadiness     `json:"providerReadiness"`
-	ModelSurface      *agentLauncherModelSurface `json:"modelSurface,omitempty"`
-	LastModelRun      *agentLauncherModelRuntime `json:"lastModelRun,omitempty"`
-	Cron              *agentLauncherCronSummary  `json:"cron,omitempty"`
-	Session           *agentLauncherSession      `json:"session,omitempty"`
+	AgentID           string                          `json:"agentId"`
+	Status            AgentState                      `json:"status"`
+	Heartbeat         *AgentHeartbeat                 `json:"heartbeat,omitempty"`
+	Memory            *AgentMemoryState               `json:"memory,omitempty"`
+	Capabilities      AgentCapabilitySummary          `json:"capabilities"`
+	ProviderReadiness agentProviderReadiness          `json:"providerReadiness"`
+	ModelSurface      *agentLauncherModelSurface      `json:"modelSurface,omitempty"`
+	LastModelRun      *agentLauncherModelRuntime      `json:"lastModelRun,omitempty"`
+	Cron              *agentLauncherCronSummary       `json:"cron,omitempty"`
+	Delegation        *agentLauncherDelegationSummary `json:"delegation,omitempty"`
+	Sessions          *agentLauncherSessionsSummary   `json:"sessions,omitempty"`
+	Session           *agentLauncherSession           `json:"session,omitempty"`
 }
 
 type agentLauncherModelSurface struct {
@@ -27,33 +30,33 @@ type agentLauncherModelSurface struct {
 }
 
 type agentLauncherModelSurfaceProfile struct {
-	ProfileName    string `json:"profileName,omitempty"`
-	ModelAlias     string `json:"modelAlias,omitempty"`
-	ModelID        string `json:"modelId,omitempty"`
-	ProviderID     string `json:"providerId,omitempty"`
-	ProviderKey    string `json:"providerKey,omitempty"`
-	ProtocolFamily string `json:"protocolFamily,omitempty"`
-	BaseURL        string `json:"baseUrl,omitempty"`
-	AuthMethod     string `json:"authMethod,omitempty"`
-	TimeoutMs      int    `json:"timeoutMs,omitempty"`
-	RetryBudget    int    `json:"retryBudget,omitempty"`
+	ProfileName      string `json:"profileName,omitempty"`
+	ModelAlias       string `json:"modelAlias,omitempty"`
+	ModelID          string `json:"modelId,omitempty"`
+	ProviderID       string `json:"providerId,omitempty"`
+	ProviderKey      string `json:"providerKey,omitempty"`
+	ProtocolFamily   string `json:"protocolFamily,omitempty"`
+	BaseURL          string `json:"baseUrl,omitempty"`
+	AuthMethod       string `json:"authMethod,omitempty"`
+	TimeoutMs        int    `json:"timeoutMs,omitempty"`
+	RetryBudget      int    `json:"retryBudget,omitempty"`
 	FallbackStrategy string `json:"fallbackStrategy,omitempty"`
-	FallbackGroup  string `json:"fallbackGroup,omitempty"`
-	AliasGroupSize int    `json:"aliasGroupSize,omitempty"`
-	Primary        bool   `json:"primary,omitempty"`
+	FallbackGroup    string `json:"fallbackGroup,omitempty"`
+	AliasGroupSize   int    `json:"aliasGroupSize,omitempty"`
+	Primary          bool   `json:"primary,omitempty"`
 }
 
 type agentLauncherModelRuntime struct {
-	RequestedAlias   string `json:"requestedAlias,omitempty"`
-	RequestedModel   string `json:"requestedModel,omitempty"`
-	ResolvedModel    string `json:"resolvedModel,omitempty"`
-	ResolvedProfile  string `json:"resolvedProfile,omitempty"`
-	FallbackGroup    string `json:"fallbackGroup,omitempty"`
+	RequestedAlias    string `json:"requestedAlias,omitempty"`
+	RequestedModel    string `json:"requestedModel,omitempty"`
+	ResolvedModel     string `json:"resolvedModel,omitempty"`
+	ResolvedProfile   string `json:"resolvedProfile,omitempty"`
+	FallbackGroup     string `json:"fallbackGroup,omitempty"`
 	SelectionStrategy string `json:"selectionStrategy,omitempty"`
-	SelectionOrdinal int    `json:"selectionOrdinal,omitempty"`
-	OverrideHit      bool   `json:"overrideHit,omitempty"`
-	FallbackHit      bool   `json:"fallbackHit,omitempty"`
-	LastRunAt        string `json:"lastRunAt,omitempty"`
+	SelectionOrdinal  int    `json:"selectionOrdinal,omitempty"`
+	OverrideHit       bool   `json:"overrideHit,omitempty"`
+	FallbackHit       bool   `json:"fallbackHit,omitempty"`
+	LastRunAt         string `json:"lastRunAt,omitempty"`
 }
 
 type agentLauncherCronSummary struct {
@@ -62,6 +65,16 @@ type agentLauncherCronSummary struct {
 	LastRunAt  string    `json:"lastRunAt,omitempty"`
 	LastResult string    `json:"lastResult,omitempty"`
 	Jobs       []CronJob `json:"jobs,omitempty"`
+}
+
+type agentLauncherDelegationSummary struct {
+	Count int                     `json:"count"`
+	Jobs  []baseagent.SubagentJob `json:"jobs,omitempty"`
+}
+
+type agentLauncherSessionsSummary struct {
+	Count    int                      `json:"count"`
+	Sessions []baseagent.SessionStats `json:"sessions,omitempty"`
 }
 
 type agentProviderReadiness struct {
@@ -143,6 +156,14 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 	if jobs, err := daemon.ListCronJobs(r.Context(), agentID, "", "webui:agents:launcher", requestID); err == nil && len(jobs) > 0 {
 		cronSummary = buildAgentCronSummary(jobs)
 	}
+	var delegationSummary *agentLauncherDelegationSummary
+	if jobs, err := daemon.GetAgentSubagentJobs(r.Context(), agentID, 5, "webui:agents:launcher", requestID); err == nil && len(jobs) > 0 {
+		delegationSummary = &agentLauncherDelegationSummary{Count: len(jobs), Jobs: jobs}
+	}
+	var sessionsSummary *agentLauncherSessionsSummary
+	if sessions, err := daemon.GetAgentSessions(r.Context(), agentID, 5, "webui:agents:launcher", requestID); err == nil && len(sessions) > 0 {
+		sessionsSummary = &agentLauncherSessionsSummary{Count: len(sessions), Sessions: sessions}
+	}
 
 	status := statuses[0]
 	if readiness.Provider == "" {
@@ -159,6 +180,8 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 		ModelSurface:      modelSurface,
 		LastModelRun:      lastModelRun,
 		Cron:              cronSummary,
+		Delegation:        delegationSummary,
+		Sessions:          sessionsSummary,
 		Session:           session,
 	})
 }
@@ -168,16 +191,16 @@ func buildAgentLauncherModelRuntime(runtime *managedAgentModelRuntime) *agentLau
 		return nil
 	}
 	return &agentLauncherModelRuntime{
-		RequestedAlias:   strings.TrimSpace(runtime.RequestedAlias),
-		RequestedModel:   strings.TrimSpace(runtime.RequestedModel),
-		ResolvedModel:    strings.TrimSpace(runtime.ResolvedModel),
-		ResolvedProfile:  strings.TrimSpace(runtime.ResolvedProfile),
-		FallbackGroup:    strings.TrimSpace(runtime.FallbackGroup),
+		RequestedAlias:    strings.TrimSpace(runtime.RequestedAlias),
+		RequestedModel:    strings.TrimSpace(runtime.RequestedModel),
+		ResolvedModel:     strings.TrimSpace(runtime.ResolvedModel),
+		ResolvedProfile:   strings.TrimSpace(runtime.ResolvedProfile),
+		FallbackGroup:     strings.TrimSpace(runtime.FallbackGroup),
 		SelectionStrategy: strings.TrimSpace(runtime.SelectionStrategy),
-		SelectionOrdinal: runtime.SelectionOrdinal,
-		OverrideHit:      runtime.OverrideHit,
-		FallbackHit:      runtime.FallbackHit,
-		LastRunAt:        strings.TrimSpace(runtime.LastRunAt),
+		SelectionOrdinal:  runtime.SelectionOrdinal,
+		OverrideHit:       runtime.OverrideHit,
+		FallbackHit:       runtime.FallbackHit,
+		LastRunAt:         strings.TrimSpace(runtime.LastRunAt),
 	}
 }
 
@@ -221,20 +244,20 @@ func buildAgentLauncherModelSurface(surface *managedAgentModelSurface) *agentLau
 			primary = true
 		}
 		result.Profiles = append(result.Profiles, agentLauncherModelSurfaceProfile{
-			ProfileName:    strings.TrimSpace(profile.ProfileName),
-			ModelAlias:     strings.TrimSpace(profile.ModelAlias),
-			ModelID:        strings.TrimSpace(profile.ModelID),
-			ProviderID:     strings.TrimSpace(profile.ProviderID),
-			ProviderKey:    strings.TrimSpace(profile.ProviderKey),
-			ProtocolFamily: strings.TrimSpace(profile.ProtocolFamily),
-			BaseURL:        strings.TrimSpace(profile.BaseURL),
-			AuthMethod:     strings.TrimSpace(profile.AuthMethod),
-			TimeoutMs:      profile.TimeoutMs,
-			RetryBudget:    profile.RetryBudget,
+			ProfileName:      strings.TrimSpace(profile.ProfileName),
+			ModelAlias:       strings.TrimSpace(profile.ModelAlias),
+			ModelID:          strings.TrimSpace(profile.ModelID),
+			ProviderID:       strings.TrimSpace(profile.ProviderID),
+			ProviderKey:      strings.TrimSpace(profile.ProviderKey),
+			ProtocolFamily:   strings.TrimSpace(profile.ProtocolFamily),
+			BaseURL:          strings.TrimSpace(profile.BaseURL),
+			AuthMethod:       strings.TrimSpace(profile.AuthMethod),
+			TimeoutMs:        profile.TimeoutMs,
+			RetryBudget:      profile.RetryBudget,
 			FallbackStrategy: strings.TrimSpace(profile.FallbackStrategy),
-			FallbackGroup:  group,
-			AliasGroupSize: aliasGroupSize,
-			Primary:        primary,
+			FallbackGroup:    group,
+			AliasGroupSize:   aliasGroupSize,
+			Primary:          primary,
 		})
 	}
 	return result

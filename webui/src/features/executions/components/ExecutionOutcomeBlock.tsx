@@ -28,6 +28,11 @@ export function ExecutionOutcomeBlock({
         const metaParts = [];
         if (String(item?.kind || '').trim()) metaParts.push(String(item.kind).trim());
         if (String(item?.contentType || '').trim()) metaParts.push(String(item.contentType).trim());
+        if (String(item?.mediaType || '').trim()) metaParts.push(`media=${String(item.mediaType).trim()}`);
+        if (String(item?.source || '').trim()) metaParts.push(`source=${String(item.source).trim()}`);
+        if (String(item?.externalId || '').trim()) metaParts.push(`external=${String(item.externalId).trim()}`);
+        if (String(item?.attachmentId || '').trim()) metaParts.push(`attachment=${String(item.attachmentId).trim()}`);
+        if (String(item?.downloadUrl || '').trim()) metaParts.push(String(item.downloadUrl).trim());
         if (toFiniteNumber(item?.sizeBytes, 0) > 0) metaParts.push(`${toFiniteNumber(item.sizeBytes, 0)} bytes`);
         if (String(item?.createdAt || '').trim()) metaParts.push(formatDateTime(item.createdAt));
         return (

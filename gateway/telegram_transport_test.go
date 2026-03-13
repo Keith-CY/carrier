@@ -393,7 +393,7 @@ func TestTelegramSendRenderedAttachment_PrefersDocument(t *testing.T) {
 	}
 }
 
-func TestTelegramSendRenderedAttachment_FallsBackToTextForUnsupportedAttachment(t *testing.T) {
+func TestTelegramSendRenderedAttachment_RendersAudioAttachmentAsDocument(t *testing.T) {
 	api := &fakeTelegramAPI{}
 	resp := GatewayResponse{
 		Result: "ok",
@@ -402,7 +402,7 @@ func TestTelegramSendRenderedAttachment_FallsBackToTextForUnsupportedAttachment(
 				{Type: "audio", Text: "voice note"},
 			},
 			Attachments: []baseagent.AttachmentRef{
-				{Kind: "audio", Name: "voice.ogg"},
+				{Kind: "audio", Name: "voice.ogg", DownloadURL: "https://downloads.example.com/voice.ogg"},
 			},
 		},
 	}
@@ -410,11 +410,43 @@ func TestTelegramSendRenderedAttachment_FallsBackToTextForUnsupportedAttachment(
 	if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
 		t.Fatalf("sendTelegramGatewayResponse error: %v", err)
 	}
-	if api.sendMessageCalls != 1 {
-		t.Fatalf("expected text fallback send, got %d", api.sendMessageCalls)
+	if api.sendDocumentCalls != 1 || api.lastSendDocumentRef != "https://downloads.example.com/voice.ogg" {
+		t.Fatalf("expected document send for audio attachment, got calls=%d ref=%q", api.sendDocumentCalls, api.lastSendDocumentRef)
 	}
-	if api.sendPhotoCalls != 0 || api.sendDocumentCalls != 0 {
-		t.Fatalf("expected unsupported attachment to avoid rich media send, got photo=%d document=%d", api.sendPhotoCalls, api.sendDocumentCalls)
+	if api.sendPhotoCalls != 0 || api.sendMessageCalls != 0 {
+		t.Fatalf("expected audio attachment to avoid photo/text fallback, got photo=%d message=%d", api.sendPhotoCalls, api.sendMessageCalls)
+	}
+}
+
+func TestTelegramSendRenderedAttachment_UsesBlockAttachmentIDForVideoRender(t *testing.T) {
+	api := &fakeTelegramAPI{}
+	resp := GatewayResponse{
+		Result: "ok",
+		RichContent: &baseagent.RichOutboundMessage{
+			Text: "video ready",
+			Blocks: []baseagent.ContentBlock{
+				{Type: "video", AttachmentID: "artifact-video-1"},
+			},
+			Attachments: []baseagent.AttachmentRef{
+				{
+					ID:          "artifact-video-1",
+					Kind:        "video",
+					Name:        "clip.mp4",
+					MediaType:   "video/mp4",
+					DownloadURL: "https://downloads.example.com/clip.mp4",
+				},
+			},
+		},
+	}
+
+	if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+		t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+	}
+	if api.sendDocumentCalls != 1 || api.lastSendDocumentRef != "https://downloads.example.com/clip.mp4" {
+		t.Fatalf("expected sendDocument with attachment download url, got calls=%d ref=%q", api.sendDocumentCalls, api.lastSendDocumentRef)
+	}
+	if api.sendPhotoCalls != 0 || api.sendMessageCalls != 0 {
+		t.Fatalf("expected video block to avoid photo/text fallback, got photo=%d message=%d", api.sendPhotoCalls, api.sendMessageCalls)
 	}
 }
 

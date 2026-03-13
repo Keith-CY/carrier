@@ -80,6 +80,11 @@ describe('ExecutionDetailContent', () => {
               name: 'summary.txt',
               kind: 'text',
               contentType: 'text/plain',
+              mediaType: 'audio/wav',
+              source: 'telegram',
+              externalId: 'tg-file-1',
+              attachmentId: 'attachment-1',
+              downloadUrl: '/downloads/artifact-1',
               sizeBytes: 12,
               createdAt: '2026-03-11T10:03:00Z',
             }],
@@ -111,6 +116,11 @@ describe('ExecutionDetailContent', () => {
     expect(screen.getByText('Approval & Governance')).toBeInTheDocument();
     expect(screen.getByText('Workers')).toBeInTheDocument();
     expect(screen.getByText('Task Results')).toBeInTheDocument();
+    expect(screen.getByText(/media=audio\/wav/i)).toBeInTheDocument();
+    expect(screen.getByText(/source=telegram/i)).toBeInTheDocument();
+    expect(screen.getByText(/external=tg-file-1/i)).toBeInTheDocument();
+    expect(screen.getByText(/attachment=attachment-1/i)).toBeInTheDocument();
+    expect(screen.getByText(/\/downloads\/artifact-1/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('link', { name: 'Download summary.txt' }));
     expect(onDownloadArtifact).toHaveBeenCalledWith('artifact-1', 'summary.txt');

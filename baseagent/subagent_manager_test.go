@@ -2,6 +2,7 @@ package baseagent
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -128,6 +129,37 @@ func TestSubagentManagerRecentJobsRetainsBoundedTerminalHistory(t *testing.T) {
 
 	if _, err := manager.Job(context.Background(), first.JobID); err == nil {
 		t.Fatalf("expected oldest terminal job to be pruned from lookup")
+	}
+}
+
+func TestSubagentManagerPersistsJobsAcrossRestart(t *testing.T) {
+	storagePath := filepath.Join(t.TempDir(), "subagents.json")
+	manager := NewInMemorySubagentManagerWithStorage(func(_ context.Context, req SubagentRequest) (string, error) {
+		return "completed: " + req.Task, nil
+	}, storagePath)
+
+	handle, err := manager.Spawn(context.Background(), SubagentRequest{Task: "collect diagnostics"})
+	if err != nil {
+		t.Fatalf("spawn job: %v", err)
+	}
+	job := waitForSubagentJobState(t, manager, handle.JobID, SubagentJobStatusCompleted)
+	if job.Result == "" {
+		t.Fatalf("expected completed result before reload, got %+v", job)
+	}
+
+	reloaded := NewInMemorySubagentManagerWithStorage(func(_ context.Context, req SubagentRequest) (string, error) {
+		return "completed: " + req.Task, nil
+	}, storagePath)
+	persisted, err := reloaded.Job(context.Background(), handle.JobID)
+	if err != nil {
+		t.Fatalf("lookup persisted job: %v", err)
+	}
+	if persisted.Status != SubagentJobStatusCompleted || persisted.Result != "completed: collect diagnostics" {
+		t.Fatalf("unexpected persisted job: %+v", persisted)
+	}
+	jobs := reloaded.RecentJobs(context.Background(), 5)
+	if len(jobs) != 1 || jobs[0].JobID != handle.JobID {
+		t.Fatalf("unexpected persisted recent jobs: %+v", jobs)
 	}
 }
 

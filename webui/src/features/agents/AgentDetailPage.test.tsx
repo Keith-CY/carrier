@@ -29,6 +29,8 @@ describe('AgentDetailPage', () => {
   beforeEach(() => {
     let cronPaused = false;
     let defaultProfile = 'openrouter-fast';
+    let mcpAttached = true;
+    let mcpConfig = '{"mode":"read"}';
     let updatedProfile = {
       profileName: 'openrouter-safe',
       modelAlias: 'flash-safe',
@@ -62,11 +64,11 @@ describe('AgentDetailPage', () => {
             disabledCount: 0,
           },
           skills: [
-            { name: 'go-testing', enabled: true, summary: 'Use go test before claiming success.', source: 'catalog', version: 'builtin', targetVersion: 'v2.0.0' },
+            { name: 'go-testing', enabled: true, summary: 'Use go test before claiming success.', source: 'catalog', version: 'builtin', targetVersion: 'v2.0.0', health: 'degraded', updateStatus: 'update_available', updateAvailable: true },
           ],
           mcp: {
             servers: [
-              { name: 'repo', health: 'healthy', enabled: true, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 },
+              { name: 'repo', health: mcpAttached ? 'healthy' : 'detached', enabled: true, attached: mcpAttached, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 },
             ],
             visibleTools: [
               { name: 'repo_search', description: 'Search the repository index.' },
@@ -110,6 +112,14 @@ describe('AgentDetailPage', () => {
             jobs: [
               { id: 'cron-1', prompt: 'check launcher', nextRunAt: '2026-03-13T00:00:00Z', lastResult: cronPaused ? 'paused' : 'succeeded', paused: cronPaused, history: [{ trigger: 'manual', result: 'succeeded' }] },
             ],
+          },
+          delegation: {
+            count: 1,
+            jobs: [{ jobId: 'subagent-1', task: 'collect diagnostics', status: 'completed', result: 'done', updatedAt: '2026-03-12T00:06:00Z' }],
+          },
+          sessions: {
+            count: 1,
+            sessions: [{ key: 'telegram:alpha', messageCount: 8, summaryLength: 64, updatedAt: '2026-03-12T00:07:00Z' }],
           },
         }), {
           status: 200,
@@ -216,7 +226,7 @@ describe('AgentDetailPage', () => {
             disabledCount: 1,
           },
           skills: [
-            { name: 'go-testing', enabled: false, summary: 'Use go test before claiming success.', source: 'catalog', version: 'builtin' },
+            { name: 'go-testing', enabled: false, summary: 'Use go test before claiming success.', source: 'catalog', version: 'builtin', health: 'degraded', updateStatus: 'update_available', updateAvailable: true },
           ],
         }), {
           status: 200,
@@ -226,7 +236,7 @@ describe('AgentDetailPage', () => {
       if (url.includes('/api/v1/agents/agent-alpha/skills/search')) {
         return new Response(JSON.stringify({
           skills: [
-            { name: 'workspace-inspection', summary: 'Inspect workspace state.', source: 'catalog', version: 'v1.2.3' },
+            { name: 'workspace-inspection', summary: 'Inspect workspace state.', source: 'catalog', version: 'v1.2.3', health: 'healthy', updateStatus: 'current', updateAvailable: false },
           ],
         }), {
           status: 200,
@@ -239,6 +249,9 @@ describe('AgentDetailPage', () => {
           summary: 'Inspect workspace state.',
           source: 'catalog',
           version: 'v1.2.3',
+          health: 'healthy',
+          updateStatus: 'current',
+          updateAvailable: false,
         }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -262,6 +275,86 @@ describe('AgentDetailPage', () => {
           summary: 'Use go test before claiming success.',
           source: 'catalog',
           version: 'builtin',
+          targetVersion: 'v2.0.0',
+          health: 'degraded',
+          updateStatus: 'update_available',
+          updateAvailable: true,
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/v1/agents/agent-alpha/mcp/repo/attach')) {
+        mcpAttached = true;
+        return new Response(JSON.stringify({
+          name: 'repo',
+          health: 'healthy',
+          enabled: true,
+          attached: true,
+          manageable: true,
+          visibleToolCount: 1,
+          hiddenToolCount: 1,
+          healthDetail: 'connected to repository index',
+          remediationHint: 'Disable MCP if repository indexing becomes noisy.',
+          configDigest: 'sha256:cfg',
+          configSummary: mcpConfig,
+          visibleTools: [
+            { name: 'repo_search', description: 'Search code' },
+          ],
+          hiddenTools: [
+            { name: 'repo_admin', description: 'Admin index' },
+          ],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/v1/agents/agent-alpha/mcp/repo/detach')) {
+        mcpAttached = false;
+        return new Response(JSON.stringify({
+          name: 'repo',
+          health: 'detached',
+          enabled: true,
+          attached: false,
+          manageable: true,
+          visibleToolCount: 1,
+          hiddenToolCount: 1,
+          healthDetail: 'detached from runtime',
+          remediationHint: 'Attach MCP before expecting tools to appear.',
+          configDigest: 'sha256:cfg',
+          configSummary: mcpConfig,
+          visibleTools: [
+            { name: 'repo_search', description: 'Search code' },
+          ],
+          hiddenTools: [
+            { name: 'repo_admin', description: 'Admin index' },
+          ],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/v1/agents/agent-alpha/mcp/repo/config')) {
+        const body = JSON.parse(String(init?.body || '{}'));
+        mcpConfig = String(body.config || '');
+        return new Response(JSON.stringify({
+          name: 'repo',
+          health: mcpAttached ? 'healthy' : 'detached',
+          enabled: true,
+          attached: mcpAttached,
+          manageable: true,
+          visibleToolCount: 1,
+          hiddenToolCount: 1,
+          healthDetail: 'connected to repository index',
+          remediationHint: 'Disable MCP if repository indexing becomes noisy.',
+          configDigest: 'sha256:test-config',
+          configSummary: mcpConfig,
+          visibleTools: [
+            { name: 'repo_search', description: 'Search code' },
+          ],
+          hiddenTools: [
+            { name: 'repo_admin', description: 'Admin index' },
+          ],
         }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -272,7 +365,7 @@ describe('AgentDetailPage', () => {
           return new Response(JSON.stringify({
             mcp: {
               servers: [
-                { name: 'repo', health: 'stopped', enabled: false, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 },
+                { name: 'repo', health: 'stopped', enabled: false, attached: mcpAttached, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 },
               ],
               visibleTools: [],
             },
@@ -283,13 +376,16 @@ describe('AgentDetailPage', () => {
         }
         return new Response(JSON.stringify({
           name: 'repo',
-          health: 'healthy',
+          health: mcpAttached ? 'healthy' : 'detached',
           enabled: true,
+          attached: mcpAttached,
           manageable: true,
           visibleToolCount: 1,
           hiddenToolCount: 1,
           healthDetail: 'connected to repository index',
           remediationHint: 'Disable MCP if repository indexing becomes noisy.',
+          configDigest: mcpConfig ? 'sha256:test-config' : '',
+          configSummary: mcpConfig,
           visibleTools: [
             { name: 'repo_search', description: 'Search code' },
           ],
@@ -355,6 +451,12 @@ describe('AgentDetailPage', () => {
     expect(screen.getAllByText(/catalog/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/builtin/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/target=v2.0.0/i)).toBeInTheDocument();
+    expect(screen.getByText(/health=degraded/i)).toBeInTheDocument();
+    expect(screen.getByText(/update_available/i)).toBeInTheDocument();
+    expect(screen.getByText(/Recent Delegation Jobs/i)).toBeInTheDocument();
+    expect(screen.getByText(/subagent-1/i)).toBeInTheDocument();
+    expect(screen.getByText(/Recent Sessions/i)).toBeInTheDocument();
+    expect(screen.getByText(/telegram:alpha/i)).toBeInTheDocument();
   });
 
   test('toggles skill state through the agent skill endpoint', async () => {
@@ -453,9 +555,45 @@ describe('AgentDetailPage', () => {
     await waitFor(() => expect(screen.getByText(/connected to repository index/i)).toBeInTheDocument());
     expect(screen.getByText(/Disable MCP if repository indexing becomes noisy\./i)).toBeInTheDocument();
     expect(screen.getByText(/repo_admin/i)).toBeInTheDocument();
+    expect(screen.getByText(/sha256:test-config/i)).toBeInTheDocument();
+    expect(screen.getByDisplayValue(/\{"mode":"read"\}/i)).toBeInTheDocument();
     expect(globalThis.fetch).toHaveBeenCalledWith(
       expect.stringContaining('/api/v1/agents/agent-alpha/mcp/repo'),
       expect.anything(),
+    );
+  });
+
+  test('attaches and updates MCP server config through managed endpoints', async () => {
+    renderAgentDetailPage();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Inspect repo MCP/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Inspect repo MCP/i }));
+    await waitFor(() => expect(screen.getByLabelText(/repo MCP config/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Detach repo/i }));
+    await waitFor(() => expect(screen.getByText(/MCP server repo detached\./i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Attach repo/i }));
+    await waitFor(() => expect(screen.getByText(/MCP server repo attached\./i)).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(/repo MCP config/i), { target: { value: '{"mode":"write"}' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save repo config/i }));
+    await waitFor(() => expect(screen.getByText(/MCP config for repo updated\./i)).toBeInTheDocument());
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/mcp/repo/detach'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/mcp/repo/attach'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/agents/agent-alpha/mcp/repo/config'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ config: '{"mode":"write"}' }),
+      }),
     );
   });
 
@@ -537,6 +675,8 @@ describe('AgentDetailPage', () => {
     expect(screen.getByText(/Provider authentication is not ready\. Reconfigure credentials or switch to a ready profile\./i)).toBeInTheDocument();
     expect(screen.getByText(/Launcher heartbeat is stale\. Restart the agent or inspect the managed runtime\./i)).toBeInTheDocument();
     expect(screen.getByText(/One or more cron jobs are paused\. Resume or cancel them to restore scheduled automation\./i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Sync model surface/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Resume paused cron/i })).toBeInTheDocument();
   });
 
   test('loads dedicated model surface and syncs it on demand', async () => {

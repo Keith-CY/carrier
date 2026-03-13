@@ -1,8 +1,8 @@
 package gateway
 
 import (
-	"carrier/baseagent"
 	"bytes"
+	"carrier/baseagent"
 	"context"
 	"encoding/json"
 	"errors"
@@ -647,6 +647,15 @@ func selectTelegramRichAttachment(resp GatewayResponse) (kind string, ref string
 			}); mediaRef != "" {
 				return "document", mediaRef, caption, true
 			}
+		case "audio", "video":
+			if mediaRef := resolveTelegramRichRef(baseagent.AttachmentRef{
+				Kind:        "document",
+				Path:        block.Path,
+				MediaType:   block.MediaType,
+				DownloadURL: block.URL,
+			}); mediaRef != "" {
+				return "document", mediaRef, caption, true
+			}
 		}
 		if attachmentID := strings.TrimSpace(block.AttachmentID); attachmentID != "" {
 			if attachment, ok := attachmentsByID[attachmentID]; ok {
@@ -672,7 +681,7 @@ func selectTelegramAttachmentForBlock(blockType string, attachment baseagent.Att
 	switch strings.ToLower(strings.TrimSpace(blockType)) {
 	case "image":
 		return "image", ref, true
-	case "file", "document":
+	case "file", "document", "audio", "video":
 		return "document", ref, true
 	default:
 		return selectTelegramAttachmentKindAndRef(attachment)
@@ -690,7 +699,7 @@ func selectTelegramAttachmentKindAndRef(attachment baseagent.AttachmentRef) (kin
 	switch strings.ToLower(strings.TrimSpace(attachment.Kind)) {
 	case "image":
 		return "image", ref, true
-	case "document", "file":
+	case "document", "file", "audio", "video":
 		return "document", ref, true
 	default:
 		return "", "", false

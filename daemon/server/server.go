@@ -79,8 +79,11 @@ type baseAgentRuntime interface {
 	UninstallSkill(ctx context.Context, name string) (baseagent.SkillDefinition, error)
 	RecentSubagentJobs(ctx context.Context, limit int) []baseagent.SubagentJob
 	SubagentJob(ctx context.Context, jobID string) (baseagent.SubagentJob, error)
+	RecentSessionStats(limit int) []baseagent.SessionStats
 	SetSkillEnabled(ctx context.Context, name string, enabled bool) error
 	SetMCPServerEnabled(ctx context.Context, name string, enabled bool) error
+	SetMCPServerAttached(ctx context.Context, name string, attached bool) error
+	UpdateMCPServerConfig(ctx context.Context, name string, config string) error
 	MCPServerDetail(ctx context.Context, name string) (baseagent.MCPServerCapability, error)
 	RespondPendingApproval(ctx context.Context, sessionKey, approvalID string, decision baseagent.ApprovalDecision) (baseagent.ChatResponse, error)
 	ScheduleJob(ctx context.Context, job baseagent.CronJob) (baseagent.CronJob, error)
@@ -1215,6 +1218,10 @@ func buildHTTPMuxWithBaseAgent(
 			handleAgentSubagent(svc, baseRuntime, agentID, jobID, w, r)
 			return
 		}
+		if agentID, serverName, mcpAction, ok := parseAgentMCPServerActionPath(r.URL.Path); ok {
+			handleAgentMCPServerAction(svc, baseRuntime, agentID, serverName, mcpAction, w, r)
+			return
+		}
 		if agentID, serverName, ok := parseAgentMCPServerPath(r.URL.Path); ok {
 			handleAgentMCPServer(svc, baseRuntime, agentID, serverName, w, r)
 			return
@@ -1251,6 +1258,8 @@ func buildHTTPMuxWithBaseAgent(
 			handleAgentChat(svc, baseRuntime, agentID, w, r)
 		case "capabilities":
 			handleAgentCapabilities(svc, baseRuntime, agentID, w, r)
+		case "sessions":
+			handleAgentSessions(svc, baseRuntime, agentID, w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -1835,6 +1844,72 @@ func handleAgentMCPServer(svc *lifecycle.Service, runtime baseAgentRuntime, agen
 	}
 }
 
+func handleAgentMCPServerAction(svc *lifecycle.Service, runtime baseAgentRuntime, agentID, serverName, action string, w http.ResponseWriter, r *http.Request) {
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
+		return
+	}
+	if _, err := svc.Status(agentID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "attach":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if err := runtime.SetMCPServerAttached(r.Context(), serverName, true); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		detail, err := runtime.MCPServerDetail(r.Context(), serverName)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, detail)
+	case "detach":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if err := runtime.SetMCPServerAttached(r.Context(), serverName, false); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		detail, err := runtime.MCPServerDetail(r.Context(), serverName)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, detail)
+	case "config":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body struct {
+			Config string `json:"config"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := runtime.UpdateMCPServerConfig(r.Context(), serverName, body.Config); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		detail, err := runtime.MCPServerDetail(r.Context(), serverName)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, detail)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
 func handleAgentSubagent(svc *lifecycle.Service, runtime baseAgentRuntime, agentID, jobID string, w http.ResponseWriter, r *http.Request) {
 	if svc == nil {
 		writeJSONError(w, http.StatusInternalServerError, "service unavailable")
@@ -1873,6 +1948,37 @@ func handleAgentSubagent(svc *lifecycle.Service, runtime baseAgentRuntime, agent
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
+}
+
+func handleAgentSessions(svc *lifecycle.Service, runtime baseAgentRuntime, agentID string, w http.ResponseWriter, r *http.Request) {
+	if svc == nil {
+		writeJSONError(w, http.StatusInternalServerError, "service unavailable")
+		return
+	}
+	if _, err := svc.Status(agentID); err != nil {
+		writeJSONError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime unavailable")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	limit := 10
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed <= 0 {
+			writeJSONError(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sessions": runtime.RecentSessionStats(limit),
+	})
 }
 
 func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID string, w http.ResponseWriter, r *http.Request) {
@@ -2331,6 +2437,63 @@ func parseAgentMCPServerPath(path string) (agentID string, serverName string, ok
 		return "", "", false
 	}
 	return decodedAgentID, decodedServerName, true
+}
+
+func parseAgentMCPServerActionPath(path string) (agentID string, serverName string, action string, ok bool) {
+	const prefix = "/api/v1/agents/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", "", false
+	}
+	rest := path[len(prefix):]
+	if strings.Contains(rest, "//") {
+		return "", "", "", false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 4 || strings.TrimSpace(parts[1]) != "mcp" {
+		return "", "", "", false
+	}
+	rawAgentID := strings.TrimSpace(parts[0])
+	rawServerName := strings.TrimSpace(parts[2])
+	if rawAgentID == "" || rawServerName == "" {
+		return "", "", "", false
+	}
+	decodedAgentID, err := url.PathUnescape(rawAgentID)
+	if err != nil {
+		return "", "", "", false
+	}
+	decodedAgentID = strings.TrimSpace(decodedAgentID)
+	if decodedAgentID == "" || strings.Contains(decodedAgentID, "/") || strings.Contains(decodedAgentID, "\\") || strings.Contains(decodedAgentID, "..") {
+		return "", "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedAgentID) {
+		return "", "", "", false
+	}
+	decodedServerName, err := url.PathUnescape(rawServerName)
+	if err != nil {
+		return "", "", "", false
+	}
+	decodedServerName = strings.TrimSpace(strings.ToLower(decodedServerName))
+	if decodedServerName == "" || strings.Contains(decodedServerName, "/") || strings.Contains(decodedServerName, "\\") || strings.Contains(decodedServerName, "..") {
+		return "", "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedServerName) {
+		return "", "", "", false
+	}
+	rawAction := strings.TrimSpace(parts[3])
+	if rawAction == "" {
+		return "", "", "", false
+	}
+	decodedAction, err := url.PathUnescape(rawAction)
+	if err != nil {
+		return "", "", "", false
+	}
+	decodedAction = strings.TrimSpace(strings.ToLower(decodedAction))
+	switch decodedAction {
+	case "attach", "detach", "config":
+		return decodedAgentID, decodedServerName, decodedAction, true
+	default:
+		return "", "", "", false
+	}
 }
 
 func parseAgentMessagingPath(path string) (agentID string, action string, ok bool) {

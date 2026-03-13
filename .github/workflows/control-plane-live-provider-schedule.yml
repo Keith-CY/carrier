@@ -28,20 +28,33 @@ jobs:
         id: resolve
         shell: bash
         env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CARRIER_LIVE_MODEL_OPENAI: ${{ vars.CARRIER_LIVE_MODEL_OPENAI }}
           CARRIER_LIVE_MODEL_OPENROUTER: ${{ vars.CARRIER_LIVE_MODEL_OPENROUTER }}
         run: |
           set -euo pipefail
-          provider="openrouter"
-          key="${OPENROUTER_API_KEY:-}"
-          model="${CARRIER_LIVE_MODEL_OPENROUTER:-openai/gpt-4o-mini}"
+          provider=""
+          key=""
+          model=""
+          require_transcription=""
+          if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+            provider="openai"
+            key="${OPENAI_API_KEY}"
+            model="${CARRIER_LIVE_MODEL_OPENAI:-openai/gpt-4o-mini}"
+            require_transcription="1"
+          elif [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+            provider="openrouter"
+            key="${OPENROUTER_API_KEY}"
+            model="${CARRIER_LIVE_MODEL_OPENROUTER:-openai/gpt-4o-mini}"
+          fi
           if [[ -z "$key" ]]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "skip_reason=missing_openrouter_api_key_secret" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=missing_live_provider_secret" >> "$GITHUB_OUTPUT"
             {
               echo "### Control Plane Live-Provider E2E"
-              echo "- provider: \`${provider}\`"
-              echo "- status: skipped (missing OPENROUTER_API_KEY)"
+              echo "- provider: \`unresolved\`"
+              echo "- status: skipped (missing OPENAI_API_KEY or OPENROUTER_API_KEY)"
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
@@ -50,6 +63,9 @@ jobs:
           printf 'CARRIER_LIVE_PROVIDER=%s\n' "$provider" >> "$GITHUB_ENV"
           printf 'CARRIER_LIVE_MODEL=%s\n' "$model" >> "$GITHUB_ENV"
           printf 'CARRIER_LIVE_API_KEY=%s\n' "$key" >> "$GITHUB_ENV"
+          if [[ -n "$require_transcription" ]]; then
+            printf 'CARRIER_LIVE_REQUIRE_TRANSCRIPTION=%s\n' "$require_transcription" >> "$GITHUB_ENV"
+          fi
 
       - name: Run live-provider control plane E2E
         if: steps.resolve.outputs.enabled == 'true'
@@ -62,7 +78,7 @@ jobs:
           set -euo pipefail
           {
             echo "### Control Plane Live-Provider E2E"
-            echo "- provider: \`openrouter\`"
+            echo "- provider: \`${CARRIER_LIVE_PROVIDER:-unresolved}\`"
             echo "- status: skipped"
             echo "- reason: \`${{ steps.resolve.outputs.skip_reason }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

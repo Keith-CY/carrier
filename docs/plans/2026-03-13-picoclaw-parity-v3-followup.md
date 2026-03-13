@@ -130,24 +130,36 @@ Expected: PASS
 
 ### Task 34: Improve Rich Outbound Media Render Depth
 
+**Status:** done on 2026-03-13
+
 Add richer image/document/audio render selection across transport and detail/evidence views.
 
 ### Task 35: Add Live Transcription Hard-Pass Provider Coverage
+
+**Status:** done on 2026-03-13
 
 Extend live-provider smoke so audio-capable providers can be required and recorded as hard pass instead of skip.
 
 ### Task 36: Add Skill Source/Health/Update Provenance
 
+**Status:** done on 2026-03-13
+
 Deepen skill lifecycle UI/runtime with source provenance, version drift, and update health.
 
 ### Task 37: Add MCP Attach/Detach Config Surface
+
+**Status:** done on 2026-03-13
 
 Move beyond enable/disable into attach/detach/config health detail.
 
 ### Task 38: Add Durable Job History And Runtime Session Surface
 
+**Status:** done on 2026-03-13
+
 Persist delegated jobs and expose recent/local interactive runtime state more fully.
 
 ### Task 39: Expand Agent Launcher Remediation UX
+
+**Status:** done on 2026-03-13
 
 Add clearer provider/model/runtime remediation actions in Agent Detail and launcher-style surfaces.

@@ -6,13 +6,16 @@ import (
 )
 
 type SkillDefinition struct {
-	Name          string   `json:"name"`
-	Summary       string   `json:"summary,omitempty"`
-	Keywords      []string `json:"keywords,omitempty"`
-	Tags          []string `json:"tags,omitempty"`
-	Source        string   `json:"source,omitempty"`
-	Version       string   `json:"version,omitempty"`
-	TargetVersion string   `json:"targetVersion,omitempty"`
+	Name            string   `json:"name"`
+	Summary         string   `json:"summary,omitempty"`
+	Keywords        []string `json:"keywords,omitempty"`
+	Tags            []string `json:"tags,omitempty"`
+	Source          string   `json:"source,omitempty"`
+	Version         string   `json:"version,omitempty"`
+	TargetVersion   string   `json:"targetVersion,omitempty"`
+	Health          string   `json:"health,omitempty"`
+	UpdateStatus    string   `json:"updateStatus,omitempty"`
+	UpdateAvailable bool     `json:"updateAvailable,omitempty"`
 }
 
 type SkillsLoader interface {

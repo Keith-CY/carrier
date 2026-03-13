@@ -2,6 +2,7 @@ package baseagent
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -394,5 +395,64 @@ func TestRuntimeSetMCPServerEnabledRefreshesStructuredTools(t *testing.T) {
 	}
 	if !containsStructuredTool(rt.loop.structuredTools.Descriptors(), "repo_search") {
 		t.Fatalf("expected runtime to expose repo_search after re-enable, got %+v", rt.loop.structuredTools.Descriptors())
+	}
+}
+
+func TestManagedMCPManagerAttachDetachAndConfig(t *testing.T) {
+	cfg := MCPConfig{
+		Servers: []MCPServerConfig{
+			{
+				Name: "repo",
+				Tools: []MCPToolConfig{
+					{Name: "repo_search", Description: "Search the repository index."},
+				},
+			},
+		},
+	}
+
+	manager, err := NewManagedMCPManager(cfg, ManagedMCPManagerOptions{
+		ToolRunners: map[string]MCPToolRunner{
+			"repo_search": func(context.Context, map[string]any) ExecutionToolResult {
+				return ExecutionToolResult{Output: "found"}
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new managed mcp manager: %v", err)
+	}
+
+	if err := manager.SetServerAttached(context.Background(), "repo", false); err != nil {
+		t.Fatalf("detach server: %v", err)
+	}
+	detail, err := manager.ServerDetail("repo")
+	if err != nil {
+		t.Fatalf("server detail after detach: %v", err)
+	}
+	if detail.Attached || detail.Health != "detached" {
+		t.Fatalf("expected detached detail state, got %+v", detail)
+	}
+	if result := manager.ExecuteTool(context.Background(), "repo_search", map[string]any{}); !result.IsError {
+		t.Fatalf("expected detached server to block tool execution, got %+v", result)
+	}
+
+	if err := manager.UpdateServerConfig(context.Background(), "repo", `{"mode":"read"}`); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+	detail, err = manager.ServerDetail("repo")
+	if err != nil {
+		t.Fatalf("server detail after config: %v", err)
+	}
+	if detail.ConfigDigest == "" || !strings.Contains(detail.ConfigSummary, `"mode":"read"`) {
+		t.Fatalf("expected config metadata in detail, got %+v", detail)
+	}
+
+	if err := manager.SetServerAttached(context.Background(), "repo", true); err != nil {
+		t.Fatalf("attach server: %v", err)
+	}
+	if err := manager.SetServerEnabled(context.Background(), "repo", true); err != nil {
+		t.Fatalf("enable attached server: %v", err)
+	}
+	if result := manager.ExecuteTool(context.Background(), "repo_search", map[string]any{}); result.IsError || result.Output != "found" {
+		t.Fatalf("expected attached server to execute tool, got %+v", result)
 	}
 }

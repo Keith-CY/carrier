@@ -8,14 +8,17 @@ import (
 )
 
 type RuntimeSkillCapability struct {
-	Name          string   `json:"name"`
-	Summary       string   `json:"summary,omitempty"`
-	Keywords      []string `json:"keywords,omitempty"`
-	Tags          []string `json:"tags,omitempty"`
-	Source        string   `json:"source,omitempty"`
-	Version       string   `json:"version,omitempty"`
-	TargetVersion string   `json:"targetVersion,omitempty"`
-	Enabled       bool     `json:"enabled"`
+	Name            string   `json:"name"`
+	Summary         string   `json:"summary,omitempty"`
+	Keywords        []string `json:"keywords,omitempty"`
+	Tags            []string `json:"tags,omitempty"`
+	Source          string   `json:"source,omitempty"`
+	Version         string   `json:"version,omitempty"`
+	TargetVersion   string   `json:"targetVersion,omitempty"`
+	Health          string   `json:"health,omitempty"`
+	UpdateStatus    string   `json:"updateStatus,omitempty"`
+	UpdateAvailable bool     `json:"updateAvailable,omitempty"`
+	Enabled         bool     `json:"enabled"`
 }
 
 type SkillsRegistry struct {
@@ -256,16 +259,21 @@ func (r *SkillsRegistry) ListRuntimeSkillCapabilities(ctx context.Context) []Run
 		if !ok {
 			continue
 		}
+		hydrated := hydrateSkillDefinitionTargetVersion(skill, versionPins)
+		health, updateStatus, updateAvailable := deriveSkillLifecycleStatus(hydrated)
 		_, enabled := enabledSet[name]
 		out = append(out, RuntimeSkillCapability{
-			Name:          skill.Name,
-			Summary:       skill.Summary,
-			Keywords:      append([]string(nil), skill.Keywords...),
-			Tags:          append([]string(nil), skill.Tags...),
-			Source:        skill.Source,
-			Version:       skill.Version,
-			TargetVersion: strings.TrimSpace(versionPins[name]),
-			Enabled:       enabled,
+			Name:            hydrated.Name,
+			Summary:         hydrated.Summary,
+			Keywords:        append([]string(nil), hydrated.Keywords...),
+			Tags:            append([]string(nil), hydrated.Tags...),
+			Source:          hydrated.Source,
+			Version:         hydrated.Version,
+			TargetVersion:   hydrated.TargetVersion,
+			Health:          health,
+			UpdateStatus:    updateStatus,
+			UpdateAvailable: updateAvailable,
+			Enabled:         enabled,
 		})
 	}
 	return out
@@ -371,11 +379,23 @@ func normalizeSkillDefinition(skill SkillDefinition) SkillDefinition {
 	skill.Source = strings.TrimSpace(skill.Source)
 	skill.Version = strings.TrimSpace(skill.Version)
 	skill.TargetVersion = strings.TrimSpace(skill.TargetVersion)
+	skill.Health = strings.TrimSpace(strings.ToLower(skill.Health))
+	skill.UpdateStatus = strings.TrimSpace(strings.ToLower(skill.UpdateStatus))
 	if skill.Source == "" {
 		skill.Source = "catalog"
 	}
 	if skill.Version == "" {
 		skill.Version = "builtin"
+	}
+	if skill.Health == "" || skill.UpdateStatus == "" {
+		health, updateStatus, updateAvailable := deriveSkillLifecycleStatus(skill)
+		if skill.Health == "" {
+			skill.Health = health
+		}
+		if skill.UpdateStatus == "" {
+			skill.UpdateStatus = updateStatus
+		}
+		skill.UpdateAvailable = updateAvailable
 	}
 	return skill
 }
@@ -402,23 +422,41 @@ func normalizeSkillValues(values []string) []string {
 
 func cloneSkillDefinition(skill SkillDefinition) SkillDefinition {
 	return SkillDefinition{
-		Name:          skill.Name,
-		Summary:       skill.Summary,
-		Keywords:      append([]string(nil), skill.Keywords...),
-		Tags:          append([]string(nil), skill.Tags...),
-		Source:        skill.Source,
-		Version:       skill.Version,
-		TargetVersion: skill.TargetVersion,
+		Name:            skill.Name,
+		Summary:         skill.Summary,
+		Keywords:        append([]string(nil), skill.Keywords...),
+		Tags:            append([]string(nil), skill.Tags...),
+		Source:          skill.Source,
+		Version:         skill.Version,
+		TargetVersion:   skill.TargetVersion,
+		Health:          skill.Health,
+		UpdateStatus:    skill.UpdateStatus,
+		UpdateAvailable: skill.UpdateAvailable,
 	}
 }
 
 func hydrateSkillDefinitionTargetVersion(skill SkillDefinition, versionPins map[string]string) SkillDefinition {
 	cloned := cloneSkillDefinition(skill)
-	if len(versionPins) == 0 {
-		return cloned
+	if len(versionPins) != 0 {
+		cloned.TargetVersion = strings.TrimSpace(versionPins[strings.TrimSpace(strings.ToLower(skill.Name))])
 	}
-	cloned.TargetVersion = strings.TrimSpace(versionPins[strings.TrimSpace(strings.ToLower(skill.Name))])
+	cloned.Health, cloned.UpdateStatus, cloned.UpdateAvailable = deriveSkillLifecycleStatus(cloned)
 	return cloned
+}
+
+func deriveSkillLifecycleStatus(skill SkillDefinition) (health string, updateStatus string, updateAvailable bool) {
+	currentVersion := strings.TrimSpace(skill.Version)
+	targetVersion := strings.TrimSpace(skill.TargetVersion)
+	switch {
+	case targetVersion == "":
+		return "healthy", "current", false
+	case currentVersion == "":
+		return "degraded", "unknown_current_version", true
+	case targetVersion == currentVersion:
+		return "healthy", "pinned_current", false
+	default:
+		return "degraded", "update_available", true
+	}
 }
 
 func scoreSkillMatch(skill SkillDefinition, query string) int {

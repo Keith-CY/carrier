@@ -30,6 +30,7 @@ type fakeBaseAgentRuntime struct {
 	searchSkills        []baseagent.SkillDefinition
 	subagentJobs        []baseagent.SubagentJob
 	subagentJob         baseagent.SubagentJob
+	sessionStats        []baseagent.SessionStats
 	cronJob             baseagent.CronJob
 	cronJobs            []baseagent.CronJob
 	cancelledCronJob    baseagent.CronJob
@@ -65,6 +66,8 @@ type fakeBaseAgentRuntime struct {
 	lastSkillEnabled    bool
 	lastMCPServerName   string
 	lastMCPEnabled      bool
+	lastMCPAttached     bool
+	lastMCPConfig       string
 	lastInstallSkill    string
 	lastUpdateSkill     string
 	lastUpdateVersion   string
@@ -155,6 +158,13 @@ func (f *fakeBaseAgentRuntime) SubagentJob(_ context.Context, jobID string) (bas
 	return f.subagentJob, nil
 }
 
+func (f *fakeBaseAgentRuntime) RecentSessionStats(limit int) []baseagent.SessionStats {
+	if limit > 0 && len(f.sessionStats) > limit {
+		return append([]baseagent.SessionStats(nil), f.sessionStats[:limit]...)
+	}
+	return append([]baseagent.SessionStats(nil), f.sessionStats...)
+}
+
 func (f *fakeBaseAgentRuntime) SetMCPServerEnabled(_ context.Context, name string, enabled bool) error {
 	f.mcpToggleCall++
 	f.lastMCPServerName = name
@@ -174,6 +184,48 @@ func (f *fakeBaseAgentRuntime) SetMCPServerEnabled(_ context.Context, name strin
 	}
 	if !enabled {
 		f.capabilities.MCP.VisibleTools = nil
+	}
+	return nil
+}
+
+func (f *fakeBaseAgentRuntime) SetMCPServerAttached(_ context.Context, name string, attached bool) error {
+	f.lastMCPServerName = name
+	f.lastMCPAttached = attached
+	if f.mcpToggleErr != nil {
+		return f.mcpToggleErr
+	}
+	f.mcpServerDetail.Name = name
+	f.mcpServerDetail.Attached = attached
+	if !attached {
+		f.mcpServerDetail.Health = "detached"
+	} else if strings.TrimSpace(f.mcpServerDetail.Health) == "" || f.mcpServerDetail.Health == "detached" {
+		f.mcpServerDetail.Health = "healthy"
+	}
+	for i := range f.capabilities.MCP.Servers {
+		if f.capabilities.MCP.Servers[i].Name == name {
+			f.capabilities.MCP.Servers[i].Attached = attached
+			if !attached {
+				f.capabilities.MCP.Servers[i].Health = "detached"
+			} else if strings.TrimSpace(f.capabilities.MCP.Servers[i].Health) == "" || f.capabilities.MCP.Servers[i].Health == "detached" {
+				f.capabilities.MCP.Servers[i].Health = "healthy"
+			}
+		}
+	}
+	return nil
+}
+
+func (f *fakeBaseAgentRuntime) UpdateMCPServerConfig(_ context.Context, name string, config string) error {
+	f.lastMCPServerName = name
+	f.lastMCPConfig = config
+	if f.mcpToggleErr != nil {
+		return f.mcpToggleErr
+	}
+	f.mcpServerDetail.Name = name
+	f.mcpServerDetail.ConfigSummary = config
+	if strings.TrimSpace(config) != "" {
+		f.mcpServerDetail.ConfigDigest = "sha256:test-config"
+	} else {
+		f.mcpServerDetail.ConfigDigest = ""
 	}
 	return nil
 }
@@ -470,22 +522,23 @@ func TestAgentMCPServerToggleEndpoint(t *testing.T) {
 		capabilities: baseagent.RuntimeCapabilitySummary{
 			MCP: baseagent.MCPCapabilitySummary{
 				Servers: []baseagent.MCPServerCapability{
-					{Name: "repo", Health: "healthy", Enabled: true, Manageable: true, VisibleToolCount: 1},
+					{Name: "repo", Health: "healthy", Enabled: true, Attached: true, Manageable: true, VisibleToolCount: 1},
 				},
 				VisibleTools: []baseagent.MCPToolCapability{{Name: "repo_search"}},
 			},
 		},
 		mcpServerDetail: baseagent.MCPServerCapability{
-			Name:            "repo",
-			Health:          "healthy",
-			Enabled:         true,
-			Manageable:      true,
+			Name:             "repo",
+			Health:           "healthy",
+			Enabled:          true,
+			Attached:         true,
+			Manageable:       true,
 			VisibleToolCount: 1,
-			HiddenToolCount: 1,
-			HealthDetail:    "connected to repository index",
-			RemediationHint: "Disable MCP if repository indexing becomes noisy.",
-			VisibleTools:    []baseagent.MCPToolCapability{{Name: "repo_search", Description: "Search code"}},
-			HiddenTools:     []baseagent.MCPToolCapability{{Name: "repo_admin", Description: "Admin index"}},
+			HiddenToolCount:  1,
+			HealthDetail:     "connected to repository index",
+			RemediationHint:  "Disable MCP if repository indexing becomes noisy.",
+			VisibleTools:     []baseagent.MCPToolCapability{{Name: "repo_search", Description: "Search code"}},
+			HiddenTools:      []baseagent.MCPToolCapability{{Name: "repo_admin", Description: "Admin index"}},
 		},
 	}
 	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
@@ -514,6 +567,59 @@ func TestAgentMCPServerToggleEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(okRec.Body.String(), `"name":"repo"`) || !strings.Contains(okRec.Body.String(), `"enabled":false`) {
 		t.Fatalf("unexpected mcp toggle body: %s", okRec.Body.String())
+	}
+}
+
+func TestAgentMCPServerActionEndpoints(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		capabilities: baseagent.RuntimeCapabilitySummary{
+			MCP: baseagent.MCPCapabilitySummary{
+				Servers: []baseagent.MCPServerCapability{
+					{Name: "repo", Health: "healthy", Enabled: true, Attached: true, Manageable: true, VisibleToolCount: 1},
+				},
+			},
+		},
+		mcpServerDetail: baseagent.MCPServerCapability{
+			Name:             "repo",
+			Health:           "healthy",
+			Enabled:          true,
+			Attached:         true,
+			Manageable:       true,
+			VisibleToolCount: 1,
+			ConfigSummary:    `{"mode":"read"}`,
+			ConfigDigest:     "sha256:seed",
+		},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	attachReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/mcp/repo/detach", nil)
+	attachRec := httptest.NewRecorder()
+	mux.ServeHTTP(attachRec, attachReq)
+	if attachRec.Code != http.StatusOK {
+		t.Fatalf("expected detach 200, got %d body=%s", attachRec.Code, attachRec.Body.String())
+	}
+	if rt.lastMCPServerName != "repo" || rt.lastMCPAttached {
+		t.Fatalf("unexpected detach state: %+v", rt)
+	}
+	if !strings.Contains(attachRec.Body.String(), `"attached":false`) {
+		t.Fatalf("unexpected detach body: %s", attachRec.Body.String())
+	}
+
+	configReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/mcp/repo/config", strings.NewReader(`{"config":"{\"mode\":\"write\"}"}`))
+	configReq.Header.Set("Content-Type", "application/json")
+	configRec := httptest.NewRecorder()
+	mux.ServeHTTP(configRec, configReq)
+	if configRec.Code != http.StatusOK {
+		t.Fatalf("expected config 200, got %d body=%s", configRec.Code, configRec.Body.String())
+	}
+	if rt.lastMCPConfig != `{"mode":"write"}` {
+		t.Fatalf("unexpected config payload: %+v", rt)
+	}
+	if !strings.Contains(configRec.Body.String(), `"configDigest":"sha256:test-config"`) {
+		t.Fatalf("unexpected config body: %s", configRec.Body.String())
 	}
 }
 
@@ -561,6 +667,36 @@ func TestAgentSubagentHistoryEndpoints(t *testing.T) {
 	mux.ServeHTTP(badLimitRec, badLimitReq)
 	if badLimitRec.Code != http.StatusBadRequest {
 		t.Fatalf("expected invalid limit 400, got %d body=%s", badLimitRec.Code, badLimitRec.Body.String())
+	}
+}
+
+func TestAgentSessionsEndpoint(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		sessionStats: []baseagent.SessionStats{
+			{Key: "telegram:alpha", MessageCount: 8, SummaryLength: 64, UpdatedAt: time.Now().UTC()},
+			{Key: "telegram:beta", MessageCount: 3, SummaryLength: 20, UpdatedAt: time.Now().UTC()},
+		},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	okReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/sessions?limit=1", nil)
+	okRec := httptest.NewRecorder()
+	mux.ServeHTTP(okRec, okReq)
+	if okRec.Code != http.StatusOK {
+		t.Fatalf("expected sessions 200, got %d body=%s", okRec.Code, okRec.Body.String())
+	}
+	if !strings.Contains(okRec.Body.String(), `"telegram:alpha"`) || strings.Contains(okRec.Body.String(), `"telegram:beta"`) {
+		t.Fatalf("unexpected sessions body: %s", okRec.Body.String())
+	}
+
+	badReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/sessions?limit=0", nil)
+	badRec := httptest.NewRecorder()
+	mux.ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected sessions invalid limit 400, got %d body=%s", badRec.Code, badRec.Body.String())
 	}
 }
 

@@ -479,14 +479,14 @@ func TestDaemonClient_GetAgentMCPServerDetail(t *testing.T) {
 	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		if err := json.NewEncoder(w).Encode(map[string]any{
-			"name":            "repo",
-			"health":          "healthy",
-			"enabled":         true,
-			"manageable":      true,
+			"name":             "repo",
+			"health":           "healthy",
+			"enabled":          true,
+			"manageable":       true,
 			"visibleToolCount": 1,
-			"hiddenToolCount": 1,
-			"healthDetail":    "connected to repository index",
-			"remediationHint": "Disable MCP if repository indexing becomes noisy.",
+			"hiddenToolCount":  1,
+			"healthDetail":     "connected to repository index",
+			"remediationHint":  "Disable MCP if repository indexing becomes noisy.",
 			"visibleTools": []map[string]any{
 				{"name": "repo_search", "description": "Search code"},
 			},
@@ -512,6 +512,101 @@ func TestDaemonClient_GetAgentMCPServerDetail(t *testing.T) {
 	}
 	if len(detail.VisibleTools) != 1 || detail.VisibleTools[0].Name != "repo_search" {
 		t.Fatalf("unexpected visible tools: %+v", detail.VisibleTools)
+	}
+}
+
+func TestDaemonClient_SetAgentMCPServerAttachedAndConfig(t *testing.T) {
+	var paths []string
+	var configBody map[string]any
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/api/v1/agents/a1/mcp/repo/attach":
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"name": "repo", "health": "healthy", "enabled": true, "attached": true,
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+		case "/api/v1/agents/a1/mcp/repo/config":
+			if err := json.NewDecoder(r.Body).Decode(&configBody); err != nil {
+				t.Fatalf("decode config body: %v", err)
+			}
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"name": "repo", "health": "healthy", "enabled": true, "attached": true, "configDigest": "sha256:cfg",
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	detail, err := dc.SetAgentMCPServerAttached(context.Background(), "a1", "repo", true, "actor", "req")
+	if err != nil {
+		t.Fatalf("SetAgentMCPServerAttached error: %v", err)
+	}
+	if !detail.Attached {
+		t.Fatalf("expected attached response, got %+v", detail)
+	}
+
+	configured, err := dc.UpdateAgentMCPServerConfig(context.Background(), "a1", "repo", `{"mode":"read"}`, "actor", "req")
+	if err != nil {
+		t.Fatalf("UpdateAgentMCPServerConfig error: %v", err)
+	}
+	if configured.ConfigDigest != "sha256:cfg" {
+		t.Fatalf("unexpected config response: %+v", configured)
+	}
+	if len(paths) != 2 || paths[0] != "/api/v1/agents/a1/mcp/repo/attach" || paths[1] != "/api/v1/agents/a1/mcp/repo/config" {
+		t.Fatalf("unexpected paths: %+v", paths)
+	}
+	if configBody["config"] != `{"mode":"read"}` {
+		t.Fatalf("unexpected config body: %+v", configBody)
+	}
+}
+
+func TestDaemonClient_GetAgentSessionsAndSubagentJobs(t *testing.T) {
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/agents/a1/sessions":
+			if r.URL.Query().Get("limit") != "3" {
+				t.Fatalf("unexpected sessions limit: %s", r.URL.Query().Get("limit"))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"sessions": []map[string]any{
+					{"key": "telegram:alpha", "messageCount": 8, "summaryLength": 64},
+				},
+			})
+		case "/api/v1/agents/a1/subagents":
+			if r.URL.Query().Get("limit") != "2" {
+				t.Fatalf("unexpected subagents limit: %s", r.URL.Query().Get("limit"))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jobs": []map[string]any{
+					{"jobId": "subagent-1", "task": "collect", "status": "completed", "result": "done"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	sessions, err := dc.GetAgentSessions(context.Background(), "a1", 3, "actor", "req")
+	if err != nil {
+		t.Fatalf("GetAgentSessions error: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].Key != "telegram:alpha" {
+		t.Fatalf("unexpected sessions: %+v", sessions)
+	}
+	jobs, err := dc.GetAgentSubagentJobs(context.Background(), "a1", 2, "actor", "req")
+	if err != nil {
+		t.Fatalf("GetAgentSubagentJobs error: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].JobID != "subagent-1" {
+		t.Fatalf("unexpected jobs: %+v", jobs)
 	}
 }
 

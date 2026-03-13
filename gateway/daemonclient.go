@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -102,6 +103,7 @@ type AgentChatResult struct {
 }
 
 type AgentCapabilitySummary = baseagent.RuntimeCapabilitySummary
+type AgentSessionStats = baseagent.SessionStats
 type CronJob = baseagent.CronJob
 
 // DaemonClientError is returned when the daemon returns a non-2xx response.
@@ -374,6 +376,77 @@ func (c *DaemonClient) GetAgentMCPServerDetail(ctx context.Context, agentID, ser
 		return baseagent.MCPServerCapability{}, fmt.Errorf("mcp detail response: %w", err)
 	}
 	return detail, nil
+}
+
+func (c *DaemonClient) SetAgentMCPServerAttached(ctx context.Context, agentID, serverName string, attached bool, actor, requestID string) (baseagent.MCPServerCapability, error) {
+	action := "detach"
+	if attached {
+		action = "attach"
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/mcp/"+url.PathEscape(serverName)+"/"+action, map[string]any{}, actor, requestID)
+	if err != nil {
+		return baseagent.MCPServerCapability{}, err
+	}
+	var detail baseagent.MCPServerCapability
+	if err := json.Unmarshal(raw, &detail); err != nil {
+		return baseagent.MCPServerCapability{}, fmt.Errorf("mcp attach response: %w", err)
+	}
+	return detail, nil
+}
+
+func (c *DaemonClient) UpdateAgentMCPServerConfig(ctx context.Context, agentID, serverName, config, actor, requestID string) (baseagent.MCPServerCapability, error) {
+	body := map[string]string{"config": strings.TrimSpace(config)}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/mcp/"+url.PathEscape(serverName)+"/config", body, actor, requestID)
+	if err != nil {
+		return baseagent.MCPServerCapability{}, err
+	}
+	var detail baseagent.MCPServerCapability
+	if err := json.Unmarshal(raw, &detail); err != nil {
+		return baseagent.MCPServerCapability{}, fmt.Errorf("mcp config response: %w", err)
+	}
+	return detail, nil
+}
+
+func (c *DaemonClient) GetAgentSessions(ctx context.Context, agentID string, limit int, actor, requestID string) ([]baseagent.SessionStats, error) {
+	path := "/api/v1/agents/" + url.PathEscape(agentID) + "/sessions"
+	if limit > 0 {
+		path += "?limit=" + url.QueryEscape(strconv.Itoa(limit))
+	}
+	raw, err := c.request(ctx, http.MethodGet, path, nil, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var wrapped struct {
+		Sessions []baseagent.SessionStats `json:"sessions"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("agent sessions response: %w", err)
+	}
+	if wrapped.Sessions == nil {
+		return []baseagent.SessionStats{}, nil
+	}
+	return wrapped.Sessions, nil
+}
+
+func (c *DaemonClient) GetAgentSubagentJobs(ctx context.Context, agentID string, limit int, actor, requestID string) ([]baseagent.SubagentJob, error) {
+	path := "/api/v1/agents/" + url.PathEscape(agentID) + "/subagents"
+	if limit > 0 {
+		path += "?limit=" + url.QueryEscape(strconv.Itoa(limit))
+	}
+	raw, err := c.request(ctx, http.MethodGet, path, nil, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var wrapped struct {
+		Jobs []baseagent.SubagentJob `json:"jobs"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("agent subagent jobs response: %w", err)
+	}
+	if wrapped.Jobs == nil {
+		return []baseagent.SubagentJob{}, nil
+	}
+	return wrapped.Jobs, nil
 }
 
 // GetLogs returns agent logs.

@@ -14,6 +14,8 @@ test.describe('Agent Detail', () => {
     let skillUninstallCalls = 0;
     let mcpToggleCalls = 0;
     let mcpEnabled = true;
+    let mcpAttached = true;
+    let mcpConfig = '{"mode":"read"}';
     let cronRunCalls = 0;
     let cronPauseCalls = 0;
     let cronResumeCalls = 0;
@@ -43,9 +45,9 @@ test.describe('Agent Detail', () => {
         contentType: 'application/json',
         body: JSON.stringify({
           skillSummary: { installedCount: 1, enabledCount: skillEnabled ? 1 : 0, disabledCount: skillEnabled ? 0 : 1 },
-          skills: [{ name: 'toolbox', enabled: skillEnabled, source: 'catalog', version: 'builtin', targetVersion: 'v2.0.0' }],
+          skills: [{ name: 'toolbox', enabled: skillEnabled, source: 'catalog', version: 'builtin', targetVersion: 'v2.0.0', health: 'degraded', updateStatus: 'update_available', updateAvailable: true }],
           mcp: {
-            servers: [{ name: 'repo', health: mcpEnabled ? 'healthy' : 'stopped', enabled: mcpEnabled, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
+            servers: [{ name: 'repo', health: mcpAttached ? (mcpEnabled ? 'healthy' : 'stopped') : 'detached', enabled: mcpEnabled, attached: mcpAttached, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
             visibleTools: [{ name: 'repo_search', description: 'Search code' }],
           },
         }),
@@ -90,12 +92,20 @@ test.describe('Agent Detail', () => {
               { id: 'cron-2', prompt: 'refresh heartbeat', nextRunAt: '2026-03-13T01:00:00Z', lastResult: 'scheduled' },
             ],
           },
+          delegation: {
+            count: 1,
+            jobs: [{ jobId: 'subagent-1', task: 'collect diagnostics', status: 'completed', summary: 'summary-ready', result: 'done', updatedAt: '2026-03-12T00:06:00Z' }],
+          },
+          sessions: {
+            count: 1,
+            sessions: [{ key: 'telegram:prod', messageCount: 8, summaryLength: 64, updatedAt: '2026-03-12T00:07:00Z' }],
+          },
           session: { instanceId: 'instance-1', channel: 'telegram', isolation: true, runtimeState: 'running' },
           capabilities: {
             skillSummary: { installedCount: 1, enabledCount: skillEnabled ? 1 : 0, disabledCount: skillEnabled ? 0 : 1 },
-            skills: [{ name: 'toolbox', enabled: skillEnabled, source: 'catalog', version: 'builtin', targetVersion: 'v2.0.0' }],
+            skills: [{ name: 'toolbox', enabled: skillEnabled, source: 'catalog', version: 'builtin', targetVersion: 'v2.0.0', health: 'degraded', updateStatus: 'update_available', updateAvailable: true }],
             mcp: {
-              servers: [{ name: 'repo', health: mcpEnabled ? 'healthy' : 'stopped', enabled: mcpEnabled, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
+              servers: [{ name: 'repo', health: mcpAttached ? (mcpEnabled ? 'healthy' : 'stopped') : 'detached', enabled: mcpEnabled, attached: mcpAttached, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
               visibleTools: [{ name: 'repo_search', description: 'Search code' }],
             },
           },
@@ -217,9 +227,9 @@ test.describe('Agent Detail', () => {
         contentType: 'application/json',
         body: JSON.stringify({
           skillSummary: { installedCount: 1, enabledCount: 0, disabledCount: 1 },
-          skills: [{ name: 'toolbox', enabled: false, source: 'catalog', version: 'builtin' }],
+          skills: [{ name: 'toolbox', enabled: false, source: 'catalog', version: 'builtin', health: 'degraded', updateStatus: 'update_available', updateAvailable: true }],
           mcp: {
-            servers: [{ name: 'repo', health: 'healthy', visibleToolCount: 1, hiddenToolCount: 0 }],
+            servers: [{ name: 'repo', health: mcpAttached ? 'healthy' : 'detached', enabled: mcpEnabled, attached: mcpAttached, visibleToolCount: 1, hiddenToolCount: 0 }],
             visibleTools: [{ name: 'repo_search', description: 'Search code' }],
           },
         }),
@@ -231,7 +241,7 @@ test.describe('Agent Detail', () => {
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          skills: [{ name: 'workspace-inspection', summary: 'Inspect workspace state.', source: 'catalog', version: 'v1.2.3' }],
+          skills: [{ name: 'workspace-inspection', summary: 'Inspect workspace state.', source: 'catalog', version: 'v1.2.3', health: 'healthy', updateStatus: 'current', updateAvailable: false }],
         }),
       });
     });
@@ -240,7 +250,7 @@ test.describe('Agent Detail', () => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ name: 'workspace-inspection', summary: 'Inspect workspace state.', source: 'catalog', version: 'v1.2.3' }),
+        body: JSON.stringify({ name: 'workspace-inspection', summary: 'Inspect workspace state.', source: 'catalog', version: 'v1.2.3', health: 'healthy', updateStatus: 'current', updateAvailable: false }),
       });
     });
     await page.route('**/api/v1/agents/agent-alpha/skills/update', async (route) => {
@@ -248,7 +258,7 @@ test.describe('Agent Detail', () => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ name: 'toolbox', summary: 'Core toolbox', source: 'catalog', version: 'builtin', targetVersion: 'v2.0.0' }),
+        body: JSON.stringify({ name: 'toolbox', summary: 'Core toolbox', source: 'catalog', version: 'builtin', targetVersion: 'v2.0.0', health: 'degraded', updateStatus: 'update_available', updateAvailable: true }),
       });
     });
     await page.route('**/api/v1/agents/agent-alpha/skills/uninstall', async (route) => {
@@ -256,7 +266,74 @@ test.describe('Agent Detail', () => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ name: 'toolbox', summary: 'Core toolbox', source: 'catalog', version: 'builtin' }),
+        body: JSON.stringify({ name: 'toolbox', summary: 'Core toolbox', source: 'catalog', version: 'builtin', health: 'degraded', updateStatus: 'update_available', updateAvailable: true }),
+      });
+    });
+    await page.route('**/api/v1/agents/agent-alpha/mcp/repo/attach', async (route) => {
+      mcpAttached = true;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          name: 'repo',
+          health: 'healthy',
+          enabled: mcpEnabled,
+          attached: true,
+          manageable: true,
+          visibleToolCount: 1,
+          hiddenToolCount: 1,
+          healthDetail: 'connected to repository index',
+          remediationHint: 'Disable MCP if repository indexing becomes noisy.',
+          configDigest: 'sha256:test-config',
+          configSummary: mcpConfig,
+          visibleTools: [{ name: 'repo_search', description: 'Search code' }],
+          hiddenTools: [{ name: 'repo_admin', description: 'Admin index' }],
+        }),
+      });
+    });
+    await page.route('**/api/v1/agents/agent-alpha/mcp/repo/detach', async (route) => {
+      mcpAttached = false;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          name: 'repo',
+          health: 'detached',
+          enabled: mcpEnabled,
+          attached: false,
+          manageable: true,
+          visibleToolCount: 1,
+          hiddenToolCount: 1,
+          healthDetail: 'detached from runtime',
+          remediationHint: 'Attach MCP before expecting tools to appear.',
+          configDigest: 'sha256:test-config',
+          configSummary: mcpConfig,
+          visibleTools: [{ name: 'repo_search', description: 'Search code' }],
+          hiddenTools: [{ name: 'repo_admin', description: 'Admin index' }],
+        }),
+      });
+    });
+    await page.route('**/api/v1/agents/agent-alpha/mcp/repo/config', async (route) => {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      mcpConfig = String(body.config || '');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          name: 'repo',
+          health: mcpAttached ? 'healthy' : 'detached',
+          enabled: mcpEnabled,
+          attached: mcpAttached,
+          manageable: true,
+          visibleToolCount: 1,
+          hiddenToolCount: 1,
+          healthDetail: mcpAttached ? 'connected to repository index' : 'detached from runtime',
+          remediationHint: mcpAttached ? 'Disable MCP if repository indexing becomes noisy.' : 'Attach MCP before expecting tools to appear.',
+          configDigest: 'sha256:test-config',
+          configSummary: mcpConfig,
+          visibleTools: [{ name: 'repo_search', description: 'Search code' }],
+          hiddenTools: [{ name: 'repo_admin', description: 'Admin index' }],
+        }),
       });
     });
     await page.route('**/api/v1/agents/agent-alpha/mcp/repo', async (route) => {
@@ -268,7 +345,7 @@ test.describe('Agent Detail', () => {
           contentType: 'application/json',
           body: JSON.stringify({
             mcp: {
-              servers: [{ name: 'repo', health: 'stopped', enabled: false, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
+              servers: [{ name: 'repo', health: mcpAttached ? 'stopped' : 'detached', enabled: false, attached: mcpAttached, manageable: true, visibleToolCount: 1, hiddenToolCount: 0 }],
               visibleTools: [],
             },
           }),
@@ -280,13 +357,16 @@ test.describe('Agent Detail', () => {
         contentType: 'application/json',
         body: JSON.stringify({
           name: 'repo',
-          health: 'healthy',
-          enabled: true,
+          health: mcpAttached ? 'healthy' : 'detached',
+          enabled: mcpEnabled,
+          attached: mcpAttached,
           manageable: true,
           visibleToolCount: 1,
           hiddenToolCount: 1,
-          healthDetail: 'connected to repository index',
-          remediationHint: 'Disable MCP if repository indexing becomes noisy.',
+          healthDetail: mcpAttached ? 'connected to repository index' : 'detached from runtime',
+          remediationHint: mcpAttached ? 'Disable MCP if repository indexing becomes noisy.' : 'Attach MCP before expecting tools to appear.',
+          configDigest: 'sha256:test-config',
+          configSummary: mcpConfig,
           visibleTools: [{ name: 'repo_search', description: 'Search code' }],
           hiddenTools: [{ name: 'repo_admin', description: 'Admin index' }],
         }),
@@ -333,6 +413,9 @@ test.describe('Agent Detail', () => {
     await expect(page.locator('#agent-detail-content')).toContainText('manual');
     await expect(page.locator('#agent-detail-content')).toContainText('1 installed · 1 enabled · 0 disabled');
     await expect(page.locator('#agent-detail-content')).toContainText('target=v2.0.0');
+    await expect(page.locator('#agent-detail-content')).toContainText('health=degraded');
+    await expect(page.locator('#agent-detail-content')).toContainText('update_available');
+    await expect(page.locator('#agent-detail-content')).toContainText('update available');
     await expect(page.locator('#agent-detail-content')).toContainText('"runtimeState": "running"');
     await expect(page.locator('#agent-detail-content')).toContainText('/tmp/agent-alpha/config.toml');
     await expect(page.locator('#agent-detail-content')).toContainText('Model Runtime Trace');
@@ -341,6 +424,10 @@ test.describe('Agent Detail', () => {
     await expect(page.locator('#agent-detail-content')).toContainText('override hit');
     await expect(page.locator('#agent-detail-content')).toContainText('fallback hit');
     await expect(page.locator('#agent-detail-content')).toContainText('last=2026-03-12T00:05:00Z');
+    await expect(page.locator('#agent-detail-content')).toContainText('Recent Delegation Jobs');
+    await expect(page.locator('#agent-detail-content')).toContainText('subagent-1');
+    await expect(page.locator('#agent-detail-content')).toContainText('Recent Sessions');
+    await expect(page.locator('#agent-detail-content')).toContainText('telegram:prod');
 
     await page.getByRole('button', { name: 'Disable', exact: true }).click();
     await expect.poll(() => skillToggleCalls).toBe(1);
@@ -367,6 +454,18 @@ test.describe('Agent Detail', () => {
     await page.getByRole('button', { name: 'Inspect repo MCP' }).click();
     await expect(page.locator('#agent-detail-content')).toContainText('connected to repository index');
     await expect(page.locator('#agent-detail-content')).toContainText('repo_admin');
+    await expect(page.locator('#agent-detail-content')).toContainText('sha256:test-config');
+    await expect(page.getByLabel('repo MCP config')).toHaveValue('{"mode":"read"}');
+
+    await page.getByRole('button', { name: 'Detach repo', exact: true }).click();
+    await expect(page.locator('#agent-detail-content')).toContainText('MCP server repo detached.');
+
+    await page.getByRole('button', { name: 'Attach repo', exact: true }).click();
+    await expect(page.locator('#agent-detail-content')).toContainText('MCP server repo attached.');
+
+    await page.getByLabel('repo MCP config').fill('{"mode":"write"}');
+    await page.getByRole('button', { name: 'Save repo config' }).click();
+    await expect(page.locator('#agent-detail-content')).toContainText('MCP config for repo updated.');
 
     await page.getByRole('button', { name: 'Run cron-1 now' }).click();
     await expect.poll(() => cronRunCalls).toBe(1);
