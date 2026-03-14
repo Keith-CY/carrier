@@ -1,6 +1,7 @@
 package work
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -109,6 +110,25 @@ func TestWorkRunNormalizeRejectsUnknownBackend(t *testing.T) {
 		Backend:    "weird",
 	})
 	if err == nil || !strings.Contains(err.Error(), "backend") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNormalizeProjectFailsWhenRandomIDGenerationFails(t *testing.T) {
+	prev := randomIDRead
+	randomIDRead = func([]byte) (int, error) {
+		return 0, errors.New("entropy unavailable")
+	}
+	defer func() {
+		randomIDRead = prev
+	}()
+
+	_, err := NormalizeProject(Project{
+		Name:       "Carrier",
+		SourceType: SourceTypeLocal,
+		SourceRef:  "/tmp/carrier",
+	})
+	if err == nil || !strings.Contains(err.Error(), "failed to read random bytes") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

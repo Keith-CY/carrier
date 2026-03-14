@@ -95,3 +95,29 @@ func TestWorkItemStoreClaimAndRunTransitions(t *testing.T) {
 		t.Fatalf("latestRunId=%q", item.LatestRunID)
 	}
 }
+
+func TestGetWorkItemUsesDirectLookup(t *testing.T) {
+	t.Setenv("CARRIER_ROOT", t.TempDir())
+	t.Setenv("CARRIER_APP_ROOT", "")
+	t.Setenv("CARRIER_PROJECTS_ROOT", "")
+	t.Setenv("CARRIER_WORKS_ROOT", "")
+
+	if _, err := upsertWorkItem(work.WorkItem{
+		ID:        "work_123",
+		ProjectID: "proj_123",
+		Title:     "Add queue",
+	}); err != nil {
+		t.Fatalf("upsertWorkItem error: %v", err)
+	}
+
+	item, ok, err := getWorkItem("work_123")
+	if err != nil {
+		t.Fatalf("getWorkItem error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected work item lookup to succeed")
+	}
+	if item.ID != "work_123" {
+		t.Fatalf("item.ID=%q", item.ID)
+	}
+}

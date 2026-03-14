@@ -360,14 +360,32 @@ func handleWorkRuns(w http.ResponseWriter, r *http.Request, requestID string, cf
 		return
 	}
 	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, os.ErrNotExist) {
-			status = http.StatusNotFound
-		} else {
-			status = http.StatusBadRequest
-		}
-		writeJSON(w, status, gatewayErrBody("E_USAGE", err.Error()))
+		status, code := classifyWorkRunActionError(err)
+		writeJSON(w, status, gatewayErrBody(code, err.Error()))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"requestId": requestID, "result": "ok", "run": run})
+}
+
+func classifyWorkRunActionError(err error) (int, string) {
+	if errors.Is(err, os.ErrNotExist) {
+		return http.StatusNotFound, "E_NOT_FOUND"
+	}
+	if isWorkRunActionUsageError(err) {
+		return http.StatusBadRequest, "E_USAGE"
+	}
+	return http.StatusInternalServerError, "E_INTERNAL"
+}
+
+func isWorkRunActionUsageError(err error) bool {
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case strings.Contains(msg, "invalid work item transition"),
+		strings.Contains(msg, "run id is required"),
+		strings.Contains(msg, "already has an active run"),
+		strings.Contains(msg, "outside project root"):
+		return true
+	default:
+		return false
+	}
 }

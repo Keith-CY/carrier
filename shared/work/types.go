@@ -149,7 +149,11 @@ type Run struct {
 
 func NormalizeProject(in Project) (Project, error) {
 	out := in
-	out.ID = ensurePrefixedID("proj", out.ID)
+	var err error
+	out.ID, err = ensurePrefixedID("proj", out.ID)
+	if err != nil {
+		return Project{}, err
+	}
 	out.Name = strings.TrimSpace(out.Name)
 	out.SourceType = normalizeSourceType(out.SourceType)
 	out.SourceRef = strings.TrimSpace(out.SourceRef)
@@ -183,7 +187,11 @@ func NormalizeProject(in Project) (Project, error) {
 
 func NormalizeWorkItem(in WorkItem) (WorkItem, error) {
 	out := in
-	out.ID = ensurePrefixedID("work", out.ID)
+	var err error
+	out.ID, err = ensurePrefixedID("work", out.ID)
+	if err != nil {
+		return WorkItem{}, err
+	}
 	out.ProjectID = strings.TrimSpace(out.ProjectID)
 	out.Title = strings.TrimSpace(out.Title)
 	out.Description = strings.TrimSpace(out.Description)
@@ -222,7 +230,11 @@ func NormalizeWorkItem(in WorkItem) (WorkItem, error) {
 func NormalizeRun(in Run) (Run, error) {
 	out := in
 	rawBackend := strings.TrimSpace(string(in.Backend))
-	out.ID = ensurePrefixedID("run", out.ID)
+	var err error
+	out.ID, err = ensurePrefixedID("run", out.ID)
+	if err != nil {
+		return Run{}, err
+	}
 	out.ProjectID = strings.TrimSpace(out.ProjectID)
 	out.WorkItemID = strings.TrimSpace(out.WorkItemID)
 	out.ExecutionID = strings.TrimSpace(out.ExecutionID)
@@ -262,20 +274,26 @@ func NormalizeRun(in Run) (Run, error) {
 	return out, nil
 }
 
-func ensurePrefixedID(prefix string, current string) string {
+func ensurePrefixedID(prefix string, current string) (string, error) {
 	trimmed := strings.TrimSpace(current)
 	if trimmed != "" {
-		return trimmed
+		return trimmed, nil
 	}
-	return prefix + "_" + randomID()
+	suffix, err := randomID()
+	if err != nil {
+		return "", err
+	}
+	return prefix + "_" + suffix, nil
 }
 
-func randomID() string {
+var randomIDRead = rand.Read
+
+func randomID() (string, error) {
 	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		return "generated"
+	if _, err := randomIDRead(buf); err != nil {
+		return "", fmt.Errorf("failed to read random bytes for id generation: %w", err)
 	}
-	return hex.EncodeToString(buf)
+	return hex.EncodeToString(buf), nil
 }
 
 func normalizeSourceType(in SourceType) SourceType {

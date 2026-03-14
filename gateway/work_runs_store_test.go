@@ -175,3 +175,47 @@ func TestWorkRunActionsSyncWorkItemAndExecutionContext(t *testing.T) {
 		t.Fatalf("execution.Status=%q want %q", execution.Status, OrchestratorExecutionStatusCancelled)
 	}
 }
+
+func TestGetWorkRunUsesDirectLookup(t *testing.T) {
+	t.Setenv("CARRIER_ROOT", t.TempDir())
+	t.Setenv("CARRIER_APP_ROOT", "")
+	t.Setenv("CARRIER_PROJECTS_ROOT", "")
+	t.Setenv("CARRIER_WORKS_ROOT", "")
+
+	project, err := upsertWorkProject(work.Project{
+		ID:         "proj_123",
+		Name:       "carrier",
+		SourceType: work.SourceTypeLocal,
+		SourceRef:  createGatewayTestGitRepo(t),
+	})
+	if err != nil {
+		t.Fatalf("upsertWorkProject error: %v", err)
+	}
+	if _, err := syncWorkProject(project.ID); err != nil {
+		t.Fatalf("syncWorkProject error: %v", err)
+	}
+	item, err := upsertWorkItem(work.WorkItem{
+		ID:        "work_123",
+		ProjectID: project.ID,
+		Title:     "Add queue",
+	})
+	if err != nil {
+		t.Fatalf("upsertWorkItem error: %v", err)
+	}
+
+	started, err := startWorkRun(item.ID, work.RunBackendLocalSandboxed)
+	if err != nil {
+		t.Fatalf("startWorkRun error: %v", err)
+	}
+
+	run, ok, err := getWorkRun(started.ID)
+	if err != nil {
+		t.Fatalf("getWorkRun error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected work run lookup to succeed")
+	}
+	if run.ID != started.ID {
+		t.Fatalf("run.ID=%q want %q", run.ID, started.ID)
+	}
+}

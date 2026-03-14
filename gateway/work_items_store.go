@@ -3,6 +3,7 @@ package gateway
 import (
 	"carrier/shared/work"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -59,17 +60,17 @@ func listWorkItems() ([]work.WorkItem, error) {
 }
 
 func getWorkItem(itemID string) (work.WorkItem, bool, error) {
-	items, err := listWorkItems()
+	workItemsStoreMu.Lock()
+	defer workItemsStoreMu.Unlock()
+
+	item, _, err := loadWorkItemByID(itemID)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return work.WorkItem{}, false, nil
+		}
 		return work.WorkItem{}, false, err
 	}
-	id := strings.TrimSpace(itemID)
-	for _, item := range items {
-		if strings.EqualFold(strings.TrimSpace(item.ID), id) {
-			return item, true, nil
-		}
-	}
-	return work.WorkItem{}, false, nil
+	return item, true, nil
 }
 
 func upsertWorkItem(item work.WorkItem) (work.WorkItem, error) {

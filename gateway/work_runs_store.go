@@ -3,6 +3,7 @@ package gateway
 import (
 	"carrier/shared/work"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -57,17 +58,17 @@ func listWorkRuns() ([]work.Run, error) {
 }
 
 func getWorkRun(runID string) (work.Run, bool, error) {
-	runs, err := listWorkRuns()
+	workRunsStoreMu.Lock()
+	defer workRunsStoreMu.Unlock()
+
+	run, _, err := loadWorkRunByID(runID)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return work.Run{}, false, nil
+		}
 		return work.Run{}, false, err
 	}
-	id := strings.TrimSpace(runID)
-	for _, run := range runs {
-		if strings.EqualFold(strings.TrimSpace(run.ID), id) {
-			return run, true, nil
-		}
-	}
-	return work.Run{}, false, nil
+	return run, true, nil
 }
 
 func setWorkRunPhase(runID string, phase work.RunPhase) (work.Run, error) {
