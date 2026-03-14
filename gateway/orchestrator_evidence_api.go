@@ -3,8 +3,10 @@ package gateway
 import (
 	"archive/zip"
 	"bytes"
+	"carrier/shared/work"
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -71,6 +73,19 @@ type OrchestratorEvidenceMediaOutput struct {
 	Source         string `json:"source,omitempty"`
 }
 
+type OrchestratorEvidenceWorkspaceManifest struct {
+	WorkspaceID        string `json:"workspaceId,omitempty"`
+	WorkspacePath      string `json:"workspacePath,omitempty"`
+	Backend            string `json:"backend,omitempty"`
+	WorkflowDigest     string `json:"workflowDigest,omitempty"`
+	Phase              string `json:"phase,omitempty"`
+	LeaseOwner         string `json:"leaseOwner,omitempty"`
+	LeaseExpiresAt     string `json:"leaseExpiresAt,omitempty"`
+	VerificationStatus string `json:"verificationStatus,omitempty"`
+	PublishStatus      string `json:"publishStatus,omitempty"`
+	Exists             bool   `json:"exists"`
+}
+
 type OrchestratorEvidenceBundle struct {
 	GeneratedAt         string                                  `json:"generatedAt"`
 	RenderMode          string                                  `json:"renderMode,omitempty"`
@@ -85,6 +100,10 @@ type OrchestratorEvidenceBundle struct {
 	ResultSummary       OrchestratorEvidenceResultSummary       `json:"resultSummary"`
 	ArtifactManifest    []OrchestratorArtifact                  `json:"artifactManifest,omitempty"`
 	MediaOutputs        []OrchestratorEvidenceMediaOutput       `json:"mediaOutputs,omitempty"`
+	WorkItemSnapshot    *work.WorkItem                          `json:"workItemSnapshot,omitempty"`
+	RunSnapshot         *work.Run                               `json:"runSnapshot,omitempty"`
+	WorkspaceManifest   *OrchestratorEvidenceWorkspaceManifest  `json:"workspaceManifest,omitempty"`
+	PublishRecords      []workGitHubPublishRecord               `json:"publishRecords,omitempty"`
 	Audit               []gatewayAuditEvent                     `json:"audit,omitempty"`
 }
 
@@ -199,6 +218,10 @@ func buildOrchestratorEvidenceBundle(execution OrchestratorExecution) (Orchestra
 	if err != nil {
 		return OrchestratorEvidenceBundle{}, err
 	}
+	workItemSnapshot, runSnapshot, workspaceManifest, publishRecords, err := buildOrchestratorEvidenceWorkContext(executionWithUsage)
+	if err != nil {
+		return OrchestratorEvidenceBundle{}, err
+	}
 	return OrchestratorEvidenceBundle{
 		GeneratedAt:         nowTimestamp(),
 		RenderMode:          strings.TrimSpace(executionWithUsage.Outcome.RenderMode),
@@ -213,6 +236,10 @@ func buildOrchestratorEvidenceBundle(execution OrchestratorExecution) (Orchestra
 		ResultSummary:       summarizeOrchestratorEvidenceResults(executionWithUsage.Results),
 		ArtifactManifest:    executionWithUsage.Outcome.Artifacts,
 		MediaOutputs:        buildOrchestratorEvidenceMediaOutputs(executionWithUsage),
+		WorkItemSnapshot:    workItemSnapshot,
+		RunSnapshot:         runSnapshot,
+		WorkspaceManifest:   workspaceManifest,
+		PublishRecords:      publishRecords,
 		Audit:               auditEvents,
 	}, nil
 }
@@ -309,6 +336,26 @@ func buildOrchestratorEvidenceArchive(bundle OrchestratorEvidenceBundle, cfg *Ga
 	}
 	if err := addJSON("media-outputs.json", bundle.MediaOutputs); err != nil {
 		return nil, err
+	}
+	if bundle.WorkItemSnapshot != nil {
+		if err := addJSON("work-item-snapshot.json", bundle.WorkItemSnapshot); err != nil {
+			return nil, err
+		}
+	}
+	if bundle.RunSnapshot != nil {
+		if err := addJSON("run-snapshot.json", bundle.RunSnapshot); err != nil {
+			return nil, err
+		}
+	}
+	if bundle.WorkspaceManifest != nil {
+		if err := addJSON("workspace-manifest.json", bundle.WorkspaceManifest); err != nil {
+			return nil, err
+		}
+	}
+	if len(bundle.PublishRecords) > 0 {
+		if err := addJSON("publish-records.json", bundle.PublishRecords); err != nil {
+			return nil, err
+		}
 	}
 	if err := addJSON("audit.json", bundle.Audit); err != nil {
 		return nil, err
@@ -489,6 +536,86 @@ func buildOrchestratorEvidenceMediaOutputs(execution OrchestratorExecution) []Or
 		})
 	}
 	return out
+}
+
+func buildOrchestratorEvidenceWorkContext(execution OrchestratorExecution) (*work.WorkItem, *work.Run, *OrchestratorEvidenceWorkspaceManifest, []workGitHubPublishRecord, error) {
+	workContext := normalizeOrchestratorExecutionWorkContext(execution.Work)
+	if execution.Mode != OrchestratorExecutionModeWork && workContext.ProjectID == "" && workContext.WorkItemID == "" && workContext.RunID == "" && workContext.WorkspaceID == "" {
+		return nil, nil, nil, nil, nil
+	}
+
+	var runSnapshot *work.Run
+	runID := strings.TrimSpace(workContext.RunID)
+	if runID != "" {
+		run, ok, err := getWorkRun(runID)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		if ok {
+			runCopy := run
+			runSnapshot = &runCopy
+		}
+	}
+
+	workItemID := strings.TrimSpace(workContext.WorkItemID)
+	if workItemID == "" && runSnapshot != nil {
+		workItemID = strings.TrimSpace(runSnapshot.WorkItemID)
+	}
+	var workItemSnapshot *work.WorkItem
+	if workItemID != "" {
+		item, ok, err := getWorkItem(workItemID)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		if ok {
+			itemCopy := item
+			workItemSnapshot = &itemCopy
+		}
+	}
+
+	var workspaceManifest *OrchestratorEvidenceWorkspaceManifest
+	workspacePath := strings.TrimSpace(workContext.WorkspacePath)
+	if workspacePath == "" && runSnapshot != nil {
+		workspacePath = strings.TrimSpace(runSnapshot.WorkspacePath)
+	}
+	if workContext.WorkspaceID != "" || workspacePath != "" || runSnapshot != nil {
+		manifest := &OrchestratorEvidenceWorkspaceManifest{
+			WorkspaceID:        strings.TrimSpace(firstString(workContext.WorkspaceID, valueFromRun(runSnapshot, func(r work.Run) string { return r.WorkspaceID }))),
+			WorkspacePath:      workspacePath,
+			Backend:            strings.TrimSpace(firstString(workContext.Backend, valueFromRun(runSnapshot, func(r work.Run) string { return string(r.Backend) }))),
+			WorkflowDigest:     strings.TrimSpace(firstString(workContext.WorkflowDigest, valueFromRun(runSnapshot, func(r work.Run) string { return r.WorkflowDigest }))),
+			Phase:              strings.TrimSpace(firstString(workContext.Phase, valueFromRun(runSnapshot, func(r work.Run) string { return string(r.Phase) }))),
+			LeaseOwner:         valueFromRun(runSnapshot, func(r work.Run) string { return r.LeaseOwner }),
+			LeaseExpiresAt:     valueFromRun(runSnapshot, func(r work.Run) string { return r.LeaseExpiresAt }),
+			VerificationStatus: strings.TrimSpace(firstString(workContext.VerificationStatus, valueFromRun(runSnapshot, func(r work.Run) string { return string(r.VerificationStatus) }))),
+			PublishStatus:      strings.TrimSpace(firstString(workContext.PublishStatus, valueFromRun(runSnapshot, func(r work.Run) string { return string(r.PublishStatus) }))),
+		}
+		if manifest.WorkspacePath != "" {
+			if _, err := os.Stat(manifest.WorkspacePath); err == nil {
+				manifest.Exists = true
+			} else if err != nil && !os.IsNotExist(err) {
+				return nil, nil, nil, nil, err
+			}
+		}
+		workspaceManifest = manifest
+	}
+
+	projectID := strings.TrimSpace(workContext.ProjectID)
+	if projectID == "" && runSnapshot != nil {
+		projectID = strings.TrimSpace(runSnapshot.ProjectID)
+	}
+	publishRecords, err := listGitHubPublishRecords(projectID, runID)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return workItemSnapshot, runSnapshot, workspaceManifest, publishRecords, nil
+}
+
+func valueFromRun(run *work.Run, selector func(work.Run) string) string {
+	if run == nil {
+		return ""
+	}
+	return strings.TrimSpace(selector(*run))
 }
 
 func evidenceMediaDeliveryKind(artifact OrchestratorArtifact) string {

@@ -15,9 +15,22 @@ describe('ExecutionDetailContent', () => {
       <ExecutionDetailContent
         execution={{
           id: 'exec-1',
+          mode: 'work',
           goal: 'Investigate weather',
           status: 'partial_completed',
           updatedAt: '2026-03-11T10:00:00Z',
+          work: {
+            projectId: 'proj_123',
+            workItemId: 'work_123',
+            runId: 'run_123',
+            workspaceId: 'ws_123',
+            workspacePath: '/tmp/carrier/worktrees/run_123',
+            backend: 'managed_isolated',
+            workflowDigest: 'sha256:workflow',
+            phase: 'executing',
+            verificationStatus: 'pending',
+            publishStatus: 'published',
+          },
           triggerSource: 'webhook',
           triggerId: 'trigger-1',
           triggerEvent: 'POST',
@@ -114,6 +127,15 @@ describe('ExecutionDetailContent', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'Investigate weather' })).toBeInTheDocument();
+    expect(screen.getByText('Work Context')).toBeInTheDocument();
+    expect(screen.getByText(/project:\s*proj_123/i)).toBeInTheDocument();
+    expect(screen.getByText(/work item:\s*work_123/i)).toBeInTheDocument();
+    expect(screen.getByText(/run:\s*run_123/i)).toBeInTheDocument();
+    expect(screen.getByText(/workspace path:\s*\/tmp\/carrier\/worktrees\/run_123/i)).toBeInTheDocument();
+    expect(screen.getByText(/backend:\s*managed_isolated/i)).toBeInTheDocument();
+    expect(screen.getByText(/verification:\s*pending/i)).toBeInTheDocument();
+    expect(screen.getByText(/publish:\s*published/i)).toBeInTheDocument();
+    expect(screen.getByText(/workflow:\s*sha256:workflow/i)).toBeInTheDocument();
     expect(screen.getByText('Trigger')).toBeInTheDocument();
     expect(screen.getByText('Execution Lineage')).toBeInTheDocument();
     expect(screen.getByText('Outcome')).toBeInTheDocument();

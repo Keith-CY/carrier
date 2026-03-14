@@ -1,5 +1,6 @@
 export const primaryNav = [
   { to: '/dashboard', route: 'dashboard', label: 'Dashboard' },
+  { to: '/work', route: 'work', label: 'Work' },
   { to: '/executions', route: 'executions', label: 'Executions' },
   { to: '/memory', route: 'memory', label: 'Memory' },
   { to: '/workers', route: 'workers', label: 'Workers' },

@@ -23,7 +23,23 @@ describe('router redirects', () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url);
       if (url.endsWith('/api/v1/features')) {
-        return new Response(JSON.stringify({ features: {}, authz: {} }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify({
+          features: {
+            remoteControlPlaneEnabled: true,
+            remoteChatEnabled: true,
+            providerBindingEnabled: true,
+          },
+          authz: {
+            permissions: {
+              viewExecutions: true,
+              launchExecutions: true,
+              approveExecutions: true,
+              managePolicies: true,
+              manageProviders: true,
+              manageHosts: true,
+            },
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url.endsWith('/healthz')) {
         return new Response(JSON.stringify({ status: 'ok' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -44,5 +60,17 @@ describe('router redirects', () => {
   test('redirects unknown routes to /welcome', async () => {
     const router = renderAt('/does-not-exist');
     await waitFor(() => expect(router.state.location.pathname).toBe('/welcome'));
+  });
+
+  test('includes the work routes', () => {
+    const rootRoute = routeObjects[0];
+    const childPaths = Array.isArray(rootRoute.children) ? rootRoute.children.map((route) => route.path) : [];
+    expect(childPaths).toContain('work');
+    expect(childPaths).toContain('work/projects');
+    expect(childPaths).toContain('work/projects/:projectId');
+    expect(childPaths).toContain('work/items');
+    expect(childPaths).toContain('work/items/:itemId');
+    expect(childPaths).toContain('work/runs');
+    expect(childPaths).toContain('work/runs/:runId');
   });
 });

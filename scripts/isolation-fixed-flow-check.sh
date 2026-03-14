@@ -62,7 +62,7 @@ run_deterministic_tests() {
   echo "[3/3] cmd/carrier: add --isolation payload e2e tests (openclaw/picoclaw/zeroclaw)"
   (
     cd "$ROOT_DIR/cmd/carrier"
-    go test ./... -run 'TestE2ECarrierBinaryAdd(OpenClawIsolationSendsInstallAndStartIsolationPayload|ManagedAgentsIsolationSendsInstallAndStartIsolationPayload)' -count=1
+    GOTOOLCHAIN=auto go test ./... -run 'TestE2ECarrierBinaryAdd(OpenClawIsolationSendsInstallAndStartIsolationPayload|ManagedAgentsIsolationSendsInstallAndStartIsolationPayload)' -count=1
   )
 }
 

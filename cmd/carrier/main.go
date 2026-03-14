@@ -578,12 +578,18 @@ Core workflows:
                         Show managed-agent launcher summary
   carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--model-alias <alias>] [--model <model-id>] [--session-id <id>] [--json]
                         Run one managed-agent prompt through the gateway
+  carrier work items create --project <project_id> --title <title> [--description <text>] [--acceptance <text>]... [--priority <level>] [--label <label>]... [--json]
+                        Create a native work item in Carrier
+  carrier work runs start <work_item_id> [--backend <local_sandboxed|managed_isolated|remote_vm>] [--json]
+                        Start one supervised run for a work item
   carrier memory [list] [--subject <subject>] [--json]
                         List memory packages, attachments, grants, and audit snapshot
   carrier templates [list] [--json]
                         List built-in execution templates
   carrier triggers [list] [--json]
                         List execution triggers
+  carrier work github import --project <project_id> --repository <owner/repo> (--issue <n>|--pr <n>) [--json]
+                        Import one external GitHub work item into Carrier
 
 Runtime ops:
   carrier daemon         Start daemon HTTP API server (foreground)
@@ -731,6 +737,40 @@ Usage:
                         Update one execution trigger
   carrier triggers delete <trigger_id> [--json]
                         Delete one execution trigger
+  carrier work projects add --name <name> --source-type <local|git|github> --source-ref <path-or-url> [--default-branch <branch>] [--workflow-path <path>] [--json]
+                        Register one canonical work project
+  carrier work projects list [--json]
+                        List work projects
+  carrier work projects show <project_id> [--json]
+                        Show one work project
+  carrier work projects sync <project_id> [--json]
+                        Sync one work project and refresh the workflow digest
+  carrier work items list [--json]
+                        List work items
+  carrier work items show <work_item_id> [--json]
+                        Show one work item
+  carrier work items claim <work_item_id> --run-id <run_id> [--json]
+                        Attach an explicit claim to one work item
+  carrier work items update <work_item_id> [--title <title>] [--description <text>] [--acceptance <text>]... [--priority <level>] [--label <label>]... [--json]
+                        Update one work item
+  carrier work items cancel <work_item_id> [--json]
+                        Cancel one work item
+  carrier work items complete <work_item_id> [--json]
+                        Mark one work item done
+  carrier work runs list [--json]
+                        List work runs
+  carrier work runs show <run_id> [--json]
+                        Show one work run
+  carrier work runs resume <run_id> [--json]
+                        Resume one work run
+  carrier work runs cancel <run_id> [--json]
+                        Cancel one work run
+  carrier work runs reclaim <run_id> [--json]
+                        Reclaim one stale work run
+  carrier work runs cleanup <run_id> [--json]
+                        Remove one run workspace while retaining metadata
+  carrier work github publish <run_id> --target <comment|branch|pr_draft|status_note> [--target <...>] [--json]
+                        Publish run output through the GitHub adapter
   carrier --help         Show this help message
 
 Notes:
@@ -1027,6 +1067,18 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "work":
+			opts, err := parseWorkCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "work failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runWorkCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "work failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "onboard":
 			opts, err := parseOnboardCommandArgs(commandArgs)
 			if err != nil {
@@ -1168,6 +1220,8 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "memory", args[2:], nil
 	case "agent":
 		return "agent", args[2:], nil
+	case "work":
+		return "work", args[2:], nil
 	case "--help", "-h", "help":
 		return "help", nil, nil
 	case "version", "--version", "-v", "-V":

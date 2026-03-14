@@ -137,7 +137,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
         with:
-          go-version-file: daemon/go.mod
+          go-version-file: go.mod
 
       - name: Run end-to-end tests
         env:
@@ -247,7 +247,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
         with:
-          go-version-file: daemon/go.mod
+          go-version-file: go.mod
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3

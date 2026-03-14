@@ -3,6 +3,7 @@ package gateway
 import (
 	"archive/zip"
 	"bytes"
+	"carrier/shared/work"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -458,6 +459,166 @@ func TestHandleOrchestratorExecutionEvidenceZipAndNegativeCases(t *testing.T) {
 	missingExecutionRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/audit/export", "")
 	if missingExecutionRec.Code != http.StatusBadRequest {
 		t.Fatalf("expected audit export validation status 400, got %d body=%s", missingExecutionRec.Code, missingExecutionRec.Body.String())
+	}
+}
+
+func TestHandleOrchestratorExecutionEvidenceIncludesWorkSnapshots(t *testing.T) {
+	t.Setenv("CARRIER_ROOT", t.TempDir())
+	t.Setenv("CARRIER_APP_ROOT", "")
+	t.Setenv("CARRIER_PROJECTS_ROOT", "")
+	t.Setenv("CARRIER_WORKS_ROOT", "")
+
+	project, err := upsertWorkProject(work.Project{
+		ID:           "proj_alpha",
+		Name:         "Alpha",
+		SourceType:   work.SourceTypeLocal,
+		SourceRef:    t.TempDir(),
+		WorkflowPath: "WORKFLOW.md",
+	})
+	if err != nil {
+		t.Fatalf("upsertWorkProject error: %v", err)
+	}
+	item, err := upsertWorkItem(work.WorkItem{
+		ID:          "work_bug",
+		ProjectID:   project.ID,
+		Title:       "Fix worker drift",
+		Description: "Investigate stale worker leases in the control plane.",
+		Acceptance:  []string{"Document the source of drift", "Propose remediation steps"},
+		Priority:    work.WorkPriorityUrgent,
+		Source:      work.WorkSourceLocal,
+		SourceRef:   "local:manual",
+		State:       work.WorkItemStateAwaitingReview,
+		LatestRunID: "run_123",
+	})
+	if err != nil {
+		t.Fatalf("upsertWorkItem error: %v", err)
+	}
+	roots, err := work.ResolveRoots()
+	if err != nil {
+		t.Fatalf("ResolveRoots error: %v", err)
+	}
+	workspacePath := filepath.Join(roots.Projects, project.ID, "worktrees", "run_123")
+	if err := os.MkdirAll(workspacePath, 0o700); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	run, err := work.NormalizeRun(work.Run{
+		ID:                 "run_123",
+		ProjectID:          project.ID,
+		WorkItemID:         item.ID,
+		ExecutionID:        "exec-work-evidence",
+		WorkspaceID:        "ws_123",
+		WorkspacePath:      workspacePath,
+		Backend:            work.RunBackendManaged,
+		Phase:              work.RunPhasePublishing,
+		LeaseOwner:         "carrier:test",
+		VerificationStatus: work.VerificationStatusPassed,
+		PublishStatus:      work.PublishStatusPublished,
+		WorkflowDigest:     "sha256:workflow-alpha",
+	})
+	if err != nil {
+		t.Fatalf("NormalizeRun error: %v", err)
+	}
+	if err := saveWorkRun(run); err != nil {
+		t.Fatalf("saveWorkRun error: %v", err)
+	}
+	record := workGitHubPublishRecord{
+		ID:         "publish_123",
+		ProjectID:  project.ID,
+		WorkItemID: item.ID,
+		RunID:      run.ID,
+		Repository: "acme/alpha",
+		SourceRef:  "github:acme/alpha/issues/12",
+		Targets: []workGitHubPublishTargetStatus{{
+			Target: "comment",
+			Status: string(work.PublishStatusPublished),
+		}},
+		CreatedAt: nowTimestamp(),
+	}
+	if err := saveGitHubPublishRecord(record); err != nil {
+		t.Fatalf("saveGitHubPublishRecord error: %v", err)
+	}
+
+	mux := buildRemoteFeatureMuxWithConfigAndDaemonHandlers(t, &GatewayConfig{
+		APIToken:                  "test-gateway-token",
+		MaxCommandBodyBytes:       64 * 1024,
+		RemoteControlPlaneEnabled: true,
+		RemoteChatEnabled:         true,
+		ProviderBindingEnabled:    true,
+	}, nil)
+	execution, err := upsertOrchestratorExecution(OrchestratorExecution{
+		ID:     "exec-work-evidence",
+		Mode:   OrchestratorExecutionModeWork,
+		Goal:   "Fix worker drift",
+		Status: OrchestratorExecutionStatusCompleted,
+		Work: OrchestratorExecutionWorkContext{
+			ProjectID:      project.ID,
+			WorkItemID:     item.ID,
+			RunID:          run.ID,
+			WorkspaceID:    run.WorkspaceID,
+			WorkflowDigest: run.WorkflowDigest,
+			Phase:          string(run.Phase),
+		},
+		CreatedAt: nowTimestamp(),
+		UpdatedAt: nowTimestamp(),
+	})
+	if err != nil {
+		t.Fatalf("upsertOrchestratorExecution error: %v", err)
+	}
+
+	rec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/orchestrator/executions/"+execution.ID+"/evidence?format=json", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected evidence json status 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	payload := decodeJSONMap(t, rec)
+	evidence, _ := payload["evidence"].(map[string]interface{})
+	if evidence == nil {
+		t.Fatalf("missing evidence payload: %+v", payload)
+	}
+	workItemSnapshot, _ := evidence["workItemSnapshot"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(workItemSnapshot["id"])); got != item.ID {
+		t.Fatalf("workItemSnapshot.id=%q want %q evidence=%+v", got, item.ID, evidence)
+	}
+	runSnapshot, _ := evidence["runSnapshot"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(runSnapshot["id"])); got != run.ID {
+		t.Fatalf("runSnapshot.id=%q want %q evidence=%+v", got, run.ID, evidence)
+	}
+	workspaceManifest, _ := evidence["workspaceManifest"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(workspaceManifest["workspacePath"])); got != workspacePath {
+		t.Fatalf("workspaceManifest.workspacePath=%q want %q manifest=%+v", got, workspacePath, workspaceManifest)
+	}
+	if got := strings.TrimSpace(anyToString(workspaceManifest["backend"])); got != string(run.Backend) {
+		t.Fatalf("workspaceManifest.backend=%q want %q manifest=%+v", got, run.Backend, workspaceManifest)
+	}
+	publishRecords, _ := evidence["publishRecords"].([]interface{})
+	if len(publishRecords) != 1 {
+		t.Fatalf("publishRecords len=%d want 1 evidence=%+v", len(publishRecords), evidence)
+	}
+
+	zipRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/orchestrator/executions/"+execution.ID+"/evidence?format=zip", "")
+	if zipRec.Code != http.StatusOK {
+		t.Fatalf("expected evidence zip status 200, got %d body=%s", zipRec.Code, zipRec.Body.String())
+	}
+	archive, err := zip.NewReader(bytes.NewReader(zipRec.Body.Bytes()), int64(zipRec.Body.Len()))
+	if err != nil {
+		t.Fatalf("open evidence zip: %v", err)
+	}
+	names := make(map[string]struct{}, len(archive.File))
+	for _, file := range archive.File {
+		names[file.Name] = struct{}{}
+	}
+	archiveNames := make([]string, 0, len(names))
+	for name := range names {
+		archiveNames = append(archiveNames, name)
+	}
+	for _, required := range []string{
+		"work-item-snapshot.json",
+		"run-snapshot.json",
+		"workspace-manifest.json",
+		"publish-records.json",
+	} {
+		if _, ok := names[required]; !ok {
+			t.Fatalf("missing %s in zip: %v", required, archiveNames)
+		}
 	}
 }
 

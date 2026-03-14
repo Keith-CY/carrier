@@ -4,6 +4,7 @@ import { ExecutionOutcomeBlock } from './components/ExecutionOutcomeBlock';
 import { ExecutionPolicyBlock } from './components/ExecutionPolicyBlock';
 import { ExecutionResultsBlock } from './components/ExecutionResultsBlock';
 import { ExecutionSummaryBlock } from './components/ExecutionSummaryBlock';
+import { ExecutionWorkContextBlock } from './components/ExecutionWorkContextBlock';
 import { TriggerBlock } from './components/TriggerBlock';
 
 export function isExecutionTerminalStatus(status: unknown): boolean {
@@ -24,6 +25,7 @@ export function ExecutionDetailContent({ execution, workers, onDownloadArtifact 
   return (
     <>
       <ExecutionSummaryBlock execution={execution} />
+      <ExecutionWorkContextBlock execution={execution} />
       <TriggerBlock execution={execution} />
       <ExecutionLineageBlock execution={execution} />
       <ExecutionOutcomeBlock execution={execution} onDownloadArtifact={onDownloadArtifact} />
