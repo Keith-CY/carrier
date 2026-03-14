@@ -146,8 +146,26 @@ type OrchestratorExecutionOutcome struct {
 	Artifacts       []OrchestratorArtifact `json:"artifacts,omitempty"`
 }
 
+type OrchestratorExecutionMode string
+
+const (
+	OrchestratorExecutionModeTask OrchestratorExecutionMode = "task"
+	OrchestratorExecutionModeWork OrchestratorExecutionMode = "work"
+)
+
+type OrchestratorExecutionWorkContext struct {
+	ProjectID      string `json:"projectId,omitempty"`
+	WorkItemID     string `json:"workItemId,omitempty"`
+	RunID          string `json:"runId,omitempty"`
+	WorkspaceID    string `json:"workspaceId,omitempty"`
+	WorkflowDigest string `json:"workflowDigest,omitempty"`
+	Phase          string `json:"phase,omitempty"`
+}
+
 type OrchestratorExecution struct {
 	ID                   string                              `json:"id"`
+	Mode                 OrchestratorExecutionMode           `json:"mode,omitempty"`
+	Work                 OrchestratorExecutionWorkContext    `json:"work,omitempty"`
 	Goal                 string                              `json:"goal"`
 	Team                 string                              `json:"team,omitempty"`
 	Project              string                              `json:"project,omitempty"`
@@ -260,6 +278,8 @@ type OrchestratorWorkerQueueSummary struct {
 func normalizeOrchestratorExecutionForStore(in OrchestratorExecution) OrchestratorExecution {
 	out := in
 	out.ID = strings.TrimSpace(out.ID)
+	out.Mode = normalizeOrchestratorExecutionMode(out.Mode)
+	out.Work = normalizeOrchestratorExecutionWorkContext(out.Work)
 	out.Goal = strings.TrimSpace(out.Goal)
 	out.TriggerSource = strings.TrimSpace(out.TriggerSource)
 	out.TriggerID = strings.TrimSpace(out.TriggerID)
@@ -390,6 +410,8 @@ func normalizeOrchestratorTask(in OrchestratorTaskUnit, idx int) (OrchestratorTa
 
 func normalizeOrchestratorExecution(in OrchestratorExecution) (OrchestratorExecution, error) {
 	out := in
+	out.Mode = normalizeOrchestratorExecutionMode(out.Mode)
+	out.Work = normalizeOrchestratorExecutionWorkContext(out.Work)
 	out.Goal = strings.TrimSpace(out.Goal)
 	out.Team = strings.TrimSpace(out.Team)
 	out.Project = strings.TrimSpace(out.Project)
@@ -413,6 +435,9 @@ func normalizeOrchestratorExecution(in OrchestratorExecution) (OrchestratorExecu
 	}
 	if out.Goal == "" {
 		return OrchestratorExecution{}, errOrchestratorValidation("goal is required", -1)
+	}
+	if out.Mode == OrchestratorExecutionModeWork && strings.TrimSpace(out.Work.WorkItemID) == "" {
+		return OrchestratorExecution{}, errOrchestratorValidation("work.workItemId is required for work executions", -1)
 	}
 	out.IdempotencyKey = strings.TrimSpace(out.IdempotencyKey)
 	out.ApprovalScope = strings.TrimSpace(out.ApprovalScope)
@@ -453,6 +478,26 @@ func normalizeOrchestratorExecution(in OrchestratorExecution) (OrchestratorExecu
 	}
 	out.ToolPolicy = normalizeOrchestratorToolPolicy(out.ToolPolicy)
 	return out, nil
+}
+
+func normalizeOrchestratorExecutionMode(in OrchestratorExecutionMode) OrchestratorExecutionMode {
+	switch OrchestratorExecutionMode(strings.ToLower(strings.TrimSpace(string(in)))) {
+	case OrchestratorExecutionModeWork:
+		return OrchestratorExecutionModeWork
+	default:
+		return OrchestratorExecutionModeTask
+	}
+}
+
+func normalizeOrchestratorExecutionWorkContext(in OrchestratorExecutionWorkContext) OrchestratorExecutionWorkContext {
+	out := in
+	out.ProjectID = strings.TrimSpace(out.ProjectID)
+	out.WorkItemID = strings.TrimSpace(out.WorkItemID)
+	out.RunID = strings.TrimSpace(out.RunID)
+	out.WorkspaceID = strings.TrimSpace(out.WorkspaceID)
+	out.WorkflowDigest = strings.TrimSpace(out.WorkflowDigest)
+	out.Phase = strings.TrimSpace(out.Phase)
+	return out
 }
 
 func normalizeOrchestratorToolPolicy(in OrchestratorToolPolicy) OrchestratorToolPolicy {
