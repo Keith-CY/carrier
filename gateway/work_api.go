@@ -53,7 +53,15 @@ func handleWorkProjects(w http.ResponseWriter, r *http.Request, requestID string
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
+		if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot sync work projects"); !ok {
+			return
+		}
 		projectID = strings.Trim(projectID, "/")
+		projectID, err := work.NormalizeProjectID(projectID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
+			return
+		}
 		project, err := syncWorkProject(projectID)
 		if err != nil {
 			status := http.StatusInternalServerError
@@ -71,7 +79,15 @@ func handleWorkProjects(w http.ResponseWriter, r *http.Request, requestID string
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
+		if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot archive work projects"); !ok {
+			return
+		}
 		projectID = strings.Trim(strings.TrimSuffix(projectID, "/archive"), "/")
+		projectID, err := work.NormalizeProjectID(projectID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
+			return
+		}
 		project, ok, err := getWorkProject(projectID)
 		if err != nil {
 			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load work project", "get work project", err)
@@ -94,6 +110,14 @@ func handleWorkProjects(w http.ResponseWriter, r *http.Request, requestID string
 		writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 		return
 	}
+	if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_EXECUTION_VIEW", "role cannot view work projects"); !ok {
+		return
+	}
+	projectID, err := work.NormalizeProjectID(projectID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
+		return
+	}
 	project, ok, err := getWorkProject(projectID)
 	if err != nil {
 		writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load work project", "get work project", err)
@@ -111,6 +135,9 @@ func handleWorkItems(w http.ResponseWriter, r *http.Request, requestID string, c
 	if trimmed == "" {
 		switch r.Method {
 		case http.MethodGet:
+			if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_EXECUTION_VIEW", "role cannot view work items"); !ok {
+				return
+			}
 			items, err := listWorkItems()
 			if err != nil {
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to list work items", "list work items", err)
@@ -119,6 +146,9 @@ func handleWorkItems(w http.ResponseWriter, r *http.Request, requestID string, c
 			writeJSON(w, http.StatusOK, map[string]any{"requestId": requestID, "result": "ok", "items": items})
 			return
 		case http.MethodPost:
+			if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot create work items"); !ok {
+				return
+			}
 			var item work.WorkItem
 			if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
 				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
@@ -143,9 +173,18 @@ func handleWorkItems(w http.ResponseWriter, r *http.Request, requestID string, c
 		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "work item id is required"))
 		return
 	}
+	normalizedItemID, err := work.NormalizeWorkItemID(itemID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
+		return
+	}
+	itemID = normalizedItemID
 	if len(parts) == 1 {
 		switch r.Method {
 		case http.MethodGet:
+			if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_EXECUTION_VIEW", "role cannot view work items"); !ok {
+				return
+			}
 			item, ok, err := getWorkItem(itemID)
 			if err != nil {
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load work item", "get work item", err)
@@ -157,6 +196,9 @@ func handleWorkItems(w http.ResponseWriter, r *http.Request, requestID string, c
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"requestId": requestID, "result": "ok", "item": item})
 		case http.MethodPatch:
+			if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot update work items"); !ok {
+				return
+			}
 			item, ok, err := getWorkItem(itemID)
 			if err != nil {
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load work item", "get work item", err)
@@ -211,6 +253,9 @@ func handleWorkItems(w http.ResponseWriter, r *http.Request, requestID string, c
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
+		if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot claim work items"); !ok {
+			return
+		}
 		var body struct {
 			RunID string `json:"runId"`
 		}
@@ -227,6 +272,9 @@ func handleWorkItems(w http.ResponseWriter, r *http.Request, requestID string, c
 	case "cancel":
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot cancel work items"); !ok {
 			return
 		}
 		item, ok, err := getWorkItem(itemID)
@@ -255,6 +303,9 @@ func handleWorkItems(w http.ResponseWriter, r *http.Request, requestID string, c
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
+		if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot complete work items"); !ok {
+			return
+		}
 		item, ok, err := getWorkItem(itemID)
 		if err != nil {
 			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load work item", "get work item", err)
@@ -281,6 +332,9 @@ func handleWorkItems(w http.ResponseWriter, r *http.Request, requestID string, c
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
+		if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot start work runs"); !ok {
+			return
+		}
 		var body struct {
 			Backend work.RunBackend `json:"backend,omitempty"`
 		}
@@ -303,6 +357,9 @@ func handleWorkRuns(w http.ResponseWriter, r *http.Request, requestID string, cf
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
+		if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_EXECUTION_VIEW", "role cannot view work runs"); !ok {
+			return
+		}
 		runs, err := listWorkRuns()
 		if err != nil {
 			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to list work runs", "list work runs", err)
@@ -317,9 +374,18 @@ func handleWorkRuns(w http.ResponseWriter, r *http.Request, requestID string, cf
 		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "run id is required"))
 		return
 	}
+	normalizedRunID, idErr := work.NormalizeRunID(runID)
+	if idErr != nil {
+		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", idErr.Error()))
+		return
+	}
+	runID = normalizedRunID
 	if len(parts) == 1 {
 		if r.Method != http.MethodGet {
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_EXECUTION_VIEW", "role cannot view work runs"); !ok {
 			return
 		}
 		run, ok, err := getWorkRun(runID)
@@ -337,6 +403,9 @@ func handleWorkRuns(w http.ResponseWriter, r *http.Request, requestID string, cf
 	action := strings.TrimSpace(parts[1])
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+		return
+	}
+	if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot update work runs"); !ok {
 		return
 	}
 	var (

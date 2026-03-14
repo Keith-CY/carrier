@@ -133,7 +133,15 @@ func workItemPath(projectID, itemID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(roots.Works, strings.TrimSpace(projectID), "items", strings.TrimSpace(itemID)+".json"), nil
+	projectID, err = work.NormalizeProjectID(projectID)
+	if err != nil {
+		return "", err
+	}
+	itemID, err = work.NormalizeWorkItemID(itemID)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(roots.Works, projectID, "items", itemID+".json"), nil
 }
 
 func loadWorkItemByID(itemID string) (work.WorkItem, string, error) {
@@ -148,7 +156,10 @@ func loadWorkItemByID(itemID string) (work.WorkItem, string, error) {
 		}
 		return work.WorkItem{}, "", fmt.Errorf("read works root: %w", err)
 	}
-	id := strings.TrimSpace(itemID)
+	id, err := work.NormalizeWorkItemID(itemID)
+	if err != nil {
+		return work.WorkItem{}, "", err
+	}
 	for _, entry := range projectEntries {
 		if !entry.IsDir() {
 			continue

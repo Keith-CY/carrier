@@ -100,16 +100,16 @@ const (
 )
 
 type Project struct {
-	ID            string       `json:"id"`
-	Name          string       `json:"name"`
-	SourceType    SourceType   `json:"sourceType"`
-	SourceRef     string       `json:"sourceRef"`
-	DefaultBranch string       `json:"defaultBranch,omitempty"`
-	WorkflowPath  string       `json:"workflowPath,omitempty"`
-	WorkflowDigest string      `json:"workflowDigest,omitempty"`
-	State         ProjectState `json:"state"`
-	LastSyncAt    string       `json:"lastSyncAt,omitempty"`
-	LastSyncError string       `json:"lastSyncError,omitempty"`
+	ID             string       `json:"id"`
+	Name           string       `json:"name"`
+	SourceType     SourceType   `json:"sourceType"`
+	SourceRef      string       `json:"sourceRef"`
+	DefaultBranch  string       `json:"defaultBranch,omitempty"`
+	WorkflowPath   string       `json:"workflowPath,omitempty"`
+	WorkflowDigest string       `json:"workflowDigest,omitempty"`
+	State          ProjectState `json:"state"`
+	LastSyncAt     string       `json:"lastSyncAt,omitempty"`
+	LastSyncError  string       `json:"lastSyncError,omitempty"`
 }
 
 type WorkItem struct {
@@ -150,7 +150,7 @@ type Run struct {
 func NormalizeProject(in Project) (Project, error) {
 	out := in
 	var err error
-	out.ID, err = ensurePrefixedID("proj", out.ID)
+	out.ID, err = ensurePrefixedID("proj", "project id", out.ID)
 	if err != nil {
 		return Project{}, err
 	}
@@ -188,11 +188,14 @@ func NormalizeProject(in Project) (Project, error) {
 func NormalizeWorkItem(in WorkItem) (WorkItem, error) {
 	out := in
 	var err error
-	out.ID, err = ensurePrefixedID("work", out.ID)
+	out.ID, err = ensurePrefixedID("work", "work item id", out.ID)
 	if err != nil {
 		return WorkItem{}, err
 	}
-	out.ProjectID = strings.TrimSpace(out.ProjectID)
+	out.ProjectID, err = NormalizeProjectID(out.ProjectID)
+	if err != nil {
+		return WorkItem{}, fmt.Errorf("work item projectId: %w", err)
+	}
 	out.Title = strings.TrimSpace(out.Title)
 	out.Description = strings.TrimSpace(out.Description)
 	out.Acceptance = normalizeStringList(out.Acceptance)
@@ -201,14 +204,17 @@ func NormalizeWorkItem(in WorkItem) (WorkItem, error) {
 	out.SourceRef = strings.TrimSpace(out.SourceRef)
 	out.Labels = normalizeStringList(out.Labels)
 	out.State = normalizeWorkItemState(out.State)
-	out.ClaimedByRunID = strings.TrimSpace(out.ClaimedByRunID)
-	out.LatestRunID = strings.TrimSpace(out.LatestRunID)
+	out.ClaimedByRunID, err = normalizeOptionalIdentifier("claimedByRunId", out.ClaimedByRunID)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	out.LatestRunID, err = normalizeOptionalIdentifier("latestRunId", out.LatestRunID)
+	if err != nil {
+		return WorkItem{}, err
+	}
 	out.CreatedAt = strings.TrimSpace(out.CreatedAt)
 	out.UpdatedAt = strings.TrimSpace(out.UpdatedAt)
 
-	if out.ProjectID == "" {
-		return WorkItem{}, fmt.Errorf("work item projectId is required")
-	}
 	if out.Title == "" {
 		return WorkItem{}, fmt.Errorf("work item title is required")
 	}
@@ -231,14 +237,23 @@ func NormalizeRun(in Run) (Run, error) {
 	out := in
 	rawBackend := strings.TrimSpace(string(in.Backend))
 	var err error
-	out.ID, err = ensurePrefixedID("run", out.ID)
+	out.ID, err = ensurePrefixedID("run", "run id", out.ID)
 	if err != nil {
 		return Run{}, err
 	}
-	out.ProjectID = strings.TrimSpace(out.ProjectID)
-	out.WorkItemID = strings.TrimSpace(out.WorkItemID)
+	out.ProjectID, err = NormalizeProjectID(out.ProjectID)
+	if err != nil {
+		return Run{}, fmt.Errorf("run projectId: %w", err)
+	}
+	out.WorkItemID, err = NormalizeWorkItemID(out.WorkItemID)
+	if err != nil {
+		return Run{}, fmt.Errorf("run workItemId: %w", err)
+	}
 	out.ExecutionID = strings.TrimSpace(out.ExecutionID)
-	out.WorkspaceID = strings.TrimSpace(out.WorkspaceID)
+	out.WorkspaceID, err = normalizeOptionalIdentifier("workspaceId", out.WorkspaceID)
+	if err != nil {
+		return Run{}, err
+	}
 	out.WorkspacePath = strings.TrimSpace(out.WorkspacePath)
 	out.Backend = normalizeRunBackend(out.Backend)
 	out.Phase = normalizeRunPhase(out.Phase)
@@ -250,12 +265,6 @@ func NormalizeRun(in Run) (Run, error) {
 	out.CreatedAt = strings.TrimSpace(out.CreatedAt)
 	out.UpdatedAt = strings.TrimSpace(out.UpdatedAt)
 
-	if out.ProjectID == "" {
-		return Run{}, fmt.Errorf("run projectId is required")
-	}
-	if out.WorkItemID == "" {
-		return Run{}, fmt.Errorf("run workItemId is required")
-	}
 	if rawBackend != "" && out.Backend == "" {
 		return Run{}, fmt.Errorf("run backend %q is invalid", rawBackend)
 	}
@@ -274,16 +283,71 @@ func NormalizeRun(in Run) (Run, error) {
 	return out, nil
 }
 
-func ensurePrefixedID(prefix string, current string) (string, error) {
+func NormalizeProjectID(current string) (string, error) {
+	return normalizeRequiredIdentifier("project id", current)
+}
+
+func NormalizeWorkItemID(current string) (string, error) {
+	return normalizeRequiredIdentifier("work item id", current)
+}
+
+func NormalizeRunID(current string) (string, error) {
+	return normalizeRequiredIdentifier("run id", current)
+}
+
+func ensurePrefixedID(prefix string, label string, current string) (string, error) {
 	trimmed := strings.TrimSpace(current)
 	if trimmed != "" {
-		return trimmed, nil
+		return normalizeRequiredIdentifier(label, trimmed)
 	}
 	suffix, err := randomID()
 	if err != nil {
 		return "", err
 	}
 	return prefix + "_" + suffix, nil
+}
+
+func normalizeRequiredIdentifier(label, current string) (string, error) {
+	trimmed := strings.TrimSpace(current)
+	if trimmed == "" {
+		return "", fmt.Errorf("%s is required", label)
+	}
+	if !isSafeIdentifier(trimmed) {
+		return "", fmt.Errorf("%s %q is invalid", label, trimmed)
+	}
+	return trimmed, nil
+}
+
+func normalizeOptionalIdentifier(label, current string) (string, error) {
+	trimmed := strings.TrimSpace(current)
+	if trimmed == "" {
+		return "", nil
+	}
+	if !isSafeIdentifier(trimmed) {
+		return "", fmt.Errorf("%s %q is invalid", label, trimmed)
+	}
+	return trimmed, nil
+}
+
+func isSafeIdentifier(value string) bool {
+	if value == "" || strings.Contains(value, "..") {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			continue
+		case r >= 'A' && r <= 'Z':
+			continue
+		case r >= '0' && r <= '9':
+			continue
+		case r == '_', r == '-':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 var randomIDRead = rand.Read

@@ -19,9 +19,9 @@ type ProjectPaths struct {
 }
 
 func ResolveProjectPaths(roots Roots, projectID string) (ProjectPaths, error) {
-	id := strings.TrimSpace(projectID)
-	if id == "" {
-		return ProjectPaths{}, fmt.Errorf("project id is required")
+	id, err := NormalizeProjectID(projectID)
+	if err != nil {
+		return ProjectPaths{}, err
 	}
 	root := filepath.Join(roots.Projects, id)
 	return ProjectPaths{

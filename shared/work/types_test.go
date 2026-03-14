@@ -132,3 +132,39 @@ func TestNormalizeProjectFailsWhenRandomIDGenerationFails(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestWorkNormalizationRejectsUnsafeIDs(t *testing.T) {
+	t.Run("project id", func(t *testing.T) {
+		_, err := NormalizeProject(Project{
+			ID:         "../proj",
+			Name:       "Carrier",
+			SourceType: SourceTypeLocal,
+			SourceRef:  "/tmp/carrier",
+		})
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "project id") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("work item id and project id", func(t *testing.T) {
+		_, err := NormalizeWorkItem(WorkItem{
+			ID:        "work/123",
+			ProjectID: "../proj",
+			Title:     "Unsafe",
+		})
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "id") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("run id and references", func(t *testing.T) {
+		_, err := NormalizeRun(Run{
+			ID:         "run\\123",
+			ProjectID:  "proj_123",
+			WorkItemID: "work/123",
+		})
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "id") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
