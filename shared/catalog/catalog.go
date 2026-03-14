@@ -15,16 +15,17 @@ const (
 
 // ProviderSpec is the canonical provider catalog entry shared across Carrier modules.
 type ProviderSpec struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	AuthMode     AuthMode `json:"auth_mode"`
-	EnvVar       string   `json:"env_var,omitempty"`
-	ExampleModel string   `json:"example_model,omitempty"`
-	Category     string   `json:"category"`
-	Description  string   `json:"description,omitempty"`
-	BaseURLEnv   string   `json:"base_url_env,omitempty"`
-	DefaultBase  string   `json:"default_base,omitempty"`
-	Setup        string   `json:"-"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	AuthMode       AuthMode `json:"auth_mode"`
+	ProtocolFamily string   `json:"protocol_family,omitempty"`
+	EnvVar         string   `json:"env_var,omitempty"`
+	ExampleModel   string   `json:"example_model,omitempty"`
+	Category       string   `json:"category"`
+	Description    string   `json:"description,omitempty"`
+	BaseURLEnv     string   `json:"base_url_env,omitempty"`
+	DefaultBase    string   `json:"default_base,omitempty"`
+	Setup          string   `json:"-"`
 }
 
 // ChannelSpec is the canonical channel catalog entry shared across Carrier modules.
@@ -39,68 +40,75 @@ type ChannelSpec struct {
 
 var providerCatalog = []ProviderSpec{
 	{
-		ID:           "anthropic",
-		Name:         "Anthropic",
-		AuthMode:     AuthModeAPIKey,
-		EnvVar:       "ANTHROPIC_API_KEY",
-		ExampleModel: "anthropic/claude-opus-4-6",
-		Category:     "builtin",
-		Description:  "Anthropic Claude models",
-		Setup:        "Claude direct API key",
+		ID:             "anthropic",
+		Name:           "Anthropic",
+		AuthMode:       AuthModeAPIKey,
+		ProtocolFamily: "anthropic",
+		EnvVar:         "ANTHROPIC_API_KEY",
+		ExampleModel:   "anthropic/claude-opus-4-6",
+		Category:       "builtin",
+		Description:    "Anthropic Claude models",
+		DefaultBase:    "https://api.anthropic.com/v1",
+		Setup:          "Claude direct API key",
 	},
 	{
-		ID:           "openai",
-		Name:         "OpenAI",
-		AuthMode:     AuthModeAPIKey,
-		EnvVar:       "OPENAI_API_KEY",
-		ExampleModel: "openai/gpt-5.2",
-		Category:     "builtin",
-		Description:  "OpenAI GPT models",
-		Setup:        "GPT direct API key",
+		ID:             "openai",
+		Name:           "OpenAI",
+		AuthMode:       AuthModeAPIKey,
+		ProtocolFamily: "openai-compatible",
+		EnvVar:         "OPENAI_API_KEY",
+		ExampleModel:   "openai/gpt-5.2",
+		Category:       "builtin",
+		Description:    "OpenAI GPT models",
+		Setup:          "GPT direct API key",
 	},
 	{
-		ID:           "openai-codex",
-		Name:         "OpenAI Codex (OAuth)",
-		AuthMode:     AuthModeOAuthDeviceCode,
-		EnvVar:       "OPENAI_CODEX_TOKEN",
-		ExampleModel: "openai-codex/gpt-5.3-codex",
-		Category:     "custom",
-		Description:  "OpenAI Codex via OAuth device code flow",
-		Setup:        "OAuth device-code login",
+		ID:             "openai-codex",
+		Name:           "OpenAI Codex (OAuth)",
+		AuthMode:       AuthModeOAuthDeviceCode,
+		ProtocolFamily: "oauth-openai",
+		EnvVar:         "OPENAI_CODEX_TOKEN",
+		ExampleModel:   "openai-codex/gpt-5.3-codex",
+		Category:       "custom",
+		Description:    "OpenAI Codex via OAuth device code flow",
+		Setup:          "OAuth device-code login",
 	},
 	{
-		ID:           "openrouter",
-		Name:         "OpenRouter",
-		AuthMode:     AuthModeAPIKey,
-		EnvVar:       "OPENROUTER_API_KEY",
-		ExampleModel: "openrouter/arcee-ai/trinity-mini:free",
-		Category:     "compatible",
-		Description:  "OpenRouter multi-model proxy (OpenAI-compatible)",
-		BaseURLEnv:   "OPENROUTER_BASE_URL",
-		DefaultBase:  "https://openrouter.ai/api/v1",
-		Setup:        "API key from openrouter.ai",
+		ID:             "openrouter",
+		Name:           "OpenRouter",
+		AuthMode:       AuthModeAPIKey,
+		ProtocolFamily: "openai-compatible",
+		EnvVar:         "OPENROUTER_API_KEY",
+		ExampleModel:   "openrouter/arcee-ai/trinity-mini:free",
+		Category:       "compatible",
+		Description:    "OpenRouter multi-model proxy (OpenAI-compatible)",
+		BaseURLEnv:     "OPENROUTER_BASE_URL",
+		DefaultBase:    "https://openrouter.ai/api/v1",
+		Setup:          "API key from openrouter.ai",
 	},
 	{
-		ID:           "ollama",
-		Name:         "Ollama (local)",
-		AuthMode:     AuthModeNone,
-		ExampleModel: "ollama/llama3",
-		Category:     "compatible",
-		Description:  "Local Ollama instance (OpenAI-compatible)",
-		BaseURLEnv:   "OLLAMA_BASE_URL",
-		DefaultBase:  "http://localhost:11434/v1",
-		Setup:        "Local Ollama endpoint",
+		ID:             "ollama",
+		Name:           "Ollama (local)",
+		AuthMode:       AuthModeNone,
+		ProtocolFamily: "ollama",
+		ExampleModel:   "ollama/llama3",
+		Category:       "compatible",
+		Description:    "Local Ollama instance (OpenAI-compatible)",
+		BaseURLEnv:     "OLLAMA_BASE_URL",
+		DefaultBase:    "http://localhost:11434/v1",
+		Setup:          "Local Ollama endpoint",
 	},
 	{
-		ID:           "openai-compatible",
-		Name:         "OpenAI-Compatible (custom)",
-		AuthMode:     AuthModeAPIKey,
-		EnvVar:       "OPENAI_COMPATIBLE_API_KEY",
-		ExampleModel: "openai-compatible/your-model-id",
-		Category:     "compatible",
-		Description:  "Custom OpenAI v1-compatible endpoint",
-		BaseURLEnv:   "OPENAI_COMPATIBLE_BASE_URL",
-		Setup:        "OpenAI v1-compatible endpoint",
+		ID:             "openai-compatible",
+		Name:           "OpenAI-Compatible (custom)",
+		AuthMode:       AuthModeAPIKey,
+		ProtocolFamily: "openai-compatible",
+		EnvVar:         "OPENAI_COMPATIBLE_API_KEY",
+		ExampleModel:   "openai-compatible/your-model-id",
+		Category:       "compatible",
+		Description:    "Custom OpenAI v1-compatible endpoint",
+		BaseURLEnv:     "OPENAI_COMPATIBLE_BASE_URL",
+		Setup:          "OpenAI v1-compatible endpoint",
 	},
 }
 
@@ -197,6 +205,16 @@ func GetProvider(id string) *ProviderSpec {
 	}
 	cp := provider
 	return &cp
+}
+
+// ProtocolFamilyForProvider returns the catalog protocol family for the
+// requested provider ID, after alias normalization.
+func ProtocolFamilyForProvider(id string) string {
+	provider := GetProvider(id)
+	if provider == nil {
+		return ""
+	}
+	return strings.TrimSpace(provider.ProtocolFamily)
 }
 
 // IsSupportedProvider reports whether the provider ID (or an alias) is supported.

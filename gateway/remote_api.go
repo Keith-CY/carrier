@@ -23,6 +23,9 @@ func handleRemoteHosts(w http.ResponseWriter, r *http.Request, requestID string,
 	if trimmed == "" {
 		switch r.Method {
 		case http.MethodGet:
+			if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_HOST_VIEW", "role cannot view remote hosts"); !ok {
+				return
+			}
 			hosts, err := listRemoteHosts()
 			if err != nil {
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load remote hosts", "load remote hosts", err)
@@ -31,6 +34,9 @@ func handleRemoteHosts(w http.ResponseWriter, r *http.Request, requestID string,
 			writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "hosts": hosts})
 			return
 		case http.MethodPost:
+			if _, ok := requireGatewayPermission(w, r, cfg, canManageHosts, "E_RBAC_HOST_MANAGE", "role cannot manage remote hosts"); !ok {
+				return
+			}
 			var req RemoteHost
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
@@ -68,6 +74,9 @@ func handleRemoteHosts(w http.ResponseWriter, r *http.Request, requestID string,
 	if len(parts) == 1 {
 		switch r.Method {
 		case http.MethodPatch:
+			if _, ok := requireGatewayPermission(w, r, cfg, canManageHosts, "E_RBAC_HOST_MANAGE", "role cannot manage remote hosts"); !ok {
+				return
+			}
 			var patch RemoteHost
 			if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
@@ -81,6 +90,9 @@ func handleRemoteHosts(w http.ResponseWriter, r *http.Request, requestID string,
 			writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "host": updated})
 			return
 		case http.MethodDelete:
+			if _, ok := requireGatewayPermission(w, r, cfg, canManageHosts, "E_RBAC_HOST_MANAGE", "role cannot manage remote hosts"); !ok {
+				return
+			}
 			deleted, err := deleteRemoteHost(hostID)
 			if err != nil {
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to delete remote host", "delete remote host", err)
@@ -93,6 +105,9 @@ func handleRemoteHosts(w http.ResponseWriter, r *http.Request, requestID string,
 			writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "deleted": true})
 			return
 		case http.MethodGet:
+			if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_HOST_VIEW", "role cannot view remote hosts"); !ok {
+				return
+			}
 			writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "host": host})
 			return
 		default:
@@ -102,6 +117,15 @@ func handleRemoteHosts(w http.ResponseWriter, r *http.Request, requestID string,
 	}
 
 	sub := strings.ToLower(strings.TrimSpace(parts[1]))
+	if r.Method == http.MethodGet {
+		if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_HOST_VIEW", "role cannot view remote host details"); !ok {
+			return
+		}
+	} else {
+		if _, ok := requireGatewayPermission(w, r, cfg, canManageHosts, "E_RBAC_HOST_MANAGE", "role cannot manage remote hosts"); !ok {
+			return
+		}
+	}
 	switch sub {
 	case "check":
 		if r.Method != http.MethodPost {
@@ -200,6 +224,9 @@ func handleRemoteMetrics(w http.ResponseWriter, r *http.Request, requestID strin
 		writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 		return
 	}
+	if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_HOST_VIEW", "role cannot view remote metrics"); !ok {
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"requestId": requestID,
 		"result":    "ok",
@@ -215,6 +242,9 @@ func handleRemoteSSHConfigHosts(w http.ResponseWriter, r *http.Request, requestI
 	}
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+		return
+	}
+	if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_HOST_VIEW", "role cannot view local ssh config hosts"); !ok {
 		return
 	}
 	hosts, err := listLocalSSHConfigHosts()
@@ -880,6 +910,9 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 	if trimmed == "" {
 		switch r.Method {
 		case http.MethodGet:
+			if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_PROVIDER_VIEW", "role cannot view provider profiles"); !ok {
+				return
+			}
 			profiles, err := listProviderProfiles()
 			if err != nil {
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to list provider profiles", "list provider profiles", err)
@@ -888,6 +921,9 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 			writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "profiles": profiles})
 			return
 		case http.MethodPost:
+			if _, ok := requireGatewayPermission(w, r, cfg, canManageProviders, "E_RBAC_PROVIDER_MANAGE", "role cannot manage provider profiles"); !ok {
+				return
+			}
 			var req struct {
 				ID       string `json:"id"`
 				Name     string `json:"name"`
@@ -918,6 +954,11 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
 				return
 			}
+			emitRemoteAuditEvent(requestID, "provider_profile_upsert", profile.ID, "success", map[string]interface{}{
+				"provider": profile.Provider,
+				"model":    profile.Model,
+				"enabled":  profile.Enabled,
+			})
 			writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "profile": profile})
 			return
 		default:
@@ -934,6 +975,9 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 	if len(parts) == 1 {
 		switch r.Method {
 		case http.MethodPatch:
+			if _, ok := requireGatewayPermission(w, r, cfg, canManageProviders, "E_RBAC_PROVIDER_MANAGE", "role cannot manage provider profiles"); !ok {
+				return
+			}
 			var req struct {
 				Name     *string `json:"name"`
 				Provider *string `json:"provider"`
@@ -958,9 +1002,17 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
 				return
 			}
+			emitRemoteAuditEvent(requestID, "provider_profile_patch", updated.ID, "success", map[string]interface{}{
+				"provider": updated.Provider,
+				"model":    updated.Model,
+				"enabled":  updated.Enabled,
+			})
 			writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "profile": updated})
 			return
 		case http.MethodDelete:
+			if _, ok := requireGatewayPermission(w, r, cfg, canManageProviders, "E_RBAC_PROVIDER_MANAGE", "role cannot manage provider profiles"); !ok {
+				return
+			}
 			deleted, err := deleteProviderProfile(profileID)
 			if err != nil {
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to delete provider profile", "delete provider profile", err)
@@ -970,9 +1022,13 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 				writeJSON(w, http.StatusNotFound, gatewayErrBody("E_PROFILE_NOT_FOUND", fmt.Sprintf("profile %s not found", profileID)))
 				return
 			}
+			emitRemoteAuditEvent(requestID, "provider_profile_delete", profileID, "success", nil)
 			writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "deleted": true})
 			return
 		case http.MethodGet:
+			if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_PROVIDER_VIEW", "role cannot view provider profiles"); !ok {
+				return
+			}
 			profile, found, err := getProviderProfile(profileID)
 			if err != nil {
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load provider profile", "get provider profile", err)
@@ -990,6 +1046,9 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 		}
 	}
 	if len(parts) == 2 && strings.EqualFold(parts[1], "test") {
+		if _, ok := requireGatewayPermission(w, r, cfg, canManageProviders, "E_RBAC_PROVIDER_MANAGE", "role cannot test provider profiles"); !ok {
+			return
+		}
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
@@ -1018,6 +1077,11 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 			return
 		}
 		if strings.TrimSpace(req.HostID) == "" {
+			emitRemoteAuditEvent(requestID, "provider_profile_test", profileID, "success", map[string]interface{}{
+				"provider": profile.Provider,
+				"model":    profile.Model,
+				"mode":     "local_validation",
+			})
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"requestId": requestID,
 				"result":    "ok",
@@ -1048,6 +1112,11 @@ func handleProviderProfiles(w http.ResponseWriter, r *http.Request, requestID st
 			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_PROFILE_TEST_FAILED", checkErr.Error()))
 			return
 		}
+		emitRemoteAuditEvent(requestID, "provider_profile_test", profileID, "success", map[string]interface{}{
+			"provider": profile.Provider,
+			"model":    profile.Model,
+			"hostId":   req.HostID,
+		})
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"requestId": requestID,
 			"result":    "ok",
@@ -1078,6 +1147,9 @@ func handleProviderBindings(w http.ResponseWriter, r *http.Request, requestID st
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
+		if _, ok := requireGatewayPermission(w, r, cfg, canManageProviders, "E_RBAC_PROVIDER_MANAGE", "role cannot manage provider bindings"); !ok {
+			return
+		}
 		deleted, err := deleteProviderBinding(trimmed)
 		if err != nil {
 			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to delete provider binding", "delete provider binding", err)
@@ -1087,12 +1159,16 @@ func handleProviderBindings(w http.ResponseWriter, r *http.Request, requestID st
 			writeJSON(w, http.StatusNotFound, gatewayErrBody("E_BINDING_NOT_FOUND", fmt.Sprintf("binding %s not found", trimmed)))
 			return
 		}
+		emitRemoteAuditEvent(requestID, "provider_binding_delete", trimmed, "success", nil)
 		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "deleted": true})
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
+		if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_PROVIDER_VIEW", "role cannot view provider bindings"); !ok {
+			return
+		}
 		bindings, err := listProviderBindings()
 		if err != nil {
 			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to list provider bindings", "list provider bindings", err)
@@ -1101,6 +1177,9 @@ func handleProviderBindings(w http.ResponseWriter, r *http.Request, requestID st
 		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "bindings": bindings})
 		return
 	case http.MethodPost:
+		if _, ok := requireGatewayPermission(w, r, cfg, canManageProviders, "E_RBAC_PROVIDER_MANAGE", "role cannot manage provider bindings"); !ok {
+			return
+		}
 		if !flags.ProviderBindingEnabled {
 			writeJSON(w, http.StatusForbidden, gatewayErrBody("E_FEATURE_DISABLED", "provider binding feature is disabled"))
 			return
@@ -1162,6 +1241,12 @@ func handleProviderBindings(w http.ResponseWriter, r *http.Request, requestID st
 			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
 			return
 		}
+		emitRemoteAuditEvent(requestID, "provider_binding_upsert", binding.ID, "success", map[string]interface{}{
+			"profileId":  binding.ProfileID,
+			"targetType": binding.TargetType,
+			"targetId":   binding.TargetID,
+			"syncMode":   binding.SyncMode,
+		})
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"requestId": requestID,
 			"result":    "ok",
@@ -1343,8 +1428,11 @@ func streamLocalChatResponse(w http.ResponseWriter, r *http.Request, requestID s
 		chatResult, err := daemon.ChatAgent(
 			ctx,
 			agentID,
+			provider,
 			req.Message,
 			sessionID,
+			"",
+			"",
 			"webui:local-chat",
 			requestID,
 		)
@@ -1364,6 +1452,7 @@ func streamLocalChatResponse(w http.ResponseWriter, r *http.Request, requestID s
 			chatID,
 			requestID,
 			req.Message,
+			nil,
 			"webui:local-chat",
 		)
 		if err != nil {

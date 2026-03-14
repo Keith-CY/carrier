@@ -103,11 +103,7 @@ func (b perAgentLimaIsolationBackend) WrapCommand(command string) (string, error
 }
 
 func (b perAgentLimaIsolationBackend) WrapStartCommand(startCommand string) (string, error) {
-	guestCommand, err := buildGuestBwrapCommand(startCommand)
-	if err != nil {
-		return "", err
-	}
-	return b.WrapCommand(guestCommand)
+	return b.WrapCommand(startCommand)
 }
 
 func (b *perAgentLimaIsolationBackend) ensureTemplatePath() (string, error) {
@@ -148,11 +144,7 @@ func (b *perAgentLimaIsolationBackend) PrepareCommands() ([]string, error) {
 		safeTemplatePath,
 	)
 	startInstance := fmt.Sprintf("%s start %s", safeLimaPath, safeInstance)
-	ensureGuestBwrap, err := b.WrapCommand(buildGuestEnsureBwrapCommand())
-	if err != nil {
-		return nil, err
-	}
-	return []string{ensureInstance, startInstance, ensureGuestBwrap}, nil
+	return []string{ensureInstance, startInstance}, nil
 }
 
 func (b *perAgentLimaIsolationBackend) Cleanup() error {
@@ -221,19 +213,11 @@ func (b wslIsolationBackend) WrapCommand(command string) (string, error) {
 }
 
 func (b wslIsolationBackend) WrapStartCommand(startCommand string) (string, error) {
-	guestCommand, err := buildGuestBwrapCommand(startCommand)
-	if err != nil {
-		return "", err
-	}
-	return b.WrapCommand(guestCommand)
+	return b.WrapCommand(startCommand)
 }
 
 func (b wslIsolationBackend) PrepareCommands() ([]string, error) {
-	ensureGuestBwrap, err := b.WrapCommand(buildGuestEnsureBwrapCommand())
-	if err != nil {
-		return nil, err
-	}
-	return []string{ensureGuestBwrap}, nil
+	return nil, nil
 }
 
 func (b wslIsolationBackend) Cleanup() error {
@@ -308,17 +292,6 @@ func buildBwrapInvocation(bwrapExecutable, startCommand string) (string, error) 
 		"%s --die-with-parent --new-session --bind / / --proc /proc --dev /dev --tmpfs /tmp --unshare-pid -- sh -lc %s",
 		safeBwrapPath,
 		safeStartCommand,
-	), nil
-}
-
-func buildGuestBwrapCommand(startCommand string) (string, error) {
-	bwrapInvocation, err := buildBwrapInvocation("bwrap", startCommand)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(
-		"set -e; if ! command -v bwrap >/dev/null 2>&1; then echo 'bubblewrap (bwrap) executable not found in guest PATH' >&2; exit 127; fi; exec %s",
-		bwrapInvocation,
 	), nil
 }
 
@@ -420,8 +393,4 @@ fi
 echo "limactl still unavailable after brew install lima" >&2
 exit 127
 `)
-}
-
-func buildGuestEnsureBwrapCommand() string {
-	return buildEnsureIsolationDepsScript("guest")
 }

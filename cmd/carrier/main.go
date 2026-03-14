@@ -30,6 +30,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -54,13 +55,16 @@ import (
 	"syscall"
 	"time"
 
+	"carrier/baseagent"
 	"carrier/configv2"
 	"carrier/daemon/credentialstore"
 	"carrier/daemon/server"
 
 	gatewayruntime "carrier/gateway"
 	"carrier/shared/catalog"
+	sharedconfig "carrier/shared/config"
 	"carrier/shared/openclawcfg"
+	sharedorchestration "carrier/shared/orchestration"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -207,13 +211,103 @@ type orchestrateCommandOptions struct {
 	Action         string
 	Goal           string
 	ExecutionID    string
+	TemplateID     string
 	HostIDs        []string
+	HostLabels     []string
+	RequiredMemory []string
+	DistillOutputs []string
 	Provider       string
+	Format         string
 	MaxConcurrency int
+	PolicyApprove  bool
 	IdempotencyKey string
+	Limit          int
+	OutputPath     string
+	Open           bool
 	Timeout        time.Duration
 	Async          bool
 	JSON           bool
+	Inputs         map[string]string
+}
+
+type templatesCommandOptions struct {
+	Action         string
+	TemplateID     string
+	HostIDs        []string
+	HostLabels     []string
+	RequiredMemory []string
+	DistillOutputs []string
+	Provider       string
+	MaxConcurrency int
+	PolicyApprove  bool
+	JSON           bool
+	Inputs         map[string]string
+}
+
+type triggersCommandOptions struct {
+	Action           string
+	TriggerID        string
+	Type             string
+	TemplateID       string
+	Name             string
+	CreatedBy        string
+	HostIDs          []string
+	HostLabels       []string
+	RequiredMemory   []string
+	DistillOutputs   []string
+	Provider         string
+	MaxConcurrency   int
+	PolicyApprove    bool
+	WebhookSecret    string
+	GitHubCommand    string
+	GitHubLabel      string
+	GitHubRepository string
+	Cron             string
+	Timezone         string
+	Enable           bool
+	Disable          bool
+	JSON             bool
+	Inputs           map[string]string
+}
+
+type memoryCommandOptions struct {
+	Action     string
+	Subject    string
+	Query      string
+	Limit      int
+	MinScore   float64
+	InstanceID string
+	Scope      string
+	DryRun     bool
+	Force      bool
+	Reason     string
+	JSON       bool
+}
+
+type agentCommandOptions struct {
+	Action           string
+	AgentID          string
+	CronJobID        string
+	SubagentJobID    string
+	ProfileName      string
+	Query            string
+	SkillName        string
+	Version          string
+	Message          string
+	Provider         string
+	BaseURL          string
+	AuthMethod       string
+	ModelAlias       string
+	Model            string
+	Voice            string
+	MediaFormat      string
+	SessionID        string
+	NextRunAt        time.Time
+	TimeoutMs        int
+	RetryBudget      int
+	FallbackStrategy string
+	Limit            int
+	JSON             bool
 }
 
 type versionInfo struct {
@@ -221,6 +315,25 @@ type versionInfo struct {
 	Commit    string `json:"commit"`
 	BuildDate string `json:"buildDate"`
 	GoVersion string `json:"goVersion"`
+}
+
+var openPathWithDefaultApp = defaultOpenPathWithDefaultApp
+
+func defaultOpenPathWithDefaultApp(path string) error {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return errors.New("path is required")
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", trimmed)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", trimmed)
+	default:
+		cmd = exec.Command("xdg-open", trimmed)
+	}
+	return cmd.Start()
 }
 
 type picoclawChannel struct {
@@ -236,8 +349,41 @@ type managedAgentAddResult struct {
 	RecordPath    string
 	ChannelID     string
 	ProviderID    string
+	ModelSurface  *managedAgentModelSurface
 	PairedChatID  string
 	Port          int
+}
+
+type managedModelProfile struct {
+	ProfileName    string
+	ModelAlias     string
+	ModelID        string
+	EnvVar         string
+	ProviderID     string
+	ProviderKey    string
+	ProtocolFamily string
+	BaseURL        string
+	AuthMethod     string
+}
+
+type managedAgentModelSurface struct {
+	DefaultProfile string                     `json:"default_profile,omitempty"`
+	Profiles       []managedAgentModelProfile `json:"profiles,omitempty"`
+}
+
+type managedAgentModelProfile struct {
+	ProfileName      string `json:"profile_name,omitempty"`
+	ModelAlias       string `json:"model_alias,omitempty"`
+	ModelID          string `json:"model_id,omitempty"`
+	ProviderID       string `json:"provider_id,omitempty"`
+	ProviderKey      string `json:"provider_key,omitempty"`
+	ProtocolFamily   string `json:"protocol_family,omitempty"`
+	BaseURL          string `json:"base_url,omitempty"`
+	AuthMethod       string `json:"auth_method,omitempty"`
+	TimeoutMs        int    `json:"timeout_ms,omitempty"`
+	RetryBudget      int    `json:"retry_budget,omitempty"`
+	FallbackStrategy string `json:"fallback_strategy,omitempty"`
+	Primary          bool   `json:"primary,omitempty"`
 }
 
 type managedAgentConfig struct {
@@ -249,24 +395,25 @@ type managedAgentConfig struct {
 }
 
 type managedAgentInstance struct {
-	ID           string `json:"id"`
-	Name         string `json:"name,omitempty"`
-	Type         string `json:"type"`
-	AgentID      string `json:"agent_id"`
-	Isolation    bool   `json:"isolation,omitempty"`
-	GatewayURL   string `json:"gateway_url"`
-	Workspace    string `json:"workspace_path,omitempty"`
-	ConfigPath   string `json:"config_path,omitempty"`
-	RecordPath   string `json:"record_path,omitempty"`
-	Channel      string `json:"channel,omitempty"`
-	Provider     string `json:"provider,omitempty"`
-	PairRequired bool   `json:"pair_required,omitempty"`
-	PairCode     string `json:"pair_code,omitempty"`
-	PairedChatID string `json:"paired_chat_id,omitempty"`
-	RuntimeState string `json:"runtime_state,omitempty"`
-	Port         int    `json:"port,omitempty"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
+	ID           string                    `json:"id"`
+	Name         string                    `json:"name,omitempty"`
+	Type         string                    `json:"type"`
+	AgentID      string                    `json:"agent_id"`
+	Isolation    bool                      `json:"isolation,omitempty"`
+	GatewayURL   string                    `json:"gateway_url"`
+	Workspace    string                    `json:"workspace_path,omitempty"`
+	ConfigPath   string                    `json:"config_path,omitempty"`
+	RecordPath   string                    `json:"record_path,omitempty"`
+	Channel      string                    `json:"channel,omitempty"`
+	Provider     string                    `json:"provider,omitempty"`
+	ModelSurface *managedAgentModelSurface `json:"model_surface,omitempty"`
+	PairRequired bool                      `json:"pair_required,omitempty"`
+	PairCode     string                    `json:"pair_code,omitempty"`
+	PairedChatID string                    `json:"paired_chat_id,omitempty"`
+	RuntimeState string                    `json:"runtime_state,omitempty"`
+	Port         int                       `json:"port,omitempty"`
+	CreatedAt    string                    `json:"created_at"`
+	UpdatedAt    string                    `json:"updated_at"`
 }
 
 type managedAgentInstanceFile struct {
@@ -417,7 +564,37 @@ var daemonActionLogPollInterval = 2 * time.Second
 var daemonActionHeartbeatInterval = 15 * time.Second
 var orchestratePollInterval = 2 * time.Second
 
-const usage = `Carrier — unified agent platform binary
+const usage = `Carrier — execution and knowledge control plane binary
+
+Core workflows:
+  carrier orchestrate <goal...> [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]...
+                        [--distill-scope <scope>]... [--provider <provider-id>]
+                        [--max-concurrency <n>] [--idempotency-key <key>]
+                        [--timeout <duration>] [--async] [--dry-run] [--json]
+                        Decompose goal with base agent, then run orchestration
+  carrier executions [list] [--limit <n>] [--json]
+                        List orchestration executions
+  carrier agent launcher <agent_id> [--json]
+                        Show managed-agent launcher summary
+  carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--model-alias <alias>] [--model <model-id>] [--session-id <id>] [--json]
+                        Run one managed-agent prompt through the gateway
+  carrier memory [list] [--subject <subject>] [--json]
+                        List memory packages, attachments, grants, and audit snapshot
+  carrier templates [list] [--json]
+                        List built-in execution templates
+  carrier triggers [list] [--json]
+                        List execution triggers
+
+Runtime ops:
+  carrier daemon         Start daemon HTTP API server (foreground)
+  carrier gateway        Start gateway HTTP server
+  carrier stop           Stop background daemon and gateway
+  carrier stop <id|name> Stop a managed agent instance
+  carrier start <id|name> Start a managed agent instance
+  carrier status <id|name> Show status for a managed agent instance
+  carrier upgrade <id|name> Upgrade a managed agent instance
+  carrier uninstall <id|name> Uninstall and remove a managed agent instance
+  carrier list           List managed agent instances
 
 Usage:
   carrier                Bootstrap Carrier (onboard if needed, keep daemon+gateway running, then exit)
@@ -425,20 +602,11 @@ Usage:
   carrier --version      Print version metadata
   carrier -v             Print version metadata
   carrier -V             Print version metadata
-  carrier daemon         Start daemon HTTP API server (foreground)
   carrier update         Update to a newer git ref
   carrier update --check  Show current and target without applying changes
   Common update options:
     --check, --yes, --dry-run, --force, --channel <stable|beta|dev>, --tag <dist-tag|version>, --timeout <seconds>, --json, --no-restart
-  carrier gateway        Start gateway HTTP server
-  carrier stop           Stop background daemon and gateway
   carrier reset          Stop Carrier services and remove local Carrier-generated data
-  carrier stop <id|name> Stop a managed agent instance
-  carrier start <id|name> Start a managed agent instance
-  carrier status <id|name> Show status for a managed agent instance
-  carrier upgrade <id|name> Upgrade a managed agent instance
-  carrier uninstall <id|name> Uninstall and remove a managed agent instance
-  carrier list           List managed agent instances
   carrier onboard [--tui|--cli]
                         Interactive terminal onboarding (channel/provider -> keep gateway running in background)
   carrier onboard --webui
@@ -505,12 +673,64 @@ Usage:
                         Backup remote-control.json store
   carrier remote-store restore --from <path>
                         Restore remote-control.json store
-  carrier orchestrate <goal...> [--host-id <id>]... [--provider <provider-id>]
+  carrier orchestrate <goal...> [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]...
+                        [--distill-scope <scope>]... [--provider <provider-id>]
                         [--max-concurrency <n>] [--idempotency-key <key>]
-                        [--timeout <duration>] [--async] [--json]
+                        [--timeout <duration>] [--async] [--dry-run] [--json]
                         Decompose goal with base agent, then run orchestration
   carrier orchestrate status <execution_id> [--json]
                         Show orchestration execution status/results
+  carrier orchestrate cancel <execution_id> [--json]
+                        Cancel orchestration execution
+  carrier executions show <execution_id> [--json]
+                        Show orchestration execution status/results
+  carrier executions cancel <execution_id> [--json]
+                        Cancel orchestration execution
+  carrier agent shell <agent_id> [--provider <provider-id>] [--model-alias <alias>] [--model <model-id>] [--session-id <id>]
+                        Run an interactive managed-agent shell
+  carrier agent heartbeat <agent_id> [--json]
+                        Show managed-agent heartbeat summary
+  carrier agent cron schedule <agent_id> -m <message> [--provider <provider-id>] [--session-id <id>] [--next-run-at <rfc3339>] [--json]
+                        Schedule one managed-agent cron prompt
+  carrier agent cron list <agent_id> [--json]
+                        List managed-agent cron jobs
+  carrier agent cron cancel <agent_id> <job_id> [--json]
+                        Cancel one managed-agent cron job
+  carrier memory search --subject <subject> --query <query> [--limit <n>] [--min-score <f>] [--json]
+                        Search curated memory records through the gateway knowledge facade
+  carrier memory attach --instance <id> --scope <scope> [--json]
+                        Attach one memory scope to an instance
+  carrier memory detach --instance <id> --scope <scope> [--json]
+                        Detach one memory scope from an instance
+  carrier memory distill --instance <id> [--scope <scope>] [--dry-run] [--force] [--reason <text>] [--json]
+                        Distill instance learnings back into the base memory plane
+  carrier templates show <template_id> [--json]
+                        Show one execution template
+  carrier templates run <template_id> --input key=value [--input key=value]...
+                        [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]...
+                        [--distill-scope <scope>]... [--provider <provider-id>]
+                        [--max-concurrency <n>] [--policy-approve] [--json]
+                        Launch a built-in execution template through the gateway
+  carrier triggers show <trigger_id> [--json]
+                        Show one execution trigger
+  carrier triggers create --type <webhook|github|schedule> --template-id <template_id>
+                        [--name <name>] [--host-id <id>]... [--host-label <label>]...
+                        [--memory-scope <scope>]... [--distill-scope <scope>]...
+                        [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve]
+                        [--webhook-secret <secret>] [--github-command <cmd>] [--github-label <label>]
+                        [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC]
+                        [--input key=value]... [--json]
+                        Create one execution trigger
+  carrier triggers update <trigger_id> [--name <name>] [--template-id <template_id>]
+                        [--enable|--disable] [--host-id <id>]... [--host-label <label>]...
+                        [--memory-scope <scope>]... [--distill-scope <scope>]...
+                        [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve]
+                        [--webhook-secret <secret>] [--github-command <cmd>] [--github-label <label>]
+                        [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC]
+                        [--input key=value]... [--json]
+                        Update one execution trigger
+  carrier triggers delete <trigger_id> [--json]
+                        Delete one execution trigger
   carrier --help         Show this help message
 
 Notes:
@@ -747,6 +967,66 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "executions":
+			opts, err := parseExecutionsCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "executions failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runOrchestrateCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "executions failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "templates":
+			opts, err := parseTemplatesCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "templates failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runTemplatesCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "templates failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "triggers":
+			opts, err := parseTriggersCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "triggers failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runTriggersCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "triggers failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "memory":
+			opts, err := parseMemoryCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "memory failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runMemoryCommand(os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "memory failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "agent":
+			opts, err := parseAgentCommandArgs(commandArgs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "agent failed: %v\n\n", err)
+				fmt.Fprint(os.Stderr, usage)
+				os.Exit(1)
+			}
+			if err := runAgentCommand(os.Stdin, os.Stdout, opts); err != nil {
+				fmt.Fprintf(os.Stderr, "agent failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "onboard":
 			opts, err := parseOnboardCommandArgs(commandArgs)
 			if err != nil {
@@ -878,6 +1158,16 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "remote-store", args[2:], nil
 	case "orchestrate":
 		return "orchestrate", args[2:], nil
+	case "executions":
+		return "executions", args[2:], nil
+	case "templates":
+		return "templates", args[2:], nil
+	case "triggers":
+		return "triggers", args[2:], nil
+	case "memory":
+		return "memory", args[2:], nil
+	case "agent":
+		return "agent", args[2:], nil
 	case "--help", "-h", "help":
 		return "help", nil, nil
 	case "version", "--version", "-v", "-V":
@@ -2214,7 +2504,7 @@ func parseRemoteStoreCommandArgs(args []string) (remoteStoreCommandOptions, erro
 
 func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, error) {
 	if len(args) == 0 {
-		return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate <goal...> [--host-id <id>]... [--provider <provider-id>] [--max-concurrency <n>] [--idempotency-key <key>] [--timeout <duration>] [--async] [--json] OR carrier orchestrate status <execution_id> [--json]")
+		return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate <goal...> [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]... [--distill-scope <scope>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--idempotency-key <key>] [--timeout <duration>] [--async] [--dry-run] [--json] OR carrier orchestrate <status|cancel|authorize> <execution_id> [--policy-approve] [--json]")
 	}
 
 	opts := orchestrateCommandOptions{
@@ -2222,8 +2512,9 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 		Timeout: defaultOrchestrateWaitTimeout,
 	}
 
-	if strings.EqualFold(strings.TrimSpace(args[0]), "status") {
-		opts.Action = "status"
+	firstArg := strings.ToLower(strings.TrimSpace(args[0]))
+	if firstArg == "status" || firstArg == "cancel" || firstArg == "authorize" {
+		opts.Action = firstArg
 		for i := 1; i < len(args); i++ {
 			raw := strings.TrimSpace(args[i])
 			lower := strings.ToLower(raw)
@@ -2231,9 +2522,11 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 			case "":
 			case "--json":
 				opts.JSON = true
+			case "--policy-approve":
+				opts.PolicyApprove = true
 			default:
 				if strings.HasPrefix(raw, "-") {
-					return orchestrateCommandOptions{}, fmt.Errorf("unknown orchestrate status option: %s", raw)
+					return orchestrateCommandOptions{}, fmt.Errorf("unknown orchestrate %s option: %s", opts.Action, raw)
 				}
 				if opts.ExecutionID != "" {
 					return orchestrateCommandOptions{}, errors.New("multiple execution ids provided")
@@ -2242,7 +2535,7 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 			}
 		}
 		if strings.TrimSpace(opts.ExecutionID) == "" {
-			return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate status <execution_id> [--json]")
+			return orchestrateCommandOptions{}, fmt.Errorf("usage: carrier orchestrate %s <execution_id> [--policy-approve] [--json]", opts.Action)
 		}
 		return opts, nil
 	}
@@ -2263,6 +2556,39 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 				return orchestrateCommandOptions{}, errors.New("--host-id cannot be empty")
 			}
 			opts.HostIDs = append(opts.HostIDs, hostID)
+			i = next
+		case "--host-label":
+			value, next, err := parseRequiredFlagValue(args, i, "--host-label")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			hostLabel := strings.TrimSpace(value)
+			if hostLabel == "" {
+				return orchestrateCommandOptions{}, errors.New("--host-label cannot be empty")
+			}
+			opts.HostLabels = append(opts.HostLabels, hostLabel)
+			i = next
+		case "--memory-scope":
+			value, next, err := parseRequiredFlagValue(args, i, "--memory-scope")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			scope := strings.TrimSpace(value)
+			if scope == "" {
+				return orchestrateCommandOptions{}, errors.New("--memory-scope cannot be empty")
+			}
+			opts.RequiredMemory = append(opts.RequiredMemory, scope)
+			i = next
+		case "--distill-scope":
+			value, next, err := parseRequiredFlagValue(args, i, "--distill-scope")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			scope := strings.TrimSpace(value)
+			if scope == "" {
+				return orchestrateCommandOptions{}, errors.New("--distill-scope cannot be empty")
+			}
+			opts.DistillOutputs = append(opts.DistillOutputs, scope)
 			i = next
 		case "--provider":
 			value, next, err := parseRequiredFlagValue(args, i, "--provider")
@@ -2289,6 +2615,8 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 			}
 			opts.IdempotencyKey = strings.TrimSpace(value)
 			i = next
+		case "--policy-approve":
+			opts.PolicyApprove = true
 		case "--timeout":
 			value, next, err := parseRequiredFlagValue(args, i, "--timeout")
 			if err != nil {
@@ -2302,6 +2630,8 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 			i = next
 		case "--async":
 			opts.Async = true
+		case "--dry-run":
+			opts.Action = "plan"
 		case "--json":
 			opts.JSON = true
 		default:
@@ -2315,6 +2645,9 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 	opts.Provider = strings.ToLower(strings.TrimSpace(opts.Provider))
 	opts.IdempotencyKey = strings.TrimSpace(opts.IdempotencyKey)
 	opts.HostIDs = dedupeStringSlice(opts.HostIDs)
+	opts.HostLabels = normalizeStringSelectorSlice(opts.HostLabels)
+	opts.RequiredMemory = normalizeMemoryScopeSlice(opts.RequiredMemory)
+	opts.DistillOutputs = normalizeMemoryScopeSlice(opts.DistillOutputs)
 	if opts.MaxConcurrency > 64 {
 		opts.MaxConcurrency = 64
 	}
@@ -2324,6 +2657,956 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 	opts.Goal = strings.TrimSpace(strings.Join(goalParts, " "))
 	if opts.Goal == "" {
 		return orchestrateCommandOptions{}, errors.New("goal is required")
+	}
+	return opts, nil
+}
+
+func parseExecutionsCommandArgs(args []string) (orchestrateCommandOptions, error) {
+	opts := orchestrateCommandOptions{
+		Action: "list",
+	}
+	if len(args) == 0 {
+		return opts, nil
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(args[0]))
+	startIdx := 0
+	switch mode {
+	case "", "list":
+		opts.Action = "list"
+		startIdx = 1
+	case "show", "status":
+		opts.Action = "status"
+		startIdx = 1
+	case "cancel":
+		opts.Action = "cancel"
+		startIdx = 1
+	case "retry":
+		opts.Action = "retry"
+		startIdx = 1
+	case "rerun":
+		opts.Action = "rerun"
+		startIdx = 1
+	case "clone":
+		opts.Action = "clone"
+		startIdx = 1
+	case "artifacts":
+		opts.Action = "artifacts"
+		startIdx = 1
+	case "evidence":
+		opts.Action = "evidence"
+		startIdx = 1
+	case "audit":
+		opts.Action = "audit"
+		startIdx = 1
+	case "authorize":
+		opts.Action = "authorize"
+		startIdx = 1
+	default:
+		if strings.HasPrefix(mode, "-") {
+			opts.Action = "list"
+			startIdx = 0
+		} else {
+			opts.Action = "status"
+			opts.ExecutionID = strings.TrimSpace(args[0])
+			startIdx = 1
+		}
+	}
+
+	for i := startIdx; i < len(args); i++ {
+		raw := strings.TrimSpace(args[i])
+		lower := strings.ToLower(raw)
+		switch lower {
+		case "":
+		case "--json":
+			opts.JSON = true
+		case "--open":
+			opts.Open = true
+		case "--policy-approve":
+			opts.PolicyApprove = true
+		case "--output":
+			value, next, err := parseRequiredFlagValue(args, i, "--output")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			opts.OutputPath = strings.TrimSpace(value)
+			i = next
+		case "--format":
+			value, next, err := parseRequiredFlagValue(args, i, "--format")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			normalized := strings.ToLower(strings.TrimSpace(value))
+			if normalized != "json" && normalized != "zip" {
+				return orchestrateCommandOptions{}, fmt.Errorf("invalid --format value: %s", value)
+			}
+			opts.Format = normalized
+			i = next
+		case "--limit":
+			value, next, err := parseRequiredFlagValue(args, i, "--limit")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			parsed, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || parsed <= 0 {
+				return orchestrateCommandOptions{}, fmt.Errorf("invalid --limit value: %s", value)
+			}
+			opts.Limit = parsed
+			i = next
+		default:
+			if strings.HasPrefix(raw, "-") {
+				return orchestrateCommandOptions{}, fmt.Errorf("unknown executions option: %s", raw)
+			}
+			if opts.Action != "status" && opts.Action != "cancel" && opts.Action != "authorize" && opts.Action != "retry" && opts.Action != "rerun" && opts.Action != "clone" && opts.Action != "artifacts" && opts.Action != "evidence" && opts.Action != "audit" {
+				return orchestrateCommandOptions{}, fmt.Errorf("unexpected executions argument: %s", raw)
+			}
+			if opts.ExecutionID != "" {
+				return orchestrateCommandOptions{}, errors.New("multiple execution ids provided")
+			}
+			opts.ExecutionID = raw
+		}
+	}
+
+	if (opts.Action == "status" || opts.Action == "cancel" || opts.Action == "authorize" || opts.Action == "retry" || opts.Action == "rerun" || opts.Action == "clone" || opts.Action == "artifacts" || opts.Action == "evidence" || opts.Action == "audit") && strings.TrimSpace(opts.ExecutionID) == "" {
+		if opts.Action == "cancel" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions cancel <execution_id> [--json]")
+		}
+		if opts.Action == "retry" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions retry <execution_id> [--json]")
+		}
+		if opts.Action == "rerun" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions rerun <execution_id> [--json]")
+		}
+		if opts.Action == "clone" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions clone <execution_id> [--json]")
+		}
+		if opts.Action == "artifacts" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions artifacts <execution_id> [--json]")
+		}
+		if opts.Action == "evidence" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions evidence <execution_id> [--format json|zip] [--output <path>] [--open] [--json]")
+		}
+		if opts.Action == "audit" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions audit <execution_id> [--output <path>] [--open] [--json]")
+		}
+		if opts.Action == "authorize" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier executions authorize <execution_id> [--policy-approve] [--json]")
+		}
+		return orchestrateCommandOptions{}, errors.New("usage: carrier executions show <execution_id> [--json]")
+	}
+	if opts.Action == "evidence" {
+		if opts.Format == "" {
+			opts.Format = "json"
+		}
+		if opts.Format == "zip" && opts.JSON {
+			return orchestrateCommandOptions{}, errors.New("--json cannot be used with --format zip")
+		}
+	}
+	if opts.Open && opts.JSON && strings.TrimSpace(opts.OutputPath) == "" && (opts.Action == "evidence" || opts.Action == "audit") {
+		return orchestrateCommandOptions{}, errors.New("--open requires --output or non-stdout export mode")
+	}
+	return opts, nil
+}
+
+func parseTemplatesCommandArgs(args []string) (templatesCommandOptions, error) {
+	opts := templatesCommandOptions{
+		Action: "list",
+		Inputs: map[string]string{},
+	}
+	if len(args) == 0 {
+		return opts, nil
+	}
+	mode := strings.ToLower(strings.TrimSpace(args[0]))
+	startIdx := 0
+	switch mode {
+	case "", "list":
+		opts.Action = "list"
+		startIdx = 1
+	case "show":
+		opts.Action = "show"
+		startIdx = 1
+	case "run":
+		opts.Action = "run"
+		startIdx = 1
+	default:
+		if strings.HasPrefix(mode, "-") {
+			opts.Action = "list"
+			startIdx = 0
+		} else {
+			opts.Action = "show"
+			opts.TemplateID = strings.TrimSpace(args[0])
+			startIdx = 1
+		}
+	}
+
+	for i := startIdx; i < len(args); i++ {
+		raw := strings.TrimSpace(args[i])
+		lower := strings.ToLower(raw)
+		switch lower {
+		case "":
+		case "--json":
+			opts.JSON = true
+		case "--policy-approve":
+			opts.PolicyApprove = true
+		case "--host-id":
+			value, next, err := parseRequiredFlagValue(args, i, "--host-id")
+			if err != nil {
+				return templatesCommandOptions{}, err
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				return templatesCommandOptions{}, errors.New("--host-id cannot be empty")
+			}
+			opts.HostIDs = append(opts.HostIDs, value)
+			i = next
+		case "--host-label":
+			value, next, err := parseRequiredFlagValue(args, i, "--host-label")
+			if err != nil {
+				return templatesCommandOptions{}, err
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				return templatesCommandOptions{}, errors.New("--host-label cannot be empty")
+			}
+			opts.HostLabels = append(opts.HostLabels, value)
+			i = next
+		case "--memory-scope":
+			value, next, err := parseRequiredFlagValue(args, i, "--memory-scope")
+			if err != nil {
+				return templatesCommandOptions{}, err
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				return templatesCommandOptions{}, errors.New("--memory-scope cannot be empty")
+			}
+			opts.RequiredMemory = append(opts.RequiredMemory, value)
+			i = next
+		case "--distill-scope":
+			value, next, err := parseRequiredFlagValue(args, i, "--distill-scope")
+			if err != nil {
+				return templatesCommandOptions{}, err
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				return templatesCommandOptions{}, errors.New("--distill-scope cannot be empty")
+			}
+			opts.DistillOutputs = append(opts.DistillOutputs, value)
+			i = next
+		case "--provider":
+			value, next, err := parseRequiredFlagValue(args, i, "--provider")
+			if err != nil {
+				return templatesCommandOptions{}, err
+			}
+			opts.Provider = strings.TrimSpace(value)
+			i = next
+		case "--max-concurrency":
+			value, next, err := parseRequiredFlagValue(args, i, "--max-concurrency")
+			if err != nil {
+				return templatesCommandOptions{}, err
+			}
+			parsed, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || parsed <= 0 {
+				return templatesCommandOptions{}, fmt.Errorf("invalid --max-concurrency value: %s", value)
+			}
+			opts.MaxConcurrency = parsed
+			i = next
+		case "--input":
+			value, next, err := parseRequiredFlagValue(args, i, "--input")
+			if err != nil {
+				return templatesCommandOptions{}, err
+			}
+			key, inputValue, ok := strings.Cut(strings.TrimSpace(value), "=")
+			key = strings.TrimSpace(key)
+			inputValue = strings.TrimSpace(inputValue)
+			if !ok || key == "" {
+				return templatesCommandOptions{}, fmt.Errorf("invalid --input value: %s", value)
+			}
+			opts.Inputs[key] = inputValue
+			i = next
+		default:
+			if strings.HasPrefix(raw, "-") {
+				return templatesCommandOptions{}, fmt.Errorf("unknown templates option: %s", raw)
+			}
+			if opts.TemplateID != "" {
+				return templatesCommandOptions{}, errors.New("multiple template ids provided")
+			}
+			opts.TemplateID = raw
+		}
+	}
+
+	opts.Provider = strings.ToLower(strings.TrimSpace(opts.Provider))
+	opts.HostIDs = dedupeStringSlice(opts.HostIDs)
+	opts.HostLabels = normalizeStringSelectorSlice(opts.HostLabels)
+	opts.RequiredMemory = normalizeMemoryScopeSlice(opts.RequiredMemory)
+	opts.DistillOutputs = normalizeMemoryScopeSlice(opts.DistillOutputs)
+	if opts.MaxConcurrency > 64 {
+		opts.MaxConcurrency = 64
+	}
+
+	if (opts.Action == "show" || opts.Action == "run") && strings.TrimSpace(opts.TemplateID) == "" {
+		if opts.Action == "run" {
+			return templatesCommandOptions{}, errors.New("usage: carrier templates run <template_id> --input key=value [--input key=value]... [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]... [--distill-scope <scope>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--json]")
+		}
+		return templatesCommandOptions{}, errors.New("usage: carrier templates show <template_id> [--json]")
+	}
+	return opts, nil
+}
+
+func parseTriggersCommandArgs(args []string) (triggersCommandOptions, error) {
+	opts := triggersCommandOptions{
+		Action: "list",
+		Inputs: map[string]string{},
+	}
+	if len(args) == 0 {
+		return opts, nil
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(args[0]))
+	startIdx := 0
+	switch mode {
+	case "", "list":
+		opts.Action = "list"
+		startIdx = 1
+	case "show":
+		opts.Action = "show"
+		startIdx = 1
+	case "create":
+		opts.Action = "create"
+		startIdx = 1
+	case "update":
+		opts.Action = "update"
+		startIdx = 1
+	case "delete":
+		opts.Action = "delete"
+		startIdx = 1
+	default:
+		if strings.HasPrefix(mode, "-") {
+			opts.Action = "list"
+			startIdx = 0
+		} else {
+			opts.Action = "show"
+			opts.TriggerID = strings.TrimSpace(args[0])
+			startIdx = 1
+		}
+	}
+
+	for i := startIdx; i < len(args); i++ {
+		raw := strings.TrimSpace(args[i])
+		lower := strings.ToLower(raw)
+		switch lower {
+		case "":
+		case "--json":
+			opts.JSON = true
+		case "--policy-approve":
+			opts.PolicyApprove = true
+		case "--enable":
+			opts.Enable = true
+		case "--disable":
+			opts.Disable = true
+		case "--type":
+			value, next, err := parseRequiredFlagValue(args, i, "--type")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.Type = strings.ToLower(strings.TrimSpace(value))
+			i = next
+		case "--template-id":
+			value, next, err := parseRequiredFlagValue(args, i, "--template-id")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.TemplateID = strings.TrimSpace(value)
+			i = next
+		case "--name":
+			value, next, err := parseRequiredFlagValue(args, i, "--name")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.Name = strings.TrimSpace(value)
+			i = next
+		case "--created-by":
+			value, next, err := parseRequiredFlagValue(args, i, "--created-by")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.CreatedBy = strings.TrimSpace(value)
+			i = next
+		case "--host-id":
+			value, next, err := parseRequiredFlagValue(args, i, "--host-id")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				return triggersCommandOptions{}, errors.New("--host-id cannot be empty")
+			}
+			opts.HostIDs = append(opts.HostIDs, value)
+			i = next
+		case "--host-label":
+			value, next, err := parseRequiredFlagValue(args, i, "--host-label")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				return triggersCommandOptions{}, errors.New("--host-label cannot be empty")
+			}
+			opts.HostLabels = append(opts.HostLabels, value)
+			i = next
+		case "--memory-scope":
+			value, next, err := parseRequiredFlagValue(args, i, "--memory-scope")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				return triggersCommandOptions{}, errors.New("--memory-scope cannot be empty")
+			}
+			opts.RequiredMemory = append(opts.RequiredMemory, value)
+			i = next
+		case "--distill-scope":
+			value, next, err := parseRequiredFlagValue(args, i, "--distill-scope")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			if value = strings.TrimSpace(value); value == "" {
+				return triggersCommandOptions{}, errors.New("--distill-scope cannot be empty")
+			}
+			opts.DistillOutputs = append(opts.DistillOutputs, value)
+			i = next
+		case "--provider":
+			value, next, err := parseRequiredFlagValue(args, i, "--provider")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.Provider = strings.ToLower(strings.TrimSpace(value))
+			i = next
+		case "--max-concurrency":
+			value, next, err := parseRequiredFlagValue(args, i, "--max-concurrency")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			parsed, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || parsed <= 0 {
+				return triggersCommandOptions{}, fmt.Errorf("invalid --max-concurrency value: %s", value)
+			}
+			opts.MaxConcurrency = parsed
+			i = next
+		case "--webhook-secret":
+			value, next, err := parseRequiredFlagValue(args, i, "--webhook-secret")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.WebhookSecret = strings.TrimSpace(value)
+			i = next
+		case "--github-command":
+			value, next, err := parseRequiredFlagValue(args, i, "--github-command")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.GitHubCommand = strings.TrimSpace(value)
+			i = next
+		case "--github-label":
+			value, next, err := parseRequiredFlagValue(args, i, "--github-label")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.GitHubLabel = strings.TrimSpace(value)
+			i = next
+		case "--github-repository":
+			value, next, err := parseRequiredFlagValue(args, i, "--github-repository")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.GitHubRepository = strings.TrimSpace(value)
+			i = next
+		case "--cron":
+			value, next, err := parseRequiredFlagValue(args, i, "--cron")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.Cron = strings.TrimSpace(value)
+			i = next
+		case "--timezone":
+			value, next, err := parseRequiredFlagValue(args, i, "--timezone")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			opts.Timezone = strings.ToUpper(strings.TrimSpace(value))
+			i = next
+		case "--input":
+			value, next, err := parseRequiredFlagValue(args, i, "--input")
+			if err != nil {
+				return triggersCommandOptions{}, err
+			}
+			key, inputValue, ok := strings.Cut(strings.TrimSpace(value), "=")
+			key = strings.TrimSpace(key)
+			inputValue = strings.TrimSpace(inputValue)
+			if !ok || key == "" {
+				return triggersCommandOptions{}, fmt.Errorf("invalid --input value: %s", value)
+			}
+			opts.Inputs[key] = inputValue
+			i = next
+		default:
+			if strings.HasPrefix(raw, "-") {
+				return triggersCommandOptions{}, fmt.Errorf("unknown triggers option: %s", raw)
+			}
+			if (opts.Action == "show" || opts.Action == "update" || opts.Action == "delete") && opts.TriggerID == "" {
+				opts.TriggerID = raw
+				continue
+			}
+			return triggersCommandOptions{}, fmt.Errorf("unexpected triggers argument: %s", raw)
+		}
+	}
+
+	if opts.Enable && opts.Disable {
+		return triggersCommandOptions{}, errors.New("cannot combine --enable and --disable")
+	}
+	opts.HostIDs = dedupeStringSlice(opts.HostIDs)
+	opts.HostLabels = normalizeStringSelectorSlice(opts.HostLabels)
+	opts.RequiredMemory = normalizeMemoryScopeSlice(opts.RequiredMemory)
+	opts.DistillOutputs = normalizeMemoryScopeSlice(opts.DistillOutputs)
+	if opts.MaxConcurrency > 64 {
+		opts.MaxConcurrency = 64
+	}
+
+	switch opts.Action {
+	case "show":
+		if strings.TrimSpace(opts.TriggerID) == "" {
+			return triggersCommandOptions{}, errors.New("usage: carrier triggers show <trigger_id> [--json]")
+		}
+	case "create":
+		if strings.TrimSpace(opts.Type) == "" || strings.TrimSpace(opts.TemplateID) == "" {
+			return triggersCommandOptions{}, errors.New("usage: carrier triggers create --type <webhook|github|schedule> --template-id <template_id> [--name <name>] [--created-by <actor>] [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]... [--distill-scope <scope>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--webhook-secret <secret>] [--github-command <command>] [--github-label <label>] [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC] [--input key=value]... [--json]")
+		}
+	case "update":
+		if strings.TrimSpace(opts.TriggerID) == "" {
+			return triggersCommandOptions{}, errors.New("usage: carrier triggers update <trigger_id> [--name <name>] [--template-id <template_id>] [--enable|--disable] [--created-by <actor>] [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]... [--distill-scope <scope>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--webhook-secret <secret>] [--github-command <command>] [--github-label <label>] [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC] [--input key=value]... [--json]")
+		}
+	case "delete":
+		if strings.TrimSpace(opts.TriggerID) == "" {
+			return triggersCommandOptions{}, errors.New("usage: carrier triggers delete <trigger_id> [--json]")
+		}
+	}
+	return opts, nil
+}
+
+func parseMemoryCommandArgs(args []string) (memoryCommandOptions, error) {
+	opts := memoryCommandOptions{
+		Action:   "list",
+		Limit:    10,
+		MinScore: 0,
+	}
+	if len(args) == 0 {
+		return opts, nil
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(args[0]))
+	startIdx := 0
+	switch mode {
+	case "", "list":
+		opts.Action = "list"
+		startIdx = 1
+	case "search":
+		opts.Action = "search"
+		startIdx = 1
+	case "attach":
+		opts.Action = "attach"
+		startIdx = 1
+	case "detach":
+		opts.Action = "detach"
+		startIdx = 1
+	case "distill":
+		opts.Action = "distill"
+		startIdx = 1
+	default:
+		if strings.HasPrefix(mode, "-") {
+			opts.Action = "list"
+			startIdx = 0
+		} else {
+			return memoryCommandOptions{}, fmt.Errorf("unknown memory action: %s", args[0])
+		}
+	}
+
+	for i := startIdx; i < len(args); i++ {
+		raw := strings.TrimSpace(args[i])
+		switch strings.ToLower(raw) {
+		case "":
+		case "--json":
+			opts.JSON = true
+		case "--dry-run":
+			opts.DryRun = true
+		case "--force":
+			opts.Force = true
+		case "--subject":
+			value, next, err := parseRequiredFlagValue(args, i, "--subject")
+			if err != nil {
+				return memoryCommandOptions{}, err
+			}
+			opts.Subject = strings.TrimSpace(value)
+			i = next
+		case "--query":
+			value, next, err := parseRequiredFlagValue(args, i, "--query")
+			if err != nil {
+				return memoryCommandOptions{}, err
+			}
+			opts.Query = strings.TrimSpace(value)
+			i = next
+		case "--limit":
+			value, next, err := parseRequiredFlagValue(args, i, "--limit")
+			if err != nil {
+				return memoryCommandOptions{}, err
+			}
+			parsed, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || parsed <= 0 {
+				return memoryCommandOptions{}, fmt.Errorf("invalid --limit value: %s", value)
+			}
+			opts.Limit = parsed
+			i = next
+		case "--min-score":
+			value, next, err := parseRequiredFlagValue(args, i, "--min-score")
+			if err != nil {
+				return memoryCommandOptions{}, err
+			}
+			parsed, convErr := strconv.ParseFloat(strings.TrimSpace(value), 64)
+			if convErr != nil || parsed < 0 {
+				return memoryCommandOptions{}, fmt.Errorf("invalid --min-score value: %s", value)
+			}
+			opts.MinScore = parsed
+			i = next
+		case "--instance":
+			value, next, err := parseRequiredFlagValue(args, i, "--instance")
+			if err != nil {
+				return memoryCommandOptions{}, err
+			}
+			opts.InstanceID = strings.TrimSpace(value)
+			i = next
+		case "--scope":
+			value, next, err := parseRequiredFlagValue(args, i, "--scope")
+			if err != nil {
+				return memoryCommandOptions{}, err
+			}
+			opts.Scope = strings.TrimSpace(value)
+			i = next
+		case "--reason":
+			value, next, err := parseRequiredFlagValue(args, i, "--reason")
+			if err != nil {
+				return memoryCommandOptions{}, err
+			}
+			opts.Reason = strings.TrimSpace(value)
+			i = next
+		default:
+			return memoryCommandOptions{}, fmt.Errorf("unknown memory option: %s", raw)
+		}
+	}
+
+	switch opts.Action {
+	case "search":
+		if opts.Query == "" {
+			return memoryCommandOptions{}, errors.New("usage: carrier memory search --subject <subject> --query <query> [--limit <n>] [--min-score <f>] [--json]")
+		}
+	case "attach", "detach":
+		if opts.InstanceID == "" || opts.Scope == "" {
+			return memoryCommandOptions{}, fmt.Errorf("usage: carrier memory %s --instance <id> --scope <scope> [--json]", opts.Action)
+		}
+	case "distill":
+		if opts.InstanceID == "" {
+			return memoryCommandOptions{}, errors.New("usage: carrier memory distill --instance <id> [--scope <scope>] [--dry-run] [--force] [--reason <text>] [--json]")
+		}
+	}
+
+	return opts, nil
+}
+
+func parseAgentCommandArgs(args []string) (agentCommandOptions, error) {
+	if len(args) == 0 {
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|media|cron|skills|models> ...")
+	}
+	opts := agentCommandOptions{}
+	startIdx := 0
+	mode := strings.ToLower(strings.TrimSpace(args[0]))
+	switch mode {
+	case "run", "shell", "launcher", "heartbeat":
+		if len(args) < 2 {
+			return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat> <agent_id> [flags]")
+		}
+		opts.Action = mode
+		opts.AgentID = strings.TrimSpace(args[1])
+		startIdx = 2
+	case "media":
+		if len(args) < 3 {
+			return agentCommandOptions{}, errors.New("usage: carrier agent media speak <agent_id> --text <text> [--voice <voice>] [--format <format>] [--json]")
+		}
+		subaction := strings.ToLower(strings.TrimSpace(args[1]))
+		opts.Action = "media-" + subaction
+		opts.AgentID = strings.TrimSpace(args[2])
+		startIdx = 3
+	case "models":
+		if len(args) < 2 {
+			return agentCommandOptions{}, errors.New("usage: carrier agent models [discover|sync|default|update-profile] <agent_id> [profile_name] [flags]")
+		}
+		if strings.EqualFold(strings.TrimSpace(args[1]), "discover") {
+			if len(args) < 3 {
+				return agentCommandOptions{}, errors.New("usage: carrier agent models discover <agent_id> [--json]")
+			}
+			opts.Action = "models-discover"
+			opts.AgentID = strings.TrimSpace(args[2])
+			startIdx = 3
+		} else if strings.EqualFold(strings.TrimSpace(args[1]), "sync") {
+			if len(args) < 3 {
+				return agentCommandOptions{}, errors.New("usage: carrier agent models sync <agent_id> [--json]")
+			}
+			opts.Action = "models-sync"
+			opts.AgentID = strings.TrimSpace(args[2])
+			startIdx = 3
+		} else if strings.EqualFold(strings.TrimSpace(args[1]), "default") {
+			if len(args) < 4 {
+				return agentCommandOptions{}, errors.New("usage: carrier agent models default <agent_id> <profile_name> [--json]")
+			}
+			opts.Action = "models-default"
+			opts.AgentID = strings.TrimSpace(args[2])
+			opts.ProfileName = strings.TrimSpace(args[3])
+			startIdx = 4
+		} else if strings.EqualFold(strings.TrimSpace(args[1]), "update-profile") {
+			if len(args) < 4 {
+				return agentCommandOptions{}, errors.New("usage: carrier agent models update-profile <agent_id> <profile_name> [--model-alias <alias>] [--model <model-id>] [--provider <provider-id>] [--base-url <url>] [--auth-method <method>] [--timeout-ms <ms>] [--retry-budget <n>] [--fallback-strategy <name>] [--json]")
+			}
+			opts.Action = "models-update-profile"
+			opts.AgentID = strings.TrimSpace(args[2])
+			opts.ProfileName = strings.TrimSpace(args[3])
+			startIdx = 4
+		} else {
+			opts.Action = "models"
+			opts.AgentID = strings.TrimSpace(args[1])
+			startIdx = 2
+		}
+	case "cron":
+		if len(args) < 3 {
+			return agentCommandOptions{}, errors.New("usage: carrier agent cron <schedule|list|cancel> <agent_id> [job_id] [flags]")
+		}
+		subaction := strings.ToLower(strings.TrimSpace(args[1]))
+		opts.Action = "cron-" + subaction
+		opts.AgentID = strings.TrimSpace(args[2])
+		startIdx = 3
+		if subaction == "cancel" {
+			if len(args) < 4 {
+				return agentCommandOptions{}, errors.New("usage: carrier agent cron cancel <agent_id> <job_id> [--json]")
+			}
+			opts.CronJobID = strings.TrimSpace(args[3])
+			startIdx = 4
+		}
+	case "skills":
+		if len(args) < 3 {
+			return agentCommandOptions{}, errors.New("usage: carrier agent skills <search|install|reinstall|update|uninstall|enable|disable> <agent_id> [args] [--json]")
+		}
+		subaction := strings.ToLower(strings.TrimSpace(args[1]))
+		opts.Action = "skills-" + subaction
+		opts.AgentID = strings.TrimSpace(args[2])
+		startIdx = 3
+		if subaction == "install" || subaction == "reinstall" || subaction == "update" || subaction == "uninstall" || subaction == "enable" || subaction == "disable" {
+			if len(args) < 4 {
+				return agentCommandOptions{}, fmt.Errorf("usage: carrier agent skills %s <agent_id> <skill_name> [--json]", subaction)
+			}
+			opts.SkillName = strings.TrimSpace(args[3])
+			startIdx = 4
+		}
+	case "subagents":
+		if len(args) < 3 {
+			return agentCommandOptions{}, errors.New("usage: carrier agent subagents <list|show> <agent_id> [job_id] [--limit <n>] [--json]")
+		}
+		subaction := strings.ToLower(strings.TrimSpace(args[1]))
+		opts.Action = "subagents-" + subaction
+		opts.AgentID = strings.TrimSpace(args[2])
+		startIdx = 3
+		if subaction == "show" {
+			if len(args) < 4 {
+				return agentCommandOptions{}, errors.New("usage: carrier agent subagents show <agent_id> <job_id> [--json]")
+			}
+			opts.SubagentJobID = strings.TrimSpace(args[3])
+			startIdx = 4
+		}
+	default:
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|media|cron|skills|models|subagents> ...")
+	}
+	if opts.AgentID == "" {
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|media|cron|skills|models|subagents> ...")
+	}
+	for i := startIdx; i < len(args); i++ {
+		raw := strings.TrimSpace(args[i])
+		switch strings.ToLower(raw) {
+		case "-m", "--message":
+			value, next, err := parseRequiredFlagValue(args, i, raw)
+			if err != nil {
+				return agentCommandOptions{}, errors.New("usage: carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--model-alias <alias>] [--model <model-id>] [--session-id <id>] [--json]")
+			}
+			opts.Message = strings.TrimSpace(value)
+			i = next
+		case "--provider":
+			value, next, err := parseRequiredFlagValue(args, i, "--provider")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.Provider = strings.TrimSpace(value)
+			i = next
+		case "--base-url":
+			value, next, err := parseRequiredFlagValue(args, i, "--base-url")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.BaseURL = strings.TrimSpace(value)
+			i = next
+		case "--auth-method":
+			value, next, err := parseRequiredFlagValue(args, i, "--auth-method")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.AuthMethod = strings.TrimSpace(value)
+			i = next
+		case "--session-id":
+			value, next, err := parseRequiredFlagValue(args, i, "--session-id")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.SessionID = strings.TrimSpace(value)
+			i = next
+		case "--model-alias":
+			value, next, err := parseRequiredFlagValue(args, i, "--model-alias")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.ModelAlias = strings.TrimSpace(value)
+			i = next
+		case "--model":
+			value, next, err := parseRequiredFlagValue(args, i, "--model")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.Model = strings.TrimSpace(value)
+			i = next
+		case "--text":
+			value, next, err := parseRequiredFlagValue(args, i, "--text")
+			if err != nil {
+				return agentCommandOptions{}, errors.New("usage: carrier agent media speak <agent_id> --text <text> [--voice <voice>] [--format <format>] [--json]")
+			}
+			opts.Message = strings.TrimSpace(value)
+			i = next
+		case "--voice":
+			value, next, err := parseRequiredFlagValue(args, i, "--voice")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.Voice = strings.TrimSpace(value)
+			i = next
+		case "--format":
+			value, next, err := parseRequiredFlagValue(args, i, "--format")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.MediaFormat = strings.TrimSpace(value)
+			i = next
+		case "--next-run-at":
+			value, next, err := parseRequiredFlagValue(args, i, "--next-run-at")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			parsed, convErr := time.Parse(time.RFC3339, strings.TrimSpace(value))
+			if convErr != nil {
+				return agentCommandOptions{}, fmt.Errorf("invalid --next-run-at value: %s", value)
+			}
+			opts.NextRunAt = parsed.UTC()
+			i = next
+		case "--query":
+			value, next, err := parseRequiredFlagValue(args, i, "--query")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.Query = strings.TrimSpace(value)
+			i = next
+		case "--version":
+			value, next, err := parseRequiredFlagValue(args, i, "--version")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.Version = strings.TrimSpace(value)
+			i = next
+		case "--timeout-ms":
+			value, next, err := parseRequiredFlagValue(args, i, "--timeout-ms")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			parsed, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || parsed < 0 {
+				return agentCommandOptions{}, fmt.Errorf("invalid --timeout-ms value: %s", value)
+			}
+			opts.TimeoutMs = parsed
+			i = next
+		case "--retry-budget":
+			value, next, err := parseRequiredFlagValue(args, i, "--retry-budget")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			parsed, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || parsed < 0 {
+				return agentCommandOptions{}, fmt.Errorf("invalid --retry-budget value: %s", value)
+			}
+			opts.RetryBudget = parsed
+			i = next
+		case "--fallback-strategy":
+			value, next, err := parseRequiredFlagValue(args, i, "--fallback-strategy")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			opts.FallbackStrategy = strings.TrimSpace(value)
+			i = next
+		case "--limit":
+			value, next, err := parseRequiredFlagValue(args, i, "--limit")
+			if err != nil {
+				return agentCommandOptions{}, err
+			}
+			parsed, convErr := strconv.Atoi(strings.TrimSpace(value))
+			if convErr != nil || parsed <= 0 {
+				return agentCommandOptions{}, fmt.Errorf("invalid --limit value: %s", value)
+			}
+			opts.Limit = parsed
+			i = next
+		case "--json":
+			opts.JSON = true
+		default:
+			return agentCommandOptions{}, fmt.Errorf("unknown agent option: %s", raw)
+		}
+	}
+	switch opts.Action {
+	case "run":
+		if opts.Message == "" {
+			return agentCommandOptions{}, errors.New("usage: carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--model-alias <alias>] [--model <model-id>] [--session-id <id>] [--json]")
+		}
+	case "media-speak":
+		if opts.Message == "" {
+			return agentCommandOptions{}, errors.New("usage: carrier agent media speak <agent_id> --text <text> [--voice <voice>] [--format <format>] [--json]")
+		}
+	case "cron-schedule":
+		if opts.Message == "" {
+			return agentCommandOptions{}, errors.New("usage: carrier agent cron schedule <agent_id> -m <message> [--provider <provider-id>] [--session-id <id>] [--next-run-at <rfc3339>] [--json]")
+		}
+	case "cron-list":
+	case "cron-cancel":
+		if strings.TrimSpace(opts.CronJobID) == "" {
+			return agentCommandOptions{}, errors.New("usage: carrier agent cron cancel <agent_id> <job_id> [--json]")
+		}
+	case "skills-search":
+	case "skills-install", "skills-reinstall", "skills-update", "skills-uninstall", "skills-enable", "skills-disable":
+		if strings.TrimSpace(opts.SkillName) == "" {
+			return agentCommandOptions{}, fmt.Errorf("usage: carrier agent skills %s <agent_id> <skill_name> [--json]", strings.TrimPrefix(opts.Action, "skills-"))
+		}
+	case "subagents-list":
+	case "subagents-show":
+		if strings.TrimSpace(opts.SubagentJobID) == "" {
+			return agentCommandOptions{}, errors.New("usage: carrier agent subagents show <agent_id> <job_id> [--json]")
+		}
+	case "shell", "launcher", "heartbeat", "models", "models-discover", "models-sync":
+	case "models-default":
+		if strings.TrimSpace(opts.ProfileName) == "" {
+			return agentCommandOptions{}, errors.New("usage: carrier agent models default <agent_id> <profile_name> [--json]")
+		}
+	case "models-update-profile":
+		if strings.TrimSpace(opts.ProfileName) == "" {
+			return agentCommandOptions{}, errors.New("usage: carrier agent models update-profile <agent_id> <profile_name> [--model-alias <alias>] [--model <model-id>] [--provider <provider-id>] [--base-url <url>] [--auth-method <method>] [--timeout-ms <ms>] [--retry-budget <n>] [--fallback-strategy <name>] [--json]")
+		}
+	default:
+		return agentCommandOptions{}, errors.New("usage: carrier agent <run|shell|launcher|heartbeat|media|cron|skills|models|subagents> ...")
 	}
 	return opts, nil
 }
@@ -2343,6 +3626,19 @@ func dedupeStringSlice(values []string) []string {
 		out = append(out, trimmed)
 	}
 	return out
+}
+
+func normalizeMemoryScopeSlice(values []string) []string {
+	return normalizeStringSelectorSlice(values)
+}
+
+func buildMemoryContractDigestCLI(scopes []string) string {
+	normalized := normalizeMemoryScopeSlice(scopes)
+	if len(normalized) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(strings.Join(normalized, "\n")))
+	return "mem-" + hex.EncodeToString(sum[:])[:12]
 }
 
 func runKeysGenerate(out io.Writer, alias string) error {
@@ -3199,53 +4495,136 @@ func runListInstances(out io.Writer) error {
 
 const orchestratorLocalHostID = "local"
 
-type orchestrateDecomposeTask struct {
-	ID      string `json:"id"`
-	Input   string `json:"input"`
-	AgentID string `json:"agentId,omitempty"`
-}
+type orchestrateDecomposeTask = sharedorchestration.DecomposeTask
 
-type orchestrateRequiredWorker struct {
-	HostID  string `json:"hostId"`
-	AgentID string `json:"agentId"`
-	Count   int    `json:"count"`
-}
+type orchestrateRequiredWorker = sharedorchestration.RequiredWorker
 
-type orchestrateTaskUnit struct {
-	ID          string `json:"id"`
-	Input       string `json:"input"`
-	TimeoutMs   int    `json:"timeoutMs,omitempty"`
-	RetryBudget int    `json:"retryBudget,omitempty"`
-	HostID      string `json:"hostId,omitempty"`
-	AgentID     string `json:"agentId,omitempty"`
-}
+type orchestrateTaskUnit = sharedorchestration.TaskUnit
 
 type orchestrateExecutionPayload struct {
-	Goal            string                      `json:"goal"`
-	IdempotencyKey  string                      `json:"idempotencyKey,omitempty"`
-	ApprovalScope   string                      `json:"approvalScope"`
-	RequiredWorkers []orchestrateRequiredWorker `json:"requiredWorkers"`
-	TaskUnits       []orchestrateTaskUnit       `json:"taskUnits"`
-	MaxConcurrency  int                         `json:"maxConcurrency,omitempty"`
+	Goal                 string                      `json:"goal"`
+	TemplateID           string                      `json:"templateId,omitempty"`
+	RequestedProvider    string                      `json:"requestedProvider,omitempty"`
+	RequiredMemory       []string                    `json:"requiredMemory,omitempty"`
+	MemoryContractDigest string                      `json:"memoryContractDigest,omitempty"`
+	MemoryProvenance     []string                    `json:"memoryProvenance,omitempty"`
+	DistillOutputs       []string                    `json:"distillOutputs,omitempty"`
+	IdempotencyKey       string                      `json:"idempotencyKey,omitempty"`
+	ApprovalScope        string                      `json:"approvalScope"`
+	RequiredWorkers      []orchestrateRequiredWorker `json:"requiredWorkers"`
+	TaskUnits            []orchestrateTaskUnit       `json:"taskUnits"`
+	MaxConcurrency       int                         `json:"maxConcurrency,omitempty"`
 }
 
 type orchestrateTaskResultSnapshot struct {
-	TaskID    string `json:"taskId"`
-	Status    string `json:"status"`
-	HostID    string `json:"hostId,omitempty"`
-	AgentID   string `json:"agentId,omitempty"`
-	Output    string `json:"output,omitempty"`
-	Error     string `json:"error,omitempty"`
-	LatencyMs int64  `json:"latencyMs,omitempty"`
+	TaskID          string `json:"taskId"`
+	Status          string `json:"status"`
+	HostID          string `json:"hostId,omitempty"`
+	AgentID         string `json:"agentId,omitempty"`
+	Summary         string `json:"summary,omitempty"`
+	Output          string `json:"output,omitempty"`
+	Error           string `json:"error,omitempty"`
+	FailureReason   string `json:"failureReason,omitempty"`
+	FailureCategory string `json:"failureCategory,omitempty"`
+	LatencyMs       int64  `json:"latencyMs,omitempty"`
+}
+
+type orchestrateArtifactSnapshot struct {
+	ID          string `json:"id"`
+	TaskID      string `json:"taskId,omitempty"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind,omitempty"`
+	ContentType string `json:"contentType,omitempty"`
+	SizeBytes   int64  `json:"sizeBytes,omitempty"`
+}
+
+type orchestrateExecutionOutcomeSnapshot struct {
+	Summary         string                        `json:"summary,omitempty"`
+	FailureReason   string                        `json:"failureReason,omitempty"`
+	FailureCategory string                        `json:"failureCategory,omitempty"`
+	Artifacts       []orchestrateArtifactSnapshot `json:"artifacts,omitempty"`
+}
+
+type orchestrateToolPolicySnapshot struct {
+	Mode         string   `json:"mode,omitempty"`
+	AllowedTools []string `json:"allowedTools,omitempty"`
+}
+
+type orchestrateExecutionPolicyTargetSnapshot struct {
+	HostID     string   `json:"hostId,omitempty"`
+	HostLabels []string `json:"hostLabels,omitempty"`
+	AgentID    string   `json:"agentId"`
+	Count      int      `json:"count,omitempty"`
+}
+
+type orchestrateExecutionPolicySnapshot struct {
+	Decision                       string                                     `json:"decision"`
+	Reason                         string                                     `json:"reason,omitempty"`
+	Summary                        string                                     `json:"summary,omitempty"`
+	RequiresInfrastructureApproval bool                                       `json:"requiresInfrastructureApproval"`
+	ConfiguredMaxConcurrency       int                                        `json:"configuredMaxConcurrency,omitempty"`
+	EffectiveMaxConcurrency        int                                        `json:"effectiveMaxConcurrency,omitempty"`
+	ToolPolicy                     orchestrateToolPolicySnapshot              `json:"toolPolicy,omitempty"`
+	MaxTaskTimeoutMs               int                                        `json:"maxTaskTimeoutMs,omitempty"`
+	MaxRetryBudget                 int                                        `json:"maxRetryBudget,omitempty"`
+	MatchedRuleID                  string                                     `json:"matchedRuleId,omitempty"`
+	MatchedRuleName                string                                     `json:"matchedRuleName,omitempty"`
+	ApprovedBy                     string                                     `json:"approvedBy,omitempty"`
+	ApprovedAt                     string                                     `json:"approvedAt,omitempty"`
+	Targets                        []orchestrateExecutionPolicyTargetSnapshot `json:"targets,omitempty"`
+}
+
+type orchestrateProviderGovernanceResolutionSnapshot struct {
+	HostID                string  `json:"hostId,omitempty"`
+	AgentID               string  `json:"agentId,omitempty"`
+	Source                string  `json:"source,omitempty"`
+	ProfileID             string  `json:"profileId,omitempty"`
+	ProfileName           string  `json:"profileName,omitempty"`
+	Provider              string  `json:"provider,omitempty"`
+	Model                 string  `json:"model,omitempty"`
+	Status                string  `json:"status,omitempty"`
+	SyncMode              string  `json:"syncMode,omitempty"`
+	EstimatedInputTokens  int     `json:"estimatedInputTokens,omitempty"`
+	EstimatedOutputTokens int     `json:"estimatedOutputTokens,omitempty"`
+	EstimatedTotalTokens  int     `json:"estimatedTotalTokens,omitempty"`
+	EstimatedCostUSD      float64 `json:"estimatedCostUsd,omitempty"`
+	SuccessfulTasks       int     `json:"successfulTasks,omitempty"`
+	FailedTasks           int     `json:"failedTasks,omitempty"`
+	AvgLatencyMs          int64   `json:"avgLatencyMs,omitempty"`
+	Message               string  `json:"message,omitempty"`
+}
+
+type orchestrateExecutionGovernanceSnapshot struct {
+	ProviderResolutions []orchestrateProviderGovernanceResolutionSnapshot `json:"providerResolutions,omitempty"`
 }
 
 type orchestrateExecutionSnapshot struct {
-	ID        string                          `json:"id"`
-	Goal      string                          `json:"goal"`
-	Status    string                          `json:"status"`
-	Error     string                          `json:"error,omitempty"`
-	TaskUnits []orchestrateTaskUnit           `json:"taskUnits,omitempty"`
-	Results   []orchestrateTaskResultSnapshot `json:"results,omitempty"`
+	ID                   string                                 `json:"id"`
+	Goal                 string                                 `json:"goal"`
+	TemplateID           string                                 `json:"templateId,omitempty"`
+	TriggerSource        string                                 `json:"triggerSource,omitempty"`
+	TriggerID            string                                 `json:"triggerId,omitempty"`
+	TriggerEvent         string                                 `json:"triggerEvent,omitempty"`
+	TriggerPayloadDigest string                                 `json:"triggerPayloadDigest,omitempty"`
+	Initiator            string                                 `json:"initiator,omitempty"`
+	RequestedProvider    string                                 `json:"requestedProvider,omitempty"`
+	RequiredMemory       []string                               `json:"requiredMemory,omitempty"`
+	MemoryContractDigest string                                 `json:"memoryContractDigest,omitempty"`
+	MemoryProvenance     []string                               `json:"memoryProvenance,omitempty"`
+	DistillOutputs       []string                               `json:"distillOutputs,omitempty"`
+	ParentExecutionID    string                                 `json:"parentExecutionId,omitempty"`
+	SourceExecutionID    string                                 `json:"sourceExecutionId,omitempty"`
+	LaunchReason         string                                 `json:"launchReason,omitempty"`
+	Status               string                                 `json:"status"`
+	Error                string                                 `json:"error,omitempty"`
+	MaxConcurrency       int                                    `json:"maxConcurrency,omitempty"`
+	Policy               orchestrateExecutionPolicySnapshot     `json:"policy,omitempty"`
+	Governance           orchestrateExecutionGovernanceSnapshot `json:"governance,omitempty"`
+	Outcome              orchestrateExecutionOutcomeSnapshot    `json:"outcome,omitempty"`
+	CreatedAt            string                                 `json:"createdAt,omitempty"`
+	UpdatedAt            string                                 `json:"updatedAt,omitempty"`
+	TaskUnits            []orchestrateTaskUnit                  `json:"taskUnits,omitempty"`
+	Results              []orchestrateTaskResultSnapshot        `json:"results,omitempty"`
 }
 
 type orchestrateWorkerLeaseSnapshot struct {
@@ -3263,22 +4642,1634 @@ type orchestrateExecutionResponse struct {
 	Workers   []orchestrateWorkerLeaseSnapshot `json:"workers,omitempty"`
 }
 
-func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error {
-	if _, err := ensureDaemonRunning(out); err != nil {
-		return err
-	}
+type orchestrateExecutionListResponse struct {
+	Result     string                         `json:"result"`
+	ErrorCode  string                         `json:"errorCode,omitempty"`
+	Message    string                         `json:"message,omitempty"`
+	Executions []orchestrateExecutionSnapshot `json:"executions"`
+}
+
+type orchestrateExecutionArtifactsResponse struct {
+	Result    string                        `json:"result"`
+	ErrorCode string                        `json:"errorCode,omitempty"`
+	Message   string                        `json:"message,omitempty"`
+	Artifacts []orchestrateArtifactSnapshot `json:"artifacts"`
+}
+
+type orchestrateAuditExportResponse struct {
+	Result      string                          `json:"result"`
+	ErrorCode   string                          `json:"errorCode,omitempty"`
+	Message     string                          `json:"message,omitempty"`
+	ExecutionID string                          `json:"executionId,omitempty"`
+	Events      []orchestrateAuditEventSnapshot `json:"events,omitempty"`
+}
+
+type orchestrateAuditEventSnapshot struct {
+	Action string `json:"action"`
+	Target string `json:"target,omitempty"`
+	Result string `json:"result,omitempty"`
+}
+
+type orchestrateEvidenceBundleSnapshot struct {
+	GeneratedAt      string                          `json:"generatedAt,omitempty"`
+	Execution        orchestrateExecutionSnapshot    `json:"execution"`
+	ArtifactManifest []orchestrateArtifactSnapshot   `json:"artifactManifest,omitempty"`
+	Audit            []orchestrateAuditEventSnapshot `json:"audit,omitempty"`
+}
+
+type orchestrateEvidenceBundleResponse struct {
+	Result    string                            `json:"result"`
+	ErrorCode string                            `json:"errorCode,omitempty"`
+	Message   string                            `json:"message,omitempty"`
+	Evidence  orchestrateEvidenceBundleSnapshot `json:"evidence"`
+}
+
+type orchestratePlanSnapshot = sharedorchestration.Plan
+
+type executionTemplateInputFieldSnapshot struct {
+	ID           string `json:"id"`
+	Label        string `json:"label"`
+	Description  string `json:"description,omitempty"`
+	Placeholder  string `json:"placeholder,omitempty"`
+	Required     bool   `json:"required,omitempty"`
+	DefaultValue string `json:"defaultValue,omitempty"`
+}
+
+type executionTemplateTaskSnapshot struct {
+	ID            string `json:"id"`
+	AgentID       string `json:"agentId,omitempty"`
+	InputTemplate string `json:"inputTemplate,omitempty"`
+}
+
+type executionTemplateSnapshot struct {
+	ID                  string                                `json:"id"`
+	Name                string                                `json:"name"`
+	Description         string                                `json:"description,omitempty"`
+	DefaultGoalTemplate string                                `json:"defaultGoalTemplate,omitempty"`
+	RequiredMemory      []string                              `json:"requiredMemory,omitempty"`
+	DistillOutputs      []string                              `json:"distillOutputs,omitempty"`
+	InputSchema         []executionTemplateInputFieldSnapshot `json:"inputSchema,omitempty"`
+	PlannerTasks        []executionTemplateTaskSnapshot       `json:"plannerTasks,omitempty"`
+}
+
+type executionTemplateListResponse struct {
+	Result    string                      `json:"result"`
+	ErrorCode string                      `json:"errorCode,omitempty"`
+	Message   string                      `json:"message,omitempty"`
+	Templates []executionTemplateSnapshot `json:"templates"`
+}
+
+type executionTemplateResponse struct {
+	Result    string                    `json:"result"`
+	ErrorCode string                    `json:"errorCode,omitempty"`
+	Message   string                    `json:"message,omitempty"`
+	Template  executionTemplateSnapshot `json:"template"`
+}
+
+type executionTemplateLaunchResponse struct {
+	Result    string                       `json:"result"`
+	ErrorCode string                       `json:"errorCode,omitempty"`
+	Message   string                       `json:"message,omitempty"`
+	Template  executionTemplateSnapshot    `json:"template"`
+	Execution orchestrateExecutionSnapshot `json:"execution"`
+}
+
+type executionTriggerConfigSnapshot struct {
+	Inputs                  map[string]string `json:"inputs,omitempty"`
+	Provider                string            `json:"provider,omitempty"`
+	HostIDs                 []string          `json:"hostIds,omitempty"`
+	HostLabels              []string          `json:"hostLabels,omitempty"`
+	RequiredMemory          []string          `json:"requiredMemory,omitempty"`
+	DistillOutputs          []string          `json:"distillOutputs,omitempty"`
+	MaxConcurrency          int               `json:"maxConcurrency,omitempty"`
+	PolicyApprove           bool              `json:"policyApprove,omitempty"`
+	WebhookSecretConfigured bool              `json:"webhookSecretConfigured,omitempty"`
+	GitHubCommand           string            `json:"githubCommand,omitempty"`
+	GitHubLabel             string            `json:"githubLabel,omitempty"`
+	GitHubRepository        string            `json:"githubRepository,omitempty"`
+	Cron                    string            `json:"cron,omitempty"`
+	Timezone                string            `json:"timezone,omitempty"`
+}
+
+type executionTriggerSnapshot struct {
+	ID              string                         `json:"id"`
+	Name            string                         `json:"name"`
+	Type            string                         `json:"type"`
+	TemplateID      string                         `json:"templateId"`
+	Enabled         bool                           `json:"enabled"`
+	CreatedBy       string                         `json:"createdBy,omitempty"`
+	Config          executionTriggerConfigSnapshot `json:"config,omitempty"`
+	LastTriggeredAt string                         `json:"lastTriggeredAt,omitempty"`
+	LastExecutionID string                         `json:"lastExecutionId,omitempty"`
+	LastError       string                         `json:"lastError,omitempty"`
+	TriggeredCount  int64                          `json:"triggeredCount,omitempty"`
+	NextRunAt       string                         `json:"nextRunAt,omitempty"`
+	CreatedAt       string                         `json:"createdAt,omitempty"`
+	UpdatedAt       string                         `json:"updatedAt,omitempty"`
+}
+
+type executionTriggerListResponse struct {
+	Result    string                     `json:"result"`
+	ErrorCode string                     `json:"errorCode,omitempty"`
+	Message   string                     `json:"message,omitempty"`
+	Triggers  []executionTriggerSnapshot `json:"triggers"`
+}
+
+type executionTriggerResponse struct {
+	Result    string                   `json:"result"`
+	ErrorCode string                   `json:"errorCode,omitempty"`
+	Message   string                   `json:"message,omitempty"`
+	Trigger   executionTriggerSnapshot `json:"trigger"`
+}
+
+type executionTriggerDeleteResponse struct {
+	Result    string `json:"result"`
+	ErrorCode string `json:"errorCode,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Deleted   bool   `json:"deleted"`
+}
+
+type memoryEntrySnapshot struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+}
+
+type memoryAttachmentSnapshot struct {
+	AgentID  string `json:"agent_id"`
+	MemoryID string `json:"memory_id"`
+}
+
+type memoryGrantSnapshot struct {
+	ID      string `json:"id"`
+	Subject string `json:"subject"`
+	Scope   string `json:"scope"`
+}
+
+type memoryAuditSnapshot struct {
+	Action string `json:"action"`
+	Target string `json:"target"`
+	Result string `json:"result"`
+}
+
+type memoryListResponse struct {
+	Result      string                     `json:"result"`
+	ErrorCode   string                     `json:"errorCode,omitempty"`
+	Message     string                     `json:"message,omitempty"`
+	Subject     string                     `json:"subject,omitempty"`
+	Entries     []memoryEntrySnapshot      `json:"entries"`
+	Attachments []memoryAttachmentSnapshot `json:"attachments"`
+	Grants      []memoryGrantSnapshot      `json:"grants"`
+	Audit       []memoryAuditSnapshot      `json:"audit"`
+}
+
+type memorySearchHitSnapshot struct {
+	ID      string  `json:"id"`
+	Scope   string  `json:"scope"`
+	Score   float64 `json:"score"`
+	Snippet string  `json:"snippet"`
+}
+
+type memorySearchResponse struct {
+	Result    string                    `json:"result"`
+	ErrorCode string                    `json:"errorCode,omitempty"`
+	Message   string                    `json:"message,omitempty"`
+	Results   []memorySearchHitSnapshot `json:"results"`
+}
+
+type memoryStatusResponse struct {
+	Result    string `json:"result"`
+	ErrorCode string `json:"errorCode,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Status    string `json:"status,omitempty"`
+}
+
+type memoryDistillRunSnapshot struct {
+	RunID      string `json:"runId"`
+	InstanceID string `json:"instanceId"`
+	Status     string `json:"status"`
+	DryRun     bool   `json:"dryRun"`
+}
+
+type memoryDistillResponse struct {
+	Result    string                   `json:"-"`
+	ErrorCode string                   `json:"errorCode,omitempty"`
+	Message   string                   `json:"message,omitempty"`
+	Run       memoryDistillRunSnapshot `json:"-"`
+}
+
+type agentLauncherCLIResponse struct {
+	Result  string `json:"result,omitempty"`
+	AgentID string `json:"agentId"`
+	Status  struct {
+		RuntimeState string `json:"runtimeState,omitempty"`
+		InstallState string `json:"installState,omitempty"`
+		Health       string `json:"health,omitempty"`
+	} `json:"status"`
+	Heartbeat *struct {
+		State          string `json:"state"`
+		AgeSeconds     int64  `json:"ageSeconds"`
+		LastActivityAt string `json:"lastActivityAt,omitempty"`
+	} `json:"heartbeat,omitempty"`
+	Memory *struct {
+		ContractID     string `json:"contractId,omitempty"`
+		ContractDigest string `json:"contractDigest,omitempty"`
+		SyncState      string `json:"syncState,omitempty"`
+	} `json:"memory,omitempty"`
+	ProviderReadiness *struct {
+		Provider string `json:"provider,omitempty"`
+		Ready    bool   `json:"ready"`
+		AuthMode string `json:"authMode,omitempty"`
+	} `json:"providerReadiness,omitempty"`
+	ModelSurface *struct {
+		DefaultProfile string `json:"defaultProfile,omitempty"`
+		Profiles       []struct {
+			ProfileName      string `json:"profileName,omitempty"`
+			ModelAlias       string `json:"modelAlias,omitempty"`
+			ModelID          string `json:"modelId,omitempty"`
+			ProviderID       string `json:"providerId,omitempty"`
+			ProviderKey      string `json:"providerKey,omitempty"`
+			ProtocolFamily   string `json:"protocolFamily,omitempty"`
+			BaseURL          string `json:"baseUrl,omitempty"`
+			AuthMethod       string `json:"authMethod,omitempty"`
+			TimeoutMs        int    `json:"timeoutMs,omitempty"`
+			RetryBudget      int    `json:"retryBudget,omitempty"`
+			FallbackStrategy string `json:"fallbackStrategy,omitempty"`
+			Primary          bool   `json:"primary,omitempty"`
+		} `json:"profiles,omitempty"`
+	} `json:"modelSurface,omitempty"`
+	LastModelRun *struct {
+		RequestedAlias string `json:"requestedAlias,omitempty"`
+		RequestedModel string `json:"requestedModel,omitempty"`
+		ResolvedModel  string `json:"resolvedModel,omitempty"`
+		FallbackGroup  string `json:"fallbackGroup,omitempty"`
+		OverrideHit    bool   `json:"overrideHit,omitempty"`
+		FallbackHit    bool   `json:"fallbackHit,omitempty"`
+		LastRunAt      string `json:"lastRunAt,omitempty"`
+	} `json:"lastModelRun,omitempty"`
+	Cron *struct {
+		Count      int                       `json:"count"`
+		NextRunAt  string                    `json:"nextRunAt,omitempty"`
+		LastRunAt  string                    `json:"lastRunAt,omitempty"`
+		LastResult string                    `json:"lastResult,omitempty"`
+		Jobs       []agentCronJobCLIResponse `json:"jobs,omitempty"`
+	} `json:"cron,omitempty"`
+	Session *struct {
+		InstanceID   string `json:"instanceId,omitempty"`
+		RuntimeMode  string `json:"runtimeMode,omitempty"`
+		RuntimeState string `json:"runtimeState,omitempty"`
+		UpdatedAt    string `json:"updatedAt,omitempty"`
+	} `json:"session,omitempty"`
+}
+
+type agentCronJobCLIResponse struct {
+	ID          string `json:"id"`
+	AgentID     string `json:"agentId,omitempty"`
+	SessionKey  string `json:"sessionKey,omitempty"`
+	Prompt      string `json:"prompt"`
+	NextRunAt   string `json:"nextRunAt,omitempty"`
+	LastRunAt   string `json:"lastRunAt,omitempty"`
+	LastResult  string `json:"lastResult,omitempty"`
+	CancelledAt string `json:"cancelledAt,omitempty"`
+}
+
+type agentCronListCLIResponse struct {
+	Jobs []agentCronJobCLIResponse `json:"jobs"`
+}
+
+type agentSubagentJobCLIResponse struct {
+	JobID     string `json:"jobId"`
+	Task      string `json:"task"`
+	Status    string `json:"status"`
+	Summary   string `json:"summary,omitempty"`
+	Result    string `json:"result,omitempty"`
+	Error     string `json:"error,omitempty"`
+	CreatedAt string `json:"createdAt,omitempty"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
+}
+
+type agentSubagentListCLIResponse struct {
+	Jobs []agentSubagentJobCLIResponse `json:"jobs"`
+}
+
+type agentSkillCLIResponse struct {
+	Name            string   `json:"name"`
+	Summary         string   `json:"summary,omitempty"`
+	Keywords        []string `json:"keywords,omitempty"`
+	Tags            []string `json:"tags,omitempty"`
+	Source          string   `json:"source,omitempty"`
+	Provenance      string   `json:"provenance,omitempty"`
+	Version         string   `json:"version,omitempty"`
+	TargetVersion   string   `json:"targetVersion,omitempty"`
+	InstalledAt     string   `json:"installedAt,omitempty"`
+	UpdatedAt       string   `json:"updatedAt,omitempty"`
+	Enabled         bool     `json:"enabled,omitempty"`
+	Health          string   `json:"health,omitempty"`
+	HealthDetail    string   `json:"healthDetail,omitempty"`
+	RemediationHint string   `json:"remediationHint,omitempty"`
+}
+
+type agentSkillsSearchCLIResponse struct {
+	Skills []agentSkillCLIResponse `json:"skills"`
+}
+
+type agentModelSurfaceCLIProfile struct {
+	ProfileName      string `json:"profileName,omitempty"`
+	ModelAlias       string `json:"modelAlias,omitempty"`
+	ModelID          string `json:"modelId,omitempty"`
+	ProviderID       string `json:"providerId,omitempty"`
+	ProviderKey      string `json:"providerKey,omitempty"`
+	ProtocolFamily   string `json:"protocolFamily,omitempty"`
+	BaseURL          string `json:"baseUrl,omitempty"`
+	AuthMethod       string `json:"authMethod,omitempty"`
+	TimeoutMs        int    `json:"timeoutMs,omitempty"`
+	RetryBudget      int    `json:"retryBudget,omitempty"`
+	FallbackStrategy string `json:"fallbackStrategy,omitempty"`
+	FallbackGroup    string `json:"fallbackGroup,omitempty"`
+	AliasGroupSize   int    `json:"aliasGroupSize,omitempty"`
+	Primary          bool   `json:"primary,omitempty"`
+}
+
+type agentModelSurfaceCLI struct {
+	DefaultProfile string                        `json:"defaultProfile,omitempty"`
+	Profiles       []agentModelSurfaceCLIProfile `json:"profiles,omitempty"`
+}
+
+type agentModelsCLIResponse struct {
+	AgentID                string                `json:"agentId"`
+	InstanceID             string                `json:"instanceId,omitempty"`
+	ConfigPath             string                `json:"configPath,omitempty"`
+	Synced                 bool                  `json:"synced,omitempty"`
+	DriftState             string                `json:"driftState,omitempty"`
+	DriftReason            string                `json:"driftReason,omitempty"`
+	ModelSurface           *agentModelSurfaceCLI `json:"modelSurface,omitempty"`
+	DiscoveredModelSurface *agentModelSurfaceCLI `json:"discoveredModelSurface,omitempty"`
+}
+
+func runMemoryCommand(out io.Writer, opts memoryCommandOptions) error {
 	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
 		return err
 	}
-
 	switch opts.Action {
-	case "status":
-		return runOrchestrateStatus(out, opts.ExecutionID, opts.JSON)
+	case "list":
+		resp, raw, err := fetchMemoryList(opts.Subject)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderMemoryList(resp))
+		return nil
+	case "search":
+		resp, raw, err := searchMemory(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderMemorySearchResults(resp))
+		return nil
+	case "attach":
+		resp, raw, err := runMemoryInstanceAction("/api/v1/memory/instance/attach", opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		if strings.TrimSpace(resp.Status) == "" {
+			return fmt.Errorf("attach %s to %s did not report a status", opts.Scope, opts.InstanceID)
+		}
+		_, _ = fmt.Fprintf(out, "%s %s to %s\n", strings.TrimSpace(resp.Status), strings.TrimSpace(opts.Scope), strings.TrimSpace(opts.InstanceID))
+		return nil
+	case "detach":
+		resp, raw, err := runMemoryInstanceAction("/api/v1/memory/instance/detach", opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		if strings.TrimSpace(resp.Status) == "" {
+			return fmt.Errorf("detach %s from %s did not report a status", opts.Scope, opts.InstanceID)
+		}
+		_, _ = fmt.Fprintf(out, "%s %s from %s\n", strings.TrimSpace(resp.Status), strings.TrimSpace(opts.Scope), strings.TrimSpace(opts.InstanceID))
+		return nil
+	case "distill":
+		resp, raw, err := distillMemory(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderMemoryDistill(resp.Run))
+		return nil
+	default:
+		return fmt.Errorf("unsupported memory action: %s", opts.Action)
+	}
+}
+
+func runAgentCommand(in io.Reader, out io.Writer, opts agentCommandOptions) error {
+	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+	switch opts.Action {
 	case "run":
+		resp, raw, err := runManagedAgentPrompt(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		if strings.TrimSpace(resp.SessionID) != "" {
+			_, _ = fmt.Fprintf(out, "session=%s\n", strings.TrimSpace(resp.SessionID))
+		}
+		_, _ = fmt.Fprintln(out, strings.TrimSpace(resp.Message))
+		return nil
+	case "media-speak":
+		resp, raw, err := runManagedAgentMediaSpeak(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		if resp != nil && resp.RichContent != nil && len(resp.RichContent.Attachments) > 0 {
+			attachment := resp.RichContent.Attachments[0]
+			if path := strings.TrimSpace(attachment.Path); path != "" {
+				_, _ = fmt.Fprintf(out, "path=%s\n", path)
+			}
+		}
+		_, _ = fmt.Fprintln(out, strings.TrimSpace(resp.Message))
+		return nil
+	case "launcher":
+		resp, raw, err := fetchManagedAgentLauncher(opts.AgentID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentLauncher(resp))
+		return nil
+	case "heartbeat":
+		resp, raw, err := fetchManagedAgentLauncher(opts.AgentID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentHeartbeat(resp))
+		return nil
+	case "cron-schedule":
+		resp, raw, err := scheduleManagedAgentCron(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentCronJob(resp))
+		return nil
+	case "cron-list":
+		resp, raw, err := listManagedAgentCron(opts.AgentID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentCronList(resp))
+		return nil
+	case "cron-cancel":
+		resp, raw, err := cancelManagedAgentCron(opts.AgentID, opts.CronJobID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentCronJob(resp))
+		return nil
+	case "skills-search":
+		resp, raw, err := searchManagedAgentSkills(opts.AgentID, opts.Query)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentSkillSearch(resp))
+		return nil
+	case "skills-install":
+		resp, raw, err := installManagedAgentSkill(opts.AgentID, opts.SkillName)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentInstalledSkill(resp))
+		return nil
+	case "skills-reinstall":
+		resp, raw, err := reinstallManagedAgentSkill(opts.AgentID, opts.SkillName)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentReinstalledSkill(resp))
+		return nil
+	case "skills-update":
+		resp, raw, err := updateManagedAgentSkill(opts.AgentID, opts.SkillName, opts.Version)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentUpdatedSkill(resp))
+		return nil
+	case "skills-uninstall":
+		resp, raw, err := uninstallManagedAgentSkill(opts.AgentID, opts.SkillName)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentRemovedSkill(resp))
+		return nil
+	case "skills-enable", "skills-disable":
+		enabled := opts.Action == "skills-enable"
+		resp, raw, err := setManagedAgentSkillEnabled(opts.AgentID, opts.SkillName, enabled)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentSkillToggle(opts.SkillName, enabled, resp))
+		return nil
+	case "subagents-list":
+		resp, raw, err := listManagedAgentSubagents(opts.AgentID, opts.Limit)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentSubagentList(resp))
+		return nil
+	case "subagents-show":
+		resp, raw, err := fetchManagedAgentSubagent(opts.AgentID, opts.SubagentJobID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentSubagent(resp))
+		return nil
+	case "models":
+		resp, raw, err := fetchManagedAgentModels(opts.AgentID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentModels(resp))
+		return nil
+	case "models-discover":
+		resp, raw, err := discoverManagedAgentModels(opts.AgentID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentModels(resp))
+		return nil
+	case "models-sync":
+		resp, raw, err := syncManagedAgentModels(opts.AgentID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentModels(resp))
+		return nil
+	case "models-default":
+		resp, raw, err := updateManagedAgentModelsDefault(opts.AgentID, opts.ProfileName)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentModels(resp))
+		return nil
+	case "models-update-profile":
+		resp, raw, err := updateManagedAgentModelProfile(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderManagedAgentModels(resp))
+		return nil
+	case "shell":
+		return runManagedAgentShell(in, out, opts)
+	default:
+		return fmt.Errorf("unsupported agent action: %s", opts.Action)
+	}
+}
+
+func runManagedAgentPrompt(opts agentCommandOptions) (*gatewayruntime.AgentChatResult, []byte, error) {
+	payload := map[string]interface{}{
+		"message": strings.TrimSpace(opts.Message),
+	}
+	if strings.TrimSpace(opts.Provider) != "" {
+		payload["provider"] = strings.TrimSpace(opts.Provider)
+	}
+	if strings.TrimSpace(opts.ModelAlias) != "" {
+		payload["modelAlias"] = strings.TrimSpace(opts.ModelAlias)
+	}
+	if strings.TrimSpace(opts.Model) != "" {
+		payload["model"] = strings.TrimSpace(opts.Model)
+	}
+	if strings.TrimSpace(opts.SessionID) != "" {
+		payload["sessionId"] = strings.TrimSpace(opts.SessionID)
+	}
+	path := fmt.Sprintf("/api/v1/agents/%s/chat", neturl.PathEscape(strings.TrimSpace(opts.AgentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp gatewayruntime.AgentChatResult
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent chat response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func runManagedAgentMediaSpeak(opts agentCommandOptions) (*gatewayruntime.AgentChatResult, []byte, error) {
+	payload := map[string]any{
+		"text": strings.TrimSpace(opts.Message),
+	}
+	if trimmed := strings.TrimSpace(opts.Voice); trimmed != "" {
+		payload["voice"] = trimmed
+	}
+	if trimmed := strings.TrimSpace(opts.MediaFormat); trimmed != "" {
+		payload["format"] = trimmed
+	}
+	path := fmt.Sprintf("/api/v1/agents/%s/media/speak", neturl.PathEscape(strings.TrimSpace(opts.AgentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp gatewayruntime.AgentChatResult
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent media response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func fetchManagedAgentLauncher(agentID string) (*agentLauncherCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/launcher", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentLauncherCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent launcher response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func scheduleManagedAgentCron(opts agentCommandOptions) (*agentCronJobCLIResponse, []byte, error) {
+	payload := map[string]interface{}{
+		"message": strings.TrimSpace(opts.Message),
+	}
+	if strings.TrimSpace(opts.Provider) != "" {
+		payload["provider"] = strings.TrimSpace(opts.Provider)
+	}
+	if strings.TrimSpace(opts.SessionID) != "" {
+		payload["sessionId"] = strings.TrimSpace(opts.SessionID)
+	}
+	if !opts.NextRunAt.IsZero() {
+		payload["nextRunAt"] = opts.NextRunAt.UTC().Format(time.RFC3339)
+	}
+	path := fmt.Sprintf("/api/v1/agents/%s/cron", neturl.PathEscape(strings.TrimSpace(opts.AgentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentCronJobCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent cron schedule response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func listManagedAgentCron(agentID string) (*agentCronListCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/cron", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentCronListCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent cron list response: %w", err)
+	}
+	if resp.Jobs == nil {
+		resp.Jobs = []agentCronJobCLIResponse{}
+	}
+	return &resp, raw, nil
+}
+
+func cancelManagedAgentCron(agentID, jobID string) (*agentCronJobCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/cron/%s/cancel", neturl.PathEscape(strings.TrimSpace(agentID)), neturl.PathEscape(strings.TrimSpace(jobID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]any{})
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentCronJobCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent cron cancel response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func listManagedAgentSubagents(agentID string, limit int) (*agentSubagentListCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/subagents", neturl.PathEscape(strings.TrimSpace(agentID)))
+	if limit > 0 {
+		path += "?limit=" + neturl.QueryEscape(strconv.Itoa(limit))
+	}
+	raw, _, err := gatewayRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentSubagentListCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent subagent list response: %w", err)
+	}
+	if resp.Jobs == nil {
+		resp.Jobs = []agentSubagentJobCLIResponse{}
+	}
+	return &resp, raw, nil
+}
+
+func fetchManagedAgentSubagent(agentID, jobID string) (*agentSubagentJobCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/subagents/%s", neturl.PathEscape(strings.TrimSpace(agentID)), neturl.PathEscape(strings.TrimSpace(jobID)))
+	raw, _, err := gatewayRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentSubagentJobCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent subagent response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func searchManagedAgentSkills(agentID, query string) (*agentSkillsSearchCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/skills/search", neturl.PathEscape(strings.TrimSpace(agentID)))
+	if trimmed := strings.TrimSpace(query); trimmed != "" {
+		path += "?q=" + neturl.QueryEscape(trimmed)
+	}
+	raw, _, err := gatewayRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentSkillsSearchCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent skill search response: %w", err)
+	}
+	if resp.Skills == nil {
+		resp.Skills = []agentSkillCLIResponse{}
+	}
+	return &resp, raw, nil
+}
+
+func installManagedAgentSkill(agentID, skillName string) (*agentSkillCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/skills/install", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]string{"name": strings.TrimSpace(skillName)})
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentSkillCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent skill install response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func reinstallManagedAgentSkill(agentID, skillName string) (*agentSkillCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/skills/reinstall", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]string{"name": strings.TrimSpace(skillName)})
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentSkillCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent skill reinstall response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func updateManagedAgentSkill(agentID, skillName, version string) (*agentSkillCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/skills/update", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]string{
+		"name":    strings.TrimSpace(skillName),
+		"version": strings.TrimSpace(version),
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentSkillCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent skill update response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func uninstallManagedAgentSkill(agentID, skillName string) (*agentSkillCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/skills/uninstall", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]string{"name": strings.TrimSpace(skillName)})
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentSkillCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent skill uninstall response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func setManagedAgentSkillEnabled(agentID, skillName string, enabled bool) (*baseagent.RuntimeCapabilitySummary, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/skills/%s", neturl.PathEscape(strings.TrimSpace(agentID)), neturl.PathEscape(strings.TrimSpace(skillName)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]bool{"enabled": enabled})
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp baseagent.RuntimeCapabilitySummary
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent skill toggle response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func fetchManagedAgentModels(agentID string) (*agentModelsCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/models", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentModelsCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent models response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func discoverManagedAgentModels(agentID string) (*agentModelsCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/models/discover", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentModelsCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent model discovery response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func syncManagedAgentModels(agentID string) (*agentModelsCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/models/sync", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]any{})
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentModelsCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent model sync response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func updateManagedAgentModelsDefault(agentID, profileName string) (*agentModelsCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/models/default", neturl.PathEscape(strings.TrimSpace(agentID)))
+	raw, _, err := gatewayRequest(http.MethodPost, path, map[string]string{"profileName": strings.TrimSpace(profileName)})
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentModelsCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent model default response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func updateManagedAgentModelProfile(opts agentCommandOptions) (*agentModelsCLIResponse, []byte, error) {
+	path := fmt.Sprintf("/api/v1/agents/%s/models/profile", neturl.PathEscape(strings.TrimSpace(opts.AgentID)))
+	payload := map[string]any{
+		"profileName":      strings.TrimSpace(opts.ProfileName),
+		"modelAlias":       strings.TrimSpace(opts.ModelAlias),
+		"modelId":          strings.TrimSpace(opts.Model),
+		"providerId":       strings.TrimSpace(opts.Provider),
+		"baseUrl":          strings.TrimSpace(opts.BaseURL),
+		"authMethod":       strings.TrimSpace(opts.AuthMethod),
+		"timeoutMs":        opts.TimeoutMs,
+		"retryBudget":      opts.RetryBudget,
+		"fallbackStrategy": strings.TrimSpace(opts.FallbackStrategy),
+	}
+	raw, _, err := gatewayRequest(http.MethodPost, path, payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	var resp agentModelsCLIResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, nil, fmt.Errorf("decode agent model profile response: %w", err)
+	}
+	return &resp, raw, nil
+}
+
+func runManagedAgentShell(in io.Reader, out io.Writer, opts agentCommandOptions) error {
+	reader := bufio.NewReader(in)
+	sessionID := strings.TrimSpace(opts.SessionID)
+	_, _ = fmt.Fprintf(out, "Interactive shell for %s. Type /exit to quit.\n", strings.TrimSpace(opts.AgentID))
+	for {
+		_, _ = fmt.Fprint(out, "> ")
+		line, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		line = strings.TrimSpace(line)
+		if line != "" {
+			switch strings.ToLower(line) {
+			case "/exit", "exit", "/quit", "quit":
+				return nil
+			default:
+				resp, _, runErr := runManagedAgentPrompt(agentCommandOptions{
+					Action:     "run",
+					AgentID:    opts.AgentID,
+					Message:    line,
+					Provider:   opts.Provider,
+					ModelAlias: opts.ModelAlias,
+					Model:      opts.Model,
+					SessionID:  sessionID,
+				})
+				if runErr != nil {
+					return runErr
+				}
+				if strings.TrimSpace(resp.SessionID) != "" {
+					sessionID = strings.TrimSpace(resp.SessionID)
+				}
+				_, _ = fmt.Fprintln(out, strings.TrimSpace(resp.Message))
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+	}
+}
+
+func renderManagedAgentLauncher(resp *agentLauncherCLIResponse) string {
+	if resp == nil {
+		return ""
+	}
+	lines := []string{
+		fmt.Sprintf("agent=%s", strings.TrimSpace(resp.AgentID)),
+		fmt.Sprintf("runtime=%s", strings.TrimSpace(resp.Status.RuntimeState)),
+		fmt.Sprintf("install=%s", strings.TrimSpace(resp.Status.InstallState)),
+		fmt.Sprintf("health=%s", strings.TrimSpace(resp.Status.Health)),
+	}
+	if resp.Heartbeat != nil {
+		lines = append(lines, fmt.Sprintf("heartbeat=%s age=%s", strings.TrimSpace(resp.Heartbeat.State), (time.Duration(resp.Heartbeat.AgeSeconds)*time.Second).String()))
+	}
+	if resp.Memory != nil && strings.TrimSpace(resp.Memory.ContractID) != "" {
+		lines = append(lines, fmt.Sprintf("memory=%s sync=%s", strings.TrimSpace(resp.Memory.ContractID), strings.TrimSpace(resp.Memory.SyncState)))
+	}
+	if resp.ProviderReadiness != nil && strings.TrimSpace(resp.ProviderReadiness.Provider) != "" {
+		lines = append(lines, fmt.Sprintf("provider=%s ready=%t auth=%s", strings.TrimSpace(resp.ProviderReadiness.Provider), resp.ProviderReadiness.Ready, strings.TrimSpace(resp.ProviderReadiness.AuthMode)))
+	}
+	if resp.ModelSurface != nil {
+		defaultProfile := strings.TrimSpace(resp.ModelSurface.DefaultProfile)
+		for _, profile := range resp.ModelSurface.Profiles {
+			if profile.Primary || (defaultProfile != "" && strings.EqualFold(strings.TrimSpace(profile.ProfileName), defaultProfile)) {
+				label := firstNonEmpty(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(profile.ProfileName))
+				lines = append(lines, fmt.Sprintf("default=%s -> %s", label, strings.TrimSpace(profile.ModelID)))
+				break
+			}
+		}
+		if len(resp.ModelSurface.Profiles) > 0 {
+			for _, profile := range resp.ModelSurface.Profiles {
+				label := firstNonEmpty(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(profile.ProfileName))
+				entry := fmt.Sprintf("profile=%s model=%s", label, strings.TrimSpace(profile.ModelID))
+				if strings.TrimSpace(profile.ProviderID) != "" {
+					entry += " provider=" + strings.TrimSpace(profile.ProviderID)
+				}
+				if strings.TrimSpace(profile.ProtocolFamily) != "" {
+					entry += " protocol=" + strings.TrimSpace(profile.ProtocolFamily)
+				}
+				if profile.TimeoutMs > 0 {
+					entry += fmt.Sprintf(" timeout=%dms", profile.TimeoutMs)
+				}
+				if profile.RetryBudget > 0 {
+					entry += fmt.Sprintf(" retry=%d", profile.RetryBudget)
+				}
+				if strings.TrimSpace(profile.FallbackStrategy) != "" {
+					entry += " fallback=" + strings.TrimSpace(profile.FallbackStrategy)
+				}
+				if profile.Primary {
+					entry += " primary=true"
+				}
+				lines = append(lines, entry)
+			}
+		}
+	}
+	if resp.LastModelRun != nil {
+		entry := "last-model"
+		if trimmed := strings.TrimSpace(resp.LastModelRun.RequestedAlias); trimmed != "" {
+			entry += " requested=" + trimmed
+		}
+		if trimmed := strings.TrimSpace(resp.LastModelRun.RequestedModel); trimmed != "" {
+			entry += " explicit=" + trimmed
+		}
+		if trimmed := strings.TrimSpace(resp.LastModelRun.ResolvedModel); trimmed != "" {
+			entry += " resolved=" + trimmed
+		}
+		if trimmed := strings.TrimSpace(resp.LastModelRun.FallbackGroup); trimmed != "" {
+			entry += " group=" + trimmed
+		}
+		entry += fmt.Sprintf(" override=%t fallback-hit=%t", resp.LastModelRun.OverrideHit, resp.LastModelRun.FallbackHit)
+		if trimmed := strings.TrimSpace(resp.LastModelRun.LastRunAt); trimmed != "" {
+			entry += " last=" + trimmed
+		}
+		lines = append(lines, entry)
+	}
+	if resp.Session != nil && strings.TrimSpace(resp.Session.InstanceID) != "" {
+		lines = append(lines, fmt.Sprintf("instance=%s state=%s", strings.TrimSpace(resp.Session.InstanceID), firstNonEmpty(strings.TrimSpace(resp.Session.RuntimeState), strings.TrimSpace(resp.Status.RuntimeState))))
+	}
+	if resp.Cron != nil {
+		line := fmt.Sprintf("cron=%d", resp.Cron.Count)
+		if trimmed := strings.TrimSpace(resp.Cron.NextRunAt); trimmed != "" {
+			line += " next=" + trimmed
+		}
+		if trimmed := strings.TrimSpace(resp.Cron.LastRunAt); trimmed != "" {
+			line += " last=" + trimmed
+		}
+		if trimmed := strings.TrimSpace(resp.Cron.LastResult); trimmed != "" {
+			line += " result=" + trimmed
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderManagedAgentSkillSearch(resp *agentSkillsSearchCLIResponse) string {
+	if resp == nil || len(resp.Skills) == 0 {
+		return "no matching skills"
+	}
+	lines := make([]string, 0, len(resp.Skills))
+	for _, skill := range resp.Skills {
+		line := strings.TrimSpace(skill.Name)
+		if line == "" {
+			line = "unknown-skill"
+		}
+		if strings.TrimSpace(skill.Summary) != "" {
+			line += " · " + strings.TrimSpace(skill.Summary)
+		}
+		meta := []string{}
+		if strings.TrimSpace(skill.Source) != "" {
+			meta = append(meta, strings.TrimSpace(skill.Source))
+		}
+		if strings.TrimSpace(skill.Version) != "" {
+			meta = append(meta, strings.TrimSpace(skill.Version))
+		}
+		if len(meta) > 0 {
+			line += " · " + strings.Join(meta, " ")
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderManagedAgentInstalledSkill(resp *agentSkillCLIResponse) string {
+	return renderManagedAgentSkillLifecycle("installed", resp)
+}
+
+func renderManagedAgentReinstalledSkill(resp *agentSkillCLIResponse) string {
+	return renderManagedAgentSkillLifecycle("reinstalled", resp)
+}
+
+func renderManagedAgentUpdatedSkill(resp *agentSkillCLIResponse) string {
+	return renderManagedAgentSkillLifecycle("updated", resp)
+}
+
+func renderManagedAgentRemovedSkill(resp *agentSkillCLIResponse) string {
+	return renderManagedAgentSkillLifecycle("removed", resp)
+}
+
+func renderManagedAgentSkillLifecycle(action string, resp *agentSkillCLIResponse) string {
+	if resp == nil {
+		return ""
+	}
+	label := strings.TrimSpace(resp.Name)
+	if label == "" {
+		label = "unknown-skill"
+	}
+	line := strings.TrimSpace(action) + " " + label
+	if strings.TrimSpace(resp.Summary) != "" {
+		line += " · " + strings.TrimSpace(resp.Summary)
+	}
+	meta := []string{}
+	if strings.TrimSpace(resp.Source) != "" {
+		meta = append(meta, strings.TrimSpace(resp.Source))
+	}
+	if strings.TrimSpace(resp.Version) != "" {
+		meta = append(meta, strings.TrimSpace(resp.Version))
+	}
+	if len(meta) > 0 {
+		line += " · " + strings.Join(meta, " ")
+	}
+	if strings.TrimSpace(resp.TargetVersion) != "" {
+		line += " · target=" + strings.TrimSpace(resp.TargetVersion)
+	}
+	if strings.TrimSpace(resp.Provenance) != "" {
+		line += " · provenance=" + strings.TrimSpace(resp.Provenance)
+	}
+	if strings.TrimSpace(resp.InstalledAt) != "" {
+		line += " · installed=" + strings.TrimSpace(resp.InstalledAt)
+	}
+	if strings.TrimSpace(resp.UpdatedAt) != "" {
+		line += " · updated=" + strings.TrimSpace(resp.UpdatedAt)
+	}
+	return line
+}
+
+func renderManagedAgentSkillToggle(skillName string, enabled bool, summary *baseagent.RuntimeCapabilitySummary) string {
+	label := strings.TrimSpace(skillName)
+	if label == "" {
+		label = "unknown-skill"
+	}
+	state := "disabled"
+	if enabled {
+		state = "enabled"
+	}
+	line := fmt.Sprintf("%s %s", state, label)
+	if summary == nil {
+		return line
+	}
+	line += fmt.Sprintf(" · installed=%d enabled=%d disabled=%d", summary.SkillSummary.InstalledCount, summary.SkillSummary.EnabledCount, summary.SkillSummary.DisabledCount)
+	for _, skill := range summary.Skills {
+		if strings.EqualFold(strings.TrimSpace(skill.Name), label) {
+			if strings.TrimSpace(skill.Health) != "" {
+				line += " · health=" + strings.TrimSpace(skill.Health)
+			}
+			if strings.TrimSpace(skill.RemediationHint) != "" {
+				line += " · hint=" + strings.TrimSpace(skill.RemediationHint)
+			}
+			break
+		}
+	}
+	return line
+}
+
+func renderManagedAgentModels(resp *agentModelsCLIResponse) string {
+	if resp == nil {
+		return ""
+	}
+	lines := []string{fmt.Sprintf("agent=%s", strings.TrimSpace(resp.AgentID))}
+	if strings.TrimSpace(resp.InstanceID) != "" {
+		lines = append(lines, fmt.Sprintf("instance=%s", strings.TrimSpace(resp.InstanceID)))
+	}
+	if strings.TrimSpace(resp.ConfigPath) != "" {
+		lines = append(lines, fmt.Sprintf("config=%s", strings.TrimSpace(resp.ConfigPath)))
+	}
+	if resp.Synced {
+		lines = append(lines, "synced=true")
+	}
+	if strings.TrimSpace(resp.DriftState) != "" {
+		line := "discovery=" + strings.TrimSpace(resp.DriftState)
+		if strings.TrimSpace(resp.DriftReason) != "" {
+			line += " reason=" + strings.TrimSpace(resp.DriftReason)
+		}
+		lines = append(lines, line)
+	}
+	if resp.ModelSurface == nil {
+		lines = append(lines, "models=unavailable")
+		return strings.Join(lines, "\n")
+	}
+	defaultProfile := strings.TrimSpace(resp.ModelSurface.DefaultProfile)
+	if defaultProfile != "" {
+		for _, profile := range resp.ModelSurface.Profiles {
+			if strings.EqualFold(strings.TrimSpace(profile.ProfileName), defaultProfile) {
+				label := firstNonEmpty(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(profile.ProfileName))
+				lines = append(lines, fmt.Sprintf("default=%s -> %s", label, strings.TrimSpace(profile.ModelID)))
+				goto renderProfiles
+			}
+		}
+	}
+	for _, profile := range resp.ModelSurface.Profiles {
+		if profile.Primary {
+			label := firstNonEmpty(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(profile.ProfileName))
+			lines = append(lines, fmt.Sprintf("default=%s -> %s", label, strings.TrimSpace(profile.ModelID)))
+			break
+		}
+	}
+renderProfiles:
+	for _, profile := range resp.ModelSurface.Profiles {
+		label := firstNonEmpty(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(profile.ProfileName))
+		entry := fmt.Sprintf("profile=%s model=%s", label, strings.TrimSpace(profile.ModelID))
+		if strings.TrimSpace(profile.ProviderID) != "" {
+			entry += " provider=" + strings.TrimSpace(profile.ProviderID)
+		}
+		if strings.TrimSpace(profile.ProtocolFamily) != "" {
+			entry += " protocol=" + strings.TrimSpace(profile.ProtocolFamily)
+		}
+		if profile.TimeoutMs > 0 {
+			entry += fmt.Sprintf(" timeout=%dms", profile.TimeoutMs)
+		}
+		if profile.RetryBudget > 0 {
+			entry += fmt.Sprintf(" retry=%d", profile.RetryBudget)
+		}
+		if strings.TrimSpace(profile.FallbackStrategy) != "" {
+			entry += " fallback=" + strings.TrimSpace(profile.FallbackStrategy)
+		}
+		if profile.Primary {
+			entry += " primary=true"
+		}
+		lines = append(lines, entry)
+	}
+	if resp.DiscoveredModelSurface != nil {
+		discoveredDefault := strings.TrimSpace(resp.DiscoveredModelSurface.DefaultProfile)
+		if discoveredDefault != "" {
+			for _, profile := range resp.DiscoveredModelSurface.Profiles {
+				if strings.EqualFold(strings.TrimSpace(profile.ProfileName), discoveredDefault) {
+					label := firstNonEmpty(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(profile.ProfileName))
+					lines = append(lines, fmt.Sprintf("discovered-default=%s -> %s", label, strings.TrimSpace(profile.ModelID)))
+					break
+				}
+			}
+		}
+		for _, profile := range resp.DiscoveredModelSurface.Profiles {
+			label := firstNonEmpty(strings.TrimSpace(profile.ModelAlias), strings.TrimSpace(profile.ProfileName))
+			entry := fmt.Sprintf("discovered-profile=%s model=%s", label, strings.TrimSpace(profile.ModelID))
+			if strings.TrimSpace(profile.ProviderID) != "" {
+				entry += " provider=" + strings.TrimSpace(profile.ProviderID)
+			}
+			if strings.TrimSpace(profile.ProtocolFamily) != "" {
+				entry += " protocol=" + strings.TrimSpace(profile.ProtocolFamily)
+			}
+			lines = append(lines, entry)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderManagedAgentHeartbeat(resp *agentLauncherCLIResponse) string {
+	if resp == nil || resp.Heartbeat == nil {
+		return "heartbeat=unknown"
+	}
+	lines := []string{
+		fmt.Sprintf("agent=%s", strings.TrimSpace(resp.AgentID)),
+		fmt.Sprintf("heartbeat=%s", strings.TrimSpace(resp.Heartbeat.State)),
+		fmt.Sprintf("age=%s", (time.Duration(resp.Heartbeat.AgeSeconds) * time.Second).String()),
+	}
+	if trimmed := strings.TrimSpace(resp.Heartbeat.LastActivityAt); trimmed != "" {
+		lines = append(lines, fmt.Sprintf("lastActivityAt=%s", trimmed))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderManagedAgentCronJob(resp *agentCronJobCLIResponse) string {
+	if resp == nil {
+		return ""
+	}
+	lines := []string{
+		fmt.Sprintf("job=%s", strings.TrimSpace(resp.ID)),
+	}
+	if trimmed := strings.TrimSpace(resp.AgentID); trimmed != "" {
+		lines = append(lines, "agent="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.SessionKey); trimmed != "" {
+		lines = append(lines, "session="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.Prompt); trimmed != "" {
+		lines = append(lines, "prompt="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.NextRunAt); trimmed != "" {
+		lines = append(lines, "nextRunAt="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.LastRunAt); trimmed != "" {
+		lines = append(lines, "lastRunAt="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.LastResult); trimmed != "" {
+		lines = append(lines, "result="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.CancelledAt); trimmed != "" {
+		lines = append(lines, "cancelledAt="+trimmed)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderManagedAgentCronList(resp *agentCronListCLIResponse) string {
+	if resp == nil || len(resp.Jobs) == 0 {
+		return "no cron jobs"
+	}
+	lines := make([]string, 0, len(resp.Jobs))
+	for _, job := range resp.Jobs {
+		line := fmt.Sprintf("%s", strings.TrimSpace(job.ID))
+		if trimmed := strings.TrimSpace(job.Prompt); trimmed != "" {
+			line += " · " + trimmed
+		}
+		details := make([]string, 0, 3)
+		if trimmed := strings.TrimSpace(job.NextRunAt); trimmed != "" {
+			details = append(details, "next="+trimmed)
+		}
+		if trimmed := strings.TrimSpace(job.LastRunAt); trimmed != "" {
+			details = append(details, "last="+trimmed)
+		}
+		if trimmed := strings.TrimSpace(job.LastResult); trimmed != "" {
+			details = append(details, "result="+trimmed)
+		}
+		if trimmed := strings.TrimSpace(job.CancelledAt); trimmed != "" {
+			details = append(details, "cancelled="+trimmed)
+		}
+		if len(details) > 0 {
+			line += " (" + strings.Join(details, ", ") + ")"
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderManagedAgentSubagentList(resp *agentSubagentListCLIResponse) string {
+	if resp == nil || len(resp.Jobs) == 0 {
+		return "no delegation jobs"
+	}
+	lines := make([]string, 0, len(resp.Jobs))
+	for _, job := range resp.Jobs {
+		line := strings.TrimSpace(job.JobID)
+		if line == "" {
+			line = "unknown-job"
+		}
+		if trimmed := strings.TrimSpace(job.Task); trimmed != "" {
+			line += " · " + trimmed
+		}
+		details := make([]string, 0, 4)
+		if trimmed := strings.TrimSpace(job.Status); trimmed != "" {
+			details = append(details, "status="+trimmed)
+		}
+		if trimmed := strings.TrimSpace(job.Summary); trimmed != "" {
+			details = append(details, "summary="+trimmed)
+		}
+		if trimmed := strings.TrimSpace(job.Error); trimmed != "" {
+			details = append(details, "error="+trimmed)
+		}
+		if trimmed := strings.TrimSpace(job.UpdatedAt); trimmed != "" {
+			details = append(details, "updated="+trimmed)
+		}
+		if len(details) > 0 {
+			line += " (" + strings.Join(details, ", ") + ")"
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderManagedAgentSubagent(resp *agentSubagentJobCLIResponse) string {
+	if resp == nil {
+		return ""
+	}
+	lines := []string{fmt.Sprintf("job=%s", strings.TrimSpace(resp.JobID))}
+	if trimmed := strings.TrimSpace(resp.Task); trimmed != "" {
+		lines = append(lines, "task="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.Status); trimmed != "" {
+		lines = append(lines, "status="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.Summary); trimmed != "" {
+		lines = append(lines, "summary="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.Result); trimmed != "" {
+		lines = append(lines, "result="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.Error); trimmed != "" {
+		lines = append(lines, "error="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.CreatedAt); trimmed != "" {
+		lines = append(lines, "createdAt="+trimmed)
+	}
+	if trimmed := strings.TrimSpace(resp.UpdatedAt); trimmed != "" {
+		lines = append(lines, "updatedAt="+trimmed)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func runTemplatesCommand(out io.Writer, opts templatesCommandOptions) error {
+	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+	switch opts.Action {
+	case "list":
+		resp, raw, err := fetchExecutionTemplates()
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderExecutionTemplateList(resp.Templates))
+		return nil
+	case "show":
+		resp, raw, err := fetchExecutionTemplate(opts.TemplateID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderExecutionTemplate(resp.Template))
+		return nil
+	case "run":
+		resp, raw, err := launchExecutionTemplate(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		executionID := strings.TrimSpace(resp.Execution.ID)
+		_, _ = fmt.Fprintf(out, "template launch accepted: %s\n", executionID)
+		_, _ = fmt.Fprintf(out, "template: %s\n", strings.TrimSpace(resp.Template.ID))
+		_, _ = fmt.Fprintf(out, "status: %s\n", strings.TrimSpace(resp.Execution.Status))
+		if executionID != "" {
+			_, _ = fmt.Fprintf(out, "next: carrier executions show %s\n", executionID)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported templates action: %s", opts.Action)
+	}
+}
+
+func runTriggersCommand(out io.Writer, opts triggersCommandOptions) error {
+	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+	switch opts.Action {
+	case "list":
+		resp, raw, err := fetchExecutionTriggers()
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderExecutionTriggerList(resp.Triggers))
+		return nil
+	case "show":
+		resp, raw, err := fetchExecutionTrigger(opts.TriggerID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderExecutionTrigger(resp.Trigger))
+		return nil
+	case "create":
+		resp, raw, err := createExecutionTrigger(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderExecutionTrigger(resp.Trigger))
+		return nil
+	case "update":
+		resp, raw, err := updateExecutionTrigger(opts)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderExecutionTrigger(resp.Trigger))
+		return nil
+	case "delete":
+		resp, raw, err := deleteExecutionTrigger(opts.TriggerID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		if resp.Deleted {
+			_, _ = fmt.Fprintf(out, "deleted trigger %s\n", strings.TrimSpace(opts.TriggerID))
+			return nil
+		}
+		return fmt.Errorf("delete trigger %s did not report success", strings.TrimSpace(opts.TriggerID))
+	default:
+		return fmt.Errorf("unsupported triggers action: %s", opts.Action)
+	}
+}
+
+func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error {
+	switch opts.Action {
+	case "plan":
+		if _, err := ensureDaemonRunning(out); err != nil {
+			return err
+		}
+		return runOrchestratePlan(out, opts)
+	case "list":
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+		return runOrchestrateList(out, opts.Limit, opts.JSON)
+	case "status":
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+		return runOrchestrateStatus(out, opts.ExecutionID, opts.JSON)
+	case "cancel":
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+		return runOrchestrateCancel(out, opts.ExecutionID, opts.JSON)
+	case "retry", "rerun", "clone":
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+		return runOrchestrateDerivedExecutionAction(out, opts.Action, opts.ExecutionID, opts.JSON)
+	case "artifacts":
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+		return runOrchestrateArtifacts(out, opts.ExecutionID, opts.JSON)
+	case "evidence":
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+		return runOrchestrateEvidence(out, opts.ExecutionID, opts.Format, opts.OutputPath, opts.Open, opts.JSON)
+	case "audit":
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+		return runOrchestrateAudit(out, opts.ExecutionID, opts.OutputPath, opts.Open, opts.JSON)
+	case "authorize":
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+		return runOrchestrateAuthorize(out, opts.ExecutionID, opts.PolicyApprove, opts.JSON)
+	case "run":
+		if _, err := ensureDaemonRunning(out); err != nil {
+			return err
+		}
+		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
 		return runOrchestrateStart(out, opts)
 	default:
 		return fmt.Errorf("unsupported orchestrate action: %s", opts.Action)
 	}
+}
+
+func runOrchestratePlan(out io.Writer, opts orchestrateCommandOptions) error {
+	plan, err := buildOrchestratePlan(opts)
+	if err != nil {
+		return err
+	}
+	if opts.JSON {
+		return writePrettyJSONValue(out, plan)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestratePlan(plan))
+	return nil
+}
+
+func runOrchestrateList(out io.Writer, limit int, outputJSON bool) error {
+	resp, _, err := fetchOrchestratorExecutions(limit)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		return writePrettyJSONValue(out, resp)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestrateExecutionList(resp.Executions))
+	return nil
 }
 
 func runOrchestrateStatus(out io.Writer, executionID string, outputJSON bool) error {
@@ -3293,25 +6284,205 @@ func runOrchestrateStatus(out io.Writer, executionID string, outputJSON bool) er
 	return nil
 }
 
+func runOrchestrateCancel(out io.Writer, executionID string, outputJSON bool) error {
+	trimmedID := strings.TrimSpace(executionID)
+	if trimmedID == "" {
+		return errors.New("execution id is required")
+	}
+	path := "/api/v1/orchestrator/executions/" + neturl.PathEscape(trimmedID) + "/cancel"
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, path, map[string]interface{}{
+		"actor": "carrier-cli",
+	}, 45*time.Second)
+	if err != nil {
+		return err
+	}
+	resp, decodeErr := decodeOrchestrateExecutionResponse(raw)
+	if decodeErr != nil {
+		return decodeErr
+	}
+	if outputJSON {
+		return writePrettyJSON(out, raw)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestrateExecution(resp))
+	return nil
+}
+
+func runOrchestrateDerivedExecutionAction(out io.Writer, action, executionID string, outputJSON bool) error {
+	trimmedAction := strings.ToLower(strings.TrimSpace(action))
+	trimmedID := strings.TrimSpace(executionID)
+	if trimmedID == "" {
+		return errors.New("execution id is required")
+	}
+	switch trimmedAction {
+	case "retry", "rerun", "clone":
+	default:
+		return fmt.Errorf("unsupported derived execution action: %s", action)
+	}
+	path := "/api/v1/orchestrator/executions/" + neturl.PathEscape(trimmedID) + "/" + trimmedAction
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, path, map[string]interface{}{}, 45*time.Second)
+	if err != nil {
+		return err
+	}
+	resp, decodeErr := decodeOrchestrateExecutionResponse(raw)
+	if decodeErr != nil {
+		return decodeErr
+	}
+	if outputJSON {
+		return writePrettyJSON(out, raw)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestrateExecution(resp))
+	if nextID := strings.TrimSpace(resp.Execution.ID); nextID != "" {
+		_, _ = fmt.Fprintf(out, "next: carrier executions show %s\n", nextID)
+	}
+	return nil
+}
+
+func runOrchestrateArtifacts(out io.Writer, executionID string, outputJSON bool) error {
+	resp, raw, err := fetchOrchestratorExecutionArtifacts(executionID)
+	if err != nil {
+		return err
+	}
+	if outputJSON {
+		return writePrettyJSON(out, raw)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestrateExecutionArtifacts(strings.TrimSpace(executionID), resp.Artifacts))
+	return nil
+}
+
+func runOrchestrateEvidence(out io.Writer, executionID, format, outputPath string, openAfterWrite bool, outputJSON bool) error {
+	normalizedFormat := strings.ToLower(strings.TrimSpace(format))
+	if normalizedFormat == "" {
+		normalizedFormat = "json"
+	}
+	if normalizedFormat == "zip" {
+		raw, err := fetchOrchestratorExecutionEvidenceArchive(executionID)
+		if err != nil {
+			return err
+		}
+		destination := strings.TrimSpace(outputPath)
+		if destination == "" {
+			destination = strings.TrimSpace(executionID) + "-evidence.zip"
+		}
+		if err := os.WriteFile(destination, raw, 0o600); err != nil {
+			return fmt.Errorf("write evidence archive: %w", err)
+		}
+		if openAfterWrite {
+			if err := openPathWithDefaultApp(destination); err != nil {
+				return fmt.Errorf("open evidence archive: %w", err)
+			}
+		}
+		_, _ = fmt.Fprintf(out, "execution evidence written: %s\n", destination)
+		return nil
+	}
+
+	resp, raw, err := fetchOrchestratorExecutionEvidence(executionID)
+	if err != nil {
+		return err
+	}
+	if destination := strings.TrimSpace(outputPath); destination != "" || openAfterWrite {
+		if destination == "" {
+			destination = strings.TrimSpace(executionID) + "-evidence.json"
+		}
+		var pretty bytes.Buffer
+		if err := writePrettyJSON(&pretty, raw); err != nil {
+			return err
+		}
+		if err := os.WriteFile(destination, pretty.Bytes(), 0o600); err != nil {
+			return fmt.Errorf("write evidence json: %w", err)
+		}
+		if openAfterWrite {
+			if err := openPathWithDefaultApp(destination); err != nil {
+				return fmt.Errorf("open evidence json: %w", err)
+			}
+		}
+		_, _ = fmt.Fprintf(out, "execution evidence written: %s\n", destination)
+		return nil
+	}
+	if outputJSON {
+		return writePrettyJSON(out, raw)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestrateExecutionEvidence(strings.TrimSpace(executionID), resp.Evidence))
+	return nil
+}
+
+func runOrchestrateAudit(out io.Writer, executionID, outputPath string, openAfterWrite bool, outputJSON bool) error {
+	resp, raw, err := fetchOrchestratorExecutionAudit(executionID)
+	if err != nil {
+		return err
+	}
+	if destination := strings.TrimSpace(outputPath); destination != "" || openAfterWrite {
+		if destination == "" {
+			destination = strings.TrimSpace(executionID) + "-audit.json"
+		}
+		var pretty bytes.Buffer
+		if err := writePrettyJSON(&pretty, raw); err != nil {
+			return err
+		}
+		if err := os.WriteFile(destination, pretty.Bytes(), 0o600); err != nil {
+			return fmt.Errorf("write audit json: %w", err)
+		}
+		if openAfterWrite {
+			if err := openPathWithDefaultApp(destination); err != nil {
+				return fmt.Errorf("open audit json: %w", err)
+			}
+		}
+		_, _ = fmt.Fprintf(out, "execution audit written: %s\n", destination)
+		return nil
+	}
+	if outputJSON {
+		return writePrettyJSON(out, raw)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestrateExecutionAudit(strings.TrimSpace(executionID), resp))
+	return nil
+}
+
+func runOrchestrateAuthorize(out io.Writer, executionID string, policyApprove bool, outputJSON bool) error {
+	trimmedID := strings.TrimSpace(executionID)
+	if trimmedID == "" {
+		return errors.New("execution id is required")
+	}
+	path := "/api/v1/orchestrator/executions/" + neturl.PathEscape(trimmedID) + "/authorize"
+	body := map[string]interface{}{
+		"approved": true,
+		"actor":    "carrier-cli",
+	}
+	if policyApprove {
+		body["policyApproved"] = true
+	}
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, path, body, 45*time.Second)
+	if err != nil {
+		return err
+	}
+	resp, decodeErr := decodeOrchestrateExecutionResponse(raw)
+	if decodeErr != nil {
+		return decodeErr
+	}
+	if outputJSON {
+		return writePrettyJSON(out, raw)
+	}
+	_, _ = fmt.Fprintln(out, renderOrchestrateExecution(resp))
+	return nil
+}
+
 func runOrchestrateStart(out io.Writer, opts orchestrateCommandOptions) error {
-	tasks, err := decomposeOrchestrateGoal(opts.Goal, opts.Provider)
+	plan, err := buildOrchestratePlan(opts)
 	if err != nil {
 		return err
 	}
 
-	taskUnits := assignOrchestrateTaskUnits(tasks, opts.HostIDs)
-	requiredWorkers := buildOrchestrateRequiredWorkers(taskUnits)
-	if len(taskUnits) == 0 || len(requiredWorkers) == 0 {
-		return errors.New("failed to build orchestrator task plan")
-	}
-
 	payload := orchestrateExecutionPayload{
-		Goal:            strings.TrimSpace(opts.Goal),
-		IdempotencyKey:  strings.TrimSpace(opts.IdempotencyKey),
-		ApprovalScope:   "infrastructure_only",
-		RequiredWorkers: requiredWorkers,
-		TaskUnits:       taskUnits,
-		MaxConcurrency:  opts.MaxConcurrency,
+		Goal:                 strings.TrimSpace(plan.Goal),
+		TemplateID:           strings.TrimSpace(plan.TemplateID),
+		RequestedProvider:    strings.TrimSpace(plan.Provider),
+		RequiredMemory:       append([]string(nil), plan.RequiredMemory...),
+		MemoryContractDigest: buildMemoryContractDigestCLI(plan.RequiredMemory),
+		MemoryProvenance:     append([]string(nil), plan.RequiredMemory...),
+		DistillOutputs:       append([]string(nil), plan.DistillOutputs...),
+		IdempotencyKey:       strings.TrimSpace(opts.IdempotencyKey),
+		ApprovalScope:        plan.ApprovalScope,
+		RequiredWorkers:      plan.RequiredWorkers,
+		TaskUnits:            plan.TaskUnits,
+		MaxConcurrency:       plan.MaxConcurrency,
 	}
 
 	createRaw, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/orchestrator/executions", payload, 90*time.Second)
@@ -3334,6 +6505,9 @@ func runOrchestrateStart(out io.Writer, opts orchestrateCommandOptions) error {
 	if opts.MaxConcurrency > 0 {
 		authorizeBody["maxConcurrency"] = opts.MaxConcurrency
 	}
+	if opts.PolicyApprove {
+		authorizeBody["policyApproved"] = true
+	}
 	authorizePath := "/api/v1/orchestrator/executions/" + neturl.PathEscape(executionID) + "/authorize"
 	authorizeRaw, _, err := gatewayRequestWithTimeout(http.MethodPost, authorizePath, authorizeBody, 90*time.Second)
 	if err != nil {
@@ -3350,7 +6524,7 @@ func runOrchestrateStart(out io.Writer, opts orchestrateCommandOptions) error {
 		}
 		_, _ = fmt.Fprintf(out, "orchestrator execution accepted: %s\n", executionID)
 		_, _ = fmt.Fprintf(out, "status: %s\n", strings.TrimSpace(authorizeResp.Execution.Status))
-		_, _ = fmt.Fprintf(out, "Use `carrier orchestrate status %s` to check progress.\n", executionID)
+		_, _ = fmt.Fprintf(out, "Use `carrier executions show %s` to check progress.\n", executionID)
 		return nil
 	}
 
@@ -3363,6 +6537,23 @@ func runOrchestrateStart(out io.Writer, opts orchestrateCommandOptions) error {
 	}
 	_, _ = fmt.Fprintln(out, renderOrchestrateExecution(finalResp))
 	return nil
+}
+
+func buildOrchestratePlan(opts orchestrateCommandOptions) (orchestratePlanSnapshot, error) {
+	tasks, err := decomposeOrchestrateGoal(opts.Goal, opts.Provider)
+	if err != nil {
+		return orchestratePlanSnapshot{}, err
+	}
+	return sharedorchestration.BuildPlan(sharedorchestration.BuildPlanInput{
+		Goal:           strings.TrimSpace(opts.Goal),
+		Provider:       strings.TrimSpace(opts.Provider),
+		HostIDs:        opts.HostIDs,
+		HostLabels:     opts.HostLabels,
+		RequiredMemory: opts.RequiredMemory,
+		DistillOutputs: opts.DistillOutputs,
+		MaxConcurrency: opts.MaxConcurrency,
+		Tasks:          tasks,
+	})
 }
 
 func decomposeOrchestrateGoal(goal, provider string) ([]orchestrateDecomposeTask, error) {
@@ -3401,7 +6592,7 @@ func decomposeOrchestrateGoal(goal, provider string) ([]orchestrateDecomposeTask
 			taskID = fmt.Sprintf("%s-%d", taskID, idx+1)
 		}
 		seen[taskID] = struct{}{}
-		agentID := normalizeOrchestrateAgentID(task.AgentID)
+		agentID := sharedorchestration.NormalizeAgentID(task.AgentID)
 		out = append(out, orchestrateDecomposeTask{
 			ID:      taskID,
 			Input:   input,
@@ -3409,97 +6600,142 @@ func decomposeOrchestrateGoal(goal, provider string) ([]orchestrateDecomposeTask
 		})
 	}
 	if len(out) == 0 {
-		return orchestrateFallbackTasks(trimmedGoal), nil
+		return nil, nil
 	}
 	return out, nil
-}
-
-func orchestrateFallbackTasks(goal string) []orchestrateDecomposeTask {
-	return []orchestrateDecomposeTask{{
-		ID:      "task-1",
-		Input:   strings.TrimSpace(goal),
-		AgentID: "zeroclaw",
-	}}
-}
-
-func assignOrchestrateTaskUnits(tasks []orchestrateDecomposeTask, hostIDs []string) []orchestrateTaskUnit {
-	trimmedHosts := dedupeStringSlice(hostIDs)
-	if len(trimmedHosts) == 0 {
-		trimmedHosts = []string{orchestratorLocalHostID}
-	}
-
-	agentOffsets := map[string]int{}
-	out := make([]orchestrateTaskUnit, 0, len(tasks))
-	for idx, task := range tasks {
-		agentID := normalizeOrchestrateAgentID(task.AgentID)
-		offset := agentOffsets[agentID]
-		hostID := trimmedHosts[offset%len(trimmedHosts)]
-		agentOffsets[agentID] = offset + 1
-
-		taskID := strings.TrimSpace(task.ID)
-		if taskID == "" {
-			taskID = fmt.Sprintf("task-%d", idx+1)
-		}
-		out = append(out, orchestrateTaskUnit{
-			ID:          taskID,
-			Input:       strings.TrimSpace(task.Input),
-			TimeoutMs:   60_000,
-			RetryBudget: 0,
-			HostID:      hostID,
-			AgentID:     agentID,
-		})
-	}
-	return out
-}
-
-func buildOrchestrateRequiredWorkers(taskUnits []orchestrateTaskUnit) []orchestrateRequiredWorker {
-	type workerKey struct {
-		hostID  string
-		agentID string
-	}
-	seen := map[workerKey]struct{}{}
-	workers := make([]orchestrateRequiredWorker, 0, len(taskUnits))
-	for _, task := range taskUnits {
-		hostID := strings.TrimSpace(task.HostID)
-		if hostID == "" {
-			hostID = orchestratorLocalHostID
-		}
-		agentID := normalizeOrchestrateAgentID(task.AgentID)
-		key := workerKey{hostID: hostID, agentID: agentID}
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		workers = append(workers, orchestrateRequiredWorker{
-			HostID:  hostID,
-			AgentID: agentID,
-			Count:   1,
-		})
-	}
-	sort.Slice(workers, func(i, j int) bool {
-		if workers[i].HostID == workers[j].HostID {
-			return workers[i].AgentID < workers[j].AgentID
-		}
-		return workers[i].HostID < workers[j].HostID
-	})
-	return workers
-}
-
-func normalizeOrchestrateAgentID(agentID string) string {
-	switch strings.ToLower(strings.TrimSpace(agentID)) {
-	case "picoclaw":
-		return "picoclaw"
-	case "zeroclaw":
-		return "zeroclaw"
-	default:
-		return "zeroclaw"
-	}
 }
 
 func decodeOrchestrateExecutionResponse(raw []byte) (orchestrateExecutionResponse, error) {
 	var resp orchestrateExecutionResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return orchestrateExecutionResponse{}, fmt.Errorf("decode orchestrator response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeOrchestrateExecutionListResponse(raw []byte) (orchestrateExecutionListResponse, error) {
+	var resp orchestrateExecutionListResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return orchestrateExecutionListResponse{}, fmt.Errorf("decode orchestrator execution list response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeExecutionTemplateListResponse(raw []byte) (executionTemplateListResponse, error) {
+	var resp executionTemplateListResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return executionTemplateListResponse{}, fmt.Errorf("decode execution template list response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeExecutionTemplateResponse(raw []byte) (executionTemplateResponse, error) {
+	var resp executionTemplateResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return executionTemplateResponse{}, fmt.Errorf("decode execution template response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeExecutionTemplateLaunchResponse(raw []byte) (executionTemplateLaunchResponse, error) {
+	var resp executionTemplateLaunchResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return executionTemplateLaunchResponse{}, fmt.Errorf("decode execution template launch response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeExecutionTriggerListResponse(raw []byte) (executionTriggerListResponse, error) {
+	var resp executionTriggerListResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return executionTriggerListResponse{}, fmt.Errorf("decode execution trigger list response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeExecutionTriggerResponse(raw []byte) (executionTriggerResponse, error) {
+	var resp executionTriggerResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return executionTriggerResponse{}, fmt.Errorf("decode execution trigger response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeExecutionTriggerDeleteResponse(raw []byte) (executionTriggerDeleteResponse, error) {
+	var resp executionTriggerDeleteResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return executionTriggerDeleteResponse{}, fmt.Errorf("decode execution trigger delete response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeMemoryListResponse(raw []byte) (memoryListResponse, error) {
+	var resp memoryListResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return memoryListResponse{}, fmt.Errorf("decode memory list response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeMemorySearchResponse(raw []byte) (memorySearchResponse, error) {
+	var resp memorySearchResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return memorySearchResponse{}, fmt.Errorf("decode memory search response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeMemoryStatusResponse(raw []byte) (memoryStatusResponse, error) {
+	var resp memoryStatusResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return memoryStatusResponse{}, fmt.Errorf("decode memory status response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeMemoryDistillResponse(raw []byte) (memoryDistillResponse, error) {
+	var payload struct {
+		Result    json.RawMessage `json:"result"`
+		ErrorCode string          `json:"errorCode,omitempty"`
+		Message   string          `json:"message,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return memoryDistillResponse{}, fmt.Errorf("decode memory distill response: %w", err)
+	}
+	var run memoryDistillRunSnapshot
+	if len(payload.Result) > 0 && string(payload.Result) != "null" {
+		if err := json.Unmarshal(payload.Result, &run); err != nil {
+			return memoryDistillResponse{}, fmt.Errorf("decode memory distill run: %w", err)
+		}
+	}
+	return memoryDistillResponse{
+		Result:    "ok",
+		ErrorCode: payload.ErrorCode,
+		Message:   payload.Message,
+		Run:       run,
+	}, nil
+}
+
+func decodeOrchestrateExecutionArtifactsResponse(raw []byte) (orchestrateExecutionArtifactsResponse, error) {
+	var resp orchestrateExecutionArtifactsResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return orchestrateExecutionArtifactsResponse{}, fmt.Errorf("decode orchestrator execution artifacts response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeOrchestrateAuditExportResponse(raw []byte) (orchestrateAuditExportResponse, error) {
+	var resp orchestrateAuditExportResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return orchestrateAuditExportResponse{}, fmt.Errorf("decode orchestrator audit export response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeOrchestrateEvidenceBundleResponse(raw []byte) (orchestrateEvidenceBundleResponse, error) {
+	var resp orchestrateEvidenceBundleResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return orchestrateEvidenceBundleResponse{}, fmt.Errorf("decode orchestrator evidence response: %w", err)
 	}
 	return resp, nil
 }
@@ -3521,6 +6757,404 @@ func fetchOrchestratorExecution(executionID string) (orchestrateExecutionRespons
 	return resp, raw, nil
 }
 
+func fetchOrchestratorExecutions(limit int) (orchestrateExecutionListResponse, []byte, error) {
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, "/api/v1/orchestrator/executions", nil, 45*time.Second)
+	if err != nil {
+		return orchestrateExecutionListResponse{}, nil, err
+	}
+	resp, decodeErr := decodeOrchestrateExecutionListResponse(raw)
+	if decodeErr != nil {
+		return orchestrateExecutionListResponse{}, nil, decodeErr
+	}
+	sort.Slice(resp.Executions, func(i, j int) bool {
+		left, leftOK := parseManagedTimestamp(resp.Executions[i].UpdatedAt)
+		right, rightOK := parseManagedTimestamp(resp.Executions[j].UpdatedAt)
+		switch {
+		case leftOK && rightOK:
+			if left.Equal(right) {
+				return resp.Executions[i].ID > resp.Executions[j].ID
+			}
+			return left.After(right)
+		case leftOK:
+			return true
+		case rightOK:
+			return false
+		default:
+			return resp.Executions[i].ID > resp.Executions[j].ID
+		}
+	})
+	if limit > 0 && len(resp.Executions) > limit {
+		resp.Executions = resp.Executions[:limit]
+	}
+	return resp, raw, nil
+}
+
+func fetchMemoryList(subject string) (memoryListResponse, []byte, error) {
+	path := "/api/v1/memory"
+	if trimmed := strings.TrimSpace(subject); trimmed != "" {
+		path += "?subject=" + neturl.QueryEscape(trimmed)
+	}
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return memoryListResponse{}, nil, err
+	}
+	resp, decodeErr := decodeMemoryListResponse(raw)
+	if decodeErr != nil {
+		return memoryListResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func searchMemory(opts memoryCommandOptions) (memorySearchResponse, []byte, error) {
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/memory/search", map[string]interface{}{
+		"subject":    strings.TrimSpace(opts.Subject),
+		"query":      strings.TrimSpace(opts.Query),
+		"maxResults": opts.Limit,
+		"minScore":   opts.MinScore,
+	}, 45*time.Second)
+	if err != nil {
+		return memorySearchResponse{}, nil, err
+	}
+	resp, decodeErr := decodeMemorySearchResponse(raw)
+	if decodeErr != nil {
+		return memorySearchResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func runMemoryInstanceAction(path string, opts memoryCommandOptions) (memoryStatusResponse, []byte, error) {
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, path, map[string]interface{}{
+		"instanceId": strings.TrimSpace(opts.InstanceID),
+		"scope":      strings.TrimSpace(opts.Scope),
+	}, 60*time.Second)
+	if err != nil {
+		return memoryStatusResponse{}, nil, err
+	}
+	resp, decodeErr := decodeMemoryStatusResponse(raw)
+	if decodeErr != nil {
+		return memoryStatusResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func distillMemory(opts memoryCommandOptions) (memoryDistillResponse, []byte, error) {
+	body := map[string]interface{}{
+		"instanceId": strings.TrimSpace(opts.InstanceID),
+		"dryRun":     opts.DryRun,
+		"force":      opts.Force,
+	}
+	if scope := strings.TrimSpace(opts.Scope); scope != "" {
+		body["scope"] = scope
+	}
+	if reason := strings.TrimSpace(opts.Reason); reason != "" {
+		body["reason"] = reason
+	}
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/memory/instance/distill", body, 90*time.Second)
+	if err != nil {
+		return memoryDistillResponse{}, nil, err
+	}
+	resp, decodeErr := decodeMemoryDistillResponse(raw)
+	if decodeErr != nil {
+		return memoryDistillResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func fetchOrchestratorExecutionArtifacts(executionID string) (orchestrateExecutionArtifactsResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(executionID)
+	if trimmedID == "" {
+		return orchestrateExecutionArtifactsResponse{}, nil, errors.New("execution id is required")
+	}
+	path := "/api/v1/orchestrator/executions/" + neturl.PathEscape(trimmedID) + "/artifacts"
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return orchestrateExecutionArtifactsResponse{}, nil, err
+	}
+	resp, decodeErr := decodeOrchestrateExecutionArtifactsResponse(raw)
+	if decodeErr != nil {
+		return orchestrateExecutionArtifactsResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func fetchOrchestratorExecutionEvidence(executionID string) (orchestrateEvidenceBundleResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(executionID)
+	if trimmedID == "" {
+		return orchestrateEvidenceBundleResponse{}, nil, errors.New("execution id is required")
+	}
+	path := "/api/v1/orchestrator/executions/" + neturl.PathEscape(trimmedID) + "/evidence?format=json"
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return orchestrateEvidenceBundleResponse{}, nil, err
+	}
+	resp, decodeErr := decodeOrchestrateEvidenceBundleResponse(raw)
+	if decodeErr != nil {
+		return orchestrateEvidenceBundleResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func fetchOrchestratorExecutionEvidenceArchive(executionID string) ([]byte, error) {
+	trimmedID := strings.TrimSpace(executionID)
+	if trimmedID == "" {
+		return nil, errors.New("execution id is required")
+	}
+	path := "/api/v1/orchestrator/executions/" + neturl.PathEscape(trimmedID) + "/evidence?format=zip"
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func fetchOrchestratorExecutionAudit(executionID string) (orchestrateAuditExportResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(executionID)
+	if trimmedID == "" {
+		return orchestrateAuditExportResponse{}, nil, errors.New("execution id is required")
+	}
+	path := "/api/v1/audit/export?executionId=" + neturl.QueryEscape(trimmedID)
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return orchestrateAuditExportResponse{}, nil, err
+	}
+	resp, decodeErr := decodeOrchestrateAuditExportResponse(raw)
+	if decodeErr != nil {
+		return orchestrateAuditExportResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func fetchExecutionTemplates() (executionTemplateListResponse, []byte, error) {
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, "/api/v1/templates", nil, 45*time.Second)
+	if err != nil {
+		return executionTemplateListResponse{}, nil, err
+	}
+	resp, decodeErr := decodeExecutionTemplateListResponse(raw)
+	if decodeErr != nil {
+		return executionTemplateListResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func fetchExecutionTemplate(templateID string) (executionTemplateResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(templateID)
+	if trimmedID == "" {
+		return executionTemplateResponse{}, nil, errors.New("template id is required")
+	}
+	path := "/api/v1/templates/" + neturl.PathEscape(trimmedID)
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return executionTemplateResponse{}, nil, err
+	}
+	resp, decodeErr := decodeExecutionTemplateResponse(raw)
+	if decodeErr != nil {
+		return executionTemplateResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func fetchExecutionTriggers() (executionTriggerListResponse, []byte, error) {
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, "/api/v1/triggers", nil, 45*time.Second)
+	if err != nil {
+		return executionTriggerListResponse{}, nil, err
+	}
+	resp, decodeErr := decodeExecutionTriggerListResponse(raw)
+	if decodeErr != nil {
+		return executionTriggerListResponse{}, nil, decodeErr
+	}
+	sort.Slice(resp.Triggers, func(i, j int) bool {
+		left, leftOK := parseManagedTimestamp(resp.Triggers[i].UpdatedAt)
+		right, rightOK := parseManagedTimestamp(resp.Triggers[j].UpdatedAt)
+		switch {
+		case leftOK && rightOK:
+			if left.Equal(right) {
+				return resp.Triggers[i].ID > resp.Triggers[j].ID
+			}
+			return left.After(right)
+		case leftOK:
+			return true
+		case rightOK:
+			return false
+		default:
+			return resp.Triggers[i].ID > resp.Triggers[j].ID
+		}
+	})
+	return resp, raw, nil
+}
+
+func fetchExecutionTrigger(triggerID string) (executionTriggerResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(triggerID)
+	if trimmedID == "" {
+		return executionTriggerResponse{}, nil, errors.New("trigger id is required")
+	}
+	path := "/api/v1/triggers/" + neturl.PathEscape(trimmedID)
+	raw, _, err := gatewayRequestWithTimeout(http.MethodGet, path, nil, 45*time.Second)
+	if err != nil {
+		return executionTriggerResponse{}, nil, err
+	}
+	resp, decodeErr := decodeExecutionTriggerResponse(raw)
+	if decodeErr != nil {
+		return executionTriggerResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func createExecutionTrigger(opts triggersCommandOptions) (executionTriggerResponse, []byte, error) {
+	body := map[string]interface{}{
+		"type":       strings.TrimSpace(opts.Type),
+		"templateId": strings.TrimSpace(opts.TemplateID),
+		"name":       strings.TrimSpace(opts.Name),
+		"createdBy":  strings.TrimSpace(firstNonEmpty(opts.CreatedBy, "carrier-cli")),
+		"enabled":    !opts.Disable,
+		"config": map[string]interface{}{
+			"inputs":           opts.Inputs,
+			"provider":         strings.TrimSpace(opts.Provider),
+			"hostIds":          opts.HostIDs,
+			"hostLabels":       opts.HostLabels,
+			"requiredMemory":   opts.RequiredMemory,
+			"distillOutputs":   opts.DistillOutputs,
+			"maxConcurrency":   opts.MaxConcurrency,
+			"policyApprove":    opts.PolicyApprove,
+			"webhookSecret":    strings.TrimSpace(opts.WebhookSecret),
+			"githubCommand":    strings.TrimSpace(opts.GitHubCommand),
+			"githubLabel":      strings.TrimSpace(opts.GitHubLabel),
+			"githubRepository": strings.TrimSpace(opts.GitHubRepository),
+			"cron":             strings.TrimSpace(opts.Cron),
+			"timezone":         firstNonEmpty(strings.TrimSpace(opts.Timezone), "UTC"),
+		},
+	}
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/triggers", body, 90*time.Second)
+	if err != nil {
+		return executionTriggerResponse{}, nil, err
+	}
+	resp, decodeErr := decodeExecutionTriggerResponse(raw)
+	if decodeErr != nil {
+		return executionTriggerResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func updateExecutionTrigger(opts triggersCommandOptions) (executionTriggerResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(opts.TriggerID)
+	if trimmedID == "" {
+		return executionTriggerResponse{}, nil, errors.New("trigger id is required")
+	}
+	body := map[string]interface{}{}
+	if name := strings.TrimSpace(opts.Name); name != "" {
+		body["name"] = name
+	}
+	if templateID := strings.TrimSpace(opts.TemplateID); templateID != "" {
+		body["templateId"] = templateID
+	}
+	if createdBy := strings.TrimSpace(opts.CreatedBy); createdBy != "" {
+		body["createdBy"] = createdBy
+	}
+	if opts.Enable || opts.Disable {
+		body["enabled"] = opts.Enable && !opts.Disable
+	}
+	config := map[string]interface{}{}
+	if len(opts.Inputs) > 0 {
+		config["inputs"] = opts.Inputs
+	}
+	if provider := strings.TrimSpace(opts.Provider); provider != "" {
+		config["provider"] = provider
+	}
+	if len(opts.HostIDs) > 0 {
+		config["hostIds"] = opts.HostIDs
+	}
+	if len(opts.HostLabels) > 0 {
+		config["hostLabels"] = opts.HostLabels
+	}
+	if len(opts.RequiredMemory) > 0 {
+		config["requiredMemory"] = opts.RequiredMemory
+	}
+	if len(opts.DistillOutputs) > 0 {
+		config["distillOutputs"] = opts.DistillOutputs
+	}
+	if opts.MaxConcurrency > 0 {
+		config["maxConcurrency"] = opts.MaxConcurrency
+	}
+	if opts.PolicyApprove {
+		config["policyApprove"] = true
+	}
+	if webhookSecret := strings.TrimSpace(opts.WebhookSecret); webhookSecret != "" {
+		config["webhookSecret"] = webhookSecret
+	}
+	if githubCommand := strings.TrimSpace(opts.GitHubCommand); githubCommand != "" {
+		config["githubCommand"] = githubCommand
+	}
+	if githubLabel := strings.TrimSpace(opts.GitHubLabel); githubLabel != "" {
+		config["githubLabel"] = githubLabel
+	}
+	if githubRepo := strings.TrimSpace(opts.GitHubRepository); githubRepo != "" {
+		config["githubRepository"] = githubRepo
+	}
+	if cronExpr := strings.TrimSpace(opts.Cron); cronExpr != "" {
+		config["cron"] = cronExpr
+	}
+	if timezone := strings.TrimSpace(opts.Timezone); timezone != "" {
+		config["timezone"] = timezone
+	}
+	if len(config) > 0 {
+		body["config"] = config
+	}
+	path := "/api/v1/triggers/" + neturl.PathEscape(trimmedID)
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPatch, path, body, 90*time.Second)
+	if err != nil {
+		return executionTriggerResponse{}, nil, err
+	}
+	resp, decodeErr := decodeExecutionTriggerResponse(raw)
+	if decodeErr != nil {
+		return executionTriggerResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func deleteExecutionTrigger(triggerID string) (executionTriggerDeleteResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(triggerID)
+	if trimmedID == "" {
+		return executionTriggerDeleteResponse{}, nil, errors.New("trigger id is required")
+	}
+	path := "/api/v1/triggers/" + neturl.PathEscape(trimmedID)
+	raw, _, err := gatewayRequestWithTimeout(http.MethodDelete, path, nil, 45*time.Second)
+	if err != nil {
+		return executionTriggerDeleteResponse{}, nil, err
+	}
+	resp, decodeErr := decodeExecutionTriggerDeleteResponse(raw)
+	if decodeErr != nil {
+		return executionTriggerDeleteResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
+func launchExecutionTemplate(opts templatesCommandOptions) (executionTemplateLaunchResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(opts.TemplateID)
+	if trimmedID == "" {
+		return executionTemplateLaunchResponse{}, nil, errors.New("template id is required")
+	}
+	body := map[string]interface{}{
+		"inputs":         opts.Inputs,
+		"provider":       strings.TrimSpace(opts.Provider),
+		"hostIds":        opts.HostIDs,
+		"hostLabels":     opts.HostLabels,
+		"requiredMemory": opts.RequiredMemory,
+		"distillOutputs": opts.DistillOutputs,
+		"maxConcurrency": opts.MaxConcurrency,
+		"policyApprove":  opts.PolicyApprove,
+		"actor":          "carrier-cli",
+	}
+	path := "/api/v1/templates/" + neturl.PathEscape(trimmedID) + "/launch"
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, path, body, 90*time.Second)
+	if err != nil {
+		return executionTemplateLaunchResponse{}, nil, err
+	}
+	resp, decodeErr := decodeExecutionTemplateLaunchResponse(raw)
+	if decodeErr != nil {
+		return executionTemplateLaunchResponse{}, nil, decodeErr
+	}
+	return resp, raw, nil
+}
+
 func waitForOrchestratorExecution(executionID string, timeout time.Duration) (orchestrateExecutionResponse, []byte, error) {
 	if timeout <= 0 {
 		timeout = defaultOrchestrateWaitTimeout
@@ -3534,7 +7168,7 @@ func waitForOrchestratorExecution(executionID string, timeout time.Duration) (or
 		}
 		status := strings.ToLower(strings.TrimSpace(resp.Execution.Status))
 		lastStatus = status
-		if status == "completed" || status == "failed" || status == "declined" {
+		if status == "completed" || status == "partial_completed" || status == "failed" || status == "retryable_failed" || status == "declined" || status == "cancelled" {
 			return resp, raw, nil
 		}
 		if time.Now().After(deadline) {
@@ -3544,27 +7178,328 @@ func waitForOrchestratorExecution(executionID string, timeout time.Duration) (or
 	}
 }
 
-func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
-	execution := resp.Execution
-	total := len(execution.TaskUnits)
-	completed := 0
-	failed := 0
-	for _, result := range execution.Results {
-		switch strings.ToLower(strings.TrimSpace(result.Status)) {
-		case "completed":
-			completed++
-		case "failed":
-			failed++
+func renderExecutionTemplateList(templates []executionTemplateSnapshot) string {
+	if len(templates) == 0 {
+		return "No execution templates found."
+	}
+	lines := []string{"Execution templates:"}
+	for _, template := range templates {
+		line := fmt.Sprintf("- %s · %s", firstNonEmpty(strings.TrimSpace(template.ID), "unknown"), firstNonEmpty(strings.TrimSpace(template.Name), "(unnamed)"))
+		if description := strings.TrimSpace(template.Description); description != "" {
+			line += " · " + truncateOrchestrateText(description, 96)
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderExecutionTemplate(template executionTemplateSnapshot) string {
+	lines := []string{
+		fmt.Sprintf("execution template %s", firstNonEmpty(strings.TrimSpace(template.ID), "unknown")),
+		fmt.Sprintf("name: %s", firstNonEmpty(strings.TrimSpace(template.Name), "(unnamed)")),
+	}
+	if description := strings.TrimSpace(template.Description); description != "" {
+		lines = append(lines, "description: "+description)
+	}
+	if goalTemplate := strings.TrimSpace(template.DefaultGoalTemplate); goalTemplate != "" {
+		lines = append(lines, "goal template: "+goalTemplate)
+	}
+	if len(template.RequiredMemory) > 0 {
+		lines = append(lines, "required memory: "+strings.Join(template.RequiredMemory, ", "))
+	}
+	if len(template.DistillOutputs) > 0 {
+		lines = append(lines, "distill outputs: "+strings.Join(template.DistillOutputs, ", "))
+	}
+	if len(template.InputSchema) > 0 {
+		lines = append(lines, "inputs:")
+		for _, field := range template.InputSchema {
+			parts := []string{firstNonEmpty(strings.TrimSpace(field.ID), "input")}
+			if label := strings.TrimSpace(field.Label); label != "" {
+				parts = append(parts, label)
+			}
+			if field.Required {
+				parts = append(parts, "required")
+			}
+			if defaultValue := strings.TrimSpace(field.DefaultValue); defaultValue != "" {
+				parts = append(parts, "default="+defaultValue)
+			}
+			lines = append(lines, "- "+strings.Join(parts, " · "))
 		}
 	}
+	if len(template.PlannerTasks) > 0 {
+		lines = append(lines, "planner tasks:")
+		for _, task := range template.PlannerTasks {
+			lines = append(lines, fmt.Sprintf(
+				"- %s · %s · %s",
+				firstNonEmpty(strings.TrimSpace(task.ID), "task"),
+				firstNonEmpty(strings.TrimSpace(task.AgentID), "zeroclaw"),
+				firstNonEmpty(strings.TrimSpace(task.InputTemplate), "(no input template)"),
+			))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderExecutionTriggerList(triggers []executionTriggerSnapshot) string {
+	if len(triggers) == 0 {
+		return "No execution triggers found."
+	}
+	lines := []string{"Execution triggers:"}
+	for _, trigger := range triggers {
+		parts := []string{
+			firstNonEmpty(strings.TrimSpace(trigger.ID), "unknown"),
+			firstNonEmpty(strings.TrimSpace(trigger.Name), "(unnamed)"),
+			"type=" + firstNonEmpty(strings.TrimSpace(trigger.Type), "unknown"),
+			"template=" + firstNonEmpty(strings.TrimSpace(trigger.TemplateID), "unknown"),
+			"enabled=" + strconv.FormatBool(trigger.Enabled),
+		}
+		if nextRunAt := strings.TrimSpace(trigger.NextRunAt); nextRunAt != "" {
+			parts = append(parts, "nextRun="+nextRunAt)
+		}
+		lines = append(lines, "- "+strings.Join(parts, " · "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderExecutionTrigger(trigger executionTriggerSnapshot) string {
+	lines := []string{
+		fmt.Sprintf("execution trigger %s", firstNonEmpty(strings.TrimSpace(trigger.ID), "unknown")),
+		fmt.Sprintf("name: %s", firstNonEmpty(strings.TrimSpace(trigger.Name), "(unnamed)")),
+		fmt.Sprintf("type: %s", firstNonEmpty(strings.TrimSpace(trigger.Type), "unknown")),
+		fmt.Sprintf("template: %s", firstNonEmpty(strings.TrimSpace(trigger.TemplateID), "unknown")),
+		fmt.Sprintf("enabled=%t", trigger.Enabled),
+	}
+	if createdBy := strings.TrimSpace(trigger.CreatedBy); createdBy != "" {
+		lines = append(lines, "created by: "+createdBy)
+	}
+	if updatedAt := strings.TrimSpace(trigger.UpdatedAt); updatedAt != "" {
+		lines = append(lines, "updated at: "+updatedAt)
+	}
+	if nextRunAt := strings.TrimSpace(trigger.NextRunAt); nextRunAt != "" {
+		lines = append(lines, "next run: "+nextRunAt)
+	}
+	if trigger.TriggeredCount > 0 {
+		lines = append(lines, fmt.Sprintf("triggered count: %d", trigger.TriggeredCount))
+	}
+	if lastExecutionID := strings.TrimSpace(trigger.LastExecutionID); lastExecutionID != "" {
+		lines = append(lines, "last execution: "+lastExecutionID)
+	}
+	if lastTriggeredAt := strings.TrimSpace(trigger.LastTriggeredAt); lastTriggeredAt != "" {
+		lines = append(lines, "last triggered at: "+lastTriggeredAt)
+	}
+	if lastError := strings.TrimSpace(trigger.LastError); lastError != "" {
+		lines = append(lines, "last error: "+lastError)
+	}
+	config := trigger.Config
+	if provider := strings.TrimSpace(config.Provider); provider != "" {
+		lines = append(lines, "provider: "+provider)
+	}
+	if len(config.HostIDs) > 0 {
+		lines = append(lines, "host ids: "+strings.Join(config.HostIDs, ", "))
+	}
+	if len(config.HostLabels) > 0 {
+		lines = append(lines, "host labels: "+strings.Join(config.HostLabels, ", "))
+	}
+	if len(config.RequiredMemory) > 0 {
+		lines = append(lines, "required memory: "+strings.Join(config.RequiredMemory, ", "))
+	}
+	if len(config.DistillOutputs) > 0 {
+		lines = append(lines, "distill outputs: "+strings.Join(config.DistillOutputs, ", "))
+	}
+	if config.MaxConcurrency > 0 {
+		lines = append(lines, fmt.Sprintf("max concurrency: %d", config.MaxConcurrency))
+	}
+	if config.PolicyApprove {
+		lines = append(lines, "policy approve: true")
+	}
+	if config.WebhookSecretConfigured {
+		lines = append(lines, "webhook secret: configured")
+	}
+	if githubCommand := strings.TrimSpace(config.GitHubCommand); githubCommand != "" {
+		lines = append(lines, "github command: "+githubCommand)
+	}
+	if githubLabel := strings.TrimSpace(config.GitHubLabel); githubLabel != "" {
+		lines = append(lines, "github label: "+githubLabel)
+	}
+	if githubRepository := strings.TrimSpace(config.GitHubRepository); githubRepository != "" {
+		lines = append(lines, "github repository: "+githubRepository)
+	}
+	if cronExpr := strings.TrimSpace(config.Cron); cronExpr != "" {
+		lines = append(lines, "cron: "+cronExpr)
+	}
+	if timezone := strings.TrimSpace(config.Timezone); timezone != "" {
+		lines = append(lines, "timezone: "+timezone)
+	}
+	if len(config.Inputs) > 0 {
+		inputKeys := make([]string, 0, len(config.Inputs))
+		for key := range config.Inputs {
+			inputKeys = append(inputKeys, key)
+		}
+		sort.Strings(inputKeys)
+		lines = append(lines, "inputs:")
+		for _, key := range inputKeys {
+			lines = append(lines, fmt.Sprintf("- %s=%s", key, config.Inputs[key]))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
+	execution := resp.Execution
+	total, completed, failed := summarizeOrchestrateExecution(execution)
 	lines := []string{
 		fmt.Sprintf("orchestrator execution %s", strings.TrimSpace(execution.ID)),
 		fmt.Sprintf("status: %s", firstNonEmpty(strings.TrimSpace(execution.Status), "unknown")),
 		fmt.Sprintf("goal: %s", strings.TrimSpace(execution.Goal)),
 		fmt.Sprintf("tasks: total=%d completed=%d failed=%d", total, completed, failed),
 	}
+	if templateID := strings.TrimSpace(execution.TemplateID); templateID != "" {
+		lines = append(lines, "template: "+templateID)
+	}
+	if triggerSource := strings.TrimSpace(execution.TriggerSource); triggerSource != "" || strings.TrimSpace(execution.TriggerID) != "" || strings.TrimSpace(execution.Initiator) != "" {
+		lines = append(lines, fmt.Sprintf(
+			"trigger: source=%s id=%s event=%s initiator=%s",
+			firstNonEmpty(triggerSource, "n/a"),
+			firstNonEmpty(strings.TrimSpace(execution.TriggerID), "n/a"),
+			firstNonEmpty(strings.TrimSpace(execution.TriggerEvent), "n/a"),
+			firstNonEmpty(strings.TrimSpace(execution.Initiator), "n/a"),
+		))
+	}
+	if requestedProvider := strings.TrimSpace(execution.RequestedProvider); requestedProvider != "" {
+		lines = append(lines, "requested provider: "+requestedProvider)
+	}
+	requiredMemoryScopes := normalizeMemoryScopeSlice(execution.RequiredMemory)
+	if digest := strings.TrimSpace(execution.MemoryContractDigest); digest != "" || len(execution.RequiredMemory) > 0 || len(execution.MemoryProvenance) > 0 || len(execution.DistillOutputs) > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"memory contract: digest=%s scopes=%s",
+			firstNonEmpty(digest, "n/a"),
+			firstNonEmpty(strings.Join(requiredMemoryScopes, ", "), "none"),
+		))
+		if len(execution.MemoryProvenance) > 0 {
+			lines = append(lines, "memory provenance: "+strings.Join(execution.MemoryProvenance, ", "))
+		}
+		if len(execution.DistillOutputs) > 0 {
+			lines = append(lines, "distill outputs: "+strings.Join(execution.DistillOutputs, ", "))
+		}
+	}
+	if len(execution.Governance.ProviderResolutions) > 0 {
+		lines = append(lines, "provider trace:")
+		for _, resolution := range execution.Governance.ProviderResolutions {
+			hostTarget := firstNonEmpty(strings.TrimSpace(resolution.HostID), "local")
+			agentTarget := firstNonEmpty(strings.TrimSpace(resolution.AgentID), "unknown")
+			providerModel := strings.Join(filterEmptyStrings([]string{
+				strings.TrimSpace(resolution.Provider),
+				strings.TrimSpace(resolution.Model),
+			}), "/")
+			if providerModel == "" {
+				providerModel = "unbound"
+			}
+			parts := []string{
+				fmt.Sprintf("%s/%s", hostTarget, agentTarget),
+				"source=" + firstNonEmpty(strings.TrimSpace(resolution.Source), "none"),
+			}
+			if profileName := firstNonEmpty(strings.TrimSpace(resolution.ProfileName), strings.TrimSpace(resolution.ProfileID)); profileName != "" {
+				parts = append(parts, "profile="+profileName)
+			}
+			parts = append(parts, providerModel)
+			if resolution.SuccessfulTasks > 0 || resolution.FailedTasks > 0 {
+				parts = append(parts, fmt.Sprintf("tasks=%d/%d", resolution.SuccessfulTasks, resolution.FailedTasks))
+			}
+			if resolution.AvgLatencyMs > 0 {
+				parts = append(parts, fmt.Sprintf("latency=%dms", resolution.AvgLatencyMs))
+			}
+			if resolution.EstimatedTotalTokens > 0 {
+				parts = append(parts, fmt.Sprintf("tokens=%d", resolution.EstimatedTotalTokens))
+			}
+			if resolution.EstimatedCostUSD > 0 {
+				parts = append(parts, fmt.Sprintf("cost=$%.4f", resolution.EstimatedCostUSD))
+			}
+			lines = append(lines, "- "+strings.Join(parts, " · "))
+		}
+	}
+	if parentID := strings.TrimSpace(execution.ParentExecutionID); parentID != "" || strings.TrimSpace(execution.SourceExecutionID) != "" || strings.TrimSpace(execution.LaunchReason) != "" {
+		lines = append(lines, fmt.Sprintf(
+			"lineage: parent=%s source=%s launch=%s",
+			firstNonEmpty(parentID, "n/a"),
+			firstNonEmpty(strings.TrimSpace(execution.SourceExecutionID), "n/a"),
+			firstNonEmpty(strings.TrimSpace(execution.LaunchReason), "n/a"),
+		))
+	}
 	if errText := strings.TrimSpace(execution.Error); errText != "" {
 		lines = append(lines, "error: "+errText)
+	}
+	if summary := strings.TrimSpace(execution.Outcome.Summary); summary != "" {
+		lines = append(lines, "outcome: "+summary)
+	}
+	if failureCategory := strings.TrimSpace(execution.Outcome.FailureCategory); failureCategory != "" || strings.TrimSpace(execution.Outcome.FailureReason) != "" {
+		lines = append(lines, fmt.Sprintf(
+			"failure: %s (%s)",
+			firstNonEmpty(failureCategory, "unknown"),
+			firstNonEmpty(strings.TrimSpace(execution.Outcome.FailureReason), "n/a"),
+		))
+	}
+	if policyDecision := strings.TrimSpace(execution.Policy.Decision); policyDecision != "" {
+		policyParts := []string{"policy: " + policyDecision}
+		if toolMode := strings.TrimSpace(execution.Policy.ToolPolicy.Mode); toolMode != "" {
+			policyParts = append(policyParts, "tool mode="+toolMode)
+		}
+		if execution.Policy.EffectiveMaxConcurrency > 0 {
+			policyParts = append(policyParts, fmt.Sprintf("effective concurrency=%d", execution.Policy.EffectiveMaxConcurrency))
+		}
+		if execution.Policy.MaxTaskTimeoutMs > 0 {
+			policyParts = append(policyParts, fmt.Sprintf("max timeout=%dms", execution.Policy.MaxTaskTimeoutMs))
+		}
+		if execution.Policy.MaxRetryBudget > 0 || len(execution.TaskUnits) > 0 {
+			policyParts = append(policyParts, fmt.Sprintf("max retry=%d", execution.Policy.MaxRetryBudget))
+		}
+		lines = append(lines, strings.Join(policyParts, " · "))
+		if ruleName := strings.TrimSpace(execution.Policy.MatchedRuleName); ruleName != "" {
+			lines = append(lines, "policy rule: "+ruleName)
+		}
+		if reason := strings.TrimSpace(execution.Policy.Reason); reason != "" {
+			lines = append(lines, "policy reason: "+reason)
+		}
+		if summary := strings.TrimSpace(execution.Policy.Summary); summary != "" {
+			lines = append(lines, "policy summary: "+summary)
+		}
+		if approvedBy := strings.TrimSpace(execution.Policy.ApprovedBy); approvedBy != "" {
+			lines = append(lines, "policy approved by: "+approvedBy)
+		}
+		if len(execution.Policy.Targets) > 0 {
+			lines = append(lines, "policy targets:")
+			for _, target := range execution.Policy.Targets {
+				hostTarget := firstNonEmpty(strings.TrimSpace(target.HostID), "unknown")
+				if hostTarget == "unknown" && len(target.HostLabels) > 0 {
+					hostTarget = "labels[" + strings.Join(target.HostLabels, ",") + "]"
+				}
+				lines = append(lines, fmt.Sprintf(
+					"- %s/%s x%d",
+					hostTarget,
+					firstNonEmpty(strings.TrimSpace(target.AgentID), "unknown"),
+					maxInt(target.Count, 1),
+				))
+			}
+		}
+		if len(execution.Policy.ToolPolicy.AllowedTools) > 0 {
+			lines = append(lines, "allowed tools: "+strings.Join(execution.Policy.ToolPolicy.AllowedTools, ", "))
+		}
+	}
+	if len(execution.Outcome.Artifacts) > 0 {
+		lines = append(lines, "artifacts:")
+		for _, artifact := range execution.Outcome.Artifacts {
+			name := firstNonEmpty(strings.TrimSpace(artifact.Name), strings.TrimSpace(artifact.ID))
+			parts := []string{firstNonEmpty(strings.TrimSpace(artifact.ID), "artifact")}
+			if taskID := strings.TrimSpace(artifact.TaskID); taskID != "" {
+				parts = append(parts, "task="+taskID)
+			}
+			if kind := strings.TrimSpace(artifact.Kind); kind != "" {
+				parts = append(parts, "kind="+kind)
+			}
+			if artifact.SizeBytes > 0 {
+				parts = append(parts, fmt.Sprintf("size=%dB", artifact.SizeBytes))
+			}
+			lines = append(lines, fmt.Sprintf("- %s · %s", name, strings.Join(parts, " · ")))
+		}
 	}
 	if len(execution.Results) > 0 {
 		lines = append(lines, "task results:")
@@ -3576,7 +7511,10 @@ func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
 			if strings.TrimSpace(target) == "" {
 				target = "(unknown target)"
 			}
-			summary := strings.TrimSpace(result.Error)
+			summary := strings.TrimSpace(result.Summary)
+			if summary == "" {
+				summary = strings.TrimSpace(result.Error)
+			}
 			if summary == "" {
 				summary = strings.TrimSpace(result.Output)
 			}
@@ -3607,6 +7545,245 @@ func renderOrchestrateExecution(resp orchestrateExecutionResponse) string {
 	return strings.Join(lines, "\n")
 }
 
+func renderOrchestrateExecutionArtifacts(executionID string, artifacts []orchestrateArtifactSnapshot) string {
+	lines := []string{fmt.Sprintf("execution artifacts %s", firstNonEmpty(strings.TrimSpace(executionID), "(unknown)"))}
+	if len(artifacts) == 0 {
+		lines = append(lines, "no artifacts recorded")
+		return strings.Join(lines, "\n")
+	}
+	for _, artifact := range artifacts {
+		name := firstNonEmpty(strings.TrimSpace(artifact.Name), strings.TrimSpace(artifact.ID))
+		parts := []string{firstNonEmpty(strings.TrimSpace(artifact.ID), "artifact")}
+		if taskID := strings.TrimSpace(artifact.TaskID); taskID != "" {
+			parts = append(parts, "task="+taskID)
+		}
+		if kind := strings.TrimSpace(artifact.Kind); kind != "" {
+			parts = append(parts, "kind="+kind)
+		}
+		if contentType := strings.TrimSpace(artifact.ContentType); contentType != "" {
+			parts = append(parts, contentType)
+		}
+		if artifact.SizeBytes > 0 {
+			parts = append(parts, fmt.Sprintf("size=%dB", artifact.SizeBytes))
+		}
+		lines = append(lines, fmt.Sprintf("- %s · %s", name, strings.Join(parts, " · ")))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func filterEmptyStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func renderOrchestrateExecutionEvidence(executionID string, evidence orchestrateEvidenceBundleSnapshot) string {
+	execution := evidence.Execution
+	id := firstNonEmpty(strings.TrimSpace(execution.ID), strings.TrimSpace(executionID), "(unknown)")
+	lines := []string{fmt.Sprintf("execution evidence %s", id)}
+	if goal := strings.TrimSpace(execution.Goal); goal != "" {
+		lines = append(lines, "goal: "+goal)
+	}
+	if generatedAt := strings.TrimSpace(evidence.GeneratedAt); generatedAt != "" {
+		lines = append(lines, "generated: "+generatedAt)
+	}
+	lines = append(lines, fmt.Sprintf("artifacts: %d", len(evidence.ArtifactManifest)))
+	lines = append(lines, fmt.Sprintf("audit events: %d", len(evidence.Audit)))
+	return strings.Join(lines, "\n")
+}
+
+func renderOrchestrateExecutionAudit(executionID string, audit orchestrateAuditExportResponse) string {
+	id := firstNonEmpty(strings.TrimSpace(audit.ExecutionID), strings.TrimSpace(executionID), "(unknown)")
+	lines := []string{fmt.Sprintf("execution audit %s", id)}
+	lines = append(lines, fmt.Sprintf("events: %d", len(audit.Events)))
+	for _, event := range audit.Events {
+		action := firstNonEmpty(strings.TrimSpace(event.Action), "unknown")
+		line := "- " + action
+		if target := strings.TrimSpace(event.Target); target != "" {
+			line += " target=" + target
+		}
+		if result := strings.TrimSpace(event.Result); result != "" {
+			line += " result=" + result
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderOrchestrateExecutionList(executions []orchestrateExecutionSnapshot) string {
+	if len(executions) == 0 {
+		return "No orchestration executions found."
+	}
+	lines := []string{"Orchestration executions:"}
+	for _, execution := range executions {
+		total, completed, failed := summarizeOrchestrateExecution(execution)
+		line := fmt.Sprintf(
+			"- %s status=%s tasks=%d completed=%d failed=%d",
+			firstNonEmpty(strings.TrimSpace(execution.ID), "unknown"),
+			firstNonEmpty(strings.TrimSpace(execution.Status), "unknown"),
+			total,
+			completed,
+			failed,
+		)
+		if updated := strings.TrimSpace(execution.UpdatedAt); updated != "" {
+			line += " updated=" + updated
+		}
+		lines = append(lines, line)
+		if goal := strings.TrimSpace(execution.Goal); goal != "" {
+			lines = append(lines, "  goal: "+truncateOrchestrateText(goal, 120))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderMemoryList(resp memoryListResponse) string {
+	lines := []string{"memory list"}
+	if subject := strings.TrimSpace(resp.Subject); subject != "" {
+		lines[0] = "memory list " + subject
+	}
+	lines = append(lines, fmt.Sprintf("entries: %d", len(resp.Entries)))
+	for _, entry := range resp.Entries {
+		lines = append(lines, fmt.Sprintf("- %s · %s", firstNonEmpty(strings.TrimSpace(entry.ID), "unknown"), firstNonEmpty(strings.TrimSpace(entry.Type), "unknown")))
+	}
+	if len(resp.Attachments) > 0 {
+		lines = append(lines, "attachments:")
+		for _, attachment := range resp.Attachments {
+			lines = append(lines, fmt.Sprintf("- %s -> %s", firstNonEmpty(strings.TrimSpace(attachment.AgentID), "unknown"), firstNonEmpty(strings.TrimSpace(attachment.MemoryID), "unknown")))
+		}
+	}
+	if len(resp.Grants) > 0 {
+		lines = append(lines, "grants:")
+		for _, grant := range resp.Grants {
+			lines = append(lines, fmt.Sprintf("- %s · %s", firstNonEmpty(strings.TrimSpace(grant.Subject), "unknown"), firstNonEmpty(strings.TrimSpace(grant.Scope), "unknown")))
+		}
+	}
+	if len(resp.Audit) > 0 {
+		lines = append(lines, fmt.Sprintf("audit events: %d", len(resp.Audit)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderMemorySearchResults(resp memorySearchResponse) string {
+	if len(resp.Results) == 0 {
+		return "No memory search results."
+	}
+	lines := []string{"memory search results:"}
+	for _, result := range resp.Results {
+		lines = append(lines, fmt.Sprintf(
+			"- %s · scope=%s · score=%.2f · %s",
+			firstNonEmpty(strings.TrimSpace(result.ID), "unknown"),
+			firstNonEmpty(strings.TrimSpace(result.Scope), "unknown"),
+			result.Score,
+			firstNonEmpty(strings.TrimSpace(result.Snippet), "(no snippet)"),
+		))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderMemoryDistill(run memoryDistillRunSnapshot) string {
+	lines := []string{
+		fmt.Sprintf("memory distill %s", firstNonEmpty(strings.TrimSpace(run.RunID), "unknown")),
+		fmt.Sprintf("instance: %s", firstNonEmpty(strings.TrimSpace(run.InstanceID), "unknown")),
+		fmt.Sprintf("status: %s", firstNonEmpty(strings.TrimSpace(run.Status), "unknown")),
+	}
+	if run.DryRun {
+		lines = append(lines, "dry run: true")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderOrchestratePlan(plan orchestratePlanSnapshot) string {
+	lines := []string{
+		"orchestration plan",
+		fmt.Sprintf("goal: %s", strings.TrimSpace(plan.Goal)),
+		fmt.Sprintf("approval: %s", firstNonEmpty(strings.TrimSpace(plan.ApprovalScope), "infrastructure_only")),
+		fmt.Sprintf("tasks: %d", len(plan.TaskUnits)),
+		fmt.Sprintf("max concurrency: %d", plan.MaxConcurrency),
+	}
+	if provider := strings.TrimSpace(plan.Provider); provider != "" {
+		lines = append(lines, "planner provider: "+provider)
+	}
+	if len(plan.TaskUnits) > 0 {
+		lines = append(lines, "task units:")
+		for _, task := range plan.TaskUnits {
+			target := strings.TrimSpace(task.AgentID)
+			if host := strings.TrimSpace(task.HostID); host != "" {
+				target = host + "/" + target
+			} else if len(task.HostLabels) > 0 {
+				target = "labels[" + strings.Join(task.HostLabels, ",") + "]/" + target
+			}
+			if target == "" {
+				target = "(unassigned)"
+			}
+			lines = append(lines, fmt.Sprintf(
+				"- %s target=%s %s",
+				firstNonEmpty(strings.TrimSpace(task.ID), "task"),
+				target,
+				truncateOrchestrateText(task.Input, 160),
+			))
+		}
+	}
+	if len(plan.RequiredWorkers) > 0 {
+		lines = append(lines, "required workers:")
+		for _, worker := range plan.RequiredWorkers {
+			hostTarget := firstNonEmpty(strings.TrimSpace(worker.HostID), orchestratorLocalHostID)
+			if strings.TrimSpace(worker.HostID) == "" && len(worker.HostLabels) > 0 {
+				hostTarget = "labels[" + strings.Join(worker.HostLabels, ",") + "]"
+			}
+			lines = append(lines, fmt.Sprintf(
+				"- %s/%s x%d",
+				hostTarget,
+				firstNonEmpty(strings.TrimSpace(worker.AgentID), "zeroclaw"),
+				maxInt(worker.Count, 1),
+			))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func normalizeStringSelectorSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		trimmed := strings.ToLower(strings.TrimSpace(value))
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func summarizeOrchestrateExecution(execution orchestrateExecutionSnapshot) (total, completed, failed int) {
+	total = len(execution.TaskUnits)
+	for _, result := range execution.Results {
+		switch strings.ToLower(strings.TrimSpace(result.Status)) {
+		case "completed":
+			completed++
+		case "failed":
+			failed++
+		}
+	}
+	if total == 0 {
+		total = len(execution.Results)
+	}
+	return total, completed, failed
+}
+
 func truncateOrchestrateText(input string, limit int) string {
 	trimmed := strings.TrimSpace(input)
 	if limit <= 0 {
@@ -3626,6 +7803,15 @@ func writePrettyJSON(out io.Writer, raw []byte) error {
 		return writeErr
 	}
 	formatted, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(out, string(formatted))
+	return err
+}
+
+func writePrettyJSONValue(out io.Writer, value interface{}) error {
+	formatted, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -5010,7 +9196,7 @@ func buildZeroClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Con
 			providerID = strings.TrimSpace(vendor)
 		}
 		defaultProvider = mapCarrierProviderToManagedProvider(providerID)
-		defaultModel = modelID
+		defaultModel = sharedconfig.NormalizeModelForProvider(defaultProvider, modelID)
 		credentialRef := strings.TrimSpace(model.CredentialRef)
 		if credentialRef == "" {
 			credentialRef = strings.TrimSpace(model.ProviderID)
@@ -5972,6 +10158,9 @@ func runOnboard(in io.Reader, out io.Writer, startGateway func() error) error {
 	}
 	modelName := provider.ID + "-default"
 	modelID := strings.TrimSpace(provider.ExampleModel)
+	if configuredModel, err := sharedconfig.LoadCarrierModelForProvider(provider.ID); err == nil && configuredModel != nil && strings.TrimSpace(configuredModel.ModelID) != "" {
+		modelID = strings.TrimSpace(configuredModel.ModelID)
+	}
 	if modelID == "" {
 		modelID = provider.ID + "/default"
 	}
@@ -6307,6 +10496,7 @@ func runAddManagedAgentTUI(in io.Reader, out io.Writer, agentID string, quiet bo
 		RecordPath:   result.RecordPath,
 		Channel:      result.ChannelID,
 		Provider:     result.ProviderID,
+		ModelSurface: result.ModelSurface,
 		PairRequired: hasChannel && strings.TrimSpace(token) != "" && strings.TrimSpace(result.PairedChatID) == "",
 		PairedChatID: result.PairedChatID,
 		Port:         result.Port,
@@ -7167,6 +11357,8 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 	configFileName := "config.json"
 	if strings.EqualFold(cfg.ID, "openclaw") {
 		configFileName = "openclaw.json"
+	} else if strings.EqualFold(cfg.ID, "zeroclaw") {
+		configFileName = "config.toml"
 	}
 	configPath := filepath.Join(home, cfg.ConfigDir, configFileName)
 	recordPath := filepath.Join(home, ".carrier", "agents", instanceID+".json")
@@ -7189,27 +11381,9 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 		return nil, fmt.Errorf("backup existing %s config: %w", cfg.ID, err)
 	}
 
-	modelID := strings.TrimSpace(provider.ExampleModel)
-	if modelID == "" {
-		modelID = provider.ID + "/default"
-	}
-	if catalog.IsOpenAICodexProviderID(provider.ID) {
-		if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
-			modelID = "openai/" + strings.TrimSpace(name)
-		} else {
-			modelID = "openai/gpt-5.3-codex"
-		}
-	}
-	modelName := modelID
-	if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
-		modelName = strings.TrimSpace(name)
-	}
-
-	providerKey := provider.ID
-	if vendor, _, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(vendor) != "" {
-		providerKey = strings.TrimSpace(vendor)
-	}
-	providerKey = mapCarrierProviderToManagedProvider(providerKey)
+	profiles := resolveManagedModelProfilesForAdd(provider)
+	primaryProfile := profiles[0]
+	providerKey := primaryProfile.ProviderKey
 	token := pickProviderTokenForManaged(provider, envVars)
 	if catalog.IsOpenAICodexProviderID(provider.ID) && strings.EqualFold(cfg.ID, "picoclaw") {
 		accountID := extractOpenAIAccountIDFromToken(token)
@@ -7224,9 +11398,9 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 	}
 	channelSetupPending := channelID != "" && channelToken == ""
 
-	var payload map[string]interface{}
+	var configRaw []byte
 	if strings.EqualFold(cfg.ID, "openclaw") {
-		payload = buildManagedOpenClawConfigPayload(
+		payload := buildManagedOpenClawConfigPayload(
 			channelID,
 			channelToken,
 			channelSetupPending,
@@ -7234,9 +11408,14 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 			provider,
 			providerKey,
 			token,
-			modelID,
+			primaryProfile.ModelID,
 			workspacePath,
 		)
+		raw, marshalErr := json.MarshalIndent(payload, "", "  ")
+		if marshalErr != nil {
+			return nil, fmt.Errorf("marshal %s config: %w", cfg.ID, marshalErr)
+		}
+		configRaw = append(raw, '\n')
 		if strings.TrimSpace(token) != "" {
 			secrets := map[string]interface{}{
 				"providers": map[string]interface{}{
@@ -7253,8 +11432,20 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 				return nil, fmt.Errorf("write openclaw carrier secrets: %w", err)
 			}
 		}
+	} else if strings.EqualFold(cfg.ID, "zeroclaw") {
+		configRaw = renderManagedZeroClawConfigTOML(
+			channelID,
+			channelToken,
+			channelSetupPending,
+			allowFrom,
+			providerKey,
+			token,
+			primaryProfile.ModelID,
+			profiles,
+			allocatedPort,
+		)
 	} else {
-		payload = buildManagedPicoClawConfigPayload(
+		payload := buildManagedPicoClawConfigPayload(
 			channelID,
 			channelToken,
 			channelSetupPending,
@@ -7262,17 +11453,18 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 			provider,
 			providerKey,
 			token,
-			modelID,
-			modelName,
+			profiles,
+			primaryProfile,
 			workspacePath,
 		)
+		raw, marshalErr := json.MarshalIndent(payload, "", "  ")
+		if marshalErr != nil {
+			return nil, fmt.Errorf("marshal %s config: %w", cfg.ID, marshalErr)
+		}
+		configRaw = append(raw, '\n')
 	}
 
-	raw, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("marshal %s config: %w", cfg.ID, err)
-	}
-	if err := os.WriteFile(configPath, append(raw, '\n'), 0o600); err != nil {
+	if err := os.WriteFile(configPath, configRaw, 0o600); err != nil {
 		return nil, fmt.Errorf("write %s config: %w", cfg.ID, err)
 	}
 
@@ -7302,9 +11494,34 @@ func prepareManagedAgentAddArtifacts(agentID, instanceID, channelID, channelToke
 		RecordPath:    recordPath,
 		ChannelID:     channelID,
 		ProviderID:    provider.ID,
+		ModelSurface:  buildManagedModelSurfaceForAdd(profiles),
 		PairedChatID:  pairedChatID,
 		Port:          allocatedPort,
 	}, nil
+}
+
+func buildManagedModelSurfaceForAdd(profiles []managedModelProfile) *managedAgentModelSurface {
+	if len(profiles) == 0 {
+		return nil
+	}
+	surface := &managedAgentModelSurface{
+		DefaultProfile: strings.TrimSpace(profiles[0].ProfileName),
+		Profiles:       make([]managedAgentModelProfile, 0, len(profiles)),
+	}
+	for i, profile := range profiles {
+		surface.Profiles = append(surface.Profiles, managedAgentModelProfile{
+			ProfileName:    strings.TrimSpace(profile.ProfileName),
+			ModelAlias:     strings.TrimSpace(profile.ModelAlias),
+			ModelID:        strings.TrimSpace(profile.ModelID),
+			ProviderID:     strings.TrimSpace(profile.ProviderID),
+			ProviderKey:    strings.TrimSpace(profile.ProviderKey),
+			ProtocolFamily: strings.TrimSpace(profile.ProtocolFamily),
+			BaseURL:        strings.TrimSpace(profile.BaseURL),
+			AuthMethod:     strings.TrimSpace(profile.AuthMethod),
+			Primary:        i == 0,
+		})
+	}
+	return surface
 }
 
 func buildManagedPicoClawConfigPayload(
@@ -7312,20 +11529,60 @@ func buildManagedPicoClawConfigPayload(
 	channelSetupPending bool,
 	allowFrom []string,
 	provider choiceOption,
-	providerKey, providerToken, modelID, modelName, workspacePath string,
+	providerKey, providerToken string,
+	profiles []managedModelProfile,
+	primaryProfile managedModelProfile,
+	workspacePath string,
 ) map[string]interface{} {
-	modelItem := map[string]interface{}{
-		"model_name": modelName,
-		"model":      modelID,
-	}
-	providerItem := map[string]interface{}{
-		"credential_ref": provider.ID,
-	}
-	if catalog.IsOpenAICodexProviderID(provider.ID) {
-		modelItem["auth_method"] = "oauth"
-		providerItem["auth_method"] = "oauth"
-	} else if providerToken != "" {
-		providerItem["api_key"] = providerToken
+	modelList := make([]interface{}, 0, len(profiles))
+	providerProfiles := map[string]interface{}{}
+	providers := map[string]interface{}{}
+	for _, profile := range profiles {
+		modelItem := map[string]interface{}{
+			"model_name":      profile.ProfileName,
+			"model":           profile.ModelID,
+			"protocol_family": profile.ProtocolFamily,
+		}
+		if strings.TrimSpace(profile.ModelAlias) != "" {
+			modelItem["model_alias"] = profile.ModelAlias
+		}
+		if strings.TrimSpace(profile.BaseURL) != "" {
+			modelItem["base_url"] = profile.BaseURL
+		}
+		if strings.TrimSpace(profile.AuthMethod) != "" {
+			modelItem["auth_method"] = profile.AuthMethod
+		}
+		modelList = append(modelList, modelItem)
+
+		profileEntry := map[string]interface{}{
+			"provider":        profile.ProviderKey,
+			"provider_id":     profile.ProviderID,
+			"protocol_family": profile.ProtocolFamily,
+			"model":           profile.ModelID,
+			"credential_ref":  provider.ID,
+		}
+		if strings.TrimSpace(profile.ModelAlias) != "" {
+			profileEntry["model_alias"] = profile.ModelAlias
+		}
+		if strings.TrimSpace(profile.BaseURL) != "" {
+			profileEntry["base_url"] = profile.BaseURL
+		}
+		if strings.TrimSpace(profile.AuthMethod) != "" {
+			profileEntry["auth_method"] = profile.AuthMethod
+		}
+		providerProfiles[profile.ProfileName] = profileEntry
+
+		if _, ok := providers[profile.ProviderKey]; !ok {
+			providerItem := map[string]interface{}{
+				"credential_ref": provider.ID,
+			}
+			if strings.TrimSpace(profile.AuthMethod) != "" {
+				providerItem["auth_method"] = profile.AuthMethod
+			} else if providerToken != "" {
+				providerItem["api_key"] = providerToken
+			}
+			providers[profile.ProviderKey] = providerItem
+		}
 	}
 
 	channels := map[string]interface{}{}
@@ -7348,19 +11605,228 @@ func buildManagedPicoClawConfigPayload(
 			"defaults": map[string]interface{}{
 				"workspace":             workspacePath,
 				"provider":              providerKey,
-				"model":                 modelName,
+				"model":                 deriveManagedModelName(primaryProfile.ModelID),
 				"max_tokens":            8192,
 				"temperature":           0.7,
 				"max_tool_iterations":   20,
 				"restrict_to_workspace": true,
 			},
 		},
-		"model_list": []interface{}{modelItem},
-		"providers": map[string]interface{}{
-			providerKey: providerItem,
-		},
-		"channels": channels,
+		"model_list":        modelList,
+		"provider_profiles": providerProfiles,
+		"providers":         providers,
+		"channels":          channels,
 	}
+}
+
+func renderManagedZeroClawConfigTOML(
+	channelID, channelToken string,
+	channelSetupPending bool,
+	allowFrom []string,
+	providerKey, providerToken, modelID string,
+	profiles []managedModelProfile,
+	port int,
+) []byte {
+	if strings.TrimSpace(providerKey) == "" {
+		providerKey = "openai"
+	}
+	if strings.TrimSpace(modelID) == "" {
+		modelID = "anthropic/claude-sonnet-4.6"
+	}
+	modelID = sharedconfig.NormalizeModelForProvider(providerKey, modelID)
+	if port <= 0 {
+		port = 9091
+	}
+
+	allowedUsers := "[]"
+	if len(allowFrom) > 0 {
+		quoted := make([]string, 0, len(allowFrom))
+		for _, raw := range allowFrom {
+			id := strings.TrimSpace(raw)
+			if id == "" {
+				continue
+			}
+			quoted = append(quoted, strconv.Quote(id))
+		}
+		if len(quoted) > 0 {
+			allowedUsers = "[" + strings.Join(quoted, ", ") + "]"
+		}
+	}
+
+	lines := []string{
+		"# Generated by Carrier managed add",
+		"# Edit manually if you need advanced ZeroClaw settings.",
+		"",
+		fmt.Sprintf("api_key = %s", strconv.Quote(strings.TrimSpace(providerToken))),
+		fmt.Sprintf("default_provider = %s", strconv.Quote(strings.TrimSpace(providerKey))),
+		fmt.Sprintf("default_model = %s", strconv.Quote(strings.TrimSpace(modelID))),
+		"default_temperature = 0.7",
+		"",
+		"[agent]",
+		"max_tool_iterations = 20",
+		"",
+		"[gateway]",
+		fmt.Sprintf("port = %d", port),
+		`host = "127.0.0.1"`,
+		"require_pairing = false",
+	}
+	if len(profiles) > 0 {
+		lines = append(lines, "", "# Managed provider profiles")
+		for _, profile := range profiles {
+			lines = append(lines,
+				"",
+				fmt.Sprintf("[provider_profiles.%s]", sanitizeManagedProfileSectionName(profile.ProfileName)),
+				fmt.Sprintf("protocol_family = %s", strconv.Quote(profile.ProtocolFamily)),
+				fmt.Sprintf("provider = %s", strconv.Quote(profile.ProviderKey)),
+				fmt.Sprintf("provider_id = %s", strconv.Quote(profile.ProviderID)),
+			)
+			if strings.TrimSpace(profile.ModelAlias) != "" {
+				lines = append(lines, fmt.Sprintf("model_alias = %s", strconv.Quote(profile.ModelAlias)))
+			}
+			lines = append(lines, fmt.Sprintf("model = %s", strconv.Quote(sharedconfig.NormalizeModelForProvider(profile.ProviderKey, profile.ModelID))))
+			if strings.TrimSpace(profile.BaseURL) != "" {
+				lines = append(lines, fmt.Sprintf("base_url = %s", strconv.Quote(profile.BaseURL)))
+			}
+			if strings.TrimSpace(profile.EnvVar) != "" {
+				lines = append(lines, fmt.Sprintf("credential_env = %s", strconv.Quote(profile.EnvVar)))
+			}
+		}
+	}
+	if strings.TrimSpace(channelID) == "" {
+		lines = append(lines,
+			"",
+			"# No chat channel configured (WebUI-only mode)",
+		)
+		return []byte(strings.Join(lines, "\n") + "\n")
+	}
+
+	lines = append(lines,
+		"",
+		fmt.Sprintf("[channels_config.%s]", channelID),
+		fmt.Sprintf("bot_token = %s", strconv.Quote(strings.TrimSpace(channelToken))),
+		fmt.Sprintf("allowed_users = %s", allowedUsers),
+		"mention_only = false",
+	)
+	if channelSetupPending {
+		lines = append(lines,
+			"",
+			"# channel setup is pending; configure channel token before enabling transport pairing",
+		)
+	}
+	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+func resolveManagedModelProfilesForAdd(provider choiceOption) []managedModelProfile {
+	configuredProfiles, err := sharedconfig.LoadCarrierModelProfilesForProvider(provider.ID)
+	if err == nil && len(configuredProfiles) > 0 {
+		profiles := make([]managedModelProfile, 0, len(configuredProfiles))
+		for _, configured := range configuredProfiles {
+			profiles = append(profiles, buildManagedModelProfileForAdd(provider, configured))
+		}
+		return profiles
+	}
+	return []managedModelProfile{buildFallbackManagedModelProfileForAdd(provider)}
+}
+
+func buildManagedModelProfileForAdd(provider choiceOption, configured sharedconfig.CarrierDefaultModel) managedModelProfile {
+	modelID := normalizeManagedModelID(configured.ProviderID, configured.ModelID)
+	providerKey := deriveManagedProviderKey(configured.ProviderID, modelID)
+	baseURL := strings.TrimSpace(configured.BaseURL)
+	if baseURL == "" {
+		baseURL = resolveManagedProviderBaseURL(provider, providerKey)
+	}
+	authMethod := ""
+	if catalog.IsOpenAICodexProviderID(configured.ProviderID) {
+		authMethod = "oauth"
+	}
+	return managedModelProfile{
+		ProfileName:    firstNonEmpty(strings.TrimSpace(configured.ModelName), deriveManagedModelName(modelID)),
+		ModelAlias:     strings.TrimSpace(configured.ModelAlias),
+		ModelID:        modelID,
+		EnvVar:         firstNonEmpty(strings.TrimSpace(configured.EnvVar), strings.TrimSpace(provider.ProviderEnv)),
+		ProviderID:     strings.TrimSpace(configured.ProviderID),
+		ProviderKey:    providerKey,
+		ProtocolFamily: firstNonEmpty(strings.TrimSpace(configured.ProtocolFamily), catalog.ProtocolFamilyForProvider(configured.ProviderID)),
+		BaseURL:        baseURL,
+		AuthMethod:     authMethod,
+	}
+}
+
+func buildFallbackManagedModelProfileForAdd(provider choiceOption) managedModelProfile {
+	modelID := strings.TrimSpace(provider.ExampleModel)
+	if modelID == "" {
+		modelID = provider.ID + "/default"
+	}
+	modelID = normalizeManagedModelID(provider.ID, modelID)
+	providerKey := deriveManagedProviderKey(provider.ID, modelID)
+	authMethod := ""
+	if catalog.IsOpenAICodexProviderID(provider.ID) {
+		authMethod = "oauth"
+	}
+	return managedModelProfile{
+		ProfileName:    deriveManagedModelName(modelID),
+		ModelID:        modelID,
+		EnvVar:         strings.TrimSpace(provider.ProviderEnv),
+		ProviderID:     strings.TrimSpace(provider.ID),
+		ProviderKey:    providerKey,
+		ProtocolFamily: catalog.ProtocolFamilyForProvider(provider.ID),
+		BaseURL:        resolveManagedProviderBaseURL(provider, providerKey),
+		AuthMethod:     authMethod,
+	}
+}
+
+func normalizeManagedModelID(providerID, modelID string) string {
+	modelID = strings.TrimSpace(modelID)
+	if catalog.IsOpenAICodexProviderID(providerID) {
+		if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
+			return "openai/" + strings.TrimSpace(name)
+		}
+		return "openai/gpt-5.3-codex"
+	}
+	return modelID
+}
+
+func deriveManagedProviderKey(providerID, modelID string) string {
+	providerKey := strings.TrimSpace(providerID)
+	if vendor, _, ok := strings.Cut(strings.TrimSpace(modelID), "/"); ok && strings.TrimSpace(vendor) != "" {
+		providerKey = strings.TrimSpace(vendor)
+	}
+	return mapCarrierProviderToManagedProvider(providerKey)
+}
+
+func deriveManagedModelName(modelID string) string {
+	modelName := strings.TrimSpace(modelID)
+	if _, name, ok := strings.Cut(modelName, "/"); ok && strings.TrimSpace(name) != "" {
+		return strings.TrimSpace(name)
+	}
+	if modelName == "" {
+		return "default"
+	}
+	return modelName
+}
+
+func sanitizeManagedProfileSectionName(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "default"
+	}
+	var b strings.Builder
+	for _, r := range raw {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	return strings.Trim(strings.ToLower(b.String()), "_")
+}
+
+func resolveManagedProviderBaseURL(provider choiceOption, providerKey string) string {
+	if strings.TrimSpace(provider.ID) == "" {
+		return catalog.ResolveProviderBaseURL("", providerKey, "")
+	}
+	return catalog.ResolveProviderBaseURL(provider.ID, providerKey, "")
 }
 
 func buildManagedOpenClawConfigPayload(

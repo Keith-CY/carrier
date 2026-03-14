@@ -16,6 +16,8 @@ type remoteControlState struct {
 	Hosts         []RemoteHost                        `json:"hosts"`
 	Profiles      []ProviderProfile                   `json:"providerProfiles"`
 	Bindings      []ProviderBinding                   `json:"providerBindings"`
+	Policies      []OrchestratorPolicyRule            `json:"orchestratorPolicies,omitempty"`
+	Triggers      []ExecutionTrigger                  `json:"executionTriggers,omitempty"`
 	InstanceSyncs map[string]RemoteInstanceSyncStatus `json:"instanceSyncs,omitempty"`
 	Executions    []OrchestratorExecution             `json:"orchestratorExecutions,omitempty"`
 	WorkerLeases  []OrchestratorWorkerLease           `json:"orchestratorWorkerLeases,omitempty"`
@@ -31,6 +33,7 @@ type providerProfilePatch struct {
 }
 
 var remoteControlStoreMu sync.Mutex
+var writeRemoteControlStoreFile = os.WriteFile
 
 func remoteControlStorePath() (string, error) {
 	if custom := strings.TrimSpace(os.Getenv("CARRIER_REMOTE_CONTROL_STORE")); custom != "" {
@@ -55,6 +58,8 @@ func loadRemoteControlState() (*remoteControlState, string, error) {
 				Hosts:         []RemoteHost{},
 				Profiles:      []ProviderProfile{},
 				Bindings:      []ProviderBinding{},
+				Policies:      []OrchestratorPolicyRule{},
+				Triggers:      []ExecutionTrigger{},
 				InstanceSyncs: map[string]RemoteInstanceSyncStatus{},
 				Executions:    []OrchestratorExecution{},
 				WorkerLeases:  []OrchestratorWorkerLease{},
@@ -74,6 +79,12 @@ func loadRemoteControlState() (*remoteControlState, string, error) {
 	}
 	if state.Bindings == nil {
 		state.Bindings = []ProviderBinding{}
+	}
+	if state.Policies == nil {
+		state.Policies = []OrchestratorPolicyRule{}
+	}
+	if state.Triggers == nil {
+		state.Triggers = []ExecutionTrigger{}
 	}
 	if state.InstanceSyncs == nil {
 		state.InstanceSyncs = map[string]RemoteInstanceSyncStatus{}
@@ -101,7 +112,7 @@ func saveRemoteControlState(path string, state *remoteControlState) error {
 	if err != nil {
 		return fmt.Errorf("marshal remote control store: %w", err)
 	}
-	if err := os.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
+	if err := writeRemoteControlStoreFile(path, append(raw, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write remote control store: %w", err)
 	}
 	return nil
@@ -215,6 +226,9 @@ func patchRemoteHost(hostID string, patch RemoteHost) (RemoteHost, error) {
 		}
 		if strings.TrimSpace(string(patch.RuntimeMode)) != "" {
 			merged.RuntimeMode = patch.RuntimeMode
+		}
+		if patch.Labels != nil {
+			merged.Labels = patch.Labels
 		}
 		merged = normalizeRemoteHost(merged)
 		if err := validateRemoteHost(merged); err != nil {
@@ -521,6 +535,176 @@ func deleteProviderBinding(bindingID string) (bool, error) {
 	return true, nil
 }
 
+func listOrchestratorPolicies() ([]OrchestratorPolicyRule, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, _, err := loadRemoteControlState()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]OrchestratorPolicyRule, len(state.Policies))
+	copy(out, state.Policies)
+	return sortOrchestratorPolicyRules(out), nil
+}
+
+func listExecutionTriggers() ([]ExecutionTrigger, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, _, err := loadRemoteControlState()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ExecutionTrigger, len(state.Triggers))
+	copy(out, state.Triggers)
+	return out, nil
+}
+
+func getExecutionTrigger(triggerID string) (ExecutionTrigger, bool, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, _, err := loadRemoteControlState()
+	if err != nil {
+		return ExecutionTrigger{}, false, err
+	}
+	id := strings.TrimSpace(triggerID)
+	for _, trigger := range state.Triggers {
+		if strings.EqualFold(strings.TrimSpace(trigger.ID), id) {
+			return trigger, true, nil
+		}
+	}
+	return ExecutionTrigger{}, false, nil
+}
+
+func upsertExecutionTrigger(trigger ExecutionTrigger) (ExecutionTrigger, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, path, err := loadRemoteControlState()
+	if err != nil {
+		return ExecutionTrigger{}, err
+	}
+	trigger, err = normalizeExecutionTriggerForStore(trigger)
+	if err != nil {
+		return ExecutionTrigger{}, err
+	}
+	now := nowTimestamp()
+	trigger.UpdatedAt = now
+	if trigger.CreatedAt == "" {
+		trigger.CreatedAt = now
+	}
+	updated := false
+	for i := range state.Triggers {
+		if strings.EqualFold(strings.TrimSpace(state.Triggers[i].ID), trigger.ID) {
+			trigger.CreatedAt = state.Triggers[i].CreatedAt
+			state.Triggers[i] = trigger
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		state.Triggers = append(state.Triggers, trigger)
+	}
+	if err := saveRemoteControlState(path, state); err != nil {
+		return ExecutionTrigger{}, err
+	}
+	return trigger, nil
+}
+
+func deleteExecutionTrigger(triggerID string) error {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, path, err := loadRemoteControlState()
+	if err != nil {
+		return err
+	}
+	id := strings.TrimSpace(triggerID)
+	filtered := state.Triggers[:0]
+	found := false
+	for _, trigger := range state.Triggers {
+		if strings.EqualFold(strings.TrimSpace(trigger.ID), id) {
+			found = true
+			continue
+		}
+		filtered = append(filtered, trigger)
+	}
+	if !found {
+		return os.ErrNotExist
+	}
+	state.Triggers = append([]ExecutionTrigger(nil), filtered...)
+	return saveRemoteControlState(path, state)
+}
+
+func upsertOrchestratorPolicy(rule OrchestratorPolicyRule) (OrchestratorPolicyRule, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, path, err := loadRemoteControlState()
+	if err != nil {
+		return OrchestratorPolicyRule{}, err
+	}
+	normalized := normalizeOrchestratorPolicyRule(rule)
+	if err := validateOrchestratorPolicyRule(normalized); err != nil {
+		return OrchestratorPolicyRule{}, err
+	}
+	now := nowTimestamp()
+	if normalized.ID == "" {
+		normalized.ID = uuid.NewString()
+	}
+	if normalized.CreatedAt == "" {
+		normalized.CreatedAt = now
+	}
+	normalized.UpdatedAt = now
+
+	updated := false
+	for i := range state.Policies {
+		if strings.EqualFold(strings.TrimSpace(state.Policies[i].ID), normalized.ID) {
+			normalized.CreatedAt = state.Policies[i].CreatedAt
+			state.Policies[i] = normalized
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		state.Policies = append(state.Policies, normalized)
+	}
+	state.Policies = sortOrchestratorPolicyRules(state.Policies)
+	if err := saveRemoteControlState(path, state); err != nil {
+		return OrchestratorPolicyRule{}, err
+	}
+	return normalized, nil
+}
+
+func deleteOrchestratorPolicy(policyID string) (bool, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, path, err := loadRemoteControlState()
+	if err != nil {
+		return false, err
+	}
+	id := strings.TrimSpace(policyID)
+	before := len(state.Policies)
+	filtered := state.Policies[:0]
+	for _, policy := range state.Policies {
+		if strings.EqualFold(strings.TrimSpace(policy.ID), id) {
+			continue
+		}
+		filtered = append(filtered, policy)
+	}
+	state.Policies = filtered
+	if len(state.Policies) == before {
+		return false, nil
+	}
+	if err := saveRemoteControlState(path, state); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func remoteInstanceSyncKey(hostID, agentID string) string {
 	return strings.ToLower(strings.TrimSpace(hostID) + ":" + strings.TrimSpace(agentID))
 }
@@ -539,6 +723,21 @@ func getRemoteInstanceSyncStatus(hostID, agentID string) (RemoteInstanceSyncStat
 		return RemoteInstanceSyncStatus{}, false, nil
 	}
 	return status, true, nil
+}
+
+func listRemoteInstanceSyncStatuses() ([]RemoteInstanceSyncStatus, error) {
+	remoteControlStoreMu.Lock()
+	defer remoteControlStoreMu.Unlock()
+
+	state, _, err := loadRemoteControlState()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RemoteInstanceSyncStatus, 0, len(state.InstanceSyncs))
+	for _, status := range state.InstanceSyncs {
+		out = append(out, status)
+	}
+	return out, nil
 }
 
 func upsertRemoteInstanceSyncStatus(status RemoteInstanceSyncStatus) (RemoteInstanceSyncStatus, error) {
@@ -736,6 +935,9 @@ func upsertOrchestratorWorkerLease(lease OrchestratorWorkerLease) (OrchestratorW
 	}
 	if lease.HeartbeatAt == "" {
 		lease.HeartbeatAt = lease.UpdatedAt
+	}
+	if lease.LastHeartbeatAt == "" {
+		lease.LastHeartbeatAt = lease.HeartbeatAt
 	}
 	if lease.LeaseExpireAt == "" {
 		lease.LeaseExpireAt = lease.UpdatedAt

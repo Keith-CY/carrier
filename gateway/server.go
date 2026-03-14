@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -48,7 +49,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		}
 		requestID := requestIDFromCtx(r.Context())
 
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -78,7 +79,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	// Provider setup
 	mux.HandleFunc("/api/v1/setup", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -91,13 +92,37 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 		}
 	})
+	mux.HandleFunc("/api/v1/auth/providers", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleProviderAuthStatusAPI(w, r, requestID)
+	})
+	mux.HandleFunc("/api/v1/channels", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleChannelStatusAPI(w, r, requestID, setup)
+	})
 	mux.HandleFunc("/api/v1/add", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -109,11 +134,11 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
-		handleWebUIOnboard(w, r, requestID, daemon)
+		handleWebUIOnboard(w, r, requestID, daemon, setup)
 	})
 	mux.HandleFunc("/api/v1/telegram/pair/init", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
@@ -121,7 +146,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -133,7 +158,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -145,7 +170,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -157,7 +182,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -165,7 +190,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/agents", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -173,15 +198,31 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/agents/", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
 		handleWebUIAgent(w, r, requestID, daemon)
 	})
+	mux.HandleFunc("/api/v1/memory", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleMemory(w, r, requestID, daemon, cfg)
+	})
+	mux.HandleFunc("/api/v1/memory/", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleMemory(w, r, requestID, daemon, cfg)
+	})
 	mux.HandleFunc("/api/v1/instances", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -189,7 +230,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/instances/", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -197,7 +238,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/features", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -205,7 +246,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/webui/delegate/events", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -213,7 +254,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/remote/hosts", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -221,7 +262,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/remote/keys", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -229,7 +270,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/remote/hosts/", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -237,7 +278,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/remote/metrics", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -245,39 +286,143 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/remote/ssh-config-hosts", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
 		handleRemoteSSHConfigHosts(w, r, requestID, cfg)
 	})
+	mux.HandleFunc("/api/v1/templates", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleExecutionTemplates(w, r, requestID, cfg)
+	})
+	mux.HandleFunc("/api/v1/templates/", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleExecutionTemplates(w, r, requestID, cfg)
+	})
+	mux.HandleFunc("/api/v1/triggers", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleExecutionTriggers(w, r, requestID, cfg)
+	})
+	mux.HandleFunc("/api/v1/triggers/", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleExecutionTriggers(w, r, requestID, cfg)
+	})
 	mux.HandleFunc("/api/v1/orchestrator/executions", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
 		handleOrchestratorExecutions(w, r, requestID, cfg)
+	})
+	mux.HandleFunc("/api/v1/orchestrator/plans", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleOrchestratorPlans(w, r, requestID, cfg, daemon)
+	})
+	mux.HandleFunc("/api/v1/orchestrator/policies", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleOrchestratorPolicies(w, r, requestID, cfg)
+	})
+	mux.HandleFunc("/api/v1/orchestrator/policies/", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleOrchestratorPolicies(w, r, requestID, cfg)
+	})
+	mux.HandleFunc("/api/v1/policies/evaluate", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handlePolicyEvaluation(w, r, requestID, cfg)
 	})
 	mux.HandleFunc("/api/v1/orchestrator/executions/", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
 		handleOrchestratorExecutions(w, r, requestID, cfg)
 	})
+	mux.HandleFunc("/api/v1/orchestrator/workers", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleOrchestratorWorkers(w, r, requestID, cfg, daemon)
+	})
+	mux.HandleFunc("/api/v1/orchestrator/metrics", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleOrchestratorMetrics(w, r, requestID, cfg)
+	})
+	mux.HandleFunc("/api/v1/audit/export", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleGatewayAuditExport(w, r, requestID, cfg)
+	})
+	mux.HandleFunc("/api/v1/orchestrator/workers/queue", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleOrchestratorWorkersQueue(w, r, requestID, cfg)
+	})
 	mux.HandleFunc("/api/v1/orchestrator/workers/reclaim", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
 		handleOrchestratorWorkersReclaim(w, r, requestID, cfg)
 	})
+	mux.HandleFunc("/api/v1/orchestrator/workers/reclaim-stale", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleOrchestratorWorkersReclaimStale(w, r, requestID, cfg)
+	})
 	mux.HandleFunc("/api/v1/provider-profiles", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -285,7 +430,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/provider-profiles/", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -293,7 +438,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/provider-bindings", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -301,15 +446,23 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/provider-bindings/", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
 		handleProviderBindings(w, r, requestID, cfg)
 	})
+	mux.HandleFunc("/api/v1/provider-governance/resolve", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleProviderGovernanceResolve(w, r, requestID, cfg)
+	})
 	mux.HandleFunc("/api/v1/remote/chat/stream", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -317,7 +470,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	mux.HandleFunc("/api/v1/chat/stream", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -336,6 +489,10 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			return
 		}
 		handleTelegramWebhook(w, r, cfg, daemon, sessions, downloads, rl, onboard)
+	})
+	mux.HandleFunc("/api/v1/triggers/webhook/", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		handleExecutionTriggerWebhook(w, r, requestID, cfg)
 	})
 	mux.HandleFunc("/webhook/discord", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -367,7 +524,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -423,7 +580,7 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
-		if err := checkGatewayToken(r, cfg.APIToken); err != nil {
+		if err := checkGatewayAccess(r, cfg); err != nil {
 			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
 			return
 		}
@@ -500,19 +657,20 @@ func handleTelegramWebhook(w http.ResponseWriter, r *http.Request, cfg *GatewayC
 		return
 	}
 
-	msg := ParseTelegramMessage(payload)
-	if msg == nil {
+	envelope := NormalizeTelegramInboundEnvelope(payload, sessions)
+	if envelope == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "message": "ignored non-command telegram update"})
 		return
 	}
-
-	var resp GatewayResponse
-	if msg.Command != nil {
-		resp = processTelegramCommand(r.Context(), msg.Command, daemon, sessions, downloads, rl, onboard)
-	} else {
-		resp = processBaseAgentChat(r.Context(), msg.Provider, msg.ChatID, msg.RequestID, msg.RawText, daemon, sessions, rl)
+	if strings.TrimSpace(cfg.TelegramBotToken) != "" {
+		api := newTelegramAPIClient(cfg.TelegramBotToken, cfg.TelegramAPIBaseURL, nil)
+		if err := hydrateTelegramInboundAttachments(r.Context(), envelope, cfg, downloads, api); err != nil {
+			log.Printf("[gateway/telegram] warning: hydrate inbound attachments failed: %v", err)
+		}
 	}
-	writeJSON(w, http.StatusOK, RenderTelegramWebhookResponse(resp, msg.ChatID))
+
+	resp := RouteInboundChannel(r.Context(), envelope, daemon, sessions, downloads, rl, onboard)
+	writeJSON(w, http.StatusOK, RenderTelegramWebhookResponse(resp, envelope.ChatID))
 }
 
 func handleDiscordWebhook(w http.ResponseWriter, r *http.Request, cfg *GatewayConfig, daemon *DaemonClient, sessions *SessionStore, downloads *DownloadStore, rl *GatewayRateLimiter, onboard *OnboardStore) {
@@ -540,24 +698,13 @@ func handleDiscordWebhook(w http.ResponseWriter, r *http.Request, cfg *GatewayCo
 		return
 	}
 
-	msg := ParseDiscordMessage(payload)
-	if msg == nil {
+	envelope := NormalizeDiscordInboundEnvelope(payload, sessions)
+	if envelope == nil {
 		writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "unsupported discord payload"))
 		return
 	}
 
-	var resp GatewayResponse
-	if msg.Command != nil {
-		session := sessions.GetSession("discord", msg.ChatID)
-		var sessionToken string
-		if session != nil {
-			sessionToken = session.SessionToken
-		}
-		input := InjectSessionToken(ToGatewayInput(msg.Command), sessionToken)
-		resp = SafeHandleCommand(r.Context(), input, daemon, sessions, downloads, rl, onboard)
-	} else {
-		resp = processBaseAgentChat(r.Context(), msg.Provider, msg.ChatID, msg.RequestID, msg.RawText, daemon, sessions, rl)
-	}
+	resp := RouteInboundChannel(r.Context(), envelope, daemon, sessions, downloads, rl, onboard)
 	rendered := RenderDiscordResponse(resp)
 
 	_ = requestID
@@ -597,24 +744,13 @@ func handleFeishuWebhook(w http.ResponseWriter, r *http.Request, cfg *GatewayCon
 		return
 	}
 
-	msg := ParseFeishuMessage(payload)
-	if msg == nil {
+	envelope := NormalizeFeishuInboundEnvelope(payload, sessions)
+	if envelope == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"requestId": requestID, "result": "ok", "message": "ignored non-command feishu event"})
 		return
 	}
 
-	var resp GatewayResponse
-	if msg.Command != nil {
-		session := sessions.GetSession("feishu", msg.ChatID)
-		var sessionToken string
-		if session != nil {
-			sessionToken = session.SessionToken
-		}
-		input := InjectSessionToken(ToGatewayInput(msg.Command), sessionToken)
-		resp = SafeHandleCommand(r.Context(), input, daemon, sessions, downloads, rl, onboard)
-	} else {
-		resp = processBaseAgentChat(r.Context(), msg.Provider, msg.ChatID, msg.RequestID, msg.RawText, daemon, sessions, rl)
-	}
+	resp := RouteInboundChannel(r.Context(), envelope, daemon, sessions, downloads, rl, onboard)
 	writeJSON(w, http.StatusOK, RenderFeishuResponse(resp))
 }
 
@@ -624,6 +760,7 @@ func processBaseAgentChat(
 	chatID string,
 	requestID string,
 	message string,
+	attachments []baseagent.AttachmentRef,
 	daemon *DaemonClient,
 	sessions *SessionStore,
 	rl *GatewayRateLimiter,
@@ -632,9 +769,8 @@ func processBaseAgentChat(
 	if trimmed == "" {
 		return GatewayResponse{RequestID: requestID, Result: "ok", Message: "empty message ignored"}
 	}
-	session := sessions.GetSession(provider, chatID)
-	if session == nil {
-		return errResp(requestID, "E_SESSION_REQUIRED", "chat is not paired; run /pair <code> first")
+	if authErr := sessions.ValidateSession(provider, chatID, ""); authErr != nil {
+		return errResp(requestID, authErr.code, authErr.msg)
 	}
 	if rl != nil {
 		key := fmt.Sprintf("%s:%s", provider, chatID)
@@ -646,18 +782,22 @@ func processBaseAgentChat(
 	sessions.Touch(provider, chatID)
 
 	actor := fmt.Sprintf("%s:%s", provider, chatID)
-	chatResult, err := daemon.ChatBaseAgent(ctx, provider, chatID, requestID, trimmed, actor)
+	chatResult, err := daemon.ChatBaseAgent(ctx, provider, chatID, requestID, trimmed, attachments, actor)
 	if err != nil {
 		return daemonErrResp(requestID, err)
 	}
 	respMessage := strings.TrimSpace(chatResult.Message)
+	if respMessage == "" && chatResult.RichContent != nil {
+		respMessage = strings.TrimSpace(chatResult.RichContent.PlainTextFallback())
+	}
 	if respMessage == "" {
 		respMessage = "base agent completed with no output"
 	}
 	return GatewayResponse{
-		RequestID: requestID,
-		Result:    "ok",
-		Message:   respMessage,
+		RequestID:   requestID,
+		Result:      "ok",
+		Message:     respMessage,
+		RichContent: chatResult.RichContent,
 	}
 }
 
@@ -756,16 +896,17 @@ func handleSetupPost(w http.ResponseWriter, r *http.Request, requestID string, s
 		})
 		return
 	}
-	if !IsValidProviderType(req.Provider) {
+	if validationErr := ValidateSetupProviderInput(req.Provider, req.Token, req.WebhookSecret); validationErr != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 			"requestId": requestID, "result": "error",
-			"errorCode": "E_INVALID_PROVIDER",
-			"message":   fmt.Sprintf("invalid provider: %s; must be one of telegram, discord, feishu, dummy", req.Provider),
+			"errorCode": validationErr.code,
+			"message":   validationErr.msg,
 		})
 		return
 	}
 	cfg := setup.Configure(ProviderType(req.Provider), req.Token, req.WebhookSecret)
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	channelStatus := BuildChannelStatus(string(cfg.Provider), true, cfg.ConfiguredAt)
+	resp := map[string]interface{}{
 		"requestId": requestID,
 		"result":    "ok",
 		"message":   fmt.Sprintf("provider %s configured", req.Provider),
@@ -773,7 +914,11 @@ func handleSetupPost(w http.ResponseWriter, r *http.Request, requestID string, s
 			"provider":      cfg.Provider,
 			"configured_at": cfg.ConfiguredAt,
 		},
-	})
+	}
+	if channelStatus.ID != "" {
+		resp["channelStatus"] = channelStatus
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func handleSetupGet(w http.ResponseWriter, r *http.Request, requestID string, setup *SetupStore) {
@@ -783,6 +928,11 @@ func handleSetupGet(w http.ResponseWriter, r *http.Request, requestID string, se
 		"result":     "ok",
 		"configured": setup.IsConfigured(),
 		"provider":   redacted,
+	}
+	if redacted != nil {
+		if channelStatus := BuildChannelStatus(string(redacted.Provider), true, redacted.ConfiguredAt); channelStatus.ID != "" {
+			resp["channelStatus"] = channelStatus
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -841,26 +991,25 @@ func validateCommandAuth(input, sessionToken string, sessions *SessionStore) map
 	if cmdName == "/pair" {
 		return nil
 	}
-	session := sessions.GetSession(provider, chatID)
-	if session == nil {
+	if authErr := sessions.ValidateSession(provider, chatID, ""); authErr != nil {
 		return map[string]interface{}{
 			"requestId": requestID, "result": "error",
-			"errorCode": "E_SESSION_REQUIRED",
-			"message":   "chat is not paired; run /pair <code> first",
+			"errorCode": authErr.code,
+			"message":   authErr.msg,
 		}
 	}
 	if sessionToken == "" {
 		return map[string]interface{}{
 			"requestId": requestID, "result": "error",
-			"errorCode": "E_AUTH_REQUIRED",
-			"message":   "session token required (provide via Authorization header or sessionToken field)",
+			"errorCode": "E_SESSION_TOKEN_MISSING",
+			"message":   "session token is required for authenticated commands",
 		}
 	}
-	if session.SessionToken != sessionToken {
+	if authErr := sessions.ValidateSession(provider, chatID, sessionToken); authErr != nil {
 		return map[string]interface{}{
 			"requestId": requestID, "result": "error",
-			"errorCode": "E_AUTH_INVALID",
-			"message":   "invalid session token",
+			"errorCode": authErr.code,
+			"message":   authErr.msg,
 		}
 	}
 	return nil

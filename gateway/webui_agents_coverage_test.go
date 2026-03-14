@@ -315,6 +315,201 @@ func TestHandleWebUIAgent_Branches(t *testing.T) {
 		}
 	})
 
+	t.Run("capabilities action", func(t *testing.T) {
+		_, daemonErr, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+			"GET /api/v1/agents/picoclaw/capabilities": func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"error": map[string]string{"code": "E_COMMAND_FAILED", "message": "boom"},
+				})
+			},
+		})
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/capabilities", nil)
+		handleWebUIAgent(rec, req, "req-capabilities-method", daemonErr)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("expected 405, got %d", rec.Code)
+		}
+
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/agents/picoclaw/capabilities", nil)
+		handleWebUIAgent(rec, req, "req-capabilities-daemon-error", daemonErr)
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("expected 502, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		_, daemonOK, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+			"GET /api/v1/agents/picoclaw/capabilities": func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"skills": []map[string]interface{}{
+						{"name": "go-testing", "enabled": true},
+					},
+					"mcp": map[string]interface{}{
+						"servers": []map[string]interface{}{
+							{"name": "repo", "health": "healthy", "visibleToolCount": 1},
+						},
+					},
+				})
+			},
+		})
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/agents/picoclaw/capabilities", nil)
+		handleWebUIAgent(rec, req, "req-capabilities-ok", daemonOK)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"go-testing"`) {
+			t.Fatalf("expected capability payload, got %s", rec.Body.String())
+		}
+	})
+
+	t.Run("skills action", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/picoclaw/skills/go-testing", nil)
+		handleWebUIAgent(rec, req, "req-skills-method", nil)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("expected 405, got %d", rec.Code)
+		}
+
+		_, daemonStub, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{})
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/skills/go-testing", strings.NewReader("{"))
+		handleWebUIAgent(rec, req, "req-skills-bad-body", daemonStub)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", rec.Code)
+		}
+
+		_, daemonOK, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+			"POST /api/v1/agents/picoclaw/skills/go-testing": func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatalf("decode toggle body: %v", err)
+				}
+				if enabled, ok := body["enabled"].(bool); !ok || enabled {
+					t.Fatalf("unexpected toggle body: %+v", body)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"skills": []map[string]any{
+						{"name": "go-testing", "enabled": false},
+					},
+					"skillSummary": map[string]any{
+						"installedCount": 1,
+						"enabledCount":   0,
+						"disabledCount":  1,
+					},
+				})
+			},
+		})
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/skills/go-testing", strings.NewReader(`{"enabled":false}`))
+		handleWebUIAgent(rec, req, "req-skills-ok", daemonOK)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"disabledCount":1`) {
+			t.Fatalf("expected toggled skill summary, got %s", rec.Body.String())
+		}
+
+		_, daemonReinstall, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+			"POST /api/v1/agents/picoclaw/skills/reinstall": func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatalf("decode reinstall body: %v", err)
+				}
+				if body["name"] != "go-testing" {
+					t.Fatalf("unexpected reinstall body: %+v", body)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"name":        "go-testing",
+					"summary":     "Use go test before claiming success.",
+					"source":      "catalog",
+					"version":     "builtin",
+					"provenance":  "managed install via catalog -> managed reinstall via catalog",
+					"installedAt": "2026-03-13T10:00:00Z",
+					"updatedAt":   "2026-03-13T10:30:00Z",
+				})
+			},
+		})
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/skills/reinstall", strings.NewReader(`{"name":"go-testing"}`))
+		handleWebUIAgent(rec, req, "req-skills-reinstall", daemonReinstall)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected reinstall 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var reinstallResp map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &reinstallResp); err != nil {
+			t.Fatalf("decode reinstall response: %v", err)
+		}
+		if reinstallResp["provenance"] != "managed install via catalog -> managed reinstall via catalog" {
+			t.Fatalf("expected reinstall payload, got %s", rec.Body.String())
+		}
+	})
+
+	t.Run("mcp action", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/picoclaw/mcp/repo", nil)
+		_, daemonDetail, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+			"GET /api/v1/agents/picoclaw/mcp/repo": func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"name":             "repo",
+					"health":           "healthy",
+					"enabled":          true,
+					"manageable":       true,
+					"visibleToolCount": 1,
+					"hiddenToolCount":  1,
+					"healthDetail":     "connected to repository index",
+					"remediationHint":  "Disable MCP if repository indexing becomes noisy.",
+					"visibleTools":     []map[string]any{{"name": "repo_search", "description": "Search code"}},
+					"hiddenTools":      []map[string]any{{"name": "repo_admin", "description": "Admin index"}},
+				})
+			},
+		})
+		handleWebUIAgent(rec, req, "req-mcp-detail", daemonDetail)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"healthDetail":"connected to repository index"`) {
+			t.Fatalf("expected mcp detail payload, got %s", rec.Body.String())
+		}
+
+		_, daemonStub, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{})
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/mcp/repo", strings.NewReader("{"))
+		handleWebUIAgent(rec, req, "req-mcp-bad-body", daemonStub)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", rec.Code)
+		}
+
+		_, daemonOK, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+			"POST /api/v1/agents/picoclaw/mcp/repo": func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatalf("decode toggle body: %v", err)
+				}
+				if enabled, ok := body["enabled"].(bool); !ok || enabled {
+					t.Fatalf("unexpected toggle body: %+v", body)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"mcp": map[string]any{
+						"servers": []map[string]any{
+							{"name": "repo", "health": "stopped", "enabled": false, "manageable": true, "visibleToolCount": 1, "hiddenToolCount": 0},
+						},
+						"visibleTools": []map[string]any{},
+					},
+				})
+			},
+		})
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/agents/picoclaw/mcp/repo", strings.NewReader(`{"enabled":false}`))
+		handleWebUIAgent(rec, req, "req-mcp-ok", daemonOK)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"health":"stopped"`) {
+			t.Fatalf("expected toggled mcp summary, got %s", rec.Body.String())
+		}
+	})
+
 	t.Run("unsupported action", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/picoclaw/unknown", nil)
@@ -586,4 +781,257 @@ func TestSyncManagedInstanceByAgentAction_Branches(t *testing.T) {
 			t.Fatalf("expected nil error, got %v", err)
 		}
 	})
+}
+
+func TestHandleWebUIAgent_MCPPersistsManagedState(t *testing.T) {
+	tmp := t.TempDir()
+	storePath := filepath.Join(tmp, "instances.json")
+	t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := saveManagedInstances(storePath, []managedAgentInstance{{
+		ID:           "agent-alpha-default",
+		Type:         "managed-agent",
+		AgentID:      "agent-alpha",
+		RuntimeState: "running",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}}); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/agent-alpha/mcp/repo/detach": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"name":            "repo",
+				"health":          "detached",
+				"enabled":         false,
+				"attached":        false,
+				"healthDetail":    "server is detached from the managed runtime",
+				"remediationHint": "Attach the MCP server to re-apply the saved config and expose its tool surface.",
+				"configDigest":    "sha256:test-config",
+				"configSummary":   `{"mode":"read"}`,
+			})
+		},
+		"POST /api/v1/agents/agent-alpha/mcp/repo/config": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"name":            "repo",
+				"health":          "detached",
+				"enabled":         false,
+				"attached":        false,
+				"healthDetail":    "server is detached from the managed runtime",
+				"remediationHint": "Attach the MCP server to re-apply the saved config and expose its tool surface.",
+				"configDigest":    "sha256:test-config",
+				"configSummary":   `{"mode":"write"}`,
+			})
+		},
+		"POST /api/v1/agents/agent-alpha/mcp/repo": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"skillSummary": map[string]any{},
+				"skills":       []any{},
+				"mcp": map[string]any{
+					"servers": []map[string]any{{
+						"name":          "repo",
+						"health":        "stopped",
+						"enabled":       false,
+						"attached":      false,
+						"configDigest":  "sha256:test-config",
+						"configSummary": `{"mode":"write"}`,
+					}},
+				},
+			})
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/agent-alpha/mcp/repo/detach", nil)
+	handleWebUIAgent(rec, req, "req-mcp-detach", daemon)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detach status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/agents/agent-alpha/mcp/repo/config", strings.NewReader(`{"config":"{\"mode\":\"write\"}"}`))
+	handleWebUIAgent(rec, req, "req-mcp-config", daemon)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("config status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/agents/agent-alpha/mcp/repo", strings.NewReader(`{"enabled":false}`))
+	handleWebUIAgent(rec, req, "req-mcp-toggle", daemon)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("toggle status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	instances := mustLoadManagedInstancesFile(t, storePath)
+	idx := findManagedInstanceIndexByAgentID(instances, "agent-alpha")
+	if idx < 0 {
+		t.Fatal("expected persisted managed instance")
+	}
+	if len(instances[idx].MCPServers) != 1 {
+		t.Fatalf("expected persisted mcp state, got %+v", instances[idx].MCPServers)
+	}
+	state := instances[idx].MCPServers[0]
+	if state.Name != "repo" || state.Attached || state.Enabled {
+		t.Fatalf("unexpected persisted mcp state: %+v", state)
+	}
+	if !strings.Contains(state.ConfigSummary, `"mode":"write"`) || state.ConfigDigest != "sha256:test-config" {
+		t.Fatalf("expected persisted config metadata, got %+v", state)
+	}
+}
+
+func TestHandleWebUIAgent_StartReplaysPersistedMCPState(t *testing.T) {
+	tmp := t.TempDir()
+	storePath := filepath.Join(tmp, "instances.json")
+	t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := saveManagedInstances(storePath, []managedAgentInstance{{
+		ID:           "agent-alpha-default",
+		Type:         "managed-agent",
+		AgentID:      "agent-alpha",
+		RuntimeState: "stopped",
+		MCPServers: []managedAgentMCPServerState{{
+			Name:          "repo",
+			Enabled:       false,
+			Attached:      true,
+			ConfigDigest:  "sha256:test-config",
+			ConfigSummary: `{"mode":"write"}`,
+			UpdatedAt:     now,
+		}},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}}); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	var calls []string
+	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/agent-alpha/start": func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, "start")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		},
+		"POST /api/v1/agents/agent-alpha/mcp/repo/config": func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, "config")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"name":          "repo",
+				"health":        "healthy",
+				"enabled":       true,
+				"attached":      true,
+				"configDigest":  "sha256:test-config",
+				"configSummary": `{"mode":"write"}`,
+			})
+		},
+		"POST /api/v1/agents/agent-alpha/mcp/repo/attach": func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, "attach")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"name":          "repo",
+				"health":        "healthy",
+				"enabled":       true,
+				"attached":      true,
+				"configDigest":  "sha256:test-config",
+				"configSummary": `{"mode":"write"}`,
+			})
+		},
+		"POST /api/v1/agents/agent-alpha/mcp/repo": func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, "toggle")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"skillSummary": map[string]any{},
+				"skills":       []any{},
+				"mcp": map[string]any{
+					"servers": []map[string]any{{
+						"name":          "repo",
+						"health":        "stopped",
+						"enabled":       false,
+						"attached":      true,
+						"configDigest":  "sha256:test-config",
+						"configSummary": `{"mode":"write"}`,
+					}},
+				},
+			})
+		},
+		"GET /api/v1/agents/agent-alpha/mcp/repo": func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, "detail")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"name":            "repo",
+				"health":          "stopped",
+				"enabled":         false,
+				"attached":        true,
+				"healthDetail":    "server is disabled",
+				"remediationHint": "Enable MCP to expose its tool surface; the saved config will be reused.",
+				"configDigest":    "sha256:test-config",
+				"configSummary":   `{"mode":"write"}`,
+			})
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/agent-alpha/start", nil)
+	handleWebUIAgent(rec, req, "req-start-replay", daemon)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("start status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"warning"`) {
+		t.Fatalf("expected clean replay without warning, got %s", rec.Body.String())
+	}
+	wantCalls := []string{"start", "config", "attach", "toggle", "detail"}
+	if strings.Join(calls, ",") != strings.Join(wantCalls, ",") {
+		t.Fatalf("unexpected replay calls: got=%v want=%v", calls, wantCalls)
+	}
+
+	instances := mustLoadManagedInstancesFile(t, storePath)
+	idx := findManagedInstanceIndexByAgentID(instances, "agent-alpha")
+	if idx < 0 {
+		t.Fatal("expected persisted managed instance")
+	}
+	if instances[idx].RuntimeState != "running" {
+		t.Fatalf("expected running state after start, got %+v", instances[idx])
+	}
+	if len(instances[idx].MCPServers) != 1 || instances[idx].MCPServers[0].Enabled || !instances[idx].MCPServers[0].Attached {
+		t.Fatalf("unexpected persisted replayed mcp state: %+v", instances[idx].MCPServers)
+	}
+}
+
+func TestHandleWebUIAgent_SubagentListAndDetail(t *testing.T) {
+	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+		"GET /api/v1/agents/agent-alpha/subagents": func(w http.ResponseWriter, r *http.Request) {
+			if got := r.URL.Query().Get("limit"); got != "10" {
+				t.Fatalf("limit=%q want 10", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jobs": []map[string]any{
+					{"jobId": "subagent-1", "task": "collect diagnostics", "status": "failed", "error": "provider timeout"},
+				},
+			})
+		},
+		"GET /api/v1/agents/agent-alpha/subagents/subagent-1": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jobId":   "subagent-1",
+				"task":    "collect diagnostics",
+				"status":  "failed",
+				"summary": "timed out during delegated run",
+				"error":   "provider timeout",
+			})
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/agent-alpha/subagents", nil)
+	handleWebUIAgent(rec, req, "req-subagents-list", daemon)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"subagent-1"`) {
+		t.Fatalf("expected subagent list body, got %s", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/agents/agent-alpha/subagents/subagent-1", nil)
+	handleWebUIAgent(rec, req, "req-subagents-detail", daemon)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"summary":"timed out during delegated run"`) {
+		t.Fatalf("expected subagent detail body, got %s", rec.Body.String())
+	}
 }

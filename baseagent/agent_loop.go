@@ -8,12 +8,19 @@ import (
 
 // AgentLoop orchestrates tool routing, provider fallback, and session tracking.
 type AgentLoop struct {
-	svc       AgentService
-	tools     *ToolRegistry
-	providers *ProviderManager
-	sessions  *SessionManager
-	bus       *MessageBus
-	channels  *ChannelManager
+	svc               AgentService
+	tools             *ToolRegistry
+	providers         *ProviderManager
+	sessions          *SessionManager
+	bus               *MessageBus
+	channels          *ChannelManager
+	memory            ExtendedMemoryStore
+	memorySubject     string
+	executionTools    *ExecutionToolRegistry
+	structuredTools   *structuredToolSurface
+	subagentManager   SubagentManager
+	maxToolIterations int
+	skillsLoader      SkillsLoader
 }
 
 func NewAgentLoop(
@@ -36,16 +43,36 @@ func NewAgentLoop(
 		bus = NewMessageBus(0, 0, 0)
 	}
 	return &AgentLoop{
-		svc:       svc,
-		tools:     tools,
-		providers: providers,
-		sessions:  sessions,
-		bus:       bus,
+		svc:               svc,
+		tools:             tools,
+		providers:         providers,
+		sessions:          sessions,
+		bus:               bus,
+		maxToolIterations: defaultMaxToolIterations,
 	}
 }
 
 func (l *AgentLoop) SetChannelManager(cm *ChannelManager) {
 	l.channels = cm
+}
+
+func (l *AgentLoop) SetSkillsLoader(loader SkillsLoader) {
+	l.skillsLoader = loader
+}
+
+func (l *AgentLoop) SetMemoryStore(store MemoryStore, subject string) {
+	if l == nil {
+		return
+	}
+	extended, _ := store.(ExtendedMemoryStore)
+	l.memory = extended
+	l.memorySubject = strings.TrimSpace(subject)
+	if l.memorySubject == "" {
+		l.memorySubject = baseAgentVirtualID
+	}
+	if l.structuredTools != nil {
+		l.structuredTools.SetMemoryStore(extended, l.memorySubject)
+	}
 }
 
 func (l *AgentLoop) ProcessChat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
@@ -60,15 +87,35 @@ func (l *AgentLoop) ProcessChat(ctx context.Context, req ChatRequest) (ChatRespo
 	sessionKey := resolveSessionKey(channel, chatID)
 
 	l.bus.PublishInbound(InboundEnvelope{
-		Channel:    channel,
-		ChatID:     chatID,
-		Content:    message,
-		SessionKey: sessionKey,
+		Channel:     channel,
+		ChatID:      chatID,
+		Content:     message,
+		Attachments: cloneAttachmentRefs(req.Attachments),
+		SessionKey:  sessionKey,
 		Metadata: map[string]string{
 			"request_id": requestID,
 		},
 	})
 	l.sessions.AddMessage(sessionKey, "user", message)
+	skillSummary := ""
+	if l.skillsLoader != nil {
+		skillSummary = strings.TrimSpace(l.skillsLoader.RelevantSkillsSummary(ctx, message))
+	}
+
+	if resp, handled, err := l.handlePendingApprovalInput(ctx, sessionKey, message); handled {
+		if err != nil {
+			l.bus.PublishEvent(LoopEvent{
+				Type:    EventError,
+				Name:    "pending_approval_failed",
+				Message: err.Error(),
+				Metadata: map[string]string{
+					"request_id": requestID,
+				},
+			})
+			return ChatResponse{}, err
+		}
+		return l.finalizeResponse(sessionKey, channel, chatID, requestID, resp), nil
+	}
 
 	if resp, handled, err := l.tools.RouteMessage(ctx, message); handled {
 		if err != nil {
@@ -90,11 +137,27 @@ func (l *AgentLoop) ProcessChat(ctx context.Context, req ChatRequest) (ChatRespo
 		return l.finalizeResponse(sessionKey, channel, chatID, requestID, resp), nil
 	}
 
+	if resp, handled, err := l.processStructuredChat(ctx, sessionKey, l.sessions.History(sessionKey), skillSummary); handled {
+		if err != nil {
+			l.bus.PublishEvent(LoopEvent{
+				Type:    EventError,
+				Name:    "structured_tool_loop_failed",
+				Message: err.Error(),
+				Metadata: map[string]string{
+					"request_id": requestID,
+				},
+			})
+			return ChatResponse{}, err
+		}
+		return l.finalizeResponse(sessionKey, channel, chatID, requestID, resp), nil
+	}
+
 	reply, err := l.providers.Reply(ctx, ProviderRequest{
-		SystemPrompt: baseAgentSystemPrompt,
-		UserMessage:  message,
-		History:      l.sessions.History(sessionKey),
-		Tools:        l.tools.ListToolDescriptors(),
+		SystemPrompt:    composeSkillAwareSystemPrompt(baseAgentSystemPrompt, skillSummary),
+		UserMessage:     message,
+		History:         l.sessions.History(sessionKey),
+		Tools:           l.tools.ListToolDescriptors(),
+		StructuredTools: l.tools.ListStructuredToolDescriptors(),
 	})
 	if err != nil {
 		l.bus.PublishEvent(LoopEvent{
@@ -137,7 +200,54 @@ func (l *AgentLoop) bestEffortAgentStatus(ctx context.Context, rawMessage string
 	return ChatResponse{}, false
 }
 
+func (l *AgentLoop) handlePendingApprovalInput(ctx context.Context, sessionKey, message string) (ChatResponse, bool, error) {
+	if l == nil || l.sessions == nil {
+		return ChatResponse{}, false, nil
+	}
+	pending := l.sessions.PendingApproval(sessionKey)
+	if pending == nil {
+		return ChatResponse{}, false, nil
+	}
+
+	switch {
+	case isApprovalRejection(message):
+		resp, err := l.RespondPendingApproval(ctx, sessionKey, pending.ID, ApprovalDecisionReject)
+		return resp, true, err
+	case !isApprovalConfirmation(message):
+		return ChatResponse{}, false, nil
+	default:
+		resp, err := l.RespondPendingApproval(ctx, sessionKey, pending.ID, ApprovalDecisionConfirm)
+		return resp, true, err
+	}
+}
+
+func isApprovalConfirmation(message string) bool {
+	switch strings.ToLower(strings.TrimSpace(message)) {
+	case "confirm", "approve", "approved", "yes", "yes please", "proceed":
+		return true
+	default:
+		return false
+	}
+}
+
+func isApprovalRejection(message string) bool {
+	switch strings.ToLower(strings.TrimSpace(message)) {
+	case "cancel", "reject", "decline", "no", "no thanks":
+		return true
+	default:
+		return false
+	}
+}
+
 func (l *AgentLoop) finalizeResponse(sessionKey, channel, chatID, requestID string, resp ChatResponse) ChatResponse {
+	if resp.RichContent != nil {
+		if strings.TrimSpace(resp.RichContent.Text) == "" {
+			resp.RichContent.Text = strings.TrimSpace(resp.Message)
+		}
+		if strings.TrimSpace(resp.Message) == "" {
+			resp.Message = strings.TrimSpace(resp.RichContent.PlainTextFallback())
+		}
+	}
 	if strings.TrimSpace(resp.Message) == "" {
 		resp.Message = "Done."
 	}
@@ -145,9 +255,10 @@ func (l *AgentLoop) finalizeResponse(sessionKey, channel, chatID, requestID stri
 
 	if !isInternalChannelName(channel) {
 		l.bus.PublishOutbound(OutboundEnvelope{
-			Channel: channel,
-			ChatID:  chatID,
-			Content: resp.Message,
+			Channel:     channel,
+			ChatID:      chatID,
+			Content:     resp.Message,
+			RichContent: resp.RichContent,
 			Metadata: map[string]string{
 				"request_id": requestID,
 				"action":     strings.TrimSpace(resp.Action),
@@ -164,6 +275,10 @@ func (l *AgentLoop) finalizeResponse(sessionKey, channel, chatID, requestID stri
 		},
 	})
 	return resp
+}
+
+func ResolveSessionKey(provider, chatID string) string {
+	return resolveSessionKey(provider, chatID)
 }
 
 func resolveSessionKey(provider, chatID string) string {

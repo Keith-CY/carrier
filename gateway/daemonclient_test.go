@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -205,6 +206,65 @@ func TestDaemonClient_GetStatus(t *testing.T) {
 	}
 }
 
+func TestDaemonClient_GetStatus_SingleObject(t *testing.T) {
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":           "a1",
+			"runtimeState": "running",
+			"health":       "healthy",
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	statuses, err := dc.GetStatus(context.Background(), "a1", "actor", "req")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 status, got %d", len(statuses))
+	}
+	if statuses[0].ID != "a1" || statuses[0].Runtime != "running" {
+		t.Fatalf("unexpected status payload: %+v", statuses[0])
+	}
+}
+
+func TestDaemonClient_SpeakAgentMedia(t *testing.T) {
+	var gotActor string
+	var gotRequestID string
+	var gotBody map[string]any
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents/zeroclaw/media/speak" || r.Method != http.MethodPost {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		gotActor = r.Header.Get("X-Carrier-Actor")
+		gotRequestID = r.Header.Get("X-Carrier-Request-Id")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"agentId":"zeroclaw","message":"Generated audio: speech.mp3","richContent":{"text":"Generated audio: speech.mp3","renderMode":"rich_media","attachments":[{"id":"speech-1","kind":"audio","outputRole":"generated","name":"speech.mp3","path":"/tmp/speech.mp3","mediaType":"audio/mpeg"}]}}`))
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	result, err := dc.SpeakAgentMedia(context.Background(), "zeroclaw", "Carrier speech smoke works.", "alloy", "mp3", "actor1", "req1")
+	if err != nil {
+		t.Fatalf("SpeakAgentMedia error: %v", err)
+	}
+	if gotActor != "actor1" || gotRequestID != "req1" {
+		t.Fatalf("unexpected headers actor=%q requestID=%q", gotActor, gotRequestID)
+	}
+	if gotBody["text"] != "Carrier speech smoke works." || gotBody["voice"] != "alloy" || gotBody["format"] != "mp3" {
+		t.Fatalf("unexpected request body: %#v", gotBody)
+	}
+	if result == nil || result.RichContent == nil || strings.TrimSpace(result.RichContent.RenderMode) != "rich_media" {
+		t.Fatalf("unexpected media speak result: %+v", result)
+	}
+}
+
 func TestDaemonClient_GetStatus_AllAgents(t *testing.T) {
 	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/agents/status" {
@@ -224,6 +284,404 @@ func TestDaemonClient_GetStatus_AllAgents(t *testing.T) {
 	}
 	if len(statuses) != 0 {
 		t.Errorf("expected 0 statuses, got %d", len(statuses))
+	}
+}
+
+func TestDaemonClient_GetAgentCapabilities(t *testing.T) {
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents/a1/capabilities" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+			"skills": []map[string]interface{}{
+				{"name": "go-testing", "enabled": true},
+			},
+			"mcp": map[string]interface{}{
+				"servers": []map[string]interface{}{
+					{"name": "repo", "health": "healthy"},
+				},
+			},
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	summary, err := dc.GetAgentCapabilities(context.Background(), "a1", "actor", "req")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(summary.Skills) != 1 || summary.Skills[0].Name != "go-testing" {
+		t.Fatalf("unexpected capabilities: %+v", summary)
+	}
+}
+
+func TestDaemonClient_SetAgentSkillEnabled(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"skills": []map[string]any{
+				{"name": "go-testing", "enabled": false},
+				{"name": "workspace-inspection", "enabled": false},
+			},
+			"skillSummary": map[string]any{
+				"installedCount": 2,
+				"enabledCount":   0,
+				"disabledCount":  2,
+			},
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	summary, err := dc.SetAgentSkillEnabled(context.Background(), "a1", "go-testing", false, "actor", "req")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/api/v1/agents/a1/skills/go-testing" {
+		t.Fatalf("unexpected path: %s", gotPath)
+	}
+	if enabled, ok := gotBody["enabled"].(bool); !ok || enabled {
+		t.Fatalf("unexpected toggle body: %+v", gotBody)
+	}
+	if summary.SkillSummary.DisabledCount != 2 || len(summary.Skills) != 2 || summary.Skills[0].Enabled {
+		t.Fatalf("unexpected skill summary: %+v", summary)
+	}
+}
+
+func TestDaemonClient_SearchAndInstallAgentSkills(t *testing.T) {
+	var paths []string
+	var installBody map[string]any
+	var reinstallBody map[string]any
+	var updateBody map[string]any
+	var uninstallBody map[string]any
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.RequestURI())
+		switch r.URL.Path {
+		case "/api/v1/agents/a1/skills/search":
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"skills": []map[string]any{
+					{"name": "workspace-inspection", "summary": "Inspect workspace state.", "source": "catalog", "version": "v1.2.3"},
+				},
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+		case "/api/v1/agents/a1/skills/install":
+			if err := json.NewDecoder(r.Body).Decode(&installBody); err != nil {
+				t.Fatalf("decode install body: %v", err)
+			}
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"name":    "workspace-inspection",
+				"summary": "Inspect workspace state.",
+				"source":  "catalog",
+				"version": "v1.2.3",
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+		case "/api/v1/agents/a1/skills/reinstall":
+			if err := json.NewDecoder(r.Body).Decode(&reinstallBody); err != nil {
+				t.Fatalf("decode reinstall body: %v", err)
+			}
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"name":        "workspace-inspection",
+				"summary":     "Inspect workspace state.",
+				"source":      "catalog",
+				"version":     "v1.2.3",
+				"provenance":  "managed install via catalog -> managed reinstall via catalog",
+				"installedAt": "2026-03-13T10:00:00Z",
+				"updatedAt":   "2026-03-13T10:30:00Z",
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+		case "/api/v1/agents/a1/skills/update":
+			if err := json.NewDecoder(r.Body).Decode(&updateBody); err != nil {
+				t.Fatalf("decode update body: %v", err)
+			}
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"name":          "workspace-inspection",
+				"summary":       "Inspect workspace state.",
+				"source":        "catalog",
+				"version":       "v1.2.3",
+				"targetVersion": "v2.0.0",
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+		case "/api/v1/agents/a1/skills/uninstall":
+			if err := json.NewDecoder(r.Body).Decode(&uninstallBody); err != nil {
+				t.Fatalf("decode uninstall body: %v", err)
+			}
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"name":    "workspace-inspection",
+				"summary": "Inspect workspace state.",
+				"source":  "catalog",
+				"version": "v1.2.3",
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	skills, err := dc.SearchAgentSkills(context.Background(), "a1", "workspace", "actor", "req")
+	if err != nil {
+		t.Fatalf("SearchAgentSkills error: %v", err)
+	}
+	if len(skills) != 1 || skills[0].Name != "workspace-inspection" {
+		t.Fatalf("unexpected skills: %+v", skills)
+	}
+	if skills[0].Source != "catalog" || skills[0].Version != "v1.2.3" {
+		t.Fatalf("unexpected skill metadata: %+v", skills[0])
+	}
+
+	installed, err := dc.InstallAgentSkill(context.Background(), "a1", "workspace-inspection", "actor", "req")
+	if err != nil {
+		t.Fatalf("InstallAgentSkill error: %v", err)
+	}
+	if installed.Name != "workspace-inspection" {
+		t.Fatalf("unexpected installed skill: %+v", installed)
+	}
+	if installed.Source != "catalog" || installed.Version != "v1.2.3" {
+		t.Fatalf("unexpected installed metadata: %+v", installed)
+	}
+
+	reinstalled, err := dc.ReinstallAgentSkill(context.Background(), "a1", "workspace-inspection", "actor", "req")
+	if err != nil {
+		t.Fatalf("ReinstallAgentSkill error: %v", err)
+	}
+	if reinstalled.Name != "workspace-inspection" || reinstalled.Source != "catalog" || reinstalled.Version != "v1.2.3" {
+		t.Fatalf("unexpected reinstalled skill: %+v", reinstalled)
+	}
+
+	updated, err := dc.UpdateAgentSkill(context.Background(), "a1", "workspace-inspection", "v2.0.0", "actor", "req")
+	if err != nil {
+		t.Fatalf("UpdateAgentSkill error: %v", err)
+	}
+	if updated.Name != "workspace-inspection" || updated.TargetVersion != "v2.0.0" {
+		t.Fatalf("unexpected updated skill: %+v", updated)
+	}
+
+	removed, err := dc.UninstallAgentSkill(context.Background(), "a1", "workspace-inspection", "actor", "req")
+	if err != nil {
+		t.Fatalf("UninstallAgentSkill error: %v", err)
+	}
+	if removed.Name != "workspace-inspection" || removed.Source != "catalog" || removed.Version != "v1.2.3" {
+		t.Fatalf("unexpected removed skill: %+v", removed)
+	}
+
+	if len(paths) != 5 || paths[0] != "/api/v1/agents/a1/skills/search?q=workspace" || paths[1] != "/api/v1/agents/a1/skills/install" || paths[2] != "/api/v1/agents/a1/skills/reinstall" || paths[3] != "/api/v1/agents/a1/skills/update" || paths[4] != "/api/v1/agents/a1/skills/uninstall" {
+		t.Fatalf("unexpected paths: %+v", paths)
+	}
+	if installBody["name"] != "workspace-inspection" {
+		t.Fatalf("unexpected install body: %+v", installBody)
+	}
+	if reinstallBody["name"] != "workspace-inspection" {
+		t.Fatalf("unexpected reinstall body: %+v", reinstallBody)
+	}
+	if updateBody["name"] != "workspace-inspection" || updateBody["version"] != "v2.0.0" {
+		t.Fatalf("unexpected update body: %+v", updateBody)
+	}
+	if uninstallBody["name"] != "workspace-inspection" {
+		t.Fatalf("unexpected uninstall body: %+v", uninstallBody)
+	}
+}
+
+func TestDaemonClient_SetAgentMCPServerEnabled(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"mcp": map[string]any{
+				"servers": []map[string]any{
+					{"name": "repo", "health": "stopped", "enabled": false, "manageable": true, "visibleToolCount": 1, "hiddenToolCount": 0},
+				},
+				"visibleTools": []map[string]any{},
+			},
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	summary, err := dc.SetAgentMCPServerEnabled(context.Background(), "a1", "repo", false, "actor", "req")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/api/v1/agents/a1/mcp/repo" {
+		t.Fatalf("unexpected path: %s", gotPath)
+	}
+	if enabled, ok := gotBody["enabled"].(bool); !ok || enabled {
+		t.Fatalf("unexpected toggle body: %+v", gotBody)
+	}
+	if len(summary.MCP.Servers) != 1 || summary.MCP.Servers[0].Enabled || summary.MCP.Servers[0].Health != "stopped" {
+		t.Fatalf("unexpected mcp summary: %+v", summary)
+	}
+}
+
+func TestDaemonClient_GetAgentMCPServerDetail(t *testing.T) {
+	var gotPath string
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"name":             "repo",
+			"health":           "healthy",
+			"enabled":          true,
+			"manageable":       true,
+			"visibleToolCount": 1,
+			"hiddenToolCount":  1,
+			"healthDetail":     "connected to repository index",
+			"remediationHint":  "Disable MCP if repository indexing becomes noisy.",
+			"visibleTools": []map[string]any{
+				{"name": "repo_search", "description": "Search code"},
+			},
+			"hiddenTools": []map[string]any{
+				{"name": "repo_admin", "description": "Admin index"},
+			},
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	detail, err := dc.GetAgentMCPServerDetail(context.Background(), "a1", "repo", "actor", "req")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPath != "/api/v1/agents/a1/mcp/repo" {
+		t.Fatalf("unexpected path: %s", gotPath)
+	}
+	if detail.Name != "repo" || detail.HealthDetail != "connected to repository index" || detail.HiddenToolCount != 1 {
+		t.Fatalf("unexpected mcp detail: %+v", detail)
+	}
+	if len(detail.VisibleTools) != 1 || detail.VisibleTools[0].Name != "repo_search" {
+		t.Fatalf("unexpected visible tools: %+v", detail.VisibleTools)
+	}
+}
+
+func TestDaemonClient_SetAgentMCPServerAttachedAndConfig(t *testing.T) {
+	var paths []string
+	var configBody map[string]any
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/api/v1/agents/a1/mcp/repo/attach":
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"name": "repo", "health": "healthy", "enabled": true, "attached": true,
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+		case "/api/v1/agents/a1/mcp/repo/config":
+			if err := json.NewDecoder(r.Body).Decode(&configBody); err != nil {
+				t.Fatalf("decode config body: %v", err)
+			}
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"name": "repo", "health": "healthy", "enabled": true, "attached": true, "configDigest": "sha256:cfg",
+			}); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	detail, err := dc.SetAgentMCPServerAttached(context.Background(), "a1", "repo", true, "actor", "req")
+	if err != nil {
+		t.Fatalf("SetAgentMCPServerAttached error: %v", err)
+	}
+	if !detail.Attached {
+		t.Fatalf("expected attached response, got %+v", detail)
+	}
+
+	configured, err := dc.UpdateAgentMCPServerConfig(context.Background(), "a1", "repo", `{"mode":"read"}`, "actor", "req")
+	if err != nil {
+		t.Fatalf("UpdateAgentMCPServerConfig error: %v", err)
+	}
+	if configured.ConfigDigest != "sha256:cfg" {
+		t.Fatalf("unexpected config response: %+v", configured)
+	}
+	if len(paths) != 2 || paths[0] != "/api/v1/agents/a1/mcp/repo/attach" || paths[1] != "/api/v1/agents/a1/mcp/repo/config" {
+		t.Fatalf("unexpected paths: %+v", paths)
+	}
+	if configBody["config"] != `{"mode":"read"}` {
+		t.Fatalf("unexpected config body: %+v", configBody)
+	}
+}
+
+func TestDaemonClient_GetAgentSessionsAndSubagentJobs(t *testing.T) {
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/agents/a1/sessions":
+			if r.URL.Query().Get("limit") != "3" {
+				t.Fatalf("unexpected sessions limit: %s", r.URL.Query().Get("limit"))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"sessions": []map[string]any{
+					{"key": "telegram:alpha", "messageCount": 8, "summaryLength": 64},
+				},
+			})
+		case "/api/v1/agents/a1/subagents":
+			if r.URL.Query().Get("limit") != "2" {
+				t.Fatalf("unexpected subagents limit: %s", r.URL.Query().Get("limit"))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jobs": []map[string]any{
+					{"jobId": "subagent-1", "task": "collect", "status": "completed", "result": "done"},
+				},
+			})
+		case "/api/v1/agents/a1/subagents/subagent-1":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jobId":   "subagent-1",
+				"task":    "collect",
+				"status":  "completed",
+				"summary": "collection done",
+				"result":  "done",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	sessions, err := dc.GetAgentSessions(context.Background(), "a1", 3, "actor", "req")
+	if err != nil {
+		t.Fatalf("GetAgentSessions error: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].Key != "telegram:alpha" {
+		t.Fatalf("unexpected sessions: %+v", sessions)
+	}
+	jobs, err := dc.GetAgentSubagentJobs(context.Background(), "a1", 2, "actor", "req")
+	if err != nil {
+		t.Fatalf("GetAgentSubagentJobs error: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].JobID != "subagent-1" {
+		t.Fatalf("unexpected jobs: %+v", jobs)
+	}
+	job, err := dc.GetAgentSubagentJob(context.Background(), "a1", "subagent-1", "actor", "req")
+	if err != nil {
+		t.Fatalf("GetAgentSubagentJob error: %v", err)
+	}
+	if job.JobID != "subagent-1" || job.Summary != "collection done" {
+		t.Fatalf("unexpected job detail: %+v", job)
 	}
 }
 
@@ -266,7 +724,7 @@ func TestDaemonClient_ChatAgent(t *testing.T) {
 	defer srv.Close()
 
 	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
-	result, err := dc.ChatAgent(context.Background(), "openclaw", "hello", "sess-local-1", "actor", "req")
+	result, err := dc.ChatAgent(context.Background(), "openclaw", "openrouter", "hello", "sess-local-1", "flash", "google/gemini-2.0-flash-001", "actor", "req")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -276,8 +734,17 @@ func TestDaemonClient_ChatAgent(t *testing.T) {
 	if gotBody["message"] != "hello" {
 		t.Fatalf("unexpected message body: %#v", gotBody)
 	}
+	if gotBody["provider"] != "openrouter" {
+		t.Fatalf("unexpected provider body: %#v", gotBody)
+	}
 	if gotBody["sessionId"] != "sess-local-1" {
 		t.Fatalf("unexpected session body: %#v", gotBody)
+	}
+	if gotBody["modelAlias"] != "flash" {
+		t.Fatalf("unexpected modelAlias body: %#v", gotBody)
+	}
+	if gotBody["model"] != "google/gemini-2.0-flash-001" {
+		t.Fatalf("unexpected model body: %#v", gotBody)
 	}
 	if result.AgentID != "openclaw" || result.SessionID != "sess-local-1" || result.Message != "hello local" {
 		t.Fatalf("unexpected chat result: %+v", result)
@@ -310,6 +777,36 @@ func TestDaemonClient_DecomposeBaseAgent(t *testing.T) {
 	}
 	if gotBody["goal"] != "analyze logs" {
 		t.Fatalf("unexpected goal body: %#v", gotBody)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "task-1" {
+		t.Fatalf("unexpected tasks: %+v", tasks)
+	}
+}
+
+func TestDaemonClient_DecomposeBaseAgentWithProvider(t *testing.T) {
+	var gotBody map[string]interface{}
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"tasks": []map[string]interface{}{
+				{"id": "task-1", "input": "summarize logs", "agentId": "zeroclaw"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	tasks, err := dc.DecomposeBaseAgentWithProvider(context.Background(), "analyze logs", "openrouter", "actor", "req")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotBody["goal"] != "analyze logs" {
+		t.Fatalf("unexpected goal body: %#v", gotBody)
+	}
+	if gotBody["provider"] != "openrouter" {
+		t.Fatalf("unexpected provider body: %#v", gotBody)
 	}
 	if len(tasks) != 1 || tasks[0].ID != "task-1" {
 		t.Fatalf("unexpected tasks: %+v", tasks)
@@ -647,6 +1144,99 @@ func TestDaemonClient_GetMergedLogs_ClampsTail(t *testing.T) {
 	}
 }
 
+func TestDaemonClient_ScheduleCronJob_SendsOnlyAcceptedFields(t *testing.T) {
+	var rawBody map[string]any
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/base-agent/cron/schedule" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&rawBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"id":"cron-1","agentId":"picoclaw","prompt":"check launcher","lastResult":"scheduled"}`))
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	resp, err := dc.ScheduleCronJob(context.Background(), baseagent.CronJob{
+		AgentID:    "picoclaw",
+		SessionKey: "openrouter:cron-ui-smoke",
+		Prompt:     "check launcher",
+		NextRunAt:  time.Now().UTC().Add(time.Hour),
+		LastResult: "should-not-send",
+	}, "actor", "req")
+	if err != nil {
+		t.Fatalf("ScheduleCronJob error: %v", err)
+	}
+	if resp == nil || resp.ID != "cron-1" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	for _, forbidden := range []string{"lastResult", "lastRunAt", "cancelledAt"} {
+		if _, exists := rawBody[forbidden]; exists {
+			t.Fatalf("unexpected field %q in payload: %#v", forbidden, rawBody)
+		}
+	}
+	if got := strings.TrimSpace(rawBody["sessionKey"].(string)); got != "openrouter:cron-ui-smoke" {
+		t.Fatalf("sessionKey=%q want openrouter:cron-ui-smoke", got)
+	}
+	if got := strings.TrimSpace(rawBody["prompt"].(string)); got != "check launcher" {
+		t.Fatalf("prompt=%q want check launcher", got)
+	}
+}
+
+func TestDaemonClient_CronActionEndpoints(t *testing.T) {
+	var gotPath string
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"id":"cron-1","lastResult":"ok"}`))
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	cases := []struct {
+		name string
+		want string
+		run  func() error
+	}{
+		{
+			name: "pause",
+			want: "/api/base-agent/cron/cron-1/pause",
+			run: func() error {
+				_, err := dc.PauseCronJob(context.Background(), "cron-1", "actor", "req")
+				return err
+			},
+		},
+		{
+			name: "resume",
+			want: "/api/base-agent/cron/cron-1/resume",
+			run: func() error {
+				_, err := dc.ResumeCronJob(context.Background(), "cron-1", "actor", "req")
+				return err
+			},
+		},
+		{
+			name: "run",
+			want: "/api/base-agent/cron/cron-1/run",
+			run: func() error {
+				_, err := dc.RunCronJob(context.Background(), "cron-1", "actor", "req")
+				return err
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotPath = ""
+			if err := tc.run(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotPath != tc.want {
+				t.Fatalf("path=%q want %q", gotPath, tc.want)
+			}
+		})
+	}
+}
+
 func TestDaemonClient_UpgradeDiagnoseAndChatParseErrors(t *testing.T) {
 	tests := []struct {
 		name string
@@ -676,7 +1266,7 @@ func TestDaemonClient_UpgradeDiagnoseAndChatParseErrors(t *testing.T) {
 			name: "chat parse error",
 			path: "/api/v1/base-agent/chat",
 			run: func(c *DaemonClient) error {
-				_, err := c.ChatBaseAgent(context.Background(), "openai", "chat-1", "req", "hello", "actor")
+				_, err := c.ChatBaseAgent(context.Background(), "openai", "chat-1", "req", "hello", nil, "actor")
 				return err
 			},
 			want: "base-agent chat response",
@@ -694,7 +1284,7 @@ func TestDaemonClient_UpgradeDiagnoseAndChatParseErrors(t *testing.T) {
 			name: "agent chat parse error",
 			path: "/api/v1/agents/openclaw/chat",
 			run: func(c *DaemonClient) error {
-				_, err := c.ChatAgent(context.Background(), "openclaw", "hello", "sess-1", "actor", "req")
+				_, err := c.ChatAgent(context.Background(), "openclaw", "openrouter", "hello", "sess-1", "", "", "actor", "req")
 				return err
 			},
 			want: "agent chat response",

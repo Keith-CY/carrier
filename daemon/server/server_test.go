@@ -2,7 +2,9 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,6 +18,306 @@ import (
 	"carrier/daemon/internal/manifest"
 	"carrier/daemon/internal/ratelimit"
 )
+
+type fakeBaseAgentRuntime struct {
+	resp                baseagent.ChatResponse
+	speakResp           baseagent.ChatResponse
+	capabilities        baseagent.RuntimeCapabilitySummary
+	approvalResp        baseagent.ChatResponse
+	approvalErr         error
+	speakErr            error
+	installSkill        baseagent.SkillDefinition
+	reinstallSkill      baseagent.SkillDefinition
+	updateSkill         baseagent.SkillDefinition
+	uninstallSkill      baseagent.SkillDefinition
+	searchSkills        []baseagent.SkillDefinition
+	subagentJobs        []baseagent.SubagentJob
+	subagentJob         baseagent.SubagentJob
+	sessionStats        []baseagent.SessionStats
+	cronJob             baseagent.CronJob
+	cronJobs            []baseagent.CronJob
+	cancelledCronJob    baseagent.CronJob
+	pausedCronJob       baseagent.CronJob
+	resumedCronJob      baseagent.CronJob
+	ranCronJob          baseagent.CronJob
+	mcpServerDetail     baseagent.MCPServerCapability
+	cronErr             error
+	skillToggleErr      error
+	mcpToggleErr        error
+	callCount           int
+	speakCallCount      int
+	approvalCall        int
+	cronCall            int
+	listCronCall        int
+	cancelCronCall      int
+	pauseCronCall       int
+	resumeCronCall      int
+	runCronCall         int
+	skillToggleCall     int
+	mcpToggleCall       int
+	searchSkillsCall    int
+	installSkillCall    int
+	reinstallSkillCall  int
+	updateSkillCall     int
+	uninstallSkillCall  int
+	lastReq             baseagent.ChatRequest
+	lastSpeakReq        baseagent.SpeechSynthesisRequest
+	lastSession         string
+	lastApproval        string
+	lastDecision        string
+	lastCronJob         baseagent.CronJob
+	lastCronListSession string
+	lastCancelledCronID string
+	lastSkillName       string
+	lastSkillEnabled    bool
+	lastMCPServerName   string
+	lastMCPEnabled      bool
+	lastMCPAttached     bool
+	lastMCPConfig       string
+	lastInstallSkill    string
+	lastReinstallSkill  string
+	lastUpdateSkill     string
+	lastUpdateVersion   string
+	lastUninstallSkill  string
+	lastSkillSearch     string
+	lastSubagentJobID   string
+	lastSubagentLimit   int
+}
+
+func (f *fakeBaseAgentRuntime) Chat(_ context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error) {
+	f.callCount++
+	f.lastReq = req
+	return f.resp, nil
+}
+
+func (f *fakeBaseAgentRuntime) SpeakMedia(_ context.Context, req baseagent.SpeechSynthesisRequest) (baseagent.ChatResponse, error) {
+	f.speakCallCount++
+	f.lastSpeakReq = req
+	return f.speakResp, f.speakErr
+}
+
+func (f *fakeBaseAgentRuntime) CapabilitySummary(_ context.Context) baseagent.RuntimeCapabilitySummary {
+	return f.capabilities
+}
+
+func (f *fakeBaseAgentRuntime) SetSkillEnabled(_ context.Context, name string, enabled bool) error {
+	f.skillToggleCall++
+	f.lastSkillName = name
+	f.lastSkillEnabled = enabled
+	if f.skillToggleErr != nil {
+		return f.skillToggleErr
+	}
+	for i := range f.capabilities.Skills {
+		if f.capabilities.Skills[i].Name == name {
+			f.capabilities.Skills[i].Enabled = enabled
+		}
+	}
+	f.capabilities.SkillSummary = baseagent.RuntimeSkillSummary{}
+	for _, skill := range f.capabilities.Skills {
+		f.capabilities.SkillSummary.InstalledCount++
+		if skill.Enabled {
+			f.capabilities.SkillSummary.EnabledCount++
+			continue
+		}
+		f.capabilities.SkillSummary.DisabledCount++
+	}
+	return nil
+}
+
+func (f *fakeBaseAgentRuntime) SearchSkills(_ context.Context, query string) []baseagent.SkillDefinition {
+	f.searchSkillsCall++
+	f.lastSkillSearch = query
+	return append([]baseagent.SkillDefinition(nil), f.searchSkills...)
+}
+
+func (f *fakeBaseAgentRuntime) InstallSkill(_ context.Context, name string) (baseagent.SkillDefinition, error) {
+	f.installSkillCall++
+	f.lastInstallSkill = name
+	if f.installSkill.Name == "" {
+		f.installSkill = baseagent.SkillDefinition{Name: name, Summary: "installed skill"}
+	}
+	return f.installSkill, nil
+}
+
+func (f *fakeBaseAgentRuntime) ReinstallSkill(_ context.Context, name string) (baseagent.SkillDefinition, error) {
+	f.reinstallSkillCall++
+	f.lastReinstallSkill = name
+	if f.reinstallSkill.Name == "" {
+		f.reinstallSkill = baseagent.SkillDefinition{Name: name, Summary: "reinstalled skill"}
+	}
+	return f.reinstallSkill, nil
+}
+
+func (f *fakeBaseAgentRuntime) UpdateSkill(_ context.Context, name, version string) (baseagent.SkillDefinition, error) {
+	f.updateSkillCall++
+	f.lastUpdateSkill = name
+	f.lastUpdateVersion = version
+	if f.updateSkill.Name == "" {
+		f.updateSkill = baseagent.SkillDefinition{Name: name, Summary: "updated skill", TargetVersion: version}
+	}
+	return f.updateSkill, nil
+}
+
+func (f *fakeBaseAgentRuntime) UninstallSkill(_ context.Context, name string) (baseagent.SkillDefinition, error) {
+	f.uninstallSkillCall++
+	f.lastUninstallSkill = name
+	if f.uninstallSkill.Name == "" {
+		f.uninstallSkill = baseagent.SkillDefinition{Name: name, Summary: "removed skill"}
+	}
+	return f.uninstallSkill, nil
+}
+
+func (f *fakeBaseAgentRuntime) RecentSubagentJobs(_ context.Context, limit int) []baseagent.SubagentJob {
+	f.lastSubagentLimit = limit
+	return append([]baseagent.SubagentJob(nil), f.subagentJobs...)
+}
+
+func (f *fakeBaseAgentRuntime) SubagentJob(_ context.Context, jobID string) (baseagent.SubagentJob, error) {
+	f.lastSubagentJobID = jobID
+	if f.subagentJob.JobID == "" {
+		return baseagent.SubagentJob{}, fmt.Errorf("subagent job %s not found", jobID)
+	}
+	return f.subagentJob, nil
+}
+
+func (f *fakeBaseAgentRuntime) RecentSessionStats(limit int) []baseagent.SessionStats {
+	if limit > 0 && len(f.sessionStats) > limit {
+		return append([]baseagent.SessionStats(nil), f.sessionStats[:limit]...)
+	}
+	return append([]baseagent.SessionStats(nil), f.sessionStats...)
+}
+
+func (f *fakeBaseAgentRuntime) SetMCPServerEnabled(_ context.Context, name string, enabled bool) error {
+	f.mcpToggleCall++
+	f.lastMCPServerName = name
+	f.lastMCPEnabled = enabled
+	if f.mcpToggleErr != nil {
+		return f.mcpToggleErr
+	}
+	for i := range f.capabilities.MCP.Servers {
+		if f.capabilities.MCP.Servers[i].Name == name {
+			f.capabilities.MCP.Servers[i].Enabled = enabled
+			if enabled {
+				f.capabilities.MCP.Servers[i].Health = "healthy"
+			} else {
+				f.capabilities.MCP.Servers[i].Health = "stopped"
+			}
+		}
+	}
+	if !enabled {
+		f.capabilities.MCP.VisibleTools = nil
+	}
+	return nil
+}
+
+func (f *fakeBaseAgentRuntime) SetMCPServerAttached(_ context.Context, name string, attached bool) error {
+	f.lastMCPServerName = name
+	f.lastMCPAttached = attached
+	if f.mcpToggleErr != nil {
+		return f.mcpToggleErr
+	}
+	f.mcpServerDetail.Name = name
+	f.mcpServerDetail.Attached = attached
+	if !attached {
+		f.mcpServerDetail.Health = "detached"
+	} else if strings.TrimSpace(f.mcpServerDetail.Health) == "" || f.mcpServerDetail.Health == "detached" {
+		f.mcpServerDetail.Health = "healthy"
+	}
+	for i := range f.capabilities.MCP.Servers {
+		if f.capabilities.MCP.Servers[i].Name == name {
+			f.capabilities.MCP.Servers[i].Attached = attached
+			if !attached {
+				f.capabilities.MCP.Servers[i].Health = "detached"
+			} else if strings.TrimSpace(f.capabilities.MCP.Servers[i].Health) == "" || f.capabilities.MCP.Servers[i].Health == "detached" {
+				f.capabilities.MCP.Servers[i].Health = "healthy"
+			}
+		}
+	}
+	return nil
+}
+
+func (f *fakeBaseAgentRuntime) UpdateMCPServerConfig(_ context.Context, name string, config string) error {
+	f.lastMCPServerName = name
+	f.lastMCPConfig = config
+	if f.mcpToggleErr != nil {
+		return f.mcpToggleErr
+	}
+	f.mcpServerDetail.Name = name
+	f.mcpServerDetail.ConfigSummary = config
+	if strings.TrimSpace(config) != "" {
+		f.mcpServerDetail.ConfigDigest = "sha256:test-config"
+	} else {
+		f.mcpServerDetail.ConfigDigest = ""
+	}
+	return nil
+}
+
+func (f *fakeBaseAgentRuntime) MCPServerDetail(_ context.Context, name string) (baseagent.MCPServerCapability, error) {
+	f.lastMCPServerName = name
+	if strings.TrimSpace(f.mcpServerDetail.Name) == "" {
+		return baseagent.MCPServerCapability{}, fmt.Errorf("mcp server %s not found", name)
+	}
+	return f.mcpServerDetail, nil
+}
+
+func (f *fakeBaseAgentRuntime) RespondPendingApproval(_ context.Context, sessionKey, approvalID string, decision baseagent.ApprovalDecision) (baseagent.ChatResponse, error) {
+	f.approvalCall++
+	f.lastSession = sessionKey
+	f.lastApproval = approvalID
+	f.lastDecision = string(decision)
+	return f.approvalResp, f.approvalErr
+}
+
+func (f *fakeBaseAgentRuntime) ScheduleJob(_ context.Context, job baseagent.CronJob) (baseagent.CronJob, error) {
+	f.cronCall++
+	f.lastCronJob = job
+	if f.cronJob.ID == "" {
+		f.cronJob = job
+	}
+	return f.cronJob, f.cronErr
+}
+
+func (f *fakeBaseAgentRuntime) ListCronJobs(_ context.Context, sessionKey string) ([]baseagent.CronJob, error) {
+	f.listCronCall++
+	f.lastCronListSession = sessionKey
+	return append([]baseagent.CronJob(nil), f.cronJobs...), nil
+}
+
+func (f *fakeBaseAgentRuntime) CancelCronJob(_ context.Context, jobID string) (baseagent.CronJob, error) {
+	f.cancelCronCall++
+	f.lastCancelledCronID = jobID
+	if f.cancelledCronJob.ID == "" {
+		f.cancelledCronJob = baseagent.CronJob{ID: jobID}
+	}
+	return f.cancelledCronJob, nil
+}
+
+func (f *fakeBaseAgentRuntime) PauseCronJob(_ context.Context, jobID string) (baseagent.CronJob, error) {
+	f.pauseCronCall++
+	f.lastCancelledCronID = jobID
+	if f.pausedCronJob.ID == "" {
+		f.pausedCronJob = baseagent.CronJob{ID: jobID, Paused: true, LastResult: "paused"}
+	}
+	return f.pausedCronJob, nil
+}
+
+func (f *fakeBaseAgentRuntime) ResumeCronJob(_ context.Context, jobID string) (baseagent.CronJob, error) {
+	f.resumeCronCall++
+	f.lastCancelledCronID = jobID
+	if f.resumedCronJob.ID == "" {
+		f.resumedCronJob = baseagent.CronJob{ID: jobID, LastResult: "resumed"}
+	}
+	return f.resumedCronJob, nil
+}
+
+func (f *fakeBaseAgentRuntime) RunCronJob(_ context.Context, jobID string) (baseagent.CronJob, error) {
+	f.runCronCall++
+	f.lastCancelledCronID = jobID
+	if f.ranCronJob.ID == "" {
+		f.ranCronJob = baseagent.CronJob{ID: jobID, LastResult: "succeeded", History: []baseagent.CronRun{{Trigger: "manual", Result: "succeeded"}}}
+	}
+	return f.ranCronJob, nil
+}
 
 func newTestService() *lifecycle.Service {
 	return lifecycle.NewService(baseagent.NoopTriager{})
@@ -72,6 +374,369 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
+func TestBaseAgentCapabilitiesEndpoint(t *testing.T) {
+	svc := newTestService()
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		capabilities: baseagent.RuntimeCapabilitySummary{
+			Skills: []baseagent.RuntimeSkillCapability{
+				{Name: "go-testing", Enabled: true},
+			},
+			SkillSummary: baseagent.RuntimeSkillSummary{InstalledCount: 1, EnabledCount: 1},
+			MCP: baseagent.MCPCapabilitySummary{
+				Servers: []baseagent.MCPServerCapability{
+					{Name: "repo", Health: "healthy", VisibleToolCount: 1},
+				},
+				VisibleTools: []baseagent.MCPToolCapability{
+					{Name: "repo_search"},
+				},
+			},
+		},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/base-agent/capabilities", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"go-testing"`) || !strings.Contains(w.Body.String(), `"repo_search"`) || !strings.Contains(w.Body.String(), `"enabledCount":1`) {
+		t.Fatalf("unexpected capabilities body: %s", w.Body.String())
+	}
+}
+
+func TestAgentSkillToggleEndpoint(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		capabilities: baseagent.RuntimeCapabilitySummary{
+			Skills: []baseagent.RuntimeSkillCapability{
+				{Name: "go-testing", Enabled: true},
+				{Name: "workspace-inspection", Enabled: false},
+			},
+			SkillSummary: baseagent.RuntimeSkillSummary{InstalledCount: 2, EnabledCount: 1, DisabledCount: 1},
+		},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	methodReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/skills/go-testing", nil)
+	methodRec := httptest.NewRecorder()
+	mux.ServeHTTP(methodRec, methodReq)
+	if methodRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", methodRec.Code)
+	}
+
+	badReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/go-testing", strings.NewReader("{"))
+	badRec := httptest.NewRecorder()
+	mux.ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", badRec.Code)
+	}
+
+	okReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/go-testing", strings.NewReader(`{"enabled":false}`))
+	okReq.Header.Set("Content-Type", "application/json")
+	okRec := httptest.NewRecorder()
+	mux.ServeHTTP(okRec, okReq)
+	if okRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", okRec.Code, okRec.Body.String())
+	}
+	if rt.skillToggleCall != 1 || rt.lastSkillName != "go-testing" || rt.lastSkillEnabled {
+		t.Fatalf("unexpected skill toggle state: %+v", rt)
+	}
+	if !strings.Contains(okRec.Body.String(), `"disabledCount":2`) || !strings.Contains(okRec.Body.String(), `"enabled":false`) {
+		t.Fatalf("unexpected skill toggle body: %s", okRec.Body.String())
+	}
+}
+
+func TestAgentSkillSearchAndInstallEndpoints(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		searchSkills: []baseagent.SkillDefinition{
+			{Name: "go-testing", Summary: "Use go test before claiming success.", Source: "catalog", Version: "builtin"},
+			{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3"},
+		},
+		installSkill:   baseagent.SkillDefinition{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3"},
+		reinstallSkill: baseagent.SkillDefinition{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3"},
+		updateSkill:    baseagent.SkillDefinition{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3", TargetVersion: "v2.0.0"},
+		uninstallSkill: baseagent.SkillDefinition{Name: "workspace-inspection", Summary: "Inspect workspace state.", Source: "catalog", Version: "v1.2.3"},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	searchReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/skills/search?q=workspace", nil)
+	searchRec := httptest.NewRecorder()
+	mux.ServeHTTP(searchRec, searchReq)
+	if searchRec.Code != http.StatusOK {
+		t.Fatalf("expected search 200, got %d body=%s", searchRec.Code, searchRec.Body.String())
+	}
+	if rt.searchSkillsCall != 1 || rt.lastSkillSearch != "workspace" {
+		t.Fatalf("unexpected skill search state: %+v", rt)
+	}
+	if !strings.Contains(searchRec.Body.String(), `"workspace-inspection"`) {
+		t.Fatalf("unexpected skill search body: %s", searchRec.Body.String())
+	}
+	if !strings.Contains(searchRec.Body.String(), `"source":"catalog"`) || !strings.Contains(searchRec.Body.String(), `"version":"v1.2.3"`) {
+		t.Fatalf("expected search metadata in body: %s", searchRec.Body.String())
+	}
+
+	installBadReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/install", strings.NewReader(`{}`))
+	installBadRec := httptest.NewRecorder()
+	mux.ServeHTTP(installBadRec, installBadReq)
+	if installBadRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected install 400 for missing name, got %d", installBadRec.Code)
+	}
+
+	installReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/install", strings.NewReader(`{"name":"workspace-inspection"}`))
+	installReq.Header.Set("Content-Type", "application/json")
+	installRec := httptest.NewRecorder()
+	mux.ServeHTTP(installRec, installReq)
+	if installRec.Code != http.StatusOK {
+		t.Fatalf("expected install 200, got %d body=%s", installRec.Code, installRec.Body.String())
+	}
+	if rt.installSkillCall != 1 || rt.lastInstallSkill != "workspace-inspection" {
+		t.Fatalf("unexpected skill install state: %+v", rt)
+	}
+	if !strings.Contains(installRec.Body.String(), `"workspace-inspection"`) {
+		t.Fatalf("unexpected skill install body: %s", installRec.Body.String())
+	}
+	if !strings.Contains(installRec.Body.String(), `"source":"catalog"`) || !strings.Contains(installRec.Body.String(), `"version":"v1.2.3"`) {
+		t.Fatalf("expected install metadata in body: %s", installRec.Body.String())
+	}
+
+	reinstallReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/reinstall", strings.NewReader(`{"name":"workspace-inspection"}`))
+	reinstallReq.Header.Set("Content-Type", "application/json")
+	reinstallRec := httptest.NewRecorder()
+	mux.ServeHTTP(reinstallRec, reinstallReq)
+	if reinstallRec.Code != http.StatusOK {
+		t.Fatalf("expected reinstall 200, got %d body=%s", reinstallRec.Code, reinstallRec.Body.String())
+	}
+	if rt.reinstallSkillCall != 1 || rt.lastReinstallSkill != "workspace-inspection" {
+		t.Fatalf("unexpected skill reinstall state: %+v", rt)
+	}
+	if !strings.Contains(reinstallRec.Body.String(), `"workspace-inspection"`) || !strings.Contains(reinstallRec.Body.String(), `"version":"v1.2.3"`) {
+		t.Fatalf("unexpected skill reinstall body: %s", reinstallRec.Body.String())
+	}
+
+	updateReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/update", strings.NewReader(`{"name":"workspace-inspection","version":"v2.0.0"}`))
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateRec := httptest.NewRecorder()
+	mux.ServeHTTP(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected update 200, got %d body=%s", updateRec.Code, updateRec.Body.String())
+	}
+	if rt.updateSkillCall != 1 || rt.lastUpdateSkill != "workspace-inspection" || rt.lastUpdateVersion != "v2.0.0" {
+		t.Fatalf("unexpected skill update state: %+v", rt)
+	}
+	if !strings.Contains(updateRec.Body.String(), `"workspace-inspection"`) || !strings.Contains(updateRec.Body.String(), `"targetVersion":"v2.0.0"`) {
+		t.Fatalf("unexpected skill update body: %s", updateRec.Body.String())
+	}
+
+	uninstallReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/skills/uninstall", strings.NewReader(`{"name":"workspace-inspection"}`))
+	uninstallReq.Header.Set("Content-Type", "application/json")
+	uninstallRec := httptest.NewRecorder()
+	mux.ServeHTTP(uninstallRec, uninstallReq)
+	if uninstallRec.Code != http.StatusOK {
+		t.Fatalf("expected uninstall 200, got %d body=%s", uninstallRec.Code, uninstallRec.Body.String())
+	}
+	if rt.uninstallSkillCall != 1 || rt.lastUninstallSkill != "workspace-inspection" {
+		t.Fatalf("unexpected skill uninstall state: %+v", rt)
+	}
+	if !strings.Contains(uninstallRec.Body.String(), `"workspace-inspection"`) || !strings.Contains(uninstallRec.Body.String(), `"version":"v1.2.3"`) {
+		t.Fatalf("unexpected skill uninstall body: %s", uninstallRec.Body.String())
+	}
+}
+
+func TestAgentMCPServerToggleEndpoint(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		capabilities: baseagent.RuntimeCapabilitySummary{
+			MCP: baseagent.MCPCapabilitySummary{
+				Servers: []baseagent.MCPServerCapability{
+					{Name: "repo", Health: "healthy", Enabled: true, Attached: true, Manageable: true, VisibleToolCount: 1},
+				},
+				VisibleTools: []baseagent.MCPToolCapability{{Name: "repo_search"}},
+			},
+		},
+		mcpServerDetail: baseagent.MCPServerCapability{
+			Name:             "repo",
+			Health:           "healthy",
+			Enabled:          true,
+			Attached:         true,
+			Manageable:       true,
+			VisibleToolCount: 1,
+			HiddenToolCount:  1,
+			HealthDetail:     "connected to repository index",
+			RemediationHint:  "Disable MCP if repository indexing becomes noisy.",
+			VisibleTools:     []baseagent.MCPToolCapability{{Name: "repo_search", Description: "Search code"}},
+			HiddenTools:      []baseagent.MCPToolCapability{{Name: "repo_admin", Description: "Admin index"}},
+		},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	detailReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/mcp/repo", nil)
+	detailRec := httptest.NewRecorder()
+	mux.ServeHTTP(detailRec, detailReq)
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", detailRec.Code, detailRec.Body.String())
+	}
+	if !strings.Contains(detailRec.Body.String(), `"healthDetail":"connected to repository index"`) ||
+		!strings.Contains(detailRec.Body.String(), `"remediationHint":"Disable MCP if repository indexing becomes noisy."`) ||
+		!strings.Contains(detailRec.Body.String(), `"hiddenToolCount":1`) {
+		t.Fatalf("unexpected mcp detail body: %s", detailRec.Body.String())
+	}
+
+	okReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/mcp/repo", strings.NewReader(`{"enabled":false}`))
+	okReq.Header.Set("Content-Type", "application/json")
+	okRec := httptest.NewRecorder()
+	mux.ServeHTTP(okRec, okReq)
+	if okRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", okRec.Code, okRec.Body.String())
+	}
+	if rt.mcpToggleCall != 1 || rt.lastMCPServerName != "repo" || rt.lastMCPEnabled {
+		t.Fatalf("unexpected mcp toggle state: %+v", rt)
+	}
+	if !strings.Contains(okRec.Body.String(), `"name":"repo"`) || !strings.Contains(okRec.Body.String(), `"enabled":false`) {
+		t.Fatalf("unexpected mcp toggle body: %s", okRec.Body.String())
+	}
+}
+
+func TestAgentMCPServerActionEndpoints(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		capabilities: baseagent.RuntimeCapabilitySummary{
+			MCP: baseagent.MCPCapabilitySummary{
+				Servers: []baseagent.MCPServerCapability{
+					{Name: "repo", Health: "healthy", Enabled: true, Attached: true, Manageable: true, VisibleToolCount: 1},
+				},
+			},
+		},
+		mcpServerDetail: baseagent.MCPServerCapability{
+			Name:             "repo",
+			Health:           "healthy",
+			Enabled:          true,
+			Attached:         true,
+			Manageable:       true,
+			VisibleToolCount: 1,
+			ConfigSummary:    `{"mode":"read"}`,
+			ConfigDigest:     "sha256:seed",
+		},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	attachReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/mcp/repo/detach", nil)
+	attachRec := httptest.NewRecorder()
+	mux.ServeHTTP(attachRec, attachReq)
+	if attachRec.Code != http.StatusOK {
+		t.Fatalf("expected detach 200, got %d body=%s", attachRec.Code, attachRec.Body.String())
+	}
+	if rt.lastMCPServerName != "repo" || rt.lastMCPAttached {
+		t.Fatalf("unexpected detach state: %+v", rt)
+	}
+	if !strings.Contains(attachRec.Body.String(), `"attached":false`) {
+		t.Fatalf("unexpected detach body: %s", attachRec.Body.String())
+	}
+
+	configReq := httptest.NewRequest(http.MethodPost, "/api/v1/agents/test-agent/mcp/repo/config", strings.NewReader(`{"config":"{\"mode\":\"write\"}"}`))
+	configReq.Header.Set("Content-Type", "application/json")
+	configRec := httptest.NewRecorder()
+	mux.ServeHTTP(configRec, configReq)
+	if configRec.Code != http.StatusOK {
+		t.Fatalf("expected config 200, got %d body=%s", configRec.Code, configRec.Body.String())
+	}
+	if rt.lastMCPConfig != `{"mode":"write"}` {
+		t.Fatalf("unexpected config payload: %+v", rt)
+	}
+	if !strings.Contains(configRec.Body.String(), `"configDigest":"sha256:test-config"`) {
+		t.Fatalf("unexpected config body: %s", configRec.Body.String())
+	}
+}
+
+func TestAgentSubagentHistoryEndpoints(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		subagentJobs: []baseagent.SubagentJob{
+			{JobID: "subagent-2", Task: "summarize", Status: baseagent.SubagentJobStatusCancelled, Error: "subagent job cancelled"},
+			{JobID: "subagent-3", Task: "collect", Status: baseagent.SubagentJobStatusCompleted, Result: "done"},
+		},
+		subagentJob: baseagent.SubagentJob{JobID: "subagent-3", Task: "collect", Status: baseagent.SubagentJobStatusCompleted, Result: "done"},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/subagents?limit=2", nil)
+	listRec := httptest.NewRecorder()
+	mux.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("expected subagent list 200, got %d body=%s", listRec.Code, listRec.Body.String())
+	}
+	if rt.lastSubagentLimit != 2 {
+		t.Fatalf("expected limit to be forwarded, got %d", rt.lastSubagentLimit)
+	}
+	if !strings.Contains(listRec.Body.String(), `"subagent-2"`) || !strings.Contains(listRec.Body.String(), `"subagent-3"`) {
+		t.Fatalf("unexpected subagent list body: %s", listRec.Body.String())
+	}
+
+	jobReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/subagents/subagent-3", nil)
+	jobRec := httptest.NewRecorder()
+	mux.ServeHTTP(jobRec, jobReq)
+	if jobRec.Code != http.StatusOK {
+		t.Fatalf("expected subagent get 200, got %d body=%s", jobRec.Code, jobRec.Body.String())
+	}
+	if rt.lastSubagentJobID != "subagent-3" {
+		t.Fatalf("expected subagent job id to be forwarded, got %q", rt.lastSubagentJobID)
+	}
+	if !strings.Contains(jobRec.Body.String(), `"subagent-3"`) || !strings.Contains(jobRec.Body.String(), `"completed"`) {
+		t.Fatalf("unexpected subagent job body: %s", jobRec.Body.String())
+	}
+
+	badLimitReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/subagents?limit=0", nil)
+	badLimitRec := httptest.NewRecorder()
+	mux.ServeHTTP(badLimitRec, badLimitReq)
+	if badLimitRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid limit 400, got %d body=%s", badLimitRec.Code, badLimitRec.Body.String())
+	}
+}
+
+func TestAgentSessionsEndpoint(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		sessionStats: []baseagent.SessionStats{
+			{Key: "telegram:alpha", MessageCount: 8, SummaryLength: 64, UpdatedAt: time.Now().UTC()},
+			{Key: "telegram:beta", MessageCount: 3, SummaryLength: 20, UpdatedAt: time.Now().UTC()},
+		},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	okReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/sessions?limit=1", nil)
+	okRec := httptest.NewRecorder()
+	mux.ServeHTTP(okRec, okReq)
+	if okRec.Code != http.StatusOK {
+		t.Fatalf("expected sessions 200, got %d body=%s", okRec.Code, okRec.Body.String())
+	}
+	if !strings.Contains(okRec.Body.String(), `"telegram:alpha"`) || strings.Contains(okRec.Body.String(), `"telegram:beta"`) {
+		t.Fatalf("unexpected sessions body: %s", okRec.Body.String())
+	}
+
+	badReq := httptest.NewRequest(http.MethodGet, "/api/v1/agents/test-agent/sessions?limit=0", nil)
+	badRec := httptest.NewRecorder()
+	mux.ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected sessions invalid limit 400, got %d body=%s", badRec.Code, badRec.Body.String())
+	}
+}
+
 func TestReadyz_Ready(t *testing.T) {
 	mux := newTestMux()
 	req := httptest.NewRequest("GET", "/readyz", nil)
@@ -96,6 +761,291 @@ func TestReadyz_NotReady(t *testing.T) {
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", w.Code)
+	}
+}
+
+func TestDaemonServerApprovalEndpoint(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		resp:         baseagent.ChatResponse{Message: "unused", Action: "chat"},
+		approvalResp: baseagent.ChatResponse{Message: "confirmed", Action: "approval_confirm"},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/base-agent/approvals/consume", strings.NewReader(`{"sessionKey":"cli:approval-api","approvalId":"approval-1","decision":"confirm"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+	if rt.approvalCall != 1 || rt.lastSession != "cli:approval-api" || rt.lastApproval != "approval-1" || rt.lastDecision != "confirm" {
+		t.Fatalf("unexpected approval runtime call state: %+v", rt)
+	}
+	if !strings.Contains(w.Body.String(), `"action":"approval_confirm"`) {
+		t.Fatalf("unexpected approval response body=%s", w.Body.String())
+	}
+}
+
+func TestDaemonServerApprovalEndpointReject(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		approvalResp: baseagent.ChatResponse{Message: "rejected", Action: "approval_cancel"},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/base-agent/approvals/consume", strings.NewReader(`{"provider":"cli","chatId":"approval-api","approvalId":"approval-2","decision":"reject"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+	if rt.lastSession != baseagent.ResolveSessionKey("cli", "approval-api") || rt.lastDecision != "reject" {
+		t.Fatalf("unexpected derived approval request state: %+v", rt)
+	}
+	if !strings.Contains(w.Body.String(), `"action":"approval_cancel"`) {
+		t.Fatalf("unexpected reject response body=%s", w.Body.String())
+	}
+}
+
+func TestDaemonServerApprovalEndpointMethodAndValidationBranches(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	mux := buildHTTPMuxWithBaseAgent(svc, &fakeBaseAgentRuntime{}, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	t.Run("method not allowed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/base-agent/approvals/consume", nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("expected 405, got %d", w.Code)
+		}
+	})
+
+	t.Run("missing session identity", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/base-agent/approvals/consume", strings.NewReader(`{"approvalId":"approval-1","decision":"confirm"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("missing approval id", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/base-agent/approvals/consume", strings.NewReader(`{"sessionKey":"cli:approval-api","decision":"confirm"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("missing decision", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/base-agent/approvals/consume", strings.NewReader(`{"sessionKey":"cli:approval-api","approvalId":"approval-1"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d; body=%s", w.Code, w.Body.String())
+		}
+	})
+}
+
+func TestDaemonServerApprovalEndpointMapsRuntimeErrors(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+
+	t.Run("invalid decision", func(t *testing.T) {
+		rt := &fakeBaseAgentRuntime{approvalErr: baseagent.ErrInvalidApprovalDecision}
+		mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+		req := httptest.NewRequest(http.MethodPost, "/api/base-agent/approvals/consume", strings.NewReader(`{"sessionKey":"cli:approval-api","approvalId":"approval-1","decision":"later"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		rt := &fakeBaseAgentRuntime{approvalErr: baseagent.ErrPendingApprovalNotFound}
+		mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+		req := httptest.NewRequest(http.MethodPost, "/api/base-agent/approvals/consume", strings.NewReader(`{"sessionKey":"cli:approval-api","approvalId":"approval-1","decision":"confirm"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d; body=%s", w.Code, w.Body.String())
+		}
+	})
+}
+
+func TestDaemonServerCronScheduleEndpoint(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		cronJob: baseagent.CronJob{ID: "cron-1", SessionKey: "cli:cron-api", Prompt: "perform maintenance planning"},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/base-agent/cron/schedule", strings.NewReader(`{"sessionKey":"cli:cron-api","prompt":"perform maintenance planning"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+	if rt.cronCall != 1 || rt.lastCronJob.SessionKey != "cli:cron-api" || rt.lastCronJob.Prompt != "perform maintenance planning" {
+		t.Fatalf("unexpected cron runtime call state: %+v", rt)
+	}
+	if !strings.Contains(w.Body.String(), `"id":"cron-1"`) {
+		t.Fatalf("unexpected cron response body=%s", w.Body.String())
+	}
+}
+
+func TestDaemonServerCronScheduleEndpointDerivesSessionKey(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	rt := &fakeBaseAgentRuntime{
+		cronJob: baseagent.CronJob{ID: "cron-2", SessionKey: "cli:cron-derived", Prompt: "perform maintenance planning"},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/base-agent/cron/schedule", strings.NewReader(`{"provider":"cli","chatId":"cron-derived","prompt":"perform maintenance planning"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body=%s", w.Code, w.Body.String())
+	}
+	if rt.lastCronJob.SessionKey != baseagent.ResolveSessionKey("cli", "cron-derived") {
+		t.Fatalf("unexpected derived cron job state: %+v", rt.lastCronJob)
+	}
+}
+
+func TestDaemonServerCronListAndCancelEndpoints(t *testing.T) {
+	svc := newTestServiceWithAgent(t)
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	lastRunAt := time.Date(2026, 3, 12, 10, 0, 0, 0, time.UTC)
+	rt := &fakeBaseAgentRuntime{
+		cronJobs: []baseagent.CronJob{{
+			ID:         "cron-3",
+			SessionKey: "agent:picoclaw",
+			Prompt:     "check launcher",
+			NextRunAt:  time.Date(2026, 3, 12, 11, 0, 0, 0, time.UTC),
+			LastRunAt:  &lastRunAt,
+			LastResult: "succeeded",
+		}},
+		cancelledCronJob: baseagent.CronJob{
+			ID:          "cron-3",
+			SessionKey:  "agent:picoclaw",
+			Prompt:      "check launcher",
+			LastResult:  "cancelled",
+			CancelledAt: &lastRunAt,
+		},
+	}
+	mux := buildHTTPMuxWithBaseAgent(svc, rt, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/base-agent/cron/jobs?sessionKey=agent:picoclaw", nil)
+	listRec := httptest.NewRecorder()
+	mux.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+	if rt.listCronCall != 1 || rt.lastCronListSession != "agent:picoclaw" {
+		t.Fatalf("unexpected cron list call state: %+v", rt)
+	}
+	if !strings.Contains(listRec.Body.String(), `"lastResult":"succeeded"`) {
+		t.Fatalf("unexpected cron list body=%s", listRec.Body.String())
+	}
+
+	cancelReq := httptest.NewRequest(http.MethodPost, "/api/base-agent/cron/cron-3/cancel", nil)
+	cancelRec := httptest.NewRecorder()
+	mux.ServeHTTP(cancelRec, cancelReq)
+	if cancelRec.Code != http.StatusOK {
+		t.Fatalf("cancel status=%d body=%s", cancelRec.Code, cancelRec.Body.String())
+	}
+	if rt.cancelCronCall != 1 || rt.lastCancelledCronID != "cron-3" {
+		t.Fatalf("unexpected cron cancel call state: %+v", rt)
+	}
+	if !strings.Contains(cancelRec.Body.String(), `"lastResult":"cancelled"`) {
+		t.Fatalf("unexpected cron cancel body=%s", cancelRec.Body.String())
+	}
+
+	rt.pausedCronJob = baseagent.CronJob{
+		ID:         "cron-3",
+		SessionKey: "agent:picoclaw",
+		Prompt:     "check launcher",
+		LastResult: "paused",
+		Paused:     true,
+	}
+	pauseReq := httptest.NewRequest(http.MethodPost, "/api/base-agent/cron/cron-3/pause", nil)
+	pauseRec := httptest.NewRecorder()
+	mux.ServeHTTP(pauseRec, pauseReq)
+	if pauseRec.Code != http.StatusOK {
+		t.Fatalf("pause status=%d body=%s", pauseRec.Code, pauseRec.Body.String())
+	}
+	if rt.pauseCronCall != 1 || rt.lastCancelledCronID != "cron-3" {
+		t.Fatalf("unexpected cron pause call state: %+v", rt)
+	}
+	if !strings.Contains(pauseRec.Body.String(), `"lastResult":"paused"`) {
+		t.Fatalf("unexpected cron pause body=%s", pauseRec.Body.String())
+	}
+
+	rt.resumedCronJob = baseagent.CronJob{
+		ID:         "cron-3",
+		SessionKey: "agent:picoclaw",
+		Prompt:     "check launcher",
+		LastResult: "resumed",
+		Paused:     false,
+	}
+	resumeReq := httptest.NewRequest(http.MethodPost, "/api/base-agent/cron/cron-3/resume", nil)
+	resumeRec := httptest.NewRecorder()
+	mux.ServeHTTP(resumeRec, resumeReq)
+	if resumeRec.Code != http.StatusOK {
+		t.Fatalf("resume status=%d body=%s", resumeRec.Code, resumeRec.Body.String())
+	}
+	if rt.resumeCronCall != 1 || rt.lastCancelledCronID != "cron-3" {
+		t.Fatalf("unexpected cron resume call state: %+v", rt)
+	}
+	if !strings.Contains(resumeRec.Body.String(), `"lastResult":"resumed"`) {
+		t.Fatalf("unexpected cron resume body=%s", resumeRec.Body.String())
+	}
+
+	rt.ranCronJob = baseagent.CronJob{
+		ID:         "cron-3",
+		SessionKey: "agent:picoclaw",
+		Prompt:     "check launcher",
+		LastResult: "succeeded",
+		History:    []baseagent.CronRun{{Trigger: "manual", Result: "succeeded"}},
+	}
+	runReq := httptest.NewRequest(http.MethodPost, "/api/base-agent/cron/cron-3/run", nil)
+	runRec := httptest.NewRecorder()
+	mux.ServeHTTP(runRec, runReq)
+	if runRec.Code != http.StatusOK {
+		t.Fatalf("run status=%d body=%s", runRec.Code, runRec.Body.String())
+	}
+	if rt.runCronCall != 1 || rt.lastCancelledCronID != "cron-3" {
+		t.Fatalf("unexpected cron run call state: %+v", rt)
+	}
+	if !strings.Contains(runRec.Body.String(), `"trigger":"manual"`) {
+		t.Fatalf("unexpected cron run body=%s", runRec.Body.String())
 	}
 }
 
@@ -659,6 +1609,32 @@ func TestV1AgentStatus(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestV1AgentStatus_IncludesHeartbeat(t *testing.T) {
+	mux := newTestMuxWithAgent(t)
+	req := httptest.NewRequest("GET", "/api/v1/agents/test-agent/status", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	var body map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode status body: %v", err)
+	}
+	heartbeat, ok := body["heartbeat"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected heartbeat object, got %+v", body["heartbeat"])
+	}
+	if strings.TrimSpace(fmt.Sprint(heartbeat["state"])) == "" {
+		t.Fatalf("expected heartbeat.state, got %+v", heartbeat)
+	}
+	if strings.TrimSpace(fmt.Sprint(heartbeat["lastActivityAt"])) == "" {
+		t.Fatalf("expected heartbeat.lastActivityAt, got %+v", heartbeat)
 	}
 }
 

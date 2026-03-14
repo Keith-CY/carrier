@@ -67,6 +67,8 @@ func TestLoadGatewayConfigFromEnvRespectsOverrides(t *testing.T) {
 	t.Setenv("CARRIER_TELEGRAM_POLLING_TIMEOUT_SEC", "45")
 	t.Setenv("CARRIER_TELEGRAM_API_BASE_URL", "https://tg.example")
 	t.Setenv("CARRIER_MAX_COMMAND_BODY_BYTES", "12345")
+	t.Setenv("CARRIER_WORKER_LEASE_STALE_AFTER_SEC", "90")
+	t.Setenv("CARRIER_WORKER_HEARTBEAT_TIMEOUT_SEC", "15")
 	t.Setenv("CARRIER_RATE_LIMIT_PER_SESSION", "13")
 	t.Setenv("CARRIER_RATE_LIMIT_GLOBAL", "37")
 	t.Setenv("CARRIER_RATE_LIMIT_WINDOW_MS", "2000")
@@ -91,6 +93,9 @@ func TestLoadGatewayConfigFromEnvRespectsOverrides(t *testing.T) {
 	}
 	if cfg.MaxCommandBodyBytes != 12345 || cfg.RateLimitPerSession != 13 || cfg.RateLimitGlobal != 37 || cfg.RateLimitWindow != 2*time.Second {
 		t.Fatalf("unexpected limits: body=%d perSession=%d global=%d window=%v", cfg.MaxCommandBodyBytes, cfg.RateLimitPerSession, cfg.RateLimitGlobal, cfg.RateLimitWindow)
+	}
+	if cfg.WorkerLeaseStaleAfter != 90*time.Second || cfg.WorkerHeartbeatTimeout != 15*time.Second {
+		t.Fatalf("unexpected worker stale thresholds: stale=%v heartbeat=%v", cfg.WorkerLeaseStaleAfter, cfg.WorkerHeartbeatTimeout)
 	}
 	if cfg.DataDir != artifactRoot || cfg.ArtifactRoot != artifactRoot {
 		t.Fatalf("unexpected data/artifact roots: data=%q artifact=%q", cfg.DataDir, cfg.ArtifactRoot)

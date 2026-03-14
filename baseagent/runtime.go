@@ -5,6 +5,7 @@ import (
 	"carrier/shared/config"
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -28,17 +29,21 @@ func mustRegisterProvider(pm *ProviderManager, provider Provider) {
 }
 
 type ChatRequest struct {
-	Provider  string `json:"provider"`
-	ChatID    string `json:"chatId"`
-	RequestID string `json:"requestId"`
-	Message   string `json:"message"`
+	Provider    string          `json:"provider"`
+	ModelAlias  string          `json:"modelAlias,omitempty"`
+	Model       string          `json:"model,omitempty"`
+	ChatID      string          `json:"chatId"`
+	RequestID   string          `json:"requestId"`
+	Message     string          `json:"message"`
+	Attachments []AttachmentRef `json:"attachments,omitempty"`
 }
 
 type ChatResponse struct {
-	Message    string `json:"message"`
-	Action     string `json:"action,omitempty"`
-	SelfHealed bool   `json:"selfHealed,omitempty"`
-	BackupRef  string `json:"backupRef,omitempty"`
+	Message     string               `json:"message"`
+	RichContent *RichOutboundMessage `json:"richContent,omitempty"`
+	Action      string               `json:"action,omitempty"`
+	SelfHealed  bool                 `json:"selfHealed,omitempty"`
+	BackupRef   string               `json:"backupRef,omitempty"`
 }
 
 type AgentState struct {
@@ -77,20 +82,44 @@ type Runtime struct {
 	providers *ProviderManager
 	sessions  *SessionManager
 	loop      *AgentLoop
+	cron      *CronService
 
-	mu          sync.Mutex
-	initialized bool
-	activeID    string
+	mu                           sync.Mutex
+	initialized                  bool
+	activeID                     string
+	workspaceRoot                string
+	maxToolIterations            int
+	structuredToolPolicyOverride *StructuredToolPolicySpec
+	mcpManager                   MCPManager
+	skillsLoader                 SkillsLoader
+	mediaRuntime                 MediaRuntime
+	webBackend                   WebToolBackend
+	subagentSpawner              SubagentSpawner
+	subagentManager              SubagentManager
 }
 
-func NewRuntime(svc AgentService, memStore MemoryStore) *Runtime {
+func NewRuntime(svc AgentService, memStore MemoryStore, opts ...RuntimeOption) *Runtime {
 	r := &Runtime{
-		svc:      svc,
-		memory:   memStore,
-		activeID: baseAgentActiveMemoryV1ID,
+		svc:               svc,
+		memory:            memStore,
+		activeID:          baseAgentActiveMemoryV1ID,
+		maxToolIterations: defaultMaxToolIterations,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(r)
+		}
+	}
+	structuredToolPolicy := ActiveBoundarySpec().StructuredToolPolicy
+	if r.structuredToolPolicyOverride != nil {
+		structuredToolPolicy = *r.structuredToolPolicyOverride
 	}
 	r.bus = NewMessageBus(0, 0, 0)
-	r.sessions = NewSessionManager(0)
+	if r.workspaceRoot != "" {
+		r.sessions = NewSessionManagerWithStorage(0, filepath.Join(r.workspaceRoot, ".baseagent", "sessions"))
+	} else {
+		r.sessions = NewSessionManager(0)
+	}
 	r.providers = NewProviderManager(nil)
 	for _, provider := range catalog.ListProviders() {
 		mustRegisterProvider(r.providers, NewLLMProviderAdapter(provider.ID, 8))
@@ -102,6 +131,35 @@ func NewRuntime(svc AgentService, memStore MemoryStore) *Runtime {
 	r.channels = NewChannelManager(r.bus)
 	r.loop = NewAgentLoop(r.svc, r.tools, r.providers, r.sessions, r.bus)
 	r.loop.SetChannelManager(r.channels)
+	r.loop.SetSkillsLoader(r.skillsLoader)
+	effectiveSubagentManager := r.subagentManager
+	if effectiveSubagentManager == nil && r.subagentSpawner == nil {
+		if r.workspaceRoot != "" {
+			effectiveSubagentManager = NewInMemorySubagentManagerWithStorage(nil, filepath.Join(r.workspaceRoot, ".baseagent", "subagents.json"))
+		} else {
+			effectiveSubagentManager = NewInMemorySubagentManager(nil)
+		}
+	}
+	effectiveSubagentSpawner := r.subagentSpawner
+	if effectiveSubagentManager != nil {
+		effectiveSubagentSpawner = effectiveSubagentManager
+	}
+	r.subagentManager = effectiveSubagentManager
+	executionToolOpts := []ExecutionToolRegistryOption{
+		WithExecutionToolWebBackend(r.webBackend),
+	}
+	if effectiveSubagentSpawner != nil {
+		executionToolOpts = append(executionToolOpts, WithExecutionToolSubagentSpawner(effectiveSubagentSpawner))
+	}
+	r.loop.SetExecutionTools(NewExecutionToolRegistry(
+		r.workspaceRoot,
+		executionToolOpts...,
+	), r.maxToolIterations, structuredToolPolicy, r.mcpManager, effectiveSubagentManager)
+	r.loop.SetMemoryStore(r.memory, baseAgentVirtualID)
+	r.cron = NewCronService(func(ctx context.Context, job CronJob) error {
+		_, err := r.Chat(ctx, cronChatRequestForSessionKey(job.SessionKey, job.Prompt))
+		return err
+	})
 	return r
 }
 
@@ -157,7 +215,156 @@ func (r *Runtime) SetActiveProvider(name string) error {
 	return r.providers.SetActiveProvider(name)
 }
 
+func (r *Runtime) ListInstalledSkills(ctx context.Context) []SkillDefinition {
+	if r == nil || r.skillsLoader == nil {
+		return nil
+	}
+	return r.skillsLoader.ListInstalledSkills(ctx)
+}
+
+func (r *Runtime) RecentSubagentJobs(ctx context.Context, limit int) []SubagentJob {
+	if r == nil || r.subagentManager == nil {
+		return nil
+	}
+	return r.subagentManager.RecentJobs(ctx, limit)
+}
+
+func (r *Runtime) RecentSessionStats(limit int) []SessionStats {
+	if r == nil || r.sessions == nil {
+		return nil
+	}
+	return r.sessions.ListStats(limit)
+}
+
+func (r *Runtime) SubagentJob(ctx context.Context, jobID string) (SubagentJob, error) {
+	if r == nil || r.subagentManager == nil {
+		return SubagentJob{}, fmt.Errorf("subagent manager is unavailable")
+	}
+	return r.subagentManager.Job(ctx, jobID)
+}
+
+func (r *Runtime) SearchSkills(ctx context.Context, query string) []SkillDefinition {
+	if r == nil || r.skillsLoader == nil {
+		return nil
+	}
+	return r.skillsLoader.SearchSkills(ctx, query)
+}
+
+func (r *Runtime) InstallSkill(ctx context.Context, name string) (SkillDefinition, error) {
+	if r == nil || r.skillsLoader == nil {
+		return SkillDefinition{}, fmt.Errorf("skills loader is unavailable")
+	}
+	return r.skillsLoader.InstallSkill(ctx, name)
+}
+
+func (r *Runtime) ReinstallSkill(ctx context.Context, name string) (SkillDefinition, error) {
+	if r == nil || r.skillsLoader == nil {
+		return SkillDefinition{}, fmt.Errorf("skills loader is unavailable")
+	}
+	return r.skillsLoader.ReinstallSkill(ctx, name)
+}
+
+func (r *Runtime) UpdateSkill(ctx context.Context, name, version string) (SkillDefinition, error) {
+	if r == nil || r.skillsLoader == nil {
+		return SkillDefinition{}, fmt.Errorf("skills loader is unavailable")
+	}
+	return r.skillsLoader.UpdateSkill(ctx, name, version)
+}
+
+func (r *Runtime) UninstallSkill(ctx context.Context, name string) (SkillDefinition, error) {
+	if r == nil || r.skillsLoader == nil {
+		return SkillDefinition{}, fmt.Errorf("skills loader is unavailable")
+	}
+	return r.skillsLoader.UninstallSkill(ctx, name)
+}
+
+func (r *Runtime) StartMCP(ctx context.Context) error {
+	if r == nil || r.mcpManager == nil {
+		return nil
+	}
+	manager, ok := r.mcpManager.(interface{ Start(context.Context) error })
+	if !ok {
+		return nil
+	}
+	return manager.Start(ctx)
+}
+
+func (r *Runtime) StopMCP(ctx context.Context) error {
+	if r == nil || r.mcpManager == nil {
+		return nil
+	}
+	manager, ok := r.mcpManager.(interface{ Stop(context.Context) error })
+	if !ok {
+		return nil
+	}
+	return manager.Stop(ctx)
+}
+
+func (r *Runtime) SetMCPServerEnabled(ctx context.Context, name string, enabled bool) error {
+	if r == nil || r.mcpManager == nil {
+		return fmt.Errorf("mcp manager is unavailable")
+	}
+	if err := r.mcpManager.SetServerEnabled(ctx, name, enabled); err != nil {
+		return err
+	}
+	if r.loop != nil {
+		r.loop.SetExecutionTools(r.loop.executionTools, r.loop.maxToolIterations, r.effectiveStructuredToolPolicy(), r.mcpManager, r.subagentManager)
+	}
+	return nil
+}
+
+func (r *Runtime) SetMCPServerAttached(ctx context.Context, name string, attached bool) error {
+	if r == nil || r.mcpManager == nil {
+		return fmt.Errorf("mcp manager is unavailable")
+	}
+	if err := r.mcpManager.SetServerAttached(ctx, name, attached); err != nil {
+		return err
+	}
+	if r.loop != nil {
+		r.loop.SetExecutionTools(r.loop.executionTools, r.loop.maxToolIterations, r.effectiveStructuredToolPolicy(), r.mcpManager, r.subagentManager)
+	}
+	return nil
+}
+
+func (r *Runtime) UpdateMCPServerConfig(ctx context.Context, name string, config string) error {
+	if r == nil || r.mcpManager == nil {
+		return fmt.Errorf("mcp manager is unavailable")
+	}
+	if err := r.mcpManager.UpdateServerConfig(ctx, name, config); err != nil {
+		return err
+	}
+	if r.loop != nil {
+		r.loop.SetExecutionTools(r.loop.executionTools, r.loop.maxToolIterations, r.effectiveStructuredToolPolicy(), r.mcpManager, r.subagentManager)
+	}
+	return nil
+}
+
+func (r *Runtime) MCPServerDetail(_ context.Context, name string) (MCPServerCapability, error) {
+	if r == nil || r.mcpManager == nil {
+		return MCPServerCapability{}, fmt.Errorf("mcp manager is unavailable")
+	}
+	return r.mcpManager.ServerDetail(name)
+}
+
+func (r *Runtime) effectiveStructuredToolPolicy() StructuredToolPolicySpec {
+	if r == nil {
+		return StructuredToolPolicySpec{}
+	}
+	if r.structuredToolPolicyOverride != nil {
+		return *r.structuredToolPolicyOverride
+	}
+	return ActiveBoundarySpec().StructuredToolPolicy
+}
+
 func (r *Runtime) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+	preparedReq, boundedResp, err := r.prepareMediaRequest(ctx, req)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	if boundedResp != nil {
+		return *boundedResp, nil
+	}
+	req = preparedReq
 	msg := strings.TrimSpace(req.Message)
 	if msg == "" {
 		return ChatResponse{Message: baseAgentHelpText()}, nil
@@ -176,6 +383,101 @@ func (r *Runtime) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 		}, healNote, healed, backupRef), nil
 	}
 	return withMemoryNote(resp, healNote, healed, backupRef), nil
+}
+
+func (r *Runtime) SpeakMedia(ctx context.Context, req SpeechSynthesisRequest) (ChatResponse, error) {
+	if strings.TrimSpace(req.Text) == "" {
+		return ChatResponse{}, fmt.Errorf("speech text is required")
+	}
+	if r == nil || r.mediaRuntime == nil {
+		return ChatResponse{
+			Message: "speech output is not supported by the configured media runtime",
+			Action:  "unsupported",
+		}, nil
+	}
+	attachment, err := r.mediaRuntime.SynthesizeSpeech(ctx, req)
+	if err != nil {
+		if isMediaUnsupportedError(err) {
+			return ChatResponse{
+				Message: strings.TrimSpace(err.Error()),
+				Action:  "unsupported",
+			}, nil
+		}
+		return ChatResponse{}, err
+	}
+	preview := strings.TrimSpace("Generated audio: " + strings.TrimSpace(attachment.Name))
+	if preview == "Generated audio:" {
+		preview = "Generated audio output."
+	}
+	return ChatResponse{
+		Message: preview,
+		RichContent: &RichOutboundMessage{
+			Text:       preview,
+			RenderMode: "rich_media",
+			Attachments: []AttachmentRef{
+				attachment,
+			},
+			Blocks: []ContentBlock{{
+				Type:         "audio",
+				OutputRole:   normalizedAttachmentOutputRole(attachment),
+				Name:         strings.TrimSpace(attachment.Name),
+				Path:         strings.TrimSpace(attachment.Path),
+				MIMEType:     strings.TrimSpace(attachment.MIMEType),
+				MediaType:    strings.TrimSpace(attachment.MediaType),
+				AttachmentID: strings.TrimSpace(attachment.ID),
+				SizeBytes:    attachment.SizeBytes,
+			}},
+		},
+	}, nil
+}
+
+func normalizedAttachmentOutputRole(attachment AttachmentRef) string {
+	if role := strings.TrimSpace(attachment.OutputRole); role != "" {
+		return role
+	}
+	return "generated"
+}
+
+func (r *Runtime) ScheduleJob(ctx context.Context, job CronJob) (CronJob, error) {
+	if r == nil || r.cron == nil {
+		return CronJob{}, fmt.Errorf("cron service is unavailable")
+	}
+	return r.cron.Schedule(ctx, job)
+}
+
+func (r *Runtime) ListCronJobs(_ context.Context, sessionKey string) ([]CronJob, error) {
+	if r == nil || r.cron == nil {
+		return nil, fmt.Errorf("cron service is unavailable")
+	}
+	return r.cron.List(sessionKey), nil
+}
+
+func (r *Runtime) CancelCronJob(_ context.Context, jobID string) (CronJob, error) {
+	if r == nil || r.cron == nil {
+		return CronJob{}, fmt.Errorf("cron service is unavailable")
+	}
+	return r.cron.Cancel(jobID)
+}
+
+func (r *Runtime) PauseCronJob(_ context.Context, jobID string) (CronJob, error) {
+	if r == nil || r.cron == nil {
+		return CronJob{}, fmt.Errorf("cron service is unavailable")
+	}
+	return r.cron.Pause(jobID)
+}
+
+func (r *Runtime) ResumeCronJob(_ context.Context, jobID string) (CronJob, error) {
+	if r == nil || r.cron == nil {
+		return CronJob{}, fmt.Errorf("cron service is unavailable")
+	}
+	return r.cron.Resume(jobID)
+}
+
+func (r *Runtime) RunCronJob(ctx context.Context, jobID string) (CronJob, error) {
+	if r == nil || r.cron == nil {
+		return CronJob{}, fmt.Errorf("cron service is unavailable")
+	}
+	return r.cron.RunNow(ctx, jobID)
 }
 
 func wantsListAgents(lower string) bool {
@@ -264,11 +566,31 @@ func (r *Runtime) executeAgentAction(ctx context.Context, action, agentID string
 }
 
 func baseAgentHelpText() string {
-	return "Base agent manages local agents: `list agents` or `/agents`, `uninstall <agent>`, `start <agent>`, `stop <agent>`, `status <agent>`, `logs <agent>`, `upgrade <agent>`, `diagnose <agent>`. Metadata commands: `/tools`, `/providers`, `/sessions`, `/boundaries`. For install/onboard, use Carrier CLI/TUI (`carrier install <agent>`, `carrier onboard`) or WebUI."
+	return "Base agent manages local agents: `list agents` or `/agents`, `uninstall <agent>`, `start <agent>`, `stop <agent>`, `status <agent>`, `logs <agent>`, `upgrade <agent>`, `diagnose <agent>`. Metadata commands: `/tools`, `/providers`, `/sessions`, `/boundaries`. When workspace tools are enabled, chat can use `read_file`, `write_file`, `append_file`, `edit_file`, `list_dir`, and bounded `exec` inside the current project workspace. For install/onboard, use Carrier CLI/TUI (`carrier install <agent>`, `carrier onboard`) or WebUI."
 }
 
 func baseAgentBoundariesText() string {
 	return ActiveBoundarySpec().RenderSummary()
+}
+
+func (r *Runtime) renderToolSummary() string {
+	if r == nil || r.tools == nil {
+		return "No tools are registered."
+	}
+
+	lines := []string{r.tools.RenderToolSummary()}
+	if r.loop == nil || r.loop.executionTools == nil {
+		return strings.Join(lines, "\n")
+	}
+
+	descriptors := r.loop.executionTools.Descriptors()
+	if len(descriptors) == 0 {
+		return strings.Join(lines, "\n")
+	}
+
+	lines = append(lines, "", fmt.Sprintf("Workspace tools (%d):", len(descriptors)))
+	lines = append(lines, renderStructuredToolLines(descriptors)...)
+	return strings.Join(lines, "\n")
 }
 
 func withMemoryNote(resp ChatResponse, note string, healed bool, backupRef string) ChatResponse {

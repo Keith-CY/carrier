@@ -1441,6 +1441,129 @@ func TestRemoteCodeAgentLifecycleAndAudit(t *testing.T) {
 	}
 }
 
+func TestProviderGovernanceResolveAndAudit(t *testing.T) {
+	auditPath := filepath.Join(t.TempDir(), "gateway-audit.jsonl")
+	t.Setenv("CARRIER_GATEWAY_AUDIT_LOG", auditPath)
+
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "cat >"):
+			return remoteExecResult{ExitCode: 0}
+		case strings.Contains(command, "openclaw config set"):
+			return remoteExecResult{ExitCode: 0, Stdout: "/tmp/snapshot.json\n"}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	createPrimaryProfileRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/provider-profiles", `{
+		"id":"profile-host",
+		"name":"openrouter-host",
+		"provider":"openrouter",
+		"model":"openai/gpt-4o-mini",
+		"authRef":"env:OPENROUTER_API_KEY",
+		"enabled":true
+	}`)
+	if createPrimaryProfileRec.Code != http.StatusOK {
+		t.Fatalf("create host profile status=%d body=%s", createPrimaryProfileRec.Code, createPrimaryProfileRec.Body.String())
+	}
+
+	createInstanceProfileRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/provider-profiles", `{
+		"id":"profile-instance",
+		"name":"anthropic-instance",
+		"provider":"anthropic",
+		"model":"claude-3-7-sonnet",
+		"authRef":"env:ANTHROPIC_API_KEY",
+		"enabled":true
+	}`)
+	if createInstanceProfileRec.Code != http.StatusOK {
+		t.Fatalf("create instance profile status=%d body=%s", createInstanceProfileRec.Code, createInstanceProfileRec.Body.String())
+	}
+
+	hostBindingRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/provider-bindings", `{
+		"id":"binding-host",
+		"profileId":"profile-host",
+		"targetType":"host",
+		"targetId":"`+hostID+`",
+		"syncMode":"always_push"
+	}`)
+	if hostBindingRec.Code != http.StatusOK {
+		t.Fatalf("create host binding status=%d body=%s", hostBindingRec.Code, hostBindingRec.Body.String())
+	}
+
+	instanceBindingRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/provider-bindings", `{
+		"id":"binding-instance",
+		"profileId":"profile-instance",
+		"targetType":"instance",
+		"targetId":"`+hostID+`:zeroclaw",
+		"syncMode":"manual"
+	}`)
+	if instanceBindingRec.Code != http.StatusOK {
+		t.Fatalf("create instance binding status=%d body=%s", instanceBindingRec.Code, instanceBindingRec.Body.String())
+	}
+
+	resolveRec := runJSONRequest(t, mux, http.MethodGet, "/api/v1/provider-governance/resolve?hostId="+hostID+"&agentId=zeroclaw", "")
+	if resolveRec.Code != http.StatusOK {
+		t.Fatalf("resolve governance status=%d body=%s", resolveRec.Code, resolveRec.Body.String())
+	}
+	resolvePayload := decodeJSONMap(t, resolveRec)
+	resolution, _ := resolvePayload["resolution"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(resolution["source"])); got != "instance" {
+		t.Fatalf("expected instance resolution source, got %q payload=%+v", got, resolvePayload)
+	}
+	if got := strings.TrimSpace(anyToString(resolution["profileId"])); got != "profile-instance" {
+		t.Fatalf("expected profile-instance resolution, got %q payload=%+v", got, resolvePayload)
+	}
+	if got := strings.TrimSpace(anyToString(resolution["provider"])); got != "anthropic" {
+		t.Fatalf("expected anthropic provider, got %q payload=%+v", got, resolvePayload)
+	}
+	if got := strings.TrimSpace(anyToString(resolution["syncMode"])); got != "manual" {
+		t.Fatalf("expected manual sync mode, got %q payload=%+v", got, resolvePayload)
+	}
+	if got := strings.TrimSpace(anyToString(resolution["driftState"])); got != "override" {
+		t.Fatalf("expected driftState=override, got %q payload=%+v", got, resolvePayload)
+	}
+	if got := strings.TrimSpace(anyToString(resolution["driftReason"])); got == "" {
+		t.Fatalf("expected driftReason in payload=%+v", resolvePayload)
+	}
+	traceEntries, _ := resolution["trace"].([]interface{})
+	if len(traceEntries) != 2 {
+		t.Fatalf("expected 2 trace entries, got %d payload=%+v", len(traceEntries), resolvePayload)
+	}
+	trace0, _ := traceEntries[0].(map[string]interface{})
+	trace1, _ := traceEntries[1].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(trace0["source"])); got != "instance" {
+		t.Fatalf("expected first trace source=instance, got %q trace=%+v", got, trace0)
+	}
+	if selected, _ := trace0["selected"].(bool); !selected {
+		t.Fatalf("expected first trace selected=true trace=%+v", trace0)
+	}
+	if got := strings.TrimSpace(anyToString(trace1["source"])); got != "host" {
+		t.Fatalf("expected second trace source=host, got %q trace=%+v", got, trace1)
+	}
+	if got := strings.TrimSpace(anyToString(trace1["status"])); got != "shadowed" {
+		t.Fatalf("expected second trace status=shadowed, got %q trace=%+v", got, trace1)
+	}
+
+	rawAudit, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit file failed: %v", err)
+	}
+	text := string(rawAudit)
+	if !strings.Contains(text, `"action":"provider_profile_upsert"`) {
+		t.Fatalf("expected provider_profile_upsert audit entry, audit=%s", text)
+	}
+	if !strings.Contains(text, `"action":"provider_binding_upsert"`) {
+		t.Fatalf("expected provider_binding_upsert audit entry, audit=%s", text)
+	}
+	if !strings.Contains(text, `"action":"provider_governance_resolve"`) {
+		t.Fatalf("expected provider_governance_resolve audit entry, audit=%s", text)
+	}
+}
+
 func TestRemoteHostConfigEndpointMethodAndPayloadValidation(t *testing.T) {
 	mux := buildRemoteFeatureMux(t)
 	hostID := createRemoteHostForTests(t, mux)

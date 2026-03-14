@@ -24,6 +24,8 @@ What this script does:
   3) create/verify remote OpenClaw agents: picoclaw, zeroclaw
   4) install/verify remote codeagent backends: codex, opencode
   5) run backend smoke calls and print normalized result envelopes
+  6) optionally run provider-backed remote execution/evidence smoke when:
+     CARRIER_LIVE_PROVIDER and CARRIER_LIVE_API_KEY are set
 USAGE
 }
 
@@ -33,6 +35,15 @@ require_cmd() {
     echo "error: required command not found: $cmd" >&2
     exit 1
   fi
+}
+
+default_live_model() {
+  case "$1" in
+    openrouter) printf '%s' 'openai/gpt-4o-mini' ;;
+    openai|openai-compatible|openai-codex) printf '%s' 'openai/gpt-4.1-mini' ;;
+    anthropic) printf '%s' 'claude-3-5-haiku-latest' ;;
+    *) printf '%s' 'openai/gpt-4.1-mini' ;;
+  esac
 }
 
 q() {
@@ -52,6 +63,10 @@ SKIP_RECONNECT_CHECK=0
 RESET_REMOTE=1
 GATEWAY_AUTOSTART=1
 GATEWAY_PID=""
+LIVE_PROVIDER="$(printf '%s' "${CARRIER_LIVE_PROVIDER:-}" | tr '[:upper:]' '[:lower:]' | xargs)"
+LIVE_API_KEY="$(printf '%s' "${CARRIER_LIVE_API_KEY:-}" | xargs)"
+LIVE_MODEL="$(printf '%s' "${CARRIER_LIVE_MODEL:-}" | xargs)"
+LIVE_BASE_URL="$(printf '%s' "${CARRIER_LIVE_BASE_URL:-}" | xargs)"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -141,13 +156,19 @@ if [[ "${WORKSPACE_ROOT#/}" == "$WORKSPACE_ROOT" ]]; then
   echo "error: --workspace-root must be an absolute path" >&2
   exit 1
 fi
+if [[ -n "$LIVE_PROVIDER" || -n "$LIVE_API_KEY" || -n "$LIVE_MODEL" || -n "$LIVE_BASE_URL" ]]; then
+  if [[ -z "$LIVE_PROVIDER" || -z "$LIVE_API_KEY" ]]; then
+    echo "error: live provider smoke requires both CARRIER_LIVE_PROVIDER and CARRIER_LIVE_API_KEY" >&2
+    exit 1
+  fi
+fi
 
-TMP_DIR="$(mktemp -d)"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/carrier-remote-vps-suite.XXXXXX")"
 cleanup() {
   if [[ -n "$GATEWAY_PID" ]]; then
     kill "$GATEWAY_PID" >/dev/null 2>&1 || true
   fi
-  rm -rf "$TMP_DIR"
+  echo "[artifacts] temp_dir=${TMP_DIR}"
 }
 trap cleanup EXIT
 
@@ -326,5 +347,148 @@ for backend in codex opencode; do
   expect_2xx "$run_code" "codeagent run $backend" "$run_out"
   jq '{backend: .run.backend, ok: .run.result.ok, exit_code: .run.result.exit_code, policy_decision: .run.result.policy_decision, stderr: .run.result.stderr}' "$run_out"
 done
+
+if [[ -n "$LIVE_PROVIDER" && -n "$LIVE_API_KEY" ]]; then
+  echo "[8/12] create provider profile + host binding for remote execution"
+  profile_id="$(printf 'live-%s-%s' "$HOST_ID" "$LIVE_PROVIDER" | tr '/: ' '---')"
+  profile_name="live-${HOST_ID}-${LIVE_PROVIDER}"
+  profile_payload="$(jq -cn \
+    --arg id "$profile_id" \
+    --arg name "$profile_name" \
+    --arg provider "$LIVE_PROVIDER" \
+    --arg model "${LIVE_MODEL:-$(default_live_model "$LIVE_PROVIDER")}" \
+    --arg base_url "$LIVE_BASE_URL" \
+    --arg auth_ref "$LIVE_API_KEY" \
+    '{
+      id: $id,
+      name: $name,
+      provider: $provider,
+      model: $model,
+      enabled: true
+    }
+    + (if $base_url != "" then {baseUrl: $base_url} else {} end)
+    + {authRef: $auth_ref}')"
+  profile_out="$TMP_DIR/live-provider-profile.json"
+  profile_code="$(api_json POST "/api/v1/provider-profiles" "$profile_payload" "$profile_out")"
+  expect_2xx "$profile_code" "provider profile upsert" "$profile_out"
+
+  binding_id="$(printf 'bind-live-%s-%s' "$HOST_ID" "$LIVE_PROVIDER" | tr '/: ' '---')"
+  binding_payload="$(jq -cn \
+    --arg id "$binding_id" \
+    --arg profile_id "$profile_id" \
+    --arg host_id "$HOST_ID" \
+    '{
+      id: $id,
+      profileId: $profile_id,
+      targetType: "host",
+      targetId: $host_id,
+      syncMode: "always_push"
+    }')"
+  binding_out="$TMP_DIR/live-provider-binding.json"
+  binding_code="$(api_json POST "/api/v1/provider-bindings" "$binding_payload" "$binding_out")"
+  expect_2xx "$binding_code" "provider binding upsert" "$binding_out"
+
+  echo "[9/12] resolve provider governance for remote openclaw"
+  resolve_out="$TMP_DIR/live-provider-resolve.json"
+  resolve_code="$(api_json GET "/api/v1/provider-governance/resolve?hostId=$(printf '%s' "$HOST_ID" | jq -sRr @uri)&agentId=openclaw" "" "$resolve_out")"
+  expect_2xx "$resolve_code" "provider governance resolve" "$resolve_out"
+  jq -e --arg provider "$LIVE_PROVIDER" '
+    .resolution.status == "resolved" and
+    .resolution.provider == $provider and
+    (.resolution.model | type == "string" and length > 0)
+  ' "$resolve_out" >/dev/null
+
+  echo "[10/12] create and authorize remote execution"
+  execution_create_out="$TMP_DIR/live-remote-execution-create.json"
+  execution_payload="$(jq -cn \
+    --arg goal "Remote live provider execution smoke" \
+    --arg provider "$LIVE_PROVIDER" \
+    --arg host_id "$HOST_ID" \
+    '{
+      goal: $goal,
+      requestedProvider: $provider,
+      requiredMemory: ["shared:remote-runbook", "shared:service-catalog"],
+      distillOutputs: ["shared:remote-lessons"],
+      approvalScope: "infrastructure_only",
+      requiredWorkers: [
+        {hostId: $host_id, agentId: "openclaw", count: 1}
+      ],
+      taskUnits: [
+        {
+          id: "remote-task-1",
+          input: "Reply with one short sentence that includes REMOTE_EXECUTION_OK and shared:remote-runbook.",
+          hostId: $host_id,
+          agentId: "openclaw",
+          timeoutMs: 120000,
+          retryBudget: 1
+        }
+      ]
+    }')"
+  execution_create_code="$(api_json POST "/api/v1/orchestrator/executions" "$execution_payload" "$execution_create_out")"
+  expect_2xx "$execution_create_code" "remote execution create" "$execution_create_out"
+  execution_id="$(jq -r '.execution.id // empty' "$execution_create_out")"
+  if [[ -z "$execution_id" ]]; then
+    echo "error: missing execution id in remote execution create response" >&2
+    sed -n '1,220p' "$execution_create_out" >&2 || true
+    exit 1
+  fi
+
+  execution_auth_out="$TMP_DIR/live-remote-execution-authorize.json"
+  execution_auth_code="$(api_json POST "/api/v1/orchestrator/executions/$execution_id/authorize" '{"approved":true,"actor":"remote-vps-suite"}' "$execution_auth_out")"
+  expect_2xx "$execution_auth_code" "remote execution authorize" "$execution_auth_out"
+
+  final_status=""
+  execution_status_out="$TMP_DIR/live-remote-execution-status.json"
+  for _ in $(seq 1 180); do
+    status_code="$(api_json GET "/api/v1/orchestrator/executions/$execution_id" "" "$execution_status_out")"
+    expect_2xx "$status_code" "remote execution status" "$execution_status_out"
+    final_status="$(jq -r '.execution.status // empty' "$execution_status_out")"
+    case "$final_status" in
+      completed|partial_completed|retryable_failed|failed|cancelled|declined)
+        break
+        ;;
+    esac
+    sleep 2
+  done
+  if [[ "$final_status" != "completed" ]]; then
+    echo "error: remote execution did not complete successfully (status=${final_status})" >&2
+    sed -n '1,260p' "$execution_status_out" >&2 || true
+    exit 1
+  fi
+  jq -e '
+    (.execution.memoryContractDigest | type == "string" and length > 0) and
+    (.execution.memoryProvenance | index("shared:remote-runbook")) and
+    (.execution.results | length >= 1) and
+    (.execution.results[0].status == "completed") and
+    (.execution.results[0].output | tostring | contains("REMOTE_EXECUTION_OK"))
+  ' "$execution_status_out" >/dev/null
+
+  echo "[11/12] export evidence, audit, and metrics"
+  evidence_json="$TMP_DIR/live-remote-evidence.json"
+  evidence_zip="$TMP_DIR/live-remote-evidence.zip"
+  audit_json="$TMP_DIR/live-remote-audit.json"
+  metrics_json="$TMP_DIR/live-remote-metrics.json"
+  carrier executions evidence "$execution_id" --format json --json >"$evidence_json"
+  carrier executions evidence "$execution_id" --format zip --output "$evidence_zip" >/dev/null
+  carrier executions audit "$execution_id" --json >"$audit_json"
+  metrics_code="$(api_json GET "/api/v1/orchestrator/metrics" "" "$metrics_json")"
+  expect_2xx "$metrics_code" "orchestrator metrics" "$metrics_json"
+  jq -e --arg exec_id "$execution_id" --arg provider "$LIVE_PROVIDER" '
+    (.evidence.execution.id == $exec_id) and
+    (.evidence.providerAttribution.totalEstimatedCostUsd > 0) and
+    (.evidence.governance.providerResolutions | length >= 1) and
+    (.evidence.governance.providerResolutions[0].provider == $provider)
+  ' "$evidence_json" >/dev/null
+  jq -e '.events | length >= 1' "$audit_json" >/dev/null
+  jq -e '.metrics.providers.totalEstimatedCostUsd > 0' "$metrics_json" >/dev/null
+  unzip -l "$evidence_zip" | grep -q 'provider-attribution.json'
+  unzip -l "$evidence_zip" | grep -q 'audit.json'
+
+  echo "[12/12] remote live execution summary"
+  echo "remote_execution_id=$execution_id"
+  echo "remote_provider=$LIVE_PROVIDER"
+else
+  echo "[8/8] live provider execution smoke skipped (set CARRIER_LIVE_PROVIDER and CARRIER_LIVE_API_KEY to enable)"
+fi
 
 echo "done: remote VPS agent suite succeeded for host=$HOST_ID agent=$AGENT_ID"

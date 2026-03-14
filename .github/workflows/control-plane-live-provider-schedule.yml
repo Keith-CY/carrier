@@ -1,0 +1,106 @@
+name: Control Plane Live-Provider Schedule
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  control-plane-live-provider:
+    name: Control Plane Live-Provider E2E (${{ matrix.provider }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment:
+      name: live_smoke
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [openai, openrouter]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve control-plane live provider inputs
+        id: resolve
+        shell: bash
+        env:
+          LIVE_PROVIDER: ${{ matrix.provider }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CARRIER_LIVE_MODEL_OPENAI: ${{ vars.CARRIER_LIVE_MODEL_OPENAI }}
+          CARRIER_LIVE_MODEL_OPENROUTER: ${{ vars.CARRIER_LIVE_MODEL_OPENROUTER }}
+        run: |
+          set -euo pipefail
+          provider="${LIVE_PROVIDER}"
+          key=""
+          model=""
+          transcription_mode=""
+          case "$provider" in
+            openai)
+              key="${OPENAI_API_KEY:-}"
+              model="${CARRIER_LIVE_MODEL_OPENAI:-openai/gpt-4o-mini}"
+              transcription_mode="hard_required"
+              ;;
+            openrouter)
+              key="${OPENROUTER_API_KEY:-}"
+              model="${CARRIER_LIVE_MODEL_OPENROUTER:-openai/gpt-4o-mini}"
+              transcription_mode="soft_optional"
+              ;;
+            *)
+              echo "unsupported live provider: $provider" >&2
+              exit 1
+              ;;
+          esac
+          if [[ -z "$key" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=missing_live_provider_secret" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Control Plane Live-Provider E2E"
+              echo "- provider: \`${provider}\`"
+              echo "- transcription mode: \`${transcription_mode}\`"
+              echo "- status: skipped (missing provider secret)"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=" >> "$GITHUB_OUTPUT"
+          printf 'CARRIER_LIVE_PROVIDER=%s\n' "$provider" >> "$GITHUB_ENV"
+          printf 'CARRIER_LIVE_MODEL=%s\n' "$model" >> "$GITHUB_ENV"
+          printf 'CARRIER_LIVE_API_KEY=%s\n' "$key" >> "$GITHUB_ENV"
+          if [[ -n "$transcription_mode" ]]; then
+            printf 'CARRIER_LIVE_TRANSCRIPTION_MODE=%s\n' "$transcription_mode" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run live-provider control plane E2E
+        if: steps.resolve.outputs.enabled == 'true'
+        run: bash scripts/e2e-control-plane-live-provider.sh
+
+      - name: Emit skipped summary
+        if: steps.resolve.outputs.enabled != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### Control Plane Live-Provider E2E"
+            echo "- provider: \`${{ matrix.provider }}\`"
+            echo "- status: skipped"
+            echo "- reason: \`${{ steps.resolve.outputs.skip_reason }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload live-provider artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: control-plane-live-provider-artifacts-${{ matrix.provider }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            /tmp/clp.*

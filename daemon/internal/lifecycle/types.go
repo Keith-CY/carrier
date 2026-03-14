@@ -31,23 +31,30 @@ const (
 )
 
 type AgentState struct {
-	ID                   string       `json:"id"`
-	Name                 string       `json:"name"`
-	Version              string       `json:"version"`
-	Install              InstallState `json:"installState"`
-	Runtime              RuntimeState `json:"runtimeState"`
-	Health               HealthState  `json:"health"`
-	Memory               *MemoryState `json:"memory,omitempty"`
-	Ports                []int        `json:"ports"`
-	StartedAt            *time.Time   `json:"startedAt,omitempty"`
-	RestartCount         int          `json:"restartCount"`
-	LastError            string       `json:"lastError,omitempty"`
-	LastTriageSummary    string       `json:"lastTriageSummary,omitempty"`
-	NeedsRemoteDiagnosis bool         `json:"needsRemoteDiagnosis"`
-	LastDiagnoseFile     string       `json:"lastDiagnoseFile,omitempty"`
-	Isolated             bool         `json:"isolated"`
-	LimaInstanceName     string       `json:"limaInstanceName,omitempty"`
-	UpdatedAt            time.Time    `json:"updatedAt"`
+	ID                   string          `json:"id"`
+	Name                 string          `json:"name"`
+	Version              string          `json:"version"`
+	Install              InstallState    `json:"installState"`
+	Runtime              RuntimeState    `json:"runtimeState"`
+	Health               HealthState     `json:"health"`
+	Memory               *MemoryState    `json:"memory,omitempty"`
+	Heartbeat            *AgentHeartbeat `json:"heartbeat,omitempty"`
+	Ports                []int           `json:"ports"`
+	StartedAt            *time.Time      `json:"startedAt,omitempty"`
+	RestartCount         int             `json:"restartCount"`
+	LastError            string          `json:"lastError,omitempty"`
+	LastTriageSummary    string          `json:"lastTriageSummary,omitempty"`
+	NeedsRemoteDiagnosis bool            `json:"needsRemoteDiagnosis"`
+	LastDiagnoseFile     string          `json:"lastDiagnoseFile,omitempty"`
+	Isolated             bool            `json:"isolated"`
+	LimaInstanceName     string          `json:"limaInstanceName,omitempty"`
+	UpdatedAt            time.Time       `json:"updatedAt"`
+}
+
+type AgentHeartbeat struct {
+	State          string     `json:"state"`
+	AgeSeconds     int64      `json:"ageSeconds"`
+	LastActivityAt *time.Time `json:"lastActivityAt,omitempty"`
 }
 
 type MemoryState struct {

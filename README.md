@@ -1,9 +1,14 @@
 # Carrier
 
-Carrier is a local control plane for onboarding agent credentials, installing managed agents, and operating remote VPS instances over SSH.
+Carrier is a local-first execution and knowledge control plane for decomposing goals, dispatching work to managed agents, attaching memory to those workers, and distilling learnings back into the base agent.
 
 ## What Works Today
 
+- Task-first orchestration via `carrier orchestrate` with execution history in `carrier executions`.
+- Knowledge-plane operations via `carrier memory` and the WebUI `Memory` view for listing memory packages, searching curated records, attaching scopes, and distilling instance learnings.
+- Built-in execution templates via `carrier templates` for repeatable triage and diagnosis flows.
+- Execution detail includes lineage, derived retries/reruns/clones, execution artifacts, and evidence export.
+- Workers inventory includes stale lease detection, queue summary, and stale/idle reclaim actions.
 - Local bootstrap/onboarding via CLI/TUI/WebUI.
 - Managed local install lifecycle for `openclaw`, `picoclaw`, `zeroclaw`.
 - Remote host control-plane APIs (host upsert/check/install/list/config/sync).
@@ -82,7 +87,81 @@ Notes:
 - Chat `/onboard` is intentionally blocked for credential safety.
 - Chat `/install` is policy-gated; default policy requires explicit host binding (`/install <agent_id> <host_id>`).
 
-### 3) Install OpenClaw Locally
+### 3) Install Local Workers
+
+```bash
+carrier add zeroclaw
+carrier add picoclaw
+carrier status zeroclaw
+carrier status picoclaw
+```
+
+Notes:
+- `carrier install <agent_id>` is an alias of `carrier add <agent_id>`.
+- `carrier orchestrate` currently expects the target local worker agents to already be installed.
+
+### 4) Run A Task
+
+Preview the plan first:
+
+```bash
+carrier orchestrate "triage this issue and summarize next actions" --dry-run
+```
+
+Run the task and wait for results:
+
+```bash
+carrier orchestrate "triage this issue and summarize next actions"
+```
+
+Or launch a built-in template:
+
+```bash
+carrier templates
+carrier templates show incident-diagnosis
+carrier templates run incident-diagnosis \
+  --input service=checkout \
+  --input environment=prod \
+  --input incidentSummary="Checkout API returns 502s after deploy"
+```
+
+Inspect execution history:
+
+```bash
+carrier executions
+carrier executions show <execution_id>
+carrier executions cancel <execution_id>
+carrier executions artifacts <execution_id>
+carrier executions evidence <execution_id>
+carrier executions audit <execution_id>
+carrier executions evidence <execution_id> --format zip --open
+carrier executions audit <execution_id> --open
+carrier executions retry <execution_id>
+carrier executions rerun <execution_id>
+carrier executions clone <execution_id>
+```
+
+Expected result:
+- base agent decomposes the goal into task units
+- tasks are assigned to local `picoclaw` / `zeroclaw` workers
+- the final output shows execution status, task results, worker targets, lineage, and artifacts
+
+### 5) Inspect And Manage Memory
+
+```bash
+carrier memory list --subject agent-a
+carrier memory search --subject agent-a --query "fusion"
+carrier memory attach --instance picoclaw-main --scope shared:profile
+carrier memory distill --instance picoclaw-main --dry-run --reason "promote learnings"
+```
+
+Expected result:
+- memory packages, attachments, and grants are visible through the gateway
+- curated memory hits can be searched by subject
+- worker instances can receive prescribed memory scopes
+- distill runs produce a run id that can be promoted back into the base knowledge plane
+
+### 6) Install OpenClaw Locally (Optional)
 
 ```bash
 carrier add openclaw
@@ -90,9 +169,7 @@ carrier status openclaw
 carrier list
 ```
 
-`carrier install openclaw` is an alias of `carrier add openclaw`.
-
-### 4) Install Agent To VPS (Deterministic)
+### 7) Install Agent To VPS (Deterministic)
 
 Use `carrier remote add` to run a fixed, repeatable sequence:
 
@@ -164,7 +241,7 @@ carrier remote add zeroclaw \
   --key-path ~/.ssh/id_ed25519
 ```
 
-### 5) Full Remote Matrix Validation (Optional)
+### 7) Full Remote Matrix Validation (Optional)
 
 For Docker-VPS style end-to-end validation across OpenClaw + PicoClaw + ZeroClaw + codeagent backends:
 
@@ -194,6 +271,20 @@ carrier stop <id|name>
 carrier status <id|name>
 carrier upgrade <id|name>
 carrier uninstall <id|name>
+
+# orchestration
+carrier orchestrate "<goal>"
+carrier orchestrate "<goal>" --dry-run
+carrier templates
+carrier templates show <template_id>
+carrier templates run <template_id> --input key=value
+carrier executions
+carrier executions show <execution_id>
+carrier executions artifacts <execution_id>
+carrier executions evidence <execution_id>
+carrier executions retry <execution_id>
+carrier executions rerun <execution_id>
+carrier executions clone <execution_id>
 
 # install aliases
 carrier add <agent_id>

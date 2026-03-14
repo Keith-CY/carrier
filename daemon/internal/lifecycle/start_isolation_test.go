@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"carrier/daemon/internal/catalog"
 )
 
 func newIsolationTestService(t *testing.T, pm *fakeProcessManager) *Service {
@@ -236,12 +238,15 @@ func TestStartWithIsolationWrapsStartCommandWithLimaBwrap(t *testing.T) {
 	for _, want := range []string{
 		"/opt/homebrew/bin/limactl",
 		"shell 'carrier-dev-a3f2'",
-		"bwrap",
-		"--tmpfs /tmp",
 		"tail -f /dev/null",
 	} {
 		if !strings.Contains(wrapped, want) {
 			t.Fatalf("expected wrapped command to contain %q, got %q", want, wrapped)
+		}
+	}
+	for _, unwanted := range []string{"bwrap", "--tmpfs /tmp"} {
+		if strings.Contains(wrapped, unwanted) {
+			t.Fatalf("expected wrapped command to omit %q for lima guest start, got %q", unwanted, wrapped)
 		}
 	}
 	if err := svc.Stop(context.Background(), "openclaw"); err != nil {
@@ -286,12 +291,15 @@ func TestStartWithIsolationWrapsStartCommandWithWSLBwrap(t *testing.T) {
 	for _, want := range []string{
 		"/usr/bin/wsl",
 		"-d 'Ubuntu-22.04'",
-		"bwrap",
-		"--tmpfs /tmp",
 		"tail -f /dev/null",
 	} {
 		if !strings.Contains(wrapped, want) {
 			t.Fatalf("expected wrapped command to contain %q, got %q", want, wrapped)
+		}
+	}
+	for _, unwanted := range []string{"bwrap", "--tmpfs /tmp"} {
+		if strings.Contains(wrapped, unwanted) {
+			t.Fatalf("expected wrapped command to omit %q for wsl guest start, got %q", unwanted, wrapped)
 		}
 	}
 	if err := svc.Stop(context.Background(), "openclaw"); err != nil {
@@ -324,6 +332,75 @@ func TestStartWithIsolationWrapsProcessStartFailure(t *testing.T) {
 	}
 	if !errors.Is(err, ErrIsolationStartFailed) {
 		t.Fatalf("expected ErrIsolationStartFailed, got %v", err)
+	}
+}
+
+func TestStartWithIsolationSyncsZeroClawConfigIntoLimaGuest(t *testing.T) {
+	origGOOS := isolationRuntimeGOOS
+	origLookup := isolationBackendLookup
+	origEnv := isolationEnvLookup
+	t.Cleanup(func() {
+		isolationRuntimeGOOS = origGOOS
+		isolationBackendLookup = origLookup
+		isolationEnvLookup = origEnv
+	})
+
+	isolationRuntimeGOOS = "darwin"
+	isolationBackendLookup = func(name string) (string, error) {
+		if name != "limactl" {
+			t.Fatalf("lookup name = %q, want limactl", name)
+		}
+		return "/opt/homebrew/bin/limactl", nil
+	}
+	isolationEnvLookup = func(string) string { return "" }
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".zeroclaw"), 0o700); err != nil {
+		t.Fatalf("mkdir zeroclaw dir: %v", err)
+	}
+	rawCfg := []byte("default_provider = \"openrouter\"\n[gateway]\nhost = \"127.0.0.1\"\nport = 43123\nrequire_pairing = false\n")
+	if err := os.WriteFile(filepath.Join(home, ".zeroclaw", "config.toml"), rawCfg, 0o600); err != nil {
+		t.Fatalf("write zeroclaw config: %v", err)
+	}
+
+	runner := &fakeRunner{}
+	checker := &fakeChecker{}
+	clock := &fakeClock{current: time.Date(2026, 3, 10, 10, 0, 0, 0, time.UTC)}
+	pm := &fakeProcessManager{isRunning: make(map[string]bool), pids: make(map[string]int), shouldStartSucceed: true, nextPID: 250}
+	svc := NewService(nil,
+		WithRunner(runner),
+		WithRuntimeChecker(checker),
+		WithNow(clock.Now),
+		WithProcessLogDir(t.TempDir()),
+		WithProcessManager(pm),
+	)
+	if err := svc.RegisterManifest(catalog.ZeroClawManifest()); err != nil {
+		t.Fatalf("RegisterManifest: %v", err)
+	}
+	svc.mu.Lock()
+	state := svc.states["zeroclaw"]
+	state.Install = InstallStateInstalled
+	state.Runtime = RuntimeStateStopped
+	state.LimaInstanceName = "carrier-zeroclaw-a3f2"
+	svc.states["zeroclaw"] = state
+	svc.mu.Unlock()
+
+	if err := svc.StartWithOptions(context.Background(), "zeroclaw", StartOptions{Isolation: true}); err != nil {
+		t.Fatalf("StartWithOptions: %v", err)
+	}
+	joinedCalls := strings.Join(runner.calls, "\n")
+	if !strings.Contains(joinedCalls, "$HOME/.zeroclaw/config.toml") {
+		t.Fatalf("expected config sync command in runner calls, got %q", joinedCalls)
+	}
+	if !strings.Contains(joinedCalls, "require_pairing = false") {
+		t.Fatalf("expected synced zeroclaw config content in runner calls, got %q", joinedCalls)
+	}
+	if len(pm.lastArgs) < 2 || pm.lastArgs[0] != "-c" {
+		t.Fatalf("unexpected process args: %#v", pm.lastArgs)
+	}
+	if !strings.Contains(pm.lastArgs[1], "limactl") || !strings.Contains(pm.lastArgs[1], "gateway") || !strings.Contains(pm.lastArgs[1], "command -v zeroclaw") {
+		t.Fatalf("expected zeroclaw lima start command, got %q", pm.lastArgs[1])
 	}
 }
 

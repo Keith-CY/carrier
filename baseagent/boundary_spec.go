@@ -41,16 +41,25 @@ type RepairPolicy struct {
 	HighRiskRequiresConfirmation bool     `json:"high_risk_requires_confirmation"`
 }
 
+type StructuredToolPolicySpec struct {
+	MetadataReadDecision      string `json:"metadata_read_decision"`
+	OperationalReadDecision   string `json:"operational_read_decision"`
+	WorkspaceReadDecision     string `json:"workspace_read_decision"`
+	WorkspaceMutationDecision string `json:"workspace_mutation_decision"`
+	HighRiskDecision          string `json:"high_risk_decision"`
+}
+
 type BoundarySpec struct {
-	SchemaVersion    string                    `json:"schema_version"`
-	AssistantRole    string                    `json:"assistant_role"`
-	InScope          []string                  `json:"in_scope"`
-	OutOfScope       []string                  `json:"out_of_scope"`
-	BoundarySources  []string                  `json:"boundary_sources"`
-	DesignPrinciples []string                  `json:"design_principles"`
-	CommandPolicies  CommandPolicies           `json:"command_policies"`
-	WorkflowPolicies map[string]WorkflowPolicy `json:"workflow_policies"`
-	RepairPolicy     RepairPolicy              `json:"repair_policy"`
+	SchemaVersion        string                    `json:"schema_version"`
+	AssistantRole        string                    `json:"assistant_role"`
+	InScope              []string                  `json:"in_scope"`
+	OutOfScope           []string                  `json:"out_of_scope"`
+	BoundarySources      []string                  `json:"boundary_sources"`
+	DesignPrinciples     []string                  `json:"design_principles"`
+	StructuredToolPolicy StructuredToolPolicySpec  `json:"structured_tool_policy"`
+	CommandPolicies      CommandPolicies           `json:"command_policies"`
+	WorkflowPolicies     map[string]WorkflowPolicy `json:"workflow_policies"`
+	RepairPolicy         RepairPolicy              `json:"repair_policy"`
 }
 
 //go:embed spec/baseagent-boundary.v1.json
@@ -101,6 +110,9 @@ func ValidateBoundarySpec(spec BoundarySpec) error {
 	}
 	if len(spec.DesignPrinciples) == 0 {
 		return fmt.Errorf("design_principles must not be empty")
+	}
+	if err := ValidateStructuredToolPolicySpec(spec.StructuredToolPolicy); err != nil {
+		return err
 	}
 	if !isValidChatPolicyMode(spec.CommandPolicies.ChatInstall) {
 		return fmt.Errorf("command_policies.chat_install has invalid mode %q", spec.CommandPolicies.ChatInstall)
@@ -157,6 +169,14 @@ func (s BoundarySpec) RenderSummary() string {
 	lines = append(lines, prefixLines(spec.BoundarySources)...)
 	lines = append(lines, "Design principles:")
 	lines = append(lines, prefixLines(spec.DesignPrinciples)...)
+	lines = append(lines, "Structured tool policy:")
+	lines = append(lines,
+		fmt.Sprintf("- metadata_read=%s", spec.StructuredToolPolicy.MetadataReadDecision),
+		fmt.Sprintf("- operational_read=%s", spec.StructuredToolPolicy.OperationalReadDecision),
+		fmt.Sprintf("- workspace_read=%s", spec.StructuredToolPolicy.WorkspaceReadDecision),
+		fmt.Sprintf("- workspace_mutation=%s", spec.StructuredToolPolicy.WorkspaceMutationDecision),
+		fmt.Sprintf("- high_risk=%s", spec.StructuredToolPolicy.HighRiskDecision),
+	)
 	lines = append(lines,
 		fmt.Sprintf("Chat install policy: %s", spec.CommandPolicies.ChatInstall),
 		fmt.Sprintf("Chat onboard policy: %s", spec.CommandPolicies.ChatOnboard),
@@ -190,28 +210,65 @@ func isValidChatPolicyMode(mode string) bool {
 	}
 }
 
+func ValidateStructuredToolPolicySpec(spec StructuredToolPolicySpec) error {
+	if !isValidStructuredToolDecisionMode(spec.MetadataReadDecision) {
+		return fmt.Errorf("structured_tool_policy.metadata_read_decision has invalid mode %q", spec.MetadataReadDecision)
+	}
+	if !isValidStructuredToolDecisionMode(spec.OperationalReadDecision) {
+		return fmt.Errorf("structured_tool_policy.operational_read_decision has invalid mode %q", spec.OperationalReadDecision)
+	}
+	if !isValidStructuredToolDecisionMode(spec.WorkspaceReadDecision) {
+		return fmt.Errorf("structured_tool_policy.workspace_read_decision has invalid mode %q", spec.WorkspaceReadDecision)
+	}
+	if !isValidStructuredToolDecisionMode(spec.WorkspaceMutationDecision) {
+		return fmt.Errorf("structured_tool_policy.workspace_mutation_decision has invalid mode %q", spec.WorkspaceMutationDecision)
+	}
+	if !isValidStructuredToolDecisionMode(spec.HighRiskDecision) {
+		return fmt.Errorf("structured_tool_policy.high_risk_decision has invalid mode %q", spec.HighRiskDecision)
+	}
+	return nil
+}
+
+func isValidStructuredToolDecisionMode(mode string) bool {
+	switch parseStructuredToolDecision(mode) {
+	case structuredToolDecisionAllow, structuredToolDecisionAsk, structuredToolDecisionDeny:
+		return true
+	default:
+		return false
+	}
+}
+
 func fallbackBoundarySpec() BoundarySpec {
 	return BoundarySpec{
 		SchemaVersion: boundarySpecSchemaV1,
-		AssistantRole: "Carrier product-specific assistant for controlled agent installation and maintenance.",
+		AssistantRole: "Carrier product-specific assistant for controlled agent maintenance and bounded workspace automation.",
 		InScope: []string{
 			"Understand user intent and map it to approved install/maintenance workflows.",
 			"Run policy-bounded lifecycle operations for agent instances.",
+			"Inspect, create, edit, append, and list files inside the configured workspace root.",
+			"Run bounded shell commands inside the configured workspace root when a chat task needs local execution.",
 			"Collect logs and escalate unresolved failures with diagnose artifacts.",
 		},
 		OutOfScope: []string{
-			"Arbitrary free-form shell execution outside approved workflows.",
+			"Arbitrary shell or file execution outside the configured workspace root.",
 			"Automatic destructive changes without explicit user confirmation.",
 		},
 		BoundarySources: []string{
 			"System/runtime constraints.",
-			"Tool and command allowlists.",
+			"Tool allowlists, workspace confinement, and execution safety guards.",
 			"Daemon API contracts and workflow checks.",
 		},
 		DesignPrinciples: []string{
 			"Least privilege by default.",
-			"Deterministic command surface.",
+			"Deterministic command surface with workspace confinement.",
 			"Auditability for lifecycle and repair operations.",
+		},
+		StructuredToolPolicy: StructuredToolPolicySpec{
+			MetadataReadDecision:      string(structuredToolDecisionAllow),
+			OperationalReadDecision:   string(structuredToolDecisionAllow),
+			WorkspaceReadDecision:     string(structuredToolDecisionAllow),
+			WorkspaceMutationDecision: string(structuredToolDecisionAllow),
+			HighRiskDecision:          string(structuredToolDecisionAsk),
 		},
 		CommandPolicies: CommandPolicies{
 			ChatInstall:                      chatPolicyRequiresHostBinding,

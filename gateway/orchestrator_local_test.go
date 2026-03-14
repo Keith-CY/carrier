@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ func TestOrchestratorExecutionLocalLifecycle(t *testing.T) {
 	resetRemoteMetricsForTests()
 
 	var startCalls int
+	var chatProvider string
 	daemonSrv := newMockDaemon(map[string]http.HandlerFunc{
 		"GET /api/v1/agents": func(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`{"agents":[{"id":"zeroclaw","installState":"installed","runtimeState":"stopped"}]}`))
@@ -25,6 +27,11 @@ func TestOrchestratorExecutionLocalLifecycle(t *testing.T) {
 			_, _ = w.Write([]byte(`{"statuses":[{"id":"zeroclaw","installState":"installed","runtimeState":"running"}]}`))
 		},
 		"POST /api/v1/agents/zeroclaw/chat": func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode chat body: %v", err)
+			}
+			chatProvider = strings.TrimSpace(anyToString(body["provider"]))
 			_, _ = w.Write([]byte(`{"agentId":"zeroclaw","message":"local-worker-output"}`))
 		},
 	})
@@ -54,6 +61,7 @@ func TestOrchestratorExecutionLocalLifecycle(t *testing.T) {
 
 	createRec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions", `{
 		"goal":"run local zeroclaw task",
+		"requestedProvider":"openrouter",
 		"requiredWorkers":[{"hostId":"local","agentId":"zeroclaw","count":1}],
 		"taskUnits":[{"id":"t1","input":"hello local","hostId":"local","agentId":"zeroclaw"}],
 		"approvalScope":"infrastructure_only"
@@ -120,5 +128,8 @@ func TestOrchestratorExecutionLocalLifecycle(t *testing.T) {
 	}
 	if got := strings.TrimSpace(anyToString(worker["state"])); got != string(OrchestratorWorkerStateReclaimed) {
 		t.Fatalf("expected worker reclaimed, got %q worker=%+v", got, worker)
+	}
+	if chatProvider != "openrouter" {
+		t.Fatalf("expected local worker chat provider openrouter, got %q", chatProvider)
 	}
 }

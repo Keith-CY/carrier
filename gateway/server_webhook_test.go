@@ -224,3 +224,113 @@ func TestFeishuWebhook_Challenge(t *testing.T) {
 		t.Errorf("expected challenge echoed, got %v", resp)
 	}
 }
+
+func buildFeishuWebhookMuxWithSessions(
+	t *testing.T,
+	daemonHandlers map[string]http.HandlerFunc,
+	maxBodyBytes int,
+	token string,
+) (http.Handler, *httptest.Server, *SessionStore) {
+	t.Helper()
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(t.TempDir(), "instances.json"))
+
+	srv := newMockDaemon(daemonHandlers)
+	dc := NewDaemonClient(srv.URL, "test-token", 5*time.Second)
+	sessions := NewSessionStore("", 0, nil)
+	t.Cleanup(sessions.Stop)
+	downloads := NewDownloadStore("", nil)
+	rl := NewGatewayRateLimiter(100, 1000, time.Minute, nil)
+	onboard := NewOnboardStore()
+	setup := NewSetupStore()
+	cfg := &GatewayConfig{
+		MaxCommandBodyBytes:     maxBodyBytes,
+		FeishuVerificationToken: token,
+	}
+	mux := buildGatewayMux(cfg, dc, sessions, downloads, rl, onboard, setup)
+	return mux, srv, sessions
+}
+
+func TestChannelRoutingAuthHappyPaths(t *testing.T) {
+	daemonHandlers := map[string]http.HandlerFunc{
+		"GET /api/v1/agents": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"agents": []map[string]interface{}{
+					{
+						"id":           "openclaw",
+						"name":         "OpenClaw",
+						"installState": "installed",
+						"runtimeState": "running",
+						"health":       "healthy",
+					},
+				},
+			})
+		},
+	}
+
+	t.Run("telegram paired command", func(t *testing.T) {
+		mux, srv, sessions := buildTelegramWebhookMux(t, daemonHandlers, 64*1024, "expected-secret")
+		defer srv.Close()
+		sessions.CreateSession("telegram", "123")
+
+		w := postTelegramWebhook(t, mux, `{"update_id":1,"message":{"message_id":99,"chat":{"id":123},"text":"/agents"}}`, "expected-secret")
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if resp["method"] != "sendMessage" {
+			t.Fatalf("expected sendMessage response, got %#v", resp)
+		}
+		text, _ := resp["text"].(string)
+		if !strings.Contains(text, "listed 1 agents") {
+			t.Fatalf("expected successful agent listing, got %q", text)
+		}
+	})
+
+	t.Run("discord interaction command", func(t *testing.T) {
+		mux, srv, sessions, priv := buildDiscordWebhookMux(t, daemonHandlers)
+		defer srv.Close()
+		sessions.CreateSession("discord", "discord-chat-3")
+
+		body := `{"type":2,"id":"i-2","channel_id":"discord-chat-3","data":{"name":"agents"}}`
+		w := postSignedDiscordWebhook(t, mux, priv, body)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+
+		var resp map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		data, _ := resp["data"].(map[string]interface{})
+		content, _ := data["content"].(string)
+		if !strings.Contains(content, "listed 1 agents") {
+			t.Fatalf("expected successful agent listing, got %q", content)
+		}
+	})
+
+	t.Run("feishu webhook command", func(t *testing.T) {
+		mux, srv, sessions := buildFeishuWebhookMuxWithSessions(t, daemonHandlers, 64*1024, "feishu-token")
+		defer srv.Close()
+		sessions.CreateSession("feishu", "f3")
+
+		body := `{"header":{"token":"feishu-token","event_id":"evt-3"},"event":{"message":{"chat_id":"f3","message_id":"m3","content":"{\"text\":\"/agents\"}"}}}`
+		w := postFeishuWebhook(t, mux, body)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		content, _ := resp["content"].(map[string]interface{})
+		text, _ := content["text"].(string)
+		if !strings.Contains(text, "listed 1 agents") {
+			t.Fatalf("expected successful agent listing, got %q", text)
+		}
+	})
+}

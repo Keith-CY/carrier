@@ -1,24 +1,49 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 type fakeTelegramAPI struct {
-	setWebhookCalls int
-	getInfoCalls    int
-	deleteCalls     int
-	setCmdCalls     int
+	setWebhookCalls   int
+	getInfoCalls      int
+	deleteCalls       int
+	setCmdCalls       int
+	sendMessageCalls  int
+	sendPhotoCalls    int
+	sendDocumentCalls int
+	sendAudioCalls    int
+	sendVoiceCalls    int
+	sendVideoCalls    int
+
+	lastSendMessageText     string
+	lastSendPhotoRef        string
+	lastSendPhotoCaption    string
+	lastSendDocumentRef     string
+	lastSendDocumentCaption string
+	lastSendAudioRef        string
+	lastSendAudioCaption    string
+	lastSendVoiceRef        string
+	lastSendVoiceCaption    string
+	lastSendVideoRef        string
+	lastSendVideoCaption    string
 
 	setWebhookErr error
 	getInfoErr    error
 	deleteErr     error
 
 	webhookInfo telegramWebhookInfo
+	fileInfo    telegramFileInfo
+	fileData    []byte
+	getFileErr  error
+	downloadErr error
 }
 
 func (f *fakeTelegramAPI) SetWebhook(_ context.Context, _ string, _ string) error {
@@ -44,12 +69,62 @@ func (f *fakeTelegramAPI) GetUpdates(_ context.Context, _ int64, _ int) ([]map[s
 }
 
 func (f *fakeTelegramAPI) SendMessage(_ context.Context, _ string, _ string, _ bool) error {
+	f.sendMessageCalls++
+	return nil
+}
+
+func (f *fakeTelegramAPI) SendPhoto(_ context.Context, _ string, photo string, caption string) error {
+	f.sendPhotoCalls++
+	f.lastSendPhotoRef = photo
+	f.lastSendPhotoCaption = caption
+	return nil
+}
+
+func (f *fakeTelegramAPI) SendDocument(_ context.Context, _ string, document string, caption string) error {
+	f.sendDocumentCalls++
+	f.lastSendDocumentRef = document
+	f.lastSendDocumentCaption = caption
+	return nil
+}
+
+func (f *fakeTelegramAPI) SendAudio(_ context.Context, _ string, audio string, caption string) error {
+	f.sendAudioCalls++
+	f.lastSendAudioRef = audio
+	f.lastSendAudioCaption = caption
+	return nil
+}
+
+func (f *fakeTelegramAPI) SendVoice(_ context.Context, _ string, voice string, caption string) error {
+	f.sendVoiceCalls++
+	f.lastSendVoiceRef = voice
+	f.lastSendVoiceCaption = caption
+	return nil
+}
+
+func (f *fakeTelegramAPI) SendVideo(_ context.Context, _ string, video string, caption string) error {
+	f.sendVideoCalls++
+	f.lastSendVideoRef = video
+	f.lastSendVideoCaption = caption
 	return nil
 }
 
 func (f *fakeTelegramAPI) SetMyCommands(_ context.Context, _ []telegramBotCommand) error {
 	f.setCmdCalls++
 	return nil
+}
+
+func (f *fakeTelegramAPI) GetFile(_ context.Context, _ string) (telegramFileInfo, error) {
+	if f.getFileErr != nil {
+		return telegramFileInfo{}, f.getFileErr
+	}
+	return f.fileInfo, nil
+}
+
+func (f *fakeTelegramAPI) DownloadFile(_ context.Context, _ string) ([]byte, error) {
+	if f.downloadErr != nil {
+		return nil, f.downloadErr
+	}
+	return append([]byte(nil), f.fileData...), nil
 }
 
 func TestNormalizeTelegramWebhookURL(t *testing.T) {
@@ -322,6 +397,297 @@ func TestResolveTelegramTransportMode_WebhookSetupAndVerifyErrors(t *testing.T) 
 			t.Fatalf("expected mismatch error, got %v", err)
 		}
 	})
+}
+
+func TestTelegramSendRenderedAttachment_PrefersDocument(t *testing.T) {
+	api := &fakeTelegramAPI{}
+	resp := GatewayResponse{
+		Result:  "ok",
+		Message: "download complete",
+		RichContent: &baseagent.RichOutboundMessage{
+			Text: "download complete",
+			Attachments: []baseagent.AttachmentRef{
+				{Kind: "document", ExternalID: "tg-file-1", Name: "report.pdf"},
+			},
+		},
+	}
+
+	if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+		t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+	}
+	if api.sendDocumentCalls != 1 || api.lastSendDocumentRef != "tg-file-1" {
+		t.Fatalf("expected sendDocument with tg-file-1, got calls=%d ref=%q", api.sendDocumentCalls, api.lastSendDocumentRef)
+	}
+	if api.sendMessageCalls != 0 {
+		t.Fatalf("expected no text fallback send, got %d", api.sendMessageCalls)
+	}
+}
+
+func TestTelegramTransportSendRichOutboundMessageAudioAndVideoPreferNativeRender(t *testing.T) {
+	t.Run("audio attachment uses sendAudio", func(t *testing.T) {
+		api := &fakeTelegramAPI{}
+		resp := GatewayResponse{
+			Result: "ok",
+			RichContent: &baseagent.RichOutboundMessage{
+				Blocks: []baseagent.ContentBlock{
+					{Type: "audio", Text: "voice note"},
+				},
+				Attachments: []baseagent.AttachmentRef{
+					{Kind: "audio", Name: "voice.ogg", DownloadURL: "https://downloads.example.com/voice.ogg"},
+				},
+			},
+		}
+
+		if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+			t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+		}
+		if api.sendAudioCalls != 1 || api.lastSendAudioRef != "https://downloads.example.com/voice.ogg" {
+			t.Fatalf("expected sendAudio for audio attachment, got calls=%d ref=%q", api.sendAudioCalls, api.lastSendAudioRef)
+		}
+		if api.sendDocumentCalls != 0 || api.sendPhotoCalls != 0 || api.sendMessageCalls != 0 {
+			t.Fatalf("expected audio attachment to avoid document/photo/text fallback, got document=%d photo=%d message=%d", api.sendDocumentCalls, api.sendPhotoCalls, api.sendMessageCalls)
+		}
+
+	})
+
+	t.Run("voice attachment uses sendVoice", func(t *testing.T) {
+		api := &fakeTelegramAPI{}
+		resp := GatewayResponse{
+			Result: "ok",
+			RichContent: &baseagent.RichOutboundMessage{
+				Blocks: []baseagent.ContentBlock{
+					{Type: "voice", AttachmentID: "artifact-voice-1"},
+				},
+				Attachments: []baseagent.AttachmentRef{
+					{
+						ID:          "artifact-voice-1",
+						Kind:        "voice",
+						Name:        "voice-note.ogg",
+						MediaType:   "audio/ogg",
+						DownloadURL: "https://downloads.example.com/voice-note.ogg",
+					},
+				},
+			},
+		}
+
+		if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+			t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+		}
+		if api.sendVoiceCalls != 1 || api.lastSendVoiceRef != "https://downloads.example.com/voice-note.ogg" {
+			t.Fatalf("expected sendVoice with attachment download url, got calls=%d ref=%q", api.sendVoiceCalls, api.lastSendVoiceRef)
+		}
+		if api.sendDocumentCalls != 0 || api.sendAudioCalls != 0 || api.sendPhotoCalls != 0 || api.sendMessageCalls != 0 {
+			t.Fatalf("expected voice block to avoid fallback paths, got document=%d audio=%d photo=%d message=%d", api.sendDocumentCalls, api.sendAudioCalls, api.sendPhotoCalls, api.sendMessageCalls)
+		}
+
+	})
+
+	t.Run("video attachment uses sendVideo", func(t *testing.T) {
+		api := &fakeTelegramAPI{}
+		resp := GatewayResponse{
+			Result: "ok",
+			RichContent: &baseagent.RichOutboundMessage{
+				Text: "video ready",
+				Blocks: []baseagent.ContentBlock{
+					{Type: "video", AttachmentID: "artifact-video-1"},
+				},
+				Attachments: []baseagent.AttachmentRef{
+					{
+						ID:          "artifact-video-1",
+						Kind:        "video",
+						Name:        "clip.mp4",
+						MediaType:   "video/mp4",
+						DownloadURL: "https://downloads.example.com/clip.mp4",
+					},
+				},
+			},
+		}
+
+		if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+			t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+		}
+		if api.sendVideoCalls != 1 || api.lastSendVideoRef != "https://downloads.example.com/clip.mp4" {
+			t.Fatalf("expected sendVideo with attachment download url, got calls=%d ref=%q", api.sendVideoCalls, api.lastSendVideoRef)
+		}
+		if api.sendDocumentCalls != 0 || api.sendPhotoCalls != 0 || api.sendMessageCalls != 0 {
+			t.Fatalf("expected video block to avoid document/photo/text fallback, got document=%d photo=%d message=%d", api.sendDocumentCalls, api.sendPhotoCalls, api.sendMessageCalls)
+		}
+	})
+}
+
+func TestTelegramSendRenderedAttachment_PrefersImageBlockURL(t *testing.T) {
+	api := &fakeTelegramAPI{}
+	resp := GatewayResponse{
+		Result: "ok",
+		RichContent: &baseagent.RichOutboundMessage{
+			Text: "generated image",
+			Blocks: []baseagent.ContentBlock{
+				{Type: "image", URL: "https://files.example.com/generated.png", Name: "generated.png"},
+			},
+		},
+	}
+
+	if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+		t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+	}
+	if api.sendPhotoCalls != 1 || api.lastSendPhotoRef != "https://files.example.com/generated.png" {
+		t.Fatalf("expected sendPhoto with block url, got calls=%d ref=%q", api.sendPhotoCalls, api.lastSendPhotoRef)
+	}
+	if api.sendMessageCalls != 0 {
+		t.Fatalf("expected no text fallback send, got %d", api.sendMessageCalls)
+	}
+}
+
+func TestTelegramSendRenderedAttachment_UsesBlockAttachmentIDForImageRender(t *testing.T) {
+	api := &fakeTelegramAPI{}
+	resp := GatewayResponse{
+		Result: "ok",
+		RichContent: &baseagent.RichOutboundMessage{
+			Text: "generated image",
+			Blocks: []baseagent.ContentBlock{
+				{Type: "image", AttachmentID: "artifact-image-1"},
+			},
+			Attachments: []baseagent.AttachmentRef{
+				{
+					ID:          "artifact-image-1",
+					Kind:        "file",
+					Name:        "render.png",
+					MediaType:   "image/png",
+					DownloadURL: "https://downloads.example.com/render.png",
+				},
+			},
+		},
+	}
+
+	if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+		t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+	}
+	if api.sendPhotoCalls != 1 || api.lastSendPhotoRef != "https://downloads.example.com/render.png" {
+		t.Fatalf("expected sendPhoto with attachment download url, got calls=%d ref=%q", api.sendPhotoCalls, api.lastSendPhotoRef)
+	}
+	if api.sendDocumentCalls != 0 || api.sendMessageCalls != 0 {
+		t.Fatalf("expected image block to avoid document/text fallback, got document=%d message=%d", api.sendDocumentCalls, api.sendMessageCalls)
+	}
+}
+
+func TestTelegramSendRenderedAttachment_UsesBlockAttachmentIDForDocumentRender(t *testing.T) {
+	api := &fakeTelegramAPI{}
+	resp := GatewayResponse{
+		Result: "ok",
+		RichContent: &baseagent.RichOutboundMessage{
+			Text: "report ready",
+			Blocks: []baseagent.ContentBlock{
+				{Type: "file", AttachmentID: "artifact-doc-1"},
+			},
+			Attachments: []baseagent.AttachmentRef{
+				{
+					ID:          "artifact-doc-1",
+					Kind:        "image",
+					Name:        "report.pdf",
+					MediaType:   "application/pdf",
+					DownloadURL: "https://downloads.example.com/report.pdf",
+				},
+			},
+		},
+	}
+
+	if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+		t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+	}
+	if api.sendDocumentCalls != 1 || api.lastSendDocumentRef != "https://downloads.example.com/report.pdf" {
+		t.Fatalf("expected sendDocument with attachment download url, got calls=%d ref=%q", api.sendDocumentCalls, api.lastSendDocumentRef)
+	}
+	if api.sendPhotoCalls != 0 || api.sendMessageCalls != 0 {
+		t.Fatalf("expected document block to avoid photo/text fallback, got photo=%d message=%d", api.sendPhotoCalls, api.sendMessageCalls)
+	}
+}
+
+func TestTelegramSendRenderedAttachment_UsesAttachmentDownloadURLForDocument(t *testing.T) {
+	api := &fakeTelegramAPI{}
+	resp := GatewayResponse{
+		Result: "ok",
+		RichContent: &baseagent.RichOutboundMessage{
+			Text: "report ready",
+			Attachments: []baseagent.AttachmentRef{
+				{Kind: "document", Name: "report.pdf", DownloadURL: "https://downloads.example.com/report.pdf"},
+			},
+		},
+	}
+
+	if err := sendTelegramGatewayResponse(context.Background(), api, "123", resp); err != nil {
+		t.Fatalf("sendTelegramGatewayResponse error: %v", err)
+	}
+	if api.sendDocumentCalls != 1 || api.lastSendDocumentRef != "https://downloads.example.com/report.pdf" {
+		t.Fatalf("expected sendDocument with download url, got calls=%d ref=%q", api.sendDocumentCalls, api.lastSendDocumentRef)
+	}
+	if api.sendMessageCalls != 0 {
+		t.Fatalf("expected no text fallback send, got %d", api.sendMessageCalls)
+	}
+}
+
+func TestHydrateTelegramInboundAttachments_DownloadsToArtifactRoot(t *testing.T) {
+	artifactRoot, err := os.MkdirTemp(".", "telegram-inbound-artifacts-*")
+	if err != nil {
+		t.Fatalf("mkdir artifact root: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(artifactRoot) })
+	downloads := NewDownloadStore(artifactRoot, nil)
+	api := &fakeTelegramAPI{
+		fileInfo: telegramFileInfo{
+			FileID:       "tg-file-1",
+			FileUniqueID: "tg-uniq-1",
+			FilePath:     "documents/file_1/report.pdf",
+		},
+		fileData: []byte("%PDF-1.7"),
+	}
+	envelope := &InboundChannelEnvelope{
+		RequestID: "req-telegram-1",
+		Attachments: []baseagent.AttachmentRef{{
+			ID:         "tg-uniq-1",
+			Kind:       "document",
+			Name:       "report.pdf",
+			MediaType:  "application/pdf",
+			ExternalID: "tg-file-1",
+			Source:     "telegram",
+			SourceMetadata: map[string]string{
+				"telegram_file_id": "tg-file-1",
+				"chat_id":          "123",
+				"message_id":       "456",
+			},
+		}},
+	}
+	cfg := &GatewayConfig{
+		ArtifactRoot:       artifactRoot,
+		TelegramBotToken:   "TOKEN",
+		TelegramAPIBaseURL: "https://api.telegram.org",
+	}
+
+	if err := hydrateTelegramInboundAttachments(context.Background(), envelope, cfg, downloads, api); err != nil {
+		t.Fatalf("hydrateTelegramInboundAttachments error: %v", err)
+	}
+	if len(envelope.Attachments) != 1 {
+		t.Fatalf("attachments len=%d want 1", len(envelope.Attachments))
+	}
+	attachment := envelope.Attachments[0]
+	if attachment.Path == "" {
+		t.Fatalf("expected persisted attachment path, got %+v", attachment)
+	}
+	if got := filepath.Base(attachment.Path); got != "report.pdf" {
+		t.Fatalf("attachment path base=%q want report.pdf path=%q", got, attachment.Path)
+	}
+	if attachment.ArtifactID == "" {
+		t.Fatalf("expected artifact id, got %+v", attachment)
+	}
+	if attachment.DownloadURL == "" || !strings.HasPrefix(attachment.DownloadURL, "/downloads/") {
+		t.Fatalf("expected download URL, got %+v", attachment)
+	}
+	data, err := os.ReadFile(attachment.Path)
+	if err != nil {
+		t.Fatalf("read persisted attachment: %v", err)
+	}
+	if string(data) != "%PDF-1.7" {
+		t.Fatalf("unexpected persisted data %q", string(data))
+	}
 }
 
 func TestTelegramBotAPI_MethodWrappers(t *testing.T) {

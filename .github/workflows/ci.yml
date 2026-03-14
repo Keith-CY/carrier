@@ -35,7 +35,7 @@ jobs:
       ci_only: ${{ steps.classify.outputs.ci_only }}
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
 
@@ -73,7 +73,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Run CI guard parser tests
         run: node --test scripts/ci/*.test.cjs
@@ -89,10 +89,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
         with:
           go-version-file: daemon/go.mod
 
@@ -122,10 +122,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
         with:
           go-version-file: daemon/go.mod
 
@@ -143,7 +143,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Run CI helper tests
         run: node scripts/kanban-project-id.test.js
@@ -152,7 +152,7 @@ jobs:
         run: node scripts/ci/credential-loader-dedupe.cjs --root .
 
       - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
         with:
           go-version-file: daemon/go.mod
 
@@ -168,10 +168,10 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
         with:
           go-version-file: daemon/go.mod
 
@@ -191,10 +191,12 @@ jobs:
         provider: [anthropic, openai, openai-codex, openrouter, openai-compatible]
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
 
       - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
         with:
           go-version-file: go.mod
 
@@ -217,10 +219,10 @@ jobs:
         provider: [anthropic, openai, openai-codex, openrouter, openai-compatible]
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
         with:
           go-version-file: go.mod
 
@@ -329,10 +331,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
         with:
           go-version-file: go.mod
 
@@ -372,10 +374,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
         with:
           go-version-file: go.mod
 
@@ -396,15 +398,15 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
         with:
           go-version-file: go.mod
 
       - name: Download daemon coverage artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         continue-on-error: true
         with:
           name: daemon-coverage
@@ -727,12 +729,17 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
+        with:
+          bun-version: latest
 
       - name: Install dependencies
         working-directory: webui/e2e
@@ -740,13 +747,13 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: webui/e2e
-        run: npx playwright install --with-deps chromium
+        run: bunx playwright install --with-deps chromium
 
       - name: Run Playwright tests
         working-directory: webui/e2e
         env:
           SKIP_REAL_API: '1'
-        run: npx playwright test --update-snapshots
+        run: bunx playwright test --update-snapshots
 
       - name: Upload visual snapshots
         if: always()
@@ -764,6 +771,148 @@ jobs:
           path: webui/e2e/test-results/
           retention-days: 7
 
+  e2e-control-plane-local:
+    name: Control Plane Local-Real E2E
+    needs: classify-scope
+    if: github.event_name != 'pull_request' || needs.classify-scope.outputs.ci_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3
+        with:
+          bun-version: 1.1.8
+
+      - name: Install dependencies
+        working-directory: webui/e2e
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: webui/e2e
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run local-real control plane E2E
+        run: bash scripts/e2e-control-plane-local.sh
+
+      - name: Upload full-stack test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: playwright-report-fullstack
+          path: webui/e2e/test-results-fullstack/
+          retention-days: 7
+
+  e2e-control-plane-live-provider:
+    name: Control Plane Live-Provider E2E (${{ matrix.provider }})
+    needs: classify-scope
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: live_smoke
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [openai, openrouter]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve control-plane live provider inputs
+        id: resolve
+        shell: bash
+        env:
+          LIVE_PROVIDER: ${{ matrix.provider }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CARRIER_LIVE_MODEL_OPENAI: ${{ vars.CARRIER_LIVE_MODEL_OPENAI }}
+          CARRIER_LIVE_MODEL_OPENROUTER: ${{ vars.CARRIER_LIVE_MODEL_OPENROUTER }}
+        run: |
+          set -euo pipefail
+          provider="${LIVE_PROVIDER}"
+          key=""
+          model=""
+          transcription_mode=""
+          case "$provider" in
+            openai)
+              key="${OPENAI_API_KEY:-}"
+              model="${CARRIER_LIVE_MODEL_OPENAI:-openai/gpt-4o-mini}"
+              transcription_mode="hard_required"
+              ;;
+            openrouter)
+              key="${OPENROUTER_API_KEY:-}"
+              model="${CARRIER_LIVE_MODEL_OPENROUTER:-openai/gpt-4o-mini}"
+              transcription_mode="soft_optional"
+              ;;
+            *)
+              echo "unsupported live provider: $provider" >&2
+              exit 1
+              ;;
+          esac
+          if [[ -z "$key" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=missing_live_provider_secret" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Control Plane Live-Provider E2E"
+              echo "- provider: \`${provider}\`"
+              echo "- transcription mode: \`${transcription_mode}\`"
+              echo "- status: skipped (missing provider secret)"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=" >> "$GITHUB_OUTPUT"
+          printf 'CARRIER_LIVE_PROVIDER=%s\n' "$provider" >> "$GITHUB_ENV"
+          printf 'CARRIER_LIVE_MODEL=%s\n' "$model" >> "$GITHUB_ENV"
+          printf 'CARRIER_LIVE_API_KEY=%s\n' "$key" >> "$GITHUB_ENV"
+          if [[ -n "$transcription_mode" ]]; then
+            printf 'CARRIER_LIVE_TRANSCRIPTION_MODE=%s\n' "$transcription_mode" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run live-provider control plane E2E
+        if: steps.resolve.outputs.enabled == 'true'
+        run: bash scripts/e2e-control-plane-live-provider.sh
+
+      - name: Emit skipped summary
+        if: steps.resolve.outputs.enabled != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### Control Plane Live-Provider E2E"
+            echo "- provider: \`${{ matrix.provider }}\`"
+            echo "- status: skipped"
+            echo "- reason: \`${{ steps.resolve.outputs.skip_reason }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload live-provider artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: control-plane-live-provider-artifacts-${{ matrix.provider }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            /tmp/clp.*
+
   e2e-tests:
     name: End-to-End Tests
     runs-on: ubuntu-latest
@@ -771,10 +920,10 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
         with:
           go-version-file: daemon/go.mod
 

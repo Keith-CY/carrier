@@ -55,6 +55,7 @@ const (
 	minBaseAgentDistillInterval     = 1 * time.Hour
 	baseAgentDistillMaxRecords      = 12
 	baseAgentDistillMaxTextLen      = 420
+	defaultAgentHeartbeatStaleAfter = 2 * time.Minute
 )
 
 var agentIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
@@ -64,6 +65,40 @@ var (
 	userHomeDirFunc   = os.UserHomeDir
 	currentUserFunc   = user.Current
 )
+
+type agentChatRuntime interface {
+	Chat(ctx context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error)
+}
+
+type agentMediaRuntime interface {
+	SpeakMedia(ctx context.Context, req baseagent.SpeechSynthesisRequest) (baseagent.ChatResponse, error)
+}
+
+type baseAgentRuntime interface {
+	Chat(ctx context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error)
+	SpeakMedia(ctx context.Context, req baseagent.SpeechSynthesisRequest) (baseagent.ChatResponse, error)
+	CapabilitySummary(ctx context.Context) baseagent.RuntimeCapabilitySummary
+	SearchSkills(ctx context.Context, query string) []baseagent.SkillDefinition
+	InstallSkill(ctx context.Context, name string) (baseagent.SkillDefinition, error)
+	ReinstallSkill(ctx context.Context, name string) (baseagent.SkillDefinition, error)
+	UpdateSkill(ctx context.Context, name, version string) (baseagent.SkillDefinition, error)
+	UninstallSkill(ctx context.Context, name string) (baseagent.SkillDefinition, error)
+	RecentSubagentJobs(ctx context.Context, limit int) []baseagent.SubagentJob
+	SubagentJob(ctx context.Context, jobID string) (baseagent.SubagentJob, error)
+	RecentSessionStats(limit int) []baseagent.SessionStats
+	SetSkillEnabled(ctx context.Context, name string, enabled bool) error
+	SetMCPServerEnabled(ctx context.Context, name string, enabled bool) error
+	SetMCPServerAttached(ctx context.Context, name string, attached bool) error
+	UpdateMCPServerConfig(ctx context.Context, name string, config string) error
+	MCPServerDetail(ctx context.Context, name string) (baseagent.MCPServerCapability, error)
+	RespondPendingApproval(ctx context.Context, sessionKey, approvalID string, decision baseagent.ApprovalDecision) (baseagent.ChatResponse, error)
+	ScheduleJob(ctx context.Context, job baseagent.CronJob) (baseagent.CronJob, error)
+	ListCronJobs(ctx context.Context, sessionKey string) ([]baseagent.CronJob, error)
+	CancelCronJob(ctx context.Context, jobID string) (baseagent.CronJob, error)
+	PauseCronJob(ctx context.Context, jobID string) (baseagent.CronJob, error)
+	ResumeCronJob(ctx context.Context, jobID string) (baseagent.CronJob, error)
+	RunCronJob(ctx context.Context, jobID string) (baseagent.CronJob, error)
+}
 
 // Run starts the daemon HTTP API server. It blocks until a termination
 // signal is received or the server encounters a fatal error.
@@ -119,7 +154,13 @@ func Run() {
 	if memStore != nil {
 		baseMemoryStore = newBaseAgentMemoryStoreAdapter(memStore)
 	}
-	baseRuntime := baseagent.NewRuntime(newLifecycleAgentServiceAdapter(svc), baseMemoryStore)
+	workspaceRoot, _ := os.Getwd()
+	baseRuntime := baseagent.NewRuntime(
+		newLifecycleAgentServiceAdapter(svc),
+		baseMemoryStore,
+		baseagent.WithWorkspaceRoot(workspaceRoot),
+		baseagent.WithMediaRuntime(baseagent.NewConfiguredMediaRuntime()),
+	)
 	stopBaseAgentDistill := startBaseAgentDistillScheduler(memStore)
 	if stopBaseAgentDistill != nil {
 		defer stopBaseAgentDistill()
@@ -225,7 +266,7 @@ func buildHTTPMux(
 
 func buildHTTPMuxWithBaseAgent(
 	svc *lifecycle.Service,
-	baseRuntime *baseagent.Runtime,
+	baseRuntime baseAgentRuntime,
 	ready *atomic.Bool,
 	pairStore *api.PairingCodeStore,
 	pairLimiter *ratelimit.Limiter,
@@ -397,6 +438,249 @@ func buildHTTPMuxWithBaseAgent(
 		writeJSON(w, http.StatusOK, resp)
 	})
 
+	register("/api/base-agent/capabilities", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if baseRuntime == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime is unavailable")
+			return
+		}
+		writeJSON(w, http.StatusOK, baseRuntime.CapabilitySummary(r.Context()))
+	})
+
+	register("/api/base-agent/approvals/consume", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if baseRuntime == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime is unavailable")
+			return
+		}
+		var body struct {
+			SessionKey string `json:"sessionKey"`
+			Provider   string `json:"provider,omitempty"`
+			ChatID     string `json:"chatId,omitempty"`
+			SessionID  string `json:"sessionId,omitempty"`
+			ApprovalID string `json:"approvalId"`
+			Decision   string `json:"decision"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		sessionKey := strings.TrimSpace(body.SessionKey)
+		if sessionKey == "" {
+			chatID := strings.TrimSpace(body.ChatID)
+			if chatID == "" {
+				chatID = strings.TrimSpace(body.SessionID)
+			}
+			if chatID != "" {
+				sessionKey = baseagent.ResolveSessionKey(body.Provider, chatID)
+			}
+		}
+		if sessionKey == "" {
+			writeJSONError(w, http.StatusBadRequest, "sessionKey or chat/session identity is required")
+			return
+		}
+		if strings.TrimSpace(body.ApprovalID) == "" {
+			writeJSONError(w, http.StatusBadRequest, "approvalId is required")
+			return
+		}
+		if strings.TrimSpace(body.Decision) == "" {
+			writeJSONError(w, http.StatusBadRequest, "decision is required")
+			return
+		}
+		resp, err := baseRuntime.RespondPendingApproval(
+			r.Context(),
+			sessionKey,
+			strings.TrimSpace(body.ApprovalID),
+			baseagent.ApprovalDecision(strings.TrimSpace(body.Decision)),
+		)
+		if err != nil {
+			switch {
+			case errors.Is(err, baseagent.ErrInvalidApprovalDecision):
+				writeJSONError(w, http.StatusBadRequest, err.Error())
+			case errors.Is(err, baseagent.ErrPendingApprovalNotFound):
+				writeJSONError(w, http.StatusNotFound, err.Error())
+			default:
+				writeJSONError(w, http.StatusInternalServerError, err.Error())
+			}
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
+
+	register("/api/base-agent/cron/schedule", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if baseRuntime == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime is unavailable")
+			return
+		}
+		var body struct {
+			SessionKey string    `json:"sessionKey"`
+			AgentID    string    `json:"agentId,omitempty"`
+			Provider   string    `json:"provider,omitempty"`
+			ChatID     string    `json:"chatId,omitempty"`
+			SessionID  string    `json:"sessionId,omitempty"`
+			Prompt     string    `json:"prompt"`
+			NextRunAt  time.Time `json:"nextRunAt,omitempty"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		sessionKey := strings.TrimSpace(body.SessionKey)
+		if sessionKey == "" {
+			chatID := strings.TrimSpace(body.ChatID)
+			if chatID == "" {
+				chatID = strings.TrimSpace(body.SessionID)
+			}
+			if chatID != "" {
+				sessionKey = baseagent.ResolveSessionKey(body.Provider, chatID)
+			}
+		}
+		if sessionKey == "" {
+			writeJSONError(w, http.StatusBadRequest, "sessionKey or chat/session identity is required")
+			return
+		}
+		if strings.TrimSpace(body.Prompt) == "" {
+			writeJSONError(w, http.StatusBadRequest, "prompt is required")
+			return
+		}
+		job, err := baseRuntime.ScheduleJob(r.Context(), baseagent.CronJob{
+			AgentID:    strings.TrimSpace(body.AgentID),
+			SessionKey: sessionKey,
+			Prompt:     strings.TrimSpace(body.Prompt),
+			NextRunAt:  body.NextRunAt,
+		})
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, job)
+	})
+
+	register("/api/base-agent/cron/jobs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if baseRuntime == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime is unavailable")
+			return
+		}
+		sessionKey := strings.TrimSpace(r.URL.Query().Get("sessionKey"))
+		agentID := strings.TrimSpace(r.URL.Query().Get("agentId"))
+		jobs, err := baseRuntime.ListCronJobs(r.Context(), sessionKey)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if agentID != "" {
+			filtered := make([]baseagent.CronJob, 0, len(jobs))
+			for _, job := range jobs {
+				if strings.EqualFold(strings.TrimSpace(job.AgentID), agentID) {
+					filtered = append(filtered, job)
+				}
+			}
+			jobs = filtered
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
+	})
+
+	register("/api/base-agent/cron/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if baseRuntime == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime is unavailable")
+			return
+		}
+		trimmed := strings.TrimPrefix(strings.TrimSpace(r.URL.Path), "/api/base-agent/cron/")
+		trimmed = strings.Trim(trimmed, "/")
+		switch {
+		case strings.HasSuffix(trimmed, "/cancel"):
+			jobID := strings.Trim(strings.TrimSuffix(trimmed, "/cancel"), "/")
+			if jobID == "" {
+				writeJSONError(w, http.StatusBadRequest, "cron job id is required")
+				return
+			}
+			job, err := baseRuntime.CancelCronJob(r.Context(), jobID)
+			if err != nil {
+				status := http.StatusInternalServerError
+				if strings.Contains(strings.ToLower(err.Error()), "not found") {
+					status = http.StatusNotFound
+				}
+				writeJSONError(w, status, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, job)
+			return
+		case strings.HasSuffix(trimmed, "/pause"):
+			jobID := strings.Trim(strings.TrimSuffix(trimmed, "/pause"), "/")
+			if jobID == "" {
+				writeJSONError(w, http.StatusBadRequest, "cron job id is required")
+				return
+			}
+			job, err := baseRuntime.PauseCronJob(r.Context(), jobID)
+			if err != nil {
+				status := http.StatusInternalServerError
+				if strings.Contains(strings.ToLower(err.Error()), "not found") {
+					status = http.StatusNotFound
+				}
+				writeJSONError(w, status, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, job)
+			return
+		case strings.HasSuffix(trimmed, "/resume"):
+			jobID := strings.Trim(strings.TrimSuffix(trimmed, "/resume"), "/")
+			if jobID == "" {
+				writeJSONError(w, http.StatusBadRequest, "cron job id is required")
+				return
+			}
+			job, err := baseRuntime.ResumeCronJob(r.Context(), jobID)
+			if err != nil {
+				status := http.StatusInternalServerError
+				if strings.Contains(strings.ToLower(err.Error()), "not found") {
+					status = http.StatusNotFound
+				}
+				writeJSONError(w, status, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, job)
+			return
+		case strings.HasSuffix(trimmed, "/run"):
+			jobID := strings.Trim(strings.TrimSuffix(trimmed, "/run"), "/")
+			if jobID == "" {
+				writeJSONError(w, http.StatusBadRequest, "cron job id is required")
+				return
+			}
+			job, err := baseRuntime.RunCronJob(r.Context(), jobID)
+			if err != nil {
+				status := http.StatusInternalServerError
+				if strings.Contains(strings.ToLower(err.Error()), "not found") {
+					status = http.StatusNotFound
+				}
+				if strings.Contains(strings.ToLower(err.Error()), "paused") {
+					status = http.StatusConflict
+				}
+				writeJSONError(w, status, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, job)
+			return
+		default:
+			http.NotFound(w, r)
+			return
+		}
+	})
+
 	register("/api/base-agent/decompose", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -466,6 +750,31 @@ func buildHTTPMuxWithBaseAgent(
 			IncludeRaw:          body.IncludeRaw,
 		})
 		writeJSON(w, http.StatusOK, map[string]interface{}{"results": results})
+	})
+
+	register("/api/v2/memory", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		subject := strings.TrimSpace(r.URL.Query().Get("subject"))
+		payload := map[string]interface{}{
+			"subject":     subject,
+			"entries":     memStore.List(),
+			"attachments": []memory.Attachment{},
+			"grants":      []memory.Grant{},
+			"audit":       memStore.AuditLogs(),
+		}
+		if subject != "" {
+			payload["attachments"] = memStore.ListAttachments(subject)
+			payload["grants"] = memStore.ListGrants(subject)
+			payload["instanceScopes"] = memStore.InstanceScopes(subject)
+		}
+		writeJSON(w, http.StatusOK, payload)
 	})
 
 	register("/api/v2/memory/get", func(w http.ResponseWriter, r *http.Request) {
@@ -907,6 +1216,26 @@ func buildHTTPMuxWithBaseAgent(
 			}
 			return
 		}
+		if agentID, skillName, ok := parseAgentSkillPath(r.URL.Path); ok {
+			handleAgentSkill(svc, baseRuntime, agentID, skillName, w, r)
+			return
+		}
+		if agentID, mediaAction, ok := parseAgentMediaPath(r.URL.Path); ok {
+			handleAgentMedia(baseRuntime, agentID, mediaAction, w, r)
+			return
+		}
+		if agentID, jobID, ok := parseAgentSubagentPath(r.URL.Path); ok {
+			handleAgentSubagent(svc, baseRuntime, agentID, jobID, w, r)
+			return
+		}
+		if agentID, serverName, mcpAction, ok := parseAgentMCPServerActionPath(r.URL.Path); ok {
+			handleAgentMCPServerAction(svc, baseRuntime, agentID, serverName, mcpAction, w, r)
+			return
+		}
+		if agentID, serverName, ok := parseAgentMCPServerPath(r.URL.Path); ok {
+			handleAgentMCPServer(svc, baseRuntime, agentID, serverName, w, r)
+			return
+		}
 
 		agentID, action, ok := parseAgentActionPath(r.URL.Path)
 		if !ok {
@@ -935,6 +1264,12 @@ func buildHTTPMuxWithBaseAgent(
 			handleUninstall(svc, agentID, w, r)
 		case "diagnose":
 			handleDiagnose(svc, agentID, w, r)
+		case "chat":
+			handleAgentChat(svc, baseRuntime, agentID, w, r)
+		case "capabilities":
+			handleAgentCapabilities(svc, baseRuntime, agentID, w, r)
+		case "sessions":
+			handleAgentSessions(svc, baseRuntime, agentID, w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -1325,7 +1660,494 @@ func handleStatus(svc *lifecycle.Service, agentID string, w http.ResponseWriter,
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, state)
+	writeJSON(w, http.StatusOK, withAgentHeartbeat(state, time.Now().UTC()))
+}
+
+func withAgentHeartbeat(state lifecycle.AgentState, now time.Time) lifecycle.AgentState {
+	if state.Heartbeat != nil {
+		return state
+	}
+
+	var lastActivity *time.Time
+	if !state.UpdatedAt.IsZero() {
+		ts := state.UpdatedAt.UTC()
+		lastActivity = &ts
+	} else if state.StartedAt != nil && !state.StartedAt.IsZero() {
+		ts := state.StartedAt.UTC()
+		lastActivity = &ts
+	}
+
+	heartbeat := &lifecycle.AgentHeartbeat{State: "unknown"}
+	if lastActivity != nil {
+		age := now.Sub(*lastActivity)
+		if age < 0 {
+			age = 0
+		}
+		heartbeat.AgeSeconds = int64(age / time.Second)
+		heartbeat.LastActivityAt = lastActivity
+		heartbeat.State = "fresh"
+		if age > defaultAgentHeartbeatStaleAfter {
+			heartbeat.State = "stale"
+		}
+	}
+	state.Heartbeat = heartbeat
+	return state
+}
+
+func handleAgentCapabilities(svc *lifecycle.Service, runtime baseAgentRuntime, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
+		return
+	}
+	if _, err := svc.Status(agentID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, runtime.CapabilitySummary(r.Context()))
+}
+
+func handleAgentSkill(svc *lifecycle.Service, runtime baseAgentRuntime, agentID, skillName string, w http.ResponseWriter, r *http.Request) {
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
+		return
+	}
+	if _, err := svc.Status(agentID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	switch skillName {
+	case "search":
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"skills": runtime.SearchSkills(r.Context(), strings.TrimSpace(r.URL.Query().Get("q"))),
+		})
+		return
+	case "install":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body struct {
+			Name string `json:"name"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		name := strings.TrimSpace(body.Name)
+		if name == "" {
+			writeJSONError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		installed, err := runtime.InstallSkill(r.Context(), name)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, installed)
+		return
+	case "reinstall":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body struct {
+			Name string `json:"name"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		name := strings.TrimSpace(body.Name)
+		if name == "" {
+			writeJSONError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		reinstalled, err := runtime.ReinstallSkill(r.Context(), name)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, reinstalled)
+		return
+	case "update":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		name := strings.TrimSpace(body.Name)
+		if name == "" {
+			writeJSONError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		updated, err := runtime.UpdateSkill(r.Context(), name, strings.TrimSpace(body.Version))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, updated)
+		return
+	case "uninstall":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body struct {
+			Name string `json:"name"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		name := strings.TrimSpace(body.Name)
+		if name == "" {
+			writeJSONError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		removed, err := runtime.UninstallSkill(r.Context(), name)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, removed)
+		return
+	default:
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := runtime.SetSkillEnabled(r.Context(), skillName, body.Enabled); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, runtime.CapabilitySummary(r.Context()))
+		return
+	}
+}
+
+func handleAgentMCPServer(svc *lifecycle.Service, runtime baseAgentRuntime, agentID, serverName string, w http.ResponseWriter, r *http.Request) {
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
+		return
+	}
+	if _, err := svc.Status(agentID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		detail, err := runtime.MCPServerDetail(r.Context(), serverName)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, detail)
+	case http.MethodPost:
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := runtime.SetMCPServerEnabled(r.Context(), serverName, body.Enabled); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, runtime.CapabilitySummary(r.Context()))
+	default:
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func handleAgentMCPServerAction(svc *lifecycle.Service, runtime baseAgentRuntime, agentID, serverName, action string, w http.ResponseWriter, r *http.Request) {
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
+		return
+	}
+	if _, err := svc.Status(agentID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "attach":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if err := runtime.SetMCPServerAttached(r.Context(), serverName, true); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		detail, err := runtime.MCPServerDetail(r.Context(), serverName)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, detail)
+	case "detach":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if err := runtime.SetMCPServerAttached(r.Context(), serverName, false); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		detail, err := runtime.MCPServerDetail(r.Context(), serverName)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, detail)
+	case "config":
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var body struct {
+			Config string `json:"config"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := runtime.UpdateMCPServerConfig(r.Context(), serverName, body.Config); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		detail, err := runtime.MCPServerDetail(r.Context(), serverName)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, detail)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func handleAgentSubagent(svc *lifecycle.Service, runtime baseAgentRuntime, agentID, jobID string, w http.ResponseWriter, r *http.Request) {
+	if svc == nil {
+		writeJSONError(w, http.StatusInternalServerError, "service unavailable")
+		return
+	}
+	if _, err := svc.Status(agentID); err != nil {
+		writeJSONError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime unavailable")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if jobID == "" {
+		limit := 20
+		if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+			parsed, err := strconv.Atoi(rawLimit)
+			if err != nil || parsed <= 0 {
+				writeJSONError(w, http.StatusBadRequest, "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"jobs": runtime.RecentSubagentJobs(r.Context(), limit),
+		})
+		return
+	}
+	job, err := runtime.SubagentJob(r.Context(), jobID)
+	if err != nil {
+		writeJSONError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
+}
+
+func handleAgentSessions(svc *lifecycle.Service, runtime baseAgentRuntime, agentID string, w http.ResponseWriter, r *http.Request) {
+	if svc == nil {
+		writeJSONError(w, http.StatusInternalServerError, "service unavailable")
+		return
+	}
+	if _, err := svc.Status(agentID); err != nil {
+		writeJSONError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime unavailable")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	limit := 10
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed <= 0 {
+			writeJSONError(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sessions": runtime.RecentSessionStats(limit),
+	})
+}
+
+func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
+		return
+	}
+	var body struct {
+		Provider    string                    `json:"provider"`
+		ModelAlias  string                    `json:"modelAlias,omitempty"`
+		Model       string                    `json:"model,omitempty"`
+		ChatID      string                    `json:"chatId"`
+		RequestID   string                    `json:"requestId"`
+		SessionID   string                    `json:"sessionId"`
+		Message     string                    `json:"message"`
+		Attachments []baseagent.AttachmentRef `json:"attachments,omitempty"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	message := strings.TrimSpace(body.Message)
+	if message == "" {
+		writeJSONError(w, http.StatusBadRequest, "message is required")
+		return
+	}
+	sessionID := strings.TrimSpace(body.SessionID)
+	chatID := strings.TrimSpace(body.ChatID)
+	if chatID == "" {
+		if sessionID != "" {
+			chatID = sessionID
+		} else {
+			chatID = fmt.Sprintf("%s-%d", strings.TrimSpace(agentID), time.Now().UnixNano())
+		}
+	}
+	if proxied, handled, err := maybeProxyManagedAgentChat(
+		r.Context(),
+		svc,
+		agentID,
+		strings.TrimSpace(body.Provider),
+		strings.TrimSpace(body.ModelAlias),
+		strings.TrimSpace(body.Model),
+		message,
+	); handled {
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if sessionID == "" {
+			sessionID = chatID
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"agentId":     strings.TrimSpace(agentID),
+			"sessionId":   sessionID,
+			"message":     proxied.Message,
+			"richContent": proxied.RichContent,
+			"action":      proxied.Action,
+			"selfHealed":  proxied.SelfHealed,
+			"backupRef":   proxied.BackupRef,
+		})
+		return
+	}
+	resp, err := runtime.Chat(r.Context(), baseagent.ChatRequest{
+		Provider:    strings.TrimSpace(body.Provider),
+		ModelAlias:  strings.TrimSpace(body.ModelAlias),
+		Model:       strings.TrimSpace(body.Model),
+		ChatID:      chatID,
+		RequestID:   strings.TrimSpace(body.RequestID),
+		Message:     message,
+		Attachments: body.Attachments,
+	})
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if sessionID == "" {
+		sessionID = chatID
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"agentId":     strings.TrimSpace(agentID),
+		"sessionId":   sessionID,
+		"message":     resp.Message,
+		"richContent": resp.RichContent,
+		"action":      resp.Action,
+		"selfHealed":  resp.SelfHealed,
+		"backupRef":   resp.BackupRef,
+	})
+}
+
+func handleAgentMedia(runtime agentMediaRuntime, agentID string, action string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "agent runtime is unavailable")
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "speak":
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	var body struct {
+		Text   string `json:"text"`
+		Voice  string `json:"voice,omitempty"`
+		Format string `json:"format,omitempty"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(body.Text) == "" {
+		writeJSONError(w, http.StatusBadRequest, "text is required")
+		return
+	}
+	resp, err := runtime.SpeakMedia(r.Context(), baseagent.SpeechSynthesisRequest{
+		Text:   strings.TrimSpace(body.Text),
+		Voice:  strings.TrimSpace(body.Voice),
+		Format: strings.TrimSpace(body.Format),
+	})
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"agentId":     strings.TrimSpace(agentID),
+		"message":     resp.Message,
+		"richContent": resp.RichContent,
+		"action":      resp.Action,
+		"selfHealed":  resp.SelfHealed,
+		"backupRef":   resp.BackupRef,
+	})
 }
 
 func handleLogs(svc *lifecycle.Service, agentID string, w http.ResponseWriter, r *http.Request) {
@@ -1561,6 +2383,243 @@ func parseAgentActionPath(path string) (agentID string, action string, ok bool) 
 		return "", "", false
 	}
 	return decoded, action, true
+}
+
+func parseAgentSkillPath(path string) (agentID string, skillName string, ok bool) {
+	const prefix = "/api/v1/agents/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	rest := path[len(prefix):]
+	if strings.Contains(rest, "//") {
+		return "", "", false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 3 || strings.TrimSpace(parts[1]) != "skills" {
+		return "", "", false
+	}
+	rawAgentID := strings.TrimSpace(parts[0])
+	rawSkillName := strings.TrimSpace(parts[2])
+	if rawAgentID == "" || rawSkillName == "" {
+		return "", "", false
+	}
+	decodedAgentID, err := url.PathUnescape(rawAgentID)
+	if err != nil {
+		return "", "", false
+	}
+	decodedAgentID = strings.TrimSpace(decodedAgentID)
+	if decodedAgentID == "" || strings.Contains(decodedAgentID, "/") || strings.Contains(decodedAgentID, "\\") || strings.Contains(decodedAgentID, "..") {
+		return "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedAgentID) {
+		return "", "", false
+	}
+	decodedSkillName, err := url.PathUnescape(rawSkillName)
+	if err != nil {
+		return "", "", false
+	}
+	decodedSkillName = strings.TrimSpace(strings.ToLower(decodedSkillName))
+	if decodedSkillName == "" || strings.Contains(decodedSkillName, "/") || strings.Contains(decodedSkillName, "\\") || strings.Contains(decodedSkillName, "..") {
+		return "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedSkillName) {
+		return "", "", false
+	}
+	return decodedAgentID, decodedSkillName, true
+}
+
+func parseAgentSubagentPath(path string) (agentID string, jobID string, ok bool) {
+	const prefix = "/api/v1/agents/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	rest := path[len(prefix):]
+	if strings.Contains(rest, "//") {
+		return "", "", false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 && len(parts) != 3 {
+		return "", "", false
+	}
+	if strings.TrimSpace(parts[1]) != "subagents" {
+		return "", "", false
+	}
+	rawAgentID := strings.TrimSpace(parts[0])
+	if rawAgentID == "" {
+		return "", "", false
+	}
+	decodedAgentID, err := url.PathUnescape(rawAgentID)
+	if err != nil {
+		return "", "", false
+	}
+	decodedAgentID = strings.TrimSpace(decodedAgentID)
+	if decodedAgentID == "" || strings.Contains(decodedAgentID, "/") || strings.Contains(decodedAgentID, "\\") || strings.Contains(decodedAgentID, "..") {
+		return "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedAgentID) {
+		return "", "", false
+	}
+	if len(parts) == 2 {
+		return decodedAgentID, "", true
+	}
+	rawJobID := strings.TrimSpace(parts[2])
+	if rawJobID == "" {
+		return "", "", false
+	}
+	decodedJobID, err := url.PathUnescape(rawJobID)
+	if err != nil {
+		return "", "", false
+	}
+	decodedJobID = strings.TrimSpace(decodedJobID)
+	if decodedJobID == "" || strings.Contains(decodedJobID, "/") || strings.Contains(decodedJobID, "\\") || strings.Contains(decodedJobID, "..") {
+		return "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedJobID) {
+		return "", "", false
+	}
+	return decodedAgentID, decodedJobID, true
+}
+
+func parseAgentMediaPath(path string) (agentID string, action string, ok bool) {
+	const prefix = "/api/v1/agents/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	rest := path[len(prefix):]
+	if strings.Contains(rest, "//") {
+		return "", "", false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 3 || strings.TrimSpace(parts[1]) != "media" {
+		return "", "", false
+	}
+	rawAgentID := strings.TrimSpace(parts[0])
+	rawAction := strings.TrimSpace(parts[2])
+	if rawAgentID == "" || rawAction == "" {
+		return "", "", false
+	}
+	decodedAgentID, err := url.PathUnescape(rawAgentID)
+	if err != nil {
+		return "", "", false
+	}
+	decodedAgentID = strings.TrimSpace(decodedAgentID)
+	if decodedAgentID == "" || strings.Contains(decodedAgentID, "/") || strings.Contains(decodedAgentID, "\\") || strings.Contains(decodedAgentID, "..") {
+		return "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedAgentID) {
+		return "", "", false
+	}
+	decodedAction, err := url.PathUnescape(rawAction)
+	if err != nil {
+		return "", "", false
+	}
+	decodedAction = strings.TrimSpace(strings.ToLower(decodedAction))
+	switch decodedAction {
+	case "speak":
+		return decodedAgentID, decodedAction, true
+	default:
+		return "", "", false
+	}
+}
+
+func parseAgentMCPServerPath(path string) (agentID string, serverName string, ok bool) {
+	const prefix = "/api/v1/agents/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", false
+	}
+	rest := path[len(prefix):]
+	if strings.Contains(rest, "//") {
+		return "", "", false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 3 || strings.TrimSpace(parts[1]) != "mcp" {
+		return "", "", false
+	}
+	rawAgentID := strings.TrimSpace(parts[0])
+	rawServerName := strings.TrimSpace(parts[2])
+	if rawAgentID == "" || rawServerName == "" {
+		return "", "", false
+	}
+	decodedAgentID, err := url.PathUnescape(rawAgentID)
+	if err != nil {
+		return "", "", false
+	}
+	decodedAgentID = strings.TrimSpace(decodedAgentID)
+	if decodedAgentID == "" || strings.Contains(decodedAgentID, "/") || strings.Contains(decodedAgentID, "\\") || strings.Contains(decodedAgentID, "..") {
+		return "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedAgentID) {
+		return "", "", false
+	}
+	decodedServerName, err := url.PathUnescape(rawServerName)
+	if err != nil {
+		return "", "", false
+	}
+	decodedServerName = strings.TrimSpace(strings.ToLower(decodedServerName))
+	if decodedServerName == "" || strings.Contains(decodedServerName, "/") || strings.Contains(decodedServerName, "\\") || strings.Contains(decodedServerName, "..") {
+		return "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedServerName) {
+		return "", "", false
+	}
+	return decodedAgentID, decodedServerName, true
+}
+
+func parseAgentMCPServerActionPath(path string) (agentID string, serverName string, action string, ok bool) {
+	const prefix = "/api/v1/agents/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", "", false
+	}
+	rest := path[len(prefix):]
+	if strings.Contains(rest, "//") {
+		return "", "", "", false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 4 || strings.TrimSpace(parts[1]) != "mcp" {
+		return "", "", "", false
+	}
+	rawAgentID := strings.TrimSpace(parts[0])
+	rawServerName := strings.TrimSpace(parts[2])
+	if rawAgentID == "" || rawServerName == "" {
+		return "", "", "", false
+	}
+	decodedAgentID, err := url.PathUnescape(rawAgentID)
+	if err != nil {
+		return "", "", "", false
+	}
+	decodedAgentID = strings.TrimSpace(decodedAgentID)
+	if decodedAgentID == "" || strings.Contains(decodedAgentID, "/") || strings.Contains(decodedAgentID, "\\") || strings.Contains(decodedAgentID, "..") {
+		return "", "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedAgentID) {
+		return "", "", "", false
+	}
+	decodedServerName, err := url.PathUnescape(rawServerName)
+	if err != nil {
+		return "", "", "", false
+	}
+	decodedServerName = strings.TrimSpace(strings.ToLower(decodedServerName))
+	if decodedServerName == "" || strings.Contains(decodedServerName, "/") || strings.Contains(decodedServerName, "\\") || strings.Contains(decodedServerName, "..") {
+		return "", "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedServerName) {
+		return "", "", "", false
+	}
+	rawAction := strings.TrimSpace(parts[3])
+	if rawAction == "" {
+		return "", "", "", false
+	}
+	decodedAction, err := url.PathUnescape(rawAction)
+	if err != nil {
+		return "", "", "", false
+	}
+	decodedAction = strings.TrimSpace(strings.ToLower(decodedAction))
+	switch decodedAction {
+	case "attach", "detach", "config":
+		return decodedAgentID, decodedServerName, decodedAction, true
+	default:
+		return "", "", "", false
+	}
 }
 
 func parseAgentMessagingPath(path string) (agentID string, action string, ok bool) {

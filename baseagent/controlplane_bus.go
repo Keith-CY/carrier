@@ -2,6 +2,7 @@ package baseagent
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 )
@@ -12,22 +13,143 @@ const (
 	defaultEventQueueSize    = 256
 )
 
+type AttachmentRef struct {
+	ID             string            `json:"id,omitempty"`
+	Kind           string            `json:"kind,omitempty"`
+	OutputRole     string            `json:"outputRole,omitempty"`
+	Path           string            `json:"path,omitempty"`
+	Name           string            `json:"name,omitempty"`
+	MIMEType       string            `json:"mimeType,omitempty"`
+	MediaType      string            `json:"mediaType,omitempty"`
+	SizeBytes      int64             `json:"sizeBytes,omitempty"`
+	Source         string            `json:"source,omitempty"`
+	ExternalID     string            `json:"externalId,omitempty"`
+	ArtifactID     string            `json:"artifactId,omitempty"`
+	DownloadURL    string            `json:"downloadUrl,omitempty"`
+	SourceMetadata map[string]string `json:"sourceMetadata,omitempty"`
+}
+
+type ContentBlock struct {
+	Type         string `json:"type"`
+	OutputRole   string `json:"outputRole,omitempty"`
+	Text         string `json:"text,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Path         string `json:"path,omitempty"`
+	MIMEType     string `json:"mimeType,omitempty"`
+	MediaType    string `json:"mediaType,omitempty"`
+	AttachmentID string `json:"attachmentId,omitempty"`
+	URL          string `json:"url,omitempty"`
+	SizeBytes    int64  `json:"sizeBytes,omitempty"`
+}
+
+type RichOutboundMessage struct {
+	Text        string          `json:"text,omitempty"`
+	RenderMode  string          `json:"renderMode,omitempty"`
+	Blocks      []ContentBlock  `json:"blocks,omitempty"`
+	Attachments []AttachmentRef `json:"attachments,omitempty"`
+}
+
+func (m *RichOutboundMessage) PlainTextFallback() string {
+	if m == nil {
+		return ""
+	}
+	lines := []string{}
+	if text := strings.TrimSpace(m.Text); text != "" {
+		lines = append(lines, text)
+	}
+	for _, block := range m.Blocks {
+		if line := contentBlockPlainText(block); line != "" {
+			if len(lines) == 0 || lines[len(lines)-1] != line {
+				lines = append(lines, line)
+			}
+		}
+	}
+	for _, attachment := range m.Attachments {
+		if line := attachmentRefPlainText(attachment); line != "" {
+			if len(lines) == 0 || lines[len(lines)-1] != line {
+				lines = append(lines, line)
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func contentBlockPlainText(block ContentBlock) string {
+	switch strings.ToLower(strings.TrimSpace(block.Type)) {
+	case "text":
+		return strings.TrimSpace(block.Text)
+	case "file":
+		if name := strings.TrimSpace(block.Name); name != "" {
+			return "Attachment: " + name
+		}
+		if path := strings.TrimSpace(block.Path); path != "" {
+			return "Attachment: " + path
+		}
+	case "image":
+		if name := strings.TrimSpace(block.Name); name != "" {
+			return "Image: " + name
+		}
+	case "audio", "voice":
+		if name := strings.TrimSpace(block.Name); name != "" {
+			return "Audio: " + name
+		}
+	case "video":
+		if name := strings.TrimSpace(block.Name); name != "" {
+			return "Video: " + name
+		}
+	}
+	if url := strings.TrimSpace(block.URL); url != "" {
+		return url
+	}
+	return ""
+}
+
+func attachmentRefPlainText(ref AttachmentRef) string {
+	switch strings.ToLower(strings.TrimSpace(ref.Kind)) {
+	case "document", "file":
+		if name := strings.TrimSpace(ref.Name); name != "" {
+			return "Attachment: " + name
+		}
+	case "image":
+		if name := strings.TrimSpace(ref.Name); name != "" {
+			return "Image: " + name
+		}
+	case "audio", "voice":
+		if name := strings.TrimSpace(ref.Name); name != "" {
+			return "Audio: " + name
+		}
+	case "video":
+		if name := strings.TrimSpace(ref.Name); name != "" {
+			return "Video: " + name
+		}
+	}
+	if ref.ExternalID != "" {
+		return ref.ExternalID
+	}
+	if ref.Path != "" {
+		return ref.Path
+	}
+	return ""
+}
+
 // InboundEnvelope represents an inbound message into the base-agent loop.
 type InboundEnvelope struct {
-	Channel    string
-	SenderID   string
-	ChatID     string
-	Content    string
-	SessionKey string
-	Metadata   map[string]string
+	Channel     string
+	SenderID    string
+	ChatID      string
+	Content     string
+	Attachments []AttachmentRef
+	SessionKey  string
+	Metadata    map[string]string
 }
 
 // OutboundEnvelope represents an outbound message emitted by the base-agent loop.
 type OutboundEnvelope struct {
-	Channel  string
-	ChatID   string
-	Content  string
-	Metadata map[string]string
+	Channel     string
+	ChatID      string
+	Content     string
+	RichContent *RichOutboundMessage
+	Metadata    map[string]string
 }
 
 // EventType describes the event category emitted by control-plane components.

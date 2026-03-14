@@ -1,8 +1,12 @@
 import { expect, test } from '@playwright/test';
-import { loginWithToken, mockAPIs } from './helpers';
+import { loginWithToken, mockAPIs, pushHistoryRoute } from './helpers';
+
+async function domClick(page, selector: string) {
+  await page.locator(selector).evaluate((element: HTMLElement) => element.click());
+}
 
 test.describe('Remote Control Plane Views', () => {
-  test('profiles binding controls are disabled when provider binding feature is off', async ({ page }) => {
+  test('providers binding controls are disabled when provider binding feature is off', async ({ page }) => {
     await mockAPIs(page);
     await page.route('**/api/v1/features', async (route) =>
       route.fulfill({
@@ -43,11 +47,88 @@ test.describe('Remote Control Plane Views', () => {
       }),
     );
 
-    await loginWithToken(page, '/#/profiles');
+    await loginWithToken(page, '/#/providers');
 
     await expect(page.locator('#binding-save')).toBeDisabled();
     await expect(page.locator('#binding-profile-id')).toBeDisabled();
     await expect(page.locator('#profiles-msg')).toContainText('Provider binding is disabled by feature flag.');
+  });
+
+  test('policies page supports execution policy create and delete', async ({ page }) => {
+    await mockAPIs(page);
+
+    const policies: Array<Record<string, unknown>> = [];
+    await page.route('**/api/v1/orchestrator/policies', async (route) => {
+      const req = route.request();
+      if (req.method() === 'GET') {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ result: 'ok', policies }),
+        });
+      }
+      if (req.method() === 'POST') {
+        const body = req.postDataJSON() as Record<string, unknown>;
+        const policy = {
+          id: `policy-${policies.length + 1}`,
+          enabled: true,
+          priority: 0,
+          ...body,
+        };
+        policies.unshift(policy);
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ result: 'ok', policy }),
+        });
+      }
+      return route.fallback();
+    });
+    await page.route('**/api/v1/orchestrator/policies/*', async (route) => {
+      if (route.request().method() !== 'DELETE') return route.fallback();
+      const path = new URL(route.request().url()).pathname;
+      const policyID = path.split('/').pop() || '';
+      const idx = policies.findIndex((item) => String(item.id) === policyID);
+      if (idx >= 0) policies.splice(idx, 1);
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ result: 'ok', deleted: true }),
+      });
+    });
+
+    await loginWithToken(page, '/#/policies');
+
+    await page.fill('#execution-policy-name', 'review picoclaw production runs');
+    await page.selectOption('#execution-policy-action', 'ask');
+    await page.fill('#execution-policy-reason', 'picoclaw on prod hosts needs review');
+    await page.fill('#execution-policy-teams', 'platform, infra');
+    await page.fill('#execution-policy-projects', 'carrier');
+    await page.fill('#execution-policy-environments', 'prod');
+    await page.fill('#execution-policy-template-ids', 'incident-triage');
+    await page.fill('#execution-policy-host-labels', 'prod, gpu');
+    await page.fill('#execution-policy-host-ids', 'host-1');
+    await page.fill('#execution-policy-agent-ids', 'picoclaw');
+    await page.fill('#execution-policy-allowed-tools', 'grep, shell');
+    await page.fill('#execution-policy-max-timeout-ms', '45000');
+    await page.fill('#execution-policy-max-retry-budget', '1');
+    await page.click('#execution-policy-save');
+
+    await expect(page.locator('#profiles-msg')).toContainText('Execution policy saved.');
+    await expect(page.locator('#execution-policies-list')).toContainText('review picoclaw production runs');
+    await expect(page.locator('#execution-policies-list')).toContainText('ask');
+    await expect(page.locator('#execution-policies-list')).toContainText('teams: infra, platform');
+    await expect(page.locator('#execution-policies-list')).toContainText('projects: carrier');
+    await expect(page.locator('#execution-policies-list')).toContainText('environments: prod');
+    await expect(page.locator('#execution-policies-list')).toContainText('templates: incident-triage');
+    await expect(page.locator('#execution-policies-list')).toContainText('host labels: gpu, prod');
+    await expect(page.locator('#execution-policies-list')).toContainText('allowed tools: grep, shell');
+    await expect(page.locator('#execution-policies-list')).toContainText('max timeout: 45000ms');
+    await expect(page.locator('#execution-policies-list')).toContainText('max retry: 1');
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.locator('#execution-policies-list .agent-card').first().locator('button', { hasText: 'Delete' }).click();
+    await expect(page.locator('#execution-policies-list .card')).toContainText('No execution policies configured.');
   });
 
   test('feature flags hide remote control routes when disabled', async ({ page }) => {
@@ -67,20 +148,23 @@ test.describe('Remote Control Plane Views', () => {
       }),
     );
 
-    await loginWithToken(page, '/#/servers');
+    await loginWithToken(page, '/#/hosts');
 
-    await expect.poll(() => page.url()).toContain('#/dashboard');
+    await expect.poll(() => page.url()).toContain('/dashboard');
     await expect(page.locator('#view-dashboard')).toBeVisible();
-    await expect(page.locator('.nav-link[data-route="servers"]')).toBeHidden();
-    await expect(page.locator('.nav-link[data-route="profiles"]')).toBeHidden();
+    await expect(page.locator('.nav-link[data-route="workers"]')).toBeHidden();
+    await expect(page.locator('.nav-link[data-route="hosts"]')).toBeHidden();
+    await expect(page.locator('.nav-link[data-route="providers"]')).toBeHidden();
+    await expect(page.locator('.nav-link[data-route="policies"]')).toBeHidden();
     await expect(page.locator('.nav-link[data-route="remote-chat"]')).toBeHidden();
     await expect(page.locator('.nav-link[data-route="remote-observability"]')).toBeHidden();
 
-    await page.goto('/#/remote-observability');
-    await expect.poll(() => page.url()).toContain('#/dashboard');
+    await page.goto('/');
+    await pushHistoryRoute(page, '/remote-observability');
+    await expect.poll(() => page.url()).toContain('/dashboard');
   });
 
-  test('servers page supports create/check/delete flow', async ({ page }) => {
+  test('hosts page supports create/check/delete flow', async ({ page }) => {
     await mockAPIs(page);
 
     const hosts: Array<Record<string, unknown>> = [];
@@ -175,24 +259,29 @@ test.describe('Remote Control Plane Views', () => {
       });
     });
 
-    await loginWithToken(page, '/#/servers');
+    await loginWithToken(page, '/#/hosts');
 
     await page.fill('#server-name', 'prod-eu-1');
     await page.fill('#server-host', '10.0.0.12');
     await page.fill('#server-user', 'ubuntu');
     await page.fill('#server-key-path', '~/.ssh/id_ed25519');
+    await page.fill('#server-labels', 'prod, gpu');
     await page.click('#server-save');
 
     await expect(page.locator('#servers-list .agent-card h4', { hasText: 'prod-eu-1' })).toBeVisible();
+    await expect(page.locator('#servers-list .agent-card').first().locator('.instance-meta')).toContainText('labels: gpu, prod');
 
     await page.locator('#servers-list .agent-card').first().locator('button', { hasText: 'Edit' }).click();
     await expect(page.locator('#server-editor-state')).toContainText('Editing host');
     await expect(page.locator('#server-save')).toContainText('Update Host');
     await page.fill('#server-name', 'prod-eu-1-updated');
+    await page.fill('#server-labels', 'prod, staging');
     await page.click('#server-save');
     await expect.poll(() => patchCalls).toBe(1);
     expect(lastPatchBody?.name).toBe('prod-eu-1-updated');
+    expect(lastPatchBody?.labels).toEqual(['prod', 'staging']);
     await expect(page.locator('#servers-list .agent-card h4', { hasText: 'prod-eu-1-updated' })).toBeVisible();
+    await expect(page.locator('#servers-list .agent-card').first().locator('.instance-meta')).toContainText('labels: prod, staging');
     await expect(page.locator('#server-save')).toContainText('Save Host');
 
     await page.locator('#servers-list .agent-card').first().locator('button', { hasText: 'Check' }).click();
@@ -213,7 +302,7 @@ test.describe('Remote Control Plane Views', () => {
     await expect(page.locator('#servers-list .card')).toContainText('No remote servers configured.');
   });
 
-  test('servers page supports config, sessions, and memory management actions', async ({ page }) => {
+  test('hosts page supports config, sessions, and memory management actions', async ({ page }) => {
     await mockAPIs(page);
 
     const hosts = [{ id: 'host-1', name: 'prod-host-1', host: '10.0.0.9', user: 'ubuntu', authMode: 'private_key', runtimeMode: 'on_demand' }];
@@ -586,33 +675,32 @@ test.describe('Remote Control Plane Views', () => {
       }),
     );
 
-    await loginWithToken(page, '/#/servers');
+    await loginWithToken(page, '/#/hosts');
 
     await expect(page.locator('#servers-list .agent-card h4', { hasText: 'prod-host-1' })).toBeVisible();
     await page.locator('#servers-list .agent-card').first().locator('button', { hasText: 'Manage' }).click();
     await expect(page.locator('#server-manage-card')).toBeVisible();
     await expect(page.locator('#server-manage-host-label')).toContainText('host-1');
 
-    await page.click('#server-manage-load-instances');
+    await domClick(page, '#server-manage-load-instances');
     await expect(page.locator('#server-manage-instances')).toContainText('main (runtime=running, health=healthy)');
 
-    await page.click('#server-manage-instance-status');
+    await domClick(page, '#server-manage-instance-status');
     await expect.poll(() => statusCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('runtime: running');
 
     const installBtn = page.locator('#server-manage-install-instance');
-    await installBtn.click();
-    await expect(installBtn).toBeDisabled();
+    await domClick(page, '#server-manage-install-instance');
     await expect(page.locator('#server-manage-msg')).toContainText('Install completed');
     await expect(installBtn).toBeEnabled();
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('Install');
 
-    await page.click('#server-manage-repair-instance');
+    await domClick(page, '#server-manage-repair-instance');
     await expect.poll(() => repairCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('repair status: repaired');
 
     await page.fill('#server-manage-log-tail', '50');
-    await page.click('#server-manage-load-logs');
+    await domClick(page, '#server-manage-load-logs');
     await expect.poll(() => logsCalls).toBe(1);
     await expect(page.locator('#server-manage-logs')).toContainText('gateway.log');
     await expect(page.locator('#server-manage-logs')).toContainText('ready');
@@ -620,45 +708,45 @@ test.describe('Remote Control Plane Views', () => {
     await expect(page.locator('#server-manage-op-meta')).toContainText('requestId=req-logs-1');
     await expect(page.locator('#server-manage-op-meta')).toContainText('duration=');
 
-    await page.click('#server-manage-sync-instance');
+    await domClick(page, '#server-manage-sync-instance');
     await expect.poll(() => syncCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('drift state: in_sync');
 
-    await page.click('#server-manage-sync-status');
+    await domClick(page, '#server-manage-sync-status');
     await expect.poll(() => syncStatusCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('sync status: success');
 
-    await page.click('#server-manage-diagnose-instance');
+    await domClick(page, '#server-manage-diagnose-instance');
     await expect.poll(() => diagnoseCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('diagnose result: healthy');
 
-    await page.click('#server-manage-reconcile-instance');
+    await domClick(page, '#server-manage-reconcile-instance');
     await expect.poll(() => reconcileCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('reconciled: true');
 
-    await page.click('#server-manage-rollback-instance');
+    await domClick(page, '#server-manage-rollback-instance');
     await expect.poll(() => rollbackCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('rolled back: true');
 
     await page.fill('#server-manage-codeagent-command', 'echo hello');
-    await page.click('#server-manage-codeagent-install');
+    await domClick(page, '#server-manage-codeagent-install');
     await expect.poll(() => codeagentInstallCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('backend: codex');
 
-    await page.click('#server-manage-codeagent-health');
+    await domClick(page, '#server-manage-codeagent-health');
     await expect.poll(() => codeagentHealthCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('healthy: true');
 
-    await page.click('#server-manage-codeagent-version');
+    await domClick(page, '#server-manage-codeagent-version');
     await expect.poll(() => codeagentVersionCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('backend: codex');
 
-    await page.click('#server-manage-codeagent-run');
+    await domClick(page, '#server-manage-codeagent-run');
     await expect.poll(() => codeagentRunCalls).toBe(1);
     await expect(page.locator('#server-manage-logs')).toContainText('hello from codeagent');
 
     const loadConfigBtn = page.locator('#server-manage-load-config');
-    await loadConfigBtn.click();
+    await domClick(page, '#server-manage-load-config');
     await expect(page.locator('#server-manage-msg')).toContainText('Loading config');
     await expect(loadConfigBtn).toBeDisabled();
     await expect(loadConfigBtn).toBeEnabled();
@@ -675,24 +763,27 @@ test.describe('Remote Control Plane Views', () => {
         },
       },
     }));
-    await page.click('#server-manage-apply-config');
-    expect(lastConfigPatchBody).toBeTruthy();
+    const applyConfigBtn = page.locator('#server-manage-apply-config');
+    await expect(applyConfigBtn).toBeVisible();
+    await expect(applyConfigBtn).toBeEnabled();
+    await domClick(page, '#server-manage-apply-config');
+    await expect.poll(() => lastConfigPatchBody).not.toBeNull();
     expect((lastConfigPatchBody?.agents as Record<string, unknown>)?.defaults).toBeTruthy();
 
-    await page.click('#server-manage-load-sessions');
+    await domClick(page, '#server-manage-load-sessions');
     await expect(page.locator('#server-manage-sessions')).toContainText('sess-1');
 
     await page.fill('#server-manage-session-id', 'sess-1');
-    await page.click('#server-manage-archive-session');
+    await domClick(page, '#server-manage-archive-session');
     await expect.poll(() => archiveCalls).toBe(1);
-    await page.click('#server-manage-delete-session');
+    await domClick(page, '#server-manage-delete-session');
     await expect.poll(() => deleteCalls).toBe(1);
 
-    await page.click('#server-manage-load-memory');
+    await domClick(page, '#server-manage-load-memory');
     await expect(page.locator('#server-manage-memory')).toContainText('facts/system.md');
   });
 
-  test('profiles page supports profile + binding flow', async ({ page }) => {
+  test('providers page supports profile + binding flow', async ({ page }) => {
     await mockAPIs(page);
 
     const hosts = [{ id: 'host-1', name: 'prod-host-1' }, { id: 'host-2', name: 'staging-host-2' }];
@@ -701,6 +792,7 @@ test.describe('Remote Control Plane Views', () => {
     let bindingSaveCalls = 0;
     let lastBindingBody: Record<string, unknown> | null = null;
     let bindingDeleteCalls = 0;
+    let governanceResolveCalls = 0;
     let profilePatchCalls = 0;
     let lastProfilePatchBody: Record<string, unknown> | null = null;
     let profileTestCalls = 0;
@@ -820,8 +912,54 @@ test.describe('Remote Control Plane Views', () => {
         body: JSON.stringify({ result: 'ok', deleted: true }),
       });
     });
+    await page.route('**/api/v1/provider-governance/resolve*', async (route) => {
+      governanceResolveCalls += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          result: 'ok',
+          resolution: {
+            source: 'instance',
+            status: 'resolved',
+            hostId: 'host-1',
+            agentId: 'zeroclaw',
+            bindingId: 'binding-instance-1',
+            bindingTargetType: 'instance',
+            bindingTargetId: 'host-1:zeroclaw',
+            profileId: 'profile-instance',
+            profileName: 'anthropic-prod',
+            provider: 'anthropic',
+            model: 'claude-3-7-sonnet',
+            syncMode: 'manual',
+            driftState: 'override',
+            driftReason: 'instance binding overrides host binding',
+            trace: [
+              {
+                source: 'instance',
+                status: 'resolved',
+                selected: true,
+                profileId: 'profile-instance',
+                profileName: 'anthropic-prod',
+                provider: 'anthropic',
+                model: 'claude-3-7-sonnet',
+              },
+              {
+                source: 'host',
+                status: 'shadowed',
+                selected: false,
+                profileId: 'profile-1',
+                profileName: 'openai-gpt5',
+                provider: 'openai',
+                model: 'gpt-5-mini',
+              },
+            ],
+          },
+        }),
+      });
+    });
 
-    await loginWithToken(page, '/#/profiles');
+    await loginWithToken(page, '/#/providers');
 
     await page.fill('#profile-name', 'openai-gpt5');
     await page.fill('#profile-provider', 'openai');
@@ -861,6 +999,16 @@ test.describe('Remote Control Plane Views', () => {
     await expect.poll(() => profileTestCalls).toBe(1);
     expect(lastProfileTestBody?.hostId).toBe('host-2');
     await expect(page.locator('#profiles-msg')).toContainText('Profile test succeeded');
+
+    await page.selectOption('#governance-preview-host', 'host-1');
+    await page.fill('#governance-preview-agent', 'zeroclaw');
+    await page.click('#governance-preview-resolve');
+    await expect.poll(() => governanceResolveCalls).toBe(1);
+    await expect(page.locator('#governance-preview-out')).toContainText('anthropic/claude-3-7-sonnet');
+    await expect(page.locator('#governance-preview-out')).toContainText('source=instance');
+    await expect(page.locator('#governance-preview-out')).toContainText('drift=override');
+    await expect(page.locator('#governance-preview-out')).toContainText('instance [resolved, selected] anthropic/claude-3-7-sonnet');
+    await expect(page.locator('#governance-preview-out')).toContainText('host [shadowed] openai/gpt-5-mini');
   });
 
   test('remote chat page supports remote and local target streaming', async ({ page }) => {
@@ -932,7 +1080,7 @@ test.describe('Remote Control Plane Views', () => {
     await loginWithToken(page, '/#/remote-chat');
 
     await page.fill('#remote-chat-input', 'hello remote');
-    await page.click('#remote-chat-send');
+    await domClick(page, '#remote-chat-send');
     await expect(page.locator('#remote-chat-messages')).toContainText('remote-instance-reply');
     expect(lastChatBody).toBeTruthy();
     expect(lastChatBody?.target).toBe('remote');
@@ -943,7 +1091,7 @@ test.describe('Remote Control Plane Views', () => {
     await page.waitForTimeout(50);
 
     await page.fill('#remote-chat-input', 'hello local');
-    await page.click('#remote-chat-send');
+    await domClick(page, '#remote-chat-send');
     await expect(page.locator('#remote-chat-messages')).toContainText('local-instance-reply');
     expect(lastChatBody).toBeTruthy();
     expect(lastChatBody?.target).toBe('local');

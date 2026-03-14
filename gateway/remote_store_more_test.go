@@ -47,6 +47,7 @@ func TestRemoteHostManagementHelpers(t *testing.T) {
 		User:        "root",
 		AuthMode:    RemoteAuthModePrivateKey,
 		KeyPath:     filepath.Join(t.TempDir(), "id.key"),
+		Labels:      []string{" Prod ", "gpu", "prod"},
 		RuntimeMode: RemoteRuntimeModeOnDemand,
 	})
 	if err != nil {
@@ -58,16 +59,23 @@ func TestRemoteHostManagementHelpers(t *testing.T) {
 	if got, ok, err := getRemoteHost(host.ID); err != nil || !ok {
 		t.Fatalf("getRemoteHost(%q) expected hit, got ok=%v err=%v got=%+v", host.ID, ok, err, got)
 	}
+	if strings.Join(host.Labels, ",") != "gpu,prod" {
+		t.Fatalf("expected normalized labels gpu,prod got %+v", host.Labels)
+	}
 
 	got, err := patchRemoteHost(host.ID, RemoteHost{
-		Name: "patched",
-		Port: 23,
+		Name:   "patched",
+		Port:   23,
+		Labels: []string{" staging ", "gpu", "staging"},
 	})
 	if err != nil {
 		t.Fatalf("patchRemoteHost failed: %v", err)
 	}
 	if got.Name != "patched" || got.Port != 23 {
 		t.Fatalf("unexpected patched host: %+v", got)
+	}
+	if strings.Join(got.Labels, ",") != "gpu,staging" {
+		t.Fatalf("expected patched labels gpu,staging got %+v", got.Labels)
 	}
 
 	if err := updateRemoteHostHealth(host.ID, RemoteHealthHealthy, "ok"); err != nil {
@@ -191,6 +199,47 @@ func TestProviderBindingUpdateAndLookup(t *testing.T) {
 	deleted, err = deleteProviderBinding(binding.ID)
 	if err != nil || deleted {
 		t.Fatalf("deleteProviderBinding should be idempotent: deleted=%v err=%v", deleted, err)
+	}
+}
+
+func TestOrchestratorPolicyScopePersistence(t *testing.T) {
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+
+	timeoutMs := 45000
+	retryBudget := 2
+	policy, err := upsertOrchestratorPolicy(OrchestratorPolicyRule{
+		Name:             "scoped policy",
+		Action:           "ask",
+		Enabled:          true,
+		Teams:            []string{"platform"},
+		Projects:         []string{"carrier"},
+		Environments:     []string{"prod"},
+		TemplateIDs:      []string{"rollout-smoke"},
+		MaxTaskTimeoutMs: &timeoutMs,
+		MaxRetryBudget:   &retryBudget,
+	})
+	if err != nil {
+		t.Fatalf("upsertOrchestratorPolicy failed: %v", err)
+	}
+
+	policies, err := listOrchestratorPolicies()
+	if err != nil {
+		t.Fatalf("listOrchestratorPolicies failed: %v", err)
+	}
+	if len(policies) != 1 {
+		t.Fatalf("expected 1 policy got %d", len(policies))
+	}
+	if strings.Join(policy.Teams, ",") != "platform" || strings.Join(policy.Projects, ",") != "carrier" {
+		t.Fatalf("unexpected normalized scope fields: %+v", policy)
+	}
+	if strings.Join(policy.Environments, ",") != "prod" || strings.Join(policy.TemplateIDs, ",") != "rollout-smoke" {
+		t.Fatalf("unexpected normalized env/template fields: %+v", policy)
+	}
+	if policy.MaxTaskTimeoutMs == nil || *policy.MaxTaskTimeoutMs != timeoutMs {
+		t.Fatalf("unexpected timeout policy: %+v", policy)
+	}
+	if policy.MaxRetryBudget == nil || *policy.MaxRetryBudget != retryBudget {
+		t.Fatalf("unexpected retry policy: %+v", policy)
 	}
 }
 

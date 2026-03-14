@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -22,20 +23,36 @@ const (
 
 // AgentState mirrors the daemon's agent status.
 type AgentState struct {
-	ID                   string  `json:"id"`
-	Name                 string  `json:"name"`
-	Version              string  `json:"version"`
-	InstallState         string  `json:"installState"`
-	Runtime              string  `json:"runtimeState"`
-	Health               string  `json:"health"`
-	Ports                []int   `json:"ports"`
-	StartedAt            *string `json:"startedAt,omitempty"`
-	RestartCount         int     `json:"restartCount"`
-	NeedsRemoteDiagnosis bool    `json:"needsRemoteDiagnosis"`
-	Isolated             bool    `json:"isolated"`
-	LimaInstanceName     *string `json:"limaInstanceName,omitempty"`
-	LastError            *string `json:"lastError,omitempty"`
-	UpdatedAt            string  `json:"updatedAt"`
+	ID                   string            `json:"id"`
+	Name                 string            `json:"name"`
+	Version              string            `json:"version"`
+	InstallState         string            `json:"installState"`
+	Runtime              string            `json:"runtimeState"`
+	Health               string            `json:"health"`
+	Memory               *AgentMemoryState `json:"memory,omitempty"`
+	Heartbeat            *AgentHeartbeat   `json:"heartbeat,omitempty"`
+	Ports                []int             `json:"ports"`
+	StartedAt            *string           `json:"startedAt,omitempty"`
+	RestartCount         int               `json:"restartCount"`
+	NeedsRemoteDiagnosis bool              `json:"needsRemoteDiagnosis"`
+	Isolated             bool              `json:"isolated"`
+	LimaInstanceName     *string           `json:"limaInstanceName,omitempty"`
+	LastError            *string           `json:"lastError,omitempty"`
+	UpdatedAt            string            `json:"updatedAt"`
+}
+
+type AgentMemoryState struct {
+	ContractID     string  `json:"contractId,omitempty"`
+	ContractDigest string  `json:"contractDigest,omitempty"`
+	SyncState      string  `json:"syncState,omitempty"`
+	SyncError      string  `json:"syncError,omitempty"`
+	SyncedAt       *string `json:"syncedAt,omitempty"`
+}
+
+type AgentHeartbeat struct {
+	State          string  `json:"state"`
+	AgeSeconds     int64   `json:"ageSeconds"`
+	LastActivityAt *string `json:"lastActivityAt,omitempty"`
 }
 
 // LogsResult holds log lines from the daemon.
@@ -80,10 +97,18 @@ type BaseAgentChatResult = baseagent.ChatResponse
 type BaseAgentDecomposeTask = baseagent.DecomposeTask
 
 type AgentChatResult struct {
-	AgentID   string `json:"agentId"`
-	SessionID string `json:"sessionId,omitempty"`
-	Message   string `json:"message"`
+	AgentID     string                         `json:"agentId"`
+	SessionID   string                         `json:"sessionId,omitempty"`
+	Message     string                         `json:"message"`
+	RichContent *baseagent.RichOutboundMessage `json:"richContent,omitempty"`
+	Action      string                         `json:"action,omitempty"`
+	SelfHealed  bool                           `json:"selfHealed,omitempty"`
+	BackupRef   string                         `json:"backupRef,omitempty"`
 }
+
+type AgentCapabilitySummary = baseagent.RuntimeCapabilitySummary
+type AgentSessionStats = baseagent.SessionStats
+type CronJob = baseagent.CronJob
 
 // DaemonClientError is returned when the daemon returns a non-2xx response.
 type DaemonClientError struct {
@@ -231,11 +256,226 @@ func (c *DaemonClient) GetStatus(ctx context.Context, agentID, actor, requestID 
 	if wrapped.Statuses != nil {
 		return wrapped.Statuses, nil
 	}
+	var single AgentState
+	if err := json.Unmarshal(raw, &single); err == nil {
+		if strings.TrimSpace(single.ID) != "" {
+			return []AgentState{single}, nil
+		}
+	}
 	var arr []AgentState
 	if err := json.Unmarshal(raw, &arr); err == nil {
 		return arr, nil
 	}
 	return []AgentState{}, nil
+}
+
+func (c *DaemonClient) GetAgentCapabilities(ctx context.Context, agentID, actor, requestID string) (AgentCapabilitySummary, error) {
+	raw, err := c.request(ctx, http.MethodGet, "/api/v1/agents/"+url.PathEscape(agentID)+"/capabilities", nil, actor, requestID)
+	if err != nil {
+		return AgentCapabilitySummary{}, err
+	}
+	var summary AgentCapabilitySummary
+	if err := json.Unmarshal(raw, &summary); err != nil {
+		return AgentCapabilitySummary{}, fmt.Errorf("capabilities response: %w", err)
+	}
+	return summary, nil
+}
+
+func (c *DaemonClient) SetAgentSkillEnabled(ctx context.Context, agentID, skillName string, enabled bool, actor, requestID string) (AgentCapabilitySummary, error) {
+	body := map[string]bool{"enabled": enabled}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/skills/"+url.PathEscape(skillName), body, actor, requestID)
+	if err != nil {
+		return AgentCapabilitySummary{}, err
+	}
+	var summary AgentCapabilitySummary
+	if err := json.Unmarshal(raw, &summary); err != nil {
+		return AgentCapabilitySummary{}, fmt.Errorf("skill toggle response: %w", err)
+	}
+	return summary, nil
+}
+
+func (c *DaemonClient) SearchAgentSkills(ctx context.Context, agentID, query, actor, requestID string) ([]baseagent.SkillDefinition, error) {
+	path := "/api/v1/agents/" + url.PathEscape(agentID) + "/skills/search"
+	if trimmed := strings.TrimSpace(query); trimmed != "" {
+		path += "?q=" + url.QueryEscape(trimmed)
+	}
+	raw, err := c.request(ctx, http.MethodGet, path, nil, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var wrapped struct {
+		Skills []baseagent.SkillDefinition `json:"skills"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("skill search response: %w", err)
+	}
+	if wrapped.Skills == nil {
+		return []baseagent.SkillDefinition{}, nil
+	}
+	return wrapped.Skills, nil
+}
+
+func (c *DaemonClient) InstallAgentSkill(ctx context.Context, agentID, skillName, actor, requestID string) (baseagent.SkillDefinition, error) {
+	body := map[string]string{"name": strings.TrimSpace(skillName)}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/skills/install", body, actor, requestID)
+	if err != nil {
+		return baseagent.SkillDefinition{}, err
+	}
+	var installed baseagent.SkillDefinition
+	if err := json.Unmarshal(raw, &installed); err != nil {
+		return baseagent.SkillDefinition{}, fmt.Errorf("skill install response: %w", err)
+	}
+	return installed, nil
+}
+
+func (c *DaemonClient) ReinstallAgentSkill(ctx context.Context, agentID, skillName, actor, requestID string) (baseagent.SkillDefinition, error) {
+	body := map[string]string{"name": strings.TrimSpace(skillName)}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/skills/reinstall", body, actor, requestID)
+	if err != nil {
+		return baseagent.SkillDefinition{}, err
+	}
+	var reinstalled baseagent.SkillDefinition
+	if err := json.Unmarshal(raw, &reinstalled); err != nil {
+		return baseagent.SkillDefinition{}, fmt.Errorf("skill reinstall response: %w", err)
+	}
+	return reinstalled, nil
+}
+
+func (c *DaemonClient) UpdateAgentSkill(ctx context.Context, agentID, skillName, version, actor, requestID string) (baseagent.SkillDefinition, error) {
+	body := map[string]string{
+		"name":    strings.TrimSpace(skillName),
+		"version": strings.TrimSpace(version),
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/skills/update", body, actor, requestID)
+	if err != nil {
+		return baseagent.SkillDefinition{}, err
+	}
+	var updated baseagent.SkillDefinition
+	if err := json.Unmarshal(raw, &updated); err != nil {
+		return baseagent.SkillDefinition{}, fmt.Errorf("skill update response: %w", err)
+	}
+	return updated, nil
+}
+
+func (c *DaemonClient) UninstallAgentSkill(ctx context.Context, agentID, skillName, actor, requestID string) (baseagent.SkillDefinition, error) {
+	body := map[string]string{"name": strings.TrimSpace(skillName)}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/skills/uninstall", body, actor, requestID)
+	if err != nil {
+		return baseagent.SkillDefinition{}, err
+	}
+	var removed baseagent.SkillDefinition
+	if err := json.Unmarshal(raw, &removed); err != nil {
+		return baseagent.SkillDefinition{}, fmt.Errorf("skill uninstall response: %w", err)
+	}
+	return removed, nil
+}
+
+func (c *DaemonClient) SetAgentMCPServerEnabled(ctx context.Context, agentID, serverName string, enabled bool, actor, requestID string) (AgentCapabilitySummary, error) {
+	body := map[string]bool{"enabled": enabled}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/mcp/"+url.PathEscape(serverName), body, actor, requestID)
+	if err != nil {
+		return AgentCapabilitySummary{}, err
+	}
+	var summary AgentCapabilitySummary
+	if err := json.Unmarshal(raw, &summary); err != nil {
+		return AgentCapabilitySummary{}, fmt.Errorf("mcp toggle response: %w", err)
+	}
+	return summary, nil
+}
+
+func (c *DaemonClient) GetAgentMCPServerDetail(ctx context.Context, agentID, serverName, actor, requestID string) (baseagent.MCPServerCapability, error) {
+	raw, err := c.request(ctx, http.MethodGet, "/api/v1/agents/"+url.PathEscape(agentID)+"/mcp/"+url.PathEscape(serverName), nil, actor, requestID)
+	if err != nil {
+		return baseagent.MCPServerCapability{}, err
+	}
+	var detail baseagent.MCPServerCapability
+	if err := json.Unmarshal(raw, &detail); err != nil {
+		return baseagent.MCPServerCapability{}, fmt.Errorf("mcp detail response: %w", err)
+	}
+	return detail, nil
+}
+
+func (c *DaemonClient) SetAgentMCPServerAttached(ctx context.Context, agentID, serverName string, attached bool, actor, requestID string) (baseagent.MCPServerCapability, error) {
+	action := "detach"
+	if attached {
+		action = "attach"
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/mcp/"+url.PathEscape(serverName)+"/"+action, map[string]any{}, actor, requestID)
+	if err != nil {
+		return baseagent.MCPServerCapability{}, err
+	}
+	var detail baseagent.MCPServerCapability
+	if err := json.Unmarshal(raw, &detail); err != nil {
+		return baseagent.MCPServerCapability{}, fmt.Errorf("mcp attach response: %w", err)
+	}
+	return detail, nil
+}
+
+func (c *DaemonClient) UpdateAgentMCPServerConfig(ctx context.Context, agentID, serverName, config, actor, requestID string) (baseagent.MCPServerCapability, error) {
+	body := map[string]string{"config": strings.TrimSpace(config)}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/mcp/"+url.PathEscape(serverName)+"/config", body, actor, requestID)
+	if err != nil {
+		return baseagent.MCPServerCapability{}, err
+	}
+	var detail baseagent.MCPServerCapability
+	if err := json.Unmarshal(raw, &detail); err != nil {
+		return baseagent.MCPServerCapability{}, fmt.Errorf("mcp config response: %w", err)
+	}
+	return detail, nil
+}
+
+func (c *DaemonClient) GetAgentSessions(ctx context.Context, agentID string, limit int, actor, requestID string) ([]baseagent.SessionStats, error) {
+	path := "/api/v1/agents/" + url.PathEscape(agentID) + "/sessions"
+	if limit > 0 {
+		path += "?limit=" + url.QueryEscape(strconv.Itoa(limit))
+	}
+	raw, err := c.request(ctx, http.MethodGet, path, nil, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var wrapped struct {
+		Sessions []baseagent.SessionStats `json:"sessions"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("agent sessions response: %w", err)
+	}
+	if wrapped.Sessions == nil {
+		return []baseagent.SessionStats{}, nil
+	}
+	return wrapped.Sessions, nil
+}
+
+func (c *DaemonClient) GetAgentSubagentJobs(ctx context.Context, agentID string, limit int, actor, requestID string) ([]baseagent.SubagentJob, error) {
+	path := "/api/v1/agents/" + url.PathEscape(agentID) + "/subagents"
+	if limit > 0 {
+		path += "?limit=" + url.QueryEscape(strconv.Itoa(limit))
+	}
+	raw, err := c.request(ctx, http.MethodGet, path, nil, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var wrapped struct {
+		Jobs []baseagent.SubagentJob `json:"jobs"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("agent subagent jobs response: %w", err)
+	}
+	if wrapped.Jobs == nil {
+		return []baseagent.SubagentJob{}, nil
+	}
+	return wrapped.Jobs, nil
+}
+
+func (c *DaemonClient) GetAgentSubagentJob(ctx context.Context, agentID, jobID, actor, requestID string) (baseagent.SubagentJob, error) {
+	raw, err := c.request(ctx, http.MethodGet, "/api/v1/agents/"+url.PathEscape(agentID)+"/subagents/"+url.PathEscape(jobID), nil, actor, requestID)
+	if err != nil {
+		return baseagent.SubagentJob{}, err
+	}
+	var job baseagent.SubagentJob
+	if err := json.Unmarshal(raw, &job); err != nil {
+		return baseagent.SubagentJob{}, fmt.Errorf("agent subagent job response: %w", err)
+	}
+	return job, nil
 }
 
 // GetLogs returns agent logs.
@@ -338,13 +578,15 @@ func (c *DaemonClient) ChatBaseAgent(
 	chatID string,
 	requestID string,
 	message string,
+	attachments []baseagent.AttachmentRef,
 	actor string,
 ) (*BaseAgentChatResult, error) {
 	body := baseagent.ChatRequest{
-		Provider:  provider,
-		ChatID:    chatID,
-		RequestID: requestID,
-		Message:   message,
+		Provider:    provider,
+		ChatID:      chatID,
+		RequestID:   requestID,
+		Message:     message,
+		Attachments: append([]baseagent.AttachmentRef(nil), attachments...),
 	}
 	raw, err := c.request(ctx, http.MethodPost, "/api/v1/base-agent/chat", body, actor, requestID)
 	if err != nil {
@@ -363,8 +605,21 @@ func (c *DaemonClient) DecomposeBaseAgent(
 	actor string,
 	requestID string,
 ) ([]baseagent.DecomposeTask, error) {
+	return c.DecomposeBaseAgentWithProvider(ctx, goal, "", actor, requestID)
+}
+
+func (c *DaemonClient) DecomposeBaseAgentWithProvider(
+	ctx context.Context,
+	goal string,
+	provider string,
+	actor string,
+	requestID string,
+) ([]baseagent.DecomposeTask, error) {
 	body := map[string]interface{}{
 		"goal": strings.TrimSpace(goal),
+	}
+	if trimmedProvider := strings.TrimSpace(provider); trimmedProvider != "" {
+		body["provider"] = trimmedProvider
 	}
 	raw, err := c.request(ctx, http.MethodPost, "/api/v1/base-agent/decompose", body, actor, requestID)
 	if err != nil {
@@ -385,16 +640,28 @@ func (c *DaemonClient) DecomposeBaseAgent(
 func (c *DaemonClient) ChatAgent(
 	ctx context.Context,
 	agentID string,
+	provider string,
 	message string,
 	sessionID string,
+	modelAlias string,
+	model string,
 	actor string,
 	requestID string,
 ) (*AgentChatResult, error) {
 	payload := map[string]interface{}{
 		"message": message,
 	}
+	if strings.TrimSpace(provider) != "" {
+		payload["provider"] = strings.TrimSpace(provider)
+	}
 	if strings.TrimSpace(sessionID) != "" {
 		payload["sessionId"] = strings.TrimSpace(sessionID)
+	}
+	if strings.TrimSpace(modelAlias) != "" {
+		payload["modelAlias"] = strings.TrimSpace(modelAlias)
+	}
+	if strings.TrimSpace(model) != "" {
+		payload["model"] = strings.TrimSpace(model)
 	}
 	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/chat", payload, actor, requestID)
 	if err != nil {
@@ -403,6 +670,169 @@ func (c *DaemonClient) ChatAgent(
 	var result AgentChatResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, fmt.Errorf("agent chat response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *DaemonClient) SpeakAgentMedia(
+	ctx context.Context,
+	agentID string,
+	text string,
+	voice string,
+	format string,
+	actor string,
+	requestID string,
+) (*AgentChatResult, error) {
+	payload := map[string]any{
+		"text": strings.TrimSpace(text),
+	}
+	if trimmed := strings.TrimSpace(voice); trimmed != "" {
+		payload["voice"] = trimmed
+	}
+	if trimmed := strings.TrimSpace(format); trimmed != "" {
+		payload["format"] = trimmed
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/media/speak", payload, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result AgentChatResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("agent media response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *DaemonClient) ScheduleCronJob(
+	ctx context.Context,
+	job baseagent.CronJob,
+	actor string,
+	requestID string,
+) (*CronJob, error) {
+	payload := struct {
+		SessionKey string    `json:"sessionKey"`
+		AgentID    string    `json:"agentId,omitempty"`
+		Prompt     string    `json:"prompt"`
+		NextRunAt  time.Time `json:"nextRunAt,omitempty"`
+	}{
+		SessionKey: strings.TrimSpace(job.SessionKey),
+		AgentID:    strings.TrimSpace(job.AgentID),
+		Prompt:     strings.TrimSpace(job.Prompt),
+		NextRunAt:  job.NextRunAt,
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/base-agent/cron/schedule", payload, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result CronJob
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("cron schedule response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *DaemonClient) ListCronJobs(
+	ctx context.Context,
+	agentID string,
+	sessionKey string,
+	actor string,
+	requestID string,
+) ([]CronJob, error) {
+	values := url.Values{}
+	if trimmed := strings.TrimSpace(agentID); trimmed != "" {
+		values.Set("agentId", trimmed)
+	}
+	if trimmed := strings.TrimSpace(sessionKey); trimmed != "" {
+		values.Set("sessionKey", trimmed)
+	}
+	path := "/api/base-agent/cron/jobs"
+	if encoded := values.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	raw, err := c.request(ctx, http.MethodGet, path, nil, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var wrapped struct {
+		Jobs []CronJob `json:"jobs"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("cron jobs response: %w", err)
+	}
+	if wrapped.Jobs == nil {
+		wrapped.Jobs = []CronJob{}
+	}
+	return wrapped.Jobs, nil
+}
+
+func (c *DaemonClient) CancelCronJob(
+	ctx context.Context,
+	jobID string,
+	actor string,
+	requestID string,
+) (*CronJob, error) {
+	path := "/api/base-agent/cron/" + url.PathEscape(strings.TrimSpace(jobID)) + "/cancel"
+	raw, err := c.request(ctx, http.MethodPost, path, map[string]any{}, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result CronJob
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("cron cancel response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *DaemonClient) PauseCronJob(
+	ctx context.Context,
+	jobID string,
+	actor string,
+	requestID string,
+) (*CronJob, error) {
+	path := "/api/base-agent/cron/" + url.PathEscape(strings.TrimSpace(jobID)) + "/pause"
+	raw, err := c.request(ctx, http.MethodPost, path, map[string]any{}, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result CronJob
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("cron pause response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *DaemonClient) ResumeCronJob(
+	ctx context.Context,
+	jobID string,
+	actor string,
+	requestID string,
+) (*CronJob, error) {
+	path := "/api/base-agent/cron/" + url.PathEscape(strings.TrimSpace(jobID)) + "/resume"
+	raw, err := c.request(ctx, http.MethodPost, path, map[string]any{}, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result CronJob
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("cron resume response: %w", err)
+	}
+	return &result, nil
+}
+
+func (c *DaemonClient) RunCronJob(
+	ctx context.Context,
+	jobID string,
+	actor string,
+	requestID string,
+) (*CronJob, error) {
+	path := "/api/base-agent/cron/" + url.PathEscape(strings.TrimSpace(jobID)) + "/run"
+	raw, err := c.request(ctx, http.MethodPost, path, map[string]any{}, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result CronJob
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("cron run response: %w", err)
 	}
 	return &result, nil
 }

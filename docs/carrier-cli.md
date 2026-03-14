@@ -5,6 +5,80 @@ All command blocks below assume `carrier` is installed and available in `PATH`.
 
 ## Command Surface
 
+### Orchestration and execution history
+
+- `carrier orchestrate <goal...> [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--idempotency-key <key>] [--timeout <duration>] [--async] [--dry-run] [--json]`
+  - Decompose a goal with the base agent, assign task units to worker agents, and optionally execute the plan.
+  - `--dry-run` previews the execution plan without creating an execution.
+- `carrier templates [list] [--json]`
+  - List built-in execution templates and their required inputs.
+- `carrier templates show <template_id> [--json]`
+  - Show one built-in execution template with task metadata and input schema.
+- `carrier templates run <template_id> --input key=value [--input key=value]... [--json]`
+  - Launch a built-in execution template, create the execution record, and authorize it immediately.
+- `carrier orchestrate status <execution_id> [--json]`
+  - Show one orchestration execution with task results and worker lease state.
+- `carrier orchestrate cancel <execution_id> [--json]`
+  - Cancel one orchestration execution.
+- `carrier executions [list] [--limit <n>] [--json]`
+  - List orchestration executions from the remote-control store.
+- `carrier executions show <execution_id> [--json]`
+  - Alias for orchestration execution status lookup.
+- `carrier executions cancel <execution_id> [--json]`
+  - Cancel one orchestration execution.
+- `carrier executions retry <execution_id> [--json]`
+  - Create a derived execution containing only failed tasks from the source execution.
+- `carrier executions rerun <execution_id> [--json]`
+  - Create a new execution from the full original plan.
+- `carrier executions clone <execution_id> [--json]`
+  - Clone the original execution plan into a fresh `pending_authorization` execution.
+- `carrier executions artifacts <execution_id> [--json]`
+  - List execution artifact metadata.
+- `carrier executions evidence <execution_id> [--format json|zip] [--output <path>] [--open] [--json]`
+  - Export an execution evidence bundle as JSON or download a ZIP archive.
+- `carrier executions audit <execution_id> [--output <path>] [--open] [--json]`
+  - Export execution-scoped gateway audit events as JSON.
+- `carrier triggers [list] [--json]`
+  - List execution triggers.
+- `carrier triggers show <trigger_id> [--json]`
+  - Show one execution trigger.
+- `carrier triggers create --type <webhook|github|schedule> --template-id <template_id> [--name <name>] [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--webhook-secret <secret>] [--github-command <cmd>] [--github-label <label>] [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC] [--input key=value]... [--json]`
+  - Create one execution trigger.
+- `carrier triggers update <trigger_id> [--name <name>] [--template-id <template_id>] [--enable|--disable] [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--webhook-secret <secret>] [--github-command <cmd>] [--github-label <label>] [--github-repository <owner/repo>] [--cron <expr>] [--timezone UTC] [--input key=value]... [--json]`
+  - Update one execution trigger.
+- `carrier triggers delete <trigger_id> [--json]`
+  - Delete one execution trigger.
+
+### Knowledge plane
+
+- `carrier memory [list] [--subject <subject>] [--json]`
+  - List memory packages, attachments, grants, and audit state through the gateway memory facade.
+- `carrier memory search --subject <subject> --query <query> [--limit <n>] [--min-score <f>] [--json]`
+  - Search curated memory records for one subject.
+- `carrier memory attach --instance <id> --scope <scope> [--json]`
+  - Attach one memory scope to an instance before execution.
+- `carrier memory detach --instance <id> --scope <scope> [--json]`
+  - Detach one memory scope from an instance.
+- `carrier memory distill --instance <id> [--scope <scope>] [--dry-run] [--force] [--reason <text>] [--json]`
+  - Distill instance learnings back into the base knowledge plane.
+
+### Managed agent direct surface
+
+- `carrier agent run <agent_id> -m <message> [--provider <provider-id>] [--session-id <id>] [--json]`
+  - Send one prompt to a managed agent through the gateway-managed runtime surface.
+- `carrier agent shell <agent_id> [--provider <provider-id>] [--session-id <id>]`
+  - Open a local interactive shell backed by the managed agent chat surface.
+- `carrier agent launcher <agent_id> [--json]`
+  - Show launcher summary with runtime, provider, memory, and session details.
+- `carrier agent heartbeat <agent_id> [--json]`
+  - Show heartbeat age and last activity for one managed agent.
+- `carrier agent cron schedule <agent_id> -m <message> [--provider <provider-id>] [--session-id <id>] [--next-run-at <rfc3339>] [--json]`
+  - Schedule one managed-agent cron prompt through the gateway.
+- `carrier agent cron list <agent_id> [--json]`
+  - List managed-agent cron jobs with next/last run state.
+- `carrier agent cron cancel <agent_id> <job_id> [--json]`
+  - Cancel one managed-agent cron job.
+
 ### Bootstrap and runtime
 
 - `carrier`
@@ -118,31 +192,33 @@ Optional remote alert webhook watchdog:
 ```bash
 carrier
 carrier onboard
-carrier add openclaw
-carrier status openclaw
+carrier add zeroclaw
+carrier add picoclaw
+carrier orchestrate "triage this issue and summarize next actions" --dry-run
+carrier orchestrate "triage this issue and summarize next actions"
 ```
 
 WebUI variant:
 
 ```bash
 carrier onboard --webui
-carrier add openclaw --webui
+carrier add zeroclaw --webui
 ```
 
 WebUI variant with isolation preselected:
 
 ```bash
-carrier add openclaw --webui --isolation
+carrier add zeroclaw --webui --isolation
 ```
 
 ### Install local managed agents
 
 ```bash
-carrier add openclaw
+carrier add zeroclaw
 ```
 
 ```bash
-carrier add openclaw --isolation
+carrier add zeroclaw --isolation
 ```
 
 ```bash
@@ -150,7 +226,142 @@ carrier add picoclaw
 ```
 
 ```bash
-carrier add zeroclaw
+carrier add openclaw
+```
+
+### Preview and run orchestration
+
+```bash
+carrier orchestrate "triage this issue and summarize next actions" --dry-run
+```
+
+```bash
+carrier orchestrate "triage this issue and summarize next actions"
+```
+
+### Browse and launch templates
+
+```bash
+carrier templates
+```
+
+```bash
+carrier templates show incident-diagnosis
+```
+
+```bash
+carrier templates run incident-diagnosis \
+  --input service=checkout \
+  --input environment=prod \
+  --input incidentSummary="Checkout API returns 502s after deploy"
+```
+
+```bash
+carrier executions
+```
+
+```bash
+carrier executions show <execution_id>
+```
+
+```bash
+carrier executions artifacts <execution_id>
+```
+
+```bash
+carrier executions evidence <execution_id>
+```
+
+```bash
+carrier executions evidence <execution_id> --format zip --output evidence.zip
+```
+
+```bash
+carrier executions audit <execution_id> --output audit.json
+```
+
+```bash
+carrier executions evidence <execution_id> --format zip --open
+```
+
+```bash
+carrier executions audit <execution_id> --open
+```
+
+```bash
+carrier executions retry <execution_id>
+```
+
+```bash
+carrier executions rerun <execution_id>
+```
+
+```bash
+carrier executions clone <execution_id>
+```
+
+### Manage triggers
+
+```bash
+carrier triggers
+```
+
+```bash
+carrier triggers show <trigger_id>
+```
+
+```bash
+carrier triggers create --type webhook --template-id incident-diagnosis --name incident-webhook --webhook-secret secret
+```
+
+```bash
+carrier triggers update <trigger_id> --enable
+```
+
+```bash
+carrier triggers delete <trigger_id>
+```
+
+### Inspect memory and distill learnings
+
+```bash
+carrier memory list --subject agent-a
+```
+
+```bash
+carrier memory search --subject agent-a --query "fusion"
+```
+
+```bash
+carrier memory attach --instance picoclaw-main --scope shared:profile
+```
+
+```bash
+carrier memory distill --instance picoclaw-main --dry-run --reason "promote learnings"
+```
+
+### Managed PicoClaw direct run
+
+```bash
+carrier agent run picoclaw -m "Summarize the latest deployment risks" --provider openrouter
+```
+
+```bash
+carrier agent shell picoclaw --provider openrouter
+```
+
+```bash
+carrier agent launcher picoclaw
+```
+
+```bash
+carrier agent heartbeat picoclaw
+```
+
+```bash
+carrier agent cron schedule picoclaw -m "Check launcher readiness" --provider openrouter --next-run-at 2026-03-13T00:00:00Z
+carrier agent cron list picoclaw
+carrier agent cron cancel picoclaw cron-1
 ```
 
 ### Install OpenClaw on VPS
@@ -239,6 +450,34 @@ carrier uninstall <id|name>
 ```
 
 ```bash
+carrier orchestrate "<goal>"
+```
+
+```bash
+carrier orchestrate "<goal>" --dry-run
+```
+
+```bash
+carrier templates
+```
+
+```bash
+carrier templates show <template_id>
+```
+
+```bash
+carrier templates run <template_id> --input key=value
+```
+
+```bash
+carrier executions
+```
+
+```bash
+carrier executions show <execution_id>
+```
+
+```bash
 carrier stop
 ```
 
@@ -250,6 +489,7 @@ carrier reset
 
 - Gateway default: `http://127.0.0.1:8787`
 - Daemon default: `http://127.0.0.1:9090`
+- `carrier orchestrate` requires the target local worker agents to already be installed (`picoclaw`, `zeroclaw`).
 - Chat `/onboard` is intentionally blocked for credential safety.
 - Chat `/install` is policy-gated; default policy requires explicit host binding (`/install <agent_id> <host_id>`).
 - For newly discovered remote instances, config pull can require explicit confirmation.

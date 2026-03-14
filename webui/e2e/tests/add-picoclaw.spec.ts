@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { TEST_TOKEN } from './helpers';
+import { loginWithToken, TEST_TOKEN } from './helpers';
 
 test.describe('Add PicoClaw (WebUI)', () => {
   test('walks add flow end-to-end and posts /api/v1/add with reused credential', async ({ page }) => {
@@ -25,6 +25,26 @@ test.describe('Add PicoClaw (WebUI)', () => {
               chatId: '418258935',
               createdAt: '2026-02-21T00:00:00Z',
               updatedAt: '2026-02-21T00:00:00Z',
+            },
+          ],
+        }),
+      }),
+    );
+
+    await page.route('**/api/v1/channels', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          channels: [
+            {
+              id: 'telegram',
+              displayName: 'Telegram',
+              supportsProviderSetup: true,
+              supportsPairing: true,
+              requiresBotToken: true,
+              requiresWebhookSecret: false,
+              configured: true,
             },
           ],
         }),
@@ -93,7 +113,7 @@ test.describe('Add PicoClaw (WebUI)', () => {
       localStorage.setItem('carrier_token', token);
     }, TEST_TOKEN);
 
-    await page.goto('/#/add/picoclaw');
+    await loginWithToken(page, '/add/picoclaw');
 
     await expect(page.locator('#view-setup')).toBeVisible();
     await expect(page.locator('#setup-title')).toContainText('Step 1');
@@ -103,14 +123,14 @@ test.describe('Add PicoClaw (WebUI)', () => {
     await page.fill('#provider-token', 'tg-test-token');
     await page.click('#setup-btn');
 
-    await expect(page).toHaveURL(/#\/provider$/);
+    await expect(page).toHaveURL(/\/provider$/);
     await expect(page.locator('#view-provider')).toBeVisible();
     await expect(page.locator('#provider-agent-name')).toContainText('Adding: picoclaw');
     await expect(page.locator('#provider-default-summary')).toContainText('Using Carrier default');
     await expect(page.locator('#provider-next')).toBeEnabled();
 
     await page.click('#provider-next');
-    await expect(page).toHaveURL(/#\/install$/);
+    await expect(page).toHaveURL(/\/install$/);
     await expect(page.locator('#view-install')).toBeVisible();
     await expect(page.locator('#install-summary')).toContainText('Agent: picoclaw');
     await expect(page.locator('#install-summary')).toContainText('Channel: telegram');
@@ -118,7 +138,7 @@ test.describe('Add PicoClaw (WebUI)', () => {
 
     await page.click('#install-confirm');
 
-    await expect(page).toHaveURL(/#\/complete$/);
+    await expect(page).toHaveURL(/\/complete$/);
     await expect(page.locator('#view-complete')).toBeVisible();
     await expect(page.locator('#complete-title')).toContainText('Setup Complete');
     await expect(page.locator('#complete-detail')).toContainText('Instance: picoclaw-abcdef01');

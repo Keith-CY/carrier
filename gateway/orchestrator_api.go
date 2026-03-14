@@ -3,10 +3,13 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,7 +35,15 @@ var (
 	orchestratorListLeasesByExecution = listOrchestratorWorkerLeasesByExecution
 	orchestratorInstallAgent          = remoteInstallAgent
 	orchestratorLocalDaemonClientFn   = newOrchestratorLocalDaemonClientFromEnv
+	orchestratorLaunchExecutionFn     = startOrchestratorExecutionAsync
 )
+
+var orchestratorExecutionCancelState = struct {
+	mu      sync.Mutex
+	cancels map[string]context.CancelFunc
+}{
+	cancels: map[string]context.CancelFunc{},
+}
 
 func newOrchestratorLocalDaemonClientFromEnv() *DaemonClient {
 	baseURL := strings.TrimSpace(os.Getenv("CARRIER_DAEMON_BASE_URL"))
@@ -61,6 +72,54 @@ type orchestratorWorkerPool struct {
 	ch  chan OrchestratorWorkerLease
 }
 
+func isOrchestratorExecutionTerminal(status OrchestratorExecutionStatus) bool {
+	switch status {
+	case OrchestratorExecutionStatusCompleted,
+		OrchestratorExecutionStatusPartialCompleted,
+		OrchestratorExecutionStatusFailed,
+		OrchestratorExecutionStatusRetryableFailed,
+		OrchestratorExecutionStatusCancelled,
+		OrchestratorExecutionStatusDeclined:
+		return true
+	default:
+		return false
+	}
+}
+
+func registerOrchestratorExecutionCancel(executionID string, cancel context.CancelFunc) {
+	id := strings.TrimSpace(executionID)
+	if id == "" || cancel == nil {
+		return
+	}
+	orchestratorExecutionCancelState.mu.Lock()
+	defer orchestratorExecutionCancelState.mu.Unlock()
+	orchestratorExecutionCancelState.cancels[id] = cancel
+}
+
+func unregisterOrchestratorExecutionCancel(executionID string) {
+	id := strings.TrimSpace(executionID)
+	if id == "" {
+		return
+	}
+	orchestratorExecutionCancelState.mu.Lock()
+	defer orchestratorExecutionCancelState.mu.Unlock()
+	delete(orchestratorExecutionCancelState.cancels, id)
+}
+
+func cancelOrchestratorExecutionRun(executionID string) bool {
+	id := strings.TrimSpace(executionID)
+	if id == "" {
+		return false
+	}
+	orchestratorExecutionCancelState.mu.Lock()
+	cancel, ok := orchestratorExecutionCancelState.cancels[id]
+	orchestratorExecutionCancelState.mu.Unlock()
+	if ok && cancel != nil {
+		cancel()
+	}
+	return ok
+}
+
 func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, requestID string, cfg *GatewayConfig) {
 	flags := effectiveGatewayFeatureFlags(cfg)
 	if !flags.RemoteControlPlaneEnabled {
@@ -71,6 +130,9 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 	if trimmed == "" {
 		switch r.Method {
 		case http.MethodGet:
+			if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_EXECUTION_VIEW", "role cannot view orchestrator executions"); !ok {
+				return
+			}
 			executions, err := listOrchestratorExecutions()
 			if err != nil {
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to list orchestrator executions", "list orchestrator executions", err)
@@ -83,6 +145,9 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			})
 			return
 		case http.MethodPost:
+			if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot launch orchestrator executions"); !ok {
+				return
+			}
 			var req OrchestratorExecution
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
@@ -117,12 +182,61 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			normalized.CreatedAt = now
 			normalized.UpdatedAt = now
 			normalized.Error = ""
+			if effectiveGatewayFeatureFlags(cfg).ProviderBindingEnabled {
+				resolutions, resolveErr := resolveProviderGovernanceForWorkers(normalized.RequiredWorkers)
+				if resolveErr != nil {
+					writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to resolve execution governance", "resolve execution provider governance", resolveErr)
+					return
+				}
+				normalized.Governance = OrchestratorExecutionGovernance{
+					ProviderResolutions: resolutions,
+				}
+			}
+			policyRules, policyErr := listOrchestratorPolicies()
+			if policyErr != nil {
+				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to evaluate execution policy", "list orchestrator policies", policyErr)
+				return
+			}
+			remoteHosts, remoteHostsErr := listRemoteHosts()
+			if remoteHostsErr != nil {
+				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load remote hosts for policy evaluation", "list remote hosts", remoteHostsErr)
+				return
+			}
+			normalized = applyOrchestratorExecutionPolicy(normalized, policyRules, remoteHosts)
+			if normalized.Policy.Decision == orchestratorPolicyDecisionDeny {
+				emitRemoteAuditEvent(requestID, "orchestrator_execution_policy_deny", normalized.ID, "blocked", map[string]interface{}{
+					"goal":              normalized.Goal,
+					"requestedProvider": normalized.RequestedProvider,
+					"policyReason":      normalized.Policy.Reason,
+					"matchedRuleId":     normalized.Policy.MatchedRuleID,
+					"matchedRuleName":   normalized.Policy.MatchedRuleName,
+				})
+				writeJSON(w, http.StatusForbidden, map[string]interface{}{
+					"requestId": requestID,
+					"result":    "error",
+					"error": map[string]interface{}{
+						"code":    "E_POLICY_DENY",
+						"message": firstNonEmptyPolicyValue(normalized.Policy.Reason, "execution denied by policy"),
+					},
+					"policy": normalized.Policy,
+				})
+				return
+			}
 
 			saved, saveErr := upsertOrchestratorExecution(normalized)
 			if saveErr != nil {
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to save orchestrator execution", "upsert orchestrator execution", saveErr)
 				return
 			}
+			emitRemoteAuditEvent(requestID, "orchestrator_execution_create", saved.ID, "success", map[string]interface{}{
+				"goal":                    saved.Goal,
+				"requestedProvider":       saved.RequestedProvider,
+				"workerCount":             len(saved.RequiredWorkers),
+				"resolutionCount":         len(saved.Governance.ProviderResolutions),
+				"policyDecision":          saved.Policy.Decision,
+				"toolMode":                saved.Policy.ToolPolicy.Mode,
+				"effectiveMaxConcurrency": saved.Policy.EffectiveMaxConcurrency,
+			})
 			writeJSON(w, http.StatusCreated, map[string]interface{}{
 				"requestId": requestID,
 				"result":    "ok",
@@ -156,6 +270,9 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
 		}
+		if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_EXECUTION_VIEW", "role cannot view orchestrator executions"); !ok {
+			return
+		}
 		leases, leaseErr := orchestratorListLeasesByExecution(executionID)
 		if leaseErr != nil {
 			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to load orchestrator worker leases", "list orchestrator worker leases by execution", leaseErr)
@@ -171,8 +288,25 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 	}
 
 	action := strings.ToLower(strings.TrimSpace(parts[1]))
+	if action == "artifacts" {
+		if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_EXECUTION_VIEW", "role cannot view orchestrator execution artifacts"); !ok {
+			return
+		}
+		handleOrchestratorExecutionArtifacts(w, r, requestID, cfg, execution, parts)
+		return
+	}
+	if action == "evidence" {
+		if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_EXECUTION_VIEW", "role cannot export orchestrator execution evidence"); !ok {
+			return
+		}
+		handleOrchestratorExecutionEvidence(w, r, requestID, cfg, execution, parts)
+		return
+	}
 	switch action {
 	case "authorize":
+		if _, ok := requireGatewayPermission(w, r, cfg, canApproveExecutions, "E_RBAC_EXECUTION_APPROVE", "role cannot approve orchestrator executions"); !ok {
+			return
+		}
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
 			return
@@ -181,6 +315,7 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			Approved       bool   `json:"approved"`
 			Actor          string `json:"actor"`
 			MaxConcurrency int    `json:"maxConcurrency,omitempty"`
+			PolicyApproved bool   `json:"policyApproved,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
@@ -205,6 +340,10 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to update orchestrator execution", "upsert orchestrator execution declined", saveErr)
 				return
 			}
+			emitRemoteAuditEvent(requestID, "orchestrator_execution_authorize", updated.ID, "declined", map[string]interface{}{
+				"actor": actor,
+			})
+			publishOrchestratorExecutionEvent(updated)
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"requestId": requestID,
 				"result":    "ok",
@@ -222,9 +361,31 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 		if execution.MaxConcurrency > 64 {
 			execution.MaxConcurrency = 64
 		}
-		if execution.Status == OrchestratorExecutionStatusCompleted ||
-			execution.Status == OrchestratorExecutionStatusFailed ||
-			execution.Status == OrchestratorExecutionStatusDeclined {
+		if execution.Policy.Decision == orchestratorPolicyDecisionDeny {
+			writeJSON(w, http.StatusForbidden, map[string]interface{}{
+				"requestId": requestID,
+				"result":    "error",
+				"execution": execution,
+				"error": map[string]interface{}{
+					"code":    "E_POLICY_DENY",
+					"message": firstNonEmptyPolicyValue(execution.Policy.Reason, "execution denied by policy"),
+				},
+			})
+			return
+		}
+		if execution.Policy.Decision == orchestratorPolicyDecisionAsk && !req.PolicyApproved {
+			writeJSON(w, http.StatusConflict, map[string]interface{}{
+				"requestId": requestID,
+				"result":    "error",
+				"execution": execution,
+				"error": map[string]interface{}{
+					"code":    "E_POLICY_APPROVAL_REQUIRED",
+					"message": firstNonEmptyPolicyValue(execution.Policy.Reason, "policy approval required before execution can run"),
+				},
+			})
+			return
+		}
+		if isOrchestratorExecutionTerminal(execution.Status) {
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"requestId": requestID,
 				"result":    "ok",
@@ -237,6 +398,10 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			ApprovedBy:             actor,
 			ApprovedAt:             nowTimestamp(),
 		}
+		if execution.Policy.Decision == orchestratorPolicyDecisionAsk && req.PolicyApproved {
+			execution.Policy.ApprovedBy = actor
+			execution.Policy.ApprovedAt = nowTimestamp()
+		}
 		if execution.StartedAt == "" {
 			execution.StartedAt = nowTimestamp()
 		}
@@ -248,11 +413,118 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to update orchestrator execution", "upsert orchestrator execution authorize", saveErr)
 			return
 		}
-		startOrchestratorExecutionAsync(updated.ID)
+		emitRemoteAuditEvent(requestID, "orchestrator_execution_authorize", updated.ID, "success", map[string]interface{}{
+			"actor":                   actor,
+			"maxConcurrency":          updated.MaxConcurrency,
+			"policyDecision":          updated.Policy.Decision,
+			"effectiveMaxConcurrency": updated.Policy.EffectiveMaxConcurrency,
+			"policyApproved":          req.PolicyApproved,
+		})
+		orchestratorLaunchExecutionFn(updated.ID)
 		writeJSON(w, http.StatusAccepted, map[string]interface{}{
 			"requestId": requestID,
 			"result":    "ok",
 			"execution": updated,
+		})
+		return
+	case "cancel":
+		if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot cancel orchestrator executions"); !ok {
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		var req struct {
+			Actor string `json:"actor"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
+			return
+		}
+		if isOrchestratorExecutionTerminal(execution.Status) {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"requestId": requestID,
+				"result":    "ok",
+				"execution": execution,
+			})
+			return
+		}
+		updated, cancelErr := cancelOrchestratorExecution(execution.ID, req.Actor)
+		if cancelErr != nil {
+			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to cancel orchestrator execution", "cancel orchestrator execution", cancelErr)
+			return
+		}
+		emitRemoteAuditEvent(requestID, "orchestrator_execution_cancel", updated.ID, "success", map[string]interface{}{
+			"actor": strings.TrimSpace(req.Actor),
+		})
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{
+			"requestId": requestID,
+			"result":    "ok",
+			"execution": updated,
+		})
+		return
+	case "retry", "rerun", "clone":
+		if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot relaunch orchestrator executions"); !ok {
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		var (
+			derived  OrchestratorExecution
+			buildErr error
+		)
+		switch action {
+		case "retry":
+			derived, buildErr = buildRetryExecution(execution)
+		case "rerun":
+			derived = buildRerunExecution(execution)
+		default:
+			derived = buildCloneExecution(execution)
+		}
+		if buildErr != nil {
+			writeJSON(w, http.StatusConflict, map[string]interface{}{
+				"requestId": requestID,
+				"result":    "error",
+				"error": map[string]interface{}{
+					"code":    "E_ORCHESTRATOR_RETRY_NOTHING",
+					"message": buildErr.Error(),
+				},
+			})
+			return
+		}
+		normalized, err := normalizeOrchestratorExecution(derived)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
+			return
+		}
+		now := nowTimestamp()
+		normalized.ID = uuid.NewString()
+		normalized.Status = OrchestratorExecutionStatusPendingAuthorization
+		normalized.Authorization = OrchestratorAuthorization{}
+		normalized.Results = []OrchestratorTaskResult{}
+		normalized.Outcome = OrchestratorExecutionOutcome{}
+		normalized.CreatedAt = now
+		normalized.StartedAt = ""
+		normalized.CompletedAt = ""
+		normalized.UpdatedAt = now
+		normalized.Error = ""
+		saved, saveErr := upsertOrchestratorExecution(normalized)
+		if saveErr != nil {
+			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to save derived orchestrator execution", "upsert derived orchestrator execution", saveErr)
+			return
+		}
+		emitRemoteAuditEvent(requestID, "orchestrator_execution_"+action, saved.ID, "success", map[string]interface{}{
+			"sourceExecutionId": execution.ID,
+			"launchReason":      saved.LaunchReason,
+			"taskCount":         len(saved.TaskUnits),
+		})
+		writeJSON(w, http.StatusCreated, map[string]interface{}{
+			"requestId": requestID,
+			"result":    "ok",
+			"execution": saved,
 		})
 		return
 	default:
@@ -269,6 +541,9 @@ func handleOrchestratorWorkersReclaim(w http.ResponseWriter, r *http.Request, re
 	}
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+		return
+	}
+	if _, ok := requireGatewayPermission(w, r, cfg, canManageHosts, "E_RBAC_HOST_MANAGE", "role cannot reclaim orchestrator workers"); !ok {
 		return
 	}
 	var req struct {
@@ -318,6 +593,134 @@ func startOrchestratorExecutionAsync(executionID string) {
 	}()
 }
 
+func cancelOrchestratorExecution(executionID string, actor string) (OrchestratorExecution, error) {
+	execution, ok, err := getOrchestratorExecution(executionID)
+	if err != nil {
+		return OrchestratorExecution{}, err
+	}
+	if !ok {
+		return OrchestratorExecution{}, fmt.Errorf("orchestrator execution %s not found", strings.TrimSpace(executionID))
+	}
+	if isOrchestratorExecutionTerminal(execution.Status) {
+		return execution, nil
+	}
+
+	cancelActor := strings.TrimSpace(actor)
+	if cancelActor == "" {
+		cancelActor = "operator"
+	}
+	cancelOrchestratorExecutionRun(execution.ID)
+
+	execution.Status = OrchestratorExecutionStatusCancelled
+	if execution.StartedAt == "" {
+		execution.StartedAt = nowTimestamp()
+	}
+	if execution.CompletedAt == "" {
+		execution.CompletedAt = nowTimestamp()
+	}
+	execution.UpdatedAt = nowTimestamp()
+	execution.Error = "execution cancelled by " + cancelActor
+	updated, err := upsertOrchestratorExecution(execution)
+	if err != nil {
+		return OrchestratorExecution{}, err
+	}
+	publishOrchestratorExecutionEvent(updated)
+	if _, reclaimErr := reclaimExecutionLeases(context.Background(), updated.ID, true); reclaimErr != nil {
+		logOrchestratorPersistError("reclaim execution leases on cancel", reclaimErr)
+	}
+	return updated, nil
+}
+
+func buildRetryExecution(source OrchestratorExecution) (OrchestratorExecution, error) {
+	failedTaskIDs := map[string]struct{}{}
+	for _, result := range source.Results {
+		if result.Status == OrchestratorTaskStatusFailed {
+			failedTaskIDs[strings.TrimSpace(result.TaskID)] = struct{}{}
+		}
+	}
+	if len(failedTaskIDs) == 0 {
+		return OrchestratorExecution{}, fmt.Errorf("execution has no failed tasks to retry")
+	}
+	tasks := make([]OrchestratorTaskUnit, 0, len(source.TaskUnits))
+	for _, task := range source.TaskUnits {
+		if _, ok := failedTaskIDs[strings.TrimSpace(task.ID)]; ok {
+			tasks = append(tasks, task)
+		}
+	}
+	if len(tasks) == 0 {
+		return OrchestratorExecution{}, fmt.Errorf("execution has no failed task units to retry")
+	}
+	derived := buildDerivedExecution(source, "retry_failed_tasks")
+	derived.TaskUnits = tasks
+	derived.RequiredWorkers = selectRequiredWorkersForTasks(source.RequiredWorkers, tasks)
+	return derived, nil
+}
+
+func buildRerunExecution(source OrchestratorExecution) OrchestratorExecution {
+	return buildDerivedExecution(source, "rerun_execution")
+}
+
+func buildCloneExecution(source OrchestratorExecution) OrchestratorExecution {
+	return buildDerivedExecution(source, "clone_execution")
+}
+
+func buildDerivedExecution(source OrchestratorExecution, launchReason string) OrchestratorExecution {
+	derived := source
+	derived.ID = ""
+	derived.IdempotencyKey = ""
+	derived.ParentExecutionID = strings.TrimSpace(source.ID)
+	derived.SourceExecutionID = sourceExecutionID(source)
+	derived.LaunchReason = strings.TrimSpace(launchReason)
+	derived.Authorization = OrchestratorAuthorization{}
+	derived.Policy = resetDerivedExecutionPolicyApproval(source.Policy)
+	derived.Results = []OrchestratorTaskResult{}
+	derived.Outcome = OrchestratorExecutionOutcome{}
+	derived.Error = ""
+	derived.Status = OrchestratorExecutionStatusPendingAuthorization
+	derived.CreatedAt = ""
+	derived.StartedAt = ""
+	derived.CompletedAt = ""
+	derived.UpdatedAt = ""
+	derived.RequiredWorkers = append([]OrchestratorRequiredWorker(nil), source.RequiredWorkers...)
+	derived.TaskUnits = append([]OrchestratorTaskUnit(nil), source.TaskUnits...)
+	return derived
+}
+
+func sourceExecutionID(source OrchestratorExecution) string {
+	if existing := strings.TrimSpace(source.SourceExecutionID); existing != "" {
+		return existing
+	}
+	return strings.TrimSpace(source.ID)
+}
+
+func resetDerivedExecutionPolicyApproval(policy OrchestratorExecutionPolicySnapshot) OrchestratorExecutionPolicySnapshot {
+	out := policy
+	out.ApprovedBy = ""
+	out.ApprovedAt = ""
+	return out
+}
+
+func selectRequiredWorkersForTasks(workers []OrchestratorRequiredWorker, tasks []OrchestratorTaskUnit) []OrchestratorRequiredWorker {
+	targets := make(map[string]struct{}, len(tasks))
+	for _, task := range tasks {
+		targets[orchestratorTargetKey(task.HostID, task.HostLabels, task.AgentID)] = struct{}{}
+	}
+	selected := make([]OrchestratorRequiredWorker, 0, len(workers))
+	for _, worker := range workers {
+		if _, ok := targets[orchestratorTargetKey(worker.HostID, worker.HostLabels, worker.AgentID)]; ok {
+			selected = append(selected, worker)
+		}
+	}
+	if len(selected) == 0 {
+		return append([]OrchestratorRequiredWorker(nil), workers...)
+	}
+	return selected
+}
+
+func orchestratorTargetKey(hostID string, hostLabels []string, agentID string) string {
+	return strings.ToLower(strings.TrimSpace(hostID) + "|" + strings.Join(normalizeStringSelectorList(hostLabels, true), ",") + "|" + strings.TrimSpace(agentID))
+}
+
 func runOrchestratorExecution(executionID string) {
 	execution, ok, err := getOrchestratorExecution(executionID)
 	if err != nil || !ok {
@@ -326,9 +729,14 @@ func runOrchestratorExecution(executionID string) {
 	if !execution.Authorization.InfrastructureApproved {
 		return
 	}
+	if isOrchestratorExecutionTerminal(execution.Status) {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	registerOrchestratorExecutionCancel(execution.ID, cancel)
 	defer cancel()
+	defer unregisterOrchestratorExecutionCancel(execution.ID)
 
 	leases, provisionErr := provisionOrchestratorWorkers(ctx, execution)
 	if provisionErr != nil {
@@ -356,6 +764,17 @@ func runOrchestratorExecution(executionID string) {
 	if _, err := reclaimExecutionLeases(context.Background(), updated.ID, true); err != nil {
 		logOrchestratorPersistError("reclaim execution leases on success", err)
 	}
+	latest, found, latestErr := getOrchestratorExecution(updated.ID)
+	if latestErr == nil && found && latest.Status == OrchestratorExecutionStatusCancelled {
+		if len(results) > 0 {
+			latest.Results = results
+			latest.UpdatedAt = nowTimestamp()
+			if _, err := upsertOrchestratorExecution(latest); err != nil {
+				logOrchestratorPersistError("upsert orchestrator execution cancelled results", err)
+			}
+		}
+		return
+	}
 	updated.Results = results
 	updated.Status = OrchestratorExecutionStatusCompleted
 	updated.CompletedAt = nowTimestamp()
@@ -364,9 +783,32 @@ func runOrchestratorExecution(executionID string) {
 	if _, err := upsertOrchestratorExecution(updated); err != nil {
 		logOrchestratorPersistError("upsert orchestrator execution completed", err)
 	}
+	publishOrchestratorExecutionEvent(updated)
 }
 
 func markOrchestratorExecutionFailed(execution OrchestratorExecution, runErr error, results []OrchestratorTaskResult) {
+	latest, found, err := getOrchestratorExecution(execution.ID)
+	if err == nil && found {
+		execution = latest
+	}
+	if results != nil {
+		execution.Results = results
+	}
+	if execution.Status == OrchestratorExecutionStatusCancelled || errors.Is(runErr, context.Canceled) {
+		execution.Status = OrchestratorExecutionStatusCancelled
+		if execution.Error == "" {
+			execution.Error = "execution cancelled"
+		}
+		if execution.CompletedAt == "" {
+			execution.CompletedAt = nowTimestamp()
+		}
+		execution.UpdatedAt = nowTimestamp()
+		if _, err := upsertOrchestratorExecution(execution); err != nil {
+			logOrchestratorPersistError("upsert orchestrator execution cancelled", err)
+		}
+		publishOrchestratorExecutionEvent(execution)
+		return
+	}
 	execution.Status = OrchestratorExecutionStatusFailed
 	execution.Error = strings.TrimSpace(runErr.Error())
 	execution.UpdatedAt = nowTimestamp()
@@ -377,6 +819,7 @@ func markOrchestratorExecutionFailed(execution OrchestratorExecution, runErr err
 	if _, err := upsertOrchestratorExecution(execution); err != nil {
 		logOrchestratorPersistError("upsert orchestrator execution failed", err)
 	}
+	publishOrchestratorExecutionEvent(execution)
 }
 
 func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExecution) ([]OrchestratorWorkerLease, error) {
@@ -384,32 +827,44 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 	installedByRun := map[string]bool{}
 
 	for _, req := range execution.RequiredWorkers {
-		if strings.EqualFold(strings.TrimSpace(req.HostID), orchestratorLocalHostID) {
-			localLeases, localErr := provisionOrchestratorLocalWorkers(ctx, execution, req)
+		resolvedReq := req
+		resolvedHostID := strings.TrimSpace(req.HostID)
+		if resolvedHostID == "" && len(req.HostLabels) > 0 {
+			host, resolveErr := selectOrchestratorRemoteHostByLabels(req.HostLabels)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			resolvedHostID = host.ID
+			resolvedReq.HostID = host.ID
+		}
+		if strings.EqualFold(resolvedHostID, orchestratorLocalHostID) {
+			localLeases, localErr := provisionOrchestratorLocalWorkers(ctx, execution, resolvedReq)
 			if localErr != nil {
 				return nil, localErr
 			}
 			leases = append(leases, localLeases...)
 			continue
 		}
-		host, found, err := getRemoteHost(req.HostID)
+		host, found, err := getRemoteHost(resolvedHostID)
 		if err != nil {
 			return nil, err
 		}
 		if !found {
-			return nil, fmt.Errorf("remote host %s not found", req.HostID)
+			return nil, fmt.Errorf("remote host %s not found", resolvedHostID)
 		}
-		key := strings.ToLower(strings.TrimSpace(req.HostID) + ":" + strings.TrimSpace(req.AgentID))
-		for i := 0; i < req.Count; i++ {
+		key := strings.ToLower(strings.TrimSpace(resolvedHostID) + ":" + strings.TrimSpace(resolvedReq.AgentID))
+		for i := 0; i < resolvedReq.Count; i++ {
 			lease := OrchestratorWorkerLease{
-				ID:          uuid.NewString(),
-				ExecutionID: execution.ID,
-				HostID:      req.HostID,
-				AgentID:     req.AgentID,
-				State:       OrchestratorWorkerStateProvisioning,
-				CreatedAt:   nowTimestamp(),
-				UpdatedAt:   nowTimestamp(),
-				HeartbeatAt: nowTimestamp(),
+				ID:              uuid.NewString(),
+				ExecutionID:     execution.ID,
+				HostID:          resolvedHostID,
+				AgentID:         resolvedReq.AgentID,
+				State:           OrchestratorWorkerStateProvisioning,
+				LeaseState:      string(OrchestratorWorkerStateProvisioning),
+				CreatedAt:       nowTimestamp(),
+				UpdatedAt:       nowTimestamp(),
+				HeartbeatAt:     nowTimestamp(),
+				LastHeartbeatAt: nowTimestamp(),
 				LeaseExpireAt: time.Now().UTC().Add(defaultOrchestratorWorkerIdleTTL).
 					Format(time.RFC3339Nano),
 			}
@@ -417,9 +872,10 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 				return nil, saveErr
 			}
 
-			exists, existsErr := remoteAgentConfigExists(ctx, host, req.AgentID)
+			exists, existsErr := remoteAgentConfigExists(ctx, host, resolvedReq.AgentID)
 			if existsErr != nil {
 				lease.State = OrchestratorWorkerStateError
+				lease.LeaseState = string(OrchestratorWorkerStateError)
 				lease.LastError = existsErr.Error()
 				lease.UpdatedAt = nowTimestamp()
 				if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
@@ -430,9 +886,10 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 
 			ephemeral := !exists || installedByRun[key]
 			if !exists && !installedByRun[key] {
-				installResult, installErr := orchestratorInstallAgent(ctx, host, req.HostID, req.AgentID, false)
+				installResult, installErr := orchestratorInstallAgent(ctx, host, resolvedHostID, resolvedReq.AgentID, false)
 				if installErr != nil {
 					lease.State = OrchestratorWorkerStateError
+					lease.LeaseState = string(OrchestratorWorkerStateError)
 					lease.LastError = installErr.Error()
 					lease.UpdatedAt = nowTimestamp()
 					if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
@@ -441,7 +898,7 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 					return nil, installErr
 				}
 				if installResult == nil || !installResult.Installed {
-					return nil, fmt.Errorf("worker install did not complete for %s:%s", req.HostID, req.AgentID)
+					return nil, fmt.Errorf("worker install did not complete for %s:%s", resolvedHostID, resolvedReq.AgentID)
 				}
 				installedByRun[key] = true
 				ephemeral = true
@@ -450,8 +907,12 @@ func provisionOrchestratorWorkers(ctx context.Context, execution OrchestratorExe
 			lease.Ephemeral = ephemeral
 			lease.InstalledByRun = installedByRun[key]
 			lease.State = OrchestratorWorkerStateReady
+			lease.LeaseState = string(OrchestratorWorkerStateReady)
 			lease.LastError = ""
 			lease.HeartbeatAt = nowTimestamp()
+			lease.LastHeartbeatAt = lease.HeartbeatAt
+			lease.Stale = false
+			lease.StaleReason = ""
 			lease.UpdatedAt = nowTimestamp()
 			savedLease, saveErr := upsertOrchestratorWorkerLease(lease)
 			if saveErr != nil {
@@ -483,16 +944,18 @@ func provisionOrchestratorLocalWorkers(ctx context.Context, execution Orchestrat
 	leases := make([]OrchestratorWorkerLease, 0, req.Count)
 	for i := 0; i < req.Count; i++ {
 		lease := OrchestratorWorkerLease{
-			ID:             uuid.NewString(),
-			ExecutionID:    execution.ID,
-			HostID:         orchestratorLocalHostID,
-			AgentID:        agentID,
-			State:          OrchestratorWorkerStateReady,
-			Ephemeral:      false,
-			InstalledByRun: false,
-			CreatedAt:      nowTimestamp(),
-			UpdatedAt:      nowTimestamp(),
-			HeartbeatAt:    nowTimestamp(),
+			ID:              uuid.NewString(),
+			ExecutionID:     execution.ID,
+			HostID:          orchestratorLocalHostID,
+			AgentID:         agentID,
+			State:           OrchestratorWorkerStateReady,
+			LeaseState:      string(OrchestratorWorkerStateReady),
+			Ephemeral:       false,
+			InstalledByRun:  false,
+			CreatedAt:       nowTimestamp(),
+			UpdatedAt:       nowTimestamp(),
+			HeartbeatAt:     nowTimestamp(),
+			LastHeartbeatAt: nowTimestamp(),
 			LeaseExpireAt: time.Now().UTC().Add(defaultOrchestratorWorkerIdleTTL).
 				Format(time.RFC3339Nano),
 		}
@@ -531,7 +994,7 @@ func ensureOrchestratorLocalAgentReady(ctx context.Context, daemon *DaemonClient
 	if strings.EqualFold(strings.TrimSpace(matched.Runtime), "running") {
 		return nil
 	}
-	if err := daemon.StartAgent(ctx, agentID, actor, requestID); err != nil {
+	if err := daemon.StartAgentWithOptions(ctx, agentID, StartAgentOptions{Isolation: matched.Isolated}, actor, requestID); err != nil {
 		return fmt.Errorf("start local worker agent %s failed: %w", agentID, err)
 	}
 	statuses, err := daemon.GetStatus(ctx, agentID, actor, requestID)
@@ -653,7 +1116,11 @@ func runTaskWithRetries(
 		}
 
 		lease.State = OrchestratorWorkerStateBusy
+		lease.LeaseState = string(OrchestratorWorkerStateBusy)
 		lease.HeartbeatAt = nowTimestamp()
+		lease.LastHeartbeatAt = lease.HeartbeatAt
+		lease.Stale = false
+		lease.StaleReason = ""
 		lease.UpdatedAt = nowTimestamp()
 		if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
 			logOrchestratorPersistError("upsert orchestrator worker lease busy", err)
@@ -662,10 +1129,14 @@ func runTaskWithRetries(
 		start := time.Now()
 		result, execErr := runOrchestratorTaskAttempt(ctx, execution, task, lease, attempt)
 		lease.HeartbeatAt = nowTimestamp()
+		lease.LastHeartbeatAt = lease.HeartbeatAt
 		lease.UpdatedAt = nowTimestamp()
 		if execErr != nil {
 			lease.State = OrchestratorWorkerStateReady
+			lease.LeaseState = string(OrchestratorWorkerStateReady)
 			lease.LastError = execErr.Error()
+			lease.Stale = false
+			lease.StaleReason = ""
 			if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
 				logOrchestratorPersistError("upsert orchestrator worker lease ready-on-error", err)
 			}
@@ -681,8 +1152,11 @@ func runTaskWithRetries(
 		}
 
 		lease.State = OrchestratorWorkerStateReady
+		lease.LeaseState = string(OrchestratorWorkerStateReady)
 		lease.LastError = ""
 		lease.TaskCount++
+		lease.Stale = false
+		lease.StaleReason = ""
 		if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
 			logOrchestratorPersistError("upsert orchestrator worker lease ready", err)
 		}
@@ -754,8 +1228,11 @@ func runOrchestratorTaskAttempt(
 		chatResult, runErr := client.ChatAgent(
 			runCtx,
 			strings.TrimSpace(lease.AgentID),
+			strings.TrimSpace(execution.RequestedProvider),
 			strings.TrimSpace(task.Input),
 			sessionID,
+			"",
+			"",
 			"gateway:orchestrator:local",
 			requestID,
 		)
@@ -872,6 +1349,7 @@ func acquireWorkerForTask(
 	firstPoolKey string,
 ) (OrchestratorWorkerLease, string, error) {
 	hostID := strings.TrimSpace(task.HostID)
+	hostLabels := normalizeStringSelectorList(task.HostLabels, true)
 	agentID := strings.TrimSpace(task.AgentID)
 	key := ""
 	if hostID != "" {
@@ -879,9 +1357,50 @@ func acquireWorkerForTask(
 			agentID = "zeroclaw"
 		}
 		key = workerPoolKey(hostID, agentID)
-	} else {
-		key = firstPoolKey
+		pool, ok := pools[key]
+		if !ok {
+			return OrchestratorWorkerLease{}, "", fmt.Errorf("no worker pool available for key %s", key)
+		}
+		select {
+		case <-ctx.Done():
+			return OrchestratorWorkerLease{}, "", ctx.Err()
+		case lease := <-pool.ch:
+			return lease, key, nil
+		}
 	}
+
+	if agentID != "" {
+		matching, matchErr := matchingOrchestratorWorkerPools(agentID, hostLabels, pools)
+		if matchErr != nil {
+			return OrchestratorWorkerLease{}, "", matchErr
+		}
+		if len(matching) > 0 {
+			cases := make([]reflect.SelectCase, 0, len(matching)+1)
+			poolKeys := make([]string, 0, len(matching))
+			cases = append(cases, reflect.SelectCase{
+				Dir:  reflect.SelectRecv,
+				Chan: reflect.ValueOf(ctx.Done()),
+			})
+			for _, pool := range matching {
+				cases = append(cases, reflect.SelectCase{
+					Dir:  reflect.SelectRecv,
+					Chan: reflect.ValueOf(pool.ch),
+				})
+				poolKeys = append(poolKeys, pool.key)
+			}
+			chosen, recv, recvOK := reflect.Select(cases)
+			if chosen == 0 {
+				return OrchestratorWorkerLease{}, "", ctx.Err()
+			}
+			if !recvOK {
+				return OrchestratorWorkerLease{}, "", fmt.Errorf("worker pool closed for key %s", poolKeys[chosen-1])
+			}
+			lease, _ := recv.Interface().(OrchestratorWorkerLease)
+			return lease, poolKeys[chosen-1], nil
+		}
+	}
+
+	key = firstPoolKey
 	pool, ok := pools[key]
 	if !ok {
 		return OrchestratorWorkerLease{}, "", fmt.Errorf("no worker pool available for key %s", key)
@@ -891,6 +1410,99 @@ func acquireWorkerForTask(
 		return OrchestratorWorkerLease{}, "", ctx.Err()
 	case lease := <-pool.ch:
 		return lease, key, nil
+	}
+}
+
+func matchingOrchestratorWorkerPools(agentID string, hostLabels []string, pools map[string]orchestratorWorkerPool) ([]orchestratorWorkerPool, error) {
+	normalized := strings.ToLower(strings.TrimSpace(agentID))
+	if normalized == "" {
+		return nil, nil
+	}
+	keys := make([]string, 0, len(pools))
+	for key, pool := range pools {
+		poolAgentID := pool.key
+		if idx := strings.LastIndex(poolAgentID, ":"); idx >= 0 && idx+1 < len(poolAgentID) {
+			poolAgentID = poolAgentID[idx+1:]
+		}
+		if !strings.EqualFold(strings.TrimSpace(poolAgentID), normalized) {
+			continue
+		}
+		if len(hostLabels) > 0 {
+			poolHostID := pool.key
+			if idx := strings.LastIndex(poolHostID, ":"); idx > 0 {
+				poolHostID = poolHostID[:idx]
+			}
+			matches, err := orchestratorHostMatchesLabels(poolHostID, hostLabels)
+			if err != nil {
+				return nil, err
+			}
+			if !matches {
+				continue
+			}
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	matching := make([]orchestratorWorkerPool, 0, len(keys))
+	for _, key := range keys {
+		matching = append(matching, pools[key])
+	}
+	return matching, nil
+}
+
+func selectOrchestratorRemoteHostByLabels(hostLabels []string) (RemoteHost, error) {
+	required := normalizeStringSelectorList(hostLabels, true)
+	if len(required) == 0 {
+		return RemoteHost{}, fmt.Errorf("hostLabels are required to resolve a remote host")
+	}
+	hosts, err := listRemoteHosts()
+	if err != nil {
+		return RemoteHost{}, err
+	}
+	matching := make([]RemoteHost, 0, len(hosts))
+	for _, host := range hosts {
+		if stringSliceContainsAllFold(host.Labels, required) {
+			matching = append(matching, host)
+		}
+	}
+	if len(matching) == 0 {
+		return RemoteHost{}, fmt.Errorf("no remote host matches labels %s", strings.Join(required, ","))
+	}
+	sort.SliceStable(matching, func(i, j int) bool {
+		leftHealth := orchestratorRemoteHealthRank(matching[i].LastHealth)
+		rightHealth := orchestratorRemoteHealthRank(matching[j].LastHealth)
+		if leftHealth != rightHealth {
+			return leftHealth < rightHealth
+		}
+		leftName := strings.ToLower(strings.TrimSpace(firstNonEmptyPolicyValue(matching[i].Name, matching[i].ID)))
+		rightName := strings.ToLower(strings.TrimSpace(firstNonEmptyPolicyValue(matching[j].Name, matching[j].ID)))
+		return leftName < rightName
+	})
+	return matching[0], nil
+}
+
+func orchestratorHostMatchesLabels(hostID string, hostLabels []string) (bool, error) {
+	if strings.TrimSpace(hostID) == "" || strings.EqualFold(strings.TrimSpace(hostID), orchestratorLocalHostID) {
+		return false, nil
+	}
+	host, found, err := getRemoteHost(hostID)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+	return stringSliceContainsAllFold(host.Labels, hostLabels), nil
+}
+
+func orchestratorRemoteHealthRank(health RemoteHealth) int {
+	switch health {
+	case RemoteHealthHealthy:
+		return 0
+	case RemoteHealthUnknown:
+		return 1
+	default:
+		return 2
 	}
 }
 
@@ -943,7 +1555,11 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 			continue
 		}
 		if !force && idleTTL > 0 {
-			heartbeat := parseRFC3339OrNow(lease.HeartbeatAt)
+			heartbeatRaw := strings.TrimSpace(lease.LastHeartbeatAt)
+			if heartbeatRaw == "" {
+				heartbeatRaw = strings.TrimSpace(lease.HeartbeatAt)
+			}
+			heartbeat := parseRFC3339OrNow(heartbeatRaw)
 			if now.Sub(heartbeat) < idleTTL {
 				skipped++
 				continue
@@ -955,6 +1571,7 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 		}
 
 		lease.State = OrchestratorWorkerStateReclaiming
+		lease.LeaseState = string(OrchestratorWorkerStateReclaiming)
 		lease.UpdatedAt = nowTimestamp()
 		if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
 			recordPersistFailure(lease.ID, "reclaiming", err)
@@ -966,6 +1583,7 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 				failed++
 				failures = append(failures, fmt.Sprintf("%s: %v", lease.ID, hostErr))
 				lease.State = OrchestratorWorkerStateError
+				lease.LeaseState = string(OrchestratorWorkerStateError)
 				lease.LastError = hostErr.Error()
 				lease.UpdatedAt = nowTimestamp()
 				if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
@@ -979,6 +1597,7 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 					failed++
 					failures = append(failures, fmt.Sprintf("%s: %v", lease.ID, uninstallErr))
 					lease.State = OrchestratorWorkerStateError
+					lease.LeaseState = string(OrchestratorWorkerStateError)
 					lease.LastError = uninstallErr.Error()
 					lease.UpdatedAt = nowTimestamp()
 					if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
@@ -990,8 +1609,12 @@ func reclaimOrchestratorLeaseSet(ctx context.Context, leases []OrchestratorWorke
 		}
 
 		lease.State = OrchestratorWorkerStateReclaimed
+		lease.LeaseState = string(OrchestratorWorkerStateReclaimed)
 		lease.LastError = ""
 		lease.HeartbeatAt = nowTimestamp()
+		lease.LastHeartbeatAt = lease.HeartbeatAt
+		lease.Stale = false
+		lease.StaleReason = ""
 		lease.UpdatedAt = nowTimestamp()
 		if _, err := upsertOrchestratorWorkerLease(lease); err != nil {
 			recordPersistFailure(lease.ID, "reclaimed", err)

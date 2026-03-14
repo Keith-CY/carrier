@@ -21,7 +21,8 @@ type GatewayConfig struct {
 	Hostname string
 
 	// Auth
-	APIToken string // CARRIER_GATEWAY_API_TOKEN
+	APIToken   string                   // CARRIER_GATEWAY_API_TOKEN
+	RoleTokens map[string]GatewayRole   // CARRIER_GATEWAY_ROLE_TOKENS (role:token,role:token)
 
 	// Daemon connection
 	DaemonBaseURL string // CARRIER_DAEMON_BASE_URL (default http://127.0.0.1:9090)
@@ -39,7 +40,10 @@ type GatewayConfig struct {
 	TelegramAPIBaseURL      string // CARRIER_TELEGRAM_API_BASE_URL
 
 	// Limits
-	MaxCommandBodyBytes int // CARRIER_MAX_COMMAND_BODY_BYTES (default 64KB)
+	MaxCommandBodyBytes    int           // CARRIER_MAX_COMMAND_BODY_BYTES (default 64KB)
+	WorkerLeaseStaleAfter  time.Duration // CARRIER_WORKER_LEASE_STALE_AFTER_SEC (default 10m)
+	WorkerHeartbeatTimeout time.Duration // CARRIER_WORKER_HEARTBEAT_TIMEOUT_SEC (default 2m)
+	TriggerSchedulePollInterval time.Duration // CARRIER_TRIGGER_SCHEDULE_POLL_INTERVAL_SEC (default 30s)
 
 	// Rate limits
 	RateLimitPerSession int           // CARRIER_RATE_LIMIT_PER_SESSION (default 30)
@@ -67,6 +71,7 @@ func LoadGatewayConfigFromEnv() *GatewayConfig {
 		Port:                    parseEnvInt("CARRIER_GATEWAY_PORT", 8787),
 		Hostname:                envOrDefault("CARRIER_GATEWAY_HOST", "127.0.0.1"),
 		APIToken:                strings.TrimSpace(os.Getenv("CARRIER_GATEWAY_API_TOKEN")),
+		RoleTokens:              parseGatewayRoleTokens(strings.TrimSpace(os.Getenv("CARRIER_GATEWAY_ROLE_TOKENS"))),
 		DaemonBaseURL:           strings.TrimRight(strings.TrimSpace(envOrDefault("CARRIER_DAEMON_BASE_URL", "http://127.0.0.1:9090")), "/"),
 		DaemonToken:             strings.TrimSpace(os.Getenv("CARRIER_SERVER_API_TOKEN")),
 		DaemonTimeout:           time.Duration(parseEnvInt("CARRIER_DAEMON_TIMEOUT_MS", int(defaultDaemonTimeout/time.Millisecond))) * time.Millisecond,
@@ -79,6 +84,9 @@ func LoadGatewayConfigFromEnv() *GatewayConfig {
 		TelegramPollingTimeout:  parseEnvInt("CARRIER_TELEGRAM_POLLING_TIMEOUT_SEC", 30),
 		TelegramAPIBaseURL:      strings.TrimSpace(envOrDefault("CARRIER_TELEGRAM_API_BASE_URL", "https://api.telegram.org")),
 		MaxCommandBodyBytes:     parseEnvInt("CARRIER_MAX_COMMAND_BODY_BYTES", defaultMaxCommandBodyBytes),
+		WorkerLeaseStaleAfter:   time.Duration(parseEnvInt("CARRIER_WORKER_LEASE_STALE_AFTER_SEC", 600)) * time.Second,
+		WorkerHeartbeatTimeout:  time.Duration(parseEnvInt("CARRIER_WORKER_HEARTBEAT_TIMEOUT_SEC", 120)) * time.Second,
+		TriggerSchedulePollInterval: time.Duration(parseEnvInt("CARRIER_TRIGGER_SCHEDULE_POLL_INTERVAL_SEC", 30)) * time.Second,
 		RateLimitPerSession:     parseEnvInt("CARRIER_RATE_LIMIT_PER_SESSION", 30),
 		RateLimitGlobal:         parseEnvInt("CARRIER_RATE_LIMIT_GLOBAL", 200),
 		RateLimitWindow:         time.Duration(parseEnvInt("CARRIER_RATE_LIMIT_WINDOW_MS", 60000)) * time.Millisecond,
@@ -184,6 +192,7 @@ func StartGateway(cfg *GatewayConfig) error {
 		return err
 	}
 	startRemoteAlertWatchdog(transportCtx, cfg)
+	startExecutionTriggerScheduler(transportCtx, cfg)
 
 	log.Printf("[gateway] listening on http://%s", addr)
 	return server.Serve(ln)
@@ -221,6 +230,33 @@ func parseEnvBool(key string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+func parseGatewayRoleTokens(raw string) map[string]GatewayRole {
+	out := map[string]GatewayRole{}
+	for _, entry := range strings.Split(strings.TrimSpace(raw), ",") {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+		var roleRaw, token string
+		if left, right, ok := strings.Cut(trimmed, ":"); ok {
+			roleRaw = left
+			token = right
+		} else if left, right, ok := strings.Cut(trimmed, "="); ok {
+			roleRaw = left
+			token = right
+		} else {
+			continue
+		}
+		role := normalizeGatewayRole(roleRaw)
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		out[token] = role
+	}
+	return out
 }
 
 // Run starts gateway using environment-based configuration.

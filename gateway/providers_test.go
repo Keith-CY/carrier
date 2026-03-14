@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
@@ -169,6 +170,47 @@ func TestParseTelegramMessage_NonCommand(t *testing.T) {
 	}
 	if msg.RawText != "Hello world" {
 		t.Fatalf("raw text = %q, want %q", msg.RawText, "Hello world")
+	}
+}
+
+func TestParseTelegramMessage_AttachmentsCarryStableMetadata(t *testing.T) {
+	payload := map[string]interface{}{
+		"update_id": float64(42),
+		"message": map[string]interface{}{
+			"message_id": float64(99),
+			"caption":    "see attachment",
+			"chat": map[string]interface{}{
+				"id": float64(777),
+			},
+			"document": map[string]interface{}{
+				"file_id":        "tg-file-id-1",
+				"file_unique_id": "tg-file-unique-1",
+				"file_name":      "report.pdf",
+				"mime_type":      "application/pdf",
+				"file_size":      float64(1234),
+			},
+		},
+	}
+
+	msg := ParseTelegramMessage(payload)
+	if msg == nil {
+		t.Fatal("expected normalized message")
+	}
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("attachments len=%d want 1 attachments=%+v", len(msg.Attachments), msg.Attachments)
+	}
+	attachment := msg.Attachments[0]
+	if attachment.ID != "tg-file-unique-1" {
+		t.Fatalf("attachment.ID=%q want %q", attachment.ID, "tg-file-unique-1")
+	}
+	if attachment.MediaType != "application/pdf" {
+		t.Fatalf("attachment.MediaType=%q want %q", attachment.MediaType, "application/pdf")
+	}
+	if attachment.SourceMetadata["chat_id"] != "777" {
+		t.Fatalf("attachment.SourceMetadata[chat_id]=%q want 777 metadata=%+v", attachment.SourceMetadata["chat_id"], attachment.SourceMetadata)
+	}
+	if attachment.SourceMetadata["message_id"] != "99" {
+		t.Fatalf("attachment.SourceMetadata[message_id]=%q want 99 metadata=%+v", attachment.SourceMetadata["message_id"], attachment.SourceMetadata)
 	}
 }
 
@@ -415,6 +457,54 @@ func TestRenderTelegramWebhookResponse_OK(t *testing.T) {
 	}
 }
 
+func TestRenderTelegramWebhookResponse_PrefersNativeMediaMethods(t *testing.T) {
+	t.Run("rich voice output uses sendVoice", func(t *testing.T) {
+		resp := GatewayResponse{
+			Result: "ok",
+			RichContent: &baseagent.RichOutboundMessage{
+				Text: "voice note ready",
+				Blocks: []baseagent.ContentBlock{
+					{Type: "voice", AttachmentID: "voice-1"},
+				},
+				Attachments: []baseagent.AttachmentRef{
+					{
+						ID:          "voice-1",
+						Kind:        "voice",
+						MediaType:   "audio/ogg",
+						DownloadURL: "https://downloads.example.com/voice.ogg",
+					},
+				},
+			},
+		}
+		rendered := RenderTelegramWebhookResponse(resp, "123")
+		if rendered["method"] != "sendVoice" {
+			t.Fatalf("expected method sendVoice, got %v", rendered["method"])
+		}
+		if rendered["voice"] != "https://downloads.example.com/voice.ogg" {
+			t.Fatalf("expected voice ref, got %v", rendered["voice"])
+		}
+	})
+
+	t.Run("download fallback uses sendDocument", func(t *testing.T) {
+		resp := GatewayResponse{
+			Result:      "ok",
+			Message:     "artifact ready",
+			DownloadURL: "/downloads/dl-2/file.zip",
+		}
+		rendered := RenderTelegramWebhookResponse(resp, "123")
+		if rendered["method"] != "sendDocument" {
+			t.Fatalf("expected method sendDocument, got %v", rendered["method"])
+		}
+		if rendered["document"] != "/downloads/dl-2/file.zip" {
+			t.Fatalf("expected document ref, got %v", rendered["document"])
+		}
+		caption, _ := rendered["caption"].(string)
+		if !strings.Contains(caption, "artifact ready") {
+			t.Fatalf("expected caption to include message, got %q", caption)
+		}
+	})
+}
+
 func TestRenderDiscordResponse(t *testing.T) {
 	resp := GatewayResponse{Result: "ok", Message: "ok msg", DownloadURL: "/downloads/dl-1/file.zip"}
 	rendered := RenderDiscordResponse(resp)
@@ -467,6 +557,22 @@ func TestRenderTelegramResponse_ErrorDefaultCode(t *testing.T) {
 	text, _ := rendered["text"].(string)
 	if !strings.Contains(text, "E_UNKNOWN") {
 		t.Fatalf("expected E_UNKNOWN default code, got %q", text)
+	}
+}
+
+func TestTelegramTransportStructuredOutboundTextFallback(t *testing.T) {
+	resp := GatewayResponse{
+		Result: "ok",
+		RichContent: &baseagent.RichOutboundMessage{
+			Blocks: []baseagent.ContentBlock{
+				{Type: "text", Text: "rendered from rich block"},
+			},
+		},
+	}
+	rendered := RenderTelegramResponse(resp)
+	text, _ := rendered["text"].(string)
+	if !strings.Contains(text, "rendered from rich block") {
+		t.Fatalf("expected structured outbound fallback text, got %q", text)
 	}
 }
 

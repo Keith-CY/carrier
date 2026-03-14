@@ -1,11 +1,13 @@
 import { expect, test } from '@playwright/test';
-import { loginWithToken, mockAPIs } from './helpers';
+import { loginWithToken, mockAPIs, mockOrchestrationAPIs } from './helpers';
 
 test.describe('Remote Observability', () => {
   test('supports operation-group filtering, anomaly-only mode, and failure-first sorting', async ({ page }) => {
     await mockAPIs(page);
+    await mockOrchestrationAPIs(page);
 
     let metricCalls = 0;
+    let orchestratorMetricCalls = 0;
     await page.route('**/api/v1/remote/metrics', async (route) => {
       metricCalls += 1;
       const second = metricCalls >= 2;
@@ -52,14 +54,130 @@ test.describe('Remote Observability', () => {
         }),
       });
     });
+    await page.route('**/api/v1/orchestrator/metrics', async (route) => {
+      orchestratorMetricCalls += 1;
+      const second = orchestratorMetricCalls >= 2;
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          result: 'ok',
+          metrics: {
+            timestamp: second ? '2026-02-25T09:00:00Z' : '2026-02-25T08:00:00Z',
+            executions: {
+              total: second ? 5 : 4,
+              running: second ? 0 : 1,
+              completed: second ? 3 : 2,
+              failed: 1,
+              cancelled: 1,
+              retryableFailed: second ? 0 : 1,
+              retryCount: second ? 1 : 3,
+              avgLatencyMs: second ? 61000 : 90000,
+            },
+            workers: {
+              total: 3,
+              busy: second ? 0 : 1,
+              ready: 1,
+              error: 1,
+              stale: second ? 0 : 1,
+            },
+            providers: {
+              requestedFailures: second ? {} : { anthropic: 1 },
+              resolvedFailures: second ? {} : { anthropic: 1 },
+              driftStates: second ? { in_sync: 5 } : { override: 1, in_sync: 3 },
+              totalEstimatedCostUsd: second ? 0.0029 : 0.0041,
+              attribution: second
+                ? {
+                    teams: [
+                      { label: 'platform', executions: 2, successes: 3, failures: 0, avgLatencyMs: 220, estimatedCostUsd: 0.0017 },
+                      { label: 'sre', executions: 1, successes: 1, failures: 0, avgLatencyMs: 180, estimatedCostUsd: 0.0012 },
+                    ],
+                    projects: [
+                      { label: 'carrier', executions: 2, successes: 3, failures: 0, avgLatencyMs: 220, estimatedCostUsd: 0.0017 },
+                      { label: 'checkout', executions: 1, successes: 1, failures: 0, avgLatencyMs: 180, estimatedCostUsd: 0.0012 },
+                    ],
+                    templates: [
+                      { label: 'pr-triage', executions: 2, successes: 3, failures: 0, avgLatencyMs: 220, estimatedCostUsd: 0.0017 },
+                      { label: 'incident-diagnosis', executions: 1, successes: 1, failures: 0, avgLatencyMs: 180, estimatedCostUsd: 0.0012 },
+                    ],
+                    triggers: [
+                      { label: 'schedule:trigger-nightly', executions: 2, successes: 2, failures: 0, avgLatencyMs: 230, estimatedCostUsd: 0.0018 },
+                      { label: 'github:trigger-gh-1', executions: 1, successes: 2, failures: 0, avgLatencyMs: 170, estimatedCostUsd: 0.0011 },
+                    ],
+                  }
+                : {
+                    teams: [
+                      { label: 'platform', executions: 2, successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0026 },
+                      { label: 'sre', executions: 1, successes: 1, failures: 1, avgLatencyMs: 510, estimatedCostUsd: 0.0015 },
+                    ],
+                    projects: [
+                      { label: 'carrier', executions: 2, successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0026 },
+                      { label: 'checkout', executions: 1, successes: 1, failures: 1, avgLatencyMs: 510, estimatedCostUsd: 0.0015 },
+                    ],
+                    templates: [
+                      { label: 'pr-triage', executions: 2, successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0026 },
+                      { label: 'incident-diagnosis', executions: 1, successes: 1, failures: 1, avgLatencyMs: 510, estimatedCostUsd: 0.0015 },
+                    ],
+                    triggers: [
+                      { label: 'github:trigger-gh-1', executions: 2, successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0026 },
+                      { label: 'schedule:trigger-nightly', executions: 1, successes: 1, failures: 1, avgLatencyMs: 510, estimatedCostUsd: 0.0015 },
+                    ],
+                  },
+              aggregates: second
+                ? [
+                    { provider: 'anthropic', successes: 2, failures: 0, avgLatencyMs: 320, estimatedCostUsd: 0.0011 },
+                    { provider: 'openrouter', successes: 3, failures: 0, avgLatencyMs: 210, estimatedCostUsd: 0.0018 },
+                  ]
+                : [
+                    { provider: 'anthropic', successes: 1, failures: 1, avgLatencyMs: 510, estimatedCostUsd: 0.0025 },
+                    { provider: 'openrouter', successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0016 },
+                  ],
+              models: second
+                ? [
+                    { provider: 'anthropic', model: 'claude-3-7-sonnet', successes: 2, failures: 0, avgLatencyMs: 320, estimatedCostUsd: 0.0011 },
+                    { provider: 'openrouter', model: 'openai/gpt-4o-mini', successes: 3, failures: 0, avgLatencyMs: 210, estimatedCostUsd: 0.0018 },
+                  ]
+                : [
+                    { provider: 'anthropic', model: 'claude-3-7-sonnet', successes: 1, failures: 1, avgLatencyMs: 510, estimatedCostUsd: 0.0025 },
+                    { provider: 'openrouter', model: 'openai/gpt-4o-mini', successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0016 },
+                  ],
+            },
+            policies: {
+              deny: 1,
+              ask: second ? 0 : 1,
+              allow: second ? 4 : 2,
+            },
+          },
+        }),
+      });
+    });
 
     await loginWithToken(page, '/#/remote-observability');
 
     await expect(page.locator('#view-remote-observability')).toBeVisible();
     await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Operations' })).toBeVisible();
     await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Rollout' })).toBeVisible();
+    await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Executions' })).toBeVisible();
+    await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Workers' })).toBeVisible();
+    await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Provider Failures' })).toBeVisible();
+    await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Provider Usage' })).toBeVisible();
+    await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Cost Attribution' })).toBeVisible();
+    await expect(page.locator('#remote-observability-summary .agent-card h4', { hasText: 'Policy Blocks' })).toBeVisible();
     await expect(page.locator('#remote-observability-summary')).toContainText('success rate: 67%');
     await expect(page.locator('#remote-observability-summary')).toContainText('state: canary');
+    await expect(page.locator('#remote-observability-summary')).toContainText('running: 1');
+    await expect(page.locator('#remote-observability-summary')).toContainText('retry count: 3');
+    await expect(page.locator('#remote-observability-summary')).toContainText('stale: 1');
+    await expect(page.locator('#remote-observability-summary')).toContainText('requested: anthropic=1');
+    await expect(page.locator('#remote-observability-summary')).toContainText('estimated cost: $0.0041');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top provider: anthropic');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top model: claude-3-7-sonnet');
+    await expect(page.locator('#remote-observability-summary')).toContainText('drift: in_sync=3, override=1');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top team: platform');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top project: carrier');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top template: pr-triage');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top trigger: github:trigger-gh-1');
+    await expect(page.locator('#remote-observability-summary')).toContainText('ask: 1');
     await expect(page.locator('#remote-observability-group')).toContainText('instances');
     await expect(page.locator('#remote-observability-group')).toContainText('provider');
     await expect(page.locator('#remote-observability-ops-body')).toContainText('instances_install');
@@ -87,9 +205,82 @@ test.describe('Remote Observability', () => {
 
     await page.click('#remote-observability-refresh');
     await expect.poll(() => metricCalls).toBe(2);
+    await expect.poll(() => orchestratorMetricCalls).toBe(2);
     await expect(page.locator('#remote-observability-summary')).toContainText('success rate: 83%');
     await expect(page.locator('#remote-observability-summary')).toContainText('state: healthy');
+    await expect(page.locator('#remote-observability-summary')).toContainText('running: 0');
+    await expect(page.locator('#remote-observability-summary')).toContainText('retry count: 1');
+    await expect(page.locator('#remote-observability-summary')).toContainText('stale: 0');
+    await expect(page.locator('#remote-observability-summary')).toContainText('requested: none');
+    await expect(page.locator('#remote-observability-summary')).toContainText('estimated cost: $0.0029');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top provider: openrouter');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top model: openai/gpt-4o-mini');
+    await expect(page.locator('#remote-observability-summary')).toContainText('drift: in_sync=5');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top team: platform');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top project: carrier');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top template: pr-triage');
+    await expect(page.locator('#remote-observability-summary')).toContainText('top trigger: schedule:trigger-nightly');
+    await expect(page.locator('#remote-observability-summary')).toContainText('ask: 0');
     await expect(page.locator('#remote-observability-status')).toContainText('Updated at 2026-02-25T09:00:00Z');
     await expect(page.locator('#remote-observability-status')).toContainText('rollout=healthy');
+  });
+
+  test('cost attribution cards drill down into filtered executions', async ({ page }) => {
+    await mockAPIs(page);
+    await mockOrchestrationAPIs(page);
+
+    await page.route('**/api/v1/remote/metrics', async (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          result: 'ok',
+          metrics: {
+            timestamp: '2026-02-25T08:00:00Z',
+            totals: { total: 1, success: 1, failure: 0, successRate: 1, avgLatencyMs: 100, minLatencyMs: 100, maxLatencyMs: 100 },
+            repair: {},
+            chatStream: {},
+            rollout: { state: 'healthy', canPromote: true, reasons: [] },
+            operations: {},
+          },
+        }),
+      });
+    });
+    await page.route('**/api/v1/orchestrator/metrics', async (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          result: 'ok',
+          metrics: {
+            timestamp: '2026-02-25T08:00:00Z',
+            executions: { total: 4, running: 1, completed: 2, failed: 1, retryCount: 3 },
+            workers: { total: 2, busy: 1, ready: 1, error: 0, stale: 0 },
+            providers: {
+              requestedFailures: {},
+              resolvedFailures: {},
+              driftStates: { in_sync: 3 },
+              totalEstimatedCostUsd: 0.0041,
+              attribution: {
+                teams: [{ label: 'platform', executions: 2, successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0026 }],
+                projects: [{ label: 'carrier', executions: 2, successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0026 }],
+                templates: [{ label: 'pr-triage', executions: 2, successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0026 }],
+                triggers: [{ label: 'github:trigger-gh-1', executions: 2, successes: 2, failures: 0, avgLatencyMs: 240, estimatedCostUsd: 0.0026 }],
+              },
+              aggregates: [],
+              models: [],
+            },
+            policies: { allow: 2, ask: 1, deny: 0 },
+            queue: { queuedTasks: 0 },
+          },
+        }),
+      });
+    });
+
+    await loginWithToken(page, '/#/remote-observability');
+    await page.click('#remote-observability-summary .agent-card:has(h4:text("Cost Attribution")) .summary-link:has-text("top team: platform")');
+    await expect.poll(() => page.url()).toContain('/executions?search=platform');
+    await expect(page.locator('#executions-list')).toContainText('platform');
+    await expect(page.locator('#executions-list')).not.toContainText('sre');
   });
 });

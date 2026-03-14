@@ -9,6 +9,41 @@ import (
 	"testing"
 )
 
+func TestNormalizeModelForProvider(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+		want     string
+	}{
+		{
+			name:     "openrouter strips provider prefix",
+			provider: "openrouter",
+			model:    "openrouter/arcee-ai/trinity-mini:free",
+			want:     "arcee-ai/trinity-mini:free",
+		},
+		{
+			name:     "openai strips provider prefix",
+			provider: "openai",
+			model:    "openai/gpt-5.2",
+			want:     "gpt-5.2",
+		},
+		{
+			name:     "plain model id remains unchanged",
+			provider: "anthropic",
+			model:    "claude-opus-4-6",
+			want:     "claude-opus-4-6",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := NormalizeModelForProvider(tc.provider, tc.model); got != tc.want {
+				t.Fatalf("NormalizeModelForProvider(%q, %q) = %q, want %q", tc.provider, tc.model, got, tc.want)
+			}
+		})
+	}
+}
+
 func writeCarrierDefaultModelFixture(t *testing.T, defaultModel string, modelList []map[string]string) string {
 	t.Helper()
 
@@ -129,6 +164,26 @@ func TestLoadCarrierModelForProvider(t *testing.T) {
 	}
 }
 
+func TestLoadCarrierDefaultModelPreservesBaseURL(t *testing.T) {
+	writeCarrierDefaultModelFixture(t, "openrouter-default", []map[string]string{
+		{
+			"model_name":  "openrouter-default",
+			"model":       "openrouter/arcee-ai/trinity-mini:free",
+			"provider_id": "openrouter",
+			"env_var":     "OPENROUTER_API_KEY",
+			"base_url":    "https://openrouter.ai/api/v1",
+		},
+	})
+
+	got, err := LoadCarrierDefaultModel()
+	if err != nil {
+		t.Fatalf("LoadCarrierDefaultModel error: %v", err)
+	}
+	if got.BaseURL != "https://openrouter.ai/api/v1" {
+		t.Fatalf("BaseURL = %q, want %q", got.BaseURL, "https://openrouter.ai/api/v1")
+	}
+}
+
 func TestLoadCarrierModelForProviderRequiresProviderID(t *testing.T) {
 	writeCarrierDefaultModelFixture(t, "openai-default", []map[string]string{
 		{
@@ -172,5 +227,65 @@ func TestLoadCarrierModelForProviderFromPathLoadError(t *testing.T) {
 	_, err := loadCarrierModelForProviderFromPath(filepath.Join(t.TempDir(), "missing-config.v2.json"), "openai")
 	if err == nil {
 		t.Fatal("expected load error for missing config path")
+	}
+}
+
+func TestLoadCarrierModelProfilesResolveProtocolFamily(t *testing.T) {
+	writeCarrierDefaultModelFixture(t, "openrouter-fast", []map[string]string{
+		{
+			"model_name":  "openrouter-fast",
+			"model_alias": "flash",
+			"model":       "openrouter/google/gemini-2.0-flash-001",
+			"provider_id": "openrouter",
+			"env_var":     "OPENROUTER_API_KEY",
+			"base_url":    "https://openrouter.ai/api/v1",
+		},
+		{
+			"model_name":  "ollama-dev",
+			"model":       "ollama/llama3.2",
+			"provider_id": "ollama",
+		},
+		{
+			"model_name":  "codex-default",
+			"model":       "openai-codex/gpt-5.3-codex",
+			"provider_id": "openai-codex",
+			"env_var":     "OPENAI_CODEX_TOKEN",
+		},
+	})
+
+	openrouterProfiles, err := LoadCarrierModelProfilesForProvider("openrouter")
+	if err != nil {
+		t.Fatalf("LoadCarrierModelProfilesForProvider error: %v", err)
+	}
+	if len(openrouterProfiles) != 1 {
+		t.Fatalf("expected 1 openrouter profile, got %d", len(openrouterProfiles))
+	}
+	if openrouterProfiles[0].ProtocolFamily != "openai-compatible" {
+		t.Fatalf("ProtocolFamily = %q, want %q", openrouterProfiles[0].ProtocolFamily, "openai-compatible")
+	}
+	if openrouterProfiles[0].ModelAlias != "flash" {
+		t.Fatalf("ModelAlias = %q, want %q", openrouterProfiles[0].ModelAlias, "flash")
+	}
+
+	oauthProfiles, err := LoadCarrierModelProfilesForProtocolFamily("oauth-openai")
+	if err != nil {
+		t.Fatalf("LoadCarrierModelProfilesForProtocolFamily error: %v", err)
+	}
+	if len(oauthProfiles) != 1 {
+		t.Fatalf("expected 1 oauth-openai profile, got %d", len(oauthProfiles))
+	}
+	if oauthProfiles[0].ProviderID != "openai-codex" {
+		t.Fatalf("ProviderID = %q, want %q", oauthProfiles[0].ProviderID, "openai-codex")
+	}
+
+	ollamaProfiles, err := LoadCarrierModelProfilesForProtocolFamily("ollama")
+	if err != nil {
+		t.Fatalf("LoadCarrierModelProfilesForProtocolFamily error: %v", err)
+	}
+	if len(ollamaProfiles) != 1 {
+		t.Fatalf("expected 1 ollama profile, got %d", len(ollamaProfiles))
+	}
+	if ollamaProfiles[0].ProtocolFamily != "ollama" {
+		t.Fatalf("ProtocolFamily = %q, want %q", ollamaProfiles[0].ProtocolFamily, "ollama")
 	}
 }

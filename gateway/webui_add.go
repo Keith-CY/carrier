@@ -255,6 +255,7 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		RecordPath:   recordPath,
 		Channel:      channelID,
 		Provider:     provider.ID,
+		ModelSurface: &result.ModelSurface,
 		PairRequired: pairRequired,
 		PairCode:     pairCode,
 		PairedChatID: pairedChatID,

@@ -144,10 +144,25 @@ func requestLLMCompletionWithDeps(ctx context.Context, systemPrompt, userMessage
 func requestLLMCompletionWithProviderAndDeps(ctx context.Context, providerID, systemPrompt, userMessage string, deps llmRequestDeps) (string, error) {
 	deps = normalizeLLMRequestDeps(deps)
 
-	cfg, err := resolveLLMRuntimeConfigForProvider(providerID)
+	configs, err := resolveLLMRuntimeConfigsForProvider(providerID)
 	if err != nil {
 		return "", err
 	}
+	var lastErr error
+	for _, cfg := range configs {
+		text, err := requestLLMCompletionWithRuntimeConfigAndDeps(ctx, cfg, systemPrompt, userMessage, deps)
+		if err == nil {
+			return text, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", errors.New("default model is not configured")
+}
+
+func requestLLMCompletionWithRuntimeConfigAndDeps(ctx context.Context, cfg llmRuntimeConfig, systemPrompt, userMessage string, deps llmRequestDeps) (string, error) {
 	modelID := normalizeModelForProvider(cfg.ProviderID, cfg.ModelID)
 
 	path := "/chat/completions"
@@ -441,6 +456,17 @@ func resolveLLMRuntimeConfig() (*llmRuntimeConfig, error) {
 }
 
 func resolveLLMRuntimeConfigForProvider(providerID string) (*llmRuntimeConfig, error) {
+	configs, err := resolveLLMRuntimeConfigsForProvider(providerID)
+	if err != nil {
+		return nil, err
+	}
+	if len(configs) == 0 {
+		return nil, errors.New("default model is not configured")
+	}
+	return &configs[0], nil
+}
+
+func resolveLLMRuntimeConfigsForProvider(providerID string) ([]llmRuntimeConfig, error) {
 	var (
 		cfg *config.CarrierDefaultModel
 		err error
@@ -453,32 +479,66 @@ func resolveLLMRuntimeConfigForProvider(providerID string) (*llmRuntimeConfig, e
 	if err != nil || cfg == nil {
 		return nil, errors.New("default model is not configured")
 	}
-	providerID = catalog.NormalizeProviderID(cfg.ProviderID)
+	candidates, err := resolveLLMRuntimeModelCandidates(*cfg)
+	if err != nil {
+		return nil, err
+	}
+	configs := make([]llmRuntimeConfig, 0, len(candidates))
+	for _, candidate := range candidates {
+		runtimeCfg, err := buildLLMRuntimeConfig(candidate)
+		if err != nil {
+			return nil, err
+		}
+		configs = append(configs, runtimeCfg)
+	}
+	if len(configs) == 0 {
+		return nil, errors.New("default model is not configured")
+	}
+	return configs, nil
+}
+
+func resolveLLMRuntimeModelCandidates(primary config.CarrierDefaultModel) ([]config.CarrierDefaultModel, error) {
+	alias := strings.TrimSpace(primary.ModelAlias)
+	if alias == "" {
+		return []config.CarrierDefaultModel{primary}, nil
+	}
+	profiles, err := config.LoadCarrierModelProfilesForAlias(primary.ProviderID, alias)
+	if err != nil || len(profiles) == 0 {
+		return []config.CarrierDefaultModel{primary}, nil
+	}
+	return profiles, nil
+}
+
+func buildLLMRuntimeConfig(cfg config.CarrierDefaultModel) (llmRuntimeConfig, error) {
+	providerID := catalog.NormalizeProviderID(cfg.ProviderID)
 	modelID := strings.TrimSpace(cfg.ModelID)
 	envVar := strings.TrimSpace(cfg.EnvVar)
 
 	if providerID == "" || modelID == "" {
-		return nil, errors.New("default model is not configured")
+		return llmRuntimeConfig{}, errors.New("default model is not configured")
 	}
 	if !catalog.IsSupportedProvider(providerID) {
-		return nil, fmt.Errorf("unsupported provider %s", providerID)
+		return llmRuntimeConfig{}, fmt.Errorf("unsupported provider %s", providerID)
 	}
 	if envVar == "" {
 		envVar = inferProviderEnvVar(providerID)
 	}
 	if envVar == "" {
-		return nil, fmt.Errorf("no env var mapping for provider %s", providerID)
+		return llmRuntimeConfig{}, fmt.Errorf("no env var mapping for provider %s", providerID)
 	}
 
 	token := strings.TrimSpace(os.Getenv(envVar))
 	if token == "" {
-		return nil, fmt.Errorf("provider credential is missing (%s)", envVar)
+		return llmRuntimeConfig{}, fmt.Errorf("provider credential is missing (%s)", envVar)
 	}
 
-	baseURL := defaultOpenAIBaseURL
+	baseURL := strings.TrimSpace(cfg.BaseURL)
+	providerSpec := catalog.GetProvider(providerID)
 	switch {
 	case isOpenAICodexProvider(providerID):
-		baseURL = strings.TrimSpace(os.Getenv("CARRIER_OPENAI_CODEX_BASE_URL"))
+		if baseURL == "" {
+			baseURL = strings.TrimSpace(os.Getenv("CARRIER_OPENAI_CODEX_BASE_URL"))
+		}
 		if baseURL == "" {
 			baseURL = strings.TrimSpace(os.Getenv("CARRIER_OPENAI_BASE_URL"))
 		}
@@ -486,13 +546,23 @@ func resolveLLMRuntimeConfigForProvider(providerID string) (*llmRuntimeConfig, e
 			baseURL = defaultOpenAICodexBaseURL
 		}
 	default:
-		override := strings.TrimSpace(os.Getenv("CARRIER_OPENAI_BASE_URL"))
-		if override != "" {
+		if baseURL == "" && providerSpec != nil {
+			if baseEnv := strings.TrimSpace(providerSpec.BaseURLEnv); baseEnv != "" {
+				baseURL = strings.TrimSpace(os.Getenv(baseEnv))
+			}
+		}
+		if override := strings.TrimSpace(os.Getenv("CARRIER_OPENAI_BASE_URL")); baseURL == "" && override != "" {
 			baseURL = override
+		}
+		if baseURL == "" {
+			baseURL = catalog.ResolveProviderBaseURL(providerID, providerID, "")
+		}
+		if baseURL == "" {
+			baseURL = defaultOpenAIBaseURL
 		}
 	}
 
-	return &llmRuntimeConfig{
+	return llmRuntimeConfig{
 		ProviderID: providerID,
 		ModelID:    modelID,
 		Token:      token,
@@ -508,14 +578,7 @@ func inferProviderEnvVar(providerID string) string {
 }
 
 func normalizeModelForProvider(providerID, modelID string) string {
-	modelID = strings.TrimSpace(modelID)
-	if modelID == "" {
-		return ""
-	}
-	if slash := strings.Index(modelID, "/"); slash > 0 && slash < len(modelID)-1 {
-		return strings.TrimSpace(modelID[slash+1:])
-	}
-	return modelID
+	return config.NormalizeModelForProvider(providerID, modelID)
 }
 
 func extractModelContent(raw interface{}) string {

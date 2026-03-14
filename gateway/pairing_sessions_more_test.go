@@ -68,3 +68,33 @@ func TestHandlePairingSessionsSummarizesSessions(t *testing.T) {
 		t.Fatalf("expected 2 telegram sessions, got %d", len(resp.Sessions))
 	}
 }
+
+func TestChannelPairingStatusSummary(t *testing.T) {
+	s := NewSessionStore("", 0, nil)
+	defer s.Stop()
+	s.CreateSession("telegram", "chat-1")
+	s.CreateSession("discord", "chat-2")
+
+	req := httptest.NewRequest(http.MethodGet, "/?provider=telegram", nil)
+	rec := httptest.NewRecorder()
+	handlePairingSessions(rec, req, "r5", s)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Sessions []pairingSessionSummary `json:"sessions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response error: %v", err)
+	}
+	if len(resp.Sessions) != 1 {
+		t.Fatalf("expected 1 telegram pairing summary, got %d", len(resp.Sessions))
+	}
+	if resp.Sessions[0].PairState == "" || resp.Sessions[0].PairMethod == "" {
+		t.Fatalf("expected pairing state metadata, got %+v", resp.Sessions[0])
+	}
+	if !resp.Sessions[0].SupportsPairing {
+		t.Fatalf("expected telegram pairing support, got %+v", resp.Sessions[0])
+	}
+}

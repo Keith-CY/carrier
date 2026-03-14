@@ -211,3 +211,84 @@ func TestExtractOpenAIAccountID_FromClaims(t *testing.T) {
 		t.Fatalf("extractOpenAIAccountID namespaced mismatch: %q", got)
 	}
 }
+
+func TestPreparePicoclawManagedOnboard_RendersManagedProfiles(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+
+	configPath := filepath.Join(t.TempDir(), "config.v2.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "default_model": "openrouter-fast",
+  "model_list": [
+    {
+      "model_name": "openrouter-fast",
+      "model_alias": "flash",
+      "model": "openrouter/google/gemini-2.0-flash-001",
+      "provider_id": "openrouter",
+      "env_var": "OPENROUTER_API_KEY",
+      "base_url": "https://openrouter.ai/api/v1"
+    },
+    {
+      "model_name": "openrouter-safe",
+      "model_alias": "flash",
+      "model": "openrouter/deepseek/deepseek-chat-v3-0324",
+      "provider_id": "openrouter",
+      "env_var": "OPENROUTER_API_KEY",
+      "base_url": "https://openrouter.ai/api/v1"
+    }
+  ]
+}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("CARRIER_CONFIG", configPath)
+
+	sess := &OnboardSession{
+		SelectedAgent:    "picoclaw",
+		SelectedProvider: "openrouter",
+		EnvVars: map[string]string{
+			"OPENROUTER_API_KEY": "sk-or-profile",
+		},
+	}
+
+	result, err := prepareManagedOnboard("picoclaw", sess, "webui:add")
+	if err != nil {
+		t.Fatalf("prepareManagedOnboard: %v", err)
+	}
+
+	cfgRaw, err := os.ReadFile(result.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(cfgRaw, &cfg); err != nil {
+		t.Fatalf("parse config json: %v", err)
+	}
+
+	modelList, ok := cfg["model_list"].([]interface{})
+	if !ok || len(modelList) != 2 {
+		t.Fatalf("expected 2 model entries, got %#v", cfg["model_list"])
+	}
+	firstModel, _ := modelList[0].(map[string]interface{})
+	if firstModel["protocol_family"] != "openai-compatible" {
+		t.Fatalf("model_list[0].protocol_family = %v, want %q", firstModel["protocol_family"], "openai-compatible")
+	}
+	if firstModel["model_alias"] != "flash" {
+		t.Fatalf("model_list[0].model_alias = %v, want %q", firstModel["model_alias"], "flash")
+	}
+
+	profiles, ok := cfg["provider_profiles"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected provider_profiles object, got %#v", cfg["provider_profiles"])
+	}
+	if len(profiles) != 2 {
+		t.Fatalf("expected 2 provider profiles, got %#v", profiles)
+	}
+	profile, _ := profiles["openrouter-fast"].(map[string]interface{})
+	if profile["protocol_family"] != "openai-compatible" {
+		t.Fatalf("provider_profiles.openrouter-fast.protocol_family = %v, want %q", profile["protocol_family"], "openai-compatible")
+	}
+	if profile["credential_ref"] != "openrouter" {
+		t.Fatalf("provider_profiles.openrouter-fast.credential_ref = %v, want %q", profile["credential_ref"], "openrouter")
+	}
+}

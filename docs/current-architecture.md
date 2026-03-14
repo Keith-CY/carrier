@@ -5,16 +5,24 @@ Use this before reading historical planning notes.
 
 ## Current Source of Truth
 
-- Product scope: [`docs/Agent_Installation_Platform_PRD.md`](./Agent_Installation_Platform_PRD.md)
+- Product scope:
+  - repository overview: [`README.md`](../README.md)
+  - system layering: [`ARCHITECTURE.md`](../ARCHITECTURE.md)
+  - near-term implementation roadmap: [`docs/plans/2026-03-09-control-plane-priority-roadmap.md`](./plans/2026-03-09-control-plane-priority-roadmap.md)
 - Runtime decision:
   - Phase 1 baseline: [`docs/phase1-runtime-adr.md`](./phase1-runtime-adr.md)
   - Phase 2 opt-in isolation: [`docs/phase2-isolation-adr.md`](./phase2-isolation-adr.md)
 - System design overview: [`ARCHITECTURE.md`](../ARCHITECTURE.md)
-- Module boundaries: `webui -> gateway -> daemon -> shared` and `webui -> gateway -> baseagent -> shared`
+- Module boundaries:
+  - execution plane: `webui -> gateway -> daemon -> shared`
+  - knowledge plane: `webui -> gateway -> daemon/internal/memory -> baseagent`
 - Shared/base modules: [`shared/`](../shared/), [`baseagent/`](../baseagent/), [`gateway/`](../gateway/), [`daemon/`](../daemon/), [`webui/`](../webui/)
 - Gateway command behavior: [`docs/command-contract.md`](./command-contract.md)
 - Daemon API contract: [`docs/daemon-api-contract.md`](./daemon-api-contract.md)
 - Deployment and operations: [`docs/deployment.md`](./deployment.md)
+- Memory backend and policy references:
+  - [`daemon/internal/memory/`](../daemon/internal/memory/)
+  - [`daemon/internal/lifecycle/memory.go`](../daemon/internal/lifecycle/memory.go)
 
 ## Task-Oriented Entry Points
 
@@ -36,7 +44,8 @@ Do not treat them as the implementation source of truth.
 - [`docs/plans/memory-package-specification.md`](./plans/memory-package-specification.md) -> use `daemon/internal/memory/`
 - [`docs/plans/memory-import-export-pipeline.md`](./plans/memory-import-export-pipeline.md) -> use `docs/command-contract.md` and `daemon/internal/memory/store.go`
 - [`docs/plans/memory-attach-detach-policy.md`](./plans/memory-attach-detach-policy.md) -> use `daemon/internal/memory/policy.go` and `daemon/internal/lifecycle/memory.go`
-- [`docs/plans/phase1-execution-checklist.md`](./plans/phase1-execution-checklist.md) -> use `docs/Agent_Installation_Platform_PRD.md` + `ARCHITECTURE.md`
+- [`docs/Agent_Installation_Platform_PRD.md`](./Agent_Installation_Platform_PRD.md) -> historical product scope before execution+knowledge control-plane convergence
+- [`docs/plans/phase1-execution-checklist.md`](./plans/phase1-execution-checklist.md) -> use `README.md` + `ARCHITECTURE.md`
 - [`docs/plans/log-rotation-retention-policy.md`](./plans/log-rotation-retention-policy.md) -> use `docs/deployment.md` + `daemon/internal/logging/`
 - [`docs/plans/phase1-e2e-test-matrix.md`](./plans/phase1-e2e-test-matrix.md) -> use `.github/workflows/ci.yml` + `scripts/run-e2e-tests.sh`
 
