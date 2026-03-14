@@ -82,7 +82,14 @@ func setWorkRunPhase(runID string, phase work.RunPhase) (work.Run, error) {
 	if err := saveWorkRunUnlocked(run); err != nil {
 		return work.Run{}, err
 	}
-	return loadWorkRunFromPath(path)
+	run, err = loadWorkRunFromPath(path)
+	if err != nil {
+		return work.Run{}, err
+	}
+	if err := syncWorkExecutionFromRun(run); err != nil && !os.IsNotExist(err) {
+		return work.Run{}, err
+	}
+	return run, nil
 }
 
 func startWorkRun(itemID string, backend work.RunBackend) (work.Run, error) {
@@ -117,11 +124,11 @@ func startWorkRun(itemID string, backend work.RunBackend) (work.Run, error) {
 	}
 
 	run, err := work.NormalizeRun(work.Run{
-		ProjectID:      project.ID,
-		WorkItemID:     item.ID,
-		Backend:        backend,
-		Phase:          work.RunPhasePreparing,
-		LeaseOwner:     "carrier:local",
+		ProjectID:          project.ID,
+		WorkItemID:         item.ID,
+		Backend:            backend,
+		Phase:              work.RunPhasePreparing,
+		LeaseOwner:         "carrier:local",
 		VerificationStatus: work.VerificationStatusPending,
 		PublishStatus:      work.PublishStatusPending,
 		WorkflowDigest:     project.WorkflowDigest,
@@ -166,7 +173,13 @@ func startWorkRun(itemID string, backend work.RunBackend) (work.Run, error) {
 func saveWorkRun(run work.Run) error {
 	workRunsStoreMu.Lock()
 	defer workRunsStoreMu.Unlock()
-	return saveWorkRunUnlocked(run)
+	if err := saveWorkRunUnlocked(run); err != nil {
+		return err
+	}
+	if err := syncWorkExecutionFromRun(run); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func saveWorkRunUnlocked(run work.Run) error {
@@ -306,15 +319,19 @@ func buildWorkExecution(project work.Project, item work.WorkItem, run work.Run, 
 	}
 	now := nowTimestamp()
 	return OrchestratorExecution{
-		ID:            uuid.NewString(),
-		Mode:          OrchestratorExecutionModeWork,
+		ID:   uuid.NewString(),
+		Mode: OrchestratorExecutionModeWork,
 		Work: OrchestratorExecutionWorkContext{
-			ProjectID:      project.ID,
-			WorkItemID:     item.ID,
-			RunID:          run.ID,
-			WorkspaceID:    run.WorkspaceID,
-			WorkflowDigest: project.WorkflowDigest,
-			Phase:          string(work.RunPhaseExecuting),
+			ProjectID:          project.ID,
+			WorkItemID:         item.ID,
+			RunID:              run.ID,
+			WorkspaceID:        run.WorkspaceID,
+			WorkspacePath:      workspacePath,
+			Backend:            string(run.Backend),
+			WorkflowDigest:     project.WorkflowDigest,
+			Phase:              string(work.RunPhaseExecuting),
+			VerificationStatus: string(run.VerificationStatus),
+			PublishStatus:      string(run.PublishStatus),
 		},
 		Goal:          goal,
 		Project:       project.Name,
@@ -325,10 +342,10 @@ func buildWorkExecution(project work.Project, item work.WorkItem, run work.Run, 
 		Outcome: OrchestratorExecutionOutcome{
 			Summary: fmt.Sprintf("work run %s bound to workspace %s", run.ID, workspacePath),
 		},
-		Results:    []OrchestratorTaskResult{},
-		CreatedAt:  now,
-		StartedAt:  now,
-		UpdatedAt:  now,
+		Results:   []OrchestratorTaskResult{},
+		CreatedAt: now,
+		StartedAt: now,
+		UpdatedAt: now,
 	}
 }
 
@@ -344,6 +361,9 @@ func completeWorkRun(runID string) (work.Run, error) {
 	if err != nil {
 		return work.Run{}, err
 	}
+	if _, err := setWorkItemState(run.WorkItemID, work.WorkItemStateAwaitingReview, run.ID); err != nil && !os.IsNotExist(err) {
+		return work.Run{}, err
+	}
 	if strings.TrimSpace(run.ExecutionID) != "" {
 		if err := updateWorkExecutionStatus(run.ExecutionID, OrchestratorExecutionStatusCompleted, "work run completed"); err != nil {
 			return work.Run{}, err
@@ -357,6 +377,9 @@ func cancelWorkRun(runID string) (work.Run, error) {
 	if err != nil {
 		return work.Run{}, err
 	}
+	if _, err := setWorkItemState(run.WorkItemID, work.WorkItemStateCancelled, run.ID); err != nil && !os.IsNotExist(err) {
+		return work.Run{}, err
+	}
 	if strings.TrimSpace(run.ExecutionID) != "" {
 		if err := updateWorkExecutionStatus(run.ExecutionID, OrchestratorExecutionStatusCancelled, "work run cancelled"); err != nil {
 			return work.Run{}, err
@@ -368,6 +391,9 @@ func cancelWorkRun(runID string) (work.Run, error) {
 func resumeWorkRun(runID string) (work.Run, error) {
 	run, err := setWorkRunPhase(runID, work.RunPhaseExecuting)
 	if err != nil {
+		return work.Run{}, err
+	}
+	if _, err := setWorkItemState(run.WorkItemID, work.WorkItemStateRunning, run.ID); err != nil && !os.IsNotExist(err) {
 		return work.Run{}, err
 	}
 	if strings.TrimSpace(run.ExecutionID) != "" {
@@ -385,6 +411,9 @@ func reclaimWorkRun(runID string) (work.Run, error) {
 	}
 	run, err = setWorkRunPhase(runID, work.RunPhaseExecuting)
 	if err != nil {
+		return work.Run{}, err
+	}
+	if _, err := setWorkItemState(run.WorkItemID, work.WorkItemStateRunning, run.ID); err != nil && !os.IsNotExist(err) {
 		return work.Run{}, err
 	}
 	if strings.TrimSpace(run.ExecutionID) != "" {
@@ -440,6 +469,32 @@ func updateWorkExecutionStatus(executionID string, status OrchestratorExecutionS
 	if strings.TrimSpace(summary) != "" {
 		execution.Outcome.Summary = strings.TrimSpace(summary)
 	}
+	_, err = upsertOrchestratorExecution(execution)
+	return err
+}
+
+func syncWorkExecutionFromRun(run work.Run) error {
+	if strings.TrimSpace(run.ExecutionID) == "" {
+		return nil
+	}
+	execution, ok, err := getOrchestratorExecution(run.ExecutionID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return os.ErrNotExist
+	}
+	execution.Work.ProjectID = strings.TrimSpace(run.ProjectID)
+	execution.Work.WorkItemID = strings.TrimSpace(run.WorkItemID)
+	execution.Work.RunID = strings.TrimSpace(run.ID)
+	execution.Work.WorkspaceID = strings.TrimSpace(run.WorkspaceID)
+	execution.Work.WorkspacePath = strings.TrimSpace(run.WorkspacePath)
+	execution.Work.Backend = strings.TrimSpace(string(run.Backend))
+	execution.Work.WorkflowDigest = strings.TrimSpace(run.WorkflowDigest)
+	execution.Work.Phase = strings.TrimSpace(string(run.Phase))
+	execution.Work.VerificationStatus = strings.TrimSpace(string(run.VerificationStatus))
+	execution.Work.PublishStatus = strings.TrimSpace(string(run.PublishStatus))
+	execution.UpdatedAt = nowTimestamp()
 	_, err = upsertOrchestratorExecution(execution)
 	return err
 }

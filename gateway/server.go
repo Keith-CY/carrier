@@ -268,6 +268,22 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		}
 		handleWorkRuns(w, r, requestID, cfg)
 	})
+	mux.HandleFunc("/api/v1/work/adapters/github", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleWorkGitHubAdapter(w, r, requestID, cfg)
+	})
+	mux.HandleFunc("/api/v1/work/adapters/github/", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		if err := checkGatewayAccess(r, cfg); err != nil {
+			writeJSON(w, http.StatusUnauthorized, gatewayErrBody(err.code, err.msg))
+			return
+		}
+		handleWorkGitHubAdapter(w, r, requestID, cfg)
+	})
 	mux.HandleFunc("/api/v1/instances", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
 		if err := checkGatewayAccess(r, cfg); err != nil {

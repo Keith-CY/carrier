@@ -154,12 +154,16 @@ const (
 )
 
 type OrchestratorExecutionWorkContext struct {
-	ProjectID      string `json:"projectId,omitempty"`
-	WorkItemID     string `json:"workItemId,omitempty"`
-	RunID          string `json:"runId,omitempty"`
-	WorkspaceID    string `json:"workspaceId,omitempty"`
-	WorkflowDigest string `json:"workflowDigest,omitempty"`
-	Phase          string `json:"phase,omitempty"`
+	ProjectID          string `json:"projectId,omitempty"`
+	WorkItemID         string `json:"workItemId,omitempty"`
+	RunID              string `json:"runId,omitempty"`
+	WorkspaceID        string `json:"workspaceId,omitempty"`
+	WorkspacePath      string `json:"workspacePath,omitempty"`
+	Backend            string `json:"backend,omitempty"`
+	WorkflowDigest     string `json:"workflowDigest,omitempty"`
+	Phase              string `json:"phase,omitempty"`
+	VerificationStatus string `json:"verificationStatus,omitempty"`
+	PublishStatus      string `json:"publishStatus,omitempty"`
 }
 
 type OrchestratorExecution struct {
@@ -495,8 +499,12 @@ func normalizeOrchestratorExecutionWorkContext(in OrchestratorExecutionWorkConte
 	out.WorkItemID = strings.TrimSpace(out.WorkItemID)
 	out.RunID = strings.TrimSpace(out.RunID)
 	out.WorkspaceID = strings.TrimSpace(out.WorkspaceID)
+	out.WorkspacePath = strings.TrimSpace(out.WorkspacePath)
+	out.Backend = strings.TrimSpace(out.Backend)
 	out.WorkflowDigest = strings.TrimSpace(out.WorkflowDigest)
 	out.Phase = strings.TrimSpace(out.Phase)
+	out.VerificationStatus = strings.TrimSpace(out.VerificationStatus)
+	out.PublishStatus = strings.TrimSpace(out.PublishStatus)
 	return out
 }
 

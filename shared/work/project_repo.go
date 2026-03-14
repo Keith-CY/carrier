@@ -32,6 +32,14 @@ func ResolveProjectPaths(roots Roots, projectID string) (ProjectPaths, error) {
 	}, nil
 }
 
+func ResolveProjectPathsFromProject(project Project) (ProjectPaths, error) {
+	roots, err := ResolveRoots()
+	if err != nil {
+		return ProjectPaths{}, err
+	}
+	return ResolveProjectPaths(roots, project.ID)
+}
+
 func SyncProjectRepo(project Project) (Project, ProjectPaths, error) {
 	normalized, err := NormalizeProject(project)
 	if err != nil {
@@ -129,4 +137,8 @@ func runGitCommand(repo string, args ...string) error {
 		return fmt.Errorf("git %s failed: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+func RunGitForWorktree(repoPath, workspacePath, branch string) error {
+	return runGitCommand(repoPath, "worktree", "add", "--force", "--detach", workspacePath, strings.TrimSpace(branch))
 }

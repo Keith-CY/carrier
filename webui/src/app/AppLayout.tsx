@@ -9,6 +9,7 @@ function isNavItemVisible(
   featureFlags: { remoteControlPlaneEnabled: boolean; remoteChatEnabled: boolean },
 ) {
   switch (route) {
+    case 'work':
     case 'executions':
     case 'workers':
     case 'hosts':

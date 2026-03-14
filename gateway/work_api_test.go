@@ -81,4 +81,12 @@ func TestHandleWorkLifecycle(t *testing.T) {
 	if getRunResp.Code != http.StatusOK {
 		t.Fatalf("get run status=%d body=%s", getRunResp.Code, getRunResp.Body.String())
 	}
+
+	resumeReq := httptest.NewRequest(http.MethodGet, "/api/v1/work/runs/"+started.Run.ID+"/resume", nil)
+	resumeReq.Header.Set("Authorization", "Bearer test-gateway-token")
+	resumeResp := httptest.NewRecorder()
+	mux.ServeHTTP(resumeResp, resumeReq)
+	if resumeResp.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("resume run status=%d want %d body=%s", resumeResp.Code, http.StatusMethodNotAllowed, resumeResp.Body.String())
+	}
 }

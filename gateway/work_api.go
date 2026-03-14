@@ -335,6 +335,10 @@ func handleWorkRuns(w http.ResponseWriter, r *http.Request, requestID string, cf
 		return
 	}
 	action := strings.TrimSpace(parts[1])
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+		return
+	}
 	var (
 		run work.Run
 		err error

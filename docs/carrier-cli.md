@@ -49,6 +49,52 @@ All command blocks below assume `carrier` is installed and available in `PATH`.
 - `carrier triggers delete <trigger_id> [--json]`
   - Delete one execution trigger.
 
+### Work-oriented orchestration
+
+- `carrier work projects add --name <name> --source-type <git|github|local> --source-ref <ref> [--default-branch <branch>] [--workflow-path <path>] [--id <project_id>] [--json]`
+  - Register one work project backed by a canonical repo substrate.
+- `carrier work projects list [--json]`
+  - List registered work projects.
+- `carrier work projects show <project_id> [--json]`
+  - Show one work project and its sync metadata.
+- `carrier work projects sync <project_id> [--json]`
+  - Refresh the canonical checkout and workflow digest for one project.
+
+- `carrier work items create --project <project_id> --title <title> [--description <text>] [--acceptance <text>]... [--priority <level>] [--label <label>]... [--json]`
+  - Create one native Carrier work item.
+- `carrier work items list [--json]`
+  - List work items.
+- `carrier work items show <work_item_id> [--json]`
+  - Show one work item.
+- `carrier work items claim <work_item_id> --run-id <run_id> [--json]`
+  - Attach a work item to an explicit run claim.
+- `carrier work items update <work_item_id> [--title <title>] [--description <text>] [--acceptance <text>]... [--priority <level>] [--label <label>]... [--json]`
+  - Update one work item.
+- `carrier work items cancel <work_item_id> [--json]`
+  - Cancel one work item.
+- `carrier work items complete <work_item_id> [--json]`
+  - Mark one work item done.
+
+- `carrier work runs start <work_item_id> [--backend <local_sandboxed|managed_isolated|remote_vm>] [--json]`
+  - Start one supervised work run and bind it to a primary execution.
+- `carrier work runs list [--json]`
+  - List work runs.
+- `carrier work runs show <run_id> [--json]`
+  - Show one work run with workspace and phase metadata.
+- `carrier work runs resume <run_id> [--json]`
+  - Resume one run and refresh the bound execution state.
+- `carrier work runs cancel <run_id> [--json]`
+  - Cancel one run.
+- `carrier work runs reclaim <run_id> [--json]`
+  - Reclaim one stale or interrupted run.
+- `carrier work runs cleanup <run_id> [--json]`
+  - Remove one run workspace under `~/.carrier/projects/<project>/worktrees/`.
+
+- `carrier work github import --project <project_id> --repository <owner/repo> (--issue <n> | --pr <n>) [--json]`
+  - Import one external GitHub issue or pull request as a local work item.
+- `carrier work github publish --run <run_id> --target <comment|status_note|branch|pr_draft>... [--json]`
+  - Publish run status back to GitHub targets while keeping Carrier as the source of truth.
+
 ### Knowledge plane
 
 - `carrier memory [list] [--subject <subject>] [--json]`
