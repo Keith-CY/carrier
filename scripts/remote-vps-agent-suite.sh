@@ -388,9 +388,9 @@ if [[ -n "$LIVE_PROVIDER" && -n "$LIVE_API_KEY" ]]; then
   binding_code="$(api_json POST "/api/v1/provider-bindings" "$binding_payload" "$binding_out")"
   expect_2xx "$binding_code" "provider binding upsert" "$binding_out"
 
-  echo "[9/12] resolve provider governance for remote openclaw"
+  echo "[9/12] resolve provider governance for remote agent ${AGENT_ID}"
   resolve_out="$TMP_DIR/live-provider-resolve.json"
-  resolve_code="$(api_json GET "/api/v1/provider-governance/resolve?hostId=$(printf '%s' "$HOST_ID" | jq -sRr @uri)&agentId=openclaw" "" "$resolve_out")"
+  resolve_code="$(api_json GET "/api/v1/provider-governance/resolve?hostId=$(printf '%s' "$HOST_ID" | jq -sRr @uri)&agentId=$(printf '%s' "$AGENT_ID" | jq -sRr @uri)" "" "$resolve_out")"
   expect_2xx "$resolve_code" "provider governance resolve" "$resolve_out"
   jq -e --arg provider "$LIVE_PROVIDER" '
     .resolution.status == "resolved" and
@@ -404,6 +404,7 @@ if [[ -n "$LIVE_PROVIDER" && -n "$LIVE_API_KEY" ]]; then
     --arg goal "Remote live provider execution smoke" \
     --arg provider "$LIVE_PROVIDER" \
     --arg host_id "$HOST_ID" \
+    --arg agent_id "$AGENT_ID" \
     '{
       goal: $goal,
       requestedProvider: $provider,
@@ -411,14 +412,14 @@ if [[ -n "$LIVE_PROVIDER" && -n "$LIVE_API_KEY" ]]; then
       distillOutputs: ["shared:remote-lessons"],
       approvalScope: "infrastructure_only",
       requiredWorkers: [
-        {hostId: $host_id, agentId: "openclaw", count: 1}
+        {hostId: $host_id, agentId: $agent_id, count: 1}
       ],
       taskUnits: [
         {
           id: "remote-task-1",
           input: "Reply with one short sentence that includes REMOTE_EXECUTION_OK and shared:remote-runbook.",
           hostId: $host_id,
-          agentId: "openclaw",
+          agentId: $agent_id,
           timeoutMs: 120000,
           retryBudget: 1
         }
