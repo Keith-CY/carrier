@@ -210,7 +210,6 @@ jobs:
     needs: classify-scope
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    continue-on-error: ${{ matrix.enforcement != 'required' }}
     environment:
       name: live_smoke
     timeout-minutes: 25
@@ -320,7 +319,25 @@ jobs:
 
       - name: Run live provider smoke
         if: steps.resolve.outputs.enabled == 'true'
-        run: go test ./cmd/carrier -run TestLiveProviderSmoke -count=1 -v
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if go test ./cmd/carrier -run TestLiveProviderSmoke -count=1 -v; then
+            exit 0
+          fi
+
+          if [[ "${{ matrix.enforcement }}" == "required" ]]; then
+            exit 1
+          fi
+
+          {
+            echo "### Live Provider Smoke"
+            echo "- provider: \`${{ matrix.provider }}\`"
+            echo "- status: soft-failed"
+            echo "- enforcement: \`${{ matrix.enforcement }}\`"
+            echo "- note: provider is optional in CI; preserving signal without failing the workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Emit skipped summary
         if: steps.resolve.outputs.enabled != 'true'

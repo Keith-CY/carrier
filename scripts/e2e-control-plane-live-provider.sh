@@ -101,33 +101,32 @@ wait_for_http_ok() {
   done
 }
 
-port_is_listening() {
+port_is_available() {
   local port="$1"
-  (echo >/dev/tcp/127.0.0.1/"$port") >/dev/null 2>&1
+  python3 - "$port" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    s.bind(("127.0.0.1", port))
+except OSError:
+    sys.exit(1)
+finally:
+    s.close()
+PY
 }
 
-pick_available_port() {
-  local start="$1"
-  local end="$2"
-  local preferred="${3:-}"
-  local candidate=""
+pick_ephemeral_port() {
+  python3 - <<'PY'
+import socket
 
-  if [[ -n "$preferred" ]]; then
-    if ! port_is_listening "$preferred"; then
-      printf '%s' "$preferred"
-      return 0
-    fi
-  fi
-
-  for candidate in $(seq "$start" "$end"); do
-    if ! port_is_listening "$candidate"; then
-      printf '%s' "$candidate"
-      return 0
-    fi
-  done
-
-  echo "error: no available TCP port in range ${start}-${end}" >&2
-  return 1
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
 }
 
 run_with_timeout() {
@@ -276,11 +275,26 @@ require_cmd curl
 require_cmd unzip
 require_cmd python3
 
-if [[ -z "$DAEMON_PORT" ]]; then
-  DAEMON_PORT="$(pick_available_port 9090 9190 9090)"
+if [[ -n "$DAEMON_PORT" ]]; then
+  if ! port_is_available "$DAEMON_PORT"; then
+    echo "error: requested daemon port is already in use: ${DAEMON_PORT}" >&2
+    exit 1
+  fi
+else
+  DAEMON_PORT="$(pick_ephemeral_port)"
 fi
-if [[ -z "$GATEWAY_PORT" ]]; then
-  GATEWAY_PORT="$(pick_available_port 8787 8887 8787)"
+if [[ -n "$GATEWAY_PORT" ]]; then
+  if ! port_is_available "$GATEWAY_PORT"; then
+    echo "error: requested gateway port is already in use: ${GATEWAY_PORT}" >&2
+    exit 1
+  fi
+else
+  while :; do
+    GATEWAY_PORT="$(pick_ephemeral_port)"
+    if [[ "$GATEWAY_PORT" != "$DAEMON_PORT" ]]; then
+      break
+    fi
+  done
 fi
 
 if [[ -n "$STATE_ROOT" ]]; then
