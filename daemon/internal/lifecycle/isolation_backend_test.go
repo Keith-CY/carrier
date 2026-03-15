@@ -111,3 +111,31 @@ func TestBuildHostEnsureLinuxIsolationDepsCommandRepairsUnusableBwrap(t *testing
 		}
 	}
 }
+
+func TestBuildBwrapInvocationPreservesTmpHomeRoot(t *testing.T) {
+	origEnv := isolationEnvLookup
+	t.Cleanup(func() {
+		isolationEnvLookup = origEnv
+	})
+	isolationEnvLookup = func(key string) string {
+		if key == "HOME" {
+			return "/tmp/clp.7q1sWL/h"
+		}
+		return ""
+	}
+
+	got, err := buildBwrapInvocation("/usr/bin/bwrap", "tail -f /dev/null")
+	if err != nil {
+		t.Fatalf("buildBwrapInvocation: %v", err)
+	}
+	for _, want := range []string{
+		"--tmpfs /tmp",
+		"--dir '/tmp/clp.7q1sWL'",
+		"--bind '/tmp/clp.7q1sWL' '/tmp/clp.7q1sWL'",
+		"tail -f /dev/null",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected wrapped invocation to contain %q, got %q", want, got)
+		}
+	}
+}

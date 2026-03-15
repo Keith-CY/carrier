@@ -288,11 +288,48 @@ func buildBwrapInvocation(bwrapExecutable, startCommand string) (string, error) 
 	}
 	safeBwrapPath := shellSingleQuote(trimmedBwrapExecutable)
 	safeStartCommand := shellSingleQuote(trimmedStartCommand)
-	return fmt.Sprintf(
-		"%s --die-with-parent --new-session --bind / / --proc /proc --dev /dev --tmpfs /tmp --unshare-pid -- sh -lc %s",
+	args := []string{
 		safeBwrapPath,
-		safeStartCommand,
-	), nil
+		"--die-with-parent",
+		"--new-session",
+		"--bind", "/", "/",
+		"--proc", "/proc",
+		"--dev", "/dev",
+		"--tmpfs", "/tmp",
+	}
+	if tmpRoot := bwrapPreservedTmpRoot(strings.TrimSpace(isolationEnvLookup("HOME"))); tmpRoot != "" {
+		safeTmpRoot := shellSingleQuote(tmpRoot)
+		args = append(args,
+			"--dir", safeTmpRoot,
+			"--bind", safeTmpRoot, safeTmpRoot,
+		)
+	}
+	args = append(args,
+		"--unshare-pid",
+		"--",
+		"sh", "-lc", safeStartCommand,
+	)
+	return strings.Join(args, " "), nil
+}
+
+func bwrapPreservedTmpRoot(home string) string {
+	trimmed := strings.TrimSpace(home)
+	if trimmed == "" || !strings.HasPrefix(trimmed, "/tmp/") {
+		return ""
+	}
+	rest := strings.TrimPrefix(trimmed, "/tmp/")
+	if rest == "" {
+		return ""
+	}
+	segment, _, _ := strings.Cut(rest, "/")
+	segment = strings.TrimSpace(segment)
+	if segment == "" || segment == "." || segment == ".." {
+		return ""
+	}
+	if strings.Contains(segment, "/") {
+		return ""
+	}
+	return "/tmp/" + segment
 }
 
 func buildHostEnsureLinuxIsolationDepsCommand() string {
