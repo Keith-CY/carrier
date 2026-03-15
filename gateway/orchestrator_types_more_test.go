@@ -269,6 +269,7 @@ func TestNormalizeOrchestratorExecutionStoresDelegatedMemoryFields(t *testing.T)
 		Goal:                  " delegate incident ",
 		AgentLifecycleMode:    " Delegated ",
 		MemoryBindingMode:     " snapshot ",
+		RequiredMemory:        []string{" shared:team ", "public", "shared:team"},
 		SourceScopes:          []string{" shared:team ", "public", "shared:team"},
 		SnapshotID:            " snapshot-1 ",
 		ChildAgentID:          " child-agent ",
@@ -311,6 +312,29 @@ func TestNormalizeOrchestratorExecutionStoresDelegatedMemoryFields(t *testing.T)
 	}
 	if out.CleanupStatus != "cleanup_pending" {
 		t.Fatalf("cleanupStatus = %q, want cleanup_pending", out.CleanupStatus)
+	}
+}
+
+func TestNormalizeOrchestratorExecutionSourceScopesFollowRequiredMemory(t *testing.T) {
+	out, err := normalizeOrchestratorExecution(OrchestratorExecution{
+		Goal:           " delegate incident ",
+		RequiredMemory: []string{" shared:team ", "private:checkout", "shared:team"},
+		SourceScopes:   []string{" public "},
+		RequiredWorkers: []OrchestratorRequiredWorker{
+			{HostID: "host-1", AgentID: "zeroclaw", Count: 1},
+		},
+		TaskUnits: []OrchestratorTaskUnit{
+			{Input: "collect incident context"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeOrchestratorExecution source scopes follow required memory failed: %v", err)
+	}
+	if strings.Join(out.SourceScopes, ",") != "private:checkout,shared:team" {
+		t.Fatalf("sourceScopes = %v, want [private:checkout shared:team]", out.SourceScopes)
+	}
+	if out.SnapshotDigest != buildMemoryContractDigest([]string{"private:checkout", "shared:team"}) {
+		t.Fatalf("snapshotDigest = %q, want derived required memory digest", out.SnapshotDigest)
 	}
 }
 

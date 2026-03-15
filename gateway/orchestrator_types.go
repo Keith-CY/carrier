@@ -507,10 +507,7 @@ func normalizeOrchestratorDelegatedMemoryState(in OrchestratorExecution) Orchest
 	if out.MemoryBindingMode != orchestratorMemoryBindingMode {
 		out.MemoryBindingMode = orchestratorMemoryBindingMode
 	}
-	out.SourceScopes = normalizeStringSelectorList(out.SourceScopes, true)
-	if len(out.SourceScopes) == 0 {
-		out.SourceScopes = append([]string(nil), out.RequiredMemory...)
-	}
+	out.SourceScopes = append([]string(nil), out.RequiredMemory...)
 	out.SnapshotID = strings.TrimSpace(out.SnapshotID)
 	out.SnapshotDigest = strings.TrimSpace(out.SnapshotDigest)
 	if out.SnapshotDigest == "" && len(out.SourceScopes) > 0 {

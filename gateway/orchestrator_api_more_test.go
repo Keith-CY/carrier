@@ -660,6 +660,7 @@ func TestHandleOrchestratorExecutionsCreateSeedsDelegatedMemoryState(t *testing.
 		"goal":"delegate checkout investigation",
 		"approvalScope":"infrastructure_only",
 		"requiredMemory":[" shared:incident ","private:checkout","shared:incident"],
+		"sourceScopes":["public"],
 		"snapshotId":"snapshot-stale",
 		"snapshotDigest":"stale-digest",
 		"childAgentId":"child-stale",
