@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"carrier/shared/openclawcfg"
 )
 
 func TestExtractChatResponseText(t *testing.T) {
@@ -260,6 +262,99 @@ func TestRemoteWriteOpenClawCarrierSecretsUsesRsyncPayload(t *testing.T) {
 	openai, _ := providers["openai"].(map[string]interface{})
 	if strings.TrimSpace(anyToString(openai["apiKey"])) != "sk-openai-rsync" {
 		t.Fatalf("unexpected secrets payload: %+v", payload)
+	}
+}
+
+func TestBuildRemoteProviderProfilePatchWritesCompleteOpenClawProviderConfig(t *testing.T) {
+	patch := buildRemoteProviderProfilePatch(ProviderProfile{
+		Provider: "openrouter",
+		Model:    "openai/gpt-4o-mini",
+		AuthRef:  "sk-openrouter-live",
+	}, "assistant")
+
+	agents, ok := patch["agents"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected agents patch, got %#v", patch["agents"])
+	}
+	defaults, ok := agents["defaults"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected agents.defaults patch, got %#v", agents["defaults"])
+	}
+	defaultModel, ok := defaults["model"].(map[string]interface{})
+	if !ok || strings.TrimSpace(anyToString(defaultModel["primary"])) != "openai/gpt-4o-mini" {
+		t.Fatalf("unexpected default model patch: %#v", defaults["model"])
+	}
+	overrides, ok := agents["overrides"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected agent overrides patch, got %#v", agents["overrides"])
+	}
+	override, ok := overrides["assistant"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected assistant override, got %#v", overrides)
+	}
+	overrideModel, ok := override["model"].(map[string]interface{})
+	if !ok || strings.TrimSpace(anyToString(overrideModel["primary"])) != "openai/gpt-4o-mini" {
+		t.Fatalf("unexpected override model patch: %#v", override["model"])
+	}
+
+	models, ok := patch["models"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected models patch, got %#v", patch["models"])
+	}
+	providers, ok := models["providers"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected models.providers patch, got %#v", models["providers"])
+	}
+	openrouter, ok := providers["openrouter"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected openrouter provider patch, got %#v", providers["openrouter"])
+	}
+	if got := strings.TrimSpace(anyToString(openrouter["baseUrl"])); got != "https://openrouter.ai/api/v1" {
+		t.Fatalf("openrouter baseUrl=%q, want https://openrouter.ai/api/v1", got)
+	}
+	providerModels, ok := openrouter["models"].([]interface{})
+	if !ok || len(providerModels) != 1 {
+		t.Fatalf("expected one provider model entry, got %#v", openrouter["models"])
+	}
+	providerModel, _ := providerModels[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(providerModel["id"])); got != "gpt-4o-mini" {
+		t.Fatalf("provider model id=%q, want gpt-4o-mini", got)
+	}
+	apiKeyRef, ok := openrouter["apiKey"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected apiKey object, got %#v", openrouter["apiKey"])
+	}
+	if got := strings.TrimSpace(anyToString(apiKeyRef["provider"])); got != "carrier_file" {
+		t.Fatalf("apiKey.provider=%q, want carrier_file", got)
+	}
+
+	secrets, ok := patch["secrets"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected secrets patch, got %#v", patch["secrets"])
+	}
+	secretProviders, ok := secrets["providers"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected secrets.providers patch, got %#v", secrets["providers"])
+	}
+	carrierFile, ok := secretProviders["carrier_file"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected carrier_file provider patch, got %#v", secretProviders["carrier_file"])
+	}
+	if got := strings.TrimSpace(anyToString(carrierFile["path"])); got != "./carrier-secrets.json" {
+		t.Fatalf("carrier_file.path=%q, want ./carrier-secrets.json", got)
+	}
+
+	secretsPatch, ok := patch[openclawcfg.CarrierSecretFilePatchKey].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected carrier secret file patch, got %#v", patch[openclawcfg.CarrierSecretFilePatchKey])
+	}
+	rawProviders, ok := secretsPatch["providers"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected secret providers patch, got %#v", secretsPatch["providers"])
+	}
+	rawOpenRouter, ok := rawProviders["openrouter"].(map[string]interface{})
+	if !ok || strings.TrimSpace(anyToString(rawOpenRouter["apiKey"])) != "sk-openrouter-live" {
+		t.Fatalf("unexpected openrouter secret patch: %#v", rawProviders["openrouter"])
 	}
 }
 

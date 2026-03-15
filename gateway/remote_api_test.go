@@ -1444,6 +1444,13 @@ func TestRemoteCodeAgentLifecycleAndAudit(t *testing.T) {
 func TestProviderGovernanceResolveAndAudit(t *testing.T) {
 	auditPath := filepath.Join(t.TempDir(), "gateway-audit.jsonl")
 	t.Setenv("CARRIER_GATEWAY_AUDIT_LOG", auditPath)
+	origRsync := remoteRsyncRunner
+	remoteRsyncRunner = func(_ context.Context, args []string) (remoteExecResult, error) {
+		return remoteExecResult{ExitCode: 0, Command: "rsync " + strings.Join(args, " ")}, nil
+	}
+	t.Cleanup(func() {
+		remoteRsyncRunner = origRsync
+	})
 
 	configureSSHRunner(t, func(command string) remoteExecResult {
 		switch {

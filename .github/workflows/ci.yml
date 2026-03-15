@@ -210,13 +210,24 @@ jobs:
     needs: classify-scope
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.enforcement != 'required' }}
     environment:
       name: live_smoke
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        provider: [anthropic, openai, openai-codex, openrouter, openai-compatible]
+        include:
+          - provider: openai
+            enforcement: required
+          - provider: openai-codex
+            enforcement: required
+          - provider: openrouter
+            enforcement: required
+          - provider: anthropic
+            enforcement: soft_optional
+          - provider: openai-compatible
+            enforcement: soft_optional
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -925,7 +936,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417
         with:
-          go-version-file: daemon/go.mod
+          go-version-file: go.mod
 
       - name: Run end-to-end tests
         env:

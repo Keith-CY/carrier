@@ -1976,6 +1976,11 @@ func parseRemoteMemoryStatus(payload map[string]interface{}) RemoteMemoryContrac
 }
 
 func applyProviderProfileToRemote(ctx context.Context, host RemoteHost, profile ProviderProfile, agentID string) (map[string]interface{}, string, []remoteExecResult, error) {
+	patch := buildRemoteProviderProfilePatch(profile, agentID)
+	return remotePatchConfig(ctx, host, patch)
+}
+
+func buildRemoteProviderProfilePatch(profile ProviderProfile, agentID string) map[string]interface{} {
 	providerKey := mapCarrierProviderToManagedProvider(profile.Provider)
 	patch := map[string]interface{}{}
 	model := strings.TrimSpace(profile.Model)
@@ -1985,13 +1990,37 @@ func applyProviderProfileToRemote(ctx context.Context, host RemoteHost, profile 
 			setNestedMapValue(patch, []string{"agents", "overrides", trimmedAgentID, "model", "primary"}, model)
 		}
 	}
-	if providerKey != "" && strings.TrimSpace(profile.BaseURL) != "" {
-		setNestedMapValue(patch, []string{"models", "providers", providerKey, "baseUrl"}, strings.TrimSpace(profile.BaseURL))
+	if providerKey == "" {
+		return patch
 	}
-	if providerKey != "" && strings.TrimSpace(profile.AuthRef) != "" {
-		setNestedMapValue(patch, []string{"models", "providers", providerKey, "apiKey"}, strings.TrimSpace(profile.AuthRef))
+
+	includeAPIKeyRef := strings.TrimSpace(profile.AuthRef) != ""
+	providerEntry := openclawcfg.BuildProviderEntry(
+		strings.TrimSpace(profile.Provider),
+		providerKey,
+		strings.TrimSpace(profile.BaseURL),
+		model,
+		includeAPIKeyRef,
+	)
+	setNestedMapValue(patch, []string{"models", "providers", providerKey}, providerEntry)
+	if !includeAPIKeyRef {
+		return patch
 	}
-	return remotePatchConfig(ctx, host, patch)
+
+	setNestedMapValue(patch, []string{"secrets", "providers", openclawcfg.CarrierFileSecretProviderAlias}, map[string]interface{}{
+		"source": "file",
+		"path":   openclawcfg.CarrierFileSecretsPath,
+		"mode":   "json",
+	})
+	setNestedMapValue(patch, []string{"secrets", "defaults", "file"}, openclawcfg.CarrierFileSecretProviderAlias)
+	patch[openclawcfg.CarrierSecretFilePatchKey] = map[string]interface{}{
+		"providers": map[string]interface{}{
+			providerKey: map[string]interface{}{
+				"apiKey": strings.TrimSpace(profile.AuthRef),
+			},
+		},
+	}
+	return patch
 }
 
 func setNestedMapValue(root map[string]interface{}, path []string, value interface{}) {
