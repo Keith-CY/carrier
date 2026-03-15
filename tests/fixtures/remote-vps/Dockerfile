@@ -8,6 +8,7 @@ RUN apt-get update \
     git \
     jq \
     openssh-server \
+    rsync \
     sudo \
     tini \
   && rm -rf /var/lib/apt/lists/*
