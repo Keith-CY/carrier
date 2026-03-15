@@ -6243,57 +6243,61 @@ func runTriggersCommand(out io.Writer, opts triggersCommandOptions) error {
 }
 
 func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error {
+	progressOut := out
+	if opts.JSON {
+		progressOut = io.Discard
+	}
 	switch opts.Action {
 	case "plan":
-		if _, err := ensureDaemonRunning(out); err != nil {
+		if _, err := ensureDaemonRunning(progressOut); err != nil {
 			return err
 		}
 		return runOrchestratePlan(out, opts)
 	case "list":
-		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		if _, err := ensureGatewayRunning(progressOut, startGatewayInBackgroundAndWait); err != nil {
 			return err
 		}
 		return runOrchestrateList(out, opts.Limit, opts.JSON)
 	case "status":
-		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		if _, err := ensureGatewayRunning(progressOut, startGatewayInBackgroundAndWait); err != nil {
 			return err
 		}
 		return runOrchestrateStatus(out, opts.ExecutionID, opts.JSON)
 	case "cancel":
-		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		if _, err := ensureGatewayRunning(progressOut, startGatewayInBackgroundAndWait); err != nil {
 			return err
 		}
 		return runOrchestrateCancel(out, opts.ExecutionID, opts.JSON)
 	case "retry", "rerun", "clone":
-		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		if _, err := ensureGatewayRunning(progressOut, startGatewayInBackgroundAndWait); err != nil {
 			return err
 		}
 		return runOrchestrateDerivedExecutionAction(out, opts.Action, opts.ExecutionID, opts.JSON)
 	case "artifacts":
-		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		if _, err := ensureGatewayRunning(progressOut, startGatewayInBackgroundAndWait); err != nil {
 			return err
 		}
 		return runOrchestrateArtifacts(out, opts.ExecutionID, opts.JSON)
 	case "evidence":
-		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		if _, err := ensureGatewayRunning(progressOut, startGatewayInBackgroundAndWait); err != nil {
 			return err
 		}
 		return runOrchestrateEvidence(out, opts.ExecutionID, opts.Format, opts.OutputPath, opts.Open, opts.JSON)
 	case "audit":
-		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		if _, err := ensureGatewayRunning(progressOut, startGatewayInBackgroundAndWait); err != nil {
 			return err
 		}
 		return runOrchestrateAudit(out, opts.ExecutionID, opts.OutputPath, opts.Open, opts.JSON)
 	case "authorize":
-		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		if _, err := ensureGatewayRunning(progressOut, startGatewayInBackgroundAndWait); err != nil {
 			return err
 		}
 		return runOrchestrateAuthorize(out, opts.ExecutionID, opts.PolicyApprove, opts.JSON)
 	case "run":
-		if _, err := ensureDaemonRunning(out); err != nil {
+		if _, err := ensureDaemonRunning(progressOut); err != nil {
 			return err
 		}
-		if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
+		if _, err := ensureGatewayRunning(progressOut, startGatewayInBackgroundAndWait); err != nil {
 			return err
 		}
 		return runOrchestrateStart(out, opts)

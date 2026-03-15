@@ -788,6 +788,21 @@ func TestRunExecutionEvidenceCommand(t *testing.T) {
 		t.Fatalf("unexpected evidence output: %q", out.String())
 	}
 
+	out.Reset()
+	if err := runOrchestrateCommand(&out, orchestrateCommandOptions{
+		Action:      "evidence",
+		ExecutionID: "exec-evidence",
+		JSON:        true,
+	}); err != nil {
+		t.Fatalf("runOrchestrateCommand(evidence --json) error: %v", err)
+	}
+	if !json.Valid(out.Bytes()) {
+		t.Fatalf("expected pure JSON evidence output, got %q", out.String())
+	}
+	if strings.Contains(out.String(), "Gateway already running") {
+		t.Fatalf("expected evidence --json output without gateway preamble, got %q", out.String())
+	}
+
 	outputPath := filepath.Join(t.TempDir(), "exec-evidence.zip")
 	out.Reset()
 	if err := runOrchestrateCommand(&out, orchestrateCommandOptions{
@@ -862,6 +877,21 @@ func TestRunExecutionAuditCommand(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "execution audit exec-audit") || !strings.Contains(out.String(), "events: 2") {
 		t.Fatalf("unexpected audit output: %q", out.String())
+	}
+
+	out.Reset()
+	if err := runOrchestrateCommand(&out, orchestrateCommandOptions{
+		Action:      "audit",
+		ExecutionID: "exec-audit",
+		JSON:        true,
+	}); err != nil {
+		t.Fatalf("runOrchestrateCommand(audit --json) error: %v", err)
+	}
+	if !json.Valid(out.Bytes()) {
+		t.Fatalf("expected pure JSON audit output, got %q", out.String())
+	}
+	if strings.Contains(out.String(), "Gateway already running") {
+		t.Fatalf("expected audit --json output without gateway preamble, got %q", out.String())
 	}
 
 	outputPath := filepath.Join(t.TempDir(), "exec-audit.json")
