@@ -1983,6 +1983,12 @@ func applyProviderProfileToRemote(ctx context.Context, host RemoteHost, profile 
 func buildRemoteProviderProfilePatch(profile ProviderProfile, agentID string) map[string]interface{} {
 	providerKey := mapCarrierProviderToManagedProvider(profile.Provider)
 	patch := map[string]interface{}{}
+	if providerKey != "" {
+		setNestedMapValue(patch, []string{"agents", "defaults", "provider"}, providerKey)
+		if trimmedAgentID := strings.TrimSpace(agentID); trimmedAgentID != "" && !strings.EqualFold(trimmedAgentID, "main") {
+			setNestedMapValue(patch, []string{"agents", "overrides", trimmedAgentID, "provider"}, providerKey)
+		}
+	}
 	model := strings.TrimSpace(profile.Model)
 	if model != "" {
 		setNestedMapValue(patch, []string{"agents", "defaults", "model", "primary"}, model)

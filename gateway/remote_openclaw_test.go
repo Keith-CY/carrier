@@ -280,6 +280,9 @@ func TestBuildRemoteProviderProfilePatchWritesCompleteOpenClawProviderConfig(t *
 	if !ok {
 		t.Fatalf("expected agents.defaults patch, got %#v", agents["defaults"])
 	}
+	if got := strings.TrimSpace(anyToString(defaults["provider"])); got != "openrouter" {
+		t.Fatalf("defaults.provider=%q, want openrouter", got)
+	}
 	defaultModel, ok := defaults["model"].(map[string]interface{})
 	if !ok || strings.TrimSpace(anyToString(defaultModel["primary"])) != "openai/gpt-4o-mini" {
 		t.Fatalf("unexpected default model patch: %#v", defaults["model"])
@@ -291,6 +294,9 @@ func TestBuildRemoteProviderProfilePatchWritesCompleteOpenClawProviderConfig(t *
 	override, ok := overrides["assistant"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("expected assistant override, got %#v", overrides)
+	}
+	if got := strings.TrimSpace(anyToString(override["provider"])); got != "openrouter" {
+		t.Fatalf("override.provider=%q, want openrouter", got)
 	}
 	overrideModel, ok := override["model"].(map[string]interface{})
 	if !ok || strings.TrimSpace(anyToString(overrideModel["primary"])) != "openai/gpt-4o-mini" {
