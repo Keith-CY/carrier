@@ -59,14 +59,17 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		inst := managedAgentInstance{
-			ID:           instanceID,
-			Type:         agentID,
-			AgentID:      agentID,
-			Isolation:    req.Isolation,
-			GatewayURL:   gatewayURLFromRequest(r),
-			RuntimeState: "running",
-			CreatedAt:    now,
-			UpdatedAt:    now,
+			ID:                  instanceID,
+			Type:                agentID,
+			AgentID:             agentID,
+			Isolation:           req.Isolation,
+			GatewayURL:          gatewayURLFromRequest(r),
+			RuntimeState:        "running",
+			AgentLifecycleMode:  managedAgentLifecyclePersistent,
+			MemoryBindingMode:   managedMemoryBindingLiveMount,
+			MemoryRefreshPolicy: managedMemoryRefreshNextTurn,
+			CreatedAt:           now,
+			UpdatedAt:           now,
 		}
 		if err := upsertManagedInstance(inst); err != nil {
 			writeStatePersistenceError(w, requestID, "add", agentID, instanceID, err)
@@ -245,23 +248,26 @@ func handleWebUIAdd(w http.ResponseWriter, r *http.Request, requestID string, da
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	inst := managedAgentInstance{
-		ID:           instanceID,
-		Type:         agentID,
-		AgentID:      agentID,
-		Isolation:    req.Isolation,
-		GatewayURL:   gatewayURLFromRequest(r),
-		Workspace:    workspacePath,
-		ConfigPath:   configPath,
-		RecordPath:   recordPath,
-		Channel:      channelID,
-		Provider:     provider.ID,
-		ModelSurface: &result.ModelSurface,
-		PairRequired: pairRequired,
-		PairCode:     pairCode,
-		PairedChatID: pairedChatID,
-		RuntimeState: runtimeState,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:                  instanceID,
+		Type:                agentID,
+		AgentID:             agentID,
+		Isolation:           req.Isolation,
+		GatewayURL:          gatewayURLFromRequest(r),
+		Workspace:           workspacePath,
+		ConfigPath:          configPath,
+		RecordPath:          recordPath,
+		Channel:             channelID,
+		Provider:            provider.ID,
+		ModelSurface:        &result.ModelSurface,
+		PairRequired:        pairRequired,
+		PairCode:            pairCode,
+		PairedChatID:        pairedChatID,
+		RuntimeState:        runtimeState,
+		AgentLifecycleMode:  managedAgentLifecyclePersistent,
+		MemoryBindingMode:   managedMemoryBindingLiveMount,
+		MemoryRefreshPolicy: managedMemoryRefreshNextTurn,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}
 	if err := upsertManagedInstance(inst); err != nil {
 		writeStatePersistenceError(w, requestID, "add", agentID, instanceID, err)

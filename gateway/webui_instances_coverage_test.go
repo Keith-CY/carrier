@@ -446,6 +446,114 @@ func TestHandleWebUIInstances_SyncAndPersistBranches(t *testing.T) {
 	})
 }
 
+func TestWebUIInstancesSurfacesLifecycleAndMemoryBindingMetadata(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	storePath := filepath.Join(tmp, "instances.json")
+	t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	inst := managedAgentInstance{
+		ID:                  "openclaw-main",
+		Type:                "openclaw",
+		AgentID:             "openclaw",
+		GatewayURL:          "http://gateway.local",
+		RuntimeState:        "running",
+		AgentLifecycleMode:  "persistent",
+		MemoryBindingMode:   "live_mount",
+		PublicScopes:        []string{"public"},
+		SharedScopes:        []string{"shared:team"},
+		PerAgentMemoryID:    "per-agent-openclaw-main",
+		MemoryRefreshPolicy: "next_turn",
+		TaskID:              "task-123",
+		SnapshotDigest:      "sha256:abc",
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	}
+
+	if err := saveManagedInstances(storePath, []managedAgentInstance{inst}); err != nil {
+		t.Fatalf("saveManagedInstances: %v", err)
+	}
+
+	t.Run("instances summary", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "http://gateway.local/api/v1/instances", nil)
+		handleWebUIInstances(rec, req, "req-instances-memory-binding", nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var payload struct {
+			Instances []managedAgentInstance `json:"instances"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode payload: %v; body=%s", err, rec.Body.String())
+		}
+		if len(payload.Instances) != 1 {
+			t.Fatalf("expected 1 instance, got %+v", payload.Instances)
+		}
+
+		got := payload.Instances[0]
+		if got.AgentLifecycleMode != "persistent" {
+			t.Fatalf("AgentLifecycleMode = %q, want persistent", got.AgentLifecycleMode)
+		}
+		if got.MemoryBindingMode != "live_mount" {
+			t.Fatalf("MemoryBindingMode = %q, want live_mount", got.MemoryBindingMode)
+		}
+		if got.PerAgentMemoryID != "per-agent-openclaw-main" {
+			t.Fatalf("PerAgentMemoryID = %q, want per-agent-openclaw-main", got.PerAgentMemoryID)
+		}
+		if got.MemoryRefreshPolicy != "next_turn" {
+			t.Fatalf("MemoryRefreshPolicy = %q, want next_turn", got.MemoryRefreshPolicy)
+		}
+		if len(got.PublicScopes) != 1 || got.PublicScopes[0] != "public" {
+			t.Fatalf("PublicScopes = %#v, want []string{\"public\"}", got.PublicScopes)
+		}
+		if len(got.SharedScopes) != 1 || got.SharedScopes[0] != "shared:team" {
+			t.Fatalf("SharedScopes = %#v, want []string{\"shared:team\"}", got.SharedScopes)
+		}
+	})
+
+	t.Run("launcher session summary", func(t *testing.T) {
+		_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+			"GET /api/v1/agents/openclaw/status": func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"id":           "openclaw",
+					"runtimeState": "running",
+					"health":       "healthy",
+					"updatedAt":    now,
+				})
+			},
+			"GET /api/v1/agents/openclaw/capabilities": func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{})
+			},
+		})
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/openclaw/launcher", nil)
+		handleWebUIAgent(rec, req, "req-launcher-memory-binding", daemon)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		body := rec.Body.String()
+		for _, needle := range []string{
+			`"agentLifecycleMode":"persistent"`,
+			`"memoryBindingMode":"live_mount"`,
+			`"publicScopes":["public"]`,
+			`"sharedScopes":["shared:team"]`,
+			`"perAgentMemoryId":"per-agent-openclaw-main"`,
+			`"memoryRefreshPolicy":"next_turn"`,
+			`"taskId":"task-123"`,
+			`"snapshotDigest":"sha256:abc"`,
+		} {
+			if !strings.Contains(body, needle) {
+				t.Fatalf("expected launcher response to contain %s, got %s", needle, body)
+			}
+		}
+	})
+}
+
 func TestHandleWebUIInstance_Branches(t *testing.T) {
 	tmp := t.TempDir()
 	storePath := filepath.Join(tmp, "instances.json")

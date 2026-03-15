@@ -121,6 +121,9 @@ func backfillManagedInstancesFromDaemon(r *http.Request, daemon *DaemonClient, i
 	if daemon == nil {
 		return instances, false, nil
 	}
+	for i := range instances {
+		instances[i] = normalizeManagedAgentInstance(instances[i])
+	}
 	agents, err := daemon.ListAgents(r.Context(), "webui:instances:backfill", requestID)
 	if err != nil {
 		return instances, false, err
@@ -168,15 +171,18 @@ func backfillManagedInstancesFromDaemon(r *http.Request, daemon *DaemonClient, i
 			}
 			instanceID = generatedID
 		}
-		instances = append(instances, managedAgentInstance{
-			ID:           instanceID,
-			Type:         agentID,
-			AgentID:      agentID,
-			GatewayURL:   gatewayURLFromRequest(r),
-			RuntimeState: defaultRuntimeState(runtimeState, installState),
-			CreatedAt:    now,
-			UpdatedAt:    now,
-		})
+		instances = append(instances, normalizeManagedAgentInstance(managedAgentInstance{
+			ID:                  instanceID,
+			Type:                agentID,
+			AgentID:             agentID,
+			GatewayURL:          gatewayURLFromRequest(r),
+			RuntimeState:        defaultRuntimeState(runtimeState, installState),
+			AgentLifecycleMode:  managedAgentLifecyclePersistent,
+			MemoryBindingMode:   managedMemoryBindingLiveMount,
+			MemoryRefreshPolicy: managedMemoryRefreshNextTurn,
+			CreatedAt:           now,
+			UpdatedAt:           now,
+		}))
 		changed = true
 	}
 	return instances, changed, nil
