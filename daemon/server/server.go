@@ -2014,6 +2014,33 @@ func handleAgentSessions(svc *lifecycle.Service, runtime baseAgentRuntime, agent
 	})
 }
 
+func shouldRefreshAgentMemoryBeforeTurn(svc *lifecycle.Service, agentID string) bool {
+	if svc == nil {
+		return false
+	}
+	memStore := svc.MemoryStore()
+	if memStore == nil {
+		return false
+	}
+	scopes := memStore.InstanceScopes(agentID)
+	if len(scopes) == 0 {
+		return false
+	}
+	hasLiveMount := false
+	for _, scope := range scopes {
+		normalized := strings.TrimSpace(string(scope))
+		switch {
+		case normalized == "":
+			continue
+		case strings.HasPrefix(normalized, "shared:snapshot-"):
+			return false
+		case normalized == "public" || strings.HasPrefix(normalized, "shared:"):
+			hasLiveMount = true
+		}
+	}
+	return hasLiveMount
+}
+
 func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID string, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -2076,6 +2103,12 @@ func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID s
 			"backupRef":   proxied.BackupRef,
 		})
 		return
+	}
+	if shouldRefreshAgentMemoryBeforeTurn(svc, agentID) {
+		if err := svc.RefreshMemoryForTurn(agentID); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	resp, err := runtime.Chat(r.Context(), baseagent.ChatRequest{
 		Provider:    strings.TrimSpace(body.Provider),

@@ -31,6 +31,12 @@ func (s *Service) autoMountMemories(agentID string) (memory.RuntimeMemoryContrac
 	return contract, nil
 }
 
+// RefreshMemoryForTurn rebuilds the effective memory view before a new turn.
+func (s *Service) RefreshMemoryForTurn(agentID string) error {
+	_, err := s.autoMountMemories(agentID)
+	return err
+}
+
 func (s *Service) applyManifestMemoryPermissions(agentID string) {
 	if s.memoryStore == nil {
 		return
