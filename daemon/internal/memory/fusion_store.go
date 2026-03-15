@@ -749,6 +749,9 @@ func (s *Store) allowedWriteScopesForSubjectLocked(subject string) map[Scope]str
 			continue
 		}
 		scope := normalizeScope(g.Scope)
+		if isSnapshotScope(scope) {
+			continue
+		}
 		if strings.HasPrefix(string(scope), "agent:") || strings.HasPrefix(string(scope), "shared:") {
 			allowed[scope] = struct{}{}
 		}
@@ -763,6 +766,9 @@ func scopeAllowed(allowed map[Scope]struct{}, candidate Scope) bool {
 	}
 	if _, ok := allowed[candidate]; ok {
 		return true
+	}
+	if isSnapshotScope(candidate) {
+		return false
 	}
 	for granted := range allowed {
 		gs := string(granted)

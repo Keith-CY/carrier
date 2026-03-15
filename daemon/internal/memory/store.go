@@ -51,6 +51,7 @@ type Store struct {
 	distillManifests  map[string]DistillSourceManifest
 	activeDistillRuns map[string]string
 	searchHits        map[string][]time.Time
+	snapshots         map[string]SnapshotRecord
 	distillSummarizer DistillSummarizerFunc
 	distillEmbedder   DistillEmbedderFunc
 }
@@ -173,6 +174,7 @@ func NewStore(opts ...StoreOption) *Store {
 		distillManifests:       make(map[string]DistillSourceManifest),
 		activeDistillRuns:      make(map[string]string),
 		searchHits:             make(map[string][]time.Time),
+		snapshots:              make(map[string]SnapshotRecord),
 	}
 	for _, o := range opts {
 		o(s)
