@@ -318,18 +318,6 @@ if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1
   missing_tools="$missing_tools openssl"
 fi
 
-if [ -z "$missing_tools" ]; then
-  exit 0
-fi
-
-packages=""
-for tool in $missing_tools; do
-  case "$tool" in
-    bwrap) packages="$packages bubblewrap" ;;
-    *) packages="$packages $tool" ;;
-  esac
-done
-
 run_pkg_install() {
   if command -v sudo >/dev/null 2>&1; then
     sudo -n "$@"
@@ -338,22 +326,32 @@ run_pkg_install() {
   fi
 }
 
-if command -v apt-get >/dev/null 2>&1; then
-  run_pkg_install apt-get update
-  run_pkg_install apt-get install -y $packages
-elif command -v dnf >/dev/null 2>&1; then
-  run_pkg_install dnf install -y $packages
-elif command -v yum >/dev/null 2>&1; then
-  run_pkg_install yum install -y $packages
-elif command -v pacman >/dev/null 2>&1; then
-  run_pkg_install pacman -Sy --noconfirm $packages
-elif command -v zypper >/dev/null 2>&1; then
-  run_pkg_install zypper --non-interactive install $packages
-elif command -v apk >/dev/null 2>&1; then
-  run_pkg_install apk add $packages
-else
-  echo "no supported package manager found to install isolation %s dependencies:$missing_tools" >&2
-  exit 127
+if [ -n "$missing_tools" ]; then
+  packages=""
+  for tool in $missing_tools; do
+    case "$tool" in
+      bwrap) packages="$packages bubblewrap" ;;
+      *) packages="$packages $tool" ;;
+    esac
+  done
+
+  if command -v apt-get >/dev/null 2>&1; then
+    run_pkg_install apt-get update
+    run_pkg_install apt-get install -y $packages
+  elif command -v dnf >/dev/null 2>&1; then
+    run_pkg_install dnf install -y $packages
+  elif command -v yum >/dev/null 2>&1; then
+    run_pkg_install yum install -y $packages
+  elif command -v pacman >/dev/null 2>&1; then
+    run_pkg_install pacman -Sy --noconfirm $packages
+  elif command -v zypper >/dev/null 2>&1; then
+    run_pkg_install zypper --non-interactive install $packages
+  elif command -v apk >/dev/null 2>&1; then
+    run_pkg_install apk add $packages
+  else
+    echo "no supported package manager found to install isolation %s dependencies:$missing_tools" >&2
+    exit 127
+  fi
 fi
 
 for tool in $required_tools; do
@@ -367,7 +365,19 @@ if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1
   echo "required %s checksum tool missing after install (need one of: sha256sum, shasum, openssl)" >&2
   exit 127
 fi
-`, label, label, label))
+
+if command -v bwrap >/dev/null 2>&1; then
+  if ! bwrap --bind / / --proc /proc --dev /dev --tmpfs /tmp --unshare-pid -- sh -lc "exit 0" >/dev/null 2>&1; then
+    if command -v sudo >/dev/null 2>&1; then
+      run_pkg_install chmod u+s "$(command -v bwrap)"
+    fi
+  fi
+  if ! bwrap --bind / / --proc /proc --dev /dev --tmpfs /tmp --unshare-pid -- sh -lc "exit 0" >/dev/null 2>&1; then
+    echo "bubblewrap is installed but unusable for isolation %s setup (need either unprivileged user namespaces or a setuid bwrap binary)" >&2
+    exit 127
+  fi
+fi
+`, label, label, label, label))
 }
 
 func buildHostEnsureDarwinIsolationDepsCommand() string {

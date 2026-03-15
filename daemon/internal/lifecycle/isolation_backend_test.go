@@ -98,3 +98,16 @@ func createWorkspaceForCleanupTest(t *testing.T, home string) string {
 	}
 	return workspace
 }
+
+func TestBuildHostEnsureLinuxIsolationDepsCommandRepairsUnusableBwrap(t *testing.T) {
+	cmd := buildHostEnsureLinuxIsolationDepsCommand()
+	for _, want := range []string{
+		`bwrap --bind / / --proc /proc --dev /dev --tmpfs /tmp --unshare-pid -- sh -lc "exit 0"`,
+		`run_pkg_install chmod u+s "$(command -v bwrap)"`,
+		`bubblewrap is installed but unusable for isolation host setup`,
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("expected host isolation prep command to contain %q, got:\n%s", want, cmd)
+		}
+	}
+}
