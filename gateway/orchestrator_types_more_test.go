@@ -314,6 +314,29 @@ func TestNormalizeOrchestratorExecutionStoresDelegatedMemoryFields(t *testing.T)
 	}
 }
 
+func TestNormalizeOrchestratorExecutionClampsDelegatedMemoryModes(t *testing.T) {
+	out, err := normalizeOrchestratorExecution(OrchestratorExecution{
+		Goal:               " delegate incident ",
+		AgentLifecycleMode: " persistent ",
+		MemoryBindingMode:  " banana ",
+		RequiredWorkers: []OrchestratorRequiredWorker{
+			{HostID: "host-1", AgentID: "zeroclaw", Count: 1},
+		},
+		TaskUnits: []OrchestratorTaskUnit{
+			{Input: "collect incident context"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeOrchestratorExecution clamp delegated memory modes failed: %v", err)
+	}
+	if out.AgentLifecycleMode != "delegated" {
+		t.Fatalf("agentLifecycleMode = %q, want delegated", out.AgentLifecycleMode)
+	}
+	if out.MemoryBindingMode != "snapshot" {
+		t.Fatalf("memoryBindingMode = %q, want snapshot", out.MemoryBindingMode)
+	}
+}
+
 func TestNormalizeOrchestratorExecutionForStorePreservesLineageAndOutcome(t *testing.T) {
 	out := normalizeOrchestratorExecutionForStore(OrchestratorExecution{
 		ID:                " exec-1 ",

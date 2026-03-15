@@ -500,11 +500,11 @@ func normalizeOrchestratorExecution(in OrchestratorExecution) (OrchestratorExecu
 func normalizeOrchestratorDelegatedMemoryState(in OrchestratorExecution) OrchestratorExecution {
 	out := in
 	out.AgentLifecycleMode = normalizeManagedEnumValue(out.AgentLifecycleMode)
-	if out.AgentLifecycleMode == "" {
+	if out.AgentLifecycleMode != orchestratorAgentLifecycleMode {
 		out.AgentLifecycleMode = orchestratorAgentLifecycleMode
 	}
 	out.MemoryBindingMode = normalizeManagedEnumValue(out.MemoryBindingMode)
-	if out.MemoryBindingMode == "" {
+	if out.MemoryBindingMode != orchestratorMemoryBindingMode {
 		out.MemoryBindingMode = orchestratorMemoryBindingMode
 	}
 	out.SourceScopes = normalizeStringSelectorList(out.SourceScopes, true)
