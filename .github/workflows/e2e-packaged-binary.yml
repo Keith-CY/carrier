@@ -80,7 +80,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: 1.1.8
 
@@ -175,7 +175,7 @@ jobs:
           echo "package_file=${package_file}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: package-${{ matrix.variant }}-${{ matrix.label }}
           retention-days: 7
@@ -528,7 +528,7 @@ jobs:
 
       - name: Upload WSL2 OpenClaw logs
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: packaged-binary-e2e-wsl2-openclaw-logs
           retention-days: 7
@@ -645,7 +645,7 @@ jobs:
 
       - name: Upload full-flow logs
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: packaged-binary-e2e-remote-vps-logs
           retention-days: 7
