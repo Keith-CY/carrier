@@ -383,6 +383,19 @@ func TestMemoryV2DelegatedSnapshotProvisioningEndpoints(t *testing.T) {
 		t.Fatalf("unexpected created entry: %+v", createResp.Entry)
 	}
 
+	invalidCreateReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/entries/create", strings.NewReader(`{
+		"id":"mem-invalid",
+		"name":"Broken Memory",
+		"version":"v1",
+		"type":"banana",
+		"owner":"child-1"
+	}`))
+	invalidCreateRR := httptest.NewRecorder()
+	mux.ServeHTTP(invalidCreateRR, invalidCreateReq)
+	if invalidCreateRR.Code == http.StatusOK {
+		t.Fatalf("expected invalid memory type rejection, body=%s", invalidCreateRR.Body.String())
+	}
+
 	snapshotReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/instance/snapshot", strings.NewReader(`{
 		"sourceSubject":"parent",
 		"sourceScopes":["public","shared:team"],

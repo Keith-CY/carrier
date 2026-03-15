@@ -994,7 +994,19 @@ func buildHTTPMuxWithBaseAgent(
 		if !decodeBody(w, r, &body) {
 			return
 		}
-		entry, err := memStore.Create(body.ID, body.Name, body.Version, memory.Type(body.Type), body.Owner)
+		entryType := memory.Type(strings.TrimSpace(body.Type))
+		validType := false
+		for _, candidate := range memory.ValidTypes() {
+			if candidate == entryType {
+				validType = true
+				break
+			}
+		}
+		if !validType {
+			writeJSONError(w, http.StatusBadRequest, "invalid memory type")
+			return
+		}
+		entry, err := memStore.Create(body.ID, body.Name, body.Version, entryType, body.Owner)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
