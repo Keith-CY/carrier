@@ -127,6 +127,23 @@ type MemorySnapshotRecord struct {
 	Reason           string   `json:"reason,omitempty"`
 }
 
+type MemoryRecord struct {
+	ID             string `json:"id"`
+	Scope          string `json:"scope,omitempty"`
+	Type           string `json:"type,omitempty"`
+	ContentRaw     string `json:"contentRaw,omitempty"`
+	ContentSummary string `json:"contentSummary,omitempty"`
+	Provenance     string `json:"provenance,omitempty"`
+}
+
+type MemoryDistillRunResult struct {
+	RunID      string   `json:"runId"`
+	InstanceID string   `json:"instanceId"`
+	Scope      string   `json:"scope,omitempty"`
+	Status     string   `json:"status,omitempty"`
+	OutputIDs  []string `json:"outputIds,omitempty"`
+}
+
 type AgentCapabilitySummary = baseagent.RuntimeCapabilitySummary
 type AgentSessionStats = baseagent.SessionStats
 type CronJob = baseagent.CronJob
@@ -790,6 +807,159 @@ func (c *DaemonClient) MountInstanceSnapshot(
 	}
 	_, err := c.request(ctx, http.MethodPost, "/api/v2/memory/instance/snapshot/mount", payload, actor, requestID)
 	return err
+}
+
+func (c *DaemonClient) DeleteInstanceSnapshot(
+	ctx context.Context,
+	snapshotID string,
+	actor string,
+	requestID string,
+) error {
+	payload := map[string]interface{}{
+		"snapshotId": strings.TrimSpace(snapshotID),
+	}
+	_, err := c.request(ctx, http.MethodPost, "/api/v2/memory/instance/snapshot/delete", payload, actor, requestID)
+	return err
+}
+
+func (c *DaemonClient) DistillInstanceMemory(
+	ctx context.Context,
+	instanceID string,
+	scope string,
+	force bool,
+	actor string,
+	requestID string,
+	reason string,
+) (*MemoryDistillRunResult, error) {
+	payload := map[string]interface{}{
+		"instanceId": strings.TrimSpace(instanceID),
+		"scope":      strings.TrimSpace(scope),
+		"force":      force,
+		"reason":     strings.TrimSpace(reason),
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v2/memory/instance/distill", payload, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Result MemoryDistillRunResult `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("memory distill response: %w", err)
+	}
+	result.Result.OutputIDs = normalizeStringSlice(result.Result.OutputIDs)
+	return &result.Result, nil
+}
+
+func (c *DaemonClient) PurgeInstanceScope(
+	ctx context.Context,
+	instanceID string,
+	scope string,
+	actor string,
+	requestID string,
+) (int, error) {
+	payload := map[string]interface{}{
+		"instanceId": strings.TrimSpace(instanceID),
+		"scope":      strings.TrimSpace(scope),
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v2/memory/instance/purge", payload, actor, requestID)
+	if err != nil {
+		return 0, err
+	}
+	var result struct {
+		Deleted int `json:"deleted"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return 0, fmt.Errorf("memory purge response: %w", err)
+	}
+	return result.Deleted, nil
+}
+
+func (c *DaemonClient) GetMemoryRecord(
+	ctx context.Context,
+	subject string,
+	id string,
+	actor string,
+	requestID string,
+) (*MemoryRecord, error) {
+	payload := map[string]interface{}{
+		"subject": strings.TrimSpace(subject),
+		"id":      strings.TrimSpace(id),
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v2/memory/get", payload, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Record MemoryRecord `json:"record"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("memory get response: %w", err)
+	}
+	return &result.Record, nil
+}
+
+func (c *DaemonClient) UpsertMemoryRecord(
+	ctx context.Context,
+	subject string,
+	scope string,
+	recordType string,
+	contentSummary string,
+	provenance string,
+	actor string,
+	requestID string,
+) (*MemoryRecord, error) {
+	payload := map[string]interface{}{
+		"subject":        strings.TrimSpace(subject),
+		"scope":          strings.TrimSpace(scope),
+		"type":           strings.TrimSpace(recordType),
+		"contentSummary": strings.TrimSpace(contentSummary),
+		"provenance":     strings.TrimSpace(provenance),
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v2/memory/records/upsert", payload, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Record MemoryRecord `json:"record"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("memory upsert response: %w", err)
+	}
+	return &result.Record, nil
+}
+
+func (c *DaemonClient) ArchiveMemoryEntry(
+	ctx context.Context,
+	id string,
+	actor string,
+	requestID string,
+) error {
+	payload := map[string]interface{}{
+		"id": strings.TrimSpace(id),
+	}
+	_, err := c.request(ctx, http.MethodPost, "/api/v2/memory/entries/archive", payload, actor, requestID)
+	return err
+}
+
+func normalizeStringSlice(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	seen := map[string]struct{}{}
+	for _, raw := range in {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func (c *DaemonClient) SpeakAgentMedia(

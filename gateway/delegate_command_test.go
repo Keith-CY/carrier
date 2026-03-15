@@ -114,6 +114,45 @@ func TestHandleCommand_Delegate_SubmitAndStatus(t *testing.T) {
 				"message":   "task completed",
 			})
 		},
+		"POST /api/v2/memory/entries/create": func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"entry": map[string]interface{}{
+					"id":    strings.TrimSpace(anyToString(body["id"])),
+					"type":  "per_agent",
+					"owner": strings.TrimSpace(anyToString(body["owner"])),
+					"state": "created",
+				},
+			})
+		},
+		"POST /api/v2/memory/instance/distill": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"result": map[string]interface{}{
+					"runId":     "distill-delegate-1",
+					"status":    "completed",
+					"outputIds": []string{},
+				},
+			})
+		},
+		"POST /api/v2/memory/records/upsert": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"record": map[string]interface{}{
+					"id":    "parent-delegate-1",
+					"scope": "agent:picoclaw",
+					"type":  "note",
+				},
+			})
+		},
+		"POST /api/v2/memory/instance/purge": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"deleted": 1})
+		},
+		"POST /api/v2/memory/entries/archive": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "archived"})
+		},
 	})
 	defer srv.Close()
 	orchestratorLocalDaemonClientFn = func() *DaemonClient { return dc }
@@ -173,6 +212,58 @@ func TestHandleCommand_Delegate_SubmitAndStatus(t *testing.T) {
 	}
 	if !strings.Contains(statusResp.Message, "task-a") {
 		t.Fatalf("expected task details in status response, got %q", statusResp.Message)
+	}
+	if !strings.Contains(statusResp.Message, "memory: binding=snapshot") {
+		t.Fatalf("expected delegated memory summary in status response, got %q", statusResp.Message)
+	}
+	if !strings.Contains(statusResp.Message, "distill=distill-delegate-1") {
+		t.Fatalf("expected distill status in status response, got %q", statusResp.Message)
+	}
+	if !strings.Contains(statusResp.Message, "cleanup=completed") {
+		t.Fatalf("expected cleanup status in status response, got %q", statusResp.Message)
+	}
+}
+
+func TestRenderDelegateOrchestratorExecutionStatusIncludesTaskMemoryLifecycle(t *testing.T) {
+	rendered := renderDelegateOrchestratorExecutionStatus(OrchestratorExecution{
+		ID:                "exec-1",
+		Status:            OrchestratorExecutionStatusCompleted,
+		Goal:              "summarize incidents",
+		MemoryBindingMode: "snapshot",
+		SourceScopes:      []string{"shared:team", "public:runbook"},
+		SnapshotID:        "snap-1",
+		SnapshotDigest:    "mem-abc123",
+		ChildAgentID:      "child-1",
+		DistillRunID:      "distill-1",
+		CleanupStatus:     "cleanup_pending",
+		DistillOutputs:    []string{"record-1"},
+		TaskUnits: []OrchestratorTaskUnit{
+			{ID: "task-a", Input: "collect evidence"},
+		},
+		Results: []OrchestratorTaskResult{
+			{
+				TaskID:    "task-a",
+				Status:    OrchestratorTaskStatusCompleted,
+				AgentID:   "picoclaw",
+				LatencyMs: 42,
+				Output:    "captured summary",
+				DelegatedMemory: &OrchestratorDelegatedTaskMemoryState{
+					ChildAgentID:    "child-1",
+					SnapshotID:      "snap-1",
+					SnapshotDigest:  "mem-abc123",
+					DistillRunID:    "distill-1",
+					CleanupStatus:   "completed",
+					ParentRecordIDs: []string{"parent-rec-1"},
+				},
+			},
+		},
+	})
+
+	if !strings.Contains(rendered, "memory: binding=snapshot sources=2 snapshot=snap-1@mem-abc123 child=child-1 distill=distill-1 cleanup=cleanup_pending outputs=1") {
+		t.Fatalf("expected execution-level memory summary, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "memory: child=child-1 snapshot=snap-1@mem-abc123 distill=distill-1 cleanup=completed writeback=1") {
+		t.Fatalf("expected task-level memory summary, got %q", rendered)
 	}
 }
 
@@ -258,6 +349,45 @@ func TestHandleCommand_Delegate_RespectsTaskAgentPreference(t *testing.T) {
 				"sessionId": "sess-z",
 				"message":   "zeroclaw task completed",
 			})
+		},
+		"POST /api/v2/memory/entries/create": func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"entry": map[string]interface{}{
+					"id":    strings.TrimSpace(anyToString(body["id"])),
+					"type":  "per_agent",
+					"owner": strings.TrimSpace(anyToString(body["owner"])),
+					"state": "created",
+				},
+			})
+		},
+		"POST /api/v2/memory/instance/distill": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"result": map[string]interface{}{
+					"runId":     "distill-delegate-z",
+					"status":    "completed",
+					"outputIds": []string{},
+				},
+			})
+		},
+		"POST /api/v2/memory/records/upsert": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"record": map[string]interface{}{
+					"id":    "parent-delegate-z",
+					"scope": "agent:zeroclaw",
+					"type":  "note",
+				},
+			})
+		},
+		"POST /api/v2/memory/instance/purge": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"deleted": 1})
+		},
+		"POST /api/v2/memory/entries/archive": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "archived"})
 		},
 	})
 	defer srv.Close()

@@ -390,6 +390,9 @@ func TestHandleAgentChatSkipsRefreshForDelegatedSnapshotScope(t *testing.T) {
 	if runtime.callCount != 1 {
 		t.Fatalf("expected runtime call despite missing root dir, got %d", runtime.callCount)
 	}
+	if runtime.lastReq.MemorySubject != "openclaw" {
+		t.Fatalf("expected delegated chat memory subject openclaw, got %+v", runtime.lastReq)
+	}
 }
 
 func TestHandleAgentChatDoesNotRefreshMidTurn(t *testing.T) {

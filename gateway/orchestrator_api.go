@@ -1276,7 +1276,7 @@ func runOrchestratorTaskAttempt(
 		if chatResult != nil {
 			output = strings.TrimSpace(chatResult.Message)
 		}
-		return OrchestratorTaskResult{
+		result := OrchestratorTaskResult{
 			TaskID:      task.ID,
 			Status:      OrchestratorTaskStatusCompleted,
 			WorkerID:    lease.ID,
@@ -1287,7 +1287,14 @@ func runOrchestratorTaskAttempt(
 			StartedAt:   start.UTC().Format(time.RFC3339Nano),
 			CompletedAt: time.Now().UTC().Format(time.RFC3339Nano),
 			LatencyMs:   time.Since(start).Milliseconds(),
-		}, nil
+		}
+		finalized, finalizeErr := finalizeDelegatedChild(runCtx, client, &executionState, task, child, result)
+		if finalizeErr != nil {
+			finalized.Status = OrchestratorTaskStatusFailed
+			finalized.Error = finalizeErr.Error()
+			return finalized, finalizeErr
+		}
+		return finalized, nil
 	}
 
 	host, found, err := getRemoteHost(lease.HostID)

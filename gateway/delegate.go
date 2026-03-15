@@ -803,6 +803,9 @@ func renderDelegateOrchestratorExecutionStatus(execution OrchestratorExecution) 
 	if strings.TrimSpace(execution.Error) != "" {
 		lines = append(lines, "error: "+strings.TrimSpace(execution.Error))
 	}
+	if memorySummary := renderDelegateExecutionMemoryStatus(execution); memorySummary != "" {
+		lines = append(lines, "memory: "+memorySummary)
+	}
 	if len(execution.Results) > 0 {
 		lines = append(lines, "task results:")
 		for _, result := range execution.Results {
@@ -829,9 +832,71 @@ func renderDelegateOrchestratorExecutionStatus(execution OrchestratorExecution) 
 				result.LatencyMs,
 				truncateDelegateText(summary, 140),
 			))
+			if memorySummary := renderDelegateTaskMemoryStatus(result.DelegatedMemory); memorySummary != "" {
+				lines = append(lines, "  memory: "+memorySummary)
+			}
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func renderDelegateExecutionMemoryStatus(execution OrchestratorExecution) string {
+	parts := make([]string, 0, 6)
+	if binding := strings.TrimSpace(execution.MemoryBindingMode); binding != "" {
+		parts = append(parts, "binding="+binding)
+	}
+	if sourceCount := len(execution.SourceScopes); sourceCount > 0 {
+		parts = append(parts, fmt.Sprintf("sources=%d", sourceCount))
+	}
+	switch {
+	case strings.TrimSpace(execution.SnapshotID) != "" && strings.TrimSpace(execution.SnapshotDigest) != "":
+		parts = append(parts, "snapshot="+strings.TrimSpace(execution.SnapshotID)+"@"+strings.TrimSpace(execution.SnapshotDigest))
+	case strings.TrimSpace(execution.SnapshotID) != "":
+		parts = append(parts, "snapshot="+strings.TrimSpace(execution.SnapshotID))
+	case strings.TrimSpace(execution.SnapshotDigest) != "":
+		parts = append(parts, "snapshotDigest="+strings.TrimSpace(execution.SnapshotDigest))
+	}
+	if child := strings.TrimSpace(execution.ChildAgentID); child != "" {
+		parts = append(parts, "child="+child)
+	}
+	if distill := strings.TrimSpace(execution.DistillRunID); distill != "" {
+		parts = append(parts, "distill="+distill)
+	}
+	if cleanup := strings.TrimSpace(execution.CleanupStatus); cleanup != "" {
+		parts = append(parts, "cleanup="+cleanup)
+	}
+	if outputs := len(execution.DistillOutputs); outputs > 0 {
+		parts = append(parts, fmt.Sprintf("outputs=%d", outputs))
+	}
+	return strings.Join(parts, " ")
+}
+
+func renderDelegateTaskMemoryStatus(state *OrchestratorDelegatedTaskMemoryState) string {
+	if state == nil {
+		return ""
+	}
+	parts := make([]string, 0, 5)
+	if child := strings.TrimSpace(state.ChildAgentID); child != "" {
+		parts = append(parts, "child="+child)
+	}
+	switch {
+	case strings.TrimSpace(state.SnapshotID) != "" && strings.TrimSpace(state.SnapshotDigest) != "":
+		parts = append(parts, "snapshot="+strings.TrimSpace(state.SnapshotID)+"@"+strings.TrimSpace(state.SnapshotDigest))
+	case strings.TrimSpace(state.SnapshotID) != "":
+		parts = append(parts, "snapshot="+strings.TrimSpace(state.SnapshotID))
+	case strings.TrimSpace(state.SnapshotDigest) != "":
+		parts = append(parts, "snapshotDigest="+strings.TrimSpace(state.SnapshotDigest))
+	}
+	if distill := strings.TrimSpace(state.DistillRunID); distill != "" {
+		parts = append(parts, "distill="+distill)
+	}
+	if cleanup := strings.TrimSpace(state.CleanupStatus); cleanup != "" {
+		parts = append(parts, "cleanup="+cleanup)
+	}
+	if writebacks := len(state.ParentRecordIDs); writebacks > 0 {
+		parts = append(parts, fmt.Sprintf("writeback=%d", writebacks))
+	}
+	return strings.Join(parts, " ")
 }
 
 func renderDelegateExecutionStatus(execution delegateExecution) string {

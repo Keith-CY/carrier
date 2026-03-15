@@ -176,6 +176,10 @@ func (s *Store) DistillForInstance(ctx context.Context, opts InstanceDistillOpti
 	result.Created = len(distilled)
 	result.Removed = len(consumedSources)
 	result.Unchanged = maxInt(0, len(candidates)-len(clusterSourceIDs))
+	for _, rec := range distilled {
+		result.OutputIDs = append(result.OutputIDs, rec.ID)
+	}
+	sort.Strings(result.OutputIDs)
 	result.SampleSource = takeFirstN(consumedSources, 5)
 	for _, rec := range distilled {
 		result.SampleOutput = append(result.SampleOutput, rec.ID)

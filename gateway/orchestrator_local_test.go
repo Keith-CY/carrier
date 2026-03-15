@@ -17,6 +17,7 @@ func TestOrchestratorExecutionLocalLifecycle(t *testing.T) {
 	var createMemoryCalls int
 	var chatProvider string
 	var chatInstanceID string
+	var upsertSummary string
 	daemonSrv := newMockDaemon(map[string]http.HandlerFunc{
 		"GET /api/v1/agents": func(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`{"agents":[{"id":"zeroclaw","installState":"installed","runtimeState":"stopped"}]}`))
@@ -44,6 +45,30 @@ func TestOrchestratorExecutionLocalLifecycle(t *testing.T) {
 			chatProvider = strings.TrimSpace(anyToString(body["provider"]))
 			chatInstanceID = strings.TrimSpace(anyToString(body["instanceId"]))
 			_, _ = w.Write([]byte(`{"agentId":"zeroclaw","message":"local-worker-output"}`))
+		},
+		"POST /api/v2/memory/instance/distill": func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"result":{"runId":"distill-local-1","instanceId":"` + chatInstanceID + `","scope":"agent:` + chatInstanceID + `","status":"completed","outputIds":[]}}`))
+		},
+		"POST /api/v2/memory/records/upsert": func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode upsert body: %v", err)
+			}
+			upsertSummary = strings.TrimSpace(anyToString(body["contentSummary"]))
+			writeJSON(w, http.StatusOK, map[string]any{
+				"record": map[string]any{
+					"id":             "parent-local-1",
+					"scope":          "agent:zeroclaw",
+					"type":           "note",
+					"contentSummary": upsertSummary,
+				},
+			})
+		},
+		"POST /api/v2/memory/instance/purge": func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"deleted":1}`))
+		},
+		"POST /api/v2/memory/entries/archive": func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"status":"archived"}`))
 		},
 	})
 	defer daemonSrv.Close()
@@ -124,6 +149,13 @@ func TestOrchestratorExecutionLocalLifecycle(t *testing.T) {
 	if got := strings.TrimSpace(anyToString(resultMap["output"])); got != "local-worker-output" {
 		t.Fatalf("expected local output, got %q result=%+v", got, resultMap)
 	}
+	delegatedMemory, _ := resultMap["delegatedMemory"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(delegatedMemory["distillRunId"])); got != "distill-local-1" {
+		t.Fatalf("expected distill run id, got %q result=%+v", got, resultMap)
+	}
+	if got := strings.TrimSpace(anyToString(delegatedMemory["cleanupStatus"])); got != delegatedCleanupStatusCompleted {
+		t.Fatalf("expected completed cleanup status, got %q result=%+v", got, resultMap)
+	}
 
 	if startCalls == 0 {
 		t.Fatal("expected local agent start to be called when runtimeState is stopped")
@@ -149,6 +181,9 @@ func TestOrchestratorExecutionLocalLifecycle(t *testing.T) {
 	if chatProvider != "openrouter" {
 		t.Fatalf("expected local worker chat provider openrouter, got %q", chatProvider)
 	}
+	if !strings.Contains(upsertSummary, "local-worker-output") {
+		t.Fatalf("expected parent write-back summary to include task output, got %q", upsertSummary)
+	}
 }
 
 func TestLocalOrchestratorRunProvisionsDelegatedChild(t *testing.T) {
@@ -171,13 +206,14 @@ func TestLocalOrchestratorRunProvisionsDelegatedChild(t *testing.T) {
 		t.Fatalf("upsertManagedInstance(parent): %v", err)
 	}
 
-	order := make([]string, 0, 4)
+	order := make([]string, 0, 8)
 	var createdOwner string
 	var snapshotSourceSubject string
 	var snapshotTargetInstanceID string
 	var mountedInstanceID string
 	var chatInstanceID string
 	var chatSessionID string
+	var upsertSummary string
 
 	daemonSrv := newMockDaemon(map[string]http.HandlerFunc{
 		"GET /api/v1/agents": func(w http.ResponseWriter, r *http.Request) {
@@ -220,6 +256,42 @@ func TestLocalOrchestratorRunProvisionsDelegatedChild(t *testing.T) {
 			chatInstanceID = strings.TrimSpace(anyToString(body["instanceId"]))
 			chatSessionID = strings.TrimSpace(anyToString(body["sessionId"]))
 			_, _ = w.Write([]byte(`{"agentId":"zeroclaw","message":"delegated-output"}`))
+		},
+		"POST /api/v2/memory/instance/distill": func(w http.ResponseWriter, r *http.Request) {
+			order = append(order, "distill")
+			_, _ = w.Write([]byte(`{"result":{"runId":"distill-local-1","instanceId":"` + snapshotTargetInstanceID + `","scope":"agent:` + snapshotTargetInstanceID + `","status":"completed","outputIds":["distilled-1"]}}`))
+		},
+		"POST /api/v2/memory/get": func(w http.ResponseWriter, r *http.Request) {
+			order = append(order, "get")
+			_, _ = w.Write([]byte(`{"record":{"id":"distilled-1","scope":"agent:` + snapshotTargetInstanceID + `","type":"note","contentSummary":"delegated child distilled summary","provenance":"distill:distill-local-1"}}`))
+		},
+		"POST /api/v2/memory/records/upsert": func(w http.ResponseWriter, r *http.Request) {
+			order = append(order, "upsert")
+			var body map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode upsert body: %v", err)
+			}
+			upsertSummary = strings.TrimSpace(anyToString(body["contentSummary"]))
+			writeJSON(w, http.StatusOK, map[string]any{
+				"record": map[string]any{
+					"id":             "parent-local-1",
+					"scope":          "agent:zeroclaw",
+					"type":           "note",
+					"contentSummary": upsertSummary,
+				},
+			})
+		},
+		"POST /api/v2/memory/instance/purge": func(w http.ResponseWriter, r *http.Request) {
+			order = append(order, "purge")
+			_, _ = w.Write([]byte(`{"deleted":2}`))
+		},
+		"POST /api/v2/memory/instance/snapshot/delete": func(w http.ResponseWriter, r *http.Request) {
+			order = append(order, "delete_snapshot")
+			_, _ = w.Write([]byte(`{"status":"deleted"}`))
+		},
+		"POST /api/v2/memory/entries/archive": func(w http.ResponseWriter, r *http.Request) {
+			order = append(order, "archive_entry")
+			_, _ = w.Write([]byte(`{"status":"archived"}`))
 		},
 	})
 	defer daemonSrv.Close()
@@ -287,8 +359,8 @@ func TestLocalOrchestratorRunProvisionsDelegatedChild(t *testing.T) {
 		t.Fatalf("expected completed status, got %q", status)
 	}
 
-	if strings.Join(order, ",") != "create,snapshot,mount,chat" {
-		t.Fatalf("provisioning order = %v, want [create snapshot mount chat]", order)
+	if strings.Join(order, ",") != "create,snapshot,mount,chat,distill,get,upsert,purge,delete_snapshot,archive_entry" {
+		t.Fatalf("provisioning/finalize order = %v, want [create snapshot mount chat distill get upsert purge delete_snapshot archive_entry]", order)
 	}
 	if snapshotSourceSubject != "zeroclaw" {
 		t.Fatalf("snapshot sourceSubject = %q, want zeroclaw", snapshotSourceSubject)
@@ -310,22 +382,8 @@ func TestLocalOrchestratorRunProvisionsDelegatedChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadManagedInstances: %v", err)
 	}
-	childIdx := findManagedInstanceIndex(instances, chatInstanceID)
-	if childIdx < 0 {
-		t.Fatalf("expected child instance %q in managed instances: %+v", chatInstanceID, instances)
-	}
-	child := instances[childIdx]
-	if child.ParentExecutionID != execID {
-		t.Fatalf("ParentExecutionID = %q, want %q", child.ParentExecutionID, execID)
-	}
-	if child.SnapshotID != "snap-local-1" {
-		t.Fatalf("SnapshotID = %q, want snap-local-1", child.SnapshotID)
-	}
-	if child.SnapshotDigest != "sha256:local-1" {
-		t.Fatalf("SnapshotDigest = %q, want sha256:local-1", child.SnapshotDigest)
-	}
-	if strings.TrimSpace(child.PerAgentMemoryID) == "" {
-		t.Fatalf("expected child per-agent memory id, child=%+v", child)
+	if findManagedInstanceIndex(instances, chatInstanceID) >= 0 {
+		t.Fatalf("expected child instance %q cleanup, instances=%+v", chatInstanceID, instances)
 	}
 
 	execution, found, err := getOrchestratorExecution(execID)
@@ -338,13 +396,29 @@ func TestLocalOrchestratorRunProvisionsDelegatedChild(t *testing.T) {
 	if execution.ChildAgentID != chatInstanceID {
 		t.Fatalf("ChildAgentID = %q, want %q", execution.ChildAgentID, chatInstanceID)
 	}
-	if execution.ChildPerAgentMemoryID != child.PerAgentMemoryID {
-		t.Fatalf("ChildPerAgentMemoryID = %q, want %q", execution.ChildPerAgentMemoryID, child.PerAgentMemoryID)
-	}
 	if execution.SnapshotID != "snap-local-1" {
 		t.Fatalf("SnapshotID = %q, want snap-local-1", execution.SnapshotID)
 	}
 	if execution.SnapshotDigest != "sha256:local-1" {
 		t.Fatalf("SnapshotDigest = %q, want sha256:local-1", execution.SnapshotDigest)
+	}
+	if execution.DistillRunID != "distill-local-1" {
+		t.Fatalf("DistillRunID = %q, want distill-local-1", execution.DistillRunID)
+	}
+	if execution.CleanupStatus != delegatedCleanupStatusCompleted {
+		t.Fatalf("CleanupStatus = %q, want %q", execution.CleanupStatus, delegatedCleanupStatusCompleted)
+	}
+	results := execution.Results
+	if len(results) != 1 || results[0].DelegatedMemory == nil {
+		t.Fatalf("expected delegated memory result, got %+v", results)
+	}
+	if results[0].DelegatedMemory.ChildAgentID != chatInstanceID {
+		t.Fatalf("delegated child id = %q, want %q", results[0].DelegatedMemory.ChildAgentID, chatInstanceID)
+	}
+	if results[0].DelegatedMemory.DistillRunID != "distill-local-1" {
+		t.Fatalf("delegated distill run = %q, want distill-local-1", results[0].DelegatedMemory.DistillRunID)
+	}
+	if !strings.Contains(upsertSummary, "delegated child distilled summary") {
+		t.Fatalf("expected parent write-back summary to include distilled summary, got %q", upsertSummary)
 	}
 }

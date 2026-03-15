@@ -327,6 +327,42 @@ func (s *Store) ArchiveRecord(subject, id string) error {
 	return nil
 }
 
+// PurgeInstanceScope deletes all non-archived records within one writable scope for an instance.
+func (s *Store) PurgeInstanceScope(instanceID string, scope Scope) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	instanceID = strings.TrimSpace(instanceID)
+	scope = normalizeScope(scope)
+	if instanceID == "" {
+		return 0, fmt.Errorf("instanceID is required")
+	}
+	if scope == "" {
+		scope = Scope("agent:" + instanceID)
+	}
+	allowed := s.allowedWriteScopesForSubjectLocked(instanceID)
+	if !scopeAllowed(allowed, scope) {
+		return 0, ErrMountDenied
+	}
+
+	deleted := 0
+	for id, rec := range s.records {
+		if rec.ArchivedAt != nil {
+			continue
+		}
+		if normalizeScope(rec.Scope) != scope {
+			continue
+		}
+		delete(s.records, id)
+		s.deleteRecordFromSQLiteLocked(id)
+		deleted++
+	}
+	if err := s.persistStateLocked(); err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
 // Observe stores an append-only event and optionally auto-curates a record.
 func (s *Store) Observe(input ObserveInput) (ObservationEvent, error) {
 	s.mu.Lock()

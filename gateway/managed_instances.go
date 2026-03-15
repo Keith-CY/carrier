@@ -213,6 +213,19 @@ func upsertManagedInstance(inst managedAgentInstance) error {
 	return saveManagedInstances(path, instances)
 }
 
+func deleteManagedInstance(instanceID string) error {
+	instances, path, err := loadManagedInstances()
+	if err != nil {
+		return err
+	}
+	idx := findManagedInstanceIndex(instances, instanceID)
+	if idx < 0 {
+		return nil
+	}
+	instances = append(instances[:idx], instances[idx+1:]...)
+	return saveManagedInstances(path, instances)
+}
+
 func normalizeManagedInstanceChannel(raw string) string {
 	channel := strings.TrimSpace(raw)
 	if channel == "" {

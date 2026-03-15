@@ -105,6 +105,21 @@ type structuredToolSurface struct {
 	tools  map[string]structuredToolDefinition
 }
 
+func (s *structuredToolSurface) clone() *structuredToolSurface {
+	if s == nil {
+		return nil
+	}
+	cloned := &structuredToolSurface{
+		policy: s.policy,
+		order:  append([]string(nil), s.order...),
+		tools:  make(map[string]structuredToolDefinition, len(s.tools)),
+	}
+	for name, def := range s.tools {
+		cloned.tools[name] = def
+	}
+	return cloned
+}
+
 var structuredBuiltinPassthroughTiers = map[string]structuredToolTier{
 	"help":            structuredToolTierMetadataRead,
 	"list_agents":     structuredToolTierOperationalRead,
@@ -147,7 +162,7 @@ func (s *structuredToolSurface) SetMemoryStore(store ExtendedMemoryStore, subjec
 	if subject == "" {
 		subject = baseAgentVirtualID
 	}
-	s.register(structuredToolDefinition{
+	def := structuredToolDefinition{
 		descriptor: StructuredToolDescriptor{
 			Name:        "memory_search",
 			Description: "Search Carrier memory records available to the base agent.",
@@ -159,7 +174,7 @@ func (s *structuredToolSurface) SetMemoryStore(store ExtendedMemoryStore, subjec
 					},
 					"scope": map[string]any{
 						"type":        "string",
-						"description": "Optional scope filter. Allowed values are public, shared:<name>, or agent:carrier.base.internal.",
+						"description": "Optional scope filter. Allowed values are public, shared:<name>, or agent:" + subject + ".",
 					},
 					"max_results": map[string]any{
 						"type": "integer",
@@ -195,7 +210,11 @@ func (s *structuredToolSurface) SetMemoryStore(store ExtendedMemoryStore, subjec
 				Metadata: map[string]any{"memory_hits": cloneMemorySearchHits(hits)},
 			}
 		},
-	})
+	}
+	if _, exists := s.tools["memory_search"]; !exists {
+		s.order = append(s.order, "memory_search")
+	}
+	s.tools["memory_search"] = def
 }
 
 func (s *structuredToolSurface) registerBuiltinStructuredTools(builtin *ToolRegistry) {

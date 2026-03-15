@@ -440,4 +440,40 @@ func TestMemoryV2DelegatedSnapshotProvisioningEndpoints(t *testing.T) {
 	if len(scopes) != 1 || scopes[0] != snapshotResp.Snapshot.Scope {
 		t.Fatalf("InstanceScopes(child-1) = %+v, want [%s]", scopes, snapshotResp.Snapshot.Scope)
 	}
+
+	purgeReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/instance/purge", strings.NewReader(`{
+		"instanceId":"child-1",
+		"scope":"agent:child-1"
+	}`))
+	purgeRR := httptest.NewRecorder()
+	mux.ServeHTTP(purgeRR, purgeReq)
+	if purgeRR.Code != http.StatusOK {
+		t.Fatalf("purge instance status=%d body=%s", purgeRR.Code, purgeRR.Body.String())
+	}
+
+	deleteSnapshotReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/instance/snapshot/delete", strings.NewReader(`{
+		"snapshotId":"`+snapshotResp.Snapshot.ID+`"
+	}`))
+	deleteSnapshotRR := httptest.NewRecorder()
+	mux.ServeHTTP(deleteSnapshotRR, deleteSnapshotReq)
+	if deleteSnapshotRR.Code != http.StatusOK {
+		t.Fatalf("delete snapshot status=%d body=%s", deleteSnapshotRR.Code, deleteSnapshotRR.Body.String())
+	}
+	if scopes := memStore.InstanceScopes("child-1"); len(scopes) != 0 {
+		t.Fatalf("expected snapshot cleanup from instance scopes, got %+v", scopes)
+	}
+
+	archiveReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/entries/archive", strings.NewReader(`{
+		"id":"mem-child-1"
+	}`))
+	archiveRR := httptest.NewRecorder()
+	mux.ServeHTTP(archiveRR, archiveReq)
+	if archiveRR.Code != http.StatusOK {
+		t.Fatalf("archive entry status=%d body=%s", archiveRR.Code, archiveRR.Body.String())
+	}
+	if entry, err := memStore.Get("mem-child-1"); err != nil {
+		t.Fatalf("Get(mem-child-1): %v", err)
+	} else if entry.State != memory.StateArchived {
+		t.Fatalf("entry state = %q, want archived", entry.State)
+	}
 }

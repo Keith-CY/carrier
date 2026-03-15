@@ -221,6 +221,7 @@ type DistillRunResult struct {
 	Removed       int                 `json:"removed"`
 	Unchanged     int                 `json:"unchanged"`
 	Clustered     int                 `json:"clustered"`
+	OutputIDs     []string            `json:"outputIds,omitempty"`
 	SampleSource  []string            `json:"sampleSourceIds,omitempty"`
 	SampleOutput  []string            `json:"sampleDistilledIds,omitempty"`
 	Warnings      []string            `json:"warnings,omitempty"`

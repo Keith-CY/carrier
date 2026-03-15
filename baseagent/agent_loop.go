@@ -75,6 +75,31 @@ func (l *AgentLoop) SetMemoryStore(store MemoryStore, subject string) {
 	}
 }
 
+func (l *AgentLoop) resolvedMemorySubject(override string) string {
+	subject := strings.TrimSpace(override)
+	if subject != "" {
+		return subject
+	}
+	subject = strings.TrimSpace(l.memorySubject)
+	if subject == "" {
+		subject = baseAgentVirtualID
+	}
+	return subject
+}
+
+func (l *AgentLoop) structuredToolSurfaceForSubject(subject string) *structuredToolSurface {
+	if l == nil || l.structuredTools == nil {
+		return nil
+	}
+	resolved := l.resolvedMemorySubject(subject)
+	if l.memory == nil || resolved == l.resolvedMemorySubject("") {
+		return l.structuredTools
+	}
+	cloned := l.structuredTools.clone()
+	cloned.SetMemoryStore(l.memory, resolved)
+	return cloned
+}
+
 func (l *AgentLoop) ProcessChat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
 	message := strings.TrimSpace(req.Message)
 	if message == "" {
@@ -101,6 +126,7 @@ func (l *AgentLoop) ProcessChat(ctx context.Context, req ChatRequest) (ChatRespo
 	if l.skillsLoader != nil {
 		skillSummary = strings.TrimSpace(l.skillsLoader.RelevantSkillsSummary(ctx, message))
 	}
+	memorySubject := l.resolvedMemorySubject(req.MemorySubject)
 
 	if resp, handled, err := l.handlePendingApprovalInput(ctx, sessionKey, message); handled {
 		if err != nil {
@@ -137,7 +163,7 @@ func (l *AgentLoop) ProcessChat(ctx context.Context, req ChatRequest) (ChatRespo
 		return l.finalizeResponse(sessionKey, channel, chatID, requestID, resp), nil
 	}
 
-	if resp, handled, err := l.processStructuredChat(ctx, sessionKey, l.sessions.History(sessionKey), skillSummary); handled {
+	if resp, handled, err := l.processStructuredChat(ctx, sessionKey, l.sessions.History(sessionKey), skillSummary, memorySubject); handled {
 		if err != nil {
 			l.bus.PublishEvent(LoopEvent{
 				Type:    EventError,

@@ -1025,6 +1025,28 @@ func buildHTTPMuxWithBaseAgent(
 		})
 	})
 
+	register("/api/v2/memory/entries/archive", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			ID string `json:"id"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := memStore.Archive(strings.TrimSpace(body.ID)); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "archived"})
+	})
+
 	register("/api/v2/memory/instance/attach", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1121,6 +1143,28 @@ func buildHTTPMuxWithBaseAgent(
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "mounted"})
+	})
+
+	register("/api/v2/memory/instance/snapshot/delete", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			SnapshotID string `json:"snapshotId"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := memStore.DeleteSnapshot(body.SnapshotID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "deleted"})
 	})
 
 	register("/api/v2/memory/instance/detach", func(w http.ResponseWriter, r *http.Request) {
@@ -1258,6 +1302,30 @@ func buildHTTPMuxWithBaseAgent(
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"result": result})
+	})
+
+	register("/api/v2/memory/instance/purge", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			InstanceID string `json:"instanceId"`
+			Scope      string `json:"scope"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		deleted, err := memStore.PurgeInstanceScope(body.InstanceID, memory.Scope(body.Scope))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"deleted": deleted})
 	})
 
 	register("/api/v2/memory/migrate/backup", func(w http.ResponseWriter, r *http.Request) {
@@ -2241,13 +2309,14 @@ func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID s
 		}
 	}
 	resp, err := runtime.Chat(r.Context(), baseagent.ChatRequest{
-		Provider:    strings.TrimSpace(body.Provider),
-		ModelAlias:  strings.TrimSpace(body.ModelAlias),
-		Model:       strings.TrimSpace(body.Model),
-		ChatID:      chatID,
-		RequestID:   strings.TrimSpace(body.RequestID),
-		Message:     message,
-		Attachments: body.Attachments,
+		Provider:      strings.TrimSpace(body.Provider),
+		ModelAlias:    strings.TrimSpace(body.ModelAlias),
+		Model:         strings.TrimSpace(body.Model),
+		MemorySubject: memoryInstanceID,
+		ChatID:        chatID,
+		RequestID:     strings.TrimSpace(body.RequestID),
+		Message:       message,
+		Attachments:   body.Attachments,
 	})
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())

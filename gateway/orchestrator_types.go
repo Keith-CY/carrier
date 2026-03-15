@@ -104,20 +104,31 @@ type OrchestratorExecutionPolicySnapshot struct {
 }
 
 type OrchestratorTaskResult struct {
-	TaskID          string                 `json:"taskId"`
-	Status          OrchestratorTaskStatus `json:"status"`
-	WorkerID        string                 `json:"workerId,omitempty"`
-	HostID          string                 `json:"hostId,omitempty"`
-	AgentID         string                 `json:"agentId,omitempty"`
-	Attempts        int                    `json:"attempts"`
-	Summary         string                 `json:"summary,omitempty"`
-	Output          string                 `json:"output,omitempty"`
-	Error           string                 `json:"error,omitempty"`
-	FailureReason   string                 `json:"failureReason,omitempty"`
-	FailureCategory string                 `json:"failureCategory,omitempty"`
-	StartedAt       string                 `json:"startedAt,omitempty"`
-	CompletedAt     string                 `json:"completedAt,omitempty"`
-	LatencyMs       int64                  `json:"latencyMs,omitempty"`
+	TaskID          string                                `json:"taskId"`
+	Status          OrchestratorTaskStatus                `json:"status"`
+	WorkerID        string                                `json:"workerId,omitempty"`
+	HostID          string                                `json:"hostId,omitempty"`
+	AgentID         string                                `json:"agentId,omitempty"`
+	Attempts        int                                   `json:"attempts"`
+	Summary         string                                `json:"summary,omitempty"`
+	Output          string                                `json:"output,omitempty"`
+	Error           string                                `json:"error,omitempty"`
+	FailureReason   string                                `json:"failureReason,omitempty"`
+	FailureCategory string                                `json:"failureCategory,omitempty"`
+	StartedAt       string                                `json:"startedAt,omitempty"`
+	CompletedAt     string                                `json:"completedAt,omitempty"`
+	LatencyMs       int64                                 `json:"latencyMs,omitempty"`
+	DelegatedMemory *OrchestratorDelegatedTaskMemoryState `json:"delegatedMemory,omitempty"`
+}
+
+type OrchestratorDelegatedTaskMemoryState struct {
+	ChildAgentID          string   `json:"childAgentId,omitempty"`
+	ChildPerAgentMemoryID string   `json:"childPerAgentMemoryId,omitempty"`
+	SnapshotID            string   `json:"snapshotId,omitempty"`
+	SnapshotDigest        string   `json:"snapshotDigest,omitempty"`
+	DistillRunID          string   `json:"distillRunId,omitempty"`
+	CleanupStatus         string   `json:"cleanupStatus,omitempty"`
+	ParentRecordIDs       []string `json:"parentRecordIds,omitempty"`
 }
 
 type OrchestratorArtifact struct {
@@ -604,7 +615,23 @@ func normalizeOrchestratorTaskResult(in OrchestratorTaskResult) OrchestratorTask
 	out.FailureCategory = strings.TrimSpace(out.FailureCategory)
 	out.StartedAt = strings.TrimSpace(out.StartedAt)
 	out.CompletedAt = strings.TrimSpace(out.CompletedAt)
+	out.DelegatedMemory = normalizeOrchestratorDelegatedTaskMemoryState(out.DelegatedMemory)
 	return out
+}
+
+func normalizeOrchestratorDelegatedTaskMemoryState(in *OrchestratorDelegatedTaskMemoryState) *OrchestratorDelegatedTaskMemoryState {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.ChildAgentID = strings.TrimSpace(out.ChildAgentID)
+	out.ChildPerAgentMemoryID = strings.TrimSpace(out.ChildPerAgentMemoryID)
+	out.SnapshotID = strings.TrimSpace(out.SnapshotID)
+	out.SnapshotDigest = strings.TrimSpace(out.SnapshotDigest)
+	out.DistillRunID = strings.TrimSpace(out.DistillRunID)
+	out.CleanupStatus = normalizeManagedEnumValue(out.CleanupStatus)
+	out.ParentRecordIDs = normalizeStringSelectorList(out.ParentRecordIDs, true)
+	return &out
 }
 
 func normalizeOrchestratorArtifact(in OrchestratorArtifact) OrchestratorArtifact {

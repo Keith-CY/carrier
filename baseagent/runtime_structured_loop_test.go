@@ -221,6 +221,59 @@ func TestBaseagentMemoryQueryUsesCarrierStore(t *testing.T) {
 	}
 }
 
+func TestBaseagentMemoryQueryUsesRequestMemorySubject(t *testing.T) {
+	mem := newRuntimeExtendedMemoryFake()
+	mem.searchHits = []MemorySearchHit{
+		{ID: "rec-1", Scope: "shared:snapshot-child-1", Score: 0.91, Snippet: "delegated timezone: JST", Provenance: "snapshot:child-1"},
+	}
+	provider := &scriptedToolAwareProvider{
+		name: "memory-aware-override",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "memory_search",
+						Arguments: map[string]any{
+							"query": "timezone",
+						},
+					},
+				},
+			},
+			{
+				Content: "memory search completed",
+			},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{}, mem, WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider:      "cli",
+		ChatID:        "memory-search-override",
+		Message:       "find delegated memory about timezone",
+		MemorySubject: "child-1",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "memory search completed" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(mem.searchCalls) != 1 {
+		t.Fatalf("expected 1 memory search call, got %d", len(mem.searchCalls))
+	}
+	if mem.searchCalls[0].subject != "child-1" {
+		t.Fatalf("expected request memory subject, got %+v", mem.searchCalls[0])
+	}
+}
+
 func TestStructuredLoopObserveMemory(t *testing.T) {
 	mem := newRuntimeExtendedMemoryFake()
 	provider := &scriptedToolAwareProvider{
@@ -272,6 +325,55 @@ func TestStructuredLoopObserveMemory(t *testing.T) {
 	}
 	if !strings.Contains(mem.observeCalls[0].outputSnippet, "openclaw") {
 		t.Fatalf("expected tool output in observe call, got %+v", mem.observeCalls[0])
+	}
+}
+
+func TestStructuredLoopObserveMemoryUsesRequestMemorySubject(t *testing.T) {
+	mem := newRuntimeExtendedMemoryFake()
+	provider := &scriptedToolAwareProvider{
+		name: "observe-aware-override",
+		replies: []StructuredToolReply{
+			{
+				ToolCalls: []StructuredToolCall{
+					{
+						ID:   "call-1",
+						Name: "list_agents",
+					},
+				},
+			},
+			{
+				Content: "listed agents",
+			},
+		},
+	}
+
+	rt := NewRuntime(&runtimeServiceFake{
+		agents: []AgentState{{ID: "openclaw", Install: "installed", Runtime: "running", Health: "ok"}},
+	}, mem, WithMaxToolIterations(4))
+	if err := rt.RegisterProvider(provider); err != nil {
+		t.Fatalf("register provider: %v", err)
+	}
+	if err := rt.SetActiveProvider(provider.Name()); err != nil {
+		t.Fatalf("set active provider: %v", err)
+	}
+
+	resp, err := rt.Chat(context.Background(), ChatRequest{
+		Provider:      "cli",
+		ChatID:        "memory-observe-override",
+		Message:       "check the current fleet posture",
+		MemorySubject: "child-1",
+	})
+	if err != nil {
+		t.Fatalf("runtime chat: %v", err)
+	}
+	if resp.Message != "listed agents" {
+		t.Fatalf("unexpected chat response: %+v", resp)
+	}
+	if len(mem.observeCalls) != 1 {
+		t.Fatalf("expected 1 memory observe call, got %d", len(mem.observeCalls))
+	}
+	if mem.observeCalls[0].subject != "child-1" {
+		t.Fatalf("expected request memory subject, got %+v", mem.observeCalls[0])
 	}
 }
 
@@ -1225,7 +1327,7 @@ func TestAgentLoopStructuredLoopStopsAtMaxIterations(t *testing.T) {
 
 	_, handled, err := loop.processStructuredChat(context.Background(), "cli:max-iterations", []ConversationMessage{
 		{Role: "user", Content: "loop forever"},
-	}, "")
+	}, "", "")
 	if !handled {
 		t.Fatal("expected structured loop to handle request")
 	}
