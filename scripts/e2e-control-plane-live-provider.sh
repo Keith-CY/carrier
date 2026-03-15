@@ -101,6 +101,47 @@ wait_for_http_ok() {
   done
 }
 
+control_plane_processes_alive() {
+  if [[ -z "${DAEMON_PID:-}" || -z "${GATEWAY_PID:-}" ]]; then
+    return 1
+  fi
+  kill -0 "${DAEMON_PID}" >/dev/null 2>&1 && kill -0 "${GATEWAY_PID}" >/dev/null 2>&1
+}
+
+stop_control_plane_processes() {
+  if [[ -n "${GATEWAY_PID:-}" ]]; then
+    kill "${GATEWAY_PID}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${DAEMON_PID:-}" ]]; then
+    kill "${DAEMON_PID}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${GATEWAY_PID:-}" ]]; then
+    wait "${GATEWAY_PID}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${DAEMON_PID:-}" ]]; then
+    wait "${DAEMON_PID}" >/dev/null 2>&1 || true
+  fi
+  GATEWAY_PID=""
+  DAEMON_PID=""
+}
+
+wait_for_control_plane_ready() {
+  local daemon_url="$1"
+  local gateway_url="$2"
+  local attempts="${3:-60}"
+  local attempt=""
+  for attempt in $(seq 1 "$attempts"); do
+    if ! control_plane_processes_alive; then
+      return 1
+    fi
+    if curl -fsS "$daemon_url" >/dev/null 2>&1 && curl -fsS "$gateway_url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 port_is_available() {
   local port="$1"
   python3 - "$port" <<'PY'
@@ -268,34 +309,14 @@ if [[ -z "$MODEL" ]]; then
 fi
 
 PROVIDER_ENV_VAR="$(provider_env_var "$PROVIDER")"
+REQUESTED_DAEMON_PORT="$DAEMON_PORT"
+REQUESTED_GATEWAY_PORT="$GATEWAY_PORT"
 
 require_cmd go
 require_cmd jq
 require_cmd curl
 require_cmd unzip
 require_cmd python3
-
-if [[ -n "$DAEMON_PORT" ]]; then
-  if ! port_is_available "$DAEMON_PORT"; then
-    echo "error: requested daemon port is already in use: ${DAEMON_PORT}" >&2
-    exit 1
-  fi
-else
-  DAEMON_PORT="$(pick_ephemeral_port)"
-fi
-if [[ -n "$GATEWAY_PORT" ]]; then
-  if ! port_is_available "$GATEWAY_PORT"; then
-    echo "error: requested gateway port is already in use: ${GATEWAY_PORT}" >&2
-    exit 1
-  fi
-else
-  while :; do
-    GATEWAY_PORT="$(pick_ephemeral_port)"
-    if [[ "$GATEWAY_PORT" != "$DAEMON_PORT" ]]; then
-      break
-    fi
-  done
-fi
 
 if [[ -n "$STATE_ROOT" ]]; then
   mkdir -p "$STATE_ROOT" "$STATE_ROOT/runs"
@@ -351,10 +372,10 @@ export CARRIER_DISCORD_PUBLIC_KEY=""
 export CARRIER_FEISHU_APP_TOKEN=""
 export CARRIER_FEISHU_VERIFICATION_TOKEN=""
 export CARRIER_SERVER_HOST="127.0.0.1"
-export CARRIER_SERVER_PORT="${DAEMON_PORT}"
 export CARRIER_GATEWAY_HOST="127.0.0.1"
-export CARRIER_GATEWAY_PORT="${GATEWAY_PORT}"
-export CARRIER_DAEMON_BASE_URL="http://127.0.0.1:${DAEMON_PORT}"
+export CARRIER_SERVER_PORT=""
+export CARRIER_GATEWAY_PORT=""
+export CARRIER_DAEMON_BASE_URL=""
 export CARRIER_SERVER_API_TOKEN=""
 export CARRIER_GATEWAY_API_TOKEN=""
 export CARRIER_TRANSCRIPTION_PROVIDER="${PROVIDER}"
@@ -362,6 +383,70 @@ if [[ -n "$TRANSCRIPTION_MODEL" ]]; then
   export CARRIER_TRANSCRIPTION_MODEL="${TRANSCRIPTION_MODEL}"
 fi
 export "${PROVIDER_ENV_VAR}=${API_KEY}"
+
+select_control_plane_ports() {
+  if [[ -n "$REQUESTED_DAEMON_PORT" ]]; then
+    if ! port_is_available "$REQUESTED_DAEMON_PORT"; then
+      echo "error: requested daemon port is already in use: ${REQUESTED_DAEMON_PORT}" >&2
+      return 1
+    fi
+    DAEMON_PORT="$REQUESTED_DAEMON_PORT"
+  else
+    DAEMON_PORT="$(pick_ephemeral_port)"
+  fi
+
+  if [[ -n "$REQUESTED_GATEWAY_PORT" ]]; then
+    if ! port_is_available "$REQUESTED_GATEWAY_PORT"; then
+      echo "error: requested gateway port is already in use: ${REQUESTED_GATEWAY_PORT}" >&2
+      return 1
+    fi
+    GATEWAY_PORT="$REQUESTED_GATEWAY_PORT"
+  else
+    while :; do
+      GATEWAY_PORT="$(pick_ephemeral_port)"
+      if [[ "$GATEWAY_PORT" != "$DAEMON_PORT" ]]; then
+        break
+      fi
+    done
+  fi
+
+  export CARRIER_SERVER_PORT="${DAEMON_PORT}"
+  export CARRIER_GATEWAY_PORT="${GATEWAY_PORT}"
+  export CARRIER_DAEMON_BASE_URL="http://127.0.0.1:${DAEMON_PORT}"
+}
+
+start_control_plane() {
+  local max_attempts="${1:-6}"
+  local attempt=""
+  : >"$DAEMON_LOG"
+  : >"$GATEWAY_LOG"
+  for attempt in $(seq 1 "$max_attempts"); do
+    select_control_plane_ports || return 1
+    printf '[start-attempt %s] daemon_port=%s gateway_port=%s\n' "$attempt" "$DAEMON_PORT" "$GATEWAY_PORT" | tee -a "$DAEMON_LOG" "$GATEWAY_LOG" >/dev/null
+    "$BIN_PATH" daemon >>"$DAEMON_LOG" 2>&1 &
+    DAEMON_PID=$!
+    "$BIN_PATH" gateway >>"$GATEWAY_LOG" 2>&1 &
+    GATEWAY_PID=$!
+
+    if wait_for_control_plane_ready \
+      "http://127.0.0.1:${DAEMON_PORT}/readyz" \
+      "http://127.0.0.1:${GATEWAY_PORT}/healthz" \
+      30; then
+      if control_plane_processes_alive; then
+        return 0
+      fi
+    fi
+
+    if [[ -n "$REQUESTED_DAEMON_PORT" || -n "$REQUESTED_GATEWAY_PORT" ]]; then
+      break
+    fi
+
+    printf '[start-attempt %s] control plane startup failed, retrying with fresh ports\n' "$attempt" | tee -a "$DAEMON_LOG" "$GATEWAY_LOG" >/dev/null
+    stop_control_plane_processes
+  done
+  stop_control_plane_processes
+  return 1
+}
 
 cleanup() {
   set +e
@@ -371,18 +456,7 @@ cleanup() {
     fi
     run_with_timeout 10 "$BIN_PATH" stop zeroclaw >/dev/null 2>&1 || true
   fi
-  if [[ -n "${GATEWAY_PID:-}" ]]; then
-    kill "${GATEWAY_PID}" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "${DAEMON_PID:-}" ]]; then
-    kill "${DAEMON_PID}" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "${GATEWAY_PID:-}" ]]; then
-    wait "${GATEWAY_PID}" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "${DAEMON_PID:-}" ]]; then
-    wait "${DAEMON_PID}" >/dev/null 2>&1 || true
-  fi
+  stop_control_plane_processes
   echo "[artifacts] temp_dir=${TMP_DIR}"
   if [[ -n "$STATE_ROOT" ]]; then
     echo "[artifacts] state_dir=${STATE_ROOT}"
@@ -441,14 +515,13 @@ if [[ ! -f "$TRANSCRIPTION_AUDIO_FIXTURE" ]]; then
 fi
 
 echo "[3/10] start daemon + gateway"
+if ! start_control_plane 6; then
+  echo "error: failed to start daemon + gateway after retrying candidate ports" >&2
+  tail -n 80 "$DAEMON_LOG" >&2 || true
+  tail -n 80 "$GATEWAY_LOG" >&2 || true
+  exit 1
+fi
 echo "  daemon_port=${DAEMON_PORT} gateway_port=${GATEWAY_PORT}"
-"$BIN_PATH" daemon >"$DAEMON_LOG" 2>&1 &
-DAEMON_PID=$!
-"$BIN_PATH" gateway >"$GATEWAY_LOG" 2>&1 &
-GATEWAY_PID=$!
-
-wait_for_http_ok "http://127.0.0.1:${DAEMON_PORT}/readyz" "daemon"
-wait_for_http_ok "http://127.0.0.1:${GATEWAY_PORT}/healthz" "gateway"
 
 "$BIN_PATH" stop zeroclaw >/dev/null 2>&1 || true
 
