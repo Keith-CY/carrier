@@ -652,6 +652,54 @@ func TestHandleOrchestratorExecutionsCreatePersistsPolicySnapshot(t *testing.T) 
 	}
 }
 
+func TestHandleOrchestratorExecutionsCreateSeedsDelegatedMemoryState(t *testing.T) {
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
+
+	mux := buildRemoteFeatureMux(t)
+	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/executions", `{
+		"goal":"delegate checkout investigation",
+		"approvalScope":"infrastructure_only",
+		"requiredMemory":[" shared:incident ","private:checkout","shared:incident"],
+		"requiredWorkers":[
+			{"hostId":"local","agentId":"zeroclaw","count":1}
+		],
+		"taskUnits":[
+			{"id":"t1","input":"collect checkout diagnostics","hostId":"local","agentId":"zeroclaw"}
+		]
+	}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create execution status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	execMap, _ := payload["execution"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(execMap["agentLifecycleMode"])); got != "delegated" {
+		t.Fatalf("agentLifecycleMode = %q, want delegated payload=%+v", got, payload)
+	}
+	if got := strings.TrimSpace(anyToString(execMap["memoryBindingMode"])); got != "snapshot" {
+		t.Fatalf("memoryBindingMode = %q, want snapshot payload=%+v", got, payload)
+	}
+	sourceScopes, _ := execMap["sourceScopes"].([]interface{})
+	if len(sourceScopes) != 2 || anyToString(sourceScopes[0]) != "private:checkout" || anyToString(sourceScopes[1]) != "shared:incident" {
+		t.Fatalf("sourceScopes = %+v, want [private:checkout shared:incident] payload=%+v", sourceScopes, payload)
+	}
+	if got := strings.TrimSpace(anyToString(execMap["snapshotDigest"])); got != buildMemoryContractDigest([]string{"private:checkout", "shared:incident"}) {
+		t.Fatalf("snapshotDigest = %q, want derived source scope digest payload=%+v", got, payload)
+	}
+	if got := strings.TrimSpace(anyToString(execMap["snapshotId"])); got != "" {
+		t.Fatalf("snapshotId = %q, want empty payload=%+v", got, payload)
+	}
+	if got := strings.TrimSpace(anyToString(execMap["childAgentId"])); got != "" {
+		t.Fatalf("childAgentId = %q, want empty payload=%+v", got, payload)
+	}
+	if got := strings.TrimSpace(anyToString(execMap["distillRunId"])); got != "" {
+		t.Fatalf("distillRunId = %q, want empty payload=%+v", got, payload)
+	}
+	if got := strings.TrimSpace(anyToString(execMap["cleanupStatus"])); got != "" {
+		t.Fatalf("cleanupStatus = %q, want empty payload=%+v", got, payload)
+	}
+}
+
 func TestHandleOrchestratorPoliciesCRUDAndExecutionEnforcement(t *testing.T) {
 	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
 

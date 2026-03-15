@@ -33,6 +33,33 @@ func TestHandleCommand_Delegate_Usage(t *testing.T) {
 	}
 }
 
+func TestDelegateExecutionSeedsDelegatedMemoryState(t *testing.T) {
+	execution, err := buildDelegateOrchestratorExecution(context.Background(), nil, " triage checkout incident ", []BaseAgentDecomposeTask{
+		{ID: "task-a", Input: "collect checkout diagnostics", AgentID: "picoclaw"},
+	}, "req-delegate-memory")
+	if err != nil {
+		t.Fatalf("buildDelegateOrchestratorExecution: %v", err)
+	}
+	if execution.AgentLifecycleMode != "delegated" {
+		t.Fatalf("agentLifecycleMode = %q, want delegated", execution.AgentLifecycleMode)
+	}
+	if execution.MemoryBindingMode != "snapshot" {
+		t.Fatalf("memoryBindingMode = %q, want snapshot", execution.MemoryBindingMode)
+	}
+	if len(execution.SourceScopes) != 0 {
+		t.Fatalf("sourceScopes = %v, want empty", execution.SourceScopes)
+	}
+	if execution.SnapshotID != "" || execution.SnapshotDigest != "" {
+		t.Fatalf("expected empty snapshot state, got snapshotId=%q snapshotDigest=%q", execution.SnapshotID, execution.SnapshotDigest)
+	}
+	if execution.ChildAgentID != "" || execution.ChildPerAgentMemoryID != "" {
+		t.Fatalf("expected empty child state, got childAgentId=%q childPerAgentMemoryId=%q", execution.ChildAgentID, execution.ChildPerAgentMemoryID)
+	}
+	if execution.DistillRunID != "" || execution.CleanupStatus != "" {
+		t.Fatalf("expected empty finalize state, got distillRunId=%q cleanupStatus=%q", execution.DistillRunID, execution.CleanupStatus)
+	}
+}
+
 func TestHandleCommand_Delegate_SubmitAndStatus(t *testing.T) {
 	t.Setenv("CARRIER_DELEGATE_STORE", t.TempDir()+"/delegate-store.json")
 	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", t.TempDir()+"/remote-control.json")
