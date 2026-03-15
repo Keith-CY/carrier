@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -296,5 +297,45 @@ func TestMemoryV2UpsertGetGrantRevokeAndInstanceAttach(t *testing.T) {
 	mux.ServeHTTP(rollbackRR, rollbackReq)
 	if rollbackRR.Code != http.StatusOK {
 		t.Fatalf("rollback status=%d body=%s", rollbackRR.Code, rollbackRR.Body.String())
+	}
+}
+
+func TestMemoryV2InstanceAttachRejectsSnapshotScope(t *testing.T) {
+	root := t.TempDir()
+	memStore := memory.NewStore(memory.WithRootDir(root))
+	if _, err := memStore.GrantScope("parent", memory.Scope("shared:team"), "tester", "seed shared team"); err != nil {
+		t.Fatalf("GrantScope(shared:team): %v", err)
+	}
+	if _, err := memStore.UpsertRecord(memory.UpsertRecordInput{
+		ID:             "shared-team-1",
+		Subject:        "parent",
+		Scope:          memory.Scope("shared:team"),
+		Type:           memory.RecordTypeFact,
+		ContentSummary: "team timezone is tokyo",
+	}); err != nil {
+		t.Fatalf("UpsertRecord(shared:team): %v", err)
+	}
+	snapshot, err := memStore.CreateSnapshotForInstance(context.Background(), memory.SnapshotOptions{
+		Actor:            "tester",
+		RequestID:        "req-snapshot-attach",
+		SourceSubject:    "parent",
+		SourceScopes:     []memory.Scope{memory.Scope("shared:team")},
+		TargetInstanceID: "child",
+		Reason:           "delegate task",
+	})
+	if err != nil {
+		t.Fatalf("CreateSnapshotForInstance: %v", err)
+	}
+
+	svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithMemoryStore(memStore))
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	mux := buildHTTPMuxWithBaseAgent(svc, nil, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	attachReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/instance/attach", strings.NewReader(`{"instanceId":"observer","scope":"`+string(snapshot.Scope)+`"}`))
+	attachRR := httptest.NewRecorder()
+	mux.ServeHTTP(attachRR, attachReq)
+	if attachRR.Code == http.StatusOK {
+		t.Fatalf("expected snapshot attach to fail, body=%s", attachRR.Body.String())
 	}
 }

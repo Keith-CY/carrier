@@ -244,3 +244,13 @@ func computeSnapshotDigest(sourceSubject string, sourceScopes []Scope, records [
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
 }
+
+func (s *Store) snapshotForScopeLocked(scope Scope) (SnapshotRecord, bool) {
+	scope = normalizeScope(scope)
+	for _, snapshot := range s.snapshots {
+		if normalizeScope(snapshot.Scope) == scope {
+			return snapshot, true
+		}
+	}
+	return SnapshotRecord{}, false
+}

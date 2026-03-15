@@ -157,3 +157,100 @@ func TestSnapshotMountRejectsWrites(t *testing.T) {
 		t.Fatalf("expected ErrMountDenied for snapshot write, got %v", err)
 	}
 }
+
+func TestSnapshotRejectsGrantAttachAndStaleMountBypass(t *testing.T) {
+	store := NewStore(WithRootDir(t.TempDir()))
+
+	if _, err := store.GrantScope("parent", Scope("shared:team"), "owner", "delegate shared team memory"); err != nil {
+		t.Fatalf("GrantScope(shared:team): %v", err)
+	}
+	if _, err := store.UpsertRecord(UpsertRecordInput{
+		ID:             "shared-team-1",
+		Subject:        "parent",
+		Scope:          Scope("shared:team"),
+		Type:           RecordTypeFact,
+		ContentSummary: "team timezone is tokyo",
+	}); err != nil {
+		t.Fatalf("UpsertRecord(shared:team): %v", err)
+	}
+
+	snapshot, err := store.CreateSnapshotForInstance(context.Background(), SnapshotOptions{
+		Actor:            "tester",
+		RequestID:        "req-snapshot-3",
+		SourceSubject:    "parent",
+		SourceScopes:     []Scope{Scope("shared:team")},
+		TargetInstanceID: "child",
+		Reason:           "delegate task",
+	})
+	if err != nil {
+		t.Fatalf("CreateSnapshotForInstance: %v", err)
+	}
+	snapshotScope := sharedSnapshotScope(snapshot.ID)
+
+	if _, err := store.GrantScope("observer", snapshotScope, "owner", "unauthorized snapshot grant"); err == nil {
+		t.Fatal("expected exact snapshot grant to be rejected")
+	}
+	if err := store.AttachScope("observer", snapshotScope); err == nil {
+		t.Fatal("expected generic AttachScope to reject snapshot scopes")
+	}
+
+	store.mu.Lock()
+	_ = store.addManualScopeLocked("observer", snapshotScope)
+	store.rebuildInstanceScopesLocked("observer")
+	store.mu.Unlock()
+
+	if hits := store.Search(SearchOptions{Subject: "observer", Query: "tokyo"}); len(hits) != 0 {
+		t.Fatalf("expected stale unauthorized mount to be ignored, got %+v", hits)
+	}
+}
+
+func TestSnapshotClonedRecordIDsCannotBeReusedForMutation(t *testing.T) {
+	store := NewStore(WithRootDir(t.TempDir()))
+
+	if _, err := store.GrantScope("parent", Scope("shared:team"), "owner", "delegate shared team memory"); err != nil {
+		t.Fatalf("GrantScope(shared:team): %v", err)
+	}
+	if _, err := store.UpsertRecord(UpsertRecordInput{
+		ID:             "shared-team-1",
+		Subject:        "parent",
+		Scope:          Scope("shared:team"),
+		Type:           RecordTypeFact,
+		ContentSummary: "team timezone is tokyo",
+	}); err != nil {
+		t.Fatalf("UpsertRecord(shared:team): %v", err)
+	}
+
+	snapshot, err := store.CreateSnapshotForInstance(context.Background(), SnapshotOptions{
+		Actor:            "tester",
+		RequestID:        "req-snapshot-4",
+		SourceSubject:    "parent",
+		SourceScopes:     []Scope{Scope("shared:team")},
+		TargetInstanceID: "child",
+		Reason:           "delegate task",
+	})
+	if err != nil {
+		t.Fatalf("CreateSnapshotForInstance: %v", err)
+	}
+	if err := store.MountSnapshot("child", snapshot.ID); err != nil {
+		t.Fatalf("MountSnapshot: %v", err)
+	}
+
+	_, err = store.UpsertRecord(UpsertRecordInput{
+		Subject:        "child",
+		ID:             snapshot.ClonedRecordIDs[0],
+		Scope:          Scope("agent:child"),
+		Type:           RecordTypeNote,
+		ContentSummary: "stolen snapshot content",
+	})
+	if err != ErrMountDenied {
+		t.Fatalf("expected ErrMountDenied for snapshot clone ID reuse, got %v", err)
+	}
+
+	rec, err := store.GetRecord("child", snapshot.ClonedRecordIDs[0])
+	if err != nil {
+		t.Fatalf("GetRecord(child, snapshot clone): %v", err)
+	}
+	if rec.Scope != sharedSnapshotScope(snapshot.ID) {
+		t.Fatalf("snapshot clone scope = %s, want %s", rec.Scope, sharedSnapshotScope(snapshot.ID))
+	}
+}

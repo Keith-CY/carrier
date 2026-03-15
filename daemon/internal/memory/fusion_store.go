@@ -241,6 +241,9 @@ func (s *Store) UpsertRecord(input UpsertRecordInput) (MemoryRecord, error) {
 	if scope == "" {
 		scope = Scope("agent:" + subject)
 	}
+	if isSnapshotScope(scope) {
+		return MemoryRecord{}, ErrMountDenied
+	}
 	allowed := s.allowedWriteScopesForSubjectLocked(subject)
 	if !scopeAllowed(allowed, scope) {
 		return MemoryRecord{}, ErrMountDenied
@@ -261,6 +264,9 @@ func (s *Store) UpsertRecord(input UpsertRecordInput) (MemoryRecord, error) {
 	}
 	rec, exists := s.records[id]
 	if exists {
+		if isSnapshotScope(rec.Scope) {
+			return MemoryRecord{}, ErrMountDenied
+		}
 		rec.Scope = scope
 		rec.Type = recordType
 		rec.ContentRaw = input.ContentRaw
@@ -429,6 +435,9 @@ func (s *Store) GrantScope(subject string, scope Scope, grantedBy, reason string
 	if subject == "" || scope == "" {
 		return Grant{}, fmt.Errorf("subject and scope are required")
 	}
+	if isSnapshotScope(scope) {
+		return Grant{}, ErrMountDenied
+	}
 	now := s.now()
 	id := "grant_" + shortDigest(subject+"|"+string(scope)+"|"+fmt.Sprintf("%d", now.UnixNano()))
 	g := Grant{
@@ -490,6 +499,9 @@ func (s *Store) AttachScope(instanceID string, scope Scope) error {
 	scope = normalizeScope(scope)
 	if instanceID == "" || scope == "" {
 		return fmt.Errorf("instanceID and scope are required")
+	}
+	if isSnapshotScope(scope) {
+		return ErrMountDenied
 	}
 	changed := s.addManualScopeLocked(instanceID, scope)
 	if !changed {
@@ -721,7 +733,14 @@ func (s *Store) allowedScopesForSubjectLocked(subject string) map[Scope]struct{}
 		allowed[Scope("agent:"+subject)] = struct{}{}
 	}
 	for _, sc := range s.instanceScopes[subject] {
-		allowed[normalizeScope(sc)] = struct{}{}
+		scope := normalizeScope(sc)
+		if isSnapshotScope(scope) {
+			snapshot, ok := s.snapshotForScopeLocked(scope)
+			if !ok || strings.TrimSpace(snapshot.TargetInstanceID) != subject {
+				continue
+			}
+		}
+		allowed[scope] = struct{}{}
 	}
 	for _, g := range s.grants {
 		if g.Subject != subject {
@@ -730,7 +749,11 @@ func (s *Store) allowedScopesForSubjectLocked(subject string) map[Scope]struct{}
 		if g.RevokedAt != nil {
 			continue
 		}
-		allowed[normalizeScope(g.Scope)] = struct{}{}
+		scope := normalizeScope(g.Scope)
+		if isSnapshotScope(scope) {
+			continue
+		}
+		allowed[scope] = struct{}{}
 	}
 	return allowed
 }
