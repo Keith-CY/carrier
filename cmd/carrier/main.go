@@ -11842,8 +11842,10 @@ func normalizeManagedModelID(providerID, modelID string) string {
 
 func deriveManagedProviderKey(providerID, modelID string) string {
 	providerKey := strings.TrimSpace(providerID)
-	if vendor, _, ok := strings.Cut(strings.TrimSpace(modelID), "/"); ok && strings.TrimSpace(vendor) != "" {
-		providerKey = strings.TrimSpace(vendor)
+	if providerKey == "" {
+		if vendor, _, ok := strings.Cut(strings.TrimSpace(modelID), "/"); ok && strings.TrimSpace(vendor) != "" {
+			providerKey = strings.TrimSpace(vendor)
+		}
 	}
 	return mapCarrierProviderToManagedProvider(providerKey)
 }

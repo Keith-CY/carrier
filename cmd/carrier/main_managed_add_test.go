@@ -448,6 +448,73 @@ func TestPrepareManagedAgentAddArtifactsUsesConfiguredModelForProvider(t *testin
 	}
 }
 
+func TestPrepareManagedAgentAddArtifactsPreservesOpenRouterVendorModel(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	configPath := filepath.Join(t.TempDir(), "config.v2.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "default_model": "openrouter-live",
+  "model_list": [
+    {
+      "model_name": "openrouter-live",
+      "model": "openai/gpt-4o-mini",
+      "provider_id": "openrouter",
+      "credential_ref": "openrouter"
+    }
+  ]
+}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("CARRIER_CONFIG", configPath)
+
+	provider := choiceOption{
+		ID:           "openrouter",
+		Name:         "OpenRouter",
+		AuthMode:     authModeAPIKey,
+		ProviderEnv:  "OPENROUTER_API_KEY",
+		ExampleModel: "openrouter/arcee-ai/trinity-mini:free",
+	}
+	envVars := map[string]string{
+		"OPENROUTER_API_KEY": "sk-or-test",
+	}
+
+	result, err := prepareManagedAgentAddArtifacts(
+		"zeroclaw",
+		"zeroclaw-unit",
+		"",
+		"",
+		provider,
+		envVars,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("prepareManagedAgentAddArtifacts: %v", err)
+	}
+
+	rawCfg, err := os.ReadFile(result.ConfigPath)
+	if err != nil {
+		t.Fatalf("read zeroclaw config: %v", err)
+	}
+	cfgText := string(rawCfg)
+	for _, want := range []string{
+		`default_provider = "openrouter"`,
+		`default_model = "openai/gpt-4o-mini"`,
+		`provider = "openrouter"`,
+		`model = "openai/gpt-4o-mini"`,
+	} {
+		if !strings.Contains(cfgText, want) {
+			t.Fatalf("expected zeroclaw config to contain %q, got:\n%s", want, cfgText)
+		}
+	}
+	if strings.Contains(cfgText, `default_provider = "openai"`) {
+		t.Fatalf("expected zeroclaw config to preserve openrouter as provider, got:\n%s", cfgText)
+	}
+}
+
 func TestPrepareManagedAgentAddArtifactsRendersProtocolProfiles(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	if err := os.MkdirAll(home, 0o700); err != nil {
