@@ -290,8 +290,8 @@ func TestLocalOrchestratorRunProvisionsDelegatedChild(t *testing.T) {
 	if strings.Join(order, ",") != "create,snapshot,mount,chat" {
 		t.Fatalf("provisioning order = %v, want [create snapshot mount chat]", order)
 	}
-	if snapshotSourceSubject != "zeroclaw-main" {
-		t.Fatalf("snapshot sourceSubject = %q, want zeroclaw-main", snapshotSourceSubject)
+	if snapshotSourceSubject != "zeroclaw" {
+		t.Fatalf("snapshot sourceSubject = %q, want zeroclaw", snapshotSourceSubject)
 	}
 	if createdOwner == "" || createdOwner != snapshotTargetInstanceID {
 		t.Fatalf("expected created per-agent memory owner to match child instance, owner=%q targetInstanceId=%q", createdOwner, snapshotTargetInstanceID)

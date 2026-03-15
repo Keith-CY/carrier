@@ -132,8 +132,8 @@ func TestProvisionDelegatedChildCreatesSnapshotAndWritablePerAgentMemory(t *test
 	if child.MemoryBindingMode != orchestratorMemoryBindingMode {
 		t.Fatalf("MemoryBindingMode = %q, want %q", child.MemoryBindingMode, orchestratorMemoryBindingMode)
 	}
-	if child.ParentAgentID != "openclaw-main" {
-		t.Fatalf("ParentAgentID = %q, want openclaw-main", child.ParentAgentID)
+	if child.ParentAgentID != "openclaw" {
+		t.Fatalf("ParentAgentID = %q, want openclaw", child.ParentAgentID)
 	}
 	if child.ParentExecutionID != "exec-1" {
 		t.Fatalf("ParentExecutionID = %q, want exec-1", child.ParentExecutionID)
@@ -169,8 +169,8 @@ func TestProvisionDelegatedChildCreatesSnapshotAndWritablePerAgentMemory(t *test
 	if snapshotCount != 1 {
 		t.Fatalf("snapshot count = %d, want 1", snapshotCount)
 	}
-	if snapshotSourceSubject != "openclaw-main" {
-		t.Fatalf("snapshot sourceSubject = %q, want openclaw-main", snapshotSourceSubject)
+	if snapshotSourceSubject != "openclaw" {
+		t.Fatalf("snapshot sourceSubject = %q, want openclaw", snapshotSourceSubject)
 	}
 	if snapshotTargetInstanceID != child.ID {
 		t.Fatalf("snapshot targetInstanceId = %q, want %q", snapshotTargetInstanceID, child.ID)

@@ -32,7 +32,7 @@ func provisionDelegatedChild(
 		return managedAgentInstance{}, fmt.Errorf("allocate delegated child instance id: %w", err)
 	}
 	perAgentMemoryID := buildDelegatedPerAgentMemoryID(childID)
-	parentSubjectID := resolveDelegatedParentSubjectID(strings.TrimSpace(lease.AgentID))
+	parentSubjectID := strings.TrimSpace(lease.AgentID)
 	requestID := "orchestrator-" + strings.TrimSpace(execution.ID)
 	actor := "gateway:orchestrator:delegated"
 
@@ -105,37 +105,6 @@ func provisionDelegatedChild(
 		return managedAgentInstance{}, fmt.Errorf("persist delegated execution state: %w", err)
 	}
 	return child, nil
-}
-
-func resolveDelegatedParentSubjectID(agentID string) string {
-	instances, _, err := loadManagedInstances()
-	if err == nil {
-		target := strings.ToLower(strings.TrimSpace(agentID))
-		bestIdx := -1
-		for i, inst := range instances {
-			if !strings.EqualFold(strings.TrimSpace(inst.AgentID), target) && !strings.EqualFold(strings.TrimSpace(inst.Type), target) {
-				continue
-			}
-			if normalizeManagedAgentLifecycleMode(inst.AgentLifecycleMode) != managedAgentLifecyclePersistent {
-				continue
-			}
-			if bestIdx < 0 {
-				bestIdx = i
-				continue
-			}
-			currentUpdated, currentHasTime := parseManagedInstanceTimestamp(inst.UpdatedAt)
-			bestUpdated, bestHasTime := parseManagedInstanceTimestamp(instances[bestIdx].UpdatedAt)
-			if currentHasTime && (!bestHasTime || currentUpdated.After(bestUpdated) || currentUpdated.Equal(bestUpdated)) {
-				bestIdx = i
-			}
-		}
-		if bestIdx >= 0 {
-			if trimmed := strings.TrimSpace(instances[bestIdx].ID); trimmed != "" {
-				return trimmed
-			}
-		}
-	}
-	return strings.TrimSpace(agentID)
 }
 
 func buildDelegatedPerAgentMemoryID(childID string) string {
