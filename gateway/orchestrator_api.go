@@ -776,6 +776,9 @@ func runOrchestratorExecution(executionID string) {
 		}
 		return
 	}
+	if latestErr == nil && found {
+		updated = latest
+	}
 	updated.Results = results
 	updated.Status = OrchestratorExecutionStatusCompleted
 	updated.CompletedAt = nowTimestamp()
@@ -1219,16 +1222,34 @@ func runOrchestratorTaskAttempt(
 		runCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
+		executionState := execution
+		child, provisionErr := provisionDelegatedChild(runCtx, client, &executionState, task, lease, attempt)
+		if provisionErr != nil {
+			return OrchestratorTaskResult{
+				TaskID:      task.ID,
+				Status:      OrchestratorTaskStatusFailed,
+				WorkerID:    lease.ID,
+				HostID:      lease.HostID,
+				AgentID:     lease.AgentID,
+				Attempts:    attempt,
+				Error:       provisionErr.Error(),
+				StartedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+				CompletedAt: time.Now().UTC().Format(time.RFC3339Nano),
+				LatencyMs:   0,
+			}, provisionErr
+		}
+
 		sessionID := strings.TrimSpace(task.SessionID)
 		if sessionID == "" {
-			sessionID = fmt.Sprintf("%s-%s-%d", execution.ID, task.ID, attempt)
+			sessionID = fmt.Sprintf("%s-%s-%d", strings.TrimSpace(child.ID), task.ID, attempt)
 		}
 
 		start := time.Now()
 		requestID := "orchestrator-" + strings.TrimSpace(execution.ID)
-		chatResult, runErr := client.ChatAgent(
+		chatResult, runErr := client.ChatAgentForInstance(
 			runCtx,
 			strings.TrimSpace(lease.AgentID),
+			strings.TrimSpace(child.ID),
 			strings.TrimSpace(execution.RequestedProvider),
 			strings.TrimSpace(task.Input),
 			sessionID,

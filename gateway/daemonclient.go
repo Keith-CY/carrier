@@ -106,6 +106,27 @@ type AgentChatResult struct {
 	BackupRef   string                         `json:"backupRef,omitempty"`
 }
 
+type MemoryEntryRecord struct {
+	ID        string `json:"id"`
+	Name      string `json:"name,omitempty"`
+	Version   string `json:"version,omitempty"`
+	Type      string `json:"type,omitempty"`
+	Owner     string `json:"owner,omitempty"`
+	State     string `json:"state,omitempty"`
+	CreatedAt string `json:"createdAt,omitempty"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
+}
+
+type MemorySnapshotRecord struct {
+	ID               string   `json:"id"`
+	Digest           string   `json:"digest"`
+	Scope            string   `json:"scope,omitempty"`
+	SourceSubject    string   `json:"sourceSubject,omitempty"`
+	SourceScopes     []string `json:"sourceScopes,omitempty"`
+	TargetInstanceID string   `json:"targetInstanceId,omitempty"`
+	Reason           string   `json:"reason,omitempty"`
+}
+
 type AgentCapabilitySummary = baseagent.RuntimeCapabilitySummary
 type AgentSessionStats = baseagent.SessionStats
 type CronJob = baseagent.CronJob
@@ -648,8 +669,26 @@ func (c *DaemonClient) ChatAgent(
 	actor string,
 	requestID string,
 ) (*AgentChatResult, error) {
+	return c.ChatAgentForInstance(ctx, agentID, "", provider, message, sessionID, modelAlias, model, actor, requestID)
+}
+
+func (c *DaemonClient) ChatAgentForInstance(
+	ctx context.Context,
+	agentID string,
+	instanceID string,
+	provider string,
+	message string,
+	sessionID string,
+	modelAlias string,
+	model string,
+	actor string,
+	requestID string,
+) (*AgentChatResult, error) {
 	payload := map[string]interface{}{
 		"message": message,
+	}
+	if strings.TrimSpace(instanceID) != "" {
+		payload["instanceId"] = strings.TrimSpace(instanceID)
 	}
 	if strings.TrimSpace(provider) != "" {
 		payload["provider"] = strings.TrimSpace(provider)
@@ -672,6 +711,85 @@ func (c *DaemonClient) ChatAgent(
 		return nil, fmt.Errorf("agent chat response: %w", err)
 	}
 	return &result, nil
+}
+
+func (c *DaemonClient) CreateMemoryEntry(
+	ctx context.Context,
+	id string,
+	name string,
+	version string,
+	entryType string,
+	owner string,
+	actor string,
+	requestID string,
+) (*MemoryEntryRecord, error) {
+	payload := map[string]interface{}{
+		"id":      strings.TrimSpace(id),
+		"name":    strings.TrimSpace(name),
+		"version": strings.TrimSpace(version),
+		"type":    strings.TrimSpace(entryType),
+		"owner":   strings.TrimSpace(owner),
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v2/memory/entries/create", payload, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Entry MemoryEntryRecord `json:"entry"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("memory create response: %w", err)
+	}
+	return &result.Entry, nil
+}
+
+func (c *DaemonClient) CreateInstanceSnapshot(
+	ctx context.Context,
+	sourceSubject string,
+	sourceScopes []string,
+	targetInstanceID string,
+	reason string,
+	actor string,
+	requestID string,
+) (*MemorySnapshotRecord, error) {
+	normalizedScopes := make([]string, 0, len(sourceScopes))
+	for _, scope := range sourceScopes {
+		if trimmed := strings.TrimSpace(scope); trimmed != "" {
+			normalizedScopes = append(normalizedScopes, trimmed)
+		}
+	}
+	payload := map[string]interface{}{
+		"sourceSubject":    strings.TrimSpace(sourceSubject),
+		"sourceScopes":     normalizedScopes,
+		"targetInstanceId": strings.TrimSpace(targetInstanceID),
+		"reason":           strings.TrimSpace(reason),
+	}
+	raw, err := c.request(ctx, http.MethodPost, "/api/v2/memory/instance/snapshot", payload, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Snapshot MemorySnapshotRecord `json:"snapshot"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("memory snapshot response: %w", err)
+	}
+	return &result.Snapshot, nil
+}
+
+func (c *DaemonClient) MountInstanceSnapshot(
+	ctx context.Context,
+	instanceID string,
+	snapshotID string,
+	actor string,
+	requestID string,
+) error {
+	payload := map[string]interface{}{
+		"instanceId": strings.TrimSpace(instanceID),
+		"snapshotId": strings.TrimSpace(snapshotID),
+	}
+	_, err := c.request(ctx, http.MethodPost, "/api/v2/memory/instance/snapshot/mount", payload, actor, requestID)
+	return err
 }
 
 func (c *DaemonClient) SpeakAgentMedia(
