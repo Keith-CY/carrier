@@ -12,6 +12,8 @@ const (
 	defaultOrchestratorTaskTimeoutMs = 60_000
 	maxOrchestratorTaskTimeoutMs     = 300_000
 	maxOrchestratorTaskRetryBudget   = 5
+	orchestratorAgentLifecycleMode   = "delegated"
+	orchestratorMemoryBindingMode    = "snapshot"
 )
 
 type OrchestratorExecutionStatus string
@@ -167,44 +169,53 @@ type OrchestratorExecutionWorkContext struct {
 }
 
 type OrchestratorExecution struct {
-	ID                   string                              `json:"id"`
-	Mode                 OrchestratorExecutionMode           `json:"mode,omitempty"`
-	Work                 OrchestratorExecutionWorkContext    `json:"work,omitempty"`
-	Goal                 string                              `json:"goal"`
-	Team                 string                              `json:"team,omitempty"`
-	Project              string                              `json:"project,omitempty"`
-	Environment          string                              `json:"environment,omitempty"`
-	TemplateID           string                              `json:"templateId,omitempty"`
-	TriggerSource        string                              `json:"triggerSource,omitempty"`
-	TriggerID            string                              `json:"triggerId,omitempty"`
-	TriggerEvent         string                              `json:"triggerEvent,omitempty"`
-	TriggerPayloadDigest string                              `json:"triggerPayloadDigest,omitempty"`
-	Initiator            string                              `json:"initiator,omitempty"`
-	RequestedProvider    string                              `json:"requestedProvider,omitempty"`
-	RequiredMemory       []string                            `json:"requiredMemory,omitempty"`
-	MemoryContractDigest string                              `json:"memoryContractDigest,omitempty"`
-	MemoryProvenance     []string                            `json:"memoryProvenance,omitempty"`
-	DistillOutputs       []string                            `json:"distillOutputs,omitempty"`
-	IdempotencyKey       string                              `json:"idempotencyKey,omitempty"`
-	ParentExecutionID    string                              `json:"parentExecutionId,omitempty"`
-	SourceExecutionID    string                              `json:"sourceExecutionId,omitempty"`
-	LaunchReason         string                              `json:"launchReason,omitempty"`
-	ApprovalScope        string                              `json:"approvalScope"`
-	ToolPolicy           OrchestratorToolPolicy              `json:"toolPolicy,omitempty"`
-	RequiredWorkers      []OrchestratorRequiredWorker        `json:"requiredWorkers"`
-	TaskUnits            []OrchestratorTaskUnit              `json:"taskUnits"`
-	Status               OrchestratorExecutionStatus         `json:"status"`
-	MaxConcurrency       int                                 `json:"maxConcurrency,omitempty"`
-	Authorization        OrchestratorAuthorization           `json:"authorization"`
-	Policy               OrchestratorExecutionPolicySnapshot `json:"policy,omitempty"`
-	Governance           OrchestratorExecutionGovernance     `json:"governance,omitempty"`
-	Outcome              OrchestratorExecutionOutcome        `json:"outcome,omitempty"`
-	Results              []OrchestratorTaskResult            `json:"results,omitempty"`
-	Error                string                              `json:"error,omitempty"`
-	CreatedAt            string                              `json:"createdAt"`
-	StartedAt            string                              `json:"startedAt,omitempty"`
-	CompletedAt          string                              `json:"completedAt,omitempty"`
-	UpdatedAt            string                              `json:"updatedAt"`
+	ID                    string                              `json:"id"`
+	Mode                  OrchestratorExecutionMode           `json:"mode,omitempty"`
+	Work                  OrchestratorExecutionWorkContext    `json:"work,omitempty"`
+	Goal                  string                              `json:"goal"`
+	Team                  string                              `json:"team,omitempty"`
+	Project               string                              `json:"project,omitempty"`
+	Environment           string                              `json:"environment,omitempty"`
+	TemplateID            string                              `json:"templateId,omitempty"`
+	TriggerSource         string                              `json:"triggerSource,omitempty"`
+	TriggerID             string                              `json:"triggerId,omitempty"`
+	TriggerEvent          string                              `json:"triggerEvent,omitempty"`
+	TriggerPayloadDigest  string                              `json:"triggerPayloadDigest,omitempty"`
+	Initiator             string                              `json:"initiator,omitempty"`
+	RequestedProvider     string                              `json:"requestedProvider,omitempty"`
+	RequiredMemory        []string                            `json:"requiredMemory,omitempty"`
+	MemoryContractDigest  string                              `json:"memoryContractDigest,omitempty"`
+	MemoryProvenance      []string                            `json:"memoryProvenance,omitempty"`
+	AgentLifecycleMode    string                              `json:"agentLifecycleMode,omitempty"`
+	MemoryBindingMode     string                              `json:"memoryBindingMode,omitempty"`
+	SourceScopes          []string                            `json:"sourceScopes,omitempty"`
+	SnapshotID            string                              `json:"snapshotId,omitempty"`
+	SnapshotDigest        string                              `json:"snapshotDigest,omitempty"`
+	ChildAgentID          string                              `json:"childAgentId,omitempty"`
+	ChildPerAgentMemoryID string                              `json:"childPerAgentMemoryId,omitempty"`
+	DistillRunID          string                              `json:"distillRunId,omitempty"`
+	CleanupStatus         string                              `json:"cleanupStatus,omitempty"`
+	DistillOutputs        []string                            `json:"distillOutputs,omitempty"`
+	IdempotencyKey        string                              `json:"idempotencyKey,omitempty"`
+	ParentExecutionID     string                              `json:"parentExecutionId,omitempty"`
+	SourceExecutionID     string                              `json:"sourceExecutionId,omitempty"`
+	LaunchReason          string                              `json:"launchReason,omitempty"`
+	ApprovalScope         string                              `json:"approvalScope"`
+	ToolPolicy            OrchestratorToolPolicy              `json:"toolPolicy,omitempty"`
+	RequiredWorkers       []OrchestratorRequiredWorker        `json:"requiredWorkers"`
+	TaskUnits             []OrchestratorTaskUnit              `json:"taskUnits"`
+	Status                OrchestratorExecutionStatus         `json:"status"`
+	MaxConcurrency        int                                 `json:"maxConcurrency,omitempty"`
+	Authorization         OrchestratorAuthorization           `json:"authorization"`
+	Policy                OrchestratorExecutionPolicySnapshot `json:"policy,omitempty"`
+	Governance            OrchestratorExecutionGovernance     `json:"governance,omitempty"`
+	Outcome               OrchestratorExecutionOutcome        `json:"outcome,omitempty"`
+	Results               []OrchestratorTaskResult            `json:"results,omitempty"`
+	Error                 string                              `json:"error,omitempty"`
+	CreatedAt             string                              `json:"createdAt"`
+	StartedAt             string                              `json:"startedAt,omitempty"`
+	CompletedAt           string                              `json:"completedAt,omitempty"`
+	UpdatedAt             string                              `json:"updatedAt"`
 }
 
 type OrchestratorExecutionGovernance struct {
@@ -294,6 +305,7 @@ func normalizeOrchestratorExecutionForStore(in OrchestratorExecution) Orchestrat
 	out.RequiredMemory = normalizeStringSelectorList(out.RequiredMemory, true)
 	out.MemoryContractDigest = strings.TrimSpace(out.MemoryContractDigest)
 	out.MemoryProvenance = normalizeStringSelectorList(out.MemoryProvenance, true)
+	out = normalizeOrchestratorDelegatedMemoryState(out)
 	out.DistillOutputs = normalizeStringSelectorList(out.DistillOutputs, true)
 	if len(out.MemoryProvenance) == 0 {
 		out.MemoryProvenance = append([]string(nil), out.RequiredMemory...)
@@ -430,6 +442,7 @@ func normalizeOrchestratorExecution(in OrchestratorExecution) (OrchestratorExecu
 	out.RequiredMemory = normalizeStringSelectorList(out.RequiredMemory, true)
 	out.MemoryContractDigest = strings.TrimSpace(out.MemoryContractDigest)
 	out.MemoryProvenance = normalizeStringSelectorList(out.MemoryProvenance, true)
+	out = normalizeOrchestratorDelegatedMemoryState(out)
 	out.DistillOutputs = normalizeStringSelectorList(out.DistillOutputs, true)
 	if len(out.MemoryProvenance) == 0 {
 		out.MemoryProvenance = append([]string(nil), out.RequiredMemory...)
@@ -482,6 +495,32 @@ func normalizeOrchestratorExecution(in OrchestratorExecution) (OrchestratorExecu
 	}
 	out.ToolPolicy = normalizeOrchestratorToolPolicy(out.ToolPolicy)
 	return out, nil
+}
+
+func normalizeOrchestratorDelegatedMemoryState(in OrchestratorExecution) OrchestratorExecution {
+	out := in
+	out.AgentLifecycleMode = normalizeManagedEnumValue(out.AgentLifecycleMode)
+	if out.AgentLifecycleMode == "" {
+		out.AgentLifecycleMode = orchestratorAgentLifecycleMode
+	}
+	out.MemoryBindingMode = normalizeManagedEnumValue(out.MemoryBindingMode)
+	if out.MemoryBindingMode == "" {
+		out.MemoryBindingMode = orchestratorMemoryBindingMode
+	}
+	out.SourceScopes = normalizeStringSelectorList(out.SourceScopes, true)
+	if len(out.SourceScopes) == 0 {
+		out.SourceScopes = append([]string(nil), out.RequiredMemory...)
+	}
+	out.SnapshotID = strings.TrimSpace(out.SnapshotID)
+	out.SnapshotDigest = strings.TrimSpace(out.SnapshotDigest)
+	if out.SnapshotDigest == "" && len(out.SourceScopes) > 0 {
+		out.SnapshotDigest = buildMemoryContractDigest(out.SourceScopes)
+	}
+	out.ChildAgentID = strings.TrimSpace(out.ChildAgentID)
+	out.ChildPerAgentMemoryID = strings.TrimSpace(out.ChildPerAgentMemoryID)
+	out.DistillRunID = strings.TrimSpace(out.DistillRunID)
+	out.CleanupStatus = normalizeManagedEnumValue(out.CleanupStatus)
+	return out
 }
 
 func normalizeOrchestratorExecutionMode(in OrchestratorExecutionMode) OrchestratorExecutionMode {

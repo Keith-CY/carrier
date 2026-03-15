@@ -278,11 +278,13 @@ func buildDelegateOrchestratorExecution(
 	}
 
 	return normalizeOrchestratorExecution(OrchestratorExecution{
-		Goal:            strings.TrimSpace(goal),
-		ApprovalScope:   "infrastructure_only",
-		RequiredWorkers: requiredWorkers,
-		TaskUnits:       taskUnits,
-		MaxConcurrency:  min(len(taskUnits), defaultOrchestratorMaxConcurrency),
+		Goal:               strings.TrimSpace(goal),
+		ApprovalScope:      "infrastructure_only",
+		AgentLifecycleMode: orchestratorAgentLifecycleMode,
+		MemoryBindingMode:  orchestratorMemoryBindingMode,
+		RequiredWorkers:    requiredWorkers,
+		TaskUnits:          taskUnits,
+		MaxConcurrency:     min(len(taskUnits), defaultOrchestratorMaxConcurrency),
 		ToolPolicy: OrchestratorToolPolicy{
 			Mode: "restricted",
 		},
