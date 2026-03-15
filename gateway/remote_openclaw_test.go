@@ -284,7 +284,7 @@ func TestBuildRemoteProviderProfilePatchWritesCompleteOpenClawProviderConfig(t *
 		t.Fatalf("did not expect agents.defaults.provider in openclaw patch: %#v", defaults["provider"])
 	}
 	defaultModel, ok := defaults["model"].(map[string]interface{})
-	if !ok || strings.TrimSpace(anyToString(defaultModel["primary"])) != "gpt-4o-mini" {
+	if !ok || strings.TrimSpace(anyToString(defaultModel["primary"])) != "openrouter/openai/gpt-4o-mini" {
 		t.Fatalf("unexpected default model patch: %#v", defaults["model"])
 	}
 	overrides, ok := agents["overrides"].(map[string]interface{})
@@ -299,7 +299,7 @@ func TestBuildRemoteProviderProfilePatchWritesCompleteOpenClawProviderConfig(t *
 		t.Fatalf("did not expect agent override provider in openclaw patch: %#v", override["provider"])
 	}
 	overrideModel, ok := override["model"].(map[string]interface{})
-	if !ok || strings.TrimSpace(anyToString(overrideModel["primary"])) != "gpt-4o-mini" {
+	if !ok || strings.TrimSpace(anyToString(overrideModel["primary"])) != "openrouter/openai/gpt-4o-mini" {
 		t.Fatalf("unexpected override model patch: %#v", override["model"])
 	}
 
@@ -323,8 +323,8 @@ func TestBuildRemoteProviderProfilePatchWritesCompleteOpenClawProviderConfig(t *
 		t.Fatalf("expected one provider model entry, got %#v", openrouter["models"])
 	}
 	providerModel, _ := providerModels[0].(map[string]interface{})
-	if got := strings.TrimSpace(anyToString(providerModel["id"])); got != "gpt-4o-mini" {
-		t.Fatalf("provider model id=%q, want gpt-4o-mini", got)
+	if got := strings.TrimSpace(anyToString(providerModel["id"])); got != "openai/gpt-4o-mini" {
+		t.Fatalf("provider model id=%q, want openai/gpt-4o-mini", got)
 	}
 	apiKeyRef, ok := openrouter["apiKey"].(map[string]interface{})
 	if !ok {

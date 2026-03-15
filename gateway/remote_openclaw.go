@@ -1985,10 +1985,10 @@ func buildRemoteProviderProfilePatch(profile ProviderProfile, agentID string) ma
 	patch := map[string]interface{}{}
 	model := strings.TrimSpace(profile.Model)
 	if model != "" {
-		modelName := deriveManagedModelName(model)
-		setNestedMapValue(patch, []string{"agents", "defaults", "model", "primary"}, modelName)
+		modelSelector := openclawcfg.BuildModelSelector(providerKey, model)
+		setNestedMapValue(patch, []string{"agents", "defaults", "model", "primary"}, modelSelector)
 		if trimmedAgentID := strings.TrimSpace(agentID); trimmedAgentID != "" && !strings.EqualFold(trimmedAgentID, "main") {
-			setNestedMapValue(patch, []string{"agents", "overrides", trimmedAgentID, "model", "primary"}, modelName)
+			setNestedMapValue(patch, []string{"agents", "overrides", trimmedAgentID, "model", "primary"}, modelSelector)
 		}
 	}
 	if providerKey == "" {

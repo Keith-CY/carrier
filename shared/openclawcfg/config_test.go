@@ -97,6 +97,27 @@ func TestBuildProviderEntryFallsBackBaseURLToOpenAI(t *testing.T) {
 	}
 }
 
+func TestBuildProviderEntryPreservesVendorQualifiedModelIDsForWrappedProviders(t *testing.T) {
+	got := BuildProviderEntry("openrouter", "openrouter", "", "openai/gpt-4o-mini", true)
+	models, ok := got["models"].([]interface{})
+	if !ok || len(models) != 1 {
+		t.Fatalf("models=%#v, want single model definition", got["models"])
+	}
+	model0, _ := models[0].(map[string]interface{})
+	if model0["id"] != "openai/gpt-4o-mini" || model0["name"] != "openai/gpt-4o-mini" {
+		t.Fatalf("model=%#v, want id/name openai/gpt-4o-mini", model0)
+	}
+}
+
+func TestBuildModelSelectorQualifiesSelectorWithProviderKey(t *testing.T) {
+	if got := BuildModelSelector("openrouter", "openai/gpt-4o-mini"); got != "openrouter/openai/gpt-4o-mini" {
+		t.Fatalf("BuildModelSelector(openrouter, openai/gpt-4o-mini)=%q, want openrouter/openai/gpt-4o-mini", got)
+	}
+	if got := BuildModelSelector("openai", "openai/gpt-5"); got != "openai/gpt-5" {
+		t.Fatalf("BuildModelSelector(openai, openai/gpt-5)=%q, want openai/gpt-5", got)
+	}
+}
+
 func TestBuildManagedConfigPayloadHandlesPendingAndAllowFrom(t *testing.T) {
 	params := ManagedPayloadParams{
 		ChannelID:           "telegram",
@@ -118,8 +139,8 @@ func TestBuildManagedConfigPayloadHandlesPendingAndAllowFrom(t *testing.T) {
 		t.Fatalf("workspace=%#v, want /tmp/work", defaults["workspace"])
 	}
 	model := defaults["model"].(map[string]interface{})
-	if model["primary"] != "gpt-5" {
-		t.Fatalf("model.primary=%#v, want gpt-5", model["primary"])
+	if model["primary"] != "openai/gpt-5" {
+		t.Fatalf("model.primary=%#v, want openai/gpt-5", model["primary"])
 	}
 	if _, exists := defaults["maxTokens"]; exists {
 		t.Fatalf("did not expect deprecated agents.defaults.maxTokens")

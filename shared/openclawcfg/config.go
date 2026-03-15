@@ -55,7 +55,7 @@ func BuildManagedConfigPayload(params ManagedPayloadParams) map[string]interface
 		"agents": map[string]interface{}{
 			"defaults": map[string]interface{}{
 				"workspace": strings.TrimSpace(params.WorkspacePath),
-				"model":     map[string]interface{}{"primary": strings.TrimSpace(params.ModelID)},
+				"model":     map[string]interface{}{"primary": BuildModelSelector(params.ProviderKey, params.ModelID)},
 			},
 		},
 		"models": map[string]interface{}{
@@ -84,10 +84,7 @@ func BuildProviderEntry(providerID, providerKey, providerBaseURL, modelID string
 	if baseURL == "" {
 		baseURL = defaultProviderBaseURL(providerID, providerKey)
 	}
-	modelName := strings.TrimSpace(modelID)
-	if _, name, ok := strings.Cut(modelName, "/"); ok && strings.TrimSpace(name) != "" {
-		modelName = strings.TrimSpace(name)
-	}
+	modelName := providerModelID(providerID, providerKey, modelID)
 	if modelName == "" {
 		modelName = "default"
 	}
@@ -112,6 +109,37 @@ func BuildProviderEntry(providerID, providerKey, providerBaseURL, modelID string
 		providerItem["auth"] = "oauth"
 	}
 	return providerItem
+}
+
+func BuildModelSelector(providerKey, modelID string) string {
+	providerKey = strings.TrimSpace(providerKey)
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return ""
+	}
+	if providerKey == "" {
+		return modelID
+	}
+	if strings.HasPrefix(strings.ToLower(modelID), strings.ToLower(providerKey)+"/") {
+		return modelID
+	}
+	return providerKey + "/" + modelID
+}
+
+func providerModelID(providerID, providerKey, modelID string) string {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return ""
+	}
+	if prefix, rest, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(rest) != "" {
+		trimmedPrefix := strings.TrimSpace(prefix)
+		trimmedProviderID := strings.TrimSpace(providerID)
+		trimmedProviderKey := strings.TrimSpace(providerKey)
+		if strings.EqualFold(trimmedPrefix, trimmedProviderID) || strings.EqualFold(trimmedPrefix, trimmedProviderKey) {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return modelID
 }
 
 func defaultProviderBaseURL(providerID, providerKey string) string {
