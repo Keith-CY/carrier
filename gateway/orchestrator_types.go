@@ -523,6 +523,20 @@ func normalizeOrchestratorDelegatedMemoryState(in OrchestratorExecution) Orchest
 	return out
 }
 
+func resetOrchestratorDelegatedMemoryProgress(in OrchestratorExecution) OrchestratorExecution {
+	out := in
+	out.SnapshotID = ""
+	out.SnapshotDigest = ""
+	if len(out.SourceScopes) > 0 {
+		out.SnapshotDigest = buildMemoryContractDigest(out.SourceScopes)
+	}
+	out.ChildAgentID = ""
+	out.ChildPerAgentMemoryID = ""
+	out.DistillRunID = ""
+	out.CleanupStatus = ""
+	return out
+}
+
 func normalizeOrchestratorExecutionMode(in OrchestratorExecutionMode) OrchestratorExecutionMode {
 	switch OrchestratorExecutionMode(strings.ToLower(strings.TrimSpace(string(in)))) {
 	case OrchestratorExecutionModeWork:

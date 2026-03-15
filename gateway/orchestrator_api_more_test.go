@@ -660,6 +660,12 @@ func TestHandleOrchestratorExecutionsCreateSeedsDelegatedMemoryState(t *testing.
 		"goal":"delegate checkout investigation",
 		"approvalScope":"infrastructure_only",
 		"requiredMemory":[" shared:incident ","private:checkout","shared:incident"],
+		"snapshotId":"snapshot-stale",
+		"snapshotDigest":"stale-digest",
+		"childAgentId":"child-stale",
+		"childPerAgentMemoryId":"memory-stale",
+		"distillRunId":"distill-stale",
+		"cleanupStatus":"cleanup_pending",
 		"requiredWorkers":[
 			{"hostId":"local","agentId":"zeroclaw","count":1}
 		],
@@ -697,6 +703,50 @@ func TestHandleOrchestratorExecutionsCreateSeedsDelegatedMemoryState(t *testing.
 	}
 	if got := strings.TrimSpace(anyToString(execMap["cleanupStatus"])); got != "" {
 		t.Fatalf("cleanupStatus = %q, want empty payload=%+v", got, payload)
+	}
+}
+
+func TestBuildDerivedExecutionResetsDelegatedMemoryProgression(t *testing.T) {
+	normalized, err := normalizeOrchestratorExecution(buildCloneExecution(OrchestratorExecution{
+		ID:                    "exec-source",
+		Goal:                  "delegate checkout investigation",
+		ApprovalScope:         "infrastructure_only",
+		AgentLifecycleMode:    "delegated",
+		MemoryBindingMode:     "snapshot",
+		SourceScopes:          []string{"shared:incident"},
+		SnapshotID:            "snapshot-stale",
+		SnapshotDigest:        "stale-digest",
+		ChildAgentID:          "child-stale",
+		ChildPerAgentMemoryID: "memory-stale",
+		DistillRunID:          "distill-stale",
+		CleanupStatus:         "cleanup_pending",
+		RequiredWorkers: []OrchestratorRequiredWorker{
+			{HostID: "local", AgentID: "zeroclaw", Count: 1},
+		},
+		TaskUnits: []OrchestratorTaskUnit{
+			{ID: "task-1", Input: "collect checkout diagnostics", HostID: "local", AgentID: "zeroclaw"},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("normalizeOrchestratorExecution(buildCloneExecution): %v", err)
+	}
+	if got := strings.TrimSpace(normalized.SnapshotID); got != "" {
+		t.Fatalf("snapshotId = %q, want empty", got)
+	}
+	if got := strings.TrimSpace(normalized.ChildAgentID); got != "" {
+		t.Fatalf("childAgentId = %q, want empty", got)
+	}
+	if got := strings.TrimSpace(normalized.ChildPerAgentMemoryID); got != "" {
+		t.Fatalf("childPerAgentMemoryId = %q, want empty", got)
+	}
+	if got := strings.TrimSpace(normalized.DistillRunID); got != "" {
+		t.Fatalf("distillRunId = %q, want empty", got)
+	}
+	if got := strings.TrimSpace(normalized.CleanupStatus); got != "" {
+		t.Fatalf("cleanupStatus = %q, want empty", got)
+	}
+	if got := strings.TrimSpace(normalized.SnapshotDigest); got != buildMemoryContractDigest([]string{"shared:incident"}) {
+		t.Fatalf("snapshotDigest = %q, want derived source scope digest", got)
 	}
 }
 

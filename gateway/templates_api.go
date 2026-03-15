@@ -231,6 +231,7 @@ func createTemplateExecutionRecord(requestID string, cfg *GatewayConfig, plan or
 	if err != nil {
 		return OrchestratorExecution{}, &gatewayAPIResponseError{Status: http.StatusBadRequest, Body: gatewayErrBody("E_USAGE", err.Error())}
 	}
+	normalized = resetOrchestratorDelegatedMemoryProgress(normalized)
 	if normalized.IdempotencyKey != "" {
 		existing, ok, findErr := findOrchestratorExecutionByIdempotencyKey(normalized.IdempotencyKey)
 		if findErr != nil {

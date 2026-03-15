@@ -158,6 +158,7 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
 				return
 			}
+			normalized = resetOrchestratorDelegatedMemoryProgress(normalized)
 			if normalized.IdempotencyKey != "" {
 				existing, ok, findErr := findOrchestratorExecutionByIdempotencyKey(normalized.IdempotencyKey)
 				if findErr != nil {
@@ -683,7 +684,7 @@ func buildDerivedExecution(source OrchestratorExecution, launchReason string) Or
 	derived.UpdatedAt = ""
 	derived.RequiredWorkers = append([]OrchestratorRequiredWorker(nil), source.RequiredWorkers...)
 	derived.TaskUnits = append([]OrchestratorTaskUnit(nil), source.TaskUnits...)
-	return derived
+	return resetOrchestratorDelegatedMemoryProgress(derived)
 }
 
 func sourceExecutionID(source OrchestratorExecution) string {
