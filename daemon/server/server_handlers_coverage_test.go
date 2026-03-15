@@ -17,6 +17,7 @@ import (
 	"carrier/baseagent"
 	"carrier/daemon/internal/catalog"
 	"carrier/daemon/internal/lifecycle"
+	"carrier/daemon/internal/memory"
 	"carrier/daemon/internal/messaging"
 )
 
@@ -94,19 +95,23 @@ func TestHandleMetricsAndConfigSetBranches(t *testing.T) {
 }
 
 type fakeAgentChatRuntime struct {
-	lastReq   baseagent.ChatRequest
-	resp      baseagent.ChatResponse
-	err       error
-	callCount int
-	lastSpeak baseagent.SpeechSynthesisRequest
-	speakResp baseagent.ChatResponse
-	speakErr  error
+	lastReq    baseagent.ChatRequest
+	resp       baseagent.ChatResponse
+	err        error
+	callCount  int
+	chatHook   func(baseagent.ChatRequest)
+	lastSpeak  baseagent.SpeechSynthesisRequest
+	speakResp  baseagent.ChatResponse
+	speakErr   error
 	speakCalls int
 }
 
 func (f *fakeAgentChatRuntime) Chat(_ context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error) {
 	f.lastReq = req
 	f.callCount++
+	if f.chatHook != nil {
+		f.chatHook(req)
+	}
 	return f.resp, f.err
 }
 
@@ -275,6 +280,174 @@ require_pairing = false
 	if !strings.Contains(rr.Body.String(), `"richContent"`) || !strings.Contains(rr.Body.String(), `"renderMode":"rich_media"`) {
 		t.Fatalf("expected structured proxy response body=%s", rr.Body.String())
 	}
+}
+
+func TestHandleAgentChatRefreshesPersistentMemoryBeforeTurn(t *testing.T) {
+	store := memory.NewStore(memory.WithRootDir(t.TempDir()))
+	svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithMemoryStore(store))
+	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+	if err := store.AttachScope("openclaw", memory.Scope("shared:team")); err != nil {
+		t.Fatalf("AttachScope(shared:team): %v", err)
+	}
+	if _, err := store.GrantScope("openclaw", memory.Scope("shared:team"), "tester", "seed shared scope"); err != nil {
+		t.Fatalf("GrantScope(shared:team): %v", err)
+	}
+	if _, err := store.UpsertRecord(memory.UpsertRecordInput{
+		ID:             "shared-team-1",
+		Subject:        "openclaw",
+		Scope:          memory.Scope("shared:team"),
+		Type:           memory.RecordTypeFact,
+		ContentSummary: "team timezone is tokyo",
+	}); err != nil {
+		t.Fatalf("UpsertRecord(shared:team): %v", err)
+	}
+
+	runtime := &fakeAgentChatRuntime{
+		resp: baseagent.ChatResponse{Message: "refreshed", Action: "chat"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"hello","sessionId":"sess-refresh"}`))
+	rr := httptest.NewRecorder()
+	handleAgentChat(svc, runtime, "openclaw", rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("first chat status=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	lines, err := svc.Logs("openclaw", 200)
+	if err != nil {
+		t.Fatalf("Logs(openclaw): %v", err)
+	}
+	if got := countLogSubstring(lines, "memory effective view prepared"); got != 1 {
+		t.Fatalf("expected one pre-turn refresh log after first turn, got %d logs=%v", got, lines)
+	}
+
+	if _, err := store.UpsertRecord(memory.UpsertRecordInput{
+		ID:             "shared-team-1",
+		Subject:        "openclaw",
+		Scope:          memory.Scope("shared:team"),
+		Type:           memory.RecordTypeFact,
+		ContentSummary: "team timezone is osaka",
+	}); err != nil {
+		t.Fatalf("mutate shared record: %v", err)
+	}
+
+	rr = httptest.NewRecorder()
+	handleAgentChat(svc, runtime, "openclaw", rr, httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"hello again","sessionId":"sess-refresh"}`)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("second chat status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	lines, err = svc.Logs("openclaw", 200)
+	if err != nil {
+		t.Fatalf("Logs(openclaw): %v", err)
+	}
+	if got := countLogSubstring(lines, "memory effective view prepared"); got != 2 {
+		t.Fatalf("expected refresh before second turn, got %d logs=%v", got, lines)
+	}
+}
+
+func TestHandleAgentChatSkipsRefreshForDelegatedSnapshotScope(t *testing.T) {
+	store := memory.NewStore()
+	svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithMemoryStore(store))
+	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+	if _, err := store.GrantScope("parent", memory.Scope("shared:team"), "tester", "seed shared scope"); err != nil {
+		t.Fatalf("GrantScope(shared:team): %v", err)
+	}
+	if _, err := store.UpsertRecord(memory.UpsertRecordInput{
+		ID:             "shared-team-1",
+		Subject:        "parent",
+		Scope:          memory.Scope("shared:team"),
+		Type:           memory.RecordTypeFact,
+		ContentSummary: "team timezone is tokyo",
+	}); err != nil {
+		t.Fatalf("UpsertRecord(shared:team): %v", err)
+	}
+	snapshot, err := store.CreateSnapshotForInstance(context.Background(), memory.SnapshotOptions{
+		Actor:            "tester",
+		RequestID:        "req-chat-snapshot",
+		SourceSubject:    "parent",
+		SourceScopes:     []memory.Scope{memory.Scope("shared:team")},
+		TargetInstanceID: "openclaw",
+		Reason:           "delegated task",
+	})
+	if err != nil {
+		t.Fatalf("CreateSnapshotForInstance: %v", err)
+	}
+	if err := store.MountSnapshot("openclaw", snapshot.ID); err != nil {
+		t.Fatalf("MountSnapshot: %v", err)
+	}
+
+	runtime := &fakeAgentChatRuntime{
+		resp: baseagent.ChatResponse{Message: "snapshot child", Action: "chat"},
+	}
+	rr := httptest.NewRecorder()
+	handleAgentChat(svc, runtime, "openclaw", rr, httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"hello","sessionId":"sess-snapshot"}`)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("chat status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if runtime.callCount != 1 {
+		t.Fatalf("expected runtime call despite missing root dir, got %d", runtime.callCount)
+	}
+}
+
+func TestHandleAgentChatDoesNotRefreshMidTurn(t *testing.T) {
+	store := memory.NewStore(memory.WithRootDir(t.TempDir()))
+	svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithMemoryStore(store))
+	if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+	if err := store.AttachScope("openclaw", memory.Scope("shared:team")); err != nil {
+		t.Fatalf("AttachScope(shared:team): %v", err)
+	}
+	if _, err := store.GrantScope("openclaw", memory.Scope("shared:team"), "tester", "seed shared scope"); err != nil {
+		t.Fatalf("GrantScope(shared:team): %v", err)
+	}
+	if _, err := store.UpsertRecord(memory.UpsertRecordInput{
+		ID:             "shared-team-1",
+		Subject:        "openclaw",
+		Scope:          memory.Scope("shared:team"),
+		Type:           memory.RecordTypeFact,
+		ContentSummary: "team timezone is tokyo",
+	}); err != nil {
+		t.Fatalf("UpsertRecord(shared:team): %v", err)
+	}
+
+	runtime := &fakeAgentChatRuntime{
+		resp: baseagent.ChatResponse{Message: "single refresh", Action: "chat"},
+		chatHook: func(_ baseagent.ChatRequest) {
+			_, _ = store.UpsertRecord(memory.UpsertRecordInput{
+				ID:             "shared-team-1",
+				Subject:        "openclaw",
+				Scope:          memory.Scope("shared:team"),
+				Type:           memory.RecordTypeFact,
+				ContentSummary: "team timezone is osaka",
+			})
+		},
+	}
+	rr := httptest.NewRecorder()
+	handleAgentChat(svc, runtime, "openclaw", rr, httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"hello","sessionId":"sess-midturn"}`)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("chat status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	lines, err := svc.Logs("openclaw", 200)
+	if err != nil {
+		t.Fatalf("Logs(openclaw): %v", err)
+	}
+	if got := countLogSubstring(lines, "memory effective view prepared"); got != 1 {
+		t.Fatalf("expected exactly one pre-turn refresh during chat, got %d logs=%v", got, lines)
+	}
+}
+
+func countLogSubstring(lines []string, needle string) int {
+	count := 0
+	for _, line := range lines {
+		if strings.Contains(line, needle) {
+			count++
+		}
+	}
+	return count
 }
 
 func TestHandleAgentChat_ProxiesManagedZeroClawAgentCLIForIsolatedInstance(t *testing.T) {

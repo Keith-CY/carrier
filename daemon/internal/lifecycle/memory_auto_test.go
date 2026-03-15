@@ -140,6 +140,36 @@ func TestAutoMountAppliesManifestMemoryPermissions(t *testing.T) {
 	}
 }
 
+func TestRefreshMemoryForTurnRebuildsMemoryContract(t *testing.T) {
+	store := memory.NewStore(memory.WithRootDir(t.TempDir()))
+	svc := NewService(nil, WithMemoryStore(store))
+	if err := svc.RegisterManifest(sampleManifest()); err != nil {
+		t.Fatalf("register manifest: %v", err)
+	}
+	if err := store.AttachScope("openclaw", memory.Scope("shared:team")); err != nil {
+		t.Fatalf("AttachScope(shared:team): %v", err)
+	}
+
+	if err := svc.RefreshMemoryForTurn("openclaw"); err != nil {
+		t.Fatalf("RefreshMemoryForTurn: %v", err)
+	}
+
+	state, err := svc.Status("openclaw")
+	if err != nil {
+		t.Fatalf("Status(openclaw): %v", err)
+	}
+	if state.Memory == nil || strings.TrimSpace(state.Memory.ContractDigest) == "" {
+		t.Fatalf("expected memory contract state after refresh, got %+v", state.Memory)
+	}
+	lines, err := svc.Logs("openclaw", 200)
+	if err != nil {
+		t.Fatalf("read logs: %v", err)
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "memory effective view prepared") {
+		t.Fatalf("expected refresh to prepare memory contract, got=%v", lines)
+	}
+}
+
 func TestStartInjectsPreparedMemoryEnvBeforeProcessStart(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	store := memory.NewStore(memory.WithRootDir(t.TempDir()))
