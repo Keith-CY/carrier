@@ -33,17 +33,17 @@ type managedOnboardResult struct {
 }
 
 type managedModelProfile struct {
-	ProfileName    string
-	ModelAlias     string
-	ModelID        string
-	EnvVar         string
-	ProviderID     string
-	ProviderKey    string
-	ProtocolFamily string
-	BaseURL        string
-	AuthMethod     string
-	TimeoutMs      int
-	RetryBudget    int
+	ProfileName      string
+	ModelAlias       string
+	ModelID          string
+	EnvVar           string
+	ProviderID       string
+	ProviderKey      string
+	ProtocolFamily   string
+	BaseURL          string
+	AuthMethod       string
+	TimeoutMs        int
+	RetryBudget      int
 	FallbackStrategy string
 }
 
@@ -72,20 +72,20 @@ func buildManagedModelSurface(profiles []managedModelProfile) managedAgentModelS
 			groupPrimaries[group] = true
 		}
 		surface.Profiles = append(surface.Profiles, managedAgentModelProfile{
-			ProfileName:    strings.TrimSpace(profile.ProfileName),
-			ModelAlias:     strings.TrimSpace(profile.ModelAlias),
-			ModelID:        strings.TrimSpace(profile.ModelID),
-			ProviderID:     strings.TrimSpace(profile.ProviderID),
-			ProviderKey:    strings.TrimSpace(profile.ProviderKey),
-			ProtocolFamily: strings.TrimSpace(profile.ProtocolFamily),
-			BaseURL:        strings.TrimSpace(profile.BaseURL),
-			AuthMethod:     strings.TrimSpace(profile.AuthMethod),
-			TimeoutMs:      profile.TimeoutMs,
-			RetryBudget:    profile.RetryBudget,
+			ProfileName:      strings.TrimSpace(profile.ProfileName),
+			ModelAlias:       strings.TrimSpace(profile.ModelAlias),
+			ModelID:          strings.TrimSpace(profile.ModelID),
+			ProviderID:       strings.TrimSpace(profile.ProviderID),
+			ProviderKey:      strings.TrimSpace(profile.ProviderKey),
+			ProtocolFamily:   strings.TrimSpace(profile.ProtocolFamily),
+			BaseURL:          strings.TrimSpace(profile.BaseURL),
+			AuthMethod:       strings.TrimSpace(profile.AuthMethod),
+			TimeoutMs:        profile.TimeoutMs,
+			RetryBudget:      profile.RetryBudget,
 			FallbackStrategy: strings.TrimSpace(profile.FallbackStrategy),
-			FallbackGroup:  group,
-			AliasGroupSize: groupSizes[group],
-			Primary:        primary,
+			FallbackGroup:    group,
+			AliasGroupSize:   groupSizes[group],
+			Primary:          primary,
 		})
 	}
 	return surface
@@ -730,11 +730,13 @@ func normalizeManagedModelID(providerID, modelID string) string {
 }
 
 func deriveManagedProviderKey(providerID, modelID string) string {
-	providerKey := strings.TrimSpace(providerID)
-	if vendor, _, ok := strings.Cut(strings.TrimSpace(modelID), "/"); ok && strings.TrimSpace(vendor) != "" {
-		providerKey = strings.TrimSpace(vendor)
+	if providerKey := strings.TrimSpace(providerID); providerKey != "" {
+		return mapCarrierProviderToManagedProvider(providerKey)
 	}
-	return mapCarrierProviderToManagedProvider(providerKey)
+	if vendor, _, ok := strings.Cut(strings.TrimSpace(modelID), "/"); ok && strings.TrimSpace(vendor) != "" {
+		return mapCarrierProviderToManagedProvider(strings.TrimSpace(vendor))
+	}
+	return ""
 }
 
 func deriveManagedModelName(modelID string) string {

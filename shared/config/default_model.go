@@ -223,13 +223,19 @@ func resolveCarrierModelProtocolFamily(providerID, explicit string) string {
 // (for example "openrouter/foo/bar") into the upstream model id expected by
 // provider runtimes such as ZeroClaw.
 func NormalizeModelForProvider(providerID, modelID string) string {
-	_ = strings.TrimSpace(providerID)
+	providerID = strings.TrimSpace(providerID)
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
 		return ""
 	}
 	if slash := strings.Index(modelID, "/"); slash > 0 && slash < len(modelID)-1 {
-		return strings.TrimSpace(modelID[slash+1:])
+		prefix := strings.TrimSpace(modelID[:slash])
+		if prefix != "" {
+			managedProvider := strings.TrimSpace(catalog.MapToManagedProvider(providerID))
+			if strings.EqualFold(prefix, providerID) || (managedProvider != "" && strings.EqualFold(prefix, managedProvider)) {
+				return strings.TrimSpace(modelID[slash+1:])
+			}
+		}
 	}
 	return modelID
 }

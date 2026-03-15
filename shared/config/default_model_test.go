@@ -34,6 +34,12 @@ func TestNormalizeModelForProvider(t *testing.T) {
 			model:    "claude-opus-4-6",
 			want:     "claude-opus-4-6",
 		},
+		{
+			name:     "openrouter preserves vendor-prefixed upstream model ids",
+			provider: "openrouter",
+			model:    "openai/gpt-4o-mini",
+			want:     "openai/gpt-4o-mini",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

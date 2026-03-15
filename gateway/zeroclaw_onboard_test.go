@@ -134,6 +134,61 @@ func TestPrepareZeroclawManagedOnboard_UsesConfiguredModelForProvider(t *testing
 	}
 }
 
+func TestPrepareZeroclawManagedOnboard_PreservesOpenRouterProviderAndVendorModel(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("CARRIER_MANAGED_ZEROCLAW_VERSION", "0.1.7")
+
+	configPath := filepath.Join(t.TempDir(), "config.v2.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "default_model": "openrouter-live",
+  "model_list": [
+    {
+      "model_name": "openrouter-live",
+      "model": "openai/gpt-4o-mini",
+      "provider_id": "openrouter",
+      "env_var": "OPENROUTER_API_KEY",
+      "credential_ref": "openrouter"
+    }
+  ]
+}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("CARRIER_CONFIG", configPath)
+
+	sess := &OnboardSession{
+		SelectedAgent:    "zeroclaw",
+		SelectedProvider: "openrouter",
+		EnvVars: map[string]string{
+			"OPENROUTER_API_KEY": "sk-or-v1-test",
+		},
+	}
+
+	result, err := prepareManagedOnboard("zeroclaw", sess, "webui:add")
+	if err != nil {
+		t.Fatalf("prepareManagedOnboard: %v", err)
+	}
+
+	cfgRaw, err := os.ReadFile(result.ConfigPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	cfgText := string(cfgRaw)
+	for _, snippet := range []string{
+		`default_provider = "openrouter"`,
+		`default_model = "openai/gpt-4o-mini"`,
+		`provider = "openrouter"`,
+		`model = "openai/gpt-4o-mini"`,
+	} {
+		if !strings.Contains(cfgText, snippet) {
+			t.Fatalf("expected config to contain %q, got:\n%s", snippet, cfgText)
+		}
+	}
+	if strings.Contains(cfgText, `default_provider = "openai"`) {
+		t.Fatalf("expected openrouter provider to be preserved, got:\n%s", cfgText)
+	}
+}
+
 func TestPrepareZeroclawManagedOnboard_RejectsUnsupportedVersion(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
