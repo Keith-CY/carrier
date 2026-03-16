@@ -22,6 +22,8 @@ const (
 	OrchestratorExecutionStatusPendingAuthorization OrchestratorExecutionStatus = "pending_authorization"
 	OrchestratorExecutionStatusProvisioning         OrchestratorExecutionStatus = "provisioning"
 	OrchestratorExecutionStatusRunning              OrchestratorExecutionStatus = "running"
+	OrchestratorExecutionStatusPauseRequested       OrchestratorExecutionStatus = "pause_requested"
+	OrchestratorExecutionStatusPaused               OrchestratorExecutionStatus = "paused"
 	OrchestratorExecutionStatusCompleted            OrchestratorExecutionStatus = "completed"
 	OrchestratorExecutionStatusPartialCompleted     OrchestratorExecutionStatus = "partial_completed"
 	OrchestratorExecutionStatusFailed               OrchestratorExecutionStatus = "failed"

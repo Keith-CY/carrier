@@ -31,6 +31,14 @@ var orchestratorExecutionRunState = struct {
 	running: map[string]bool{},
 }
 
+type orchestratorExecutionControl struct {
+	cancel         context.CancelFunc
+	mu             sync.Mutex
+	pauseRequested bool
+	paused         bool
+	resumeCh       chan struct{}
+}
+
 var (
 	orchestratorListLeasesByExecution = listOrchestratorWorkerLeasesByExecution
 	orchestratorInstallAgent          = remoteInstallAgent
@@ -38,11 +46,11 @@ var (
 	orchestratorLaunchExecutionFn     = startOrchestratorExecutionAsync
 )
 
-var orchestratorExecutionCancelState = struct {
-	mu      sync.Mutex
-	cancels map[string]context.CancelFunc
+var orchestratorExecutionControlState = struct {
+	mu       sync.Mutex
+	controls map[string]*orchestratorExecutionControl
 }{
-	cancels: map[string]context.CancelFunc{},
+	controls: map[string]*orchestratorExecutionControl{},
 }
 
 func newOrchestratorLocalDaemonClientFromEnv() *DaemonClient {
@@ -91,9 +99,12 @@ func registerOrchestratorExecutionCancel(executionID string, cancel context.Canc
 	if id == "" || cancel == nil {
 		return
 	}
-	orchestratorExecutionCancelState.mu.Lock()
-	defer orchestratorExecutionCancelState.mu.Unlock()
-	orchestratorExecutionCancelState.cancels[id] = cancel
+	orchestratorExecutionControlState.mu.Lock()
+	defer orchestratorExecutionControlState.mu.Unlock()
+	orchestratorExecutionControlState.controls[id] = &orchestratorExecutionControl{
+		cancel:   cancel,
+		resumeCh: make(chan struct{}),
+	}
 }
 
 func unregisterOrchestratorExecutionCancel(executionID string) {
@@ -101,9 +112,9 @@ func unregisterOrchestratorExecutionCancel(executionID string) {
 	if id == "" {
 		return
 	}
-	orchestratorExecutionCancelState.mu.Lock()
-	defer orchestratorExecutionCancelState.mu.Unlock()
-	delete(orchestratorExecutionCancelState.cancels, id)
+	orchestratorExecutionControlState.mu.Lock()
+	defer orchestratorExecutionControlState.mu.Unlock()
+	delete(orchestratorExecutionControlState.controls, id)
 }
 
 func cancelOrchestratorExecutionRun(executionID string) bool {
@@ -111,13 +122,94 @@ func cancelOrchestratorExecutionRun(executionID string) bool {
 	if id == "" {
 		return false
 	}
-	orchestratorExecutionCancelState.mu.Lock()
-	cancel, ok := orchestratorExecutionCancelState.cancels[id]
-	orchestratorExecutionCancelState.mu.Unlock()
+	orchestratorExecutionControlState.mu.Lock()
+	control, ok := orchestratorExecutionControlState.controls[id]
+	orchestratorExecutionControlState.mu.Unlock()
+	if !ok || control == nil {
+		return false
+	}
+	cancel := control.cancel
 	if ok && cancel != nil {
 		cancel()
 	}
 	return ok
+}
+
+func getOrchestratorExecutionControl(executionID string) *orchestratorExecutionControl {
+	orchestratorExecutionControlState.mu.Lock()
+	defer orchestratorExecutionControlState.mu.Unlock()
+	return orchestratorExecutionControlState.controls[strings.TrimSpace(executionID)]
+}
+
+func requestOrchestratorExecutionPause(executionID string) bool {
+	control := getOrchestratorExecutionControl(executionID)
+	if control == nil {
+		return false
+	}
+	control.mu.Lock()
+	defer control.mu.Unlock()
+	if control.pauseRequested {
+		return true
+	}
+	control.pauseRequested = true
+	control.resumeCh = make(chan struct{})
+	return true
+}
+
+func resumeOrchestratorExecutionRun(executionID string) bool {
+	control := getOrchestratorExecutionControl(executionID)
+	if control == nil {
+		return false
+	}
+	control.mu.Lock()
+	defer control.mu.Unlock()
+	if !control.pauseRequested && !control.paused {
+		return false
+	}
+	control.pauseRequested = false
+	control.paused = false
+	select {
+	case <-control.resumeCh:
+	default:
+		close(control.resumeCh)
+	}
+	control.resumeCh = make(chan struct{})
+	return true
+}
+
+func waitIfOrchestratorExecutionPaused(ctx context.Context, executionID string) error {
+	control := getOrchestratorExecutionControl(executionID)
+	if control == nil {
+		return nil
+	}
+	for {
+		control.mu.Lock()
+		if !control.pauseRequested {
+			control.mu.Unlock()
+			return nil
+		}
+		resumeCh := control.resumeCh
+		shouldMarkPaused := !control.paused
+		if shouldMarkPaused {
+			control.paused = true
+		}
+		control.mu.Unlock()
+
+		if shouldMarkPaused {
+			if err := markOrchestratorExecutionPaused(executionID); err != nil {
+				logOrchestratorPersistError("mark orchestrator execution paused", err)
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-resumeCh:
+			if err := markOrchestratorExecutionResumed(executionID); err != nil {
+				logOrchestratorPersistError("mark orchestrator execution resumed", err)
+			}
+		}
+	}
 }
 
 func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, requestID string, cfg *GatewayConfig) {
@@ -428,6 +520,58 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			"execution": updated,
 		})
 		return
+	case "pause":
+		if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot pause orchestrator executions"); !ok {
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		var req struct {
+			Actor string `json:"actor"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
+			return
+		}
+		updated, pauseErr := pauseOrchestratorExecution(execution.ID, req.Actor)
+		if pauseErr != nil {
+			writeInternalGatewayError(w, http.StatusConflict, "E_ORCHESTRATOR_PAUSE_FAILED", pauseErr.Error(), "pause orchestrator execution", pauseErr)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{
+			"requestId": requestID,
+			"result":    "ok",
+			"execution": updated,
+		})
+		return
+	case "resume":
+		if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot resume orchestrator executions"); !ok {
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		var req struct {
+			Actor string `json:"actor"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", "request body must be valid JSON"))
+			return
+		}
+		updated, resumeErr := resumeOrchestratorExecution(execution.ID, req.Actor)
+		if resumeErr != nil {
+			writeInternalGatewayError(w, http.StatusConflict, "E_ORCHESTRATOR_RESUME_FAILED", resumeErr.Error(), "resume orchestrator execution", resumeErr)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{
+			"requestId": requestID,
+			"result":    "ok",
+			"execution": updated,
+		})
+		return
 	case "cancel":
 		if _, ok := requireGatewayPermission(w, r, cfg, canLaunchExecutions, "E_RBAC_EXECUTION_LAUNCH", "role cannot cancel orchestrator executions"); !ok {
 			return
@@ -632,6 +776,96 @@ func cancelOrchestratorExecution(executionID string, actor string) (Orchestrator
 	return updated, nil
 }
 
+func pauseOrchestratorExecution(executionID string, actor string) (OrchestratorExecution, error) {
+	execution, ok, err := getOrchestratorExecution(executionID)
+	if err != nil {
+		return OrchestratorExecution{}, err
+	}
+	if !ok {
+		return OrchestratorExecution{}, fmt.Errorf("orchestrator execution %s not found", strings.TrimSpace(executionID))
+	}
+	if isOrchestratorExecutionTerminal(execution.Status) {
+		return execution, nil
+	}
+	switch execution.Status {
+	case OrchestratorExecutionStatusPaused, OrchestratorExecutionStatusPauseRequested:
+		return execution, nil
+	}
+	if !requestOrchestratorExecutionPause(execution.ID) {
+		return OrchestratorExecution{}, fmt.Errorf("orchestrator execution %s is not actively running on this gateway", strings.TrimSpace(executionID))
+	}
+	execution.Status = OrchestratorExecutionStatusPauseRequested
+	execution.UpdatedAt = nowTimestamp()
+	if strings.TrimSpace(actor) != "" {
+		execution.Error = "pause requested by " + strings.TrimSpace(actor)
+	}
+	updated, err := upsertOrchestratorExecution(execution)
+	if err != nil {
+		return OrchestratorExecution{}, err
+	}
+	return updated, nil
+}
+
+func resumeOrchestratorExecution(executionID string, actor string) (OrchestratorExecution, error) {
+	execution, ok, err := getOrchestratorExecution(executionID)
+	if err != nil {
+		return OrchestratorExecution{}, err
+	}
+	if !ok {
+		return OrchestratorExecution{}, fmt.Errorf("orchestrator execution %s not found", strings.TrimSpace(executionID))
+	}
+	if isOrchestratorExecutionTerminal(execution.Status) {
+		return execution, nil
+	}
+	if !resumeOrchestratorExecutionRun(execution.ID) {
+		return OrchestratorExecution{}, fmt.Errorf("orchestrator execution %s is not paused on this gateway", strings.TrimSpace(executionID))
+	}
+	execution.Status = OrchestratorExecutionStatusRunning
+	execution.UpdatedAt = nowTimestamp()
+	execution.Error = ""
+	updated, err := upsertOrchestratorExecution(execution)
+	if err != nil {
+		return OrchestratorExecution{}, err
+	}
+	return updated, nil
+}
+
+func markOrchestratorExecutionPaused(executionID string) error {
+	execution, ok, err := getOrchestratorExecution(executionID)
+	if err != nil {
+		return err
+	}
+	if !ok || isOrchestratorExecutionTerminal(execution.Status) || execution.Status == OrchestratorExecutionStatusPaused {
+		return nil
+	}
+	execution.Status = OrchestratorExecutionStatusPaused
+	execution.UpdatedAt = nowTimestamp()
+	if _, err = upsertOrchestratorExecution(execution); err != nil {
+		return err
+	}
+	return appendIntegrationEventByOrchestratorExecution(executionID, "execution.paused", map[string]interface{}{
+		"status": execution.Status,
+	})
+}
+
+func markOrchestratorExecutionResumed(executionID string) error {
+	execution, ok, err := getOrchestratorExecution(executionID)
+	if err != nil {
+		return err
+	}
+	if !ok || isOrchestratorExecutionTerminal(execution.Status) {
+		return nil
+	}
+	if execution.Status != OrchestratorExecutionStatusPaused && execution.Status != OrchestratorExecutionStatusPauseRequested {
+		return nil
+	}
+	execution.Status = OrchestratorExecutionStatusRunning
+	execution.UpdatedAt = nowTimestamp()
+	execution.Error = ""
+	_, err = upsertOrchestratorExecution(execution)
+	return err
+}
+
 func buildRetryExecution(source OrchestratorExecution) (OrchestratorExecution, error) {
 	failedTaskIDs := map[string]struct{}{}
 	for _, result := range source.Results {
@@ -745,12 +979,22 @@ func runOrchestratorExecution(executionID string) {
 		return
 	}
 
+	if waitErr := waitIfOrchestratorExecutionPaused(ctx, execution.ID); waitErr != nil {
+		markOrchestratorExecutionFailed(execution, waitErr, nil)
+		return
+	}
+
 	execution.Status = OrchestratorExecutionStatusRunning
 	execution.UpdatedAt = nowTimestamp()
 	updated, saveErr := upsertOrchestratorExecution(execution)
 	if saveErr != nil {
 		markOrchestratorExecutionFailed(execution, saveErr, nil)
 		return
+	}
+	if err := appendIntegrationEventByOrchestratorExecution(updated.ID, "execution.started", map[string]interface{}{
+		"status": updated.Status,
+	}); err != nil {
+		logOrchestratorPersistError("append integration started event", err)
 	}
 
 	results, runErr := runOrchestratorTasks(ctx, updated, leases)
@@ -784,8 +1028,10 @@ func runOrchestratorExecution(executionID string) {
 	updated.CompletedAt = nowTimestamp()
 	updated.UpdatedAt = updated.CompletedAt
 	updated.Error = ""
-	if _, err := upsertOrchestratorExecution(updated); err != nil {
+	if persisted, err := upsertOrchestratorExecution(updated); err != nil {
 		logOrchestratorPersistError("upsert orchestrator execution completed", err)
+	} else {
+		updated = persisted
 	}
 	publishOrchestratorExecutionEvent(updated)
 }
@@ -1064,6 +1310,18 @@ func runOrchestratorTasks(ctx context.Context, execution OrchestratorExecution, 
 		go func() {
 			defer wg.Done()
 			for idx := range jobs {
+				if err := waitIfOrchestratorExecutionPaused(ctx, execution.ID); err != nil {
+					outcomes <- taskOutcome{
+						index: idx,
+						result: OrchestratorTaskResult{
+							TaskID: execution.TaskUnits[idx].ID,
+							Status: OrchestratorTaskStatusFailed,
+							Error:  err.Error(),
+						},
+						err: err,
+					}
+					continue
+				}
 				task := execution.TaskUnits[idx]
 				result, err := runTaskWithRetries(ctx, execution, task, pools, firstPoolKey)
 				outcomes <- taskOutcome{
@@ -1107,6 +1365,16 @@ func runTaskWithRetries(
 	var lastErr error
 	var lastResult OrchestratorTaskResult
 	for attempt := 1; attempt <= retries+1; attempt++ {
+		if err := waitIfOrchestratorExecutionPaused(ctx, execution.ID); err != nil {
+			lastErr = err
+			lastResult = OrchestratorTaskResult{
+				TaskID:   task.ID,
+				Status:   OrchestratorTaskStatusFailed,
+				Attempts: attempt,
+				Error:    err.Error(),
+			}
+			return lastResult, err
+		}
 		lease, key, err := acquireWorkerForTask(ctx, task, pools, firstPoolKey)
 		if err != nil {
 			lastErr = err

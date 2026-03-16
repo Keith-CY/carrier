@@ -204,6 +204,10 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 		}
 		handleWebUIAgent(w, r, requestID, daemon)
 	})
+	mux.HandleFunc("/api/v1/integrations/one-tok/", func(w http.ResponseWriter, r *http.Request) {
+		requestID := requestIDFromCtx(r.Context())
+		handleOneTokIntegration(w, r, requestID)
+	})
 	mux.HandleFunc("/api/v1/memory", func(w http.ResponseWriter, r *http.Request) {
 		requestID := requestIDFromCtx(r.Context())
 		if err := checkGatewayAccess(r, cfg); err != nil {
