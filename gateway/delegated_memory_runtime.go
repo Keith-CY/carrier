@@ -124,7 +124,7 @@ func resolveDelegatedParentSubjectID(agentID string, sourceScopes []string) (str
 	}
 
 	sharedScopes := make([]string, 0, len(sourceScopes))
-	for _, scope := range normalizeStringSelectorList(sourceScopes, true) {
+	for _, scope := range sourceScopes {
 		if strings.HasPrefix(scope, "shared:") {
 			sharedScopes = append(sharedScopes, scope)
 		}
