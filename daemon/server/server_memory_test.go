@@ -1,11 +1,17 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"os/user"
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"carrier/baseagent"
+	"carrier/daemon/internal/catalog"
+	"carrier/daemon/internal/lifecycle"
+	"carrier/daemon/internal/memory"
 )
 
 func resetMemoryRootResolvers(t *testing.T) {
@@ -32,6 +38,69 @@ func TestDefaultMemoryRootUsesConfiguredOverride(t *testing.T) {
 	if root != custom {
 		t.Fatalf("root = %q, want %q", root, custom)
 	}
+}
+
+func TestShouldRefreshAgentMemoryBeforeTurn(t *testing.T) {
+	t.Run("returns false without service or memory store", func(t *testing.T) {
+		if shouldRefreshAgentMemoryBeforeTurn(nil, "openclaw") {
+			t.Fatal("expected nil service to skip refresh")
+		}
+		svc := lifecycle.NewService(baseagent.NoopTriager{})
+		if shouldRefreshAgentMemoryBeforeTurn(svc, "openclaw") {
+			t.Fatal("expected missing memory store to skip refresh")
+		}
+	})
+
+	t.Run("returns true for live shared scopes", func(t *testing.T) {
+		store := memory.NewStore(memory.WithRootDir(t.TempDir()))
+		svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithMemoryStore(store))
+		if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
+			t.Fatalf("register manifest: %v", err)
+		}
+		if err := store.AttachScope("openclaw", memory.Scope("shared:team")); err != nil {
+			t.Fatalf("AttachScope(shared:team): %v", err)
+		}
+		if !shouldRefreshAgentMemoryBeforeTurn(svc, "openclaw") {
+			t.Fatal("expected shared scope to require refresh")
+		}
+	})
+
+	t.Run("returns false for delegated snapshot scopes", func(t *testing.T) {
+		store := memory.NewStore(memory.WithRootDir(t.TempDir()))
+		svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithMemoryStore(store))
+		if err := svc.RegisterManifest(catalog.OpenClawManifest()); err != nil {
+			t.Fatalf("register manifest: %v", err)
+		}
+		if _, err := store.GrantScope("parent", memory.Scope("shared:team"), "tester", "seed shared scope"); err != nil {
+			t.Fatalf("GrantScope(shared:team): %v", err)
+		}
+		if _, err := store.UpsertRecord(memory.UpsertRecordInput{
+			ID:             "shared-team-1",
+			Subject:        "parent",
+			Scope:          memory.Scope("shared:team"),
+			Type:           memory.RecordTypeFact,
+			ContentSummary: "team timezone is tokyo",
+		}); err != nil {
+			t.Fatalf("UpsertRecord(shared:team): %v", err)
+		}
+		snapshot, err := store.CreateSnapshotForInstance(context.Background(), memory.SnapshotOptions{
+			Actor:            "tester",
+			RequestID:        "req-refresh-snapshot",
+			SourceSubject:    "parent",
+			SourceScopes:     []memory.Scope{memory.Scope("shared:team")},
+			TargetInstanceID: "openclaw",
+			Reason:           "delegated task",
+		})
+		if err != nil {
+			t.Fatalf("CreateSnapshotForInstance: %v", err)
+		}
+		if err := store.MountSnapshot("openclaw", snapshot.ID); err != nil {
+			t.Fatalf("MountSnapshot: %v", err)
+		}
+		if shouldRefreshAgentMemoryBeforeTurn(svc, "openclaw") {
+			t.Fatal("expected snapshot-scoped delegated agent to skip live refresh")
+		}
+	})
 }
 
 func TestDefaultMemoryRootFallsBackToHomeConfigDir(t *testing.T) {

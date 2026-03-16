@@ -110,20 +110,33 @@ type agentProviderReadiness struct {
 }
 
 type agentLauncherSession struct {
-	InstanceID   string `json:"instanceId"`
-	Type         string `json:"type,omitempty"`
-	Channel      string `json:"channel,omitempty"`
-	Provider     string `json:"provider,omitempty"`
-	Isolation    bool   `json:"isolation,omitempty"`
-	RuntimeState string `json:"runtimeState,omitempty"`
-	GatewayURL   string `json:"gatewayUrl,omitempty"`
-	PairRequired bool   `json:"pairRequired,omitempty"`
-	PairedChatID string `json:"pairedChatId,omitempty"`
-	Workspace    string `json:"workspace,omitempty"`
-	ConfigPath   string `json:"configPath,omitempty"`
-	RecordPath   string `json:"recordPath,omitempty"`
-	CreatedAt    string `json:"createdAt,omitempty"`
-	UpdatedAt    string `json:"updatedAt,omitempty"`
+	InstanceID          string   `json:"instanceId"`
+	Type                string   `json:"type,omitempty"`
+	Channel             string   `json:"channel,omitempty"`
+	Provider            string   `json:"provider,omitempty"`
+	Isolation           bool     `json:"isolation,omitempty"`
+	RuntimeState        string   `json:"runtimeState,omitempty"`
+	GatewayURL          string   `json:"gatewayUrl,omitempty"`
+	PairRequired        bool     `json:"pairRequired,omitempty"`
+	PairedChatID        string   `json:"pairedChatId,omitempty"`
+	Workspace           string   `json:"workspace,omitempty"`
+	ConfigPath          string   `json:"configPath,omitempty"`
+	RecordPath          string   `json:"recordPath,omitempty"`
+	AgentLifecycleMode  string   `json:"agentLifecycleMode,omitempty"`
+	MemoryBindingMode   string   `json:"memoryBindingMode,omitempty"`
+	PublicScopes        []string `json:"publicScopes,omitempty"`
+	SharedScopes        []string `json:"sharedScopes,omitempty"`
+	PerAgentMemoryID    string   `json:"perAgentMemoryId,omitempty"`
+	MemoryRefreshPolicy string   `json:"memoryRefreshPolicy,omitempty"`
+	ParentAgentID       string   `json:"parentAgentId,omitempty"`
+	ParentExecutionID   string   `json:"parentExecutionId,omitempty"`
+	TaskID              string   `json:"taskId,omitempty"`
+	SnapshotID          string   `json:"snapshotId,omitempty"`
+	SnapshotDigest      string   `json:"snapshotDigest,omitempty"`
+	DistillTarget       string   `json:"distillTarget,omitempty"`
+	CleanupPolicy       string   `json:"cleanupPolicy,omitempty"`
+	CreatedAt           string   `json:"createdAt,omitempty"`
+	UpdatedAt           string   `json:"updatedAt,omitempty"`
 }
 
 func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agentID string, daemon *DaemonClient) {
@@ -157,20 +170,33 @@ func handleAgentLauncher(w http.ResponseWriter, r *http.Request, requestID, agen
 	var lastModelRun *agentLauncherModelRuntime
 	if inst, ok := latestManagedInstanceForAgent(agentID); ok {
 		session = &agentLauncherSession{
-			InstanceID:   strings.TrimSpace(inst.ID),
-			Type:         strings.TrimSpace(inst.Type),
-			Channel:      strings.TrimSpace(inst.Channel),
-			Provider:     strings.TrimSpace(inst.Provider),
-			Isolation:    inst.Isolation,
-			RuntimeState: strings.TrimSpace(inst.RuntimeState),
-			GatewayURL:   strings.TrimSpace(inst.GatewayURL),
-			PairRequired: inst.PairRequired,
-			PairedChatID: strings.TrimSpace(inst.PairedChatID),
-			Workspace:    strings.TrimSpace(inst.Workspace),
-			ConfigPath:   strings.TrimSpace(inst.ConfigPath),
-			RecordPath:   strings.TrimSpace(inst.RecordPath),
-			CreatedAt:    strings.TrimSpace(inst.CreatedAt),
-			UpdatedAt:    strings.TrimSpace(inst.UpdatedAt),
+			InstanceID:          strings.TrimSpace(inst.ID),
+			Type:                strings.TrimSpace(inst.Type),
+			Channel:             strings.TrimSpace(inst.Channel),
+			Provider:            strings.TrimSpace(inst.Provider),
+			Isolation:           inst.Isolation,
+			RuntimeState:        strings.TrimSpace(inst.RuntimeState),
+			GatewayURL:          strings.TrimSpace(inst.GatewayURL),
+			PairRequired:        inst.PairRequired,
+			PairedChatID:        strings.TrimSpace(inst.PairedChatID),
+			Workspace:           strings.TrimSpace(inst.Workspace),
+			ConfigPath:          strings.TrimSpace(inst.ConfigPath),
+			RecordPath:          strings.TrimSpace(inst.RecordPath),
+			AgentLifecycleMode:  strings.TrimSpace(inst.AgentLifecycleMode),
+			MemoryBindingMode:   strings.TrimSpace(inst.MemoryBindingMode),
+			PublicScopes:        append([]string(nil), inst.PublicScopes...),
+			SharedScopes:        append([]string(nil), inst.SharedScopes...),
+			PerAgentMemoryID:    strings.TrimSpace(inst.PerAgentMemoryID),
+			MemoryRefreshPolicy: strings.TrimSpace(inst.MemoryRefreshPolicy),
+			ParentAgentID:       strings.TrimSpace(inst.ParentAgentID),
+			ParentExecutionID:   strings.TrimSpace(inst.ParentExecutionID),
+			TaskID:              strings.TrimSpace(inst.TaskID),
+			SnapshotID:          strings.TrimSpace(inst.SnapshotID),
+			SnapshotDigest:      strings.TrimSpace(inst.SnapshotDigest),
+			DistillTarget:       strings.TrimSpace(inst.DistillTarget),
+			CleanupPolicy:       strings.TrimSpace(inst.CleanupPolicy),
+			CreatedAt:           strings.TrimSpace(inst.CreatedAt),
+			UpdatedAt:           strings.TrimSpace(inst.UpdatedAt),
 		}
 		readiness = buildAgentProviderReadiness(inst.Provider)
 		modelSurface = buildAgentLauncherModelSurface(inst.ModelSurface)

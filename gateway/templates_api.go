@@ -197,6 +197,10 @@ func createTemplateExecutionRecord(requestID string, cfg *GatewayConfig, plan or
 		RequiredMemory:       append([]string(nil), plan.RequiredMemory...),
 		MemoryContractDigest: buildMemoryContractDigest(plan.RequiredMemory),
 		MemoryProvenance:     append([]string(nil), plan.RequiredMemory...),
+		AgentLifecycleMode:   orchestratorAgentLifecycleMode,
+		MemoryBindingMode:    orchestratorMemoryBindingMode,
+		SourceScopes:         append([]string(nil), plan.RequiredMemory...),
+		SnapshotDigest:       buildMemoryContractDigest(plan.RequiredMemory),
 		DistillOutputs:       append([]string(nil), plan.DistillOutputs...),
 		IdempotencyKey:       strings.TrimSpace(idempotencyKey),
 		ApprovalScope:        strings.TrimSpace(plan.ApprovalScope),
@@ -227,6 +231,7 @@ func createTemplateExecutionRecord(requestID string, cfg *GatewayConfig, plan or
 	if err != nil {
 		return OrchestratorExecution{}, &gatewayAPIResponseError{Status: http.StatusBadRequest, Body: gatewayErrBody("E_USAGE", err.Error())}
 	}
+	normalized = resetOrchestratorDelegatedMemoryProgress(normalized)
 	if normalized.IdempotencyKey != "" {
 		existing, ok, findErr := findOrchestratorExecutionByIdempotencyKey(normalized.IdempotencyKey)
 		if findErr != nil {

@@ -141,6 +141,30 @@ type InstanceExportOptions struct {
 	Format    string // truth-only | truth+index
 }
 
+// SnapshotOptions controls creation of a frozen read-only scope snapshot.
+type SnapshotOptions struct {
+	Actor            string
+	RequestID        string
+	SourceSubject    string
+	SourceScopes     []Scope
+	TargetInstanceID string
+	Reason           string
+}
+
+// SnapshotRecord captures persisted metadata for one frozen scope snapshot.
+type SnapshotRecord struct {
+	ID               string    `json:"id"`
+	Digest           string    `json:"digest"`
+	Scope            Scope     `json:"scope"`
+	SourceSubject    string    `json:"source_subject,omitempty"`
+	SourceScopes     []Scope   `json:"source_scopes,omitempty"`
+	SourceRecordIDs  []string  `json:"source_record_ids,omitempty"`
+	ClonedRecordIDs  []string  `json:"cloned_record_ids,omitempty"`
+	TargetInstanceID string    `json:"target_instance_id,omitempty"`
+	Reason           string    `json:"reason,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
 // DistillScoreWeights controls distill score component weighting.
 type DistillScoreWeights struct {
 	Age        float64 `json:"age"`
@@ -197,6 +221,7 @@ type DistillRunResult struct {
 	Removed       int                 `json:"removed"`
 	Unchanged     int                 `json:"unchanged"`
 	Clustered     int                 `json:"clustered"`
+	OutputIDs     []string            `json:"outputIds,omitempty"`
 	SampleSource  []string            `json:"sampleSourceIds,omitempty"`
 	SampleOutput  []string            `json:"sampleDistilledIds,omitempty"`
 	Warnings      []string            `json:"warnings,omitempty"`

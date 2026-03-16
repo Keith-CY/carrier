@@ -95,7 +95,7 @@ func shouldObserveStructuredToolResult(toolName string, status ExecutionToolResu
 	}
 }
 
-func (l *AgentLoop) observeStructuredToolResult(toolName string, result ExecutionToolResult) {
+func (l *AgentLoop) observeStructuredToolResult(memorySubject string, toolName string, result ExecutionToolResult) {
 	if l == nil || l.memory == nil {
 		return
 	}
@@ -107,7 +107,7 @@ func (l *AgentLoop) observeStructuredToolResult(toolName string, result Executio
 	if output == "" {
 		return
 	}
-	if _, err := observeMemoryStore(l.memory, l.memorySubject, strings.TrimSpace(toolName), output, ""); err != nil {
+	if _, err := observeMemoryStore(l.memory, l.resolvedMemorySubject(memorySubject), strings.TrimSpace(toolName), output, ""); err != nil {
 		return
 	}
 }
@@ -130,8 +130,13 @@ func (l *AgentLoop) processStructuredChat(
 	sessionKey string,
 	legacyHistory []ConversationMessage,
 	skillSummary string,
+	memorySubject string,
 ) (ChatResponse, bool, error) {
 	if l == nil || l.structuredTools == nil || l.providers == nil {
+		return ChatResponse{}, false, nil
+	}
+	structuredTools := l.structuredToolSurfaceForSubject(memorySubject)
+	if structuredTools == nil {
 		return ChatResponse{}, false, nil
 	}
 
@@ -154,7 +159,7 @@ func (l *AgentLoop) processStructuredChat(
 		reply, err := l.providers.ReplyWithTools(ctx, StructuredToolRequest{
 			SystemPrompt: buildStructuredSystemPrompt(skillSummary),
 			Messages:     messages,
-			Tools:        l.structuredTools.Descriptors(),
+			Tools:        structuredTools.Descriptors(),
 		})
 		if err != nil {
 			return ChatResponse{}, true, err
@@ -185,10 +190,10 @@ func (l *AgentLoop) processStructuredChat(
 		}
 
 		for _, call := range reply.ToolCalls {
-			result := l.structuredTools.Execute(ctx, call.Name, call.Arguments)
+			result := structuredTools.Execute(ctx, call.Name, call.Arguments)
 			status := normalizeExecutionToolResultStatus(result)
 			toolOutput := renderStructuredToolResultOutput(call.Name, result)
-			l.observeStructuredToolResult(call.Name, result)
+			l.observeStructuredToolResult(memorySubject, call.Name, result)
 			if status == ExecutionToolResultStatusAsk && l.sessions != nil {
 				requestedAt := time.Now().UTC()
 				pending := &PendingToolApproval{

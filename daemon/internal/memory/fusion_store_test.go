@@ -385,6 +385,75 @@ func TestFusionGrantAndInstanceScopeOperations(t *testing.T) {
 	}
 }
 
+func TestFusionSnapshotPersistsMountAndDeletesClonedState(t *testing.T) {
+	root := t.TempDir()
+	fixed := time.Date(2026, 3, 16, 11, 0, 0, 0, time.UTC)
+	store := NewStore(
+		WithRootDir(root),
+		WithNow(func() time.Time { return fixed }),
+	)
+
+	if _, err := store.GrantScope("parent", Scope("shared:team"), "owner", "delegate shared team memory"); err != nil {
+		t.Fatalf("GrantScope(shared:team): %v", err)
+	}
+	if _, err := store.UpsertRecord(UpsertRecordInput{
+		ID:             "shared-team-1",
+		Subject:        "parent",
+		Scope:          Scope("shared:team"),
+		Type:           RecordTypeFact,
+		ContentSummary: "team timezone is tokyo",
+	}); err != nil {
+		t.Fatalf("UpsertRecord(shared:team): %v", err)
+	}
+
+	snapshot, err := store.CreateSnapshotForInstance(context.Background(), SnapshotOptions{
+		Actor:            "tester",
+		RequestID:        "req-snapshot-persist",
+		SourceSubject:    "parent",
+		SourceScopes:     []Scope{Scope("shared:team")},
+		TargetInstanceID: "child",
+		Reason:           "delegate task",
+	})
+	if err != nil {
+		t.Fatalf("CreateSnapshotForInstance: %v", err)
+	}
+	if err := store.MountSnapshot("child", snapshot.ID); err != nil {
+		t.Fatalf("MountSnapshot: %v", err)
+	}
+
+	reloaded := NewStore(
+		WithRootDir(root),
+		WithNow(func() time.Time { return fixed.Add(time.Hour) }),
+	)
+
+	snapshotScope := sharedSnapshotScope(snapshot.ID)
+	scopes := reloaded.InstanceScopes("child")
+	if len(scopes) != 1 || scopes[0] != snapshotScope {
+		t.Fatalf("reloaded InstanceScopes(child) = %+v, want [%s]", scopes, snapshotScope)
+	}
+	if hits := reloaded.Search(SearchOptions{Subject: "child", Query: "tokyo"}); len(hits) == 0 {
+		t.Fatal("expected reloaded child snapshot search hits")
+	}
+
+	if err := reloaded.DeleteSnapshot(snapshot.ID); err != nil {
+		t.Fatalf("DeleteSnapshot: %v", err)
+	}
+	if scopes := reloaded.InstanceScopes("child"); len(scopes) != 0 {
+		t.Fatalf("expected snapshot scope cleanup, got %+v", scopes)
+	}
+	if hits := reloaded.Search(SearchOptions{Subject: "child", Query: "tokyo"}); len(hits) != 0 {
+		t.Fatalf("expected child snapshot search hits to be cleaned up, got %+v", hits)
+	}
+	for _, rec := range reloaded.records {
+		if rec.Scope == snapshotScope {
+			t.Fatalf("expected snapshot-scoped records to be deleted, found %+v", rec)
+		}
+	}
+	if err := reloaded.DeleteSnapshot(snapshot.ID); err != ErrMemoryNotFound {
+		t.Fatalf("expected ErrMemoryNotFound on repeated snapshot delete, got %v", err)
+	}
+}
+
 func TestFusionInstanceDistillDryRunAndApply(t *testing.T) {
 	root := t.TempDir()
 	fixed := time.Date(2026, 3, 2, 12, 0, 0, 0, time.UTC)

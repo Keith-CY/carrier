@@ -751,6 +751,120 @@ func TestDaemonClient_ChatAgent(t *testing.T) {
 	}
 }
 
+func TestDaemonClient_ChatAgentForInstance(t *testing.T) {
+	var gotBody map[string]interface{}
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"agentId":   "openclaw",
+			"sessionId": "delegated-child-1",
+			"message":   "hello delegated",
+		})
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	result, err := dc.ChatAgentForInstance(context.Background(), "openclaw", "openclaw-child-1", "openrouter", "hello", "delegated-child-1", "", "", "actor", "req")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := gotBody["instanceId"]; got != "openclaw-child-1" {
+		t.Fatalf("unexpected instanceId body: %#v", gotBody)
+	}
+	if result.SessionID != "delegated-child-1" {
+		t.Fatalf("unexpected chat result: %+v", result)
+	}
+}
+
+func TestDaemonClient_DelegatedMemoryProvisioningMethods(t *testing.T) {
+	var gotCreatePath string
+	var gotSnapshotPath string
+	var gotMountPath string
+	var gotCreateBody map[string]interface{}
+	var gotSnapshotBody map[string]interface{}
+	var gotMountBody map[string]interface{}
+	srv := newLocalhostServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/memory/entries/create":
+			gotCreatePath = r.URL.Path
+			if err := json.NewDecoder(r.Body).Decode(&gotCreateBody); err != nil {
+				t.Fatalf("decode create body: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"entry": map[string]interface{}{
+					"id":    gotCreateBody["id"],
+					"type":  gotCreateBody["type"],
+					"owner": gotCreateBody["owner"],
+					"state": "created",
+				},
+			})
+		case "/api/v2/memory/instance/snapshot":
+			gotSnapshotPath = r.URL.Path
+			if err := json.NewDecoder(r.Body).Decode(&gotSnapshotBody); err != nil {
+				t.Fatalf("decode snapshot body: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"snapshot": map[string]interface{}{
+					"id":               "snap-1",
+					"digest":           "sha256:snap-1",
+					"scope":            "shared:snapshot-snap-1",
+					"targetInstanceId": gotSnapshotBody["targetInstanceId"],
+				},
+			})
+		case "/api/v2/memory/instance/snapshot/mount":
+			gotMountPath = r.URL.Path
+			if err := json.NewDecoder(r.Body).Decode(&gotMountBody); err != nil {
+				t.Fatalf("decode mount body: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "mounted"})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	dc := NewDaemonClient(srv.URL, "", 5*time.Second)
+	entry, err := dc.CreateMemoryEntry(context.Background(), "mem-child-1", "Delegated Child", "v1", "per_agent", "child-1", "actor", "req")
+	if err != nil {
+		t.Fatalf("CreateMemoryEntry error: %v", err)
+	}
+	if gotCreatePath != "/api/v2/memory/entries/create" {
+		t.Fatalf("unexpected create path %q", gotCreatePath)
+	}
+	if got := gotCreateBody["owner"]; got != "child-1" {
+		t.Fatalf("unexpected create body: %#v", gotCreateBody)
+	}
+	if entry.ID != "mem-child-1" || entry.Type != "per_agent" {
+		t.Fatalf("unexpected entry: %+v", entry)
+	}
+
+	snapshot, err := dc.CreateInstanceSnapshot(context.Background(), "parent-1", []string{"public", "shared:team"}, "child-1", "delegate task", "actor", "req")
+	if err != nil {
+		t.Fatalf("CreateInstanceSnapshot error: %v", err)
+	}
+	if gotSnapshotPath != "/api/v2/memory/instance/snapshot" {
+		t.Fatalf("unexpected snapshot path %q", gotSnapshotPath)
+	}
+	if got := gotSnapshotBody["sourceSubject"]; got != "parent-1" {
+		t.Fatalf("unexpected snapshot body: %#v", gotSnapshotBody)
+	}
+	if snapshot.ID != "snap-1" || snapshot.TargetInstanceID != "child-1" {
+		t.Fatalf("unexpected snapshot: %+v", snapshot)
+	}
+
+	if err := dc.MountInstanceSnapshot(context.Background(), "child-1", "snap-1", "actor", "req"); err != nil {
+		t.Fatalf("MountInstanceSnapshot error: %v", err)
+	}
+	if gotMountPath != "/api/v2/memory/instance/snapshot/mount" {
+		t.Fatalf("unexpected mount path %q", gotMountPath)
+	}
+	if got := gotMountBody["instanceId"]; got != "child-1" {
+		t.Fatalf("unexpected mount body: %#v", gotMountBody)
+	}
+}
+
 func TestDaemonClient_DecomposeBaseAgent(t *testing.T) {
 	var gotPath string
 	var gotBody map[string]interface{}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 type managedAgentInstance struct {
@@ -31,6 +32,19 @@ type managedAgentInstance struct {
 	PairCode              string                       `json:"pair_code,omitempty"`
 	PairedChatID          string                       `json:"paired_chat_id,omitempty"`
 	RuntimeState          string                       `json:"runtime_state,omitempty"`
+	AgentLifecycleMode    string                       `json:"agent_lifecycle_mode,omitempty"`
+	MemoryBindingMode     string                       `json:"memory_binding_mode,omitempty"`
+	PublicScopes          []string                     `json:"public_scopes,omitempty"`
+	SharedScopes          []string                     `json:"shared_scopes,omitempty"`
+	PerAgentMemoryID      string                       `json:"per_agent_memory_id,omitempty"`
+	MemoryRefreshPolicy   string                       `json:"memory_refresh_policy,omitempty"`
+	ParentAgentID         string                       `json:"parent_agent_id,omitempty"`
+	ParentExecutionID     string                       `json:"parent_execution_id,omitempty"`
+	TaskID                string                       `json:"task_id,omitempty"`
+	SnapshotID            string                       `json:"snapshot_id,omitempty"`
+	SnapshotDigest        string                       `json:"snapshot_digest,omitempty"`
+	DistillTarget         string                       `json:"distill_target,omitempty"`
+	CleanupPolicy         string                       `json:"cleanup_policy,omitempty"`
 	CreatedAt             string                       `json:"created_at"`
 	UpdatedAt             string                       `json:"updated_at"`
 }
@@ -88,6 +102,12 @@ type managedAgentInstanceFile struct {
 
 var managedInstanceRandReader io.Reader = rand.Reader
 
+const (
+	managedAgentLifecyclePersistent = "persistent"
+	managedMemoryBindingLiveMount   = "live_mount"
+	managedMemoryRefreshNextTurn    = "next_turn"
+)
+
 func managedInstancesPath() (string, error) {
 	if custom := strings.TrimSpace(os.Getenv("CARRIER_INSTANCE_STORE")); custom != "" {
 		return custom, nil
@@ -131,8 +151,7 @@ func loadManagedInstances() ([]managedAgentInstance, string, error) {
 		file.Instances = []managedAgentInstance{}
 	}
 	for i := range file.Instances {
-		file.Instances[i].Channel = normalizeManagedInstanceChannel(file.Instances[i].Channel)
-		file.Instances[i].MCPServers = normalizeManagedAgentMCPServers(file.Instances[i].MCPServers)
+		file.Instances[i] = normalizeManagedAgentInstance(file.Instances[i])
 	}
 	return file.Instances, path, nil
 }
@@ -144,7 +163,11 @@ func saveManagedInstances(path string, instances []managedAgentInstance) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create instance store dir: %w", err)
 	}
-	payload := managedAgentInstanceFile{Instances: instances}
+	normalized := make([]managedAgentInstance, len(instances))
+	for i, inst := range instances {
+		normalized[i] = normalizeManagedAgentInstance(inst)
+	}
+	payload := managedAgentInstanceFile{Instances: normalized}
 	raw, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal instance store: %w", err)
@@ -176,7 +199,7 @@ func findManagedInstanceIndexByAgentID(instances []managedAgentInstance, agentID
 }
 
 func upsertManagedInstance(inst managedAgentInstance) error {
-	inst.Channel = normalizeManagedInstanceChannel(inst.Channel)
+	inst = normalizeManagedAgentInstance(inst)
 	instances, path, err := loadManagedInstances()
 	if err != nil {
 		return err
@@ -187,6 +210,19 @@ func upsertManagedInstance(inst managedAgentInstance) error {
 	} else {
 		instances = append(instances, inst)
 	}
+	return saveManagedInstances(path, instances)
+}
+
+func deleteManagedInstance(instanceID string) error {
+	instances, path, err := loadManagedInstances()
+	if err != nil {
+		return err
+	}
+	idx := findManagedInstanceIndex(instances, instanceID)
+	if idx < 0 {
+		return nil
+	}
+	instances = append(instances[:idx], instances[idx+1:]...)
 	return saveManagedInstances(path, instances)
 }
 
@@ -201,6 +237,101 @@ func normalizeManagedInstanceChannel(raw string) string {
 		return channel
 	}
 	return string(channelID)
+}
+
+func normalizeManagedAgentInstance(inst managedAgentInstance) managedAgentInstance {
+	inst.Channel = normalizeManagedInstanceChannel(inst.Channel)
+	inst.MCPServers = normalizeManagedAgentMCPServers(inst.MCPServers)
+	inst.AgentLifecycleMode = normalizeManagedAgentLifecycleMode(inst.AgentLifecycleMode)
+	inst.MemoryBindingMode = normalizeManagedMemoryBindingMode(inst.MemoryBindingMode)
+	inst.PublicScopes = normalizeManagedScopeList(inst.PublicScopes)
+	inst.SharedScopes = normalizeManagedScopeList(inst.SharedScopes)
+	inst.PerAgentMemoryID = strings.TrimSpace(inst.PerAgentMemoryID)
+	inst.MemoryRefreshPolicy = normalizeManagedMemoryRefreshPolicy(inst.MemoryRefreshPolicy)
+	inst.ParentAgentID = strings.TrimSpace(inst.ParentAgentID)
+	inst.ParentExecutionID = strings.TrimSpace(inst.ParentExecutionID)
+	inst.TaskID = strings.TrimSpace(inst.TaskID)
+	inst.SnapshotID = strings.TrimSpace(inst.SnapshotID)
+	inst.SnapshotDigest = strings.TrimSpace(inst.SnapshotDigest)
+	inst.DistillTarget = normalizeManagedDistillTarget(inst.DistillTarget)
+	inst.CleanupPolicy = normalizeManagedCleanupPolicy(inst.CleanupPolicy)
+	return inst
+}
+
+func normalizeManagedAgentLifecycleMode(raw string) string {
+	mode := normalizeManagedEnumValue(raw)
+	if mode == "" {
+		return managedAgentLifecyclePersistent
+	}
+	return mode
+}
+
+func normalizeManagedMemoryBindingMode(raw string) string {
+	mode := normalizeManagedEnumValue(raw)
+	if mode == "" {
+		return managedMemoryBindingLiveMount
+	}
+	return mode
+}
+
+func normalizeManagedMemoryRefreshPolicy(raw string) string {
+	policy := normalizeManagedEnumValue(raw)
+	if policy == "" {
+		return managedMemoryRefreshNextTurn
+	}
+	return policy
+}
+
+func normalizeManagedDistillTarget(raw string) string {
+	return normalizeManagedEnumValue(raw)
+}
+
+func normalizeManagedCleanupPolicy(raw string) string {
+	return normalizeManagedEnumValue(raw)
+}
+
+func normalizeManagedEnumValue(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	b.Grow(len(trimmed))
+	lastUnderscore := false
+	for _, r := range trimmed {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r):
+			b.WriteRune(unicode.ToLower(r))
+			lastUnderscore = false
+		default:
+			if lastUnderscore || b.Len() == 0 {
+				continue
+			}
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+
+	return strings.Trim(b.String(), "_")
+}
+
+func normalizeManagedScopeList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 func cleanupManagedInstanceFiles(inst managedAgentInstance) error {

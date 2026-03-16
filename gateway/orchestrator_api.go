@@ -158,6 +158,7 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 				writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
 				return
 			}
+			normalized = resetOrchestratorDelegatedMemoryProgress(normalized)
 			if normalized.IdempotencyKey != "" {
 				existing, ok, findErr := findOrchestratorExecutionByIdempotencyKey(normalized.IdempotencyKey)
 				if findErr != nil {
@@ -683,7 +684,7 @@ func buildDerivedExecution(source OrchestratorExecution, launchReason string) Or
 	derived.UpdatedAt = ""
 	derived.RequiredWorkers = append([]OrchestratorRequiredWorker(nil), source.RequiredWorkers...)
 	derived.TaskUnits = append([]OrchestratorTaskUnit(nil), source.TaskUnits...)
-	return derived
+	return resetOrchestratorDelegatedMemoryProgress(derived)
 }
 
 func sourceExecutionID(source OrchestratorExecution) string {
@@ -774,6 +775,9 @@ func runOrchestratorExecution(executionID string) {
 			}
 		}
 		return
+	}
+	if latestErr == nil && found {
+		updated = latest
 	}
 	updated.Results = results
 	updated.Status = OrchestratorExecutionStatusCompleted
@@ -1218,16 +1222,34 @@ func runOrchestratorTaskAttempt(
 		runCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
+		executionState := execution
+		child, provisionErr := provisionDelegatedChild(runCtx, client, &executionState, task, lease, attempt)
+		if provisionErr != nil {
+			return OrchestratorTaskResult{
+				TaskID:      task.ID,
+				Status:      OrchestratorTaskStatusFailed,
+				WorkerID:    lease.ID,
+				HostID:      lease.HostID,
+				AgentID:     lease.AgentID,
+				Attempts:    attempt,
+				Error:       provisionErr.Error(),
+				StartedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+				CompletedAt: time.Now().UTC().Format(time.RFC3339Nano),
+				LatencyMs:   0,
+			}, provisionErr
+		}
+
 		sessionID := strings.TrimSpace(task.SessionID)
 		if sessionID == "" {
-			sessionID = fmt.Sprintf("%s-%s-%d", execution.ID, task.ID, attempt)
+			sessionID = fmt.Sprintf("%s-%s-%d", strings.TrimSpace(child.ID), task.ID, attempt)
 		}
 
 		start := time.Now()
 		requestID := "orchestrator-" + strings.TrimSpace(execution.ID)
-		chatResult, runErr := client.ChatAgent(
+		chatResult, runErr := client.ChatAgentForInstance(
 			runCtx,
 			strings.TrimSpace(lease.AgentID),
+			strings.TrimSpace(child.ID),
 			strings.TrimSpace(execution.RequestedProvider),
 			strings.TrimSpace(task.Input),
 			sessionID,
@@ -1254,7 +1276,7 @@ func runOrchestratorTaskAttempt(
 		if chatResult != nil {
 			output = strings.TrimSpace(chatResult.Message)
 		}
-		return OrchestratorTaskResult{
+		result := OrchestratorTaskResult{
 			TaskID:      task.ID,
 			Status:      OrchestratorTaskStatusCompleted,
 			WorkerID:    lease.ID,
@@ -1265,7 +1287,14 @@ func runOrchestratorTaskAttempt(
 			StartedAt:   start.UTC().Format(time.RFC3339Nano),
 			CompletedAt: time.Now().UTC().Format(time.RFC3339Nano),
 			LatencyMs:   time.Since(start).Milliseconds(),
-		}, nil
+		}
+		finalized, finalizeErr := finalizeDelegatedChild(runCtx, client, &executionState, task, child, result)
+		if finalizeErr != nil {
+			finalized.Status = OrchestratorTaskStatusFailed
+			finalized.Error = finalizeErr.Error()
+			return finalized, finalizeErr
+		}
+		return finalized, nil
 	}
 
 	host, found, err := getRemoteHost(lease.HostID)

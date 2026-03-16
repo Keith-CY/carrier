@@ -82,6 +82,65 @@ func TestHandleWebUIAdd_NonManagedAgentSuccess(t *testing.T) {
 	}
 }
 
+func TestHandleWebUIAddDefaultsPersistentMemoryBinding(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("CARRIER_INSTANCE_STORE", filepath.Join(tmp, "instances.json"))
+
+	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/worker/install": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		},
+		"POST /api/v1/agents/worker/start": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "http://gateway.local/api/v1/add", strings.NewReader(`{"agentId":"worker"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handleWebUIAdd(rec, req, "req-non-managed-defaults", daemon)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	instances, _, err := loadManagedInstances()
+	if err != nil {
+		t.Fatalf("loadManagedInstances: %v", err)
+	}
+	if len(instances) != 1 {
+		t.Fatalf("expected 1 instance, got %d", len(instances))
+	}
+
+	inst := instances[0]
+	if inst.AgentLifecycleMode != "persistent" {
+		t.Fatalf("AgentLifecycleMode = %q, want persistent", inst.AgentLifecycleMode)
+	}
+	if inst.MemoryBindingMode != "live_mount" {
+		t.Fatalf("MemoryBindingMode = %q, want live_mount", inst.MemoryBindingMode)
+	}
+	if inst.MemoryRefreshPolicy != "next_turn" {
+		t.Fatalf("MemoryRefreshPolicy = %q, want next_turn", inst.MemoryRefreshPolicy)
+	}
+	if inst.ParentAgentID != "" {
+		t.Fatalf("ParentAgentID = %q, want empty", inst.ParentAgentID)
+	}
+	if inst.SnapshotID != "" {
+		t.Fatalf("SnapshotID = %q, want empty", inst.SnapshotID)
+	}
+	if inst.CleanupPolicy != "" {
+		t.Fatalf("CleanupPolicy = %q, want empty", inst.CleanupPolicy)
+	}
+	if len(inst.PublicScopes) != 0 {
+		t.Fatalf("PublicScopes = %#v, want empty", inst.PublicScopes)
+	}
+	if len(inst.SharedScopes) != 0 {
+		t.Fatalf("SharedScopes = %#v, want empty", inst.SharedScopes)
+	}
+}
+
 func TestResolveWebUIAddProviderID_FallbackOrder(t *testing.T) {
 	t.Run("invalid default falls back to latest instance provider", func(t *testing.T) {
 		tmp := t.TempDir()

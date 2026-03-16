@@ -68,7 +68,7 @@ func (l *AgentLoop) RespondPendingApproval(ctx context.Context, sessionKey, appr
 			ToolPolicyRuleID: strings.TrimSpace(result.PolicyRuleID),
 		})
 
-		if resp, handled, err := l.processStructuredChat(ctx, sessionKey, l.sessions.History(sessionKey), ""); handled {
+		if resp, handled, err := l.processStructuredChat(ctx, sessionKey, l.sessions.History(sessionKey), "", l.resolvedMemorySubject("")); handled {
 			resp.Action = "approval_confirm"
 			return resp, err
 		}

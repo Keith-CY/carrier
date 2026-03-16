@@ -92,6 +92,127 @@ func TestLoadSaveManagedInstances(t *testing.T) {
 	}
 }
 
+func TestManagedInstanceRoundTripPreservesMemoryBindingFields(t *testing.T) {
+	t.Run("preserves explicit fields", func(t *testing.T) {
+		storePath := filepath.Join(t.TempDir(), "instances.json")
+		t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+
+		inst := managedAgentInstance{
+			ID:                  "openclaw-main",
+			Type:                "openclaw",
+			AgentID:             "openclaw",
+			AgentLifecycleMode:  " Persistent ",
+			MemoryBindingMode:   "LIVE-MOUNT",
+			PublicScopes:        []string{"public"},
+			SharedScopes:        []string{"shared:team"},
+			PerAgentMemoryID:    "per-agent-openclaw-main",
+			MemoryRefreshPolicy: "Next Turn",
+			ParentAgentID:       "planner",
+			ParentExecutionID:   "exec-123",
+			TaskID:              "task-456",
+			SnapshotID:          "snap-789",
+			SnapshotDigest:      "sha256:abc",
+			DistillTarget:       "Per Agent",
+			CleanupPolicy:       "Delete After Distill",
+			CreatedAt:           "2026-03-16T00:00:00Z",
+			UpdatedAt:           "2026-03-16T00:00:00Z",
+		}
+
+		if err := saveManagedInstances(storePath, []managedAgentInstance{inst}); err != nil {
+			t.Fatalf("saveManagedInstances: %v", err)
+		}
+
+		instances, _, err := loadManagedInstances()
+		if err != nil {
+			t.Fatalf("loadManagedInstances: %v", err)
+		}
+		if len(instances) != 1 {
+			t.Fatalf("expected 1 instance, got %d", len(instances))
+		}
+
+		got := instances[0]
+		if got.AgentLifecycleMode != "persistent" {
+			t.Fatalf("AgentLifecycleMode = %q, want persistent", got.AgentLifecycleMode)
+		}
+		if got.MemoryBindingMode != "live_mount" {
+			t.Fatalf("MemoryBindingMode = %q, want live_mount", got.MemoryBindingMode)
+		}
+		if len(got.PublicScopes) != 1 || got.PublicScopes[0] != "public" {
+			t.Fatalf("PublicScopes = %#v, want []string{\"public\"}", got.PublicScopes)
+		}
+		if len(got.SharedScopes) != 1 || got.SharedScopes[0] != "shared:team" {
+			t.Fatalf("SharedScopes = %#v, want []string{\"shared:team\"}", got.SharedScopes)
+		}
+		if got.PerAgentMemoryID != "per-agent-openclaw-main" {
+			t.Fatalf("PerAgentMemoryID = %q, want per-agent-openclaw-main", got.PerAgentMemoryID)
+		}
+		if got.MemoryRefreshPolicy != "next_turn" {
+			t.Fatalf("MemoryRefreshPolicy = %q, want next_turn", got.MemoryRefreshPolicy)
+		}
+		if got.ParentAgentID != "planner" {
+			t.Fatalf("ParentAgentID = %q, want planner", got.ParentAgentID)
+		}
+		if got.ParentExecutionID != "exec-123" {
+			t.Fatalf("ParentExecutionID = %q, want exec-123", got.ParentExecutionID)
+		}
+		if got.TaskID != "task-456" {
+			t.Fatalf("TaskID = %q, want task-456", got.TaskID)
+		}
+		if got.SnapshotID != "snap-789" {
+			t.Fatalf("SnapshotID = %q, want snap-789", got.SnapshotID)
+		}
+		if got.SnapshotDigest != "sha256:abc" {
+			t.Fatalf("SnapshotDigest = %q, want sha256:abc", got.SnapshotDigest)
+		}
+		if got.DistillTarget != "per_agent" {
+			t.Fatalf("DistillTarget = %q, want per_agent", got.DistillTarget)
+		}
+		if got.CleanupPolicy != "delete_after_distill" {
+			t.Fatalf("CleanupPolicy = %q, want delete_after_distill", got.CleanupPolicy)
+		}
+	})
+
+	t.Run("normalizes legacy defaults", func(t *testing.T) {
+		storePath := filepath.Join(t.TempDir(), "instances.json")
+		t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+
+		raw := []byte(`{
+  "instances": [
+    {
+      "id": "legacy-openclaw",
+      "type": "openclaw",
+      "agent_id": "openclaw",
+      "created_at": "2026-03-16T00:00:00Z",
+      "updated_at": "2026-03-16T00:00:00Z"
+    }
+  ]
+}
+`)
+		if err := os.WriteFile(storePath, raw, 0o600); err != nil {
+			t.Fatalf("write legacy instance store: %v", err)
+		}
+
+		instances, _, err := loadManagedInstances()
+		if err != nil {
+			t.Fatalf("loadManagedInstances: %v", err)
+		}
+		if len(instances) != 1 {
+			t.Fatalf("expected 1 instance, got %d", len(instances))
+		}
+
+		got := instances[0]
+		if got.AgentLifecycleMode != "persistent" {
+			t.Fatalf("AgentLifecycleMode = %q, want persistent", got.AgentLifecycleMode)
+		}
+		if got.MemoryBindingMode != "live_mount" {
+			t.Fatalf("MemoryBindingMode = %q, want live_mount", got.MemoryBindingMode)
+		}
+		if got.MemoryRefreshPolicy != "next_turn" {
+			t.Fatalf("MemoryRefreshPolicy = %q, want next_turn", got.MemoryRefreshPolicy)
+		}
+	})
+}
+
 func TestUpsertManagedInstance(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "instances.json")
 	t.Setenv("CARRIER_INSTANCE_STORE", storePath)

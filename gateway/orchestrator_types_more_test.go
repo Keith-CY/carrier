@@ -264,6 +264,103 @@ func TestNormalizeOrchestratorExecutionValidationAndDefaults(t *testing.T) {
 	}
 }
 
+func TestNormalizeOrchestratorExecutionStoresDelegatedMemoryFields(t *testing.T) {
+	out, err := normalizeOrchestratorExecution(OrchestratorExecution{
+		Goal:                  " delegate incident ",
+		AgentLifecycleMode:    " Delegated ",
+		MemoryBindingMode:     " snapshot ",
+		RequiredMemory:        []string{" shared:team ", "public", "shared:team"},
+		SourceScopes:          []string{" shared:team ", "public", "shared:team"},
+		SnapshotID:            " snapshot-1 ",
+		ChildAgentID:          " child-agent ",
+		ChildPerAgentMemoryID: " child-memory ",
+		DistillRunID:          " distill-1 ",
+		CleanupStatus:         " Cleanup Pending ",
+		RequiredWorkers: []OrchestratorRequiredWorker{
+			{HostID: "host-1", AgentID: "zeroclaw", Count: 1},
+		},
+		TaskUnits: []OrchestratorTaskUnit{
+			{Input: "collect incident context"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeOrchestratorExecution delegated memory fields failed: %v", err)
+	}
+	if out.AgentLifecycleMode != "delegated" {
+		t.Fatalf("agentLifecycleMode = %q, want delegated", out.AgentLifecycleMode)
+	}
+	if out.MemoryBindingMode != "snapshot" {
+		t.Fatalf("memoryBindingMode = %q, want snapshot", out.MemoryBindingMode)
+	}
+	if strings.Join(out.SourceScopes, ",") != "public,shared:team" {
+		t.Fatalf("sourceScopes = %v, want [public shared:team]", out.SourceScopes)
+	}
+	if out.SnapshotDigest != buildMemoryContractDigest([]string{"public", "shared:team"}) {
+		t.Fatalf("snapshotDigest = %q, want derived source scope digest", out.SnapshotDigest)
+	}
+	if out.SnapshotID != "snapshot-1" {
+		t.Fatalf("snapshotId = %q, want snapshot-1", out.SnapshotID)
+	}
+	if out.ChildAgentID != "child-agent" {
+		t.Fatalf("childAgentId = %q, want child-agent", out.ChildAgentID)
+	}
+	if out.ChildPerAgentMemoryID != "child-memory" {
+		t.Fatalf("childPerAgentMemoryId = %q, want child-memory", out.ChildPerAgentMemoryID)
+	}
+	if out.DistillRunID != "distill-1" {
+		t.Fatalf("distillRunId = %q, want distill-1", out.DistillRunID)
+	}
+	if out.CleanupStatus != "cleanup_pending" {
+		t.Fatalf("cleanupStatus = %q, want cleanup_pending", out.CleanupStatus)
+	}
+}
+
+func TestNormalizeOrchestratorExecutionSourceScopesFollowRequiredMemory(t *testing.T) {
+	out, err := normalizeOrchestratorExecution(OrchestratorExecution{
+		Goal:           " delegate incident ",
+		RequiredMemory: []string{" shared:team ", "private:checkout", "shared:team"},
+		SourceScopes:   []string{" public "},
+		RequiredWorkers: []OrchestratorRequiredWorker{
+			{HostID: "host-1", AgentID: "zeroclaw", Count: 1},
+		},
+		TaskUnits: []OrchestratorTaskUnit{
+			{Input: "collect incident context"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeOrchestratorExecution source scopes follow required memory failed: %v", err)
+	}
+	if strings.Join(out.SourceScopes, ",") != "private:checkout,shared:team" {
+		t.Fatalf("sourceScopes = %v, want [private:checkout shared:team]", out.SourceScopes)
+	}
+	if out.SnapshotDigest != buildMemoryContractDigest([]string{"private:checkout", "shared:team"}) {
+		t.Fatalf("snapshotDigest = %q, want derived required memory digest", out.SnapshotDigest)
+	}
+}
+
+func TestNormalizeOrchestratorExecutionClampsDelegatedMemoryModes(t *testing.T) {
+	out, err := normalizeOrchestratorExecution(OrchestratorExecution{
+		Goal:               " delegate incident ",
+		AgentLifecycleMode: " persistent ",
+		MemoryBindingMode:  " banana ",
+		RequiredWorkers: []OrchestratorRequiredWorker{
+			{HostID: "host-1", AgentID: "zeroclaw", Count: 1},
+		},
+		TaskUnits: []OrchestratorTaskUnit{
+			{Input: "collect incident context"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeOrchestratorExecution clamp delegated memory modes failed: %v", err)
+	}
+	if out.AgentLifecycleMode != "delegated" {
+		t.Fatalf("agentLifecycleMode = %q, want delegated", out.AgentLifecycleMode)
+	}
+	if out.MemoryBindingMode != "snapshot" {
+		t.Fatalf("memoryBindingMode = %q, want snapshot", out.MemoryBindingMode)
+	}
+}
+
 func TestNormalizeOrchestratorExecutionForStorePreservesLineageAndOutcome(t *testing.T) {
 	out := normalizeOrchestratorExecutionForStore(OrchestratorExecution{
 		ID:                " exec-1 ",

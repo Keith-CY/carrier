@@ -64,6 +64,13 @@ var (
 	userConfigDirFunc = os.UserConfigDir
 	userHomeDirFunc   = os.UserHomeDir
 	currentUserFunc   = user.Current
+	validMemoryTypes  = func() map[memory.Type]struct{} {
+		allowed := make(map[memory.Type]struct{}, len(memory.ValidTypes()))
+		for _, candidate := range memory.ValidTypes() {
+			allowed[candidate] = struct{}{}
+		}
+		return allowed
+	}()
 )
 
 type agentChatRuntime interface {
@@ -975,6 +982,71 @@ func buildHTTPMuxWithBaseAgent(
 		writeJSON(w, http.StatusOK, map[string]interface{}{"audit": memStore.AuditLogs()})
 	})
 
+	register("/api/v2/memory/entries/create", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Version string `json:"version"`
+			Type    string `json:"type"`
+			Owner   string `json:"owner"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		entryType := memory.Type(strings.TrimSpace(body.Type))
+		if _, ok := validMemoryTypes[entryType]; !ok {
+			writeJSONError(w, http.StatusBadRequest, "invalid memory type")
+			return
+		}
+		entry, err := memStore.Create(body.ID, body.Name, body.Version, entryType, body.Owner)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"entry": map[string]interface{}{
+				"id":        entry.ID,
+				"name":      entry.Name,
+				"version":   entry.Version,
+				"type":      entry.Type,
+				"owner":     entry.Owner,
+				"state":     entry.State,
+				"createdAt": entry.CreatedAt,
+				"updatedAt": entry.UpdatedAt,
+			},
+		})
+	})
+
+	register("/api/v2/memory/entries/archive", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			ID string `json:"id"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := memStore.Archive(strings.TrimSpace(body.ID)); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "archived"})
+	})
+
 	register("/api/v2/memory/instance/attach", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -996,6 +1068,103 @@ func buildHTTPMuxWithBaseAgent(
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "attached"})
+	})
+
+	register("/api/v2/memory/instance/snapshot", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			SourceSubject    string   `json:"sourceSubject"`
+			SourceScopes     []string `json:"sourceScopes"`
+			TargetInstanceID string   `json:"targetInstanceId"`
+			Actor            string   `json:"actor"`
+			RequestID        string   `json:"requestId"`
+			Reason           string   `json:"reason"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		sourceScopes := make([]memory.Scope, 0, len(body.SourceScopes))
+		for _, scope := range body.SourceScopes {
+			if trimmed := strings.TrimSpace(scope); trimmed != "" {
+				sourceScopes = append(sourceScopes, memory.Scope(trimmed))
+			}
+		}
+		snapshot, err := memStore.CreateSnapshotForInstance(r.Context(), memory.SnapshotOptions{
+			Actor:            body.Actor,
+			RequestID:        body.RequestID,
+			SourceSubject:    body.SourceSubject,
+			SourceScopes:     sourceScopes,
+			TargetInstanceID: body.TargetInstanceID,
+			Reason:           body.Reason,
+		})
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"snapshot": map[string]interface{}{
+				"id":               snapshot.ID,
+				"digest":           snapshot.Digest,
+				"scope":            snapshot.Scope,
+				"sourceSubject":    snapshot.SourceSubject,
+				"sourceScopes":     snapshot.SourceScopes,
+				"targetInstanceId": snapshot.TargetInstanceID,
+				"reason":           snapshot.Reason,
+				"createdAt":        snapshot.CreatedAt,
+			},
+		})
+	})
+
+	register("/api/v2/memory/instance/snapshot/mount", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			InstanceID string `json:"instanceId"`
+			SnapshotID string `json:"snapshotId"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := memStore.MountSnapshot(body.InstanceID, body.SnapshotID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "mounted"})
+	})
+
+	register("/api/v2/memory/instance/snapshot/delete", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			SnapshotID string `json:"snapshotId"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		if err := memStore.DeleteSnapshot(body.SnapshotID); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "deleted"})
 	})
 
 	register("/api/v2/memory/instance/detach", func(w http.ResponseWriter, r *http.Request) {
@@ -1133,6 +1302,30 @@ func buildHTTPMuxWithBaseAgent(
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"result": result})
+	})
+
+	register("/api/v2/memory/instance/purge", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if memStore == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "memory store is unavailable")
+			return
+		}
+		var body struct {
+			InstanceID string `json:"instanceId"`
+			Scope      string `json:"scope"`
+		}
+		if !decodeBody(w, r, &body) {
+			return
+		}
+		deleted, err := memStore.PurgeInstanceScope(body.InstanceID, memory.Scope(body.Scope))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"deleted": deleted})
 	})
 
 	register("/api/v2/memory/migrate/backup", func(w http.ResponseWriter, r *http.Request) {
@@ -2014,6 +2207,33 @@ func handleAgentSessions(svc *lifecycle.Service, runtime baseAgentRuntime, agent
 	})
 }
 
+func shouldRefreshAgentMemoryBeforeTurn(svc *lifecycle.Service, agentID string) bool {
+	if svc == nil {
+		return false
+	}
+	memStore := svc.MemoryStore()
+	if memStore == nil {
+		return false
+	}
+	scopes := memStore.InstanceScopes(agentID)
+	if len(scopes) == 0 {
+		return false
+	}
+	hasLiveMount := false
+	for _, scope := range scopes {
+		normalized := strings.TrimSpace(string(scope))
+		switch {
+		case normalized == "":
+			continue
+		case strings.HasPrefix(normalized, "shared:snapshot-"):
+			return false
+		case normalized == "public" || strings.HasPrefix(normalized, "shared:"):
+			hasLiveMount = true
+		}
+	}
+	return hasLiveMount
+}
+
 func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID string, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -2027,6 +2247,7 @@ func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID s
 		Provider    string                    `json:"provider"`
 		ModelAlias  string                    `json:"modelAlias,omitempty"`
 		Model       string                    `json:"model,omitempty"`
+		InstanceID  string                    `json:"instanceId,omitempty"`
 		ChatID      string                    `json:"chatId"`
 		RequestID   string                    `json:"requestId"`
 		SessionID   string                    `json:"sessionId"`
@@ -2077,14 +2298,25 @@ func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID s
 		})
 		return
 	}
+	memoryInstanceID := strings.TrimSpace(body.InstanceID)
+	if memoryInstanceID == "" {
+		memoryInstanceID = agentID
+	}
+	if shouldRefreshAgentMemoryBeforeTurn(svc, memoryInstanceID) {
+		if err := svc.RefreshMemoryForTurn(memoryInstanceID); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
 	resp, err := runtime.Chat(r.Context(), baseagent.ChatRequest{
-		Provider:    strings.TrimSpace(body.Provider),
-		ModelAlias:  strings.TrimSpace(body.ModelAlias),
-		Model:       strings.TrimSpace(body.Model),
-		ChatID:      chatID,
-		RequestID:   strings.TrimSpace(body.RequestID),
-		Message:     message,
-		Attachments: body.Attachments,
+		Provider:      strings.TrimSpace(body.Provider),
+		ModelAlias:    strings.TrimSpace(body.ModelAlias),
+		Model:         strings.TrimSpace(body.Model),
+		MemorySubject: memoryInstanceID,
+		ChatID:        chatID,
+		RequestID:     strings.TrimSpace(body.RequestID),
+		Message:       message,
+		Attachments:   body.Attachments,
 	})
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())

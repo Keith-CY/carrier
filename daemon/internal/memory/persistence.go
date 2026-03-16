@@ -26,6 +26,7 @@ type persistedStoreState struct {
 	IndexPath        string                           `json:"index_path,omitempty"`
 	DistillRuns      map[string]DistillRunResult      `json:"distill_runs,omitempty"`
 	DistillManifests map[string]DistillSourceManifest `json:"distill_manifests,omitempty"`
+	Snapshots        map[string]SnapshotRecord        `json:"snapshots,omitempty"`
 }
 
 func (s *Store) loadState() error {
@@ -98,6 +99,9 @@ func (s *Store) loadState() error {
 	if state.DistillManifests != nil {
 		s.distillManifests = state.DistillManifests
 	}
+	if state.Snapshots != nil {
+		s.snapshots = state.Snapshots
+	}
 
 	return nil
 }
@@ -126,6 +130,7 @@ func (s *Store) persistStateLocked() error {
 		IndexPath:        s.indexPath,
 		DistillRuns:      make(map[string]DistillRunResult, len(s.distillRuns)),
 		DistillManifests: make(map[string]DistillSourceManifest, len(s.distillManifests)),
+		Snapshots:        make(map[string]SnapshotRecord, len(s.snapshots)),
 	}
 	for k, v := range s.entries {
 		state.Entries[k] = v
@@ -166,6 +171,9 @@ func (s *Store) persistStateLocked() error {
 	}
 	for k, v := range s.distillManifests {
 		state.DistillManifests[k] = v
+	}
+	for k, v := range s.snapshots {
+		state.Snapshots[k] = v
 	}
 
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {

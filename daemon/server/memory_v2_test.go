@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -296,5 +297,183 @@ func TestMemoryV2UpsertGetGrantRevokeAndInstanceAttach(t *testing.T) {
 	mux.ServeHTTP(rollbackRR, rollbackReq)
 	if rollbackRR.Code != http.StatusOK {
 		t.Fatalf("rollback status=%d body=%s", rollbackRR.Code, rollbackRR.Body.String())
+	}
+}
+
+func TestMemoryV2InstanceAttachRejectsSnapshotScope(t *testing.T) {
+	root := t.TempDir()
+	memStore := memory.NewStore(memory.WithRootDir(root))
+	if _, err := memStore.GrantScope("parent", memory.Scope("shared:team"), "tester", "seed shared team"); err != nil {
+		t.Fatalf("GrantScope(shared:team): %v", err)
+	}
+	if _, err := memStore.UpsertRecord(memory.UpsertRecordInput{
+		ID:             "shared-team-1",
+		Subject:        "parent",
+		Scope:          memory.Scope("shared:team"),
+		Type:           memory.RecordTypeFact,
+		ContentSummary: "team timezone is tokyo",
+	}); err != nil {
+		t.Fatalf("UpsertRecord(shared:team): %v", err)
+	}
+	snapshot, err := memStore.CreateSnapshotForInstance(context.Background(), memory.SnapshotOptions{
+		Actor:            "tester",
+		RequestID:        "req-snapshot-attach",
+		SourceSubject:    "parent",
+		SourceScopes:     []memory.Scope{memory.Scope("shared:team")},
+		TargetInstanceID: "child",
+		Reason:           "delegate task",
+	})
+	if err != nil {
+		t.Fatalf("CreateSnapshotForInstance: %v", err)
+	}
+
+	svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithMemoryStore(memStore))
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	mux := buildHTTPMuxWithBaseAgent(svc, nil, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	attachReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/instance/attach", strings.NewReader(`{"instanceId":"observer","scope":"`+string(snapshot.Scope)+`"}`))
+	attachRR := httptest.NewRecorder()
+	mux.ServeHTTP(attachRR, attachReq)
+	if attachRR.Code == http.StatusOK {
+		t.Fatalf("expected snapshot attach to fail, body=%s", attachRR.Body.String())
+	}
+}
+
+func TestMemoryV2DelegatedSnapshotProvisioningEndpoints(t *testing.T) {
+	root := t.TempDir()
+	memStore := memory.NewStore(memory.WithRootDir(root))
+	if _, err := memStore.GrantScope("parent", memory.Scope("shared:team"), "tester", "seed shared team"); err != nil {
+		t.Fatalf("GrantScope(shared:team): %v", err)
+	}
+	if _, err := memStore.UpsertRecord(memory.UpsertRecordInput{
+		ID:             "shared-team-1",
+		Subject:        "parent",
+		Scope:          memory.Scope("shared:team"),
+		Type:           memory.RecordTypeFact,
+		ContentSummary: "team timezone is tokyo",
+	}); err != nil {
+		t.Fatalf("UpsertRecord(shared:team): %v", err)
+	}
+
+	svc := lifecycle.NewService(baseagent.NoopTriager{}, lifecycle.WithMemoryStore(memStore))
+	ready := &atomic.Bool{}
+	ready.Store(true)
+	mux := buildHTTPMuxWithBaseAgent(svc, nil, ready, api.NewPairingCodeStore(nil), ratelimit.New())
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/entries/create", strings.NewReader(`{
+		"id":"mem-child-1",
+		"name":"Delegated Child Memory",
+		"version":"v1",
+		"type":"per_agent",
+		"owner":"child-1"
+	}`))
+	createRR := httptest.NewRecorder()
+	mux.ServeHTTP(createRR, createReq)
+	if createRR.Code != http.StatusOK {
+		t.Fatalf("create entry status=%d body=%s", createRR.Code, createRR.Body.String())
+	}
+	var createResp struct {
+		Entry memory.Entry `json:"entry"`
+	}
+	if err := json.Unmarshal(createRR.Body.Bytes(), &createResp); err != nil {
+		t.Fatalf("decode create entry response: %v", err)
+	}
+	if createResp.Entry.ID != "mem-child-1" || createResp.Entry.Owner != "child-1" {
+		t.Fatalf("unexpected created entry: %+v", createResp.Entry)
+	}
+
+	invalidCreateReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/entries/create", strings.NewReader(`{
+		"id":"mem-invalid",
+		"name":"Broken Memory",
+		"version":"v1",
+		"type":"banana",
+		"owner":"child-1"
+	}`))
+	invalidCreateRR := httptest.NewRecorder()
+	mux.ServeHTTP(invalidCreateRR, invalidCreateReq)
+	if invalidCreateRR.Code == http.StatusOK {
+		t.Fatalf("expected invalid memory type rejection, body=%s", invalidCreateRR.Body.String())
+	}
+
+	snapshotReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/instance/snapshot", strings.NewReader(`{
+		"sourceSubject":"parent",
+		"sourceScopes":["public","shared:team"],
+		"targetInstanceId":"child-1",
+		"actor":"tester",
+		"requestId":"req-snapshot",
+		"reason":"delegate task"
+	}`))
+	snapshotRR := httptest.NewRecorder()
+	mux.ServeHTTP(snapshotRR, snapshotReq)
+	if snapshotRR.Code != http.StatusOK {
+		t.Fatalf("create snapshot status=%d body=%s", snapshotRR.Code, snapshotRR.Body.String())
+	}
+	var snapshotResp struct {
+		Snapshot struct {
+			ID               string       `json:"id"`
+			Digest           string       `json:"digest"`
+			Scope            memory.Scope `json:"scope"`
+			TargetInstanceID string       `json:"targetInstanceId"`
+		} `json:"snapshot"`
+	}
+	if err := json.Unmarshal(snapshotRR.Body.Bytes(), &snapshotResp); err != nil {
+		t.Fatalf("decode snapshot response: %v", err)
+	}
+	if strings.TrimSpace(snapshotResp.Snapshot.ID) == "" {
+		t.Fatalf("expected snapshot id in response: %+v", snapshotResp)
+	}
+	if snapshotResp.Snapshot.TargetInstanceID != "child-1" {
+		t.Fatalf("snapshot targetInstanceId = %q, want child-1", snapshotResp.Snapshot.TargetInstanceID)
+	}
+
+	mountReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/instance/snapshot/mount", strings.NewReader(`{
+		"instanceId":"child-1",
+		"snapshotId":"`+snapshotResp.Snapshot.ID+`"
+	}`))
+	mountRR := httptest.NewRecorder()
+	mux.ServeHTTP(mountRR, mountReq)
+	if mountRR.Code != http.StatusOK {
+		t.Fatalf("mount snapshot status=%d body=%s", mountRR.Code, mountRR.Body.String())
+	}
+	scopes := memStore.InstanceScopes("child-1")
+	if len(scopes) != 1 || scopes[0] != snapshotResp.Snapshot.Scope {
+		t.Fatalf("InstanceScopes(child-1) = %+v, want [%s]", scopes, snapshotResp.Snapshot.Scope)
+	}
+
+	purgeReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/instance/purge", strings.NewReader(`{
+		"instanceId":"child-1",
+		"scope":"agent:child-1"
+	}`))
+	purgeRR := httptest.NewRecorder()
+	mux.ServeHTTP(purgeRR, purgeReq)
+	if purgeRR.Code != http.StatusOK {
+		t.Fatalf("purge instance status=%d body=%s", purgeRR.Code, purgeRR.Body.String())
+	}
+
+	deleteSnapshotReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/instance/snapshot/delete", strings.NewReader(`{
+		"snapshotId":"`+snapshotResp.Snapshot.ID+`"
+	}`))
+	deleteSnapshotRR := httptest.NewRecorder()
+	mux.ServeHTTP(deleteSnapshotRR, deleteSnapshotReq)
+	if deleteSnapshotRR.Code != http.StatusOK {
+		t.Fatalf("delete snapshot status=%d body=%s", deleteSnapshotRR.Code, deleteSnapshotRR.Body.String())
+	}
+	if scopes := memStore.InstanceScopes("child-1"); len(scopes) != 0 {
+		t.Fatalf("expected snapshot cleanup from instance scopes, got %+v", scopes)
+	}
+
+	archiveReq := httptest.NewRequest(http.MethodPost, "/api/v2/memory/entries/archive", strings.NewReader(`{
+		"id":"mem-child-1"
+	}`))
+	archiveRR := httptest.NewRecorder()
+	mux.ServeHTTP(archiveRR, archiveReq)
+	if archiveRR.Code != http.StatusOK {
+		t.Fatalf("archive entry status=%d body=%s", archiveRR.Code, archiveRR.Body.String())
+	}
+	if entry, err := memStore.Get("mem-child-1"); err != nil {
+		t.Fatalf("Get(mem-child-1): %v", err)
+	} else if entry.State != memory.StateArchived {
+		t.Fatalf("entry state = %q, want archived", entry.State)
 	}
 }
