@@ -705,6 +705,7 @@ fi
 echo "[7/10] attach/distill memory against the real instance"
 "$BIN_PATH" memory attach --instance "$ZERO_INSTANCE_ID" --scope shared:incident-response >/dev/null
 "$BIN_PATH" memory attach --instance "$ZERO_INSTANCE_ID" --scope shared:service-catalog >/dev/null
+"$BIN_PATH" memory attach --instance "$ZERO_INSTANCE_ID" --scope shared:e2e-live-provider >/dev/null
 capture_json_output "$DISTILL_JSON" "$BIN_PATH" memory distill --instance "$ZERO_INSTANCE_ID" --dry-run --json
 json_get "$DISTILL_JSON" '.result.runId // .run.runId // empty' >/dev/null
 
