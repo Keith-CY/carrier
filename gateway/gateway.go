@@ -21,8 +21,8 @@ type GatewayConfig struct {
 	Hostname string
 
 	// Auth
-	APIToken   string                   // CARRIER_GATEWAY_API_TOKEN
-	RoleTokens map[string]GatewayRole   // CARRIER_GATEWAY_ROLE_TOKENS (role:token,role:token)
+	APIToken   string                 // CARRIER_GATEWAY_API_TOKEN
+	RoleTokens map[string]GatewayRole // CARRIER_GATEWAY_ROLE_TOKENS (role:token,role:token)
 
 	// Daemon connection
 	DaemonBaseURL string // CARRIER_DAEMON_BASE_URL (default http://127.0.0.1:9090)
@@ -40,9 +40,9 @@ type GatewayConfig struct {
 	TelegramAPIBaseURL      string // CARRIER_TELEGRAM_API_BASE_URL
 
 	// Limits
-	MaxCommandBodyBytes    int           // CARRIER_MAX_COMMAND_BODY_BYTES (default 64KB)
-	WorkerLeaseStaleAfter  time.Duration // CARRIER_WORKER_LEASE_STALE_AFTER_SEC (default 10m)
-	WorkerHeartbeatTimeout time.Duration // CARRIER_WORKER_HEARTBEAT_TIMEOUT_SEC (default 2m)
+	MaxCommandBodyBytes         int           // CARRIER_MAX_COMMAND_BODY_BYTES (default 64KB)
+	WorkerLeaseStaleAfter       time.Duration // CARRIER_WORKER_LEASE_STALE_AFTER_SEC (default 10m)
+	WorkerHeartbeatTimeout      time.Duration // CARRIER_WORKER_HEARTBEAT_TIMEOUT_SEC (default 2m)
 	TriggerSchedulePollInterval time.Duration // CARRIER_TRIGGER_SCHEDULE_POLL_INTERVAL_SEC (default 30s)
 
 	// Rate limits
@@ -68,28 +68,28 @@ type GatewayConfig struct {
 // LoadGatewayConfigFromEnv loads GatewayConfig from environment variables.
 func LoadGatewayConfigFromEnv() *GatewayConfig {
 	cfg := &GatewayConfig{
-		Port:                    parseEnvInt("CARRIER_GATEWAY_PORT", 8787),
-		Hostname:                envOrDefault("CARRIER_GATEWAY_HOST", "127.0.0.1"),
-		APIToken:                strings.TrimSpace(os.Getenv("CARRIER_GATEWAY_API_TOKEN")),
-		RoleTokens:              parseGatewayRoleTokens(strings.TrimSpace(os.Getenv("CARRIER_GATEWAY_ROLE_TOKENS"))),
-		DaemonBaseURL:           strings.TrimRight(strings.TrimSpace(envOrDefault("CARRIER_DAEMON_BASE_URL", "http://127.0.0.1:9090")), "/"),
-		DaemonToken:             strings.TrimSpace(os.Getenv("CARRIER_SERVER_API_TOKEN")),
-		DaemonTimeout:           time.Duration(parseEnvInt("CARRIER_DAEMON_TIMEOUT_MS", int(defaultDaemonTimeout/time.Millisecond))) * time.Millisecond,
-		DiscordPublicKey:        strings.TrimSpace(os.Getenv("CARRIER_DISCORD_PUBLIC_KEY")),
-		FeishuVerificationToken: strings.TrimSpace(os.Getenv("CARRIER_FEISHU_VERIFICATION_TOKEN")),
-		TelegramWebhookSecret:   strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_WEBHOOK_SECRET")),
-		TelegramBotToken:        strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_BOT_TOKEN")),
-		TelegramTransportMode:   strings.ToLower(strings.TrimSpace(envOrDefault("CARRIER_TELEGRAM_TRANSPORT_MODE", "auto"))),
-		TelegramWebhookURL:      strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_WEBHOOK_URL")),
-		TelegramPollingTimeout:  parseEnvInt("CARRIER_TELEGRAM_POLLING_TIMEOUT_SEC", 30),
-		TelegramAPIBaseURL:      strings.TrimSpace(envOrDefault("CARRIER_TELEGRAM_API_BASE_URL", "https://api.telegram.org")),
-		MaxCommandBodyBytes:     parseEnvInt("CARRIER_MAX_COMMAND_BODY_BYTES", defaultMaxCommandBodyBytes),
-		WorkerLeaseStaleAfter:   time.Duration(parseEnvInt("CARRIER_WORKER_LEASE_STALE_AFTER_SEC", 600)) * time.Second,
-		WorkerHeartbeatTimeout:  time.Duration(parseEnvInt("CARRIER_WORKER_HEARTBEAT_TIMEOUT_SEC", 120)) * time.Second,
+		Port:                        parseEnvInt("CARRIER_GATEWAY_PORT", 8787),
+		Hostname:                    envOrDefault("CARRIER_GATEWAY_HOST", "127.0.0.1"),
+		APIToken:                    strings.TrimSpace(os.Getenv("CARRIER_GATEWAY_API_TOKEN")),
+		RoleTokens:                  parseGatewayRoleTokens(strings.TrimSpace(os.Getenv("CARRIER_GATEWAY_ROLE_TOKENS"))),
+		DaemonBaseURL:               strings.TrimRight(strings.TrimSpace(envOrDefault("CARRIER_DAEMON_BASE_URL", "http://127.0.0.1:9090")), "/"),
+		DaemonToken:                 strings.TrimSpace(os.Getenv("CARRIER_SERVER_API_TOKEN")),
+		DaemonTimeout:               time.Duration(parseEnvInt("CARRIER_DAEMON_TIMEOUT_MS", int(defaultDaemonTimeout/time.Millisecond))) * time.Millisecond,
+		DiscordPublicKey:            strings.TrimSpace(os.Getenv("CARRIER_DISCORD_PUBLIC_KEY")),
+		FeishuVerificationToken:     strings.TrimSpace(os.Getenv("CARRIER_FEISHU_VERIFICATION_TOKEN")),
+		TelegramWebhookSecret:       strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_WEBHOOK_SECRET")),
+		TelegramBotToken:            strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_BOT_TOKEN")),
+		TelegramTransportMode:       strings.ToLower(strings.TrimSpace(envOrDefault("CARRIER_TELEGRAM_TRANSPORT_MODE", "auto"))),
+		TelegramWebhookURL:          strings.TrimSpace(os.Getenv("CARRIER_TELEGRAM_WEBHOOK_URL")),
+		TelegramPollingTimeout:      parseEnvInt("CARRIER_TELEGRAM_POLLING_TIMEOUT_SEC", 30),
+		TelegramAPIBaseURL:          strings.TrimSpace(envOrDefault("CARRIER_TELEGRAM_API_BASE_URL", "https://api.telegram.org")),
+		MaxCommandBodyBytes:         parseEnvInt("CARRIER_MAX_COMMAND_BODY_BYTES", defaultMaxCommandBodyBytes),
+		WorkerLeaseStaleAfter:       time.Duration(parseEnvInt("CARRIER_WORKER_LEASE_STALE_AFTER_SEC", 600)) * time.Second,
+		WorkerHeartbeatTimeout:      time.Duration(parseEnvInt("CARRIER_WORKER_HEARTBEAT_TIMEOUT_SEC", 120)) * time.Second,
 		TriggerSchedulePollInterval: time.Duration(parseEnvInt("CARRIER_TRIGGER_SCHEDULE_POLL_INTERVAL_SEC", 30)) * time.Second,
-		RateLimitPerSession:     parseEnvInt("CARRIER_RATE_LIMIT_PER_SESSION", 30),
-		RateLimitGlobal:         parseEnvInt("CARRIER_RATE_LIMIT_GLOBAL", 200),
-		RateLimitWindow:         time.Duration(parseEnvInt("CARRIER_RATE_LIMIT_WINDOW_MS", 60000)) * time.Millisecond,
+		RateLimitPerSession:         parseEnvInt("CARRIER_RATE_LIMIT_PER_SESSION", 30),
+		RateLimitGlobal:             parseEnvInt("CARRIER_RATE_LIMIT_GLOBAL", 200),
+		RateLimitWindow:             time.Duration(parseEnvInt("CARRIER_RATE_LIMIT_WINDOW_MS", 60000)) * time.Millisecond,
 		RemoteControlPlaneEnabled: parseEnvBool(
 			"CARRIER_REMOTE_CONTROL_PLANE_ENABLED",
 			true,
@@ -191,6 +191,7 @@ func StartGateway(cfg *GatewayConfig) error {
 	if err := startTelegramTransport(transportCtx, cfg, daemon, sessions, downloads, rl, onboard); err != nil {
 		return err
 	}
+	startIntegrationCallbackDispatcher(transportCtx)
 	startRemoteAlertWatchdog(transportCtx, cfg)
 	startExecutionTriggerScheduler(transportCtx, cfg)
 

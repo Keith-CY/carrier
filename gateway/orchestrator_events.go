@@ -22,6 +22,32 @@ func publishOrchestratorExecutionEvent(execution OrchestratorExecution) {
 	if !isOrchestratorExecutionTerminal(execution.Status) {
 		return
 	}
+	switch execution.Status {
+	case OrchestratorExecutionStatusCompleted, OrchestratorExecutionStatusPartialCompleted:
+		if err := syncIntegrationUsageProofsByOrchestratorExecution(execution); err != nil {
+			logOrchestratorPersistError("sync integration usage proofs", err)
+		}
+		if err := appendIntegrationEventByOrchestratorExecution(execution.ID, "execution.completed", map[string]interface{}{
+			"status": execution.Status,
+			"error":  execution.Error,
+		}); err != nil {
+			logOrchestratorPersistError("append integration completed event", err)
+		}
+	case OrchestratorExecutionStatusFailed, OrchestratorExecutionStatusRetryableFailed, OrchestratorExecutionStatusDeclined:
+		if err := appendIntegrationEventByOrchestratorExecution(execution.ID, "execution.failed", map[string]interface{}{
+			"status": execution.Status,
+			"error":  execution.Error,
+		}); err != nil {
+			logOrchestratorPersistError("append integration failed event", err)
+		}
+	case OrchestratorExecutionStatusCancelled:
+		if err := appendIntegrationEventByOrchestratorExecution(execution.ID, "execution.cancelled", map[string]interface{}{
+			"status": execution.Status,
+			"error":  execution.Error,
+		}); err != nil {
+			logOrchestratorPersistError("append integration cancelled event", err)
+		}
+	}
 	evt := orchestratorExecutionEvent{
 		ExecutionID: execution.ID,
 		Status:      string(execution.Status),
