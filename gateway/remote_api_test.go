@@ -1491,6 +1491,8 @@ func TestRemoteCodeAgentLifecycleAndAudit(t *testing.T) {
 func TestProviderGovernanceResolveAndAudit(t *testing.T) {
 	auditPath := filepath.Join(t.TempDir(), "gateway-audit.jsonl")
 	t.Setenv("CARRIER_GATEWAY_AUDIT_LOG", auditPath)
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-governance-test")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-governance-test")
 	origRsync := remoteRsyncRunner
 	remoteRsyncRunner = func(_ context.Context, args []string) (remoteExecResult, error) {
 		return remoteExecResult{ExitCode: 0, Command: "rsync " + strings.Join(args, " ")}, nil

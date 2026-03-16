@@ -156,7 +156,8 @@ EOF
     -X POST \
     --data @"$remote_host_payload" \
     "${CARRIER_E2E_BASE_URL}/api/v1/remote/hosts" >"$remote_host_response"
-  export CARRIER_E2E_REMOTE_HOST_ID="$(jq -r '.host.id' "$remote_host_response")"
+  remote_host_id="$(jq -r '.host.id' "$remote_host_response")"
+  export CARRIER_E2E_REMOTE_HOST_ID="$remote_host_id"
   export CARRIER_E2E_REMOTE_HOST_NAME="$remote_host_name"
   export CARRIER_E2E_REMOTE_SSH_PORT="$remote_ssh_port"
   export CARRIER_E2E_REMOTE_SSH_KEY="$remote_ssh_key"
