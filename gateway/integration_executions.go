@@ -23,19 +23,19 @@ type integrationActionResult struct {
 }
 
 func createIntegrationExecution(binding integration.Binding, req integration.CreateExecutionRequest) (integrationCreateResult, error) {
-	integrationStoreMu.Lock()
-	defer integrationStoreMu.Unlock()
-
 	normalizedReq, err := integration.NormalizeCreateExecutionRequest(req)
 	if err != nil {
 		return integrationCreateResult{}, err
 	}
 
+	integrationStoreMu.Lock()
 	existing, attempt, found, err := loadIntegrationExecutionByBindingAndIdempotencyLocked(binding.ID, normalizedReq.IdempotencyKey)
 	if err != nil {
+		integrationStoreMu.Unlock()
 		return integrationCreateResult{}, err
 	}
 	if found {
+		integrationStoreMu.Unlock()
 		materialized, materializeErr := materializeIntegrationExecutionLocked(existing)
 		if materializeErr != nil {
 			return integrationCreateResult{}, materializeErr
@@ -45,6 +45,7 @@ func createIntegrationExecution(binding integration.Binding, req integration.Cre
 
 	internal, err := buildIntegrationOrchestratorExecution(binding, normalizedReq)
 	if err != nil {
+		integrationStoreMu.Unlock()
 		return integrationCreateResult{}, err
 	}
 	now := nowTimestamp()
@@ -65,19 +66,23 @@ func createIntegrationExecution(binding integration.Binding, req integration.Cre
 
 	policyRules, policyErr := listOrchestratorPolicies()
 	if policyErr != nil {
+		integrationStoreMu.Unlock()
 		return integrationCreateResult{}, fmt.Errorf("list orchestrator policies: %w", policyErr)
 	}
 	remoteHosts, remoteHostsErr := listRemoteHosts()
 	if remoteHostsErr != nil {
+		integrationStoreMu.Unlock()
 		return integrationCreateResult{}, fmt.Errorf("list remote hosts: %w", remoteHostsErr)
 	}
 	internal = applyOrchestratorExecutionPolicy(internal, policyRules, remoteHosts)
 	if internal.Policy.Decision == orchestratorPolicyDecisionDeny {
+		integrationStoreMu.Unlock()
 		return integrationCreateResult{}, fmt.Errorf("policy denied integration execution: %s", firstNonEmptyPolicyValue(internal.Policy.Reason, "execution denied"))
 	}
 
 	savedOrchestrator, err := upsertOrchestratorExecution(internal)
 	if err != nil {
+		integrationStoreMu.Unlock()
 		return integrationCreateResult{}, fmt.Errorf("save orchestrator execution: %w", err)
 	}
 
@@ -108,18 +113,22 @@ func createIntegrationExecution(binding integration.Binding, req integration.Cre
 
 	db, err := openIntegrationDB()
 	if err != nil {
+		integrationStoreMu.Unlock()
 		return integrationCreateResult{}, err
 	}
 	defer db.Close()
 	tx, err := db.Begin()
 	if err != nil {
+		integrationStoreMu.Unlock()
 		return integrationCreateResult{}, fmt.Errorf("begin integration execution tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	if err := insertIntegrationExecutionTx(tx, execution); err != nil {
+		integrationStoreMu.Unlock()
 		return integrationCreateResult{}, err
 	}
 	if err := insertIntegrationAttemptTx(tx, attempt); err != nil {
+		integrationStoreMu.Unlock()
 		return integrationCreateResult{}, err
 	}
 	if _, err := appendIntegrationEventTx(tx, execution.ID, attempt.ID, "execution.accepted", map[string]interface{}{
@@ -128,12 +137,15 @@ func createIntegrationExecution(binding integration.Binding, req integration.Cre
 		"bindingId":          binding.ID,
 		"orchestratorId":     savedOrchestrator.ID,
 	}); err != nil {
+		integrationStoreMu.Unlock()
 		return integrationCreateResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
+		integrationStoreMu.Unlock()
 		return integrationCreateResult{}, fmt.Errorf("commit integration execution tx: %w", err)
 	}
 
+	integrationStoreMu.Unlock()
 	orchestratorLaunchExecutionFn(savedOrchestrator.ID)
 	return integrationCreateResult{Execution: execution, Attempt: attempt}, nil
 }

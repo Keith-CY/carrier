@@ -335,6 +335,7 @@ func ensureIntegrationSchema(ctx context.Context, db *sql.DB) error {
 			FOREIGN KEY(binding_id) REFERENCES integration_bindings(id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_integration_callback_deliveries_event ON integration_callback_deliveries(event_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_integration_callback_deliveries_execution_status ON integration_callback_deliveries(execution_id, status)`,
 		`CREATE INDEX IF NOT EXISTS idx_integration_actions_execution_idempotency ON integration_actions(execution_id, idempotency_key)`,
 		`CREATE INDEX IF NOT EXISTS idx_integration_token_hash ON integration_binding_tokens(token_hash)`,
 	}

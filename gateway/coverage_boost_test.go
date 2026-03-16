@@ -72,6 +72,7 @@ func TestLoadGatewayConfigFromEnvRespectsOverrides(t *testing.T) {
 	t.Setenv("CARRIER_RATE_LIMIT_PER_SESSION", "13")
 	t.Setenv("CARRIER_RATE_LIMIT_GLOBAL", "37")
 	t.Setenv("CARRIER_RATE_LIMIT_WINDOW_MS", "2000")
+	t.Setenv("CARRIER_INTEGRATION_CALLBACK_POLL_INTERVAL_SEC", "7")
 	t.Setenv("SESSION_DATA_DIR", "")
 	t.Setenv("ARTIFACT_ROOT", artifactRoot)
 
@@ -93,6 +94,9 @@ func TestLoadGatewayConfigFromEnvRespectsOverrides(t *testing.T) {
 	}
 	if cfg.MaxCommandBodyBytes != 12345 || cfg.RateLimitPerSession != 13 || cfg.RateLimitGlobal != 37 || cfg.RateLimitWindow != 2*time.Second {
 		t.Fatalf("unexpected limits: body=%d perSession=%d global=%d window=%v", cfg.MaxCommandBodyBytes, cfg.RateLimitPerSession, cfg.RateLimitGlobal, cfg.RateLimitWindow)
+	}
+	if cfg.IntegrationCallbackPollInterval != 7*time.Second {
+		t.Fatalf("unexpected integration callback poll interval: %v", cfg.IntegrationCallbackPollInterval)
 	}
 	if cfg.WorkerLeaseStaleAfter != 90*time.Second || cfg.WorkerHeartbeatTimeout != 15*time.Second {
 		t.Fatalf("unexpected worker stale thresholds: stale=%v heartbeat=%v", cfg.WorkerLeaseStaleAfter, cfg.WorkerHeartbeatTimeout)

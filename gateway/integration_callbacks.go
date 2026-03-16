@@ -59,14 +59,17 @@ type integrationCallbackRecommendedAction struct {
 	Reason string                 `json:"reason,omitempty"`
 }
 
-func startIntegrationCallbackDispatcher(ctx context.Context) {
+func startIntegrationCallbackDispatcher(ctx context.Context, pollInterval time.Duration) {
 	integrationCallbackStartOnce.Do(func() {
-		go runIntegrationCallbackDispatcher(ctx)
+		go runIntegrationCallbackDispatcher(ctx, pollInterval)
 	})
 }
 
-func runIntegrationCallbackDispatcher(ctx context.Context) {
-	ticker := time.NewTicker(2 * time.Second)
+func runIntegrationCallbackDispatcher(ctx context.Context, pollInterval time.Duration) {
+	if pollInterval <= 0 {
+		pollInterval = 2 * time.Second
+	}
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	for {
 		select {

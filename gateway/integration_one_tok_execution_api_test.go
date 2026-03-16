@@ -303,6 +303,130 @@ func TestHandleOneTokExecutionsCreateStatusAndCancelIdempotency(t *testing.T) {
 	}
 }
 
+func TestCreateIntegrationExecutionIdempotencyMaterializesWithoutDeadlock(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CARRIER_ROOT", root)
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(root, "remote-control.json"))
+
+	host, err := upsertRemoteHost(RemoteHost{
+		Name:     "host-1",
+		Host:     "example.internal",
+		User:     "carrier",
+		AuthMode: RemoteAuthModePrivateKey,
+		KeyRef:   "ssh-key",
+	})
+	if err != nil {
+		t.Fatalf("upsertRemoteHost() error = %v", err)
+	}
+	binding, err := upsertIntegrationBinding(integration.Binding{
+		Adapter: "one-tok",
+		Account: "provider-org-1",
+		Target: integration.BindingTarget{
+			HostID:        host.ID,
+			AgentID:       "main",
+			Backend:       "codex",
+			WorkspaceRoot: "/workspace",
+		},
+		Status: integration.BindingStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("upsertIntegrationBinding() error = %v", err)
+	}
+
+	prevLaunch := orchestratorLaunchExecutionFn
+	orchestratorLaunchExecutionFn = func(string) {}
+	defer func() { orchestratorLaunchExecutionFn = prevLaunch }()
+
+	req := integration.CreateExecutionRequest{
+		IdempotencyKey: "idem-deadlock-1",
+		Goal:           "Fix repo regression",
+		Input:          "Run tests and fix failures",
+	}
+	created, err := createIntegrationExecution(binding, req)
+	if err != nil {
+		t.Fatalf("createIntegrationExecution() error = %v", err)
+	}
+
+	internal, found, err := getOrchestratorExecution(created.Execution.OrchestratorExecutionID)
+	if err != nil || !found {
+		t.Fatalf("getOrchestratorExecution() found=%v err=%v", found, err)
+	}
+	internal.Status = OrchestratorExecutionStatusCompleted
+	internal.TaskUnits = []OrchestratorTaskUnit{{
+		ID:      "task-1",
+		HostID:  host.ID,
+		AgentID: "main",
+		Input:   "Run regression tests and summarize usage",
+	}}
+	internal.Results = []OrchestratorTaskResult{{
+		TaskID:    "task-1",
+		HostID:    host.ID,
+		AgentID:   "main",
+		Status:    OrchestratorTaskStatusCompleted,
+		Output:    "Done",
+		LatencyMs: 120,
+	}}
+	internal.Governance.ProviderResolutions = []ProviderGovernanceResolution{{
+		HostID:               host.ID,
+		AgentID:              "main",
+		Provider:             "openrouter",
+		Model:                "gpt-4o-mini",
+		Enabled:              true,
+		EstimatedTotalTokens: 321,
+		EstimatedCostUSD:     0.42,
+	}}
+	internal.Outcome.Artifacts = []OrchestratorArtifact{{
+		ID:          "artifact-1",
+		Name:        "run.log",
+		Kind:        "log",
+		DownloadURL: "https://example.invalid/run.log",
+	}}
+	if _, err := upsertOrchestratorExecution(internal); err != nil {
+		t.Fatalf("upsertOrchestratorExecution() error = %v", err)
+	}
+
+	resultCh := make(chan integrationCreateResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, callErr := createIntegrationExecution(binding, req)
+		if callErr != nil {
+			errCh <- callErr
+			return
+		}
+		resultCh <- result
+	}()
+
+	select {
+	case callErr := <-errCh:
+		t.Fatalf("idempotent create returned error: %v", callErr)
+	case result := <-resultCh:
+		if !result.Existing {
+			t.Fatalf("expected idempotent hit, got %+v", result)
+		}
+		if result.Execution.ID != created.Execution.ID || result.Attempt.ID != created.Attempt.ID {
+			t.Fatalf("unexpected idempotent create result: %+v", result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("idempotent create timed out while rematerializing execution")
+	}
+
+	proofs, err := listIntegrationUsageProofsByExecutionID(created.Execution.ID)
+	if err != nil {
+		t.Fatalf("listIntegrationUsageProofsByExecutionID() error = %v", err)
+	}
+	if len(proofs) != 1 {
+		t.Fatalf("usage proofs=%d want 1: %+v", len(proofs), proofs)
+	}
+
+	artifacts, err := listIntegrationArtifactRefsByExecutionID(created.Execution.ID)
+	if err != nil {
+		t.Fatalf("listIntegrationArtifactRefsByExecutionID() error = %v", err)
+	}
+	if len(artifacts) != 1 {
+		t.Fatalf("artifact refs=%d want 1: %+v", len(artifacts), artifacts)
+	}
+}
+
 func TestHandleOneTokExecutionStatusAutoMaterializesUsageProofs(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("CARRIER_ROOT", root)

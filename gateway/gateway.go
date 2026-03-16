@@ -63,6 +63,9 @@ type GatewayConfig struct {
 	RemoteAlertWebhookURL string        // CARRIER_REMOTE_ALERT_WEBHOOK_URL
 	RemoteAlertInterval   time.Duration // CARRIER_REMOTE_ALERT_INTERVAL_SEC
 	RemoteAlertCooldown   time.Duration // CARRIER_REMOTE_ALERT_COOLDOWN_SEC
+
+	// Integrations
+	IntegrationCallbackPollInterval time.Duration // CARRIER_INTEGRATION_CALLBACK_POLL_INTERVAL_SEC
 }
 
 // LoadGatewayConfigFromEnv loads GatewayConfig from environment variables.
@@ -102,9 +105,10 @@ func LoadGatewayConfigFromEnv() *GatewayConfig {
 			"CARRIER_PROVIDER_BINDING_ENABLED",
 			true,
 		),
-		RemoteAlertWebhookURL: strings.TrimSpace(os.Getenv("CARRIER_REMOTE_ALERT_WEBHOOK_URL")),
-		RemoteAlertInterval:   time.Duration(parseEnvInt("CARRIER_REMOTE_ALERT_INTERVAL_SEC", 30)) * time.Second,
-		RemoteAlertCooldown:   time.Duration(parseEnvInt("CARRIER_REMOTE_ALERT_COOLDOWN_SEC", 300)) * time.Second,
+		RemoteAlertWebhookURL:           strings.TrimSpace(os.Getenv("CARRIER_REMOTE_ALERT_WEBHOOK_URL")),
+		RemoteAlertInterval:             time.Duration(parseEnvInt("CARRIER_REMOTE_ALERT_INTERVAL_SEC", 30)) * time.Second,
+		RemoteAlertCooldown:             time.Duration(parseEnvInt("CARRIER_REMOTE_ALERT_COOLDOWN_SEC", 300)) * time.Second,
+		IntegrationCallbackPollInterval: time.Duration(parseEnvInt("CARRIER_INTEGRATION_CALLBACK_POLL_INTERVAL_SEC", 2)) * time.Second,
 	}
 	normalizeGatewayConfigFeatureFlags(cfg)
 
@@ -191,7 +195,7 @@ func StartGateway(cfg *GatewayConfig) error {
 	if err := startTelegramTransport(transportCtx, cfg, daemon, sessions, downloads, rl, onboard); err != nil {
 		return err
 	}
-	startIntegrationCallbackDispatcher(transportCtx)
+	startIntegrationCallbackDispatcher(transportCtx, cfg.IntegrationCallbackPollInterval)
 	startRemoteAlertWatchdog(transportCtx, cfg)
 	startExecutionTriggerScheduler(transportCtx, cfg)
 
