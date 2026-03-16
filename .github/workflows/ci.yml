@@ -456,6 +456,7 @@ jobs:
           set -euo pipefail
           go test ./... -coverprofile=coverage-root.out
           (cd webui && go test ./... -coverprofile=coverage-webui.out)
+          cp webui/coverage-webui.out coverage-webui.out
 
       - name: Collect base branch coverage
         continue-on-error: true
