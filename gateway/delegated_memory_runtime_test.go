@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 )
@@ -132,8 +133,8 @@ func TestProvisionDelegatedChildCreatesSnapshotAndWritablePerAgentMemory(t *test
 	if child.MemoryBindingMode != orchestratorMemoryBindingMode {
 		t.Fatalf("MemoryBindingMode = %q, want %q", child.MemoryBindingMode, orchestratorMemoryBindingMode)
 	}
-	if child.ParentAgentID != "openclaw" {
-		t.Fatalf("ParentAgentID = %q, want openclaw", child.ParentAgentID)
+	if child.ParentAgentID != "openclaw-main" {
+		t.Fatalf("ParentAgentID = %q, want openclaw-main", child.ParentAgentID)
 	}
 	if child.ParentExecutionID != "exec-1" {
 		t.Fatalf("ParentExecutionID = %q, want exec-1", child.ParentExecutionID)
@@ -169,8 +170,8 @@ func TestProvisionDelegatedChildCreatesSnapshotAndWritablePerAgentMemory(t *test
 	if snapshotCount != 1 {
 		t.Fatalf("snapshot count = %d, want 1", snapshotCount)
 	}
-	if snapshotSourceSubject != "openclaw" {
-		t.Fatalf("snapshot sourceSubject = %q, want openclaw", snapshotSourceSubject)
+	if snapshotSourceSubject != "openclaw-main" {
+		t.Fatalf("snapshot sourceSubject = %q, want openclaw-main", snapshotSourceSubject)
 	}
 	if snapshotTargetInstanceID != child.ID {
 		t.Fatalf("snapshot targetInstanceId = %q, want %q", snapshotTargetInstanceID, child.ID)
@@ -218,6 +219,46 @@ func TestProvisionDelegatedChildCreatesSnapshotAndWritablePerAgentMemory(t *test
 	}
 }
 
+func TestProvisionDelegatedChildFailsWhenParentSubjectResolutionErrors(t *testing.T) {
+	storePath := t.TempDir() + "/instances.json"
+	t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", t.TempDir()+"/remote-control.json")
+	if err := os.WriteFile(storePath, []byte("{not-json"), 0o600); err != nil {
+		t.Fatalf("write invalid instance store: %v", err)
+	}
+
+	execution := OrchestratorExecution{
+		ID:           "exec-err",
+		SourceScopes: []string{"shared:team"},
+	}
+
+	var createCount int
+	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+		"POST /api/v2/memory/entries/create": func(w http.ResponseWriter, r *http.Request) {
+			createCount++
+			writeJSON(w, http.StatusOK, map[string]any{"entry": map[string]any{"id": "unused"}})
+		},
+	})
+
+	_, err := provisionDelegatedChild(
+		context.Background(),
+		daemon,
+		&execution,
+		OrchestratorTaskUnit{ID: "task-err", Input: "noop"},
+		OrchestratorWorkerLease{AgentID: "openclaw"},
+		1,
+	)
+	if err == nil {
+		t.Fatal("expected provisionDelegatedChild to fail")
+	}
+	if !strings.Contains(err.Error(), "resolve delegated parent subject") {
+		t.Fatalf("error = %q, want parent subject resolution context", err)
+	}
+	if createCount != 0 {
+		t.Fatalf("create memory count = %d, want 0", createCount)
+	}
+}
+
 func TestFinalizeDelegatedChildDistillsWritebackAndCleansUp(t *testing.T) {
 	t.Setenv("CARRIER_INSTANCE_STORE", t.TempDir()+"/instances.json")
 	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", t.TempDir()+"/remote-control.json")
@@ -230,7 +271,7 @@ func TestFinalizeDelegatedChildDistillsWritebackAndCleansUp(t *testing.T) {
 		AgentLifecycleMode: orchestratorAgentLifecycleMode,
 		MemoryBindingMode:  orchestratorMemoryBindingMode,
 		PerAgentMemoryID:   "per-agent-child-1",
-		ParentAgentID:      "openclaw",
+		ParentAgentID:      "openclaw-main",
 		ParentExecutionID:  "exec-1",
 		TaskID:             "task-1",
 		SnapshotID:         "snap-1",
@@ -395,11 +436,11 @@ func TestFinalizeDelegatedChildDistillsWritebackAndCleansUp(t *testing.T) {
 	if strings.Join(result.DelegatedMemory.ParentRecordIDs, ",") != "parent-rec-1" {
 		t.Fatalf("ParentRecordIDs = %v, want [parent-rec-1]", result.DelegatedMemory.ParentRecordIDs)
 	}
-	if upsertSubject != "openclaw" {
-		t.Fatalf("write-back subject = %q, want openclaw", upsertSubject)
+	if upsertSubject != "openclaw-main" {
+		t.Fatalf("write-back subject = %q, want openclaw-main", upsertSubject)
 	}
-	if upsertScope != "agent:openclaw" {
-		t.Fatalf("write-back scope = %q, want agent:openclaw", upsertScope)
+	if upsertScope != "agent:openclaw-main" {
+		t.Fatalf("write-back scope = %q, want agent:openclaw-main", upsertScope)
 	}
 	if !strings.Contains(upsertProvenance, child.ID) || !strings.Contains(upsertProvenance, "distill-1") {
 		t.Fatalf("write-back provenance = %q, want child id and distill run", upsertProvenance)
