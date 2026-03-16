@@ -213,6 +213,8 @@ func TestLocalOrchestratorRunProvisionsDelegatedChild(t *testing.T) {
 	var mountedInstanceID string
 	var chatInstanceID string
 	var chatSessionID string
+	var upsertSubject string
+	var upsertScope string
 	var upsertSummary string
 
 	daemonSrv := newMockDaemon(map[string]http.HandlerFunc{
@@ -271,6 +273,8 @@ func TestLocalOrchestratorRunProvisionsDelegatedChild(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode upsert body: %v", err)
 			}
+			upsertSubject = strings.TrimSpace(anyToString(body["subject"]))
+			upsertScope = strings.TrimSpace(anyToString(body["scope"]))
 			upsertSummary = strings.TrimSpace(anyToString(body["contentSummary"]))
 			writeJSON(w, http.StatusOK, map[string]any{
 				"record": map[string]any{
@@ -362,8 +366,8 @@ func TestLocalOrchestratorRunProvisionsDelegatedChild(t *testing.T) {
 	if strings.Join(order, ",") != "create,snapshot,mount,chat,distill,get,upsert,purge,delete_snapshot,archive_entry" {
 		t.Fatalf("provisioning/finalize order = %v, want [create snapshot mount chat distill get upsert purge delete_snapshot archive_entry]", order)
 	}
-	if snapshotSourceSubject != "zeroclaw" {
-		t.Fatalf("snapshot sourceSubject = %q, want zeroclaw", snapshotSourceSubject)
+	if snapshotSourceSubject != parent.ID {
+		t.Fatalf("snapshot sourceSubject = %q, want %q", snapshotSourceSubject, parent.ID)
 	}
 	if createdOwner == "" || createdOwner != snapshotTargetInstanceID {
 		t.Fatalf("expected created per-agent memory owner to match child instance, owner=%q targetInstanceId=%q", createdOwner, snapshotTargetInstanceID)
@@ -420,5 +424,11 @@ func TestLocalOrchestratorRunProvisionsDelegatedChild(t *testing.T) {
 	}
 	if !strings.Contains(upsertSummary, "delegated child distilled summary") {
 		t.Fatalf("expected parent write-back summary to include distilled summary, got %q", upsertSummary)
+	}
+	if upsertSubject != parent.ID {
+		t.Fatalf("write-back subject = %q, want %q", upsertSubject, parent.ID)
+	}
+	if upsertScope != "agent:"+parent.ID {
+		t.Fatalf("write-back scope = %q, want %q", upsertScope, "agent:"+parent.ID)
 	}
 }

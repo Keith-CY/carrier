@@ -132,8 +132,8 @@ func TestProvisionDelegatedChildCreatesSnapshotAndWritablePerAgentMemory(t *test
 	if child.MemoryBindingMode != orchestratorMemoryBindingMode {
 		t.Fatalf("MemoryBindingMode = %q, want %q", child.MemoryBindingMode, orchestratorMemoryBindingMode)
 	}
-	if child.ParentAgentID != "openclaw" {
-		t.Fatalf("ParentAgentID = %q, want openclaw", child.ParentAgentID)
+	if child.ParentAgentID != "openclaw-main" {
+		t.Fatalf("ParentAgentID = %q, want openclaw-main", child.ParentAgentID)
 	}
 	if child.ParentExecutionID != "exec-1" {
 		t.Fatalf("ParentExecutionID = %q, want exec-1", child.ParentExecutionID)
@@ -169,8 +169,8 @@ func TestProvisionDelegatedChildCreatesSnapshotAndWritablePerAgentMemory(t *test
 	if snapshotCount != 1 {
 		t.Fatalf("snapshot count = %d, want 1", snapshotCount)
 	}
-	if snapshotSourceSubject != "openclaw" {
-		t.Fatalf("snapshot sourceSubject = %q, want openclaw", snapshotSourceSubject)
+	if snapshotSourceSubject != "openclaw-main" {
+		t.Fatalf("snapshot sourceSubject = %q, want openclaw-main", snapshotSourceSubject)
 	}
 	if snapshotTargetInstanceID != child.ID {
 		t.Fatalf("snapshot targetInstanceId = %q, want %q", snapshotTargetInstanceID, child.ID)
@@ -230,7 +230,7 @@ func TestFinalizeDelegatedChildDistillsWritebackAndCleansUp(t *testing.T) {
 		AgentLifecycleMode: orchestratorAgentLifecycleMode,
 		MemoryBindingMode:  orchestratorMemoryBindingMode,
 		PerAgentMemoryID:   "per-agent-child-1",
-		ParentAgentID:      "openclaw",
+		ParentAgentID:      "openclaw-main",
 		ParentExecutionID:  "exec-1",
 		TaskID:             "task-1",
 		SnapshotID:         "snap-1",
@@ -395,11 +395,11 @@ func TestFinalizeDelegatedChildDistillsWritebackAndCleansUp(t *testing.T) {
 	if strings.Join(result.DelegatedMemory.ParentRecordIDs, ",") != "parent-rec-1" {
 		t.Fatalf("ParentRecordIDs = %v, want [parent-rec-1]", result.DelegatedMemory.ParentRecordIDs)
 	}
-	if upsertSubject != "openclaw" {
-		t.Fatalf("write-back subject = %q, want openclaw", upsertSubject)
+	if upsertSubject != "openclaw-main" {
+		t.Fatalf("write-back subject = %q, want openclaw-main", upsertSubject)
 	}
-	if upsertScope != "agent:openclaw" {
-		t.Fatalf("write-back scope = %q, want agent:openclaw", upsertScope)
+	if upsertScope != "agent:openclaw-main" {
+		t.Fatalf("write-back scope = %q, want agent:openclaw-main", upsertScope)
 	}
 	if !strings.Contains(upsertProvenance, child.ID) || !strings.Contains(upsertProvenance, "distill-1") {
 		t.Fatalf("write-back provenance = %q, want child id and distill run", upsertProvenance)
