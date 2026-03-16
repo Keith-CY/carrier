@@ -32,12 +32,11 @@ test("coverage comment writes WebUI head coverage where the summary expects it",
   );
 
   const writesRootProfile =
-    headCoverageScript.includes("(cd webui && go test ./... -coverprofile=../coverage-webui.out)") ||
-    headCoverageScript.includes("cp webui/coverage-webui.out coverage-webui.out");
+    /\(\s*cd\s+webui\s+&&\s+go\s+test\b[\s\S]*?-coverprofile=\.\.\/coverage-webui\.out\s*\)/.test(headCoverageScript) ||
+    /cp\s+webui\/coverage-webui\.out\s+coverage-webui\.out\b/.test(headCoverageScript);
 
-  assert.equal(
+  assert.ok(
     writesRootProfile,
-    true,
     "Collect head branch coverage must place the WebUI profile at coverage-webui.out in the repository root",
   );
 });
