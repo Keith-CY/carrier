@@ -304,12 +304,6 @@ func normalizeManagedEnumValue(raw string) string {
 		case unicode.IsLetter(r), unicode.IsDigit(r):
 			b.WriteRune(unicode.ToLower(r))
 			lastUnderscore = false
-		case unicode.IsSpace(r), r == '-', r == '_':
-			if lastUnderscore || b.Len() == 0 {
-				continue
-			}
-			b.WriteByte('_')
-			lastUnderscore = true
 		default:
 			if lastUnderscore || b.Len() == 0 {
 				continue

@@ -847,7 +847,7 @@ func (c *DaemonClient) DistillInstanceMemory(
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, fmt.Errorf("memory distill response: %w", err)
 	}
-	result.Result.OutputIDs = normalizeStringSlice(result.Result.OutputIDs)
+	result.Result.OutputIDs = normalizeStringSelectorList(result.Result.OutputIDs, false)
 	return &result.Result, nil
 }
 
@@ -940,26 +940,6 @@ func (c *DaemonClient) ArchiveMemoryEntry(
 	}
 	_, err := c.request(ctx, http.MethodPost, "/api/v2/memory/entries/archive", payload, actor, requestID)
 	return err
-}
-
-func normalizeStringSlice(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(in))
-	seen := map[string]struct{}{}
-	for _, raw := range in {
-		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" {
-			continue
-		}
-		if _, ok := seen[trimmed]; ok {
-			continue
-		}
-		seen[trimmed] = struct{}{}
-		out = append(out, trimmed)
-	}
-	return out
 }
 
 func (c *DaemonClient) SpeakAgentMedia(

@@ -64,6 +64,13 @@ var (
 	userConfigDirFunc = os.UserConfigDir
 	userHomeDirFunc   = os.UserHomeDir
 	currentUserFunc   = user.Current
+	validMemoryTypes  = func() map[memory.Type]struct{} {
+		allowed := make(map[memory.Type]struct{}, len(memory.ValidTypes()))
+		for _, candidate := range memory.ValidTypes() {
+			allowed[candidate] = struct{}{}
+		}
+		return allowed
+	}()
 )
 
 type agentChatRuntime interface {
@@ -995,14 +1002,7 @@ func buildHTTPMuxWithBaseAgent(
 			return
 		}
 		entryType := memory.Type(strings.TrimSpace(body.Type))
-		validType := false
-		for _, candidate := range memory.ValidTypes() {
-			if candidate == entryType {
-				validType = true
-				break
-			}
-		}
-		if !validType {
+		if _, ok := validMemoryTypes[entryType]; !ok {
 			writeJSONError(w, http.StatusBadRequest, "invalid memory type")
 			return
 		}
