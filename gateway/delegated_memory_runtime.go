@@ -36,6 +36,11 @@ func provisionDelegatedChild(
 	perAgentMemoryID := buildDelegatedPerAgentMemoryID(childID)
 	requestID := "orchestrator-" + strings.TrimSpace(execution.ID)
 	actor := "gateway:orchestrator:delegated"
+	sourceScopes := normalizeStringSelectorList(execution.SourceScopes, true)
+	parentSubjectID, err := resolveDelegatedParentSubjectID(strings.TrimSpace(lease.AgentID), sourceScopes)
+	if err != nil {
+		return managedAgentInstance{}, fmt.Errorf("resolve delegated parent subject: %w", err)
+	}
 
 	if _, err := daemon.CreateMemoryEntry(
 		ctx,
@@ -52,8 +57,6 @@ func provisionDelegatedChild(
 
 	var snapshotID string
 	var snapshotDigest string
-	sourceScopes := normalizeStringSelectorList(execution.SourceScopes, true)
-	parentSubjectID := resolveDelegatedParentSubjectID(strings.TrimSpace(lease.AgentID), sourceScopes)
 	if len(sourceScopes) > 0 {
 		snapshot, err := daemon.CreateInstanceSnapshot(
 			ctx,
@@ -109,15 +112,15 @@ func provisionDelegatedChild(
 	return child, nil
 }
 
-func resolveDelegatedParentSubjectID(agentID string, sourceScopes []string) string {
+func resolveDelegatedParentSubjectID(agentID string, sourceScopes []string) (string, error) {
 	agentID = strings.TrimSpace(agentID)
 	if agentID == "" {
-		return ""
+		return "", nil
 	}
 
 	instances, _, err := loadManagedInstances()
 	if err != nil {
-		return agentID
+		return "", err
 	}
 
 	sharedScopes := make([]string, 0, len(sourceScopes))
@@ -129,7 +132,6 @@ func resolveDelegatedParentSubjectID(agentID string, sourceScopes []string) stri
 
 	fallbackID := ""
 	for _, inst := range instances {
-		inst = normalizeManagedAgentInstance(inst)
 		if !strings.EqualFold(strings.TrimSpace(inst.AgentID), agentID) {
 			continue
 		}
@@ -145,13 +147,13 @@ func resolveDelegatedParentSubjectID(agentID string, sourceScopes []string) stri
 		if len(sharedScopes) > 0 && !stringSliceContainsAllFold(inst.SharedScopes, sharedScopes) {
 			continue
 		}
-		return strings.TrimSpace(inst.ID)
+		return strings.TrimSpace(inst.ID), nil
 	}
 
 	if fallbackID != "" {
-		return fallbackID
+		return fallbackID, nil
 	}
-	return agentID
+	return agentID, nil
 }
 
 func buildDelegatedPerAgentMemoryID(childID string) string {

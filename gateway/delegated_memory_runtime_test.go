@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 )
@@ -215,6 +216,46 @@ func TestProvisionDelegatedChildCreatesSnapshotAndWritablePerAgentMemory(t *test
 	}
 	if updatedExecution.SnapshotDigest != "sha256:snapshot-1" {
 		t.Fatalf("SnapshotDigest = %q, want sha256:snapshot-1", updatedExecution.SnapshotDigest)
+	}
+}
+
+func TestProvisionDelegatedChildFailsWhenParentSubjectResolutionErrors(t *testing.T) {
+	storePath := t.TempDir() + "/instances.json"
+	t.Setenv("CARRIER_INSTANCE_STORE", storePath)
+	t.Setenv("CARRIER_REMOTE_CONTROL_STORE", t.TempDir()+"/remote-control.json")
+	if err := os.WriteFile(storePath, []byte("{not-json"), 0o600); err != nil {
+		t.Fatalf("write invalid instance store: %v", err)
+	}
+
+	execution := OrchestratorExecution{
+		ID:           "exec-err",
+		SourceScopes: []string{"shared:team"},
+	}
+
+	var createCount int
+	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+		"POST /api/v2/memory/entries/create": func(w http.ResponseWriter, r *http.Request) {
+			createCount++
+			writeJSON(w, http.StatusOK, map[string]any{"entry": map[string]any{"id": "unused"}})
+		},
+	})
+
+	_, err := provisionDelegatedChild(
+		context.Background(),
+		daemon,
+		&execution,
+		OrchestratorTaskUnit{ID: "task-err", Input: "noop"},
+		OrchestratorWorkerLease{AgentID: "openclaw"},
+		1,
+	)
+	if err == nil {
+		t.Fatal("expected provisionDelegatedChild to fail")
+	}
+	if !strings.Contains(err.Error(), "resolve delegated parent subject") {
+		t.Fatalf("error = %q, want parent subject resolution context", err)
+	}
+	if createCount != 0 {
+		t.Fatalf("create memory count = %d, want 0", createCount)
 	}
 }
 
