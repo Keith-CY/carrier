@@ -77,6 +77,114 @@ func TestExtractChatResponseText(t *testing.T) {
 	}
 }
 
+func TestExtractRemoteChatSessionID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		payload map[string]interface{}
+		want    string
+	}{
+		{
+			name:    "top level session id",
+			payload: map[string]interface{}{"sessionId": "sess-top"},
+			want:    "sess-top",
+		},
+		{
+			name: "meta session id",
+			payload: map[string]interface{}{
+				"meta": map[string]interface{}{"sessionId": "sess-meta"},
+			},
+			want: "sess-meta",
+		},
+		{
+			name: "agent meta session id",
+			payload: map[string]interface{}{
+				"meta": map[string]interface{}{
+					"agentMeta": map[string]interface{}{"sessionId": "sess-agent"},
+				},
+			},
+			want: "sess-agent",
+		},
+		{
+			name:    "missing",
+			payload: map[string]interface{}{"meta": map[string]interface{}{"model": "openrouter"}},
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := extractRemoteChatSessionID(tt.payload); got != tt.want {
+				t.Fatalf("extractRemoteChatSessionID()=%q want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractChatTextFromSessionJSONL(t *testing.T) {
+	t.Parallel()
+
+	raw := strings.Join([]string{
+		`{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"NO_REPLY"}]}}`,
+		`{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"tts","arguments":{"text":"remote openclaw ok"}}]}}`,
+		`{"type":"message","message":{"role":"toolResult","content":[{"type":"text","text":"[[audio_as_voice]]\nMEDIA:/tmp/voice.mp3"}]}}`,
+		`{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"NO_REPLY"}]}}`,
+	}, "\n")
+
+	if got := extractChatTextFromSessionJSONL(raw); got != "remote openclaw ok" {
+		t.Fatalf("extractChatTextFromSessionJSONL()=%q want %q", got, "remote openclaw ok")
+	}
+}
+
+func TestRemoteChatViaOpenClawFallsBackToSessionTranscript(t *testing.T) {
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "openclaw agent --local --agent 'main'"):
+			return remoteExecResult{
+				ExitCode: 0,
+				Stdout: `{"meta":{"sessionId":"sess-fallback","agentMeta":{"sessionId":"sess-fallback"}},"payloads":[]}`,
+			}
+		case strings.Contains(command, `cat "$f"; exit 0; done; exit 44`):
+			return remoteExecResult{
+				ExitCode: 0,
+				Stdout: strings.Join([]string{
+					`{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"tts","arguments":{"text":"remote openclaw ok"}}]}}`,
+					`{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"NO_REPLY"}]}}`,
+				}, "\n"),
+			}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	// Use a host value that satisfies validation, the SSH runner is mocked above.
+	host := RemoteHost{
+		ID:       "h1",
+		Name:     "demo",
+		Host:     "127.0.0.1",
+		Port:     22,
+		User:     "carrier",
+		AuthMode: RemoteAuthModePrivateKey,
+		KeyPath:  "~/.ssh/id_ed25519",
+	}
+	payload, steps, err := remoteChatViaOpenClaw(context.Background(), host, "main", "say exactly remote openclaw ok", "")
+	if err != nil {
+		t.Fatalf("remoteChatViaOpenClaw() error: %v", err)
+	}
+	if got := strings.TrimSpace(anyToString(payload["sessionId"])); got != "sess-fallback" {
+		t.Fatalf("sessionId=%q want sess-fallback payload=%v", got, payload)
+	}
+	if got := strings.TrimSpace(anyToString(payload["message"])); got != "remote openclaw ok" {
+		t.Fatalf("message=%q want remote openclaw ok payload=%v", got, payload)
+	}
+	if len(steps) != 2 {
+		t.Fatalf("expected 2 steps (chat + transcript read), got %d", len(steps))
+	}
+}
+
 func TestParseRemoteHostPlatform(t *testing.T) {
 	t.Parallel()
 
@@ -266,11 +374,14 @@ func TestRemoteWriteOpenClawCarrierSecretsUsesRsyncPayload(t *testing.T) {
 }
 
 func TestBuildRemoteProviderProfilePatchWritesCompleteOpenClawProviderConfig(t *testing.T) {
-	patch := buildRemoteProviderProfilePatch(ProviderProfile{
+	patch, err := buildRemoteProviderProfilePatch(ProviderProfile{
 		Provider: "openrouter",
 		Model:    "openai/gpt-4o-mini",
 		AuthRef:  "sk-openrouter-live",
 	}, "assistant")
+	if err != nil {
+		t.Fatalf("buildRemoteProviderProfilePatch error: %v", err)
+	}
 
 	agents, ok := patch["agents"].(map[string]interface{})
 	if !ok {
@@ -361,6 +472,72 @@ func TestBuildRemoteProviderProfilePatchWritesCompleteOpenClawProviderConfig(t *
 	rawOpenRouter, ok := rawProviders["openrouter"].(map[string]interface{})
 	if !ok || strings.TrimSpace(anyToString(rawOpenRouter["apiKey"])) != "sk-openrouter-live" {
 		t.Fatalf("unexpected openrouter secret patch: %#v", rawProviders["openrouter"])
+	}
+}
+
+func TestBuildRemoteProviderProfilePatchResolvesEnvAuthRef(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "sk-openrouter-from-env")
+
+	patch, err := buildRemoteProviderProfilePatch(ProviderProfile{
+		Provider: "openrouter",
+		Model:    "openai/gpt-4o-mini",
+		AuthRef:  "env:OPENROUTER_API_KEY",
+	}, "main")
+	if err != nil {
+		t.Fatalf("buildRemoteProviderProfilePatch error: %v", err)
+	}
+
+	secretsPatch, ok := patch[openclawcfg.CarrierSecretFilePatchKey].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected carrier secret file patch, got %#v", patch[openclawcfg.CarrierSecretFilePatchKey])
+	}
+	rawProviders, ok := secretsPatch["providers"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected secret providers patch, got %#v", secretsPatch["providers"])
+	}
+	rawOpenRouter, ok := rawProviders["openrouter"].(map[string]interface{})
+	if !ok || strings.TrimSpace(anyToString(rawOpenRouter["apiKey"])) != "sk-openrouter-from-env" {
+		t.Fatalf("unexpected openrouter secret patch: %#v", rawProviders["openrouter"])
+	}
+}
+
+func TestBuildRemoteProviderProfilePatchResolvesSavedProviderCredential(t *testing.T) {
+	t.Setenv("CARRIER_DISABLE_KEYCHAIN", "1")
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(t.TempDir(), "credentials.json"))
+	if _, err := saveProviderCredential("openrouter", "sk-openrouter-saved"); err != nil {
+		t.Fatalf("saveProviderCredential error: %v", err)
+	}
+
+	patch, err := buildRemoteProviderProfilePatch(ProviderProfile{
+		Provider: "openrouter",
+		Model:    "openai/gpt-4o-mini",
+		AuthRef:  "provider:openrouter",
+	}, "main")
+	if err != nil {
+		t.Fatalf("buildRemoteProviderProfilePatch error: %v", err)
+	}
+
+	secretsPatch, ok := patch[openclawcfg.CarrierSecretFilePatchKey].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected carrier secret file patch, got %#v", patch[openclawcfg.CarrierSecretFilePatchKey])
+	}
+	rawProviders, ok := secretsPatch["providers"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected secret providers patch, got %#v", secretsPatch["providers"])
+	}
+	rawOpenRouter, ok := rawProviders["openrouter"].(map[string]interface{})
+	if !ok || strings.TrimSpace(anyToString(rawOpenRouter["apiKey"])) != "sk-openrouter-saved" {
+		t.Fatalf("unexpected openrouter secret patch: %#v", rawProviders["openrouter"])
+	}
+}
+
+func TestBuildRemoteProviderProfilePatchErrorsWhenAuthRefEnvMissing(t *testing.T) {
+	if _, err := buildRemoteProviderProfilePatch(ProviderProfile{
+		Provider: "openrouter",
+		Model:    "openai/gpt-4o-mini",
+		AuthRef:  "env:OPENROUTER_API_KEY",
+	}, "main"); err == nil || !strings.Contains(err.Error(), "OPENROUTER_API_KEY") {
+		t.Fatalf("expected missing env authRef error, got %v", err)
 	}
 }
 

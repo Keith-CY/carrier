@@ -1,6 +1,29 @@
+import { normalizeProviderAuthMode, shouldShowProviderCredentialInput } from '../model';
 import type { OnboardingData } from '../useOnboardingData';
 
 export function ProviderStep({ data }: { data: OnboardingData }) {
+  const providerAuthMode = normalizeProviderAuthMode(data.selectedProvider?.auth_mode);
+  const showProviderCredentialInput = shouldShowProviderCredentialInput(data.selectedProvider, data.addMode);
+  const providerCredentialLabel = data.selectedProvider?.auth_mode === 'api_key'
+    ? data.selectedProviderReusable
+      ? `Carrier already has a reusable credential for ${data.selectedProvider?.name}. Paste a new API key only if you want to override it.`
+      : `Paste API key for ${data.selectedProvider?.name} (${data.selectedProvider?.env_var || ''}):`
+    : data.selectedProvider
+      ? data.addMode
+        ? data.selectedProviderReusable
+          ? `${data.selectedProvider.name} can reuse an existing Carrier credential. Paste a fresh access token only if you want to override it.`
+          : `Paste access token for ${data.selectedProvider.name}${data.selectedProvider?.env_var ? ` (${data.selectedProvider.env_var})` : ''}:`
+        : data.selectedProvider.reusable
+          ? `${data.selectedProvider.name} can reuse an existing Carrier credential.`
+          : `${data.selectedProvider.name} requires external authentication.`
+      : '';
+  const providerInputPlaceholder = providerAuthMode === 'api_key' ? 'Paste API key here…' : 'Paste access token here…';
+  const providerInstructions = data.selectedProvider && providerAuthMode !== 'api_key'
+    ? (data.addMode
+      ? 'Carrier can install this agent with a pasted access token right now, or reuse an existing saved credential.'
+      : `Run: openclaw models auth login --provider ${data.selectedProvider.id}`)
+    : '';
+
   return (
     <section id="view-provider" className="view">
       <div className="steps-indicator" id="steps-indicator-p"></div>
@@ -51,29 +74,19 @@ export function ProviderStep({ data }: { data: OnboardingData }) {
         </div>
         <div id="provider-auth-section" className={`provider-auth-section${data.selectedProvider ? '' : ' hidden'}`} style={{ marginTop: '1rem' }}>
           <div id="provider-auth-label" className="text-dim">
-            {data.selectedProvider?.auth_mode === 'api_key'
-              ? data.selectedProviderReusable
-                ? `Carrier already has a reusable credential for ${data.selectedProvider?.name}. Paste a new API key only if you want to override it.`
-                : `Paste API key for ${data.selectedProvider?.name} (${data.selectedProvider?.env_var || ''}):`
-              : data.selectedProvider
-                ? data.selectedProvider.reusable
-                  ? `${data.selectedProvider.name} can reuse an existing Carrier credential.`
-                  : `${data.selectedProvider.name} requires external authentication.`
-                : ''}
+            {providerCredentialLabel}
           </div>
           <input
             type="password"
             id="provider-api-key"
-            placeholder="Paste API key here…"
-            className={data.selectedProvider?.auth_mode === 'api_key' ? '' : 'hidden'}
+            placeholder={providerInputPlaceholder}
+            className={showProviderCredentialInput ? '' : 'hidden'}
             style={{ marginTop: '0.5rem' }}
             value={data.providerApiKey}
             onChange={(event) => data.setProviderApiKey(event.target.value)}
           />
-          <div id="provider-auth-instructions" className={`text-dim${data.selectedProvider && data.selectedProvider.auth_mode !== 'api_key' ? '' : ' hidden'}`} style={{ marginTop: '0.5rem' }}>
-            {data.selectedProvider && data.selectedProvider.auth_mode !== 'api_key'
-              ? (data.addMode ? 'Paste access token below if you are not reusing Carrier credential.' : `Run: openclaw models auth login --provider ${data.selectedProvider.id}`)
-              : ''}
+          <div id="provider-auth-instructions" className={`text-dim${providerInstructions ? '' : ' hidden'}`} style={{ marginTop: '0.5rem' }}>
+            {providerInstructions}
           </div>
         </div>
         <div className="btn-row" style={{ marginTop: '1rem' }}>

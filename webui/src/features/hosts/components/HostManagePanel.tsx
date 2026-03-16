@@ -33,6 +33,7 @@ export function HostManagePanel({ data }: { data: HostsData }) {
     instancesText,
     instanceStatusText,
     logsText,
+    streamStatusText,
     configText,
     setConfigText,
     sessionsText,
@@ -155,7 +156,7 @@ export function HostManagePanel({ data }: { data: HostsData }) {
       <div id="server-manage-instance-status-out" className="manage-output" style={{ marginTop: '8px', minHeight: '72px', whiteSpace: 'pre-line' }}>{instanceStatusText}</div>
       {heartbeatSummary ? <p id="server-manage-heartbeat-summary" className="text-dim">{heartbeatSummary}</p> : null}
       <div id="server-manage-logs" className="manage-output" style={{ marginTop: '8px', minHeight: '72px', whiteSpace: 'pre-line' }}>{logsText}</div>
-      <p id="server-manage-stream-status" className="text-dim" />
+      <p id="server-manage-stream-status" className="text-dim">{streamStatusText}</p>
       <div id="server-manage-diagnosis" className="manage-output" style={{ marginTop: '8px' }} />
 
       <div className="card" style={{ marginTop: '10px' }}>

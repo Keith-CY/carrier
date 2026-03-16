@@ -1428,7 +1428,7 @@ export async function loginWithToken(page: Page, url = '/', waitUntil: 'load' | 
     localStorage.setItem('carrier_token', token);
   }, TEST_TOKEN);
   const targetPath = normalizeTestRoute(url);
-  await page.goto('/index.html', { waitUntil });
+  await page.goto('/', { waitUntil });
   await page.locator('#header').waitFor({ state: 'visible' });
   await page.waitForFunction(() => {
     const overlay = document.querySelector('#login-overlay');

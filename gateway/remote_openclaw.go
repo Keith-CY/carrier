@@ -1840,6 +1840,52 @@ func remoteDeleteSession(ctx context.Context, host RemoteHost, agentID, sessionI
 	return steps, nil
 }
 
+func extractRemoteChatSessionID(payload map[string]interface{}) string {
+	if payload == nil {
+		return ""
+	}
+	if sessionID := strings.TrimSpace(anyToString(payload["sessionId"])); sessionID != "" {
+		return sessionID
+	}
+	if meta, ok := payload["meta"].(map[string]interface{}); ok {
+		if sessionID := strings.TrimSpace(anyToString(meta["sessionId"])); sessionID != "" {
+			return sessionID
+		}
+		if agentMeta, ok := meta["agentMeta"].(map[string]interface{}); ok {
+			if sessionID := strings.TrimSpace(anyToString(agentMeta["sessionId"])); sessionID != "" {
+				return sessionID
+			}
+		}
+	}
+	return ""
+}
+
+func remoteReadSessionFallbackText(ctx context.Context, host RemoteHost, agentID, sessionID string) (string, remoteExecResult, error) {
+	if err := validateAgentIdentifier(agentID); err != nil {
+		return "", remoteExecResult{}, err
+	}
+	trimmedSessionID, err := validateRemoteSessionIdentifier(sessionID)
+	if err != nil {
+		return "", remoteExecResult{}, err
+	}
+	cmd := fmt.Sprintf(
+		"set -e; sid=%s; base=\"$HOME/.openclaw/agents/%s\"; for f in \"$base/sessions/$sid.jsonl\" \"$base/sessions_archive/$sid.jsonl\"; do [ -f \"$f\" ] || continue; cat \"$f\"; exit 0; done; exit 44",
+		shellSingleQuote(trimmedSessionID),
+		agentID,
+	)
+	res, runErr := runRemoteCommand(ctx, host, cmd)
+	if runErr != nil {
+		return "", res, runErr
+	}
+	if res.ExitCode == 44 {
+		return "", res, nil
+	}
+	if res.ExitCode != 0 {
+		return "", res, remoteCommandError(res, "read remote session transcript")
+	}
+	return extractChatTextFromSessionJSONL(res.Stdout), res, nil
+}
+
 func remoteListMemory(ctx context.Context, host RemoteHost, agentID string) ([]RemoteMemoryEntry, []remoteExecResult, error) {
 	if err := validateAgentIdentifier(agentID); err != nil {
 		return nil, nil, err
@@ -1928,6 +1974,20 @@ func remoteChatViaOpenClaw(ctx context.Context, host RemoteHost, agentID, messag
 			"syncedAt":       nowTimestamp(),
 		}
 	}
+	if sessionID := extractRemoteChatSessionID(out); sessionID != "" {
+		out["sessionId"] = sessionID
+		if extractChatResponseText(out) == "" {
+			if fallbackText, readRes, fallbackErr := remoteReadSessionFallbackText(ctx, host, agentID, sessionID); fallbackErr == nil {
+				steps = append(steps, readRes)
+				if fallbackText != "" {
+					out["message"] = fallbackText
+				}
+			}
+		}
+	}
+	if extractChatResponseText(out) == "" {
+		out["message"] = "Remote agent completed without a plain-text reply."
+	}
 	return out, steps, nil
 }
 
@@ -1941,7 +2001,7 @@ func remoteRunViaOpenClaw(ctx context.Context, host RemoteHost, hostID, agentID,
 	return &remoteRunResult{
 		HostID:     strings.TrimSpace(hostID),
 		AgentID:    strings.TrimSpace(agentID),
-		SessionID:  strings.TrimSpace(anyToString(payload["sessionId"])),
+		SessionID:  extractRemoteChatSessionID(payload),
 		Output:     extractChatResponseText(payload),
 		LatencyMs:  time.Since(startedAt).Milliseconds(),
 		Memory:     memoryStatus,
@@ -1976,11 +2036,49 @@ func parseRemoteMemoryStatus(payload map[string]interface{}) RemoteMemoryContrac
 }
 
 func applyProviderProfileToRemote(ctx context.Context, host RemoteHost, profile ProviderProfile, agentID string) (map[string]interface{}, string, []remoteExecResult, error) {
-	patch := buildRemoteProviderProfilePatch(profile, agentID)
+	patch, err := buildRemoteProviderProfilePatch(profile, agentID)
+	if err != nil {
+		return nil, "", nil, err
+	}
 	return remotePatchConfig(ctx, host, patch)
 }
 
-func buildRemoteProviderProfilePatch(profile ProviderProfile, agentID string) map[string]interface{} {
+func resolveRemoteProviderAuthValue(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+	lower := strings.ToLower(trimmed)
+	switch {
+	case strings.HasPrefix(lower, "env:"):
+		envKey := strings.TrimSpace(trimmed[len("env:"):])
+		if envKey == "" {
+			return "", fmt.Errorf("authRef env variable name is required")
+		}
+		value := strings.TrimSpace(os.Getenv(envKey))
+		if value == "" {
+			return "", fmt.Errorf("authRef env %s is not set", envKey)
+		}
+		return value, nil
+	case strings.HasPrefix(lower, "provider:"), strings.HasPrefix(lower, "credential:"):
+		providerID := strings.TrimSpace(trimmed[strings.Index(trimmed, ":")+1:])
+		if providerID == "" {
+			return "", fmt.Errorf("authRef provider id is required")
+		}
+		value, _, ok, err := loadProviderCredential(providerID)
+		if err != nil {
+			return "", fmt.Errorf("load saved credential for provider %s: %w", providerID, err)
+		}
+		if !ok || strings.TrimSpace(value) == "" {
+			return "", fmt.Errorf("saved credential for provider %s is not available", providerID)
+		}
+		return strings.TrimSpace(value), nil
+	default:
+		return trimmed, nil
+	}
+}
+
+func buildRemoteProviderProfilePatch(profile ProviderProfile, agentID string) (map[string]interface{}, error) {
 	providerKey := mapCarrierProviderToManagedProvider(profile.Provider)
 	patch := map[string]interface{}{}
 	model := strings.TrimSpace(profile.Model)
@@ -1992,10 +2090,14 @@ func buildRemoteProviderProfilePatch(profile ProviderProfile, agentID string) ma
 		}
 	}
 	if providerKey == "" {
-		return patch
+		return patch, nil
 	}
 
-	includeAPIKeyRef := strings.TrimSpace(profile.AuthRef) != ""
+	resolvedAuthValue, err := resolveRemoteProviderAuthValue(profile.AuthRef)
+	if err != nil {
+		return nil, err
+	}
+	includeAPIKeyRef := resolvedAuthValue != ""
 	providerEntry := openclawcfg.BuildProviderEntry(
 		strings.TrimSpace(profile.Provider),
 		providerKey,
@@ -2005,7 +2107,7 @@ func buildRemoteProviderProfilePatch(profile ProviderProfile, agentID string) ma
 	)
 	setNestedMapValue(patch, []string{"models", "providers", providerKey}, providerEntry)
 	if !includeAPIKeyRef {
-		return patch
+		return patch, nil
 	}
 
 	setNestedMapValue(patch, []string{"secrets", "providers", openclawcfg.CarrierFileSecretProviderAlias}, map[string]interface{}{
@@ -2017,11 +2119,11 @@ func buildRemoteProviderProfilePatch(profile ProviderProfile, agentID string) ma
 	patch[openclawcfg.CarrierSecretFilePatchKey] = map[string]interface{}{
 		"providers": map[string]interface{}{
 			providerKey: map[string]interface{}{
-				"apiKey": strings.TrimSpace(profile.AuthRef),
+				"apiKey": resolvedAuthValue,
 			},
 		},
 	}
-	return patch
+	return patch, nil
 }
 
 func setNestedMapValue(root map[string]interface{}, path []string, value interface{}) {
@@ -2049,35 +2151,27 @@ func extractJSONObjectOrArray(input string) string {
 	if json.Valid([]byte(trimmed)) {
 		return trimmed
 	}
-	firstObject := strings.Index(trimmed, "{")
-	firstArray := strings.Index(trimmed, "[")
-	start := -1
-	if firstObject >= 0 && firstArray >= 0 {
-		if firstObject < firstArray {
-			start = firstObject
-		} else {
-			start = firstArray
+	for start, char := range trimmed {
+		if char != '{' && char != '[' {
+			continue
 		}
-	} else if firstObject >= 0 {
-		start = firstObject
-	} else if firstArray >= 0 {
-		start = firstArray
-	}
-	if start < 0 {
-		return ""
-	}
-	candidate := strings.TrimSpace(trimmed[start:])
-	if json.Valid([]byte(candidate)) {
-		return candidate
-	}
-	lastObject := strings.LastIndex(candidate, "}")
-	lastArray := strings.LastIndex(candidate, "]")
-	end := lastObject
-	if lastArray > end {
-		end = lastArray
-	}
-	if end >= 0 {
-		maybe := strings.TrimSpace(candidate[:end+1])
+		candidate := strings.TrimSpace(trimmed[start:])
+		if candidate == "" {
+			continue
+		}
+		if json.Valid([]byte(candidate)) {
+			return candidate
+		}
+		decoder := json.NewDecoder(strings.NewReader(candidate))
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			continue
+		}
+		end := int(decoder.InputOffset())
+		if end <= 0 || end > len(candidate) {
+			continue
+		}
+		maybe := strings.TrimSpace(candidate[:end])
 		if json.Valid([]byte(maybe)) {
 			return maybe
 		}
@@ -2165,4 +2259,101 @@ func extractChatTextFromAny(value interface{}) string {
 		}
 	}
 	return ""
+}
+
+func extractChatTextFromSessionJSONL(raw string) string {
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	for idx := len(lines) - 1; idx >= 0; idx-- {
+		line := strings.TrimSpace(lines[idx])
+		if line == "" {
+			continue
+		}
+		var entry map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if text := extractChatTextFromSessionEntry(entry); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func extractChatTextFromSessionEntry(entry map[string]interface{}) string {
+	message, _ := entry["message"].(map[string]interface{})
+	if len(message) == 0 {
+		return ""
+	}
+	if text := extractChatTextFromSessionContent(message["content"]); text != "" {
+		return text
+	}
+	if arguments := message["arguments"]; arguments != nil {
+		if text := extractChatTextFromToolArguments(arguments); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func extractChatTextFromSessionContent(value interface{}) string {
+	switch typed := value.(type) {
+	case []interface{}:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := extractChatTextFromSessionContent(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	case map[string]interface{}:
+		itemType := strings.ToLower(strings.TrimSpace(anyToString(typed["type"])))
+		switch itemType {
+		case "text":
+			return sanitizeSessionTranscriptText(anyToString(typed["text"]))
+		case "toolcall":
+			name := strings.ToLower(strings.TrimSpace(anyToString(typed["name"])))
+			if name == "tts" {
+				if text := extractChatTextFromToolArguments(typed["arguments"]); text != "" {
+					return text
+				}
+			}
+		}
+		if text := sanitizeSessionTranscriptText(anyToString(typed["text"])); text != "" {
+			return text
+		}
+		if text := extractChatTextFromToolArguments(typed["arguments"]); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func extractChatTextFromToolArguments(value interface{}) string {
+	args, ok := value.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	for _, key := range []string{"text", "message", "content", "output_text", "prompt"} {
+		if text := sanitizeSessionTranscriptText(anyToString(args[key])); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func sanitizeSessionTranscriptText(raw string) string {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return ""
+	}
+	if strings.EqualFold(text, "NO_REPLY") {
+		return ""
+	}
+	if strings.HasPrefix(text, "[[audio_as_voice]]") {
+		return ""
+	}
+	if strings.HasPrefix(text, "MEDIA:") {
+		return ""
+	}
+	return text
 }

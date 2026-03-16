@@ -309,7 +309,6 @@ test.describe('Remote Control Plane Views', () => {
     let lastConfigPatchBody: Record<string, unknown> | null = null;
     let archiveCalls = 0;
     let deleteCalls = 0;
-    let installCalls = 0;
     let repairCalls = 0;
     let statusCalls = 0;
     let logsCalls = 0;
@@ -401,24 +400,6 @@ test.describe('Remote Control Plane Views', () => {
             health: 'healthy',
           },
           steps: [{ command: 'openclaw status', exitCode: 0 }],
-        }),
-      });
-    });
-
-    await page.route('**/api/v1/remote/hosts/*/instances/*/install*', async (route) => {
-      installCalls += 1;
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          requestId: 'req-install-1',
-          result: 'ok',
-          install: {
-            hostId: 'host-1',
-            agentId: 'main',
-            installed: true,
-          },
         }),
       });
     });
@@ -688,12 +669,6 @@ test.describe('Remote Control Plane Views', () => {
     await domClick(page, '#server-manage-instance-status');
     await expect.poll(() => statusCalls).toBe(1);
     await expect(page.locator('#server-manage-instance-status-out')).toContainText('runtime: running');
-
-    const installBtn = page.locator('#server-manage-install-instance');
-    await domClick(page, '#server-manage-install-instance');
-    await expect(page.locator('#server-manage-msg')).toContainText('Install completed');
-    await expect(installBtn).toBeEnabled();
-    await expect(page.locator('#server-manage-instance-status-out')).toContainText('Install');
 
     await domClick(page, '#server-manage-repair-instance');
     await expect.poll(() => repairCalls).toBe(1);
@@ -1095,5 +1070,54 @@ test.describe('Remote Control Plane Views', () => {
     await expect(page.locator('#remote-chat-messages')).toContainText('local-instance-reply');
     expect(lastChatBody).toBeTruthy();
     expect(lastChatBody?.target).toBe('local');
+  });
+
+  test('hosts page keeps main content visible below the header chrome', async ({ page }) => {
+    await mockAPIs(page);
+    await page.route('**/api/v1/remote/hosts', async (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          result: 'ok',
+          hosts: [
+            {
+              id: 'host-1',
+              name: 'ubuntu-demo',
+              host: '127.0.0.1',
+              port: 22240,
+              user: 'carrier',
+              authMode: 'private_key',
+              runtimeMode: 'on_demand',
+              labels: ['demo'],
+              lastHealth: 'unknown',
+            },
+          ],
+        }),
+      }),
+    );
+    await page.route('**/api/v1/remote/ssh-config-hosts', async (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ result: 'ok', hosts: [] }),
+      }),
+    );
+
+    await loginWithToken(page, '/#/hosts');
+
+    const headerBox = await page.locator('#header').boundingBox();
+    const pageHeadBox = await page.locator('#view-servers > .section-head').boundingBox();
+    const hostCardBox = await page.locator('#servers-list .agent-card').first().boundingBox();
+
+    expect(headerBox).toBeTruthy();
+    expect(pageHeadBox).toBeTruthy();
+    expect(hostCardBox).toBeTruthy();
+    const headerRight = headerBox!.x + headerBox!.width;
+
+    expect(pageHeadBox!.y).toBeGreaterThanOrEqual(0);
+    expect(hostCardBox!.y).toBeGreaterThan(pageHeadBox!.y);
+    expect(pageHeadBox!.x).toBeGreaterThanOrEqual(headerRight - 1);
+    expect(hostCardBox!.x).toBeGreaterThanOrEqual(headerRight - 1);
   });
 });

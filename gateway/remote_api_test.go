@@ -606,6 +606,53 @@ func TestRemoteChatStreamSSE(t *testing.T) {
 	}
 }
 
+func TestRemoteChatStreamSSEFallsBackToSessionTranscript(t *testing.T) {
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "command -v openclaw"):
+			return remoteExecResult{ExitCode: 0}
+		case strings.Contains(command, "openclaw agent --local"):
+			return remoteExecResult{
+				ExitCode: 0,
+				Stdout:   `{"meta":{"sessionId":"sess-fallback","agentMeta":{"sessionId":"sess-fallback"}},"payloads":[]}`,
+			}
+		case strings.Contains(command, `cat "$f"; exit 0; done; exit 44`):
+			return remoteExecResult{
+				ExitCode: 0,
+				Stdout: strings.Join([]string{
+					`{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"tts","arguments":{"text":"remote openclaw ok"}}]}}`,
+					`{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"NO_REPLY"}]}}`,
+				}, "\n"),
+			}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/chat/stream", `{
+		"target":"remote",
+		"hostId":"`+hostID+`",
+		"agentId":"main",
+		"message":"say exactly remote openclaw ok"
+	}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unified remote chat status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `remote openclaw ok`) {
+		t.Fatalf("expected transcript fallback text in stream body: %s", body)
+	}
+	if !strings.Contains(body, `"type":"session"`) || !strings.Contains(body, `sess-fallback`) {
+		t.Fatalf("expected normalized session id in stream body: %s", body)
+	}
+	if strings.Contains(body, `"payloads":[]`) {
+		t.Fatalf("expected stream body to avoid raw payload fallback: %s", body)
+	}
+}
+
 func TestRemoteInstanceRunInjectsMemoryContract(t *testing.T) {
 	seenMemoryEnv := false
 	configureSSHRunner(t, func(command string) remoteExecResult {

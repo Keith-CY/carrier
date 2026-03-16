@@ -371,6 +371,36 @@ func TestSetup_LegacyAlias(t *testing.T) {
 	}
 }
 
+func TestSetup_BrowserRouteServesWebUI(t *testing.T) {
+	SetWebUIHandlerFactory(func() http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = io.WriteString(w, "<!doctype html><title>carrier-webui</title>")
+		})
+	})
+	t.Cleanup(func() {
+		SetWebUIHandlerFactory(nil)
+	})
+
+	mux, srv, _ := buildTestMux(t, nil)
+	defer srv.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/setup", nil)
+	req.Header.Set("Accept", "text/html")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Content-Type"); !strings.Contains(got, "text/html") {
+		t.Fatalf("expected text/html response, got %q", got)
+	}
+	if !strings.Contains(w.Body.String(), "carrier-webui") {
+		t.Fatalf("expected WebUI body, got %s", w.Body.String())
+	}
+}
+
 func TestTelegramTransportStatusEndpoint(t *testing.T) {
 	mux, srv, _ := buildTestMux(t, nil)
 	defer srv.Close()

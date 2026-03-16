@@ -546,6 +546,11 @@ func buildGatewayMux(cfg *GatewayConfig, daemon *DaemonClient, sessions *Session
 	})
 	// Legacy alias
 	mux.HandleFunc("/setup", func(w http.ResponseWriter, r *http.Request) {
+		accept := r.Header.Get("Accept")
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && strings.Contains(strings.ToLower(accept), "text/html") {
+			webUIHandler().ServeHTTP(w, r)
+			return
+		}
 		r.URL.Path = "/api/v1/setup"
 		mux.ServeHTTP(w, r)
 	})
