@@ -17,6 +17,7 @@ export function useHostManageState(hosts: HostRecord[]) {
   const [instancesText, setInstancesText] = useState('');
   const [instanceStatusText, setInstanceStatusText] = useState('');
   const [logsText, setLogsText] = useState('');
+  const [streamStatusText, setStreamStatusText] = useState('');
   const [configText, setConfigText] = useState('');
   const [sessionsText, setSessionsText] = useState('');
   const [memoryText, setMemoryText] = useState('');
@@ -39,6 +40,7 @@ export function useHostManageState(hosts: HostRecord[]) {
     setInstancesText('');
     setInstanceStatusText('');
     setLogsText('');
+    setStreamStatusText('');
     setConfigText('');
     setSessionsText('');
     setMemoryText('');
@@ -66,6 +68,8 @@ export function useHostManageState(hosts: HostRecord[]) {
     setInstanceStatusText,
     logsText,
     setLogsText,
+    streamStatusText,
+    setStreamStatusText,
     configText,
     setConfigText,
     sessionsText,
@@ -75,4 +79,3 @@ export function useHostManageState(hosts: HostRecord[]) {
     showManageHost,
   };
 }
-

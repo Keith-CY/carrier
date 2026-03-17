@@ -16,6 +16,7 @@ export type HostManageOperationContext = {
   setInstancesText: (text: string) => void;
   setInstanceStatusText: (text: string) => void;
   setLogsText: (text: string) => void;
+  setStreamStatusText: (text: string) => void;
   setConfigText: (text: string) => void;
   setSessionsText: (text: string) => void;
   setMemoryText: (text: string) => void;

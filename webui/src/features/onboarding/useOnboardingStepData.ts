@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { apiGet, type ChannelStatus, type ChannelStatusPayload } from '../../lib/api';
-import type { Step } from './model';
+import { shouldRequireChannelPairing, type Step } from './model';
 import type { WizardProvider } from './state';
 import { useOnboardingAgentsData } from './useOnboardingAgentsData';
 import { useOnboardingProviderData } from './useOnboardingProviderData';
@@ -9,6 +9,7 @@ import { useOnboardingWelcomeData } from './useOnboardingWelcomeData';
 export function useOnboardingStepData(args: {
   step: Step;
   addMode: boolean;
+  addTargetAgent: string;
   channel: string;
   setChannel: (value: string | ((current: string) => string)) => void;
   channelChatId: string;
@@ -29,6 +30,7 @@ export function useOnboardingStepData(args: {
     () => channelOptions.find((candidate) => String(candidate.id || '').trim().toLowerCase() === String(args.channel || '').trim().toLowerCase()) || null,
     [args.channel, channelOptions],
   );
+  const channelRequiresPairing = shouldRequireChannelPairing(args.addTargetAgent, !!selectedChannelStatus?.supportsPairing);
 
   useEffect(() => {
     if (args.step !== 'setup') return;
@@ -59,7 +61,7 @@ export function useOnboardingStepData(args: {
   }, [args.setChannel, args.setSetupMsg, args.step]);
 
   useEffect(() => {
-    if (args.step !== 'setup' || !args.addMode || !selectedChannelStatus?.supportsPairing || !String(args.channel).trim()) return;
+    if (args.step !== 'setup' || !args.addMode || !channelRequiresPairing || !String(args.channel).trim()) return;
     void apiGet<any>(`/api/v1/pairing/sessions?provider=${encodeURIComponent(args.channel)}`)
       .then((payload) => {
         const sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
@@ -71,7 +73,7 @@ export function useOnboardingStepData(args: {
         }
       })
       .catch(() => {});
-  }, [args.addMode, args.channel, args.channelChatId, args.setChannelChatId, args.step, selectedChannelStatus?.supportsPairing]);
+  }, [args.addMode, args.channel, args.channelChatId, args.setChannelChatId, args.step, channelRequiresPairing, selectedChannelStatus?.displayName]);
 
   return {
     ...welcomeData,

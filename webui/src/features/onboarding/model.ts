@@ -36,3 +36,36 @@ export function collectEnvVars(rows: Array<{ key: string; value: string }>) {
     return acc;
   }, {});
 }
+
+export function normalizeProviderAuthMode(authMode?: string): string {
+  const normalized = String(authMode || '').trim().toLowerCase();
+  return normalized || 'none';
+}
+
+export function agentRequiresChannelPairing(agentId: string): boolean {
+  return String(agentId || '').trim().toLowerCase() === 'picoclaw';
+}
+
+export function shouldRequireChannelPairing(agentId: string, supportsPairing: boolean): boolean {
+  return agentRequiresChannelPairing(agentId) && supportsPairing;
+}
+
+export function shouldShowProviderCredentialInput(provider: WizardProvider | null, addMode: boolean): boolean {
+  const authMode = normalizeProviderAuthMode(provider?.auth_mode);
+  if (authMode === 'api_key') return true;
+  return addMode && authMode !== 'none';
+}
+
+export function isProviderSelectionReady(args: {
+  provider: WizardProvider | null;
+  addMode: boolean;
+  providerApiKey: string;
+  reusable: boolean;
+}): boolean {
+  if (!args.provider) return false;
+  if (args.reusable) return true;
+  const authMode = normalizeProviderAuthMode(args.provider.auth_mode);
+  if (args.addMode) return authMode === 'none' || !!args.providerApiKey.trim();
+  if (authMode === 'api_key') return !!args.providerApiKey.trim();
+  return true;
+}

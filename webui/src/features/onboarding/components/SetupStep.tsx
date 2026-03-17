@@ -18,7 +18,7 @@ export function SetupStep({ data }: { data: OnboardingData }) {
         {data.selectedChannelStatus ? (
           <p id="setup-channel-summary" className="text-dim">
             {[
-              data.selectedChannelStatus.supportsPairing ? 'Requires Carrier pairing' : 'No pairing required',
+              data.channelRequiresPairing ? 'Requires Carrier pairing' : 'No pairing required',
               data.selectedChannelStatus.requiresWebhookSecret ? 'Webhook secret required' : 'Webhook secret optional',
               data.selectedChannelStatus.configured ? 'Already configured in gateway' : '',
             ].filter(Boolean).join(' · ')}

@@ -58,6 +58,10 @@ func TestExtractJSONObjectOrArrayAndAnyToStringRound95(t *testing.T) {
 	if got := extractJSONObjectOrArray("prefix {\"a\":1} trailing"); got != `{"a":1}` {
 		t.Fatalf("unexpected trimmed object extraction: %q", got)
 	}
+	prefixedJSON := "[secrets] agent: gateway secrets.resolve unavailable\n{\"payloads\":[{\"text\":\"remote openclaw ok\"}]}\n"
+	if got := extractJSONObjectOrArray(prefixedJSON); got != `{"payloads":[{"text":"remote openclaw ok"}]}` {
+		t.Fatalf("unexpected extraction for prefixed json payload: %q", got)
+	}
 	if got := extractJSONObjectOrArray("garbage"); got != "" {
 		t.Fatalf("expected empty extraction for garbage, got %q", got)
 	}

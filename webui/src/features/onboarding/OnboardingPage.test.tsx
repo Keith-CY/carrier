@@ -6,7 +6,7 @@ import { SessionProvider } from '../../app/session';
 import { OnboardingPage } from './OnboardingPage';
 import { resetWizardState } from './state';
 
-function renderOnboardingSetup() {
+function renderOnboardingSetup(addTargetAgent = 'picoclaw') {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -17,7 +17,7 @@ function renderOnboardingSetup() {
     <QueryClientProvider client={queryClient}>
       <SessionProvider>
         <MemoryRouter>
-          <OnboardingPage step="setup" addTargetAgent="picoclaw" />
+          <OnboardingPage step="setup" addTargetAgent={addTargetAgent} />
         </MemoryRouter>
       </SessionProvider>
     </QueryClientProvider>,
@@ -72,5 +72,20 @@ describe('OnboardingPage', () => {
 
     await waitFor(() => expect(continueButton.disabled).toBe(false));
     expect(screen.queryByText(/Paired chat id:/i)).not.toBeInTheDocument();
+  });
+
+  test('does not require Telegram pairing when adding openclaw', async () => {
+    renderOnboardingSetup('openclaw');
+
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Telegram' })).toBeInTheDocument());
+    expect(screen.getByText(/No pairing required/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Start Pairing/i)).not.toBeInTheDocument();
+
+    const continueButton = screen.getByRole('button', { name: 'Continue →' }) as HTMLButtonElement;
+    expect(continueButton.disabled).toBe(true);
+
+    fireEvent.change(screen.getByLabelText('Channel Bot Token'), { target: { value: 'telegram-openclaw-token' } });
+
+    await waitFor(() => expect(continueButton.disabled).toBe(false));
   });
 });

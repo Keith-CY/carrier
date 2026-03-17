@@ -10,6 +10,7 @@ describe('useHostManageState', () => {
     act(() => {
       result.current.setInstancesText('instances');
       result.current.setLogsText('logs');
+      result.current.setStreamStatusText('streaming');
       result.current.setConfigText('config');
       result.current.setSessionsText('sessions');
       result.current.setMemoryText('memory');
@@ -20,6 +21,7 @@ describe('useHostManageState', () => {
     expect(result.current.selectedHost?.id).toBe('host-1');
     expect(result.current.instancesText).toBe('');
     expect(result.current.logsText).toBe('');
+    expect(result.current.streamStatusText).toBe('');
     expect(result.current.configText).toBe('');
     expect(result.current.sessionsText).toBe('');
     expect(result.current.memoryText).toBe('');

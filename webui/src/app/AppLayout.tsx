@@ -74,26 +74,28 @@ export function AppLayout() {
         </div>
       </div>
 
-      <header id="header">
-        <div className="header-left">
-          <h1>Carrier</h1>
-          <nav id="nav" className={authenticated ? '' : 'hidden'}>
-            {renderNav(primaryNav, featureFlags)}
-            {renderNav(secondaryNav, featureFlags)}
-          </nav>
-        </div>
-        <div className="header-right">
-          <span id="health-badge" className={health.className}>{health.text}</span>
-          <button id="logout-btn" className={`btn-sm btn-secondary${authenticated ? '' : ' hidden'}`} type="button" onClick={() => logout()}>
-            Logout
-          </button>
-        </div>
-      </header>
+      <div id="app">
+        <header id="header">
+          <div className="header-left">
+            <h1>Carrier</h1>
+            <nav id="nav" className={authenticated ? '' : 'hidden'}>
+              {renderNav(primaryNav, featureFlags)}
+              {renderNav(secondaryNav, featureFlags)}
+            </nav>
+          </div>
+          <div className="header-right">
+            <span id="health-badge" className={health.className}>{health.text}</span>
+            <button id="logout-btn" className={`btn-sm btn-secondary${authenticated ? '' : ' hidden'}`} type="button" onClick={() => logout()}>
+              Logout
+            </button>
+          </div>
+        </header>
 
-      <RouteSync />
-      <main id="main">
-        <Outlet />
-      </main>
+        <RouteSync />
+        <main id="main">
+          <Outlet />
+        </main>
+      </div>
       {toasts.length ? (
         <div id="delegate-toast-root" className="delegate-toast-root">
           {toasts.map((toast) => (

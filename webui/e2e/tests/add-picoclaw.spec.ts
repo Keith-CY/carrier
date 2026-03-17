@@ -88,6 +88,24 @@ test.describe('Add PicoClaw (WebUI)', () => {
       }),
     );
 
+    await page.route('**/api/v1/auth/providers', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          providers: [
+            {
+              id: 'openai-codex',
+              configured: true,
+              reusable: true,
+              hasSavedCredential: true,
+              credentialBackend: 'local-file',
+            },
+          ],
+        }),
+      }),
+    );
+
     await page.route('**/api/v1/add', async (route) => {
       addRequestBody = route.request().postDataJSON();
       addRequestAuthHeader = (await route.request().headerValue('authorization')) || '';
@@ -127,9 +145,10 @@ test.describe('Add PicoClaw (WebUI)', () => {
     await expect(page.locator('#view-provider')).toBeVisible();
     await expect(page.locator('#provider-agent-name')).toContainText('Adding: picoclaw');
     await expect(page.locator('#provider-default-summary')).toContainText('Using Carrier default');
+    await expect(page.locator('#provider-use-default-continue')).toBeVisible();
     await expect(page.locator('#provider-next')).toBeEnabled();
 
-    await page.click('#provider-next');
+    await page.click('#provider-use-default-continue');
     await expect(page).toHaveURL(/\/install$/);
     await expect(page.locator('#view-install')).toBeVisible();
     await expect(page.locator('#install-summary')).toContainText('Agent: picoclaw');

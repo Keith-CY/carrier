@@ -33,6 +33,7 @@ export function useHostsData() {
     setInstancesText: manageState.setInstancesText,
     setInstanceStatusText: manageState.setInstanceStatusText,
     setLogsText: manageState.setLogsText,
+    setStreamStatusText: manageState.setStreamStatusText,
     setConfigText: manageState.setConfigText,
     setSessionsText: manageState.setSessionsText,
     setMemoryText: manageState.setMemoryText,

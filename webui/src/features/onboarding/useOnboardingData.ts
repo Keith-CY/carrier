@@ -5,6 +5,10 @@ import {
   type WizardProvider,
 } from './state';
 import { type Step } from './model';
+import {
+  isProviderSelectionReady,
+  shouldRequireChannelPairing,
+} from './model';
 import { useOnboardingActions } from './useOnboardingActions';
 import { useOnboardingStepData } from './useOnboardingStepData';
 import { useOnboardingWizardState } from './useOnboardingWizardState';
@@ -19,6 +23,7 @@ export function useOnboardingData({ step, addTargetAgent }: { step: Step; addTar
   const stepData = useOnboardingStepData({
     step,
     addMode: wizardState.baseState.addMode,
+    addTargetAgent: resolvedAddTargetAgent,
     channel: wizardState.channel,
     setChannel: wizardState.setChannel,
     channelChatId: wizardState.channelChatId,
@@ -42,16 +47,21 @@ export function useOnboardingData({ step, addTargetAgent }: { step: Step; addTar
     setInstallMsg,
     channelRequiresBotToken: stepData.selectedChannelStatus?.requiresBotToken ?? true,
     channelRequiresWebhookSecret: !!stepData.selectedChannelStatus?.requiresWebhookSecret,
-    channelRequiresPairing: wizardState.baseState.addMode && !!stepData.selectedChannelStatus?.supportsPairing,
+    channelRequiresPairing: shouldRequireChannelPairing(resolvedAddTargetAgent, !!stepData.selectedChannelStatus?.supportsPairing),
     selectedChannelDisplayName: stepData.selectedChannelStatus?.displayName || '',
   });
   const addMode = wizardState.baseState.addMode;
   const selectedProvider = wizardState.selectedProvider as WizardProvider | null;
   const selectedProviderReusable = !!selectedProvider?.reusable;
-  const providerNextEnabled = !!selectedProvider && (selectedProvider.auth_mode !== 'api_key' || !!wizardState.providerApiKey.trim() || selectedProviderReusable);
+  const providerNextEnabled = isProviderSelectionReady({
+    provider: selectedProvider,
+    addMode,
+    providerApiKey: wizardState.providerApiKey,
+    reusable: selectedProviderReusable,
+  });
   const channelRequiresBotToken = stepData.selectedChannelStatus?.requiresBotToken ?? true;
   const channelRequiresWebhookSecret = !!stepData.selectedChannelStatus?.requiresWebhookSecret;
-  const channelRequiresPairing = addMode && !!stepData.selectedChannelStatus?.supportsPairing;
+  const channelRequiresPairing = shouldRequireChannelPairing(resolvedAddTargetAgent, !!stepData.selectedChannelStatus?.supportsPairing);
 
   return {
     step,
