@@ -207,10 +207,16 @@ Additional remote operations:
 
 - `carrier remote status <host_id> <agent_id>`
 - `carrier remote logs <host_id> <agent_id> [--tail <n>]`
+- `carrier remote run <host_id> <agent_id> -m <message> [--session-id <id>] [--timeout-ms <ms>] [--json]`
 - `carrier remote rollback <host_id> <agent_id> [--commit <sha>]`
 - `carrier remote uninstall <host_id> <agent_id>`
 - `carrier remote key import --file <pem-path>`
 - `carrier remote key generate [--type <ed25519|rsa>] [--output <private-key-path>]`
+
+Notes:
+
+- For remote instance commands, `openclaw` is the user-facing alias for the remote `main` slot.
+- `zeroclaw` now supports provider-only sync for fresh deterministic installs, for example `--sync-provider anthropic`.
 
 Remote preflight notes:
 
@@ -454,7 +460,24 @@ carrier remote add zeroclaw \
   --host 203.0.113.10 \
   --port 22 \
   --user ubuntu \
-  --key-path ~/.ssh/id_ed25519
+  --key-path ~/.ssh/id_ed25519 \
+  --sync-provider anthropic
+```
+
+### Run a one-shot remote task
+
+```bash
+carrier remote run vps-1 openclaw \
+  -m "Reply with exactly REMOTE_OPENCLAW_OK." \
+  --session-id remote-openclaw-smoke \
+  --timeout-ms 120000 \
+  --json
+```
+
+### Repeatable Ubuntu 24.04 Docker flow
+
+```bash
+ANTHROPIC_API_KEY=... bash scripts/e2e-remote-cli-ubuntu.sh
 ```
 
 ### Skip reconnect verification (faster install path)

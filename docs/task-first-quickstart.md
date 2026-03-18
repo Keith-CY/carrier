@@ -162,7 +162,18 @@ carrier remote add zeroclaw \
   --host 203.0.113.10 \
   --port 22 \
   --user ubuntu \
-  --key-path ~/.ssh/id_ed25519
+  --key-path ~/.ssh/id_ed25519 \
+  --sync-provider anthropic
+```
+
+Run a one-shot task on the remote host:
+
+```bash
+carrier remote run vps-1 openclaw \
+  -m "Reply with exactly REMOTE_OPENCLAW_OK." \
+  --session-id remote-openclaw-smoke \
+  --timeout-ms 120000 \
+  --json
 ```
 
 Expected result:
@@ -182,6 +193,12 @@ scripts/remote-vps-agent-suite.sh \
 ```
 
 This runs deterministic validation for OpenClaw + PicoClaw + ZeroClaw + codeagent backends.
+
+For the CLI-only Ubuntu 24.04 Docker flow described above:
+
+```bash
+ANTHROPIC_API_KEY=... bash scripts/e2e-remote-cli-ubuntu.sh
+```
 
 ## Task 8: Common Failures
 

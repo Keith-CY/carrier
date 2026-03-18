@@ -14,6 +14,12 @@ import (
 	"time"
 )
 
+func isZeroClawSingleShotCommand(command string) bool {
+	return strings.Contains(command, "zeroclaw task run") ||
+		strings.Contains(command, "zeroclaw run ") ||
+		strings.Contains(command, "zeroclaw agent ")
+}
+
 func TestHandleOrchestratorPlans(t *testing.T) {
 	var gotDecomposeBody string
 	mux := buildRemoteFeatureMuxWithDaemonHandlers(t, map[string]http.HandlerFunc{
@@ -1693,12 +1699,43 @@ func TestRemoteRunPayloadAndZeroClawFallback(t *testing.T) {
 		t.Fatal("expected empty message to fail")
 	}
 
+	t.Run("session-id-retries-without-flag-and-preserves-session", func(t *testing.T) {
+		sawWithSession := false
+		sawWithoutSession := false
+		configureSSHRunner(t, func(command string) remoteExecResult {
+			switch {
+			case isZeroClawSingleShotCommand(command) && strings.Contains(command, "--session-id"):
+				sawWithSession = true
+				return remoteExecResult{ExitCode: 1, Stderr: "unknown flag: --session-id"}
+			case strings.Contains(command, `zeroclaw agent --config-dir "$HOME/.zeroclaw" --json --no-color -m`):
+				sawWithoutSession = true
+				return remoteExecResult{ExitCode: 0, Stdout: `{"message":"zc-ok"}`}
+			case isZeroClawSingleShotCommand(command):
+				return remoteExecResult{ExitCode: 1, Stderr: "other zeroclaw form failed"}
+			default:
+				return remoteExecResult{ExitCode: 0}
+			}
+		})
+
+		runResult, steps, err := remoteRunViaZeroClaw(context.Background(), host, "host-1", "zeroclaw", "hello", "sess-1")
+		if err != nil {
+			t.Fatalf("expected zeroclaw retry success, got error: %v", err)
+		}
+		if !sawWithSession || !sawWithoutSession {
+			t.Fatalf("expected both session and no-session zeroclaw attempts, sawWithSession=%v sawWithoutSession=%v steps=%d", sawWithSession, sawWithoutSession, len(steps))
+		}
+		if runResult == nil || strings.TrimSpace(runResult.Output) != "zc-ok" {
+			t.Fatalf("expected zc-ok output, got %+v", runResult)
+		}
+		if strings.TrimSpace(runResult.SessionID) != "sess-1" {
+			t.Fatalf("expected session id injection, got %+v", runResult)
+		}
+	})
+
 	t.Run("fallback-success", func(t *testing.T) {
 		configureSSHRunner(t, func(command string) remoteExecResult {
 			switch {
-			case strings.Contains(command, "zeroclaw task run"),
-				strings.Contains(command, "zeroclaw run --message"),
-				strings.Contains(command, "zeroclaw agent --message"):
+			case isZeroClawSingleShotCommand(command):
 				return remoteExecResult{ExitCode: 1, Stderr: "zeroclaw failed"}
 			case strings.Contains(command, "openclaw agent --local"):
 				return remoteExecResult{ExitCode: 0, Stdout: `{"sessionId":"sess-open","output_text":"openclaw-output"}`}
@@ -1722,9 +1759,7 @@ func TestRemoteRunPayloadAndZeroClawFallback(t *testing.T) {
 	t.Run("fallback-failed", func(t *testing.T) {
 		configureSSHRunner(t, func(command string) remoteExecResult {
 			switch {
-			case strings.Contains(command, "zeroclaw task run"),
-				strings.Contains(command, "zeroclaw run --message"),
-				strings.Contains(command, "zeroclaw agent --message"),
+			case isZeroClawSingleShotCommand(command),
 				strings.Contains(command, "openclaw agent --local"):
 				return remoteExecResult{ExitCode: 1, Stderr: "all failed"}
 			default:
@@ -1769,9 +1804,7 @@ func TestRunOrchestratorTaskAttemptHostAndExecutionErrors(t *testing.T) {
 	t.Run("run-error", func(t *testing.T) {
 		configureSSHRunner(t, func(command string) remoteExecResult {
 			switch {
-			case strings.Contains(command, "zeroclaw task run"),
-				strings.Contains(command, "zeroclaw run --message"),
-				strings.Contains(command, "zeroclaw agent --message"),
+			case isZeroClawSingleShotCommand(command),
 				strings.Contains(command, "openclaw agent --local"):
 				return remoteExecResult{ExitCode: 1, Stderr: "run failed"}
 			default:
@@ -2083,9 +2116,7 @@ func TestRunOrchestratorExecutionAdditionalBranches(t *testing.T) {
 			switch {
 			case strings.Contains(command, `if [ -f "$HOME/.zeroclaw/config.toml" ]`):
 				return remoteExecResult{ExitCode: 0, Stdout: "1\n"}
-			case strings.Contains(command, "zeroclaw task run"),
-				strings.Contains(command, "zeroclaw run --message"),
-				strings.Contains(command, "zeroclaw agent --message"),
+			case isZeroClawSingleShotCommand(command),
 				strings.Contains(command, "openclaw agent --local"):
 				return remoteExecResult{ExitCode: 1, Stderr: "failed"}
 			case strings.Contains(command, `rm -f "$HOME/.zeroclaw/config.toml"`):
@@ -2411,9 +2442,7 @@ func TestRunTasksAndRetriesAdditionalBranches(t *testing.T) {
 		t.Setenv("CARRIER_REMOTE_CONTROL_STORE", filepath.Join(t.TempDir(), "remote-control.json"))
 		configureSSHRunner(t, func(command string) remoteExecResult {
 			switch {
-			case strings.Contains(command, "zeroclaw task run"),
-				strings.Contains(command, "zeroclaw run --message"),
-				strings.Contains(command, "zeroclaw agent --message"),
+			case isZeroClawSingleShotCommand(command),
 				strings.Contains(command, "openclaw agent --local"):
 				return remoteExecResult{ExitCode: 1, Stderr: "run failed"}
 			default:
@@ -2508,18 +2537,19 @@ func TestRunTasksAndRetriesAdditionalBranches(t *testing.T) {
 		key := workerPoolKey(host.ID, "zeroclaw")
 		pool := orchestratorWorkerPool{key: key, ch: make(chan OrchestratorWorkerLease, 1)}
 		pool.ch <- lease
-		callCount := 0
+		firstAttemptExhausted := false
 		configureSSHRunner(t, func(command string) remoteExecResult {
 			switch {
 			case strings.Contains(command, "zeroclaw task run"):
-				callCount++
-				if callCount == 1 {
+				if !firstAttemptExhausted {
 					return remoteExecResult{ExitCode: 1, Stderr: "first fail"}
 				}
 				return remoteExecResult{ExitCode: 0, Stdout: `{"output_text":"ok"}`}
-			case strings.Contains(command, "zeroclaw run --message"),
-				strings.Contains(command, "zeroclaw agent --message"),
+			case isZeroClawSingleShotCommand(command),
 				strings.Contains(command, "openclaw agent --local"):
+				if strings.Contains(command, "openclaw agent --local") {
+					firstAttemptExhausted = true
+				}
 				return remoteExecResult{ExitCode: 1, Stderr: "retry path fail"}
 			default:
 				return remoteExecResult{ExitCode: 0}
@@ -2568,9 +2598,7 @@ func TestRunTasksAndRetriesAdditionalBranches(t *testing.T) {
 		pool := orchestratorWorkerPool{key: key, ch: make(chan OrchestratorWorkerLease, 1)}
 		pool.ch <- lease
 		configureSSHRunner(t, func(command string) remoteExecResult {
-			if strings.Contains(command, "zeroclaw task run") ||
-				strings.Contains(command, "zeroclaw run --message") ||
-				strings.Contains(command, "zeroclaw agent --message") ||
+			if isZeroClawSingleShotCommand(command) ||
 				strings.Contains(command, "openclaw agent --local") {
 				return remoteExecResult{ExitCode: 1, Stderr: "always fail"}
 			}

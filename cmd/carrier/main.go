@@ -173,6 +173,10 @@ type remoteCommandOptions struct {
 	AgentID            string
 	InstallAgentID     string
 	TargetAgentID      string
+	Message            string
+	SessionID          string
+	TimeoutMs          int
+	JSON               bool
 	All                bool
 	Concurrency        int
 	Isolation          bool
@@ -663,6 +667,8 @@ Usage:
                         Show remote instance status via gateway API
   carrier remote logs <host_id> <agent_id> [--tail <n>]
                         Fetch remote instance logs via gateway API
+  carrier remote run <host_id> <agent_id> -m <message> [--session-id <id>] [--timeout-ms <ms>] [--json]
+                        Run one non-stream prompt on a remote instance via gateway API
   carrier remote rollback <host_id> <agent_id> [--commit <sha>]
                         Roll back remote instance config sync state
   carrier remote uninstall <host_id> <agent_id>
@@ -2110,7 +2116,7 @@ func fetchDoctorAgentStatuses() ([]doctorAgentStatus, error) {
 
 func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 	if len(args) < 1 {
-		return remoteCommandOptions{}, errors.New("usage: carrier remote <add|install|status|logs|rollback|uninstall|key> ...")
+		return remoteCommandOptions{}, errors.New("usage: carrier remote <add|install|status|logs|run|rollback|uninstall|key> ...")
 	}
 	action := strings.ToLower(strings.TrimSpace(args[0]))
 	opts := remoteCommandOptions{
@@ -2146,14 +2152,22 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 		// "carrier remote status <host_id> <agent_id>".
 		if len(args) == 1 || strings.HasPrefix(strings.TrimSpace(args[1]), "-") {
 			opts.All = true
+		} else {
+			if len(args) < 3 {
+				return remoteCommandOptions{}, fmt.Errorf("usage: carrier remote %s <host_id> <agent_id>", opts.Action)
+			}
+			opts.HostID = strings.TrimSpace(args[1])
+			opts.AgentID = strings.ToLower(strings.TrimSpace(args[2]))
+			opts.TargetAgentID = remoteRuntimeAgentID(opts.AgentID)
+			opts.InstallAgentID = opts.TargetAgentID
 		}
-	case "logs", "rollback", "uninstall":
+	case "logs", "rollback", "uninstall", "run":
 		if len(args) < 3 {
 			return remoteCommandOptions{}, fmt.Errorf("usage: carrier remote %s <host_id> <agent_id>", opts.Action)
 		}
 		opts.HostID = strings.TrimSpace(args[1])
-		opts.TargetAgentID = strings.ToLower(strings.TrimSpace(args[2]))
-		opts.AgentID = opts.TargetAgentID
+		opts.AgentID = strings.ToLower(strings.TrimSpace(args[2]))
+		opts.TargetAgentID = remoteRuntimeAgentID(opts.AgentID)
 		opts.InstallAgentID = opts.TargetAgentID
 	case "key":
 		if len(args) < 2 {
@@ -2177,6 +2191,7 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 	default:
 		if opts.Action == "status" ||
 			opts.Action == "logs" ||
+			opts.Action == "run" ||
 			opts.Action == "rollback" ||
 			opts.Action == "uninstall" ||
 			opts.Action == "key-import" ||
@@ -2197,7 +2212,7 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 	switch opts.Action {
 	case "add":
 		startIndex = 2
-	case "status", "logs", "rollback", "uninstall":
+	case "status", "logs", "run", "rollback", "uninstall":
 		if !opts.All {
 			startIndex = 3
 		}
@@ -2371,6 +2386,40 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 			}
 			opts.Tail = tail
 			i = next
+		case "-m", "--message", "--session-id", "--timeout-ms", "--json":
+			if opts.Action != "run" {
+				return remoteCommandOptions{}, fmt.Errorf("unknown remote option: %s", raw)
+			}
+			const runUsage = "usage: carrier remote run <host_id> <agent_id> -m <message> [--session-id <id>] [--timeout-ms <ms>] [--json]"
+			switch raw {
+			case "-m", "--message":
+				value, next, err := parseRequiredFlagValue(args, i, raw)
+				if err != nil {
+					return remoteCommandOptions{}, errors.New(runUsage)
+				}
+				opts.Message = strings.TrimSpace(value)
+				i = next
+			case "--session-id":
+				value, next, err := parseRequiredFlagValue(args, i, "--session-id")
+				if err != nil {
+					return remoteCommandOptions{}, errors.New(runUsage)
+				}
+				opts.SessionID = strings.TrimSpace(value)
+				i = next
+			case "--timeout-ms":
+				value, next, err := parseRequiredFlagValue(args, i, "--timeout-ms")
+				if err != nil {
+					return remoteCommandOptions{}, errors.New(runUsage)
+				}
+				timeoutMs, convErr := strconv.Atoi(strings.TrimSpace(value))
+				if convErr != nil || timeoutMs < 0 {
+					return remoteCommandOptions{}, fmt.Errorf("invalid --timeout-ms value: %s", value)
+				}
+				opts.TimeoutMs = timeoutMs
+				i = next
+			case "--json":
+				opts.JSON = true
+			}
 		case "--commit":
 			if opts.Action != "rollback" {
 				return remoteCommandOptions{}, fmt.Errorf("unknown remote option: %s", raw)
@@ -2415,7 +2464,7 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 			if opts.Action == "install" && strings.EqualFold(raw, opts.AgentID) {
 				continue
 			}
-			if (opts.Action == "status" || opts.Action == "logs" || opts.Action == "rollback" || opts.Action == "uninstall") && !opts.All && (i == 1 || i == 2) {
+			if (opts.Action == "status" || opts.Action == "logs" || opts.Action == "run" || opts.Action == "rollback" || opts.Action == "uninstall") && !opts.All && (i == 1 || i == 2) {
 				continue
 			}
 			if opts.Action == "status" {
@@ -2440,6 +2489,13 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 		if opts.All {
 			return opts, nil
 		}
+		if opts.HostID == "" {
+			return remoteCommandOptions{}, errors.New("host_id is required")
+		}
+		if opts.TargetAgentID == "" {
+			return remoteCommandOptions{}, errors.New("agent_id is required")
+		}
+		return opts, nil
 	}
 
 	if opts.Action == "logs" || opts.Action == "rollback" || opts.Action == "uninstall" {
@@ -2448,6 +2504,18 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 		}
 		if opts.TargetAgentID == "" {
 			return remoteCommandOptions{}, errors.New("agent_id is required")
+		}
+		return opts, nil
+	}
+	if opts.Action == "run" {
+		if opts.HostID == "" {
+			return remoteCommandOptions{}, errors.New("host_id is required")
+		}
+		if opts.TargetAgentID == "" {
+			return remoteCommandOptions{}, errors.New("agent_id is required")
+		}
+		if opts.Message == "" {
+			return remoteCommandOptions{}, errors.New("usage: carrier remote run <host_id> <agent_id> -m <message> [--session-id <id>] [--timeout-ms <ms>] [--json]")
 		}
 		return opts, nil
 	}
@@ -7925,6 +7993,20 @@ type remoteInstanceLogsResponse struct {
 	Logs string `json:"logs"`
 }
 
+type remoteInstanceRunSnapshot struct {
+	HostID     string                                    `json:"hostId"`
+	AgentID    string                                    `json:"agentId"`
+	SessionID  string                                    `json:"sessionId,omitempty"`
+	Output     string                                    `json:"output,omitempty"`
+	LatencyMs  int64                                     `json:"latencyMs"`
+	Memory     gatewayruntime.RemoteMemoryContractStatus `json:"memory,omitempty"`
+	RawPayload map[string]interface{}                    `json:"rawPayload,omitempty"`
+}
+
+type remoteInstanceRunResponse struct {
+	Run remoteInstanceRunSnapshot `json:"run"`
+}
+
 type remoteInstanceRollbackSummary struct {
 	RolledBack       bool   `json:"rolledBack"`
 	FromCommit       string `json:"fromCommit"`
@@ -7976,6 +8058,8 @@ func runRemoteCommand(in io.Reader, out io.Writer, opts remoteCommandOptions) er
 		return runRemoteStatusCommand(out, opts)
 	case "logs":
 		return runRemoteLogsCommand(out, opts)
+	case "run":
+		return runRemoteRunCommand(out, opts)
 	case "rollback":
 		return runRemoteRollbackCommand(out, opts)
 	case "uninstall":
@@ -8163,7 +8247,7 @@ func runRemoteStatusCommand(out io.Writer, opts remoteCommandOptions) error {
 	if health == "" {
 		health = "unknown"
 	}
-	_, _ = fmt.Fprintf(out, "Remote instance %s (%s)\n", strings.TrimSpace(status.ID), strings.TrimSpace(status.AgentID))
+	_, _ = fmt.Fprintf(out, "Remote instance %s (%s)\n", strings.TrimSpace(status.ID), remoteCLIRequestedAgentID(opts.AgentID, opts.TargetAgentID))
 	_, _ = fmt.Fprintf(out, "  runtime=%s health=%s\n", runtimeState, health)
 	if lastErr := strings.TrimSpace(status.LastError); lastErr != "" {
 		_, _ = fmt.Fprintf(out, "  lastError=%s\n", lastErr)
@@ -8191,6 +8275,38 @@ func runRemoteLogsCommand(out io.Writer, opts remoteCommandOptions) error {
 	return nil
 }
 
+func runRemoteRunCommand(out io.Writer, opts remoteCommandOptions) error {
+	progressOut := out
+	if opts.JSON {
+		progressOut = io.Discard
+	}
+	if _, err := ensureGatewayRunning(progressOut, startGatewayInBackgroundAndWait); err != nil {
+		return err
+	}
+	run, raw, err := runRemoteInstanceRun(opts.HostID, opts.TargetAgentID, opts.Message, opts.SessionID, opts.TimeoutMs)
+	if err != nil {
+		return err
+	}
+	if opts.JSON {
+		return writePrettyJSON(out, raw)
+	}
+	_, _ = fmt.Fprintf(out, "Remote run %s/%s\n", strings.TrimSpace(opts.HostID), remoteCLIRequestedAgentID(opts.AgentID, opts.TargetAgentID))
+	meta := []string{}
+	if sessionID := strings.TrimSpace(run.SessionID); sessionID != "" {
+		meta = append(meta, "session="+sessionID)
+	}
+	if run.LatencyMs > 0 {
+		meta = append(meta, fmt.Sprintf("latency=%dms", run.LatencyMs))
+	}
+	if len(meta) > 0 {
+		_, _ = fmt.Fprintf(out, "  %s\n", strings.Join(meta, " "))
+	}
+	if output := strings.TrimSpace(run.Output); output != "" {
+		_, _ = fmt.Fprintln(out, output)
+	}
+	return nil
+}
+
 func runRemoteRollbackCommand(out io.Writer, opts remoteCommandOptions) error {
 	if _, err := ensureGatewayRunning(out, startGatewayInBackgroundAndWait); err != nil {
 		return err
@@ -8199,7 +8315,7 @@ func runRemoteRollbackCommand(out io.Writer, opts remoteCommandOptions) error {
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "Rollback completed for %s:%s\n", strings.TrimSpace(opts.HostID), strings.TrimSpace(opts.TargetAgentID))
+	_, _ = fmt.Fprintf(out, "Rollback completed for %s:%s\n", strings.TrimSpace(opts.HostID), remoteCLIRequestedAgentID(opts.AgentID, opts.TargetAgentID))
 	_, _ = fmt.Fprintf(out, "  rolledBack=%t drift=%s\n", rollback.RolledBack, strings.TrimSpace(rollback.DriftState))
 	if fromCommit := strings.TrimSpace(rollback.FromCommit); fromCommit != "" {
 		_, _ = fmt.Fprintf(out, "  fromCommit=%s\n", fromCommit)
@@ -8220,7 +8336,7 @@ func runRemoteUninstallCommand(out io.Writer, opts remoteCommandOptions) error {
 	}
 	_, _ = fmt.Fprintf(out, "Remote uninstall completed for %s:%s (uninstalled=%t)\n",
 		strings.TrimSpace(uninstall.HostID),
-		strings.TrimSpace(uninstall.AgentID),
+		remoteCLIRequestedAgentID(opts.AgentID, uninstall.AgentID),
 		uninstall.Uninstalled,
 	)
 	return nil
@@ -8396,6 +8512,31 @@ func runRemoteInstanceLogs(hostID, agentID string, tail int) (string, error) {
 		return "", fmt.Errorf("decode remote logs response: %w", err)
 	}
 	return payload.Logs, nil
+}
+
+func runRemoteInstanceRun(hostID, agentID, message, sessionID string, timeoutMs int) (remoteInstanceRunSnapshot, []byte, error) {
+	path := fmt.Sprintf("/api/v1/remote/hosts/%s/instances/%s/run",
+		neturl.PathEscape(strings.TrimSpace(hostID)),
+		neturl.PathEscape(strings.TrimSpace(agentID)),
+	)
+	body := map[string]interface{}{
+		"message": strings.TrimSpace(message),
+	}
+	if trimmed := strings.TrimSpace(sessionID); trimmed != "" {
+		body["sessionId"] = trimmed
+	}
+	if timeoutMs > 0 {
+		body["timeoutMs"] = timeoutMs
+	}
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, path, body, 5*time.Minute)
+	if err != nil {
+		return remoteInstanceRunSnapshot{}, nil, err
+	}
+	var payload remoteInstanceRunResponse
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return remoteInstanceRunSnapshot{}, nil, fmt.Errorf("decode remote run response: %w", err)
+	}
+	return payload.Run, raw, nil
 }
 
 func runRemoteInstanceRollback(hostID, agentID, commit string) (remoteInstanceRollbackSummary, error) {
@@ -8840,6 +8981,27 @@ func remoteAgentDisplayName(agentID string) string {
 	}
 }
 
+func remoteRuntimeAgentID(agentID string) string {
+	switch strings.ToLower(strings.TrimSpace(agentID)) {
+	case "openclaw":
+		return "main"
+	default:
+		return strings.ToLower(strings.TrimSpace(agentID))
+	}
+}
+
+func remoteCLIRequestedAgentID(requestedAgentID, runtimeAgentID string) string {
+	requested := strings.ToLower(strings.TrimSpace(requestedAgentID))
+	if requested != "" {
+		return requested
+	}
+	runtimeAgentID = strings.ToLower(strings.TrimSpace(runtimeAgentID))
+	if runtimeAgentID == "main" {
+		return "openclaw"
+	}
+	return runtimeAgentID
+}
+
 func printRemoteCheckSummary(out io.Writer, check remoteHostCheckResponse, label string) {
 	label = strings.TrimSpace(label)
 	if label != "" {
@@ -9030,6 +9192,7 @@ func buildPicoClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Con
 		defaultProviderKey := ""
 		defaultManagedModel := ""
 		modelList := make([]interface{}, 0, len(opts.SyncProviders))
+		providerProfiles := map[string]interface{}{}
 		providers := map[string]interface{}{}
 
 		for _, requestedProvider := range dedupeLowerStrings(opts.SyncProviders) {
@@ -9043,6 +9206,23 @@ func buildPicoClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Con
 			}
 			providers[managedProviderKey] = providerItem
 			modelList = append(modelList, modelItem)
+			profileEntry := map[string]interface{}{
+				"provider":        managedProviderKey,
+				"provider_id":     strings.TrimSpace(model.ProviderID),
+				"protocol_family": strings.TrimSpace(anyToString(modelItem["protocol_family"])),
+				"model":           managedModelID,
+				"credential_ref":  firstNonEmpty(strings.TrimSpace(model.CredentialRef), strings.TrimSpace(model.ProviderID)),
+			}
+			if alias := strings.TrimSpace(anyToString(modelItem["model_alias"])); alias != "" {
+				profileEntry["model_alias"] = alias
+			}
+			if baseURL := strings.TrimSpace(anyToString(modelItem["base_url"])); baseURL != "" {
+				profileEntry["base_url"] = baseURL
+			}
+			if authMethod := strings.TrimSpace(anyToString(modelItem["auth_method"])); authMethod != "" {
+				profileEntry["auth_method"] = authMethod
+			}
+			providerProfiles[managedModelName] = profileEntry
 			if defaultProviderKey == "" {
 				defaultProviderKey = managedProviderKey
 				defaultManagedModel = managedModelName
@@ -9056,6 +9236,9 @@ func buildPicoClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Con
 
 		patch["providers"] = providers
 		patch["model_list"] = modelList
+		if len(providerProfiles) > 0 {
+			patch["provider_profiles"] = providerProfiles
+		}
 		if defaultProviderKey != "" && defaultManagedModel != "" {
 			patch["agents"] = map[string]interface{}{
 				"defaults": map[string]interface{}{
@@ -9231,8 +9414,8 @@ func buildOpenClawProviderEntry(model configv2.Model) (providerKey, modelName, m
 func buildZeroClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Config) (map[string]interface{}, error) {
 	syncChannels := dedupeLowerStrings(opts.SyncChannels)
 	syncProviders := dedupeLowerStrings(opts.SyncProviders)
-	if (len(syncChannels) == 0) != (len(syncProviders) == 0) {
-		return nil, errors.New("zeroclaw sync requires both --sync-channel and --sync-provider to avoid overwriting existing remote config")
+	if len(syncChannels) > 0 && len(syncProviders) == 0 {
+		return nil, errors.New("zeroclaw sync with --sync-channel also requires --sync-provider")
 	}
 
 	var (
@@ -9310,15 +9493,6 @@ func buildZeroClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Con
 			"mention_only = false",
 		)
 	}
-	if len(channelSections) == 0 {
-		channelSections = append(channelSections,
-			"[channels_config.telegram]",
-			"bot_token = \"\"",
-			"allowed_users = []",
-			"mention_only = false",
-		)
-	}
-
 	lines := []string{
 		"# Generated by Carrier CLI remote add",
 		fmt.Sprintf("api_key = %s", strconv.Quote(defaultAPIKey)),
@@ -9328,9 +9502,11 @@ func buildZeroClawRemoteConfigPatch(opts remoteCommandOptions, cfg *configv2.Con
 		"",
 		"[agent]",
 		"max_tool_iterations = 20",
-		"",
 	}
-	lines = append(lines, channelSections...)
+	if len(channelSections) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, channelSections...)
+	}
 	return map[string]interface{}{
 		"raw_toml": strings.Join(lines, "\n") + "\n",
 	}, nil
@@ -9363,13 +9539,7 @@ func buildManagedProviderAndModelEntry(model configv2.Model) (providerKey string
 	if modelID == "" {
 		modelID = modelName
 	}
-	if modelName == "" {
-		if _, name, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(name) != "" {
-			modelName = strings.TrimSpace(name)
-		} else {
-			modelName = modelID
-		}
-	}
+	modelName = deriveManagedModelName(modelID)
 
 	providerKey = strings.TrimSpace(model.ProviderID)
 	if vendor, _, ok := strings.Cut(modelID, "/"); ok && strings.TrimSpace(vendor) != "" {
@@ -9390,6 +9560,12 @@ func buildManagedProviderAndModelEntry(model configv2.Model) (providerKey string
 	modelItem = map[string]interface{}{
 		"model_name": modelName,
 		"model":      modelID,
+	}
+	if protocolFamily := strings.TrimSpace(catalog.ProtocolFamilyForProvider(model.ProviderID)); protocolFamily != "" {
+		modelItem["protocol_family"] = protocolFamily
+	}
+	if baseURL := strings.TrimSpace(model.BaseURL); baseURL != "" {
+		modelItem["base_url"] = baseURL
 	}
 	if catalog.IsOpenAICodexProviderID(model.ProviderID) {
 		providerItem["auth_method"] = "oauth"
