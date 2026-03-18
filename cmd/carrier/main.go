@@ -2386,45 +2386,39 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 			}
 			opts.Tail = tail
 			i = next
-		case "-m", "--message":
+		case "-m", "--message", "--session-id", "--timeout-ms", "--json":
 			if opts.Action != "run" {
 				return remoteCommandOptions{}, fmt.Errorf("unknown remote option: %s", raw)
 			}
-			value, next, err := parseRequiredFlagValue(args, i, raw)
-			if err != nil {
-				return remoteCommandOptions{}, errors.New("usage: carrier remote run <host_id> <agent_id> -m <message> [--session-id <id>] [--timeout-ms <ms>] [--json]")
+			switch raw {
+			case "-m", "--message":
+				value, next, err := parseRequiredFlagValue(args, i, raw)
+				if err != nil {
+					return remoteCommandOptions{}, errors.New("usage: carrier remote run <host_id> <agent_id> -m <message> [--session-id <id>] [--timeout-ms <ms>] [--json]")
+				}
+				opts.Message = strings.TrimSpace(value)
+				i = next
+			case "--session-id":
+				value, next, err := parseRequiredFlagValue(args, i, "--session-id")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				opts.SessionID = strings.TrimSpace(value)
+				i = next
+			case "--timeout-ms":
+				value, next, err := parseRequiredFlagValue(args, i, "--timeout-ms")
+				if err != nil {
+					return remoteCommandOptions{}, err
+				}
+				timeoutMs, convErr := strconv.Atoi(strings.TrimSpace(value))
+				if convErr != nil || timeoutMs < 0 {
+					return remoteCommandOptions{}, fmt.Errorf("invalid --timeout-ms value: %s", value)
+				}
+				opts.TimeoutMs = timeoutMs
+				i = next
+			case "--json":
+				opts.JSON = true
 			}
-			opts.Message = strings.TrimSpace(value)
-			i = next
-		case "--session-id":
-			if opts.Action != "run" {
-				return remoteCommandOptions{}, fmt.Errorf("unknown remote option: %s", raw)
-			}
-			value, next, err := parseRequiredFlagValue(args, i, "--session-id")
-			if err != nil {
-				return remoteCommandOptions{}, err
-			}
-			opts.SessionID = strings.TrimSpace(value)
-			i = next
-		case "--timeout-ms":
-			if opts.Action != "run" {
-				return remoteCommandOptions{}, fmt.Errorf("unknown remote option: %s", raw)
-			}
-			value, next, err := parseRequiredFlagValue(args, i, "--timeout-ms")
-			if err != nil {
-				return remoteCommandOptions{}, err
-			}
-			timeoutMs, convErr := strconv.Atoi(strings.TrimSpace(value))
-			if convErr != nil || timeoutMs < 0 {
-				return remoteCommandOptions{}, fmt.Errorf("invalid --timeout-ms value: %s", value)
-			}
-			opts.TimeoutMs = timeoutMs
-			i = next
-		case "--json":
-			if opts.Action != "run" {
-				return remoteCommandOptions{}, fmt.Errorf("unknown remote option: %s", raw)
-			}
-			opts.JSON = true
 		case "--commit":
 			if opts.Action != "rollback" {
 				return remoteCommandOptions{}, fmt.Errorf("unknown remote option: %s", raw)

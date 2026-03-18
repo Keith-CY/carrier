@@ -1966,6 +1966,32 @@ func remoteRunTaskViaAgent(ctx context.Context, host RemoteHost, hostID, agentID
 	}
 }
 
+func withRemoteRunSessionFallback(candidates []string, sessionID string) []string {
+	trimmed := strings.TrimSpace(sessionID)
+	if trimmed == "" {
+		return candidates
+	}
+	withSession := make([]string, 0, len(candidates)*2)
+	for _, cmd := range candidates {
+		withSession = append(withSession, cmd+" --session-id "+shellSingleQuote(trimmed))
+	}
+	withSession = append(withSession, candidates...)
+	return withSession
+}
+
+func ensureRemoteRunPayloadSessionID(payload map[string]interface{}, sessionID string) {
+	if payload == nil {
+		return
+	}
+	trimmed := strings.TrimSpace(sessionID)
+	if trimmed == "" {
+		return
+	}
+	if strings.TrimSpace(anyToString(payload["sessionId"])) == "" {
+		payload["sessionId"] = trimmed
+	}
+}
+
 func remoteRunViaPicoClaw(ctx context.Context, host RemoteHost, hostID, agentID, message, sessionID string) (*remoteRunResult, []remoteExecResult, error) {
 	startedAt := time.Now()
 	if err := validateAgentIdentifier(agentID); err != nil {
@@ -1983,14 +2009,7 @@ func remoteRunViaPicoClaw(ctx context.Context, host RemoteHost, hostID, agentID,
 		fmt.Sprintf("picoclaw agent --json -m %s", shellSingleQuote(trimmedMessage)),
 		fmt.Sprintf("picoclaw agent -m %s", shellSingleQuote(trimmedMessage)),
 	}
-	if trimmed := strings.TrimSpace(sessionID); trimmed != "" {
-		withSession := make([]string, 0, len(candidates)*2)
-		for _, cmd := range candidates {
-			withSession = append(withSession, cmd+" --session-id "+shellSingleQuote(trimmed))
-		}
-		withSession = append(withSession, candidates...)
-		candidates = withSession
-	}
+	candidates = withRemoteRunSessionFallback(candidates, sessionID)
 	steps := make([]remoteExecResult, 0, len(candidates))
 	for _, cmd := range candidates {
 		res, err := runRemoteCommand(ctx, host, wrapRemoteCommandWithMemoryContract(cmd, contract))
@@ -2002,9 +2021,7 @@ func remoteRunViaPicoClaw(ctx context.Context, host RemoteHost, hostID, agentID,
 			continue
 		}
 		payload := parseRemoteRunPayload(res.Stdout, contract)
-		if strings.TrimSpace(anyToString(payload["sessionId"])) == "" && strings.TrimSpace(sessionID) != "" {
-			payload["sessionId"] = strings.TrimSpace(sessionID)
-		}
+		ensureRemoteRunPayloadSessionID(payload, sessionID)
 		return &remoteRunResult{
 			HostID:     strings.TrimSpace(hostID),
 			AgentID:    strings.TrimSpace(agentID),
@@ -2039,14 +2056,7 @@ func remoteRunViaZeroClaw(ctx context.Context, host RemoteHost, hostID, agentID,
 		fmt.Sprintf("zeroclaw agent -m %s", shellSingleQuote(trimmedMessage)),
 		fmt.Sprintf("zeroclaw agent --message %s --json --no-color", shellSingleQuote(trimmedMessage)),
 	}
-	if trimmed := strings.TrimSpace(sessionID); trimmed != "" {
-		withSession := make([]string, 0, len(candidates)*2)
-		for _, cmd := range candidates {
-			withSession = append(withSession, cmd+" --session-id "+shellSingleQuote(trimmed))
-		}
-		withSession = append(withSession, candidates...)
-		candidates = withSession
-	}
+	candidates = withRemoteRunSessionFallback(candidates, sessionID)
 
 	steps := make([]remoteExecResult, 0, len(candidates)+1)
 	for _, cmd := range candidates {
@@ -2059,9 +2069,7 @@ func remoteRunViaZeroClaw(ctx context.Context, host RemoteHost, hostID, agentID,
 			continue
 		}
 		payload := parseRemoteRunPayload(res.Stdout, contract)
-		if strings.TrimSpace(anyToString(payload["sessionId"])) == "" && strings.TrimSpace(sessionID) != "" {
-			payload["sessionId"] = strings.TrimSpace(sessionID)
-		}
+		ensureRemoteRunPayloadSessionID(payload, sessionID)
 		return &remoteRunResult{
 			HostID:     strings.TrimSpace(hostID),
 			AgentID:    strings.TrimSpace(agentID),
