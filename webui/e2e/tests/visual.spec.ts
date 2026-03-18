@@ -24,92 +24,68 @@ test.describe('Visual Regression', () => {
     });
   });
 
-  test('welcome page', async ({ page }) => {
-    await captureView(page, '/#/welcome', '#view-welcome', 'welcome.png');
+  test('onboarding page', async ({ page }) => {
+    await captureView(page, '/onboarding', '#view-onboarding', 'onboarding.png');
   });
 
-  test('setup page', async ({ page }) => {
-    await captureView(page, '/#/setup', '#view-setup', 'setup.png');
+  test('home page', async ({ page }) => {
+    await captureView(page, '/home', '#view-home', 'home.png');
   });
 
-  test('dashboard page', async ({ page }) => {
-    await mockAPIs(page);
-    await loginWithToken(page, '/#/dashboard');
-    await expect(page.locator('.agent-card')).toHaveCount(3);
-    await expect(page).toHaveScreenshot('dashboard.png', {
-      fullPage: true,
-      animations: 'disabled',
-      caret: 'hide',
-    });
-  });
-
-  test('executions page', async ({ page }) => {
+  test('quick entry desktop page', async ({ page }) => {
     await mockAPIs(page);
     await mockOrchestrationAPIs(page);
-    await loginWithToken(page, '/#/executions');
-    await expect(page.locator('#executions-list .execution-list-card').first()).toBeVisible();
-    await expect(page).toHaveScreenshot('executions.png', {
+    await loginWithToken(page, '/quick-entry');
+    await expect(page.locator('#view-quick-entry')).toBeVisible();
+    await expect(page).toHaveScreenshot('quick-entry-desktop.png', {
       fullPage: true,
       animations: 'disabled',
       caret: 'hide',
     });
+  });
+
+  test('quick entry mobile page', async ({ page }) => {
+    await page.setViewportSize({ width: 430, height: 932 });
+    await mockAPIs(page);
+    await mockOrchestrationAPIs(page);
+    await loginWithToken(page, '/quick-entry');
+    await expect(page.locator('#view-quick-entry')).toBeVisible();
+    await expect(page).toHaveScreenshot('quick-entry-mobile.png', {
+      fullPage: true,
+      animations: 'disabled',
+      caret: 'hide',
+    });
+  });
+
+  test('projects page', async ({ page }) => {
+    await captureView(page, '/projects', '#view-projects', 'projects.png');
+  });
+
+  test('project detail page', async ({ page }) => {
+    await captureView(page, '/projects/proj_alpha', '#view-project-detail', 'project-detail.png');
   });
 
   test('agent detail page', async ({ page }) => {
-    await captureView(page, '/#/agents/agent-alpha', '#view-agent-detail', 'agent-detail.png');
+    await captureView(page, '/agents/agent-alpha', '#view-agent-detail', 'agent-detail.png');
   });
 
-  test('memory page', async ({ page }) => {
-    await captureView(page, '/#/memory', '#memory-summary', 'memory.png');
+  test('agents page', async ({ page }) => {
+    await captureView(page, '/agents', '#view-agents', 'agents.png');
   });
 
-  test('workers page', async ({ page }) => {
-    await captureView(page, '/#/workers', '#workers-summary', 'workers.png');
-  });
-
-  test('hosts page', async ({ page }) => {
-    await captureView(page, '/#/hosts', '#servers-list', 'hosts.png');
-  });
-
-  test('providers page', async ({ page }) => {
+  test('activity page', async ({ page }) => {
     await mockAPIs(page);
-    await loginWithToken(page, '/#/providers');
-    await expect(page.locator('#profiles-title')).toContainText('Providers');
-    await expect(page).toHaveScreenshot('providers.png', {
+    await mockOrchestrationAPIs(page);
+    await loginWithToken(page, '/activity');
+    await expect(page.locator('#view-activity')).toBeVisible();
+    await expect(page).toHaveScreenshot('activity.png', {
       fullPage: true,
       animations: 'disabled',
       caret: 'hide',
     });
-  });
-
-  test('policies page', async ({ page }) => {
-    await mockAPIs(page);
-    await loginWithToken(page, '/#/policies');
-    await expect(page.locator('#profiles-title')).toContainText('Policies');
-    await expect(page).toHaveScreenshot('policies.png', {
-      fullPage: true,
-      animations: 'disabled',
-      caret: 'hide',
-    });
-  });
-
-  test('observability page', async ({ page }) => {
-    await captureView(page, '/#/remote-observability', '#remote-observability-summary', 'observability.png');
-  });
-
-  test('logs page', async ({ page }) => {
-    await captureView(page, '/#/logs', '#view-logs', 'logs.png');
-  });
-
-  test('chat page', async ({ page }) => {
-    await captureView(page, '/#/chat', '#view-chat', 'chat.png');
-  });
-
-  test('remote chat page', async ({ page }) => {
-    await captureView(page, '/#/remote-chat', '#view-remote-chat', 'remote-chat.png');
   });
 
   test('settings page', async ({ page }) => {
-    await captureView(page, '/#/settings', '#view-settings', 'settings.png');
+    await captureView(page, '/settings', '#view-settings', 'settings.png');
   });
 });

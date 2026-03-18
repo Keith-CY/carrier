@@ -1,0 +1,198 @@
+"use strict";
+
+const fs = require("node:fs");
+const path = require("node:path");
+
+const COMMENT_MARKER = "<!-- carrier-pr-visual-acceptance -->";
+const FLOW_ORDER = [
+  "01-carrier-onboarding",
+  "02-openclaw-install",
+  "03-carrier-chat-openclaw",
+  "04-multi-agent-orchestration",
+  "05-supplemental",
+];
+const FLOW_TITLES = {
+  "01-carrier-onboarding": "Carrier Onboarding",
+  "02-openclaw-install": "OpenClaw Install",
+  "03-carrier-chat-openclaw": "Carrier Chat -> OpenClaw",
+  "04-multi-agent-orchestration": "Multi-Agent Orchestration",
+  "05-supplemental": "Supplemental",
+};
+const LAYOUT_ORDER = ["desktop", "mobile", "pwa"];
+const LAYOUT_TITLES = {
+  desktop: "Desktop",
+  mobile: "Mobile",
+  pwa: "PWA",
+};
+
+function parseArgs(argv) {
+  const out = {};
+  for (let idx = 2; idx < argv.length; idx += 2) {
+    const key = argv[idx];
+    const value = argv[idx + 1];
+    if (!key || !key.startsWith("--")) {
+      throw new Error(`Unexpected argument "${key}"`);
+    }
+    if (value === undefined || value.startsWith("--")) {
+      throw new Error(`Missing value for argument "${key}"`);
+    }
+    out[key.slice(2)] = value;
+  }
+  return out;
+}
+
+function humanizeStep(fileName) {
+  const base = fileName.replace(/\.png$/i, "");
+  return base
+    .replace(/^\d+[-_]?/, "")
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function listPngFiles(dirPath) {
+  if (!fs.existsSync(dirPath)) return [];
+  return fs
+    .readdirSync(dirPath, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".png"))
+    .map((entry) => entry.name)
+    .sort();
+}
+
+function loadScreenshotCatalog(screenshotsDir) {
+  if (!fs.existsSync(screenshotsDir)) {
+    throw new Error(`screenshots directory does not exist: ${screenshotsDir}`);
+  }
+
+  return FLOW_ORDER.map((flowId) => {
+    const flowDir = path.join(screenshotsDir, flowId);
+    const layouts = LAYOUT_ORDER.map((layout) => {
+      const layoutDir = path.join(flowDir, layout);
+      const shots = listPngFiles(layoutDir).map((fileName) => ({
+        fileName,
+        label: humanizeStep(fileName),
+        relativePath: path.posix.join(flowId, layout, fileName),
+      }));
+      return {
+        id: layout,
+        title: LAYOUT_TITLES[layout],
+        shots,
+      };
+    });
+    return {
+      id: flowId,
+      title: FLOW_TITLES[flowId] || flowId,
+      layouts,
+    };
+  });
+}
+
+function buildRawUrl(repository, screenshotsRef, relativePath) {
+  return `https://raw.githubusercontent.com/${repository}/${screenshotsRef}/${relativePath}`;
+}
+
+function buildPrVisualAcceptanceComment({
+  repository,
+  runId,
+  commitSha,
+  screenshotsRef,
+  artifactUrl,
+  screenshotsDir,
+}) {
+  const repo = String(repository || "").trim();
+  const run = String(runId || "").trim();
+  const sha = String(commitSha || "").trim();
+  const ref = String(screenshotsRef || "").trim();
+  const artifact = String(artifactUrl || "").trim();
+
+  if (!repo) throw new Error("repository is required");
+  if (!run || !/^\d+$/.test(run)) throw new Error(`runId must be numeric, got "${runId}"`);
+  if (!sha) throw new Error("commitSha is required");
+  if (!ref) throw new Error("screenshotsRef is required");
+
+  const runUrl = `https://github.com/${repo}/actions/runs/${run}`;
+  const catalog = loadScreenshotCatalog(screenshotsDir);
+  const totalShots = catalog.reduce(
+    (count, flow) => count + flow.layouts.reduce((inner, layout) => inner + layout.shots.length, 0),
+    0,
+  );
+  if (totalShots === 0) {
+    throw new Error(`no screenshots found under ${screenshotsDir}`);
+  }
+
+  const lines = [
+    COMMENT_MARKER,
+    "## WebUI Visual Acceptance",
+    "",
+    `- Commit: \`${sha}\``,
+    `- Workflow run: [${run}](${runUrl})`,
+  ];
+  if (artifact) {
+    lines.push(`- Screenshot artifact: [download](${artifact})`);
+  }
+  lines.push(`- Screenshot ref: \`${ref}\``);
+  lines.push("");
+
+  for (const flow of catalog) {
+    lines.push(`### ${flow.title}`);
+    lines.push("");
+    for (const layout of flow.layouts) {
+      lines.push(`<details${layout.id === "desktop" ? " open" : ""}>`);
+      lines.push(`<summary>${layout.title}</summary>`);
+      lines.push("");
+      if (!layout.shots.length) {
+        lines.push("_No capture published for this layout in this flow._");
+        lines.push("");
+        lines.push("</details>");
+        lines.push("");
+        continue;
+      }
+      lines.push("| Step | Preview |");
+      lines.push("| --- | --- |");
+      for (const shot of layout.shots) {
+        const imageUrl = buildRawUrl(repo, ref, shot.relativePath);
+        lines.push(`| ${shot.label} | ![${flow.title} ${layout.title} ${shot.label}](${imageUrl}) |`);
+      }
+      lines.push("");
+      lines.push("</details>");
+      lines.push("");
+    }
+  }
+
+  lines.push("_Generated by the Docker visual-acceptance harness._");
+  return `${lines.join("\n")}\n`;
+}
+
+function runCli() {
+  const args = parseArgs(process.argv);
+  const repository = args.repository || process.env.GITHUB_REPOSITORY;
+  const runId = args["run-id"] || process.env.GITHUB_RUN_ID;
+  const commitSha = args["commit-sha"] || process.env.GITHUB_SHA;
+  const screenshotsRef = args["screenshots-ref"];
+  const artifactUrl = args["artifact-url"] || "";
+  const screenshotsDir = args["screenshots-dir"] || path.join(process.cwd(), ".artifacts", "visual-acceptance", "screenshots");
+  const outputPath = args.output || "pr-visual-acceptance-comment.md";
+
+  const body = buildPrVisualAcceptanceComment({
+    repository,
+    runId,
+    commitSha,
+    screenshotsRef,
+    artifactUrl,
+    screenshotsDir,
+  });
+  fs.writeFileSync(outputPath, body);
+}
+
+if (require.main === module) {
+  runCli();
+}
+
+module.exports = {
+  COMMENT_MARKER,
+  FLOW_ORDER,
+  buildPrVisualAcceptanceComment,
+  loadScreenshotCatalog,
+  humanizeStep,
+};

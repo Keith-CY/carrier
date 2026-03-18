@@ -7,7 +7,7 @@ export function HostEditorCard({ data }: { data: HostsData }) {
   return (
     <div className="card">
       <h3>Add / Update Server</h3>
-      <div className="form-grid">
+      <div className="form-grid hosts-editor-grid">
         <div>
           <label htmlFor="server-name">Name</label>
           <input id="server-name" type="text" placeholder="prod-eu-1" value={editor.name} onChange={(event) => setEditor((current) => ({ ...current, name: event.target.value }))} />

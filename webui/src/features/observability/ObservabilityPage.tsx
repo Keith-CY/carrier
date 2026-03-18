@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { PageShell } from '../../app/page-shell';
 import {
   formatMetricsBreakdown,
   formatMilliseconds,
@@ -55,20 +56,27 @@ export function ObservabilityPage() {
   } = useObservabilityData();
 
   return (
-    <section id="view-remote-observability" className="view">
-      <div className="section-head">
-        <h2>Remote Observability</h2>
-        <div className="section-actions">
-          <button
-            id="remote-observability-refresh"
-            className="btn-sm btn-secondary"
-            onClick={() => refreshMutation.mutate()}
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
-
+    <PageShell
+      id="view-remote-observability"
+      eyebrow="Observe"
+      title="Observability"
+      description="Read remote metrics, rollout posture, provider drift, and cost attribution without dropping into raw telemetry first."
+      actions={(
+        <button
+          id="remote-observability-refresh"
+          className="btn-sm btn-secondary"
+          onClick={() => refreshMutation.mutate()}
+        >
+          Refresh
+        </button>
+      )}
+      stats={[
+        { label: 'Operation Group', value: group },
+        { label: 'Visible Ops', value: String(visibleOperations.length) },
+        { label: 'Top Provider', value: topProvider },
+        { label: 'Top Model', value: topModel },
+      ]}
+    >
       <div className="form-grid remote-observability-controls">
         <div>
           <label htmlFor="remote-observability-group">Operation Group</label>
@@ -203,6 +211,6 @@ export function ObservabilityPage() {
           </table>
         </div>
       </div>
-    </section>
+    </PageShell>
   );
 }

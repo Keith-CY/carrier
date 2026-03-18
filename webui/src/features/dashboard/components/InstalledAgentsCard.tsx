@@ -1,19 +1,22 @@
 import type { DashboardData } from '../useDashboardData';
 
-function statusIcon(value: unknown): string {
+function statusTone(value: unknown): 'ok' | 'error' | 'idle' {
   const status = String(value || '').trim().toLowerCase();
-  if (status === 'running' || status === 'healthy') return '🟢';
-  if (status === 'error') return '🔴';
-  return '⚪';
+  if (status === 'running' || status === 'healthy') return 'ok';
+  if (status === 'error') return 'error';
+  return 'idle';
 }
 
 export function InstalledAgentsCard({ data }: { data: DashboardData }) {
   const { instancesQuery, instances, runningInstances, refreshInstances, handleInstanceAction, setAddAgentModalOpen } = data;
 
   return (
-    <>
+    <section id="dashboard-agents-section" className="card dashboard-panel dashboard-panel--agents">
       <div className="section-head">
-        <h2>Installed Agents</h2>
+        <div>
+          <h2>Installed Agents</h2>
+          <p className="text-dim">Installed runtime surfaces, current health, and lifecycle actions.</p>
+        </div>
         <div className="section-actions">
           <button id="dashboard-add-agent" type="button" onClick={() => setAddAgentModalOpen(true)}>Add Agent</button>
           <button id="refresh-instances" className="btn-sm btn-secondary" onClick={() => void refreshInstances()}>
@@ -34,10 +37,14 @@ export function InstalledAgentsCard({ data }: { data: DashboardData }) {
           let metaText = `Type: ${agentId} · Channel: ${String(item?.channel || 'n/a')} · Provider: ${String(item?.provider || 'n/a')}`;
           if (pairRequired) metaText += ' · Pair: required';
           else if (pairedChatId) metaText += ` · Paired chat: ${pairedChatId}`;
+          const tone = statusTone(runtime);
           return (
             <div key={instanceId} className="agent-card">
               <h4>{instanceId}</h4>
-              <div className="agent-status">{statusIcon(runtime)} {runtime}</div>
+              <div className={`dashboard-status dashboard-status--${tone}`}>
+                <span className="dashboard-status__dot" aria-hidden="true" />
+                <span>{runtime}</span>
+              </div>
               <div className="instance-meta">{metaText}</div>
               <div className="btn-row">
                 <button className="btn-sm" onClick={() => void handleInstanceAction(instanceId, 'start')}>Start</button>
@@ -48,6 +55,6 @@ export function InstalledAgentsCard({ data }: { data: DashboardData }) {
           );
         })}
       </div>
-    </>
+    </section>
   );
 }

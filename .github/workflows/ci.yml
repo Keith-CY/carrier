@@ -778,11 +778,11 @@ jobs:
         working-directory: webui/e2e
         run: bunx playwright install --with-deps chromium
 
-      - name: Run Playwright tests
+      - name: Run Playwright visual regression
         working-directory: webui/e2e
         env:
           SKIP_REAL_API: '1'
-        run: bunx playwright test --update-snapshots
+        run: bun run test:visual
 
       - name: Upload visual snapshots
         if: always()

@@ -17,21 +17,21 @@ export function authHeaders(role: TestRole): Record<string, string> {
   return { Authorization: 'Bearer ' + roleTokens[role] };
 }
 
-export async function loginWithRole(page: Page, role: TestRole, url = '/dashboard', waitUntil: 'load' | 'domcontentloaded' | 'commit' = 'commit') {
+export async function loginWithRole(page: Page, role: TestRole, url = '/home', waitUntil: 'load' | 'domcontentloaded' | 'commit' = 'commit') {
   const token = roleTokens[role];
   await page.addInitScript((nextToken: string) => {
     localStorage.setItem('carrier_token', nextToken);
   }, token);
   const targetPath = normalizeTestRoute(url);
-  await page.goto('/', { waitUntil });
-  await page.locator('#logout-btn').waitFor({ state: 'visible' });
+  await page.goto(gatewayBaseURL + '/', { waitUntil });
+  await page.locator('#main').waitFor({ state: 'visible' });
+  await expect(page.locator('#login-overlay')).toHaveCount(0);
   if (targetPath !== '/') {
     await pushHistoryRoute(page, targetPath);
   }
   await page.waitForFunction((expectedPath: string) => {
-    const nav = document.querySelector('#nav');
     const current = window.location.pathname || '/';
-    return current === expectedPath || (!!nav && !nav.classList.contains('hidden'));
+    return current === expectedPath;
   }, targetPath);
 }
 

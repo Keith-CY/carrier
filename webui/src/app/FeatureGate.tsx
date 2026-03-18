@@ -13,7 +13,7 @@ export function FeatureGate({
   children,
   requireRemoteControlPlane = false,
   requireRemoteChat = false,
-  redirectTo = '/dashboard',
+  redirectTo = '/home',
 }: FeatureGateProps) {
   const { featureFlags, isLoading } = useFeatures();
 
