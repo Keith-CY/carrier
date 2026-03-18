@@ -134,7 +134,7 @@ if [[ "${CARRIER_E2E_SKIP_BUILD:-0}" != "1" ]]; then
   echo "[e2e-bootstrap] Building WebUI assets..."
   (cd "$repo_root" && bash scripts/build-webui.sh)
   echo "[e2e-bootstrap] Building carrier binary..."
-  (cd "$repo_root" && go build -o "$bin_path" ./cmd/carrier)
+  (cd "$repo_root" && go build -buildvcs=false -o "$bin_path" ./cmd/carrier)
 elif [[ ! -x "$bin_path" && -x "$repo_root/carrier" ]]; then
   bin_path="$repo_root/carrier"
 fi
