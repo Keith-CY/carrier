@@ -213,6 +213,16 @@ func TestParseRemoteCommandArgsAddDefaultsAndValidation(t *testing.T) {
 	if runOpts.Message != "say remote run ok" || runOpts.SessionID != "sess-1" || runOpts.TimeoutMs != 1500 || !runOpts.JSON {
 		t.Fatalf("unexpected run opts payload: %+v", runOpts)
 	}
+	runUsage := "usage: carrier remote run <host_id> <agent_id> -m <message> [--session-id <id>] [--timeout-ms <ms>] [--json]"
+	for _, args := range [][]string{
+		{"run", "host-1", "openclaw", "-m"},
+		{"run", "host-1", "openclaw", "-m", "say remote run ok", "--session-id"},
+		{"run", "host-1", "openclaw", "-m", "say remote run ok", "--timeout-ms"},
+	} {
+		if _, err := parseRemoteCommandArgs(args); err == nil || err.Error() != runUsage {
+			t.Fatalf("parseRemoteCommandArgs(%v) error = %v, want %q", args, err, runUsage)
+		}
+	}
 
 	keyImportOpts, err := parseRemoteCommandArgs([]string{"key", "import", "--file", "/tmp/id_ed25519"})
 	if err != nil {

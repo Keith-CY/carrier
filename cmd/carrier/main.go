@@ -2390,25 +2390,26 @@ func parseRemoteCommandArgs(args []string) (remoteCommandOptions, error) {
 			if opts.Action != "run" {
 				return remoteCommandOptions{}, fmt.Errorf("unknown remote option: %s", raw)
 			}
+			const runUsage = "usage: carrier remote run <host_id> <agent_id> -m <message> [--session-id <id>] [--timeout-ms <ms>] [--json]"
 			switch raw {
 			case "-m", "--message":
 				value, next, err := parseRequiredFlagValue(args, i, raw)
 				if err != nil {
-					return remoteCommandOptions{}, errors.New("usage: carrier remote run <host_id> <agent_id> -m <message> [--session-id <id>] [--timeout-ms <ms>] [--json]")
+					return remoteCommandOptions{}, errors.New(runUsage)
 				}
 				opts.Message = strings.TrimSpace(value)
 				i = next
 			case "--session-id":
 				value, next, err := parseRequiredFlagValue(args, i, "--session-id")
 				if err != nil {
-					return remoteCommandOptions{}, err
+					return remoteCommandOptions{}, errors.New(runUsage)
 				}
 				opts.SessionID = strings.TrimSpace(value)
 				i = next
 			case "--timeout-ms":
 				value, next, err := parseRequiredFlagValue(args, i, "--timeout-ms")
 				if err != nil {
-					return remoteCommandOptions{}, err
+					return remoteCommandOptions{}, errors.New(runUsage)
 				}
 				timeoutMs, convErr := strconv.Atoi(strings.TrimSpace(value))
 				if convErr != nil || timeoutMs < 0 {
