@@ -697,6 +697,57 @@ func TestRemoteInstanceRunInjectsMemoryContract(t *testing.T) {
 	}
 }
 
+func TestRemoteInstanceRunDispatchesPicoClaw(t *testing.T) {
+	seenDirectRun := false
+	seenMemoryEnv := false
+	configureSSHRunner(t, func(command string) remoteExecResult {
+		switch {
+		case strings.Contains(command, "picoclaw agent") && strings.Contains(command, "--session-id"):
+			return remoteExecResult{ExitCode: 2, Stderr: "unknown option --session-id"}
+		case strings.Contains(command, "picoclaw agent"):
+			seenDirectRun = true
+			if strings.Contains(command, "AGENTD_MEMORY_CONTRACT_ID=") && strings.Contains(command, "AGENTD_MEMORY_VIEW_DIGEST=") {
+				seenMemoryEnv = true
+			}
+			return remoteExecResult{ExitCode: 0, Stdout: `{"message":"hello from picoclaw"}`}
+		default:
+			return remoteExecResult{ExitCode: 0}
+		}
+	})
+
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+
+	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/remote/hosts/"+hostID+"/instances/picoclaw/run", `{
+		"message":"run pico now",
+		"sessionId":"sess-pico-1"
+	}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("picoclaw run status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	payload := decodeJSONMap(t, rec)
+	runMap, _ := payload["run"].(map[string]interface{})
+	if runMap == nil {
+		t.Fatalf("missing run payload: %v", payload)
+	}
+	if got, _ := runMap["sessionId"].(string); got != "sess-pico-1" {
+		t.Fatalf("expected sessionId sess-pico-1, got=%q payload=%v", got, payload)
+	}
+	if got, _ := runMap["output"].(string); got != "hello from picoclaw" {
+		t.Fatalf("expected picoclaw output, got=%q payload=%v", got, payload)
+	}
+	if !seenDirectRun {
+		t.Fatal("expected picoclaw direct remote command to execute")
+	}
+	memoryMap, _ := runMap["memory"].(map[string]interface{})
+	if memoryMap == nil || strings.TrimSpace(anyToString(memoryMap["contractDigest"])) == "" {
+		t.Fatalf("expected synthesized memory payload for picoclaw remote run: %v", payload)
+	}
+	if !seenMemoryEnv {
+		t.Fatalf("expected AGENTD_MEMORY_* env injection in picoclaw remote run command")
+	}
+}
+
 func TestRemoteInstallStreamSSE(t *testing.T) {
 	var installCommand string
 	configureSSHStreamRunner(t, func(command string, onChunk func(remoteStreamChunk)) remoteExecResult {

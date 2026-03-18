@@ -480,7 +480,7 @@ func handleRemoteHostInstances(w http.ResponseWriter, r *http.Request, requestID
 		startedAt := time.Now()
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
-		runResult, steps, err := remoteRunViaOpenClaw(ctx, host, hostID, agentID, req.Message, req.SessionID)
+		runResult, steps, err := remoteRunTaskViaAgent(ctx, host, hostID, agentID, req.Message, req.SessionID)
 		recordRemoteOperationMetric(remoteOpInstancesRun, startedAt, err)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, gatewayErrBody("E_REMOTE_RUN_FAILED", err.Error()))

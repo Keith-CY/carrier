@@ -23,6 +23,7 @@ import (
 const (
 	remoteOpenClawConfigPath         = "$HOME/.openclaw/openclaw.json"
 	remoteOpenClawCarrierSecretsPath = "$HOME/.openclaw/workspace/carrier-secrets.json"
+	remoteRsyncSecureChmodArg        = "--chmod=Fu=rw,Fgo=,Du=rwx,Dgo="
 	remotePicoClawConfigPath         = "$HOME/.picoclaw/config.json"
 	remoteZeroClawConfigPath         = "$HOME/.zeroclaw/config.toml"
 )
@@ -1546,7 +1547,7 @@ func runRemoteRsync(ctx context.Context, host RemoteHost, localPath, remotePath 
 	// (remoteOpenClawCarrierSecretsPath), not user input, so injection is not a concern.
 	args := []string{
 		"-az",
-		"--chmod=F600,D700",
+		remoteRsyncSecureChmodArg,
 		"-e", sshCommand,
 		"--rsync-path", rsyncPath,
 		localPath,
@@ -1630,7 +1631,7 @@ func remotePatchZeroClawConfig(ctx context.Context, host RemoteHost, patch map[s
 	snapshotUnix := time.Now().Unix()
 	snapshotPath := fmt.Sprintf("$HOME/.zeroclaw/snapshots/zeroclaw-%d.toml", snapshotUnix)
 	writeCmd := fmt.Sprintf(
-		"mkdir -p \"$HOME/.zeroclaw\" \"$HOME/.zeroclaw/snapshots\"; snapshot_path=\"$HOME/.zeroclaw/snapshots/zeroclaw-%d.toml\"; cp \"$HOME/.zeroclaw/config.toml\" \"$snapshot_path\" 2>/dev/null || true; cat > \"$HOME/.zeroclaw/config.toml\" <<'%s'\n%s\n%s",
+		"mkdir -p \"$HOME/.zeroclaw\" \"$HOME/.zeroclaw/snapshots\"; snapshot_path=\"$HOME/.zeroclaw/snapshots/zeroclaw-%d.toml\"; cp \"$HOME/.zeroclaw/config.toml\" \"$snapshot_path\" 2>/dev/null || true; cat > \"$HOME/.zeroclaw/config.toml\" <<'%s'\n%s\n%s\nchmod 600 \"$HOME/.zeroclaw/config.toml\"",
 		snapshotUnix,
 		delimiter,
 		rawToml,

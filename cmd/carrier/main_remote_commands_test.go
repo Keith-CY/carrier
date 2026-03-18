@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -186,6 +187,31 @@ func TestParseRemoteCommandArgsAddDefaultsAndValidation(t *testing.T) {
 	}
 	if rollbackOpts.Commit != "abc123" {
 		t.Fatalf("rollback commit = %q, want abc123", rollbackOpts.Commit)
+	}
+
+	statusAliasOpts, err := parseRemoteCommandArgs([]string{"status", "host-1", "openclaw"})
+	if err != nil {
+		t.Fatalf("parseRemoteCommandArgs(status alias) error: %v", err)
+	}
+	if statusAliasOpts.AgentID != "openclaw" || statusAliasOpts.TargetAgentID != "main" {
+		t.Fatalf("unexpected status alias opts: %+v", statusAliasOpts)
+	}
+
+	runOpts, err := parseRemoteCommandArgs([]string{
+		"run", "host-1", "openclaw",
+		"-m", "say remote run ok",
+		"--session-id", "sess-1",
+		"--timeout-ms", "1500",
+		"--json",
+	})
+	if err != nil {
+		t.Fatalf("parseRemoteCommandArgs(run) error: %v", err)
+	}
+	if runOpts.Action != "run" || runOpts.HostID != "host-1" || runOpts.AgentID != "openclaw" || runOpts.TargetAgentID != "main" {
+		t.Fatalf("unexpected run opts targeting: %+v", runOpts)
+	}
+	if runOpts.Message != "say remote run ok" || runOpts.SessionID != "sess-1" || runOpts.TimeoutMs != 1500 || !runOpts.JSON {
+		t.Fatalf("unexpected run opts payload: %+v", runOpts)
 	}
 
 	keyImportOpts, err := parseRemoteCommandArgs([]string{"key", "import", "--file", "/tmp/id_ed25519"})
@@ -423,6 +449,99 @@ func TestRunRemoteKeyImportCommand(t *testing.T) {
 	}
 }
 
+func TestRunRemoteRunCommandUsesOpenClawAliasAndWritesOutput(t *testing.T) {
+	var (
+		runBody string
+		runHits int
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/remote/hosts/host-1/instances/main/run":
+			if r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			runHits++
+			bodyRaw, _ := io.ReadAll(r.Body)
+			runBody = strings.TrimSpace(string(bodyRaw))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"result":"ok","run":{"hostId":"host-1","agentId":"main","sessionId":"sess-1","output":"remote-openclaw-ok","latencyMs":42}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	configureGatewayProbeEnvForTest(t, server.URL)
+
+	var out bytes.Buffer
+	if err := runRemoteCommand(strings.NewReader(""), &out, remoteCommandOptions{
+		Action:        "run",
+		AgentID:       "openclaw",
+		TargetAgentID: "main",
+		HostID:        "host-1",
+		Message:       "say remote run ok",
+		SessionID:     "sess-1",
+		TimeoutMs:     1500,
+	}); err != nil {
+		t.Fatalf("runRemoteCommand(run) error: %v", err)
+	}
+	if runHits != 1 {
+		t.Fatalf("expected one remote run call, got %d", runHits)
+	}
+	if !strings.Contains(runBody, `"message":"say remote run ok"`) || !strings.Contains(runBody, `"sessionId":"sess-1"`) || !strings.Contains(runBody, `"timeoutMs":1500`) {
+		t.Fatalf("unexpected remote run body: %s", runBody)
+	}
+	output := out.String()
+	if !strings.Contains(output, "Remote run host-1/openclaw") {
+		t.Fatalf("expected output to use openclaw alias, got %s", output)
+	}
+	if !strings.Contains(output, "session=sess-1") || !strings.Contains(output, "latency=42ms") || !strings.Contains(output, "remote-openclaw-ok") {
+		t.Fatalf("expected output to include run details, got %s", output)
+	}
+}
+
+func TestRunRemoteRunCommandJSONOutputSkipsGatewayProgress(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/remote/hosts/host-1/instances/main/run":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"result":"ok","run":{"hostId":"host-1","agentId":"main","sessionId":"sess-json","output":"json-openclaw-ok","latencyMs":7}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	configureGatewayProbeEnvForTest(t, server.URL)
+
+	var out bytes.Buffer
+	if err := runRemoteCommand(strings.NewReader(""), &out, remoteCommandOptions{
+		Action:        "run",
+		AgentID:       "openclaw",
+		TargetAgentID: "main",
+		HostID:        "host-1",
+		Message:       "json run",
+		JSON:          true,
+	}); err != nil {
+		t.Fatalf("runRemoteCommand(run json) error: %v", err)
+	}
+	output := strings.TrimSpace(out.String())
+	if !strings.HasPrefix(output, "{") {
+		t.Fatalf("expected pure json output, got %s", output)
+	}
+	if strings.Contains(output, "Gateway already running") || strings.Contains(output, "Gateway not detected") {
+		t.Fatalf("expected json mode to suppress gateway progress, got %s", output)
+	}
+	if !strings.Contains(output, `"sessionId": "sess-json"`) || !strings.Contains(output, `"output": "json-openclaw-ok"`) {
+		t.Fatalf("expected pretty json run payload, got %s", output)
+	}
+}
+
 func TestParseConfigAndRemoteStoreCommandArgs(t *testing.T) {
 	cfgBackup, err := parseConfigCommandArgs([]string{"backup", "--output", "/tmp/config-backup.json"})
 	if err != nil {
@@ -499,6 +618,62 @@ func TestBuildJSONRemoteConfigPatch(t *testing.T) {
 	openai := providers["openai"].(map[string]interface{})
 	if strings.TrimSpace(anyToString(openai["api_key"])) != "sk-openai-1" {
 		t.Fatalf("provider api key mismatch: %+v", openai)
+	}
+}
+
+func TestBuildJSONRemoteConfigPatchUsesManagedModelNameForPicoDefaults(t *testing.T) {
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(t.TempDir(), "credentials.json"))
+	if _, err := saveProviderCredential("anthropic", "sk-ant-1"); err != nil {
+		t.Fatalf("saveProviderCredential(anthropic): %v", err)
+	}
+	cfg := &configv2.Config{
+		DefaultModel: "anthropic-default",
+		ModelList: []configv2.Model{
+			{
+				ModelName:     "anthropic-default",
+				Model:         "anthropic/claude-opus-4-6",
+				ProviderID:    "anthropic",
+				CredentialRef: "anthropic",
+			},
+		},
+	}
+
+	patch, err := buildJSONRemoteConfigPatch(remoteCommandOptions{
+		SyncProviders: []string{"anthropic"},
+	}, cfg)
+	if err != nil {
+		t.Fatalf("buildJSONRemoteConfigPatch error: %v", err)
+	}
+
+	defaults := patch["agents"].(map[string]interface{})["defaults"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(defaults["model"])); got != "claude-opus-4-6" {
+		t.Fatalf("defaults.model = %q, want claude-opus-4-6", got)
+	}
+
+	modelList, _ := patch["model_list"].([]interface{})
+	if len(modelList) != 1 {
+		t.Fatalf("expected 1 model entry, got %#v", patch["model_list"])
+	}
+	modelItem, _ := modelList[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(modelItem["model_name"])); got != "claude-opus-4-6" {
+		t.Fatalf("model_list[0].model_name = %q, want claude-opus-4-6", got)
+	}
+	if got := strings.TrimSpace(anyToString(modelItem["model"])); got != "anthropic/claude-opus-4-6" {
+		t.Fatalf("model_list[0].model = %q, want anthropic/claude-opus-4-6", got)
+	}
+
+	profiles, _ := patch["provider_profiles"].(map[string]interface{})
+	profile, _ := profiles["claude-opus-4-6"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(profile["credential_ref"])); got != "anthropic" {
+		t.Fatalf("provider_profiles[claude-opus-4-6].credential_ref = %q, want anthropic", got)
+	}
+
+	encoded, err := json.Marshal(patch)
+	if err != nil {
+		t.Fatalf("marshal patch: %v", err)
+	}
+	if strings.Contains(string(encoded), "anthropic-default") {
+		t.Fatalf("expected managed pico patch to avoid local display name, got %s", string(encoded))
 	}
 }
 
@@ -619,33 +794,40 @@ func TestBuildOpenClawRemoteConfigPatch(t *testing.T) {
 	}
 }
 
-func TestBuildZeroClawRemoteConfigPatchRejectsProviderOnlySync(t *testing.T) {
+func TestBuildZeroClawRemoteConfigPatchAllowsProviderOnlySync(t *testing.T) {
+	t.Setenv("CARRIER_CREDENTIAL_STORE", filepath.Join(t.TempDir(), "credentials.json"))
+	if _, err := saveProviderCredential("anthropic", "sk-ant-1"); err != nil {
+		t.Fatalf("saveProviderCredential(anthropic): %v", err)
+	}
 	cfg := &configv2.Config{
-		Channels: []configv2.Channel{
-			{
-				ID:       "telegram",
-				BotToken: "tg-1",
-				Enabled:  true,
-			},
-		},
 		ModelList: []configv2.Model{
 			{
-				ModelName:     "gpt-4.1",
-				Model:         "openai/gpt-4.1",
-				ProviderID:    "openai",
-				CredentialRef: "openai",
+				ModelName:     "claude-3-5-haiku",
+				Model:         "anthropic/claude-3-5-haiku-latest",
+				ProviderID:    "anthropic",
+				CredentialRef: "anthropic",
 			},
 		},
 	}
 
-	_, err := buildZeroClawRemoteConfigPatch(remoteCommandOptions{
-		SyncProviders: []string{"openai"},
+	patch, err := buildZeroClawRemoteConfigPatch(remoteCommandOptions{
+		SyncProviders: []string{"anthropic"},
 	}, cfg)
-	if err == nil {
-		t.Fatal("expected provider-only zeroclaw sync to fail")
+	if err != nil {
+		t.Fatalf("buildZeroClawRemoteConfigPatch(provider only) error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "requires both --sync-channel and --sync-provider") {
-		t.Fatalf("unexpected error: %v", err)
+	rawTOML := strings.TrimSpace(anyToString(patch["raw_toml"]))
+	if !strings.Contains(rawTOML, `default_provider = "anthropic"`) {
+		t.Fatalf("expected anthropic default provider, got %s", rawTOML)
+	}
+	if !strings.Contains(rawTOML, `default_model = "claude-3-5-haiku-latest"`) {
+		t.Fatalf("expected anthropic default model, got %s", rawTOML)
+	}
+	if !strings.Contains(rawTOML, `api_key = "sk-ant-1"`) {
+		t.Fatalf("expected anthropic api key in raw_toml, got %s", rawTOML)
+	}
+	if strings.Contains(rawTOML, "[channels_config.") {
+		t.Fatalf("expected provider-only patch to omit channel sections, got %s", rawTOML)
 	}
 }
 
@@ -666,7 +848,7 @@ func TestBuildZeroClawRemoteConfigPatchRejectsChannelOnlySync(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected channel-only zeroclaw sync to fail")
 	}
-	if !strings.Contains(err.Error(), "requires both --sync-channel and --sync-provider") {
+	if !strings.Contains(err.Error(), "--sync-channel also requires --sync-provider") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

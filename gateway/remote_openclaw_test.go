@@ -145,7 +145,7 @@ func TestRemoteChatViaOpenClawFallsBackToSessionTranscript(t *testing.T) {
 		case strings.Contains(command, "openclaw agent --local --agent 'main'"):
 			return remoteExecResult{
 				ExitCode: 0,
-				Stdout: `{"meta":{"sessionId":"sess-fallback","agentMeta":{"sessionId":"sess-fallback"}},"payloads":[]}`,
+				Stdout:   `{"meta":{"sessionId":"sess-fallback","agentMeta":{"sessionId":"sess-fallback"}},"payloads":[]}`,
 			}
 		case strings.Contains(command, `cat "$f"; exit 0; done; exit 44`):
 			return remoteExecResult{
@@ -302,6 +302,9 @@ func TestRunRemoteRsyncBuildsSSHTransportForPrivateKeyHost(t *testing.T) {
 		t.Fatal("expected rsync args to be captured")
 	}
 	joined := strings.Join(captured, " ")
+	if !strings.Contains(joined, remoteRsyncSecureChmodArg) {
+		t.Fatalf("expected secure rsync chmod arg in rsync args, got %q", joined)
+	}
 	if !strings.Contains(joined, "--rsync-path") || !strings.Contains(joined, "mkdir -p") {
 		t.Fatalf("expected --rsync-path mkdir command in rsync args, got %q", joined)
 	}
@@ -829,11 +832,13 @@ func TestRemotePatchPicoClawConfigMergesAndWritesSnapshot(t *testing.T) {
 }
 
 func TestRemotePatchZeroClawConfigRequiresRawTomlAndWrites(t *testing.T) {
+	var writeCommand string
 	configureSSHRunner(t, func(command string) remoteExecResult {
 		switch {
 		case strings.Contains(command, "cat \"$HOME/.zeroclaw/config.toml\""):
 			return remoteExecResult{ExitCode: 0, Stdout: "api_key = \"old\""}
 		case strings.Contains(command, "cat > \"$HOME/.zeroclaw/config.toml\""):
+			writeCommand = command
 			return remoteExecResult{ExitCode: 0}
 		default:
 			return remoteExecResult{ExitCode: 0}
@@ -856,6 +861,9 @@ func TestRemotePatchZeroClawConfigRequiresRawTomlAndWrites(t *testing.T) {
 	}
 	if strings.TrimSpace(anyToString(patched["raw_toml"])) != "api_key = \"new\"" {
 		t.Fatalf("unexpected patched zeroclaw raw_toml: %#v", patched)
+	}
+	if !strings.Contains(writeCommand, "chmod 600 \"$HOME/.zeroclaw/config.toml\"") {
+		t.Fatalf("expected zeroclaw config write to tighten file mode, command=%q", writeCommand)
 	}
 
 	if _, _, _, err := remotePatchZeroClawConfig(context.Background(), RemoteHost{
