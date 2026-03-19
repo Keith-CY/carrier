@@ -10,7 +10,8 @@ Current harness sections:
 
 1. **Commit Size** (soft gate)
 2. **WebUI Bundle Size** (hard gate)
-3. **Code Readability** (hard gate on changed source files)
+3. **Perf Probes** (soft gate)
+4. **Code Readability** (hard gate on changed source files)
 
 The workflow is implemented in:
 
@@ -33,7 +34,30 @@ Measured after `bash scripts/build-webui.sh` using files under `webui/static/ass
 
 If either threshold is exceeded, the metrics workflow fails.
 
-## 3) Code Readability (hard gate)
+## 3) Perf Probes (soft gate)
+
+Perf probes are intended to provide trend visibility without introducing flaky hard failures.
+
+Current probes:
+
+- **Carrier CLI build time** (`go build -o dist/carrier-perf ./cmd/carrier`)
+- **Carrier CLI binary size**
+- **CLI command timing** across 3 runs each:
+  - `carrier --help`
+  - `carrier version`
+  - `carrier --version`
+  - report P50/P95/max
+- **Remote-path test timing**:
+  - `go test ./cmd/carrier -run 'TestRunRemoteRunCommandUsesOpenClawAliasAndWritesOutput|TestRunRemoteRunCommandJSONOutputSkipsGatewayProgress'`
+  - `cd gateway && go test ./... -run 'TestRemoteMetricsEndpointTracksOperations|TestRemoteMetricsCollectorSnapshot'`
+
+Behavior:
+
+- Reported in PR metrics comment
+- Marked as soft-gate (`✅/⚠️`) for now
+- Does not fail the workflow by itself
+
+## 4) Code Readability (hard gate)
 
 Checks **changed source files in the PR diff** across:
 
@@ -63,6 +87,7 @@ This keeps the PR timeline clean and avoids duplicate bot comments.
 
 Planned additions (optional, not yet hard-gated):
 
-- command latency probes (P50/P95) for selected control-plane flows
+- remote SSH probe timings (similar to clawpal command-hop timing)
 - packaged binary size trend section from `e2e-packaged-binary` artifacts
 - visual acceptance timing rollup alongside screenshot links
+- tightening perf thresholds after baseline data is accumulated

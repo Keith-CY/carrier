@@ -210,6 +210,113 @@ jobs:
           echo "violations=${violations}" >> "$GITHUB_OUTPUT"
           echo "fail=${fail}" >> "$GITHUB_OUTPUT"
 
+      - name: "Perf probes (soft gate: CLI timing + remote path test timing)"
+        id: perf
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          build_start_ns="$(date +%s%N)"
+          go build -o dist/carrier-perf ./cmd/carrier
+          build_end_ns="$(date +%s%N)"
+          build_ms=$(( (build_end_ns - build_start_ns) / 1000000 ))
+          binary_size_bytes="$(wc -c < dist/carrier-perf | tr -d ' ')"
+          binary_size_mb="$(awk -v b="${binary_size_bytes}" 'BEGIN { printf "%.1f", b / 1024 / 1024 }')"
+
+          cmd_limit_ms=800
+          cmd_runs=0
+          cmd_failures=0
+          cmd_details=""
+          all_times=""
+
+          cmds=(
+            "--help"
+            "version"
+            "--version"
+          )
+
+          for cmd in "${cmds[@]}"; do
+            runs_for_cmd=3
+            failures=0
+            times=""
+
+            for i in 1 2 3; do
+              start_ns="$(date +%s%N)"
+              if ./dist/carrier-perf ${cmd} >/dev/null 2>&1; then
+                :
+              else
+                failures=$((failures + 1))
+                cmd_failures=$((cmd_failures + 1))
+              fi
+              end_ns="$(date +%s%N)"
+
+              ms=$(( (end_ns - start_ns) / 1000000 ))
+              times+="${ms}\n"
+              all_times+="${ms}\n"
+              cmd_runs=$((cmd_runs + 1))
+            done
+
+            sorted="$(printf "%b" "${times}" | sed '/^$/d' | sort -n)"
+            p50="$(echo "${sorted}" | awk 'NF{a[++n]=$1} END{if(n==0){print 0}else{print a[int((n+1)/2)]}}')"
+            p95="$(echo "${sorted}" | awk 'NF{a[++n]=$1} END{if(n==0){print 0}else{idx=int((n*95+99)/100); if(idx<1)idx=1; if(idx>n)idx=n; print a[idx]}}')"
+            max="$(echo "${sorted}" | awk 'NF{m=$1} END{if(NR==0){print 0}else{print m}}')"
+
+            status='✅'
+            if [[ "${failures}" -gt 0 ]] || [[ "${p95}" -gt "${cmd_limit_ms}" ]]; then
+              status='⚠️'
+            fi
+
+            cmd_details+="| \`carrier ${cmd}\` | ${runs_for_cmd} | ${failures} | ${p50} ms | ${p95} ms | ${max} ms | ${status} |\n"
+          done
+
+          if [[ -z "${cmd_details}" ]]; then
+            cmd_details='| _(no command probes)_ | 0 | 0 | 0 ms | 0 ms | 0 ms | ℹ️ |\n'
+          fi
+          printf "%b" "${cmd_details}" > /tmp/metrics_perf_cmd_details.md
+
+          all_sorted="$(printf "%b" "${all_times}" | sed '/^$/d' | sort -n)"
+          overall_p50_ms="$(echo "${all_sorted}" | awk 'NF{a[++n]=$1} END{if(n==0){print 0}else{print a[int((n+1)/2)]}}')"
+          overall_p95_ms="$(echo "${all_sorted}" | awk 'NF{a[++n]=$1} END{if(n==0){print 0}else{idx=int((n*95+99)/100); if(idx<1)idx=1; if(idx>n)idx=n; print a[idx]}}')"
+          overall_max_ms="$(echo "${all_sorted}" | awk 'NF{m=$1} END{if(NR==0){print 0}else{print m}}')"
+
+          remote_suite_ok=true
+          gateway_suite_ok=true
+
+          remote_start_ns="$(date +%s%N)"
+          if go test ./cmd/carrier -run 'TestRunRemoteRunCommandUsesOpenClawAliasAndWritesOutput|TestRunRemoteRunCommandJSONOutputSkipsGatewayProgress' -count=1 >/tmp/metrics_perf_remote_cmd_test.log 2>&1; then
+            :
+          else
+            remote_suite_ok=false
+          fi
+          remote_end_ns="$(date +%s%N)"
+          remote_suite_ms=$(( (remote_end_ns - remote_start_ns) / 1000000 ))
+
+          gateway_start_ns="$(date +%s%N)"
+          if (
+            cd gateway
+            go test ./... -run 'TestRemoteMetricsEndpointTracksOperations|TestRemoteMetricsCollectorSnapshot' -count=1 >/tmp/metrics_perf_gateway_test.log 2>&1
+          ); then
+            :
+          else
+            gateway_suite_ok=false
+          fi
+          gateway_end_ns="$(date +%s%N)"
+          gateway_suite_ms=$(( (gateway_end_ns - gateway_start_ns) / 1000000 ))
+
+          echo "build_ms=${build_ms}" >> "$GITHUB_OUTPUT"
+          echo "binary_size_mb=${binary_size_mb}" >> "$GITHUB_OUTPUT"
+          echo "cmd_limit_ms=${cmd_limit_ms}" >> "$GITHUB_OUTPUT"
+          echo "cmd_runs=${cmd_runs}" >> "$GITHUB_OUTPUT"
+          echo "cmd_failures=${cmd_failures}" >> "$GITHUB_OUTPUT"
+          echo "overall_p50_ms=${overall_p50_ms}" >> "$GITHUB_OUTPUT"
+          echo "overall_p95_ms=${overall_p95_ms}" >> "$GITHUB_OUTPUT"
+          echo "overall_max_ms=${overall_max_ms}" >> "$GITHUB_OUTPUT"
+          echo "remote_suite_ok=${remote_suite_ok}" >> "$GITHUB_OUTPUT"
+          echo "remote_suite_ms=${remote_suite_ms}" >> "$GITHUB_OUTPUT"
+          echo "gateway_suite_ok=${gateway_suite_ok}" >> "$GITHUB_OUTPUT"
+          echo "gateway_suite_ms=${gateway_suite_ms}" >> "$GITHUB_OUTPUT"
+
       - name: Build metrics report
         id: report
         shell: bash
@@ -243,7 +350,13 @@ jobs:
             commit_icon='❌'
           fi
 
+          perf_icon='✅'
+          if [[ "${{ steps.perf.outputs.cmd_failures }}" -gt 0 ]] || [[ "${{ steps.perf.outputs.remote_suite_ok }}" != 'true' ]] || [[ "${{ steps.perf.outputs.gateway_suite_ok }}" != 'true' ]]; then
+            perf_icon='⚠️'
+          fi
+
           commit_details="$(cat /tmp/metrics_commit_details.md)"
+          perf_cmd_details="$(cat /tmp/metrics_perf_cmd_details.md)"
           readability_details="$(cat /tmp/metrics_readability_details.md)"
 
           cat > /tmp/pr-metrics-comment.md <<EOF
@@ -275,6 +388,25 @@ jobs:
           | JS bundle (raw) | ${{ steps.bundle.outputs.raw_kb }} KB | — | — |
           | JS bundle (gzip) | ${{ steps.bundle.outputs.gzip_kb }} KB | ≤ ${{ steps.bundle.outputs.gzip_limit_kb }} KB | $( [[ "${{ steps.bundle.outputs.gzip_kb }}" -le "${{ steps.bundle.outputs.gzip_limit_kb }}" ]] && echo "✅" || echo "❌" ) |
           | JS initial load (gzip) | ${{ steps.bundle.outputs.initial_gzip_kb }} KB | ≤ ${{ steps.bundle.outputs.initial_limit_kb }} KB | $( [[ "${{ steps.bundle.outputs.initial_gzip_kb }}" -le "${{ steps.bundle.outputs.initial_limit_kb }}" ]] && echo "✅" || echo "❌" ) |
+
+          ### Perf Probes (soft gate) ${perf_icon}
+
+          | Metric | Value | Target | Status |
+          |--------|-------|--------|--------|
+          | carrier build time | ${{ steps.perf.outputs.build_ms }} ms | trend ↓ | ℹ️ |
+          | carrier binary size | ${{ steps.perf.outputs.binary_size_mb }} MB | trend ↓ | ℹ️ |
+          | CLI probe runs | ${{ steps.perf.outputs.cmd_runs }} | failures = 0 | $( [[ "${{ steps.perf.outputs.cmd_failures }}" -eq 0 ]] && echo "✅" || echo "⚠️" ) |
+          | CLI overall P95 | ${{ steps.perf.outputs.overall_p95_ms }} ms | ≤ ${{ steps.perf.outputs.cmd_limit_ms }} ms (soft) | $( [[ "${{ steps.perf.outputs.overall_p95_ms }}" -le "${{ steps.perf.outputs.cmd_limit_ms }}" ]] && echo "✅" || echo "⚠️" ) |
+          | cmd/carrier remote-path suite | ${{ steps.perf.outputs.remote_suite_ms }} ms | pass | $( [[ "${{ steps.perf.outputs.remote_suite_ok }}" == 'true' ]] && echo "✅" || echo "⚠️" ) |
+          | gateway remote-metrics suite | ${{ steps.perf.outputs.gateway_suite_ms }} ms | pass | $( [[ "${{ steps.perf.outputs.gateway_suite_ok }}" == 'true' ]] && echo "✅" || echo "⚠️" ) |
+
+          <details><summary>CLI command timings</summary>
+
+          | Command | Runs | Failures | P50 | P95 | Max | Status |
+          |---------|------|----------|-----|-----|-----|--------|
+          ${perf_cmd_details}
+
+          </details>
 
           ### Code Readability (hard gate: changed source files) ${readability_icon}
 
