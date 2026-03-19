@@ -455,8 +455,12 @@ jobs:
         run: |
           set -euo pipefail
           go test ./... -coverprofile=coverage-root.out
-          (cd webui && go test ./... -coverprofile=coverage-webui.out)
-          cp webui/coverage-webui.out coverage-webui.out
+          (cd baseagent && go test ./... -coverprofile=../coverage-baseagent.out)
+          (cd gateway && go test ./... -coverprofile=../coverage-gateway.out)
+          (cd shared && go test ./... -coverprofile=../coverage-shared.out)
+          (cd profilesync && go test ./... -coverprofile=../coverage-profilesync.out)
+          (cd codeagent && go test ./... -coverprofile=../coverage-codeagent.out)
+          (cd webui && go test ./... -coverprofile=../coverage-webui.out)
 
       - name: Collect base branch coverage
         continue-on-error: true
@@ -478,12 +482,22 @@ jobs:
           git worktree add ../_base_cov "${base_sha}"
           trap 'git worktree remove -f ../_base_cov || true' EXIT
 
-          (cd ../_base_cov && go test ./... -coverprofile=coverage-root.out)
-          (cd ../_base_cov/webui && go test ./... -coverprofile=coverage-webui.out)
+          (cd ../_base_cov && go test ./... -coverprofile=coverage-base-root.out)
+          (cd ../_base_cov/baseagent && go test ./... -coverprofile=../coverage-base-baseagent.out)
+          (cd ../_base_cov/gateway && go test ./... -coverprofile=../coverage-base-gateway.out)
+          (cd ../_base_cov/shared && go test ./... -coverprofile=../coverage-base-shared.out)
+          (cd ../_base_cov/profilesync && go test ./... -coverprofile=../coverage-base-profilesync.out)
+          (cd ../_base_cov/codeagent && go test ./... -coverprofile=../coverage-base-codeagent.out)
+          (cd ../_base_cov/webui && go test ./... -coverprofile=../coverage-base-webui.out)
           (cd ../_base_cov/daemon && go test ./... -coverprofile=coverage.out)
 
-          cp ../_base_cov/coverage-root.out coverage-base-root.out
-          cp ../_base_cov/webui/coverage-webui.out coverage-base-webui.out
+          cp ../_base_cov/coverage-base-root.out coverage-base-root.out
+          cp ../_base_cov/coverage-base-baseagent.out coverage-base-baseagent.out
+          cp ../_base_cov/coverage-base-gateway.out coverage-base-gateway.out
+          cp ../_base_cov/coverage-base-shared.out coverage-base-shared.out
+          cp ../_base_cov/coverage-base-profilesync.out coverage-base-profilesync.out
+          cp ../_base_cov/coverage-base-codeagent.out coverage-base-codeagent.out
+          cp ../_base_cov/coverage-base-webui.out coverage-base-webui.out
           cp ../_base_cov/daemon/coverage.out coverage-base-daemon.out
 
       - name: Build markdown summary
@@ -492,196 +506,14 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          python3 - <<'PY2'
-          import os
-          import pathlib
-          import subprocess
-          import sys
-
-          MODULES = [
-              {
-                  "key": "daemon",
-                  "label": "Daemon (Go)",
-                  "head_profile": "daemon/coverage.out",
-                  "base_profile": "coverage-base-daemon.out",
-              },
-              {
-                  "key": "root",
-                  "label": "Carrier Core (Go)",
-                  "head_profile": "coverage-root.out",
-                  "base_profile": "coverage-base-root.out",
-              },
-              {
-                  "key": "webui",
-                  "label": "WebUI (Go)",
-                  "head_profile": "coverage-webui.out",
-                  "base_profile": "coverage-base-webui.out",
-              },
-          ]
-
-          def parse_coverprofile(path):
-              p = pathlib.Path(path)
-              if not p.exists():
-                  return {"exists": False, "total": 0, "covered": 0}
-
-              total = 0
-              covered = 0
-              for raw in p.read_text().splitlines():
-                  line = raw.strip()
-                  if not line or line.startswith("mode:"):
-                      continue
-                  parts = line.rsplit(" ", 2)
-                  if len(parts) != 3:
-                      continue
-                  try:
-                      stmts = int(parts[1])
-                      count = int(parts[2])
-                  except ValueError:
-                      continue
-                  total += stmts
-                  if count > 0:
-                      covered += stmts
-
-              return {"exists": True, "total": total, "covered": covered}
-
-          def pct(stats):
-              if stats["total"] == 0:
-                  return 0.0
-              return (stats["covered"] * 100.0) / stats["total"]
-
-          def changed_modules():
-              base_sha = os.environ.get("BASE_SHA", "").strip()
-              head_sha = os.environ.get("HEAD_SHA", "").strip()
-              if not base_sha or not head_sha:
-                  return []
-
-              try:
-                  output = subprocess.check_output(
-                      ["git", "diff", "--name-only", base_sha, head_sha],
-                      text=True,
-                  )
-              except subprocess.CalledProcessError as err:
-                  print(
-                      f"changed_modules: git diff failed for {base_sha}..{head_sha}: {err}",
-                      file=sys.stderr,
-                  )
-                  return []
-              files = [f.strip() for f in output.splitlines() if f.strip()]
-              selected = set()
-
-              for path in files:
-                  if path.startswith("daemon/"):
-                      selected.add("daemon")
-                      continue
-                  if path.startswith("webui/"):
-                      selected.add("webui")
-                      continue
-                  if (
-                      path.endswith(".go")
-                      or path in {"go.mod", "go.sum"}
-                      or path.startswith(("cmd/", "internal/", "pkg/"))
-                  ):
-                      selected.add("root")
-
-              order = ["daemon", "root", "webui"]
-              return [m for m in order if m in selected]
-
-          module_data = {}
-          for mod in MODULES:
-              head_stats = parse_coverprofile(mod["head_profile"])
-              base_stats = parse_coverprofile(mod["base_profile"])
-              head_pct = pct(head_stats)
-              base_pct = pct(base_stats)
-              module_data[mod["key"]] = {
-                  "label": mod["label"],
-                  "head": head_stats,
-                  "base": base_stats,
-                  "head_pct": head_pct,
-                  "base_pct": base_pct,
-                  "delta": head_pct - base_pct,
-              }
-
-          changed = changed_modules()
-          visible_modules = changed if changed else [m["key"] for m in MODULES]
-
-          product_head_total = sum(module_data[m["key"]]["head"]["total"] for m in MODULES)
-          product_head_covered = sum(module_data[m["key"]]["head"]["covered"] for m in MODULES)
-          product_base_total = sum(module_data[m["key"]]["base"]["total"] for m in MODULES)
-          product_base_covered = sum(module_data[m["key"]]["base"]["covered"] for m in MODULES)
-
-          product_head_pct = (product_head_covered * 100.0 / product_head_total) if product_head_total else 0.0
-          product_base_pct = (product_base_covered * 100.0 / product_base_total) if product_base_total else 0.0
-          product_delta = product_head_pct - product_base_pct
-
-          gate_triggered = product_delta <= -3.0
-
-          compared_modules = 0
-          head_sum = 0.0
-          base_sum = 0.0
-          missing_modules = []
-
-          rows = []
-          for key in visible_modules:
-              row = module_data[key]
-              has_head = row["head"]["exists"]
-              has_base = row["base"]["exists"]
-              status = "✅"
-              if not (has_head and has_base):
-                  status = "⚠️"
-                  missing_modules.append(row["label"])
-              else:
-                  compared_modules += 1
-                  head_sum += row["head_pct"]
-                  base_sum += row["base_pct"]
-
-              rows.append(
-                  f'| {row["label"]} | {row["head_pct"]:.2f}% | {row["delta"]:+.2f}% | {status} |'
-              )
-
-          avg_head = (head_sum / compared_modules) if compared_modules else 0.0
-          avg_base = (base_sum / compared_modules) if compared_modules else 0.0
-          avg_delta = avg_head - avg_base
-
-          marker = '<!-- carrier-pr-coverage-report -->'
-          lines = [
-              marker,
-              '### 📊 Coverage Report',
-              '',
-              '| Module | Line Coverage | Δ vs base | Status |',
-              '|---|---:|---:|:---|',
-              *rows,
-              '',
-              f'**Average line coverage:** {avg_head:.2f}%',
-              f'**Base average line coverage:** {avg_base:.2f}%',
-              f'**Δ vs base:** {avg_delta:+.2f}%',
-              f'**Compared modules:** Modules with head/base coverage: {compared_modules}/{len(visible_modules)}',
-              '',
-              '### Action needed',
-          ]
-
-          if gate_triggered:
-              lines.append(
-                  f'- ❌ Full product coverage dropped by {abs(product_delta):.2f}% (threshold: 3.00%). Add tests before merge.'
-              )
-          elif missing_modules:
-              lines.append(
-                  f'- ⚠️ Coverage profiles missing for: {", ".join(missing_modules)}. Please rerun tests for complete stats.'
-              )
-          else:
-              lines.append('- ✅ No action needed.')
-
-          lines.extend([
-              '',
-              '- To recalc the report after fixes: open this workflow run and rerun **Coverage Comment** job.',
-              '',
-              '_Status legend: ✅ OK, ⚠️ module missing, ❌ module coverage run failed._',
-          ])
-
-          pathlib.Path('coverage-comment.md').write_text('\n'.join(lines))
-          pathlib.Path('coverage-request-changes.txt').write_text('true' if gate_triggered else 'false')
-          pathlib.Path('coverage-product-delta.txt').write_text(f'{product_delta:+.2f}')
-          pathlib.Path('coverage-product-current.txt').write_text(f'{product_head_pct:.2f}')
-          PY2
+          node scripts/ci/coverage-comment.cjs \
+            --repo-root . \
+            --base-sha "${BASE_SHA}" \
+            --head-sha "${HEAD_SHA}" \
+            --output coverage-comment.md \
+            --request-output coverage-request-changes.txt \
+            --product-delta-output coverage-product-delta.txt \
+            --product-current-output coverage-product-current.txt
 
           echo "request_changes=$(cat coverage-request-changes.txt)" >> "$GITHUB_OUTPUT"
           echo "product_delta=$(cat coverage-product-delta.txt)" >> "$GITHUB_OUTPUT"
