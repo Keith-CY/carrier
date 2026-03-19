@@ -28,12 +28,26 @@ function listMetadataFiles(metadataDir) {
   return files.sort();
 }
 
+function parseOptionalSize(raw, filePath) {
+  if (raw.package_size_bytes === undefined || raw.package_size_bytes === null || raw.package_size_bytes === "") {
+    return null;
+  }
+
+  const parsed = Number(raw.package_size_bytes);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`Invalid "package_size_bytes" in ${filePath}: "${raw.package_size_bytes}"`);
+  }
+
+  return Math.round(parsed);
+}
+
 function parseMetadataFile(filePath) {
   const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
   const label = String(raw.label || "").trim();
   const variant = String(raw.variant || "").trim();
   const packageFile = String(raw.package_file || "").trim();
   const artifactId = String(raw.artifact_id || "").trim();
+  const packageSizeBytes = parseOptionalSize(raw, filePath);
 
   if (!label) {
     throw new Error(`Missing "label" in ${filePath}`);
@@ -54,12 +68,25 @@ function parseMetadataFile(filePath) {
     variant,
     packageFile,
     artifactId,
+    packageSizeBytes,
   };
 }
 
 function loadPackageMetadata(metadataDir) {
   const files = listMetadataFiles(metadataDir);
   return files.map((filePath) => parseMetadataFile(filePath));
+}
+
+function formatSize(sizeBytes) {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return "—";
+  }
+  const mb = sizeBytes / (1024 * 1024);
+  if (mb >= 1) {
+    return `${mb.toFixed(1)} MB`;
+  }
+  const kb = sizeBytes / 1024;
+  return `${kb.toFixed(1)} KB`;
 }
 
 function buildPrPackagesComment({ repository, runId, commitSha, packages }) {
@@ -78,20 +105,33 @@ function buildPrPackagesComment({ repository, runId, commitSha, packages }) {
   }
 
   const runUrl = `https://github.com/${repo}/actions/runs/${run}`;
+  const shortSha = sha.slice(0, 7);
+  const rows = Array.isArray(packages) ? packages : [];
+
   const lines = [
     COMMENT_MARKER,
-    "## Test Packages",
+    "## 📦 PR Test Package Artifacts",
     "",
-    `- Commit: \`${sha}\``,
-    `- Workflow run: [${run}](${runUrl})`,
-    "",
-    "Download:",
   ];
 
-  for (const item of packages) {
-    const label = item.variant ? `${item.variant}/${item.label}` : item.label;
-    lines.push(`- ${label}: [\`${item.packageFile}\`](${runUrl}/artifacts/${item.artifactId})`);
+  if (rows.length === 0) {
+    lines.push(`⚠️ No package artifacts were produced. Check the [workflow run](${runUrl}) for details.`);
+  } else {
+    lines.push("| Platform | Download | Size |");
+    lines.push("|----------|----------|------|");
+
+    for (const item of rows) {
+      const platform = item.variant ? `${item.variant}/${item.label}` : item.label;
+      const download = `[📥 ${item.packageFile}](${runUrl}/artifacts/${item.artifactId})`;
+      const sizeText = formatSize(item.packageSizeBytes);
+      lines.push(`| ${platform} | ${download} | ${sizeText} |`);
+    }
   }
+
+  lines.push("");
+  lines.push("---");
+  lines.push(`> 🔨 Built from \`${shortSha}\` · [View workflow run](${runUrl})`);
+  lines.push("> ⚠️ **Unsigned development test packages** — for verification only");
 
   return `${lines.join("\n")}\n`;
 }
@@ -140,4 +180,5 @@ module.exports = {
   listMetadataFiles,
   loadPackageMetadata,
   parseMetadataFile,
+  formatSize,
 };
