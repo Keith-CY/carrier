@@ -1,0 +1,398 @@
+package work
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"strings"
+)
+
+func NormalizeProject(in Project) (Project, error) {
+	out := in
+	var err error
+	out.ID, err = ensurePrefixedID("proj", "project id", out.ID)
+	if err != nil {
+		return Project{}, err
+	}
+	out.Name = strings.TrimSpace(out.Name)
+	out.SourceType = normalizeSourceType(out.SourceType)
+	out.SourceRef = strings.TrimSpace(out.SourceRef)
+	out.DefaultBranch = strings.TrimSpace(out.DefaultBranch)
+	out.WorkflowPath = strings.TrimSpace(out.WorkflowPath)
+	out.WorkflowDigest = strings.TrimSpace(out.WorkflowDigest)
+	out.State = normalizeProjectState(out.State)
+	out.LastSyncAt = strings.TrimSpace(out.LastSyncAt)
+	out.LastSyncError = strings.TrimSpace(out.LastSyncError)
+
+	if out.Name == "" {
+		return Project{}, fmt.Errorf("project name is required")
+	}
+	if out.SourceType == "" {
+		return Project{}, fmt.Errorf("project sourceType is required")
+	}
+	if out.SourceRef == "" {
+		return Project{}, fmt.Errorf("project sourceRef is required")
+	}
+	if out.DefaultBranch == "" {
+		out.DefaultBranch = "main"
+	}
+	if out.WorkflowPath == "" {
+		out.WorkflowPath = DefaultWorkflowPath
+	}
+	if out.State == "" {
+		out.State = ProjectStateRegistered
+	}
+	return out, nil
+}
+
+func NormalizeWorkItem(in WorkItem) (WorkItem, error) {
+	out := in
+	var err error
+	out.ID, err = ensurePrefixedID("work", "work item id", out.ID)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	out.ProjectID, err = NormalizeProjectID(out.ProjectID)
+	if err != nil {
+		return WorkItem{}, fmt.Errorf("work item projectId: %w", err)
+	}
+	out.Title = strings.TrimSpace(out.Title)
+	out.Description = strings.TrimSpace(out.Description)
+	out.Acceptance = normalizeStringList(out.Acceptance)
+	out.Priority = normalizeWorkPriority(out.Priority)
+	out.Source = normalizeWorkSource(out.Source)
+	out.SourceRef = strings.TrimSpace(out.SourceRef)
+	out.Labels = normalizeStringList(out.Labels)
+	out.State = normalizeWorkItemState(out.State)
+	out.ClaimedByRunID, err = normalizeOptionalIdentifier("claimedByRunId", out.ClaimedByRunID)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	out.LatestRunID, err = normalizeOptionalIdentifier("latestRunId", out.LatestRunID)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	out.CreatedAt = strings.TrimSpace(out.CreatedAt)
+	out.UpdatedAt = strings.TrimSpace(out.UpdatedAt)
+
+	if out.Title == "" {
+		return WorkItem{}, fmt.Errorf("work item title is required")
+	}
+	if out.Priority == "" {
+		out.Priority = WorkPriorityNormal
+	}
+	if out.Source == "" {
+		out.Source = WorkSourceLocal
+	}
+	if out.SourceRef == "" && out.Source == WorkSourceLocal {
+		out.SourceRef = "local:manual"
+	}
+	if out.State == "" {
+		out.State = WorkItemStateNew
+	}
+	return out, nil
+}
+
+func NormalizeRun(in Run) (Run, error) {
+	out := in
+	rawBackend := strings.TrimSpace(string(in.Backend))
+	var err error
+	out.ID, err = ensurePrefixedID("run", "run id", out.ID)
+	if err != nil {
+		return Run{}, err
+	}
+	out.ProjectID, err = NormalizeProjectID(out.ProjectID)
+	if err != nil {
+		return Run{}, fmt.Errorf("run projectId: %w", err)
+	}
+	out.WorkItemID, err = NormalizeWorkItemID(out.WorkItemID)
+	if err != nil {
+		return Run{}, fmt.Errorf("run workItemId: %w", err)
+	}
+	out.ExecutionID = strings.TrimSpace(out.ExecutionID)
+	out.WorkspaceID, err = normalizeOptionalIdentifier("workspaceId", out.WorkspaceID)
+	if err != nil {
+		return Run{}, err
+	}
+	out.WorkspacePath = strings.TrimSpace(out.WorkspacePath)
+	out.Backend = normalizeRunBackend(out.Backend)
+	out.Phase = normalizeRunPhase(out.Phase)
+	out.LeaseOwner = strings.TrimSpace(out.LeaseOwner)
+	out.LeaseExpiresAt = strings.TrimSpace(out.LeaseExpiresAt)
+	out.VerificationStatus = normalizeVerificationStatus(out.VerificationStatus)
+	out.PublishStatus = normalizePublishStatus(out.PublishStatus)
+	out.WorkflowDigest = strings.TrimSpace(out.WorkflowDigest)
+	out.CreatedAt = strings.TrimSpace(out.CreatedAt)
+	out.UpdatedAt = strings.TrimSpace(out.UpdatedAt)
+
+	if rawBackend != "" && out.Backend == "" {
+		return Run{}, fmt.Errorf("run backend %q is invalid", rawBackend)
+	}
+	if out.Backend == "" {
+		out.Backend = RunBackendLocalSandboxed
+	}
+	if out.Phase == "" {
+		out.Phase = RunPhaseCreated
+	}
+	if out.VerificationStatus == "" {
+		out.VerificationStatus = VerificationStatusPending
+	}
+	if out.PublishStatus == "" {
+		out.PublishStatus = PublishStatusPending
+	}
+	return out, nil
+}
+
+func NormalizeProjectID(current string) (string, error) {
+	return normalizeRequiredIdentifier("project id", current)
+}
+
+func NormalizeWorkItemID(current string) (string, error) {
+	return normalizeRequiredIdentifier("work item id", current)
+}
+
+func NormalizeRunID(current string) (string, error) {
+	return normalizeRequiredIdentifier("run id", current)
+}
+
+func ensurePrefixedID(prefix string, label string, current string) (string, error) {
+	trimmed := strings.TrimSpace(current)
+	if trimmed != "" {
+		return normalizeRequiredIdentifier(label, trimmed)
+	}
+	suffix, err := randomID()
+	if err != nil {
+		return "", err
+	}
+	return prefix + "_" + suffix, nil
+}
+
+func normalizeRequiredIdentifier(label, current string) (string, error) {
+	trimmed := strings.TrimSpace(current)
+	if trimmed == "" {
+		return "", fmt.Errorf("%s is required", label)
+	}
+	if !isSafeIdentifier(trimmed) {
+		return "", fmt.Errorf("%s %q is invalid", label, trimmed)
+	}
+	return trimmed, nil
+}
+
+func normalizeOptionalIdentifier(label, current string) (string, error) {
+	trimmed := strings.TrimSpace(current)
+	if trimmed == "" {
+		return "", nil
+	}
+	if !isSafeIdentifier(trimmed) {
+		return "", fmt.Errorf("%s %q is invalid", label, trimmed)
+	}
+	return trimmed, nil
+}
+
+func isSafeIdentifier(value string) bool {
+	if value == "" || strings.Contains(value, "..") {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			continue
+		case r >= 'A' && r <= 'Z':
+			continue
+		case r >= '0' && r <= '9':
+			continue
+		case r == '_', r == '-':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+var randomIDRead = rand.Read
+
+func randomID() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := randomIDRead(buf); err != nil {
+		return "", fmt.Errorf("failed to read random bytes for id generation: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+func normalizeSourceType(in SourceType) SourceType {
+	switch SourceType(strings.ToLower(strings.TrimSpace(string(in)))) {
+	case SourceTypeGitHub:
+		return SourceTypeGitHub
+	case SourceTypeGit:
+		return SourceTypeGit
+	case SourceTypeLocal:
+		return SourceTypeLocal
+	default:
+		return ""
+	}
+}
+
+func normalizeProjectState(in ProjectState) ProjectState {
+	switch ProjectState(strings.ToLower(strings.TrimSpace(string(in)))) {
+	case ProjectStateRegistered:
+		return ProjectStateRegistered
+	case ProjectStateSyncing:
+		return ProjectStateSyncing
+	case ProjectStateReady:
+		return ProjectStateReady
+	case ProjectStateDrifted:
+		return ProjectStateDrifted
+	case ProjectStateError:
+		return ProjectStateError
+	case ProjectStateArchived:
+		return ProjectStateArchived
+	default:
+		return ""
+	}
+}
+
+func normalizeWorkPriority(in WorkPriority) WorkPriority {
+	switch WorkPriority(strings.ToLower(strings.TrimSpace(string(in)))) {
+	case WorkPriorityLow:
+		return WorkPriorityLow
+	case WorkPriorityNormal:
+		return WorkPriorityNormal
+	case WorkPriorityHigh:
+		return WorkPriorityHigh
+	case WorkPriorityUrgent:
+		return WorkPriorityUrgent
+	default:
+		return ""
+	}
+}
+
+func normalizeWorkSource(in WorkSource) WorkSource {
+	switch WorkSource(strings.ToLower(strings.TrimSpace(string(in)))) {
+	case WorkSourceLocal:
+		return WorkSourceLocal
+	case WorkSourceGitHub:
+		return WorkSourceGitHub
+	default:
+		return ""
+	}
+}
+
+func normalizeWorkItemState(in WorkItemState) WorkItemState {
+	switch WorkItemState(strings.ToLower(strings.TrimSpace(string(in)))) {
+	case WorkItemStateNew:
+		return WorkItemStateNew
+	case WorkItemStateTriaged:
+		return WorkItemStateTriaged
+	case WorkItemStateQueued:
+		return WorkItemStateQueued
+	case WorkItemStateClaimed:
+		return WorkItemStateClaimed
+	case WorkItemStateRunning:
+		return WorkItemStateRunning
+	case WorkItemStateBlocked:
+		return WorkItemStateBlocked
+	case WorkItemStateAwaitingReview:
+		return WorkItemStateAwaitingReview
+	case WorkItemStateDone:
+		return WorkItemStateDone
+	case WorkItemStateCancelled:
+		return WorkItemStateCancelled
+	default:
+		return ""
+	}
+}
+
+func normalizeRunBackend(in RunBackend) RunBackend {
+	switch RunBackend(strings.ToLower(strings.TrimSpace(string(in)))) {
+	case RunBackendLocalSandboxed:
+		return RunBackendLocalSandboxed
+	case RunBackendManaged:
+		return RunBackendManaged
+	case RunBackendRemoteVM:
+		return RunBackendRemoteVM
+	default:
+		return ""
+	}
+}
+
+func normalizeRunPhase(in RunPhase) RunPhase {
+	switch RunPhase(strings.ToLower(strings.TrimSpace(string(in)))) {
+	case RunPhaseCreated:
+		return RunPhaseCreated
+	case RunPhasePreparing:
+		return RunPhasePreparing
+	case RunPhaseReady:
+		return RunPhaseReady
+	case RunPhaseExecuting:
+		return RunPhaseExecuting
+	case RunPhaseVerifying:
+		return RunPhaseVerifying
+	case RunPhasePublishing:
+		return RunPhasePublishing
+	case RunPhaseCompleted:
+		return RunPhaseCompleted
+	case RunPhaseFailed:
+		return RunPhaseFailed
+	case RunPhaseCancelled:
+		return RunPhaseCancelled
+	case RunPhaseStale:
+		return RunPhaseStale
+	default:
+		return ""
+	}
+}
+
+func normalizeVerificationStatus(in VerificationStatus) VerificationStatus {
+	switch VerificationStatus(strings.ToLower(strings.TrimSpace(string(in)))) {
+	case VerificationStatusPending:
+		return VerificationStatusPending
+	case VerificationStatusPassed:
+		return VerificationStatusPassed
+	case VerificationStatusFailed:
+		return VerificationStatusFailed
+	case VerificationStatusSkipped:
+		return VerificationStatusSkipped
+	default:
+		return ""
+	}
+}
+
+func normalizePublishStatus(in PublishStatus) PublishStatus {
+	switch PublishStatus(strings.ToLower(strings.TrimSpace(string(in)))) {
+	case PublishStatusPending:
+		return PublishStatusPending
+	case PublishStatusPublished:
+		return PublishStatusPublished
+	case PublishStatusFailed:
+		return PublishStatusFailed
+	case PublishStatusSkipped:
+		return PublishStatusSkipped
+	default:
+		return ""
+	}
+}
+
+func normalizeStringList(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	seen := make(map[string]struct{}, len(in))
+	for _, value := range in {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}

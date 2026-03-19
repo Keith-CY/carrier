@@ -28,4 +28,4 @@ jobs:
             exit 0
           fi
           echo "Checking ${#files[@]} file(s)..."
-          shellcheck "${files[@]}"
+          shellcheck -x "${files[@]}"
