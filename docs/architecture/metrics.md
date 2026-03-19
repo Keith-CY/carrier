@@ -10,7 +10,7 @@ Current harness sections:
 
 1. **Commit Size** (soft gate)
 2. **WebUI Bundle Size** (hard gate)
-3. **Code Readability Scan** (informational)
+3. **Code Readability** (hard gate on changed source files)
 
 The workflow is implemented in:
 
@@ -33,9 +33,9 @@ Measured after `bash scripts/build-webui.sh` using files under `webui/static/ass
 
 If either threshold is exceeded, the metrics workflow fails.
 
-## 3) Code Readability Scan (informational)
+## 3) Code Readability (hard gate)
 
-Scans source files across:
+Checks **changed source files in the PR diff** across:
 
 - `baseagent`, `cmd`, `codeagent`, `daemon`, `gateway`, `shared`, `webui/src`, `scripts`
 
@@ -45,14 +45,11 @@ File types:
 
 Rules:
 
-- Track files with more than 300 lines
-- Auto target = max(500, round(60% of current lines to nearest 100))
-- Report:
-  - file line count
-  - computed target
-  - status (`✅` / `⚠️`)
+- Every checked source file must be `≤ 500` lines
+- Violations are reported per file in the PR metrics comment
+- Any violation fails the metrics workflow
 
-This section is informational and trend-focused.
+This is intentionally strict for changed code so new/modified files stay readable without forcing an immediate full-repo refactor.
 
 ## PR Comment Contract
 
