@@ -50,6 +50,10 @@ Current probes:
 - **Remote-path test timing**:
   - `go test ./cmd/carrier -run 'TestRunRemoteRunCommandUsesOpenClawAliasAndWritesOutput|TestRunRemoteRunCommandJSONOutputSkipsGatewayProgress'`
   - `cd gateway && go test ./... -run 'TestRemoteMetricsEndpointTracksOperations|TestRemoteMetricsCollectorSnapshot'`
+- **Remote SSH timing (localhost loopback)**:
+  - brings up local SSH daemon on a high port in CI
+  - runs `carrier --help|version|--version` over SSH
+  - reports SSH command P50/P95/max and batch-hop median
 
 Behavior:
 
@@ -87,7 +91,7 @@ This keeps the PR timeline clean and avoids duplicate bot comments.
 
 Planned additions (optional, not yet hard-gated):
 
-- remote SSH probe timings (similar to clawpal command-hop timing)
+- dedicated remote-host (non-loopback) SSH probe timings with fixed fixture hosts
 - packaged binary size trend section from `e2e-packaged-binary` artifacts
 - visual acceptance timing rollup alongside screenshot links
 - tightening perf thresholds after baseline data is accumulated

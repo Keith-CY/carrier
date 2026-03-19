@@ -304,6 +304,131 @@ jobs:
           gateway_end_ns="$(date +%s%N)"
           gateway_suite_ms=$(( (gateway_end_ns - gateway_start_ns) / 1000000 ))
 
+          # Remote SSH timing probes (localhost loopback, soft gate)
+          ssh_ready=false
+          ssh_cmd_limit_ms=2500
+          ssh_cmd_runs=0
+          ssh_cmd_failures=0
+          ssh_cmd_details=""
+          ssh_all_times=""
+          ssh_batch_times=""
+          ssh_overall_p95_ms=0
+          ssh_overall_max_ms=0
+          ssh_batch_p50_ms=0
+
+          ssh_user="$(whoami)"
+          ssh_port=2231
+          ssh_key=/tmp/metrics_ssh_key
+          ssh_known_hosts=/tmp/metrics_ssh_known_hosts
+
+          if ! command -v sshd >/dev/null 2>&1; then
+            sudo apt-get update -y >/dev/null 2>&1 || true
+            sudo apt-get install -y openssh-server >/dev/null 2>&1 || true
+          fi
+
+          if command -v sshd >/dev/null 2>&1 && command -v ssh >/dev/null 2>&1; then
+            mkdir -p "${HOME}/.ssh"
+            chmod 700 "${HOME}/.ssh"
+            if [[ ! -f "${ssh_key}" ]]; then
+              ssh-keygen -t ed25519 -N "" -f "${ssh_key}" >/dev/null
+            fi
+            touch "${HOME}/.ssh/authorized_keys"
+            if ! grep -q -F "$(cat "${ssh_key}.pub")" "${HOME}/.ssh/authorized_keys"; then
+              cat "${ssh_key}.pub" >> "${HOME}/.ssh/authorized_keys"
+            fi
+            chmod 600 "${HOME}/.ssh/authorized_keys"
+
+            sudo mkdir -p /var/run/sshd
+            sudo bash -c "printf '%s\n' \"Port ${ssh_port}\" \"ListenAddress 127.0.0.1\" \"PasswordAuthentication no\" \"PubkeyAuthentication yes\" \"PermitRootLogin no\" \"AllowUsers ${ssh_user}\" > /etc/ssh/sshd_config.d/99-carrier-metrics.conf"
+
+            sudo service ssh restart >/dev/null 2>&1 || sudo /usr/sbin/sshd >/dev/null 2>&1 || true
+
+            ssh_opts=(
+              -i "${ssh_key}"
+              -o BatchMode=yes
+              -o StrictHostKeyChecking=no
+              -o UserKnownHostsFile="${ssh_known_hosts}"
+              -o ConnectTimeout=5
+              -p "${ssh_port}"
+            )
+
+            for _ in 1 2 3 4 5; do
+              if ssh "${ssh_opts[@]}" "${ssh_user}@127.0.0.1" "echo ok" >/dev/null 2>&1; then
+                ssh_ready=true
+                break
+              fi
+              sleep 1
+            done
+
+            if [[ "${ssh_ready}" == true ]]; then
+              remote_bin="${PWD}/dist/carrier-perf"
+              for entry in \
+                "help::${remote_bin} --help" \
+                "version::${remote_bin} version" \
+                "version-flag::${remote_bin} --version"; do
+                label="${entry%%::*}"
+                remote_cmd="${entry#*::}"
+
+                runs_for_cmd=3
+                failures=0
+                times=""
+
+                for i in 1 2 3; do
+                  start_ns="$(date +%s%N)"
+                  if ssh "${ssh_opts[@]}" "${ssh_user}@127.0.0.1" "${remote_cmd}" >/dev/null 2>&1; then
+                    :
+                  else
+                    failures=$((failures + 1))
+                    ssh_cmd_failures=$((ssh_cmd_failures + 1))
+                  fi
+                  end_ns="$(date +%s%N)"
+
+                  ms=$(( (end_ns - start_ns) / 1000000 ))
+                  times+="${ms}\n"
+                  ssh_all_times+="${ms}\n"
+                  ssh_cmd_runs=$((ssh_cmd_runs + 1))
+                done
+
+                sorted="$(printf "%b" "${times}" | sed '/^$/d' | sort -n)"
+                p50="$(echo "${sorted}" | awk 'NF{a[++n]=$1} END{if(n==0){print 0}else{print a[int((n+1)/2)]}}')"
+                p95="$(echo "${sorted}" | awk 'NF{a[++n]=$1} END{if(n==0){print 0}else{idx=int((n*95+99)/100); if(idx<1)idx=1; if(idx>n)idx=n; print a[idx]}}')"
+                max="$(echo "${sorted}" | awk 'NF{m=$1} END{if(NR==0){print 0}else{print m}}')"
+
+                status='✅'
+                if [[ "${failures}" -gt 0 ]] || [[ "${p95}" -gt "${ssh_cmd_limit_ms}" ]]; then
+                  status='⚠️'
+                fi
+
+                ssh_cmd_details+="| \`ssh:${label}\` | ${runs_for_cmd} | ${failures} | ${p50} ms | ${p95} ms | ${max} ms | ${status} |\n"
+              done
+
+              for i in 1 2 3; do
+                start_ns="$(date +%s%N)"
+                if ssh "${ssh_opts[@]}" "${ssh_user}@127.0.0.1" "${remote_bin} --help >/dev/null 2>&1; ${remote_bin} version >/dev/null 2>&1; ${remote_bin} --version >/dev/null 2>&1" >/dev/null 2>&1; then
+                  :
+                else
+                  ssh_cmd_failures=$((ssh_cmd_failures + 1))
+                fi
+                end_ns="$(date +%s%N)"
+
+                ms=$(( (end_ns - start_ns) / 1000000 ))
+                ssh_batch_times+="${ms}\n"
+              done
+
+              ssh_sorted="$(printf "%b" "${ssh_all_times}" | sed '/^$/d' | sort -n)"
+              ssh_overall_p95_ms="$(echo "${ssh_sorted}" | awk 'NF{a[++n]=$1} END{if(n==0){print 0}else{idx=int((n*95+99)/100); if(idx<1)idx=1; if(idx>n)idx=n; print a[idx]}}')"
+              ssh_overall_max_ms="$(echo "${ssh_sorted}" | awk 'NF{m=$1} END{if(NR==0){print 0}else{print m}}')"
+
+              batch_sorted="$(printf "%b" "${ssh_batch_times}" | sed '/^$/d' | sort -n)"
+              ssh_batch_p50_ms="$(echo "${batch_sorted}" | awk 'NF{a[++n]=$1} END{if(n==0){print 0}else{print a[int((n+1)/2)]}}')"
+            fi
+          fi
+
+          if [[ -z "${ssh_cmd_details}" ]]; then
+            ssh_cmd_details='| _(no ssh probe)_ | 0 | 0 | 0 ms | 0 ms | 0 ms | ⚠️ |\n'
+          fi
+          printf "%b" "${ssh_cmd_details}" > /tmp/metrics_perf_ssh_details.md
+
           echo "build_ms=${build_ms}" >> "$GITHUB_OUTPUT"
           echo "binary_size_mb=${binary_size_mb}" >> "$GITHUB_OUTPUT"
           echo "cmd_limit_ms=${cmd_limit_ms}" >> "$GITHUB_OUTPUT"
@@ -316,6 +441,13 @@ jobs:
           echo "remote_suite_ms=${remote_suite_ms}" >> "$GITHUB_OUTPUT"
           echo "gateway_suite_ok=${gateway_suite_ok}" >> "$GITHUB_OUTPUT"
           echo "gateway_suite_ms=${gateway_suite_ms}" >> "$GITHUB_OUTPUT"
+          echo "ssh_ready=${ssh_ready}" >> "$GITHUB_OUTPUT"
+          echo "ssh_cmd_limit_ms=${ssh_cmd_limit_ms}" >> "$GITHUB_OUTPUT"
+          echo "ssh_cmd_runs=${ssh_cmd_runs}" >> "$GITHUB_OUTPUT"
+          echo "ssh_cmd_failures=${ssh_cmd_failures}" >> "$GITHUB_OUTPUT"
+          echo "ssh_overall_p95_ms=${ssh_overall_p95_ms}" >> "$GITHUB_OUTPUT"
+          echo "ssh_overall_max_ms=${ssh_overall_max_ms}" >> "$GITHUB_OUTPUT"
+          echo "ssh_batch_p50_ms=${ssh_batch_p50_ms}" >> "$GITHUB_OUTPUT"
 
       - name: Build metrics report
         id: report
@@ -351,12 +483,13 @@ jobs:
           fi
 
           perf_icon='✅'
-          if [[ "${{ steps.perf.outputs.cmd_failures }}" -gt 0 ]] || [[ "${{ steps.perf.outputs.remote_suite_ok }}" != 'true' ]] || [[ "${{ steps.perf.outputs.gateway_suite_ok }}" != 'true' ]]; then
+          if [[ "${{ steps.perf.outputs.cmd_failures }}" -gt 0 ]] || [[ "${{ steps.perf.outputs.remote_suite_ok }}" != 'true' ]] || [[ "${{ steps.perf.outputs.gateway_suite_ok }}" != 'true' ]] || [[ "${{ steps.perf.outputs.ssh_ready }}" != 'true' ]] || [[ "${{ steps.perf.outputs.ssh_cmd_failures }}" -gt 0 ]] || [[ "${{ steps.perf.outputs.ssh_overall_p95_ms }}" -gt "${{ steps.perf.outputs.ssh_cmd_limit_ms }}" ]]; then
             perf_icon='⚠️'
           fi
 
           commit_details="$(cat /tmp/metrics_commit_details.md)"
           perf_cmd_details="$(cat /tmp/metrics_perf_cmd_details.md)"
+          perf_ssh_details="$(cat /tmp/metrics_perf_ssh_details.md)"
           readability_details="$(cat /tmp/metrics_readability_details.md)"
 
           cat > /tmp/pr-metrics-comment.md <<EOF
@@ -399,12 +532,24 @@ jobs:
           | CLI overall P95 | ${{ steps.perf.outputs.overall_p95_ms }} ms | ≤ ${{ steps.perf.outputs.cmd_limit_ms }} ms (soft) | $( [[ "${{ steps.perf.outputs.overall_p95_ms }}" -le "${{ steps.perf.outputs.cmd_limit_ms }}" ]] && echo "✅" || echo "⚠️" ) |
           | cmd/carrier remote-path suite | ${{ steps.perf.outputs.remote_suite_ms }} ms | pass | $( [[ "${{ steps.perf.outputs.remote_suite_ok }}" == 'true' ]] && echo "✅" || echo "⚠️" ) |
           | gateway remote-metrics suite | ${{ steps.perf.outputs.gateway_suite_ms }} ms | pass | $( [[ "${{ steps.perf.outputs.gateway_suite_ok }}" == 'true' ]] && echo "✅" || echo "⚠️" ) |
+          | remote SSH available | ${{ steps.perf.outputs.ssh_ready }} | true | $( [[ "${{ steps.perf.outputs.ssh_ready }}" == 'true' ]] && echo "✅" || echo "⚠️" ) |
+          | remote SSH probe runs | ${{ steps.perf.outputs.ssh_cmd_runs }} | failures = 0 | $( [[ "${{ steps.perf.outputs.ssh_cmd_failures }}" -eq 0 ]] && [[ "${{ steps.perf.outputs.ssh_ready }}" == 'true' ]] && echo "✅" || echo "⚠️" ) |
+          | remote SSH overall P95 | ${{ steps.perf.outputs.ssh_overall_p95_ms }} ms | ≤ ${{ steps.perf.outputs.ssh_cmd_limit_ms }} ms (soft) | $( [[ "${{ steps.perf.outputs.ssh_overall_p95_ms }}" -le "${{ steps.perf.outputs.ssh_cmd_limit_ms }}" ]] && [[ "${{ steps.perf.outputs.ssh_ready }}" == 'true' ]] && echo "✅" || echo "⚠️" ) |
+          | remote SSH batch P50 | ${{ steps.perf.outputs.ssh_batch_p50_ms }} ms | trend ↓ | $( [[ "${{ steps.perf.outputs.ssh_ready }}" == 'true' ]] && echo "ℹ️" || echo "⚠️" ) |
 
           <details><summary>CLI command timings</summary>
 
           | Command | Runs | Failures | P50 | P95 | Max | Status |
           |---------|------|----------|-----|-----|-----|--------|
           ${perf_cmd_details}
+
+          </details>
+
+          <details><summary>Remote SSH timings</summary>
+
+          | Command | Runs | Failures | P50 | P95 | Max | Status |
+          |---------|------|----------|-----|-----|-----|--------|
+          ${perf_ssh_details}
 
           </details>
 
