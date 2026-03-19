@@ -70,8 +70,15 @@ func TestReconcileProfilesNestedMapAndAcceptedRemotePath(t *testing.T) {
 	}
 
 	report := ReconcileProfiles(base, local, remote, ReconcileOptions{})
-	if report.AcceptedRemoteCount != 1 {
-		t.Fatalf("expected 1 accepted remote change, got %d", report.AcceptedRemoteCount)
+	if report.AcceptedRemoteCount != 2 {
+		t.Fatalf("expected 2 accepted remote leaf changes, got %d", report.AcceptedRemoteCount)
+	}
+	wantPaths := []string{
+		"outer.nested.active",
+		"outer.nested.ports.metrics",
+	}
+	if !reflect.DeepEqual(report.AcceptedRemotePaths, wantPaths) {
+		t.Fatalf("unexpected accepted remote paths: got=%v want=%v", report.AcceptedRemotePaths, wantPaths)
 	}
 	if got := nestedString(report.ReconciledProfile, "outer", "nested", "active"); got != "false" {
 		t.Fatalf("expected active to follow remote, got %q", got)

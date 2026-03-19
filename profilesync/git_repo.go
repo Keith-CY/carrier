@@ -1,32 +1,15 @@
 package profilesync
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
-	"time"
 )
 
 const defaultProfilesyncRepoDirName = "profiles-repo"
-
-const gitInstallTimeout = 10 * time.Minute
-
-var runtimeGOOS = runtime.GOOS
-
-var (
-	verifyGitAvailableFn    = verifyGitAvailable
-	installGitFn            = installGit
-	gitInstallStrategiesFn  = gitInstallStrategies
-	commandExistsFn         = commandExists
-	runGitInstallStrategyFn = runGitInstallStrategy
-	osGeteuidFn             = os.Geteuid
-)
 
 func profilesyncRepoRoot() (string, error) {
 	if custom := strings.TrimSpace(os.Getenv("CARRIER_PROFILESYNC_REPO")); custom != "" {
@@ -182,14 +165,10 @@ func ensureGitRepo(repoRoot string) error {
 	if _, err := runGit(repoRoot, "config", "user.email", "carrier-profilesync@localhost"); err != nil {
 		return err
 	}
-	if err := ensureProfilesRepoGitIgnore(repoRoot); err != nil {
-		return err
-	}
-	return nil
+	return ensureProfilesRepoGitIgnore(repoRoot)
 }
 
 func ensureProfilesRepoGitIgnore(repoRoot string) error {
-	// Required non-blank lines that must appear in .gitignore.
 	requiredLines := []string{
 		"/credentials.json",
 		"/carrier-secrets.json",
@@ -203,8 +182,6 @@ func ensureProfilesRepoGitIgnore(repoRoot string) error {
 		"*.pem",
 	}
 
-	// The canonical block appended when entries are missing, with comments and spacing.
-	// Note: no leading newline - the concatenation logic handles spacing.
 	const carrierBlock = `# Carrier secrets (never commit)
 /credentials.json
 /carrier-secrets.json
@@ -232,32 +209,26 @@ instances/*/tmp/
 		existingContent = string(current)
 	}
 
-	// Check which required lines are already present.
 	existingLines := make(map[string]bool)
-	for _, l := range strings.Split(existingContent, "\n") {
-		existingLines[strings.TrimSpace(l)] = true
+	for _, line := range strings.Split(existingContent, "\n") {
+		existingLines[strings.TrimSpace(line)] = true
 	}
 
-	// Find missing entries.
 	var missingLines []string
-	for _, req := range requiredLines {
-		if !existingLines[req] {
-			missingLines = append(missingLines, req)
+	for _, required := range requiredLines {
+		if !existingLines[required] {
+			missingLines = append(missingLines, required)
 		}
 	}
 	if len(missingLines) == 0 {
 		return nil
 	}
 
-	// Append only missing lines, or the full block if none are present.
 	content := strings.TrimSpace(existingContent)
 	if content != "" {
 		content += "\n\n"
 	}
-	// If no required entries exist yet, use the formatted block with comments.
-	// Otherwise, append only the missing individual lines to avoid duplicates.
-	anyPresent := len(missingLines) < len(requiredLines)
-	if anyPresent {
+	if len(missingLines) < len(requiredLines) {
 		content += strings.Join(missingLines, "\n")
 	} else {
 		content += carrierBlock
@@ -268,269 +239,6 @@ instances/*/tmp/
 		return fmt.Errorf("write profilesync .gitignore: %w", err)
 	}
 	return nil
-}
-
-func ensureGitAvailable() error {
-	if err := verifyGitAvailableFn(); err == nil {
-		return nil
-	}
-	if err := installGitFn(); err != nil {
-		return fmt.Errorf("git is required for profile sync and auto-install failed: %w", err)
-	}
-	if err := verifyGitAvailableFn(); err != nil {
-		return fmt.Errorf("git remains unavailable after auto-install: %w", err)
-	}
-	return nil
-}
-
-func verifyGitAvailable() error {
-	if _, err := exec.LookPath("git"); err != nil {
-		return fmt.Errorf("git executable not found in PATH: %w", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "--version")
-	raw, err := cmd.CombinedOutput()
-	if err != nil {
-		out := strings.TrimSpace(string(raw))
-		return fmt.Errorf("git --version failed: %v: %s", err, out)
-	}
-	return nil
-}
-
-type gitInstallStrategy struct {
-	Name         string
-	RequireRoot  bool
-	InstallSteps [][]string
-}
-
-func installGit() error {
-	strategies := gitInstallStrategiesFn()
-	if len(strategies) == 0 {
-		return fmt.Errorf("unsupported operating system %q for automatic git installation", runtimeGOOS)
-	}
-	tried := 0
-	failures := make([]string, 0, len(strategies))
-	for _, strategy := range strategies {
-		if len(strategy.InstallSteps) == 0 || len(strategy.InstallSteps[0]) == 0 {
-			continue
-		}
-		manager := strategy.InstallSteps[0][0]
-		if !commandExistsFn(manager) {
-			continue
-		}
-		tried++
-		if err := runGitInstallStrategyFn(strategy); err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", strategy.Name, err))
-			continue
-		}
-		if err := verifyGitAvailableFn(); err == nil {
-			return nil
-		}
-		failures = append(failures, fmt.Sprintf("%s: install finished but git still unavailable", strategy.Name))
-	}
-	if tried == 0 {
-		return fmt.Errorf("no supported package manager found to install git on %s", runtimeGOOS)
-	}
-	return fmt.Errorf("all git installation attempts failed (%s)", strings.Join(failures, "; "))
-}
-
-func gitInstallStrategies() []gitInstallStrategy {
-	switch runtimeGOOS {
-	case "darwin":
-		return []gitInstallStrategy{
-			{
-				Name:         "homebrew",
-				InstallSteps: [][]string{{"brew", "install", "git"}},
-			},
-		}
-	case "linux":
-		return []gitInstallStrategy{
-			{
-				Name:         "apt-get",
-				RequireRoot:  true,
-				InstallSteps: [][]string{{"apt-get", "install", "-y", "git"}},
-			},
-			{
-				Name:         "dnf",
-				RequireRoot:  true,
-				InstallSteps: [][]string{{"dnf", "install", "-y", "git"}},
-			},
-			{
-				Name:         "yum",
-				RequireRoot:  true,
-				InstallSteps: [][]string{{"yum", "install", "-y", "git"}},
-			},
-			{
-				Name:         "pacman",
-				RequireRoot:  true,
-				InstallSteps: [][]string{{"pacman", "-Sy", "--noconfirm", "git"}},
-			},
-			{
-				Name:         "zypper",
-				RequireRoot:  true,
-				InstallSteps: [][]string{{"zypper", "--non-interactive", "install", "git-core"}},
-			},
-			{
-				Name:         "apk",
-				RequireRoot:  true,
-				InstallSteps: [][]string{{"apk", "add", "--no-cache", "git"}},
-			},
-		}
-	case "windows":
-		return []gitInstallStrategy{
-			{
-				Name: "winget",
-				InstallSteps: [][]string{{
-					"winget", "install", "--id", "Git.Git", "-e", "--source", "winget",
-					"--accept-package-agreements", "--accept-source-agreements",
-				}},
-			},
-			{
-				Name:         "chocolatey",
-				InstallSteps: [][]string{{"choco", "install", "git", "-y"}},
-			},
-		}
-	default:
-		return nil
-	}
-}
-
-func runGitInstallStrategy(strategy gitInstallStrategy) error {
-	for _, step := range strategy.InstallSteps {
-		if len(step) == 0 {
-			continue
-		}
-		command, args, err := applyPrivilege(step[0], step[1:], strategy.RequireRoot)
-		if err != nil {
-			return err
-		}
-		if _, err := runCommand(command, args...); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func applyPrivilege(command string, args []string, requireRoot bool) (string, []string, error) {
-	if !requireRoot || runtimeGOOS == "windows" {
-		return command, args, nil
-	}
-	if osGeteuidFn() == 0 {
-		return command, args, nil
-	}
-	if !commandExistsFn("sudo") {
-		return "", nil, fmt.Errorf("%s requires root privileges but sudo is unavailable", command)
-	}
-	wrapped := make([]string, 0, len(args)+2)
-	wrapped = append(wrapped, "-n", command)
-	wrapped = append(wrapped, args...)
-	return "sudo", wrapped, nil
-}
-
-func runCommand(command string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), gitInstallTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, command, args...)
-	if isAptGetCommand(command, args) {
-		cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
-	}
-	raw, err := cmd.CombinedOutput()
-	out := strings.TrimSpace(string(raw))
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return "", fmt.Errorf("%s timed out after %s", commandLine(command, args), gitInstallTimeout)
-	}
-	if err != nil {
-		return "", fmt.Errorf("%s failed: %v: %s", commandLine(command, args), err, truncateOutput(out))
-	}
-	return out, nil
-}
-
-func commandExists(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
-}
-
-func isAptGetCommand(command string, args []string) bool {
-	if command == "apt-get" {
-		return true
-	}
-	return command == "sudo" && len(args) >= 2 && args[1] == "apt-get"
-}
-
-func commandLine(command string, args []string) string {
-	if len(args) == 0 {
-		return command
-	}
-	return command + " " + strings.Join(args, " ")
-}
-
-func truncateOutput(out string) string {
-	const maxLen = 800
-	if len(out) <= maxLen {
-		return out
-	}
-	return out[:maxLen] + "...(truncated)"
-}
-
-func runGit(repoRoot string, args ...string) (string, error) {
-	ctx := context.Background()
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = repoRoot
-	raw, err := cmd.CombinedOutput()
-	out := strings.TrimSpace(string(raw))
-	if err != nil {
-		return "", fmt.Errorf("git %s failed: %v: %s", strings.Join(args, " "), err, out)
-	}
-	return out, nil
-}
-
-func gitHead(repoRoot string) (string, error) {
-	out, err := runGit(repoRoot, "rev-parse", "HEAD")
-	if err != nil {
-		if strings.Contains(err.Error(), "unknown revision") || strings.Contains(err.Error(), "Needed a single revision") {
-			return "", nil
-		}
-		return "", err
-	}
-	return strings.TrimSpace(out), nil
-}
-
-func gitHasStagedChanges(repoRoot string) (bool, error) {
-	out, err := runGit(repoRoot, "diff", "--cached", "--name-only")
-	if err != nil {
-		return false, err
-	}
-	return strings.TrimSpace(out) != "", nil
-}
-
-func parseProfileJSON(raw string) (map[string]interface{}, error) {
-	text := strings.TrimSpace(raw)
-	if text == "" {
-		return map[string]interface{}{}, nil
-	}
-	var out map[string]interface{}
-	if err := json.Unmarshal([]byte(text), &out); err != nil {
-		return nil, fmt.Errorf("parse profile json: %w", err)
-	}
-	return out, nil
-}
-
-func sanitizeInstanceID(instanceID string) string {
-	trimmed := strings.TrimSpace(instanceID)
-	if trimmed == "" {
-		return "default"
-	}
-	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", "..", "_")
-	return replacer.Replace(trimmed)
-}
-
-func normalizeCommitReason(reason string) string {
-	trimmed := strings.TrimSpace(strings.ToLower(reason))
-	if trimmed == "" {
-		return "sync"
-	}
-	return trimmed
 }
 
 func SyncInstanceMemoryContract(instanceID string, contract map[string]interface{}, repoURL, branch, reason string) (string, bool, error) {
@@ -601,116 +309,4 @@ func SyncInstanceMemoryContract(instanceID string, contract map[string]interface
 		}
 	}
 	return head, true, nil
-}
-
-func ensureGitRemote(repoRoot, remoteName, remoteURL string) error {
-	remoteName = strings.TrimSpace(remoteName)
-	remoteURL = strings.TrimSpace(remoteURL)
-	if remoteName == "" || remoteURL == "" {
-		return errors.New("remote name and remote url are required")
-	}
-	if _, err := runGit(repoRoot, "remote", "get-url", remoteName); err != nil {
-		if _, addErr := runGit(repoRoot, "remote", "add", remoteName, remoteURL); addErr != nil {
-			return addErr
-		}
-		return nil
-	}
-	_, err := runGit(repoRoot, "remote", "set-url", remoteName, remoteURL)
-	return err
-}
-
-func checkoutBranch(repoRoot, branch string) error {
-	branch = strings.TrimSpace(branch)
-	if branch == "" {
-		return errors.New("branch is required")
-	}
-	_, err := runGit(repoRoot, "checkout", "-B", branch)
-	return err
-}
-
-func pullRemoteBranch(repoRoot, remoteName, branch string) error {
-	remoteName = strings.TrimSpace(remoteName)
-	branch = strings.TrimSpace(branch)
-	if remoteName == "" || branch == "" {
-		return errors.New("remote and branch are required")
-	}
-	if _, err := runGit(repoRoot, "fetch", remoteName, branch); err != nil {
-		// Brand-new remotes may not have the target branch yet.
-		errText := strings.ToLower(err.Error())
-		if strings.Contains(errText, "couldn't find remote ref") || strings.Contains(errText, "remote ref does not exist") {
-			return nil
-		}
-		return err
-	}
-	if _, err := runGit(repoRoot, "merge", "--ff-only", "FETCH_HEAD"); err != nil {
-		errText := strings.ToLower(err.Error())
-		if strings.Contains(errText, "not possible to fast-forward") || strings.Contains(errText, "unrelated histories") {
-			return err
-		}
-	}
-	return nil
-}
-
-func pushRemoteBranch(repoRoot, remoteName, branch string) error {
-	remoteName = strings.TrimSpace(remoteName)
-	branch = strings.TrimSpace(branch)
-	if remoteName == "" || branch == "" {
-		return errors.New("remote and branch are required")
-	}
-	if _, err := runGit(repoRoot, "push", remoteName, branch); err != nil {
-		if !isNonFastForwardPushError(err) {
-			return err
-		}
-		// Another writer updated remote branch after our last pull; rebase and retry once.
-		if err := rebaseRemoteBranch(repoRoot, remoteName, branch); err != nil {
-			return err
-		}
-		if _, err := runGit(repoRoot, "push", remoteName, branch); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func rebaseRemoteBranch(repoRoot, remoteName, branch string) error {
-	remoteName = strings.TrimSpace(remoteName)
-	branch = strings.TrimSpace(branch)
-	if remoteName == "" || branch == "" {
-		return errors.New("remote and branch are required")
-	}
-	if _, err := runGit(repoRoot, "fetch", remoteName, branch); err != nil {
-		errText := strings.ToLower(err.Error())
-		if strings.Contains(errText, "couldn't find remote ref") || strings.Contains(errText, "remote ref does not exist") {
-			return nil
-		}
-		return err
-	}
-	if _, err := runGit(repoRoot, "rebase", "FETCH_HEAD"); err != nil {
-		_, _ = runGit(repoRoot, "rebase", "--abort")
-		return err
-	}
-	return nil
-}
-
-func isNonFastForwardPushError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "non-fast-forward") ||
-		strings.Contains(msg, "fetch first") ||
-		strings.Contains(msg, "rejected")
-}
-
-func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmpPath := filepath.Join(dir, "."+filepath.Base(path)+".tmp")
-	if err := os.WriteFile(tmpPath, data, mode); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	return nil
 }
