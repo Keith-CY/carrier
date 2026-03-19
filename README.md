@@ -1,35 +1,47 @@
 # Carrier
 
-> A local-first control plane for running AI worker fleets with explicit memory, deterministic execution, and auditable results.
+> The command bridge for AI work — dispatch specialist agents, control memory flow, and ship outcomes you can audit.
 
-Carrier is for teams who want more than “chat with a model.”
-It turns goals into structured execution runs, routes work to managed agents, tracks artifacts/evidence, and keeps memory attached to the right worker scopes.
+Carrier is a **local-first execution and knowledge control plane** for teams doing real agent operations.
 
-## Why Carrier
+Instead of one opaque chat thread, Carrier turns intent into explicit runs:
 
-Most agent setups break down on three things:
+- planned tasks
+- assigned workers
+- tracked artifacts
+- verifiable results
 
-- **Control** — too much hidden behavior
-- **Memory discipline** — context drifts, leaks, or gets lost
-- **Operations** — hard to inspect, replay, or prove what happened
+## Why Carrier feels different
 
-Carrier is built to solve those directly.
+Most agent stacks break at production scale because too much is implicit:
 
-## What Carrier Does
+- hidden behavior
+- memory drift and context leakage
+- weak operational visibility
+- no clean replay/rollback story
 
-- **Goal → execution graph** with run history, lineage, retries, reruns, and clones
-- **Managed agent lifecycle** for local and remote workers (`openclaw`, `picoclaw`, `zeroclaw`)
-- **Knowledge-plane operations** (search, attach, distill, scope-aware memory grants)
-- **Deterministic remote install flow** with pre-check/post-check and rollback semantics
-- **Evidence-first operations** via artifacts, audits, and exportable execution records
+Carrier makes those concerns first-class:
 
-## Product Surfaces
+- **Deterministic execution** — explicit run graph, retries, reruns, and clones
+- **Scoped memory discipline** — attach, distill, and grant memory with clear boundaries
+- **Worker fleet control** — manage local + remote agents with lifecycle APIs
+- **Evidence-first operations** — artifacts, audits, and exportable execution traces
 
-- **CLI** for deterministic operations and automation
-- **WebUI** for onboarding, memory, executions, and remote control
-- **Gateway APIs** for host/instance lifecycle and control-plane integration
+## What you can do with Carrier today
 
-## Read the Docs
+- Orchestrate complex goals into structured execution runs
+- Operate managed agents (`openclaw`, `picoclaw`, `zeroclaw`) across local and remote hosts
+- Search/attach/distill memory packages through a dedicated knowledge plane
+- Run deterministic remote install flows with pre-check/post-check and rollback semantics
+- Review execution lineage and outcomes from CLI or WebUI
+
+## Product surfaces
+
+- **CLI** — deterministic operations and automation
+- **WebUI** — onboarding, memory, executions, and remote control
+- **Gateway APIs** — host/instance lifecycle and control-plane integration
+
+## Read the docs
 
 - Full setup & operations guide: [`docs/guides/getting-started-and-operations.md`](./docs/guides/getting-started-and-operations.md)
 - CLI reference: [`docs/carrier-cli.md`](./docs/carrier-cli.md)
