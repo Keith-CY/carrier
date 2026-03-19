@@ -10,6 +10,7 @@ const {
   COMMENT_MARKER,
   buildPrPackagesComment,
   loadPackageMetadata,
+  formatSize,
 } = require("./pr-package-comment.cjs");
 
 function withTempDir(fn) {
@@ -29,6 +30,7 @@ test("loadPackageMetadata reads sorted metadata and enforces zip package names",
         label: "darwin-arm64",
         package_file: "carrier-darwin-arm64.zip",
         artifact_id: "22",
+        package_size_bytes: 22 * 1024 * 1024,
       }),
     );
     fs.writeFileSync(
@@ -44,6 +46,8 @@ test("loadPackageMetadata reads sorted metadata and enforces zip package names",
     assert.equal(metadata.length, 2);
     assert.equal(metadata[0].artifactId, "11");
     assert.equal(metadata[1].artifactId, "22");
+    assert.equal(metadata[0].packageSizeBytes, null);
+    assert.equal(metadata[1].packageSizeBytes, 22 * 1024 * 1024);
   });
 });
 
@@ -92,7 +96,13 @@ test("loadPackageMetadata fails when package_file does not end with .zip", () =>
   });
 });
 
-test("buildPrPackagesComment renders markdown body with artifact links", () => {
+test("formatSize supports MB and fallback dash", () => {
+  assert.equal(formatSize(15.7 * 1024 * 1024), "15.7 MB");
+  assert.equal(formatSize(5120), "5.0 KB");
+  assert.equal(formatSize(null), "—");
+});
+
+test("buildPrPackagesComment renders markdown body with table and artifact links", () => {
   const body = buildPrPackagesComment({
     repository: "Keith-CY/carrier",
     runId: "22252074017",
@@ -103,23 +113,23 @@ test("buildPrPackagesComment renders markdown body with artifact links", () => {
         variant: "app",
         packageFile: "carrier-app-darwin-arm64.zip",
         artifactId: "5600022400",
+        packageSizeBytes: 15.7 * 1024 * 1024,
       },
       {
         label: "linux-x64",
         variant: "cli",
         packageFile: "carrier-linux-x64.zip",
         artifactId: "5600022428",
+        packageSizeBytes: 102.9 * 1024 * 1024,
       },
     ],
   });
 
   assert.match(body, new RegExp(COMMENT_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.match(body, /- Commit: `38695c9610c2592d729cc566fa2b3619e0841905`/);
-  assert.match(body, /- Workflow run: \[22252074017\]\(https:\/\/github\.com\/Keith-CY\/carrier\/actions\/runs\/22252074017\)/);
-  assert.match(body, /app\/darwin-arm64/);
-  assert.match(body, /carrier-app-darwin-arm64\.zip/);
-  assert.match(body, /actions\/runs\/22252074017\/artifacts\/5600022400/);
-  assert.match(body, /cli\/linux-x64/);
-  assert.match(body, /carrier-linux-x64\.zip/);
-  assert.match(body, /actions\/runs\/22252074017\/artifacts\/5600022428/);
+  assert.match(body, /## 📦 PR Test Package Artifacts/);
+  assert.match(body, /\| Platform \| Download \| Size \|/);
+  assert.match(body, /\| app\/darwin-arm64 \| \[📥 carrier-app-darwin-arm64\.zip\]\(https:\/\/github\.com\/Keith-CY\/carrier\/actions\/runs\/22252074017\/artifacts\/5600022400\) \| 15\.7 MB \|/);
+  assert.match(body, /\| cli\/linux-x64 \| \[📥 carrier-linux-x64\.zip\]\(https:\/\/github\.com\/Keith-CY\/carrier\/actions\/runs\/22252074017\/artifacts\/5600022428\) \| 102\.9 MB \|/);
+  assert.match(body, /> 🔨 Built from `38695c9`/);
+  assert.match(body, /Unsigned development test packages/);
 });

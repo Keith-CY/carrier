@@ -396,13 +396,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p pr-meta
+          package_size_bytes="$(wc -c < "dist/${{ steps.build.outputs.package_file }}" | tr -d ' ')"
           jq -n \
             --arg label "${{ matrix.label }}" \
             --arg archive_name "${{ steps.build.outputs.archive_name }}" \
             --arg variant "${{ matrix.variant }}" \
             --arg package_file "${{ steps.build.outputs.package_file }}" \
             --arg artifact_id "${{ steps.upload.outputs.artifact-id }}" \
-            '{label: $label, variant: $variant, archive_name: $archive_name, package_file: $package_file, artifact_id: $artifact_id}' \
+            --arg package_size_bytes "${package_size_bytes}" \
+            '{label: $label, variant: $variant, archive_name: $archive_name, package_file: $package_file, artifact_id: $artifact_id, package_size_bytes: ($package_size_bytes | tonumber)}' \
             > "pr-meta/${{ matrix.variant }}-${{ matrix.label }}.json"
 
       - name: Upload PR metadata
