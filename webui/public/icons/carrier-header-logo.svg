@@ -1,0 +1,15 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g stroke-linecap="round" stroke-linejoin="round">
+    <path d="M32 6L45 13L52 26L45 39L32 58L19 39L12 26L19 13Z" fill="#5E7AEF" fill-opacity="0.12" stroke="#5E7AEF" stroke-width="2.5"/>
+    <path d="M32 12L40 17L45 26L40 35L32 48L24 35L19 26L24 17Z" fill="#5E7AEF" fill-opacity="0.22" stroke="#5E7AEF" stroke-width="2"/>
+    <circle cx="32" cy="26" r="4.5" fill="#5E7AEF" fill-opacity="0.95" stroke="#5E7AEF" stroke-width="1.4"/>
+
+    <path d="M32 31V39" stroke="#5E7AEF" stroke-opacity="0.72" stroke-width="1.8"/>
+    <path d="M32 39L22 49" stroke="#5E7AEF" stroke-opacity="0.56" stroke-width="1.8"/>
+    <path d="M32 39L42 49" stroke="#5E7AEF" stroke-opacity="0.56" stroke-width="1.8"/>
+
+    <path d="M32 48L29.4 52.4L34.6 52.4Z" fill="#5E7AEF" fill-opacity="0.95" stroke="#5E7AEF" stroke-width="1"/>
+    <path d="M22 49L19.8 52.6L24.2 52.6Z" fill="#5E7AEF" fill-opacity="0.9" stroke="#5E7AEF" stroke-width="1"/>
+    <path d="M42 49L39.8 52.6L44.2 52.6Z" fill="#5E7AEF" fill-opacity="0.9" stroke="#5E7AEF" stroke-width="1"/>
+  </g>
+</svg>

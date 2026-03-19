@@ -15,6 +15,7 @@ import {
   RiSparklingLine,
   RiTerminalBoxLine,
 } from 'react-icons/ri';
+import { CarrierHeaderLogo } from '@/components/carrier-header-logo';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import {
@@ -140,7 +141,7 @@ export function AppLayout() {
               <CardContent className="space-y-5 p-7">
                 <div className="flex items-center gap-2">
                   <span className="flex size-9 items-center justify-center rounded-[0.85rem] border border-[color:rgba(20,24,31,0.08)] bg-[var(--color-panel)] text-[var(--color-primary)]">
-                    <RiSparklingLine className="size-4.5" />
+                    <CarrierHeaderLogo className="size-5" />
                   </span>
                   <div className="text-base font-medium text-[var(--color-ink)]">Carrier</div>
                 </div>
@@ -198,7 +199,7 @@ export function AppLayout() {
               <div className="sticky top-5 flex min-h-[calc(100vh-2.5rem)] flex-col items-center justify-between rounded-[1rem] border border-[var(--color-line)] bg-[rgba(251,250,246,0.9)] p-2 shadow-[0_10px_30px_rgba(45,41,36,0.04)]">
                 <div className="grid gap-3">
                   <div className="flex size-10 items-center justify-center rounded-xl bg-[var(--color-panel-2)] text-[var(--color-primary)]">
-                    <RiSparklingLine className="size-4.5" />
+                    <CarrierHeaderLogo className="size-5" />
                   </div>
                   <ShellNavigation compact />
                 </div>
@@ -230,13 +231,21 @@ export function AppLayout() {
                       </Button>
                     </SheetTrigger>
                     <SheetContent side="left" className="w-[18rem] bg-[var(--color-panel)] p-4">
-                      <div className="mb-4 text-sm font-medium text-[var(--color-ink)]">
+                      <div className="mb-4 flex items-center gap-2 text-sm font-medium text-[var(--color-ink)]">
+                        <span className="flex size-7 items-center justify-center rounded-lg bg-[var(--color-panel-2)] text-[var(--color-primary)]">
+                          <CarrierHeaderLogo className="size-4" />
+                        </span>
                         Carrier
                       </div>
                       <ShellNavigation onNavigate={() => {}} compact={false} />
                     </SheetContent>
                   </Sheet>
 
+                  <div className="hidden items-center gap-2 rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1 text-[var(--color-primary)] sm:flex">
+                    <CarrierHeaderLogo className="size-4" />
+                    <span className="text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-[var(--color-ink)]">Carrier</span>
+                  </div>
+                  <span className="hidden h-5 w-px bg-[var(--color-line)] sm:block" />
                   <span className="flex size-8 items-center justify-center rounded-lg bg-[var(--color-panel-2)] text-[var(--color-primary)]">
                     <currentNavItem.icon className="size-4" />
                   </span>
