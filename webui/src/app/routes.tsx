@@ -1,25 +1,52 @@
+import type { ComponentType } from 'react';
 import { createBrowserRouter, Navigate, type RouteObject } from 'react-router-dom';
 import { AppLayout } from './AppLayout';
 import { FeatureGate } from './FeatureGate';
-import { DashboardPage } from '../features/dashboard/DashboardPage';
-import { ExecutionsPage } from '../features/executions/ExecutionsPage';
-import { MemoryPage } from '../features/memory/MemoryPage';
-import { WorkersPage } from '../features/workers/WorkersPage';
-import { HostsPage } from '../features/hosts/HostsPage';
-import { ProvidersPage } from '../features/providers/ProvidersPage';
-import { PoliciesPage } from '../features/policies/PoliciesPage';
-import { ObservabilityPage } from '../features/observability/ObservabilityPage';
-import { SettingsPage } from '../features/settings/SettingsPage';
-import { LogsPage } from '../features/logs/LogsPage';
-import { ChatPage } from '../features/chat/ChatPage';
-import { RemoteChatPage } from '../features/remote-chat/RemoteChatPage';
-import { OnboardingPage } from '../features/onboarding/OnboardingPage';
-import { AgentDetailPage } from '../features/agents/AgentDetailPage';
-import { WorkPage } from '../features/work/WorkPage';
-import { WorkItemsPage, WorkProjectsPage, WorkRunsPage } from '../features/work/WorkCollectionPages';
-import { WorkProjectPage } from '../features/work/WorkProjectPage';
-import { WorkItemPage } from '../features/work/WorkItemPage';
-import { WorkRunPage } from '../features/work/WorkRunPage';
+
+function lazyPage<TModule extends Record<string, unknown>, TKey extends keyof TModule>(
+  load: () => Promise<TModule>,
+  exportName: TKey,
+) {
+  return async () => {
+    const module = await load();
+    return {
+      Component: module[exportName] as ComponentType,
+    };
+  };
+}
+
+function lazyPageWithProps<TModule extends Record<string, unknown>, TKey extends keyof TModule>(
+  load: () => Promise<TModule>,
+  exportName: TKey,
+  props: Record<string, unknown>,
+) {
+  return async () => {
+    const module = await load();
+    const Component = module[exportName] as ComponentType<Record<string, unknown>>;
+    return {
+      Component: () => <Component {...props} />,
+    };
+  };
+}
+
+function lazyGatedPage<TModule extends Record<string, unknown>, TKey extends keyof TModule>(
+  load: () => Promise<TModule>,
+  exportName: TKey,
+  gate: { requireRemoteControlPlane?: boolean; requireRemoteChat?: boolean },
+  props?: Record<string, unknown>,
+) {
+  return async () => {
+    const module = await load();
+    const Component = module[exportName] as ComponentType<Record<string, unknown>>;
+    return {
+      Component: () => (
+        <FeatureGate {...gate}>
+          <Component {...(props || {})} />
+        </FeatureGate>
+      ),
+    };
+  };
+}
 
 export const routeObjects: RouteObject[] = [
   {
@@ -28,131 +55,187 @@ export const routeObjects: RouteObject[] = [
     children: [
       {
         index: true,
-        element: <Navigate to="/welcome" replace />,
+        element: <Navigate to="/home" replace />,
       },
       {
-        path: 'dashboard',
-        element: <DashboardPage />,
+        path: 'onboarding',
+        lazy: lazyPage(() => import('../features/onboarding/OnboardingHubPage'), 'OnboardingHubPage'),
       },
       {
         path: 'welcome',
-        element: <OnboardingPage step="welcome" />,
+        lazy: lazyPageWithProps(() => import('../features/onboarding/OnboardingPage'), 'OnboardingPage', { step: 'welcome' }),
       },
       {
         path: 'setup',
-        element: <OnboardingPage step="setup" />,
-      },
-      {
-        path: 'agents/:agentId',
-        element: <AgentDetailPage />,
-      },
-      {
-        path: 'agents',
-        element: <OnboardingPage step="agents" />,
+        lazy: lazyPageWithProps(() => import('../features/onboarding/OnboardingPage'), 'OnboardingPage', { step: 'setup' }),
       },
       {
         path: 'provider',
-        element: <OnboardingPage step="provider" />,
+        lazy: lazyPageWithProps(() => import('../features/onboarding/OnboardingPage'), 'OnboardingPage', { step: 'provider' }),
       },
       {
         path: 'config',
-        element: <OnboardingPage step="config" />,
+        lazy: lazyPageWithProps(() => import('../features/onboarding/OnboardingPage'), 'OnboardingPage', { step: 'config' }),
       },
       {
         path: 'install',
-        element: <OnboardingPage step="install" />,
+        lazy: lazyPageWithProps(() => import('../features/onboarding/OnboardingPage'), 'OnboardingPage', { step: 'install' }),
       },
       {
         path: 'complete',
-        element: <OnboardingPage step="complete" />,
+        lazy: lazyPageWithProps(() => import('../features/onboarding/OnboardingPage'), 'OnboardingPage', { step: 'complete' }),
       },
       {
         path: 'add/:agentId',
-        element: <OnboardingPage step="setup" />,
+        lazy: lazyPageWithProps(() => import('../features/onboarding/OnboardingPage'), 'OnboardingPage', { step: 'setup' }),
       },
       {
-        path: 'executions',
-        element: <FeatureGate requireRemoteControlPlane><ExecutionsPage /></FeatureGate>,
-      },
-      {
-        path: 'work',
-        element: <FeatureGate requireRemoteControlPlane><WorkPage /></FeatureGate>,
-      },
-      {
-        path: 'work/projects',
-        element: <FeatureGate requireRemoteControlPlane><WorkProjectsPage /></FeatureGate>,
-      },
-      {
-        path: 'work/projects/:projectId',
-        element: <FeatureGate requireRemoteControlPlane><WorkProjectPage /></FeatureGate>,
-      },
-      {
-        path: 'work/items',
-        element: <FeatureGate requireRemoteControlPlane><WorkItemsPage /></FeatureGate>,
-      },
-      {
-        path: 'work/items/:itemId',
-        element: <FeatureGate requireRemoteControlPlane><WorkItemPage /></FeatureGate>,
-      },
-      {
-        path: 'work/runs',
-        element: <FeatureGate requireRemoteControlPlane><WorkRunsPage /></FeatureGate>,
-      },
-      {
-        path: 'work/runs/:runId',
-        element: <FeatureGate requireRemoteControlPlane><WorkRunPage /></FeatureGate>,
-      },
-      {
-        path: 'executions/:executionId',
-        element: <FeatureGate requireRemoteControlPlane><ExecutionsPage /></FeatureGate>,
-      },
-      {
-        path: 'memory',
-        element: <MemoryPage />,
-      },
-      {
-        path: 'workers',
-        element: <FeatureGate requireRemoteControlPlane><WorkersPage /></FeatureGate>,
-      },
-      {
-        path: 'hosts',
-        element: <FeatureGate requireRemoteControlPlane><HostsPage /></FeatureGate>,
-      },
-      {
-        path: 'providers',
-        element: <FeatureGate requireRemoteControlPlane><ProvidersPage /></FeatureGate>,
-      },
-      {
-        path: 'policies',
-        element: <FeatureGate requireRemoteControlPlane><PoliciesPage /></FeatureGate>,
-      },
-      {
-        path: 'remote-observability',
-        element: <FeatureGate requireRemoteControlPlane><ObservabilityPage /></FeatureGate>,
-      },
-      {
-        path: 'settings',
-        element: <SettingsPage />,
-      },
-      {
-        path: 'logs',
-        element: <LogsPage />,
+        path: 'home',
+        lazy: lazyPage(() => import('../features/chat/ChatPage'), 'ChatPage'),
       },
       {
         path: 'chat',
-        element: <ChatPage />,
+        lazy: lazyPage(() => import('../features/chat/ChatPage'), 'ChatPage'),
       },
       {
-        path: 'remote-chat',
-        element: <FeatureGate requireRemoteChat><RemoteChatPage /></FeatureGate>,
+        path: 'dashboard',
+        lazy: lazyGatedPage(() => import('../features/dashboard/DashboardPage'), 'DashboardPage', {
+          requireRemoteControlPlane: true,
+        }),
+      },
+      {
+        path: 'quick-entry',
+        lazy: lazyPage(() => import('../features/quick-entry/QuickEntryPage'), 'QuickEntryPage'),
+      },
+      {
+        path: 'projects',
+        lazy: lazyPage(() => import('../features/work/ProjectsPage'), 'ProjectsPage'),
+      },
+      {
+        path: 'projects/:projectId',
+        lazy: lazyPage(() => import('../features/work/ProjectDetailPage'), 'ProjectDetailPage'),
+      },
+      {
+        path: 'agents',
+        lazy: lazyPage(() => import('../features/agents/AgentsPage'), 'AgentsPage'),
+      },
+      {
+        path: 'agents/:agentId',
+        lazy: lazyPage(() => import('../features/agents/AgentDetailPage'), 'AgentDetailPage'),
       },
       {
         path: 'agent-detail/:agentId',
-        element: <AgentDetailPage />,
+        lazy: lazyPage(() => import('../features/agents/AgentDetailPage'), 'AgentDetailPage'),
+      },
+      {
+        path: 'activity',
+        lazy: lazyPage(() => import('../features/activity/ActivityPage'), 'ActivityPage'),
+      },
+      {
+        path: 'executions',
+        lazy: lazyGatedPage(() => import('../features/executions/ExecutionsPage'), 'ExecutionsPage', {
+          requireRemoteControlPlane: true,
+        }),
+      },
+      {
+        path: 'executions/:executionId',
+        lazy: lazyGatedPage(() => import('../features/executions/ExecutionsPage'), 'ExecutionsPage', {
+          requireRemoteControlPlane: true,
+        }),
+      },
+      {
+        path: 'work',
+        lazy: lazyGatedPage(() => import('../features/work/WorkPage'), 'WorkPage', {
+          requireRemoteControlPlane: true,
+        }),
+      },
+      {
+        path: 'work/projects',
+        lazy: lazyGatedPage(() => import('../features/work/WorkProjectPage'), 'WorkProjectPage', {
+          requireRemoteControlPlane: true,
+        }),
+      },
+      {
+        path: 'work/projects/:projectId',
+        lazy: lazyGatedPage(() => import('../features/work/WorkProjectPage'), 'WorkProjectPage', {
+          requireRemoteControlPlane: true,
+        }),
+      },
+      {
+        path: 'work/items',
+        lazy: lazyGatedPage(() => import('../features/work/WorkItemPage'), 'WorkItemPage', {
+          requireRemoteControlPlane: true,
+        }),
+      },
+      {
+        path: 'work/items/:itemId',
+        lazy: lazyGatedPage(() => import('../features/work/WorkItemPage'), 'WorkItemPage', {
+          requireRemoteControlPlane: true,
+        }),
+      },
+      {
+        path: 'work/runs',
+        lazy: lazyGatedPage(() => import('../features/work/WorkRunPage'), 'WorkRunPage', {
+          requireRemoteControlPlane: true,
+        }),
+      },
+      {
+        path: 'work/runs/:runId',
+        lazy: lazyGatedPage(() => import('../features/work/WorkRunPage'), 'WorkRunPage', {
+          requireRemoteControlPlane: true,
+        }),
+      },
+      {
+        path: 'memory',
+        lazy: lazyPage(() => import('../features/memory/MemoryPage'), 'MemoryPage'),
+      },
+      {
+        path: 'logs',
+        lazy: lazyPage(() => import('../features/logs/LogsPage'), 'LogsPage'),
+      },
+      {
+        path: 'workers',
+        lazy: lazyGatedPage(() => import('../features/workers/WorkersPage'), 'WorkersPage', {
+          requireRemoteControlPlane: true,
+        }),
+      },
+      {
+        path: 'hosts',
+        lazy: lazyGatedPage(() => import('../features/hosts/HostsPage'), 'HostsPage', {
+          requireRemoteControlPlane: true,
+        }),
+      },
+      {
+        path: 'providers',
+        lazy: lazyGatedPage(() => import('../features/providers/ProvidersPage'), 'ProvidersPage', {
+          requireRemoteControlPlane: true,
+        }),
+      },
+      {
+        path: 'policies',
+        lazy: lazyGatedPage(() => import('../features/policies/PoliciesPage'), 'PoliciesPage', {
+          requireRemoteControlPlane: true,
+        }),
+      },
+      {
+        path: 'remote-observability',
+        lazy: lazyGatedPage(() => import('../features/observability/ObservabilityPage'), 'ObservabilityPage', {
+          requireRemoteControlPlane: true,
+        }),
+      },
+      {
+        path: 'remote-chat',
+        lazy: lazyGatedPage(() => import('../features/remote-chat/RemoteChatPage'), 'RemoteChatPage', {
+          requireRemoteChat: true,
+        }),
+      },
+      {
+        path: 'settings',
+        lazy: lazyPage(() => import('../features/settings/SettingsHubPage'), 'SettingsHubPage'),
       },
       {
         path: '*',
-        element: <Navigate to="/welcome" replace />,
+        element: <Navigate to="/home" replace />,
       },
     ],
   },

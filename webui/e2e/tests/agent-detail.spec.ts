@@ -553,17 +553,17 @@ test.describe('Agent Detail', () => {
     await expect(page.locator('#agent-detail-content')).toContainText('flash-safe-v2');
     await expect(page.locator('#agent-detail-content')).toContainText('anthropic/claude-sonnet-4.6');
 
-    await page.getByRole('button', { name: '▶ Start' }).evaluate((element: HTMLButtonElement) => element.click());
+    await page.getByRole('button', { name: 'Start' }).evaluate((element: HTMLButtonElement) => element.click());
     await expect.poll(() => startCalls).toBe(1);
     await expect(page.locator('#agent-detail-content')).toContainText('Agent start requested.');
 
-    const stopButton = page.getByRole('button', { name: '⏹ Stop' });
+    const stopButton = page.getByRole('button', { name: 'Stop' });
     await expect(stopButton).toBeEnabled();
     await stopButton.evaluate((element: HTMLButtonElement) => element.click());
     await expect.poll(() => stopCalls).toBe(1);
     await expect(page.locator('#agent-detail-content')).toContainText('Agent stop requested.');
 
-    await page.getByRole('button', { name: '← Back' }).evaluate((element: HTMLButtonElement) => element.click());
+    await page.getByRole('button', { name: 'Back' }).evaluate((element: HTMLButtonElement) => element.click());
     await expect(page).toHaveURL(/\/dashboard$/);
     await expect(page.locator('.agent-card').first()).toBeVisible();
   });

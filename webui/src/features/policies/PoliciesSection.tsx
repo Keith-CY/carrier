@@ -1,3 +1,4 @@
+import { PageShell } from '../../app/page-shell';
 import { usePoliciesData } from './usePoliciesData';
 import { PolicyEditorCard } from './components/PolicyEditorCard';
 import { PoliciesList } from './components/PoliciesList';
@@ -8,13 +9,16 @@ export function PoliciesSection() {
   const data = usePoliciesData();
 
   return (
-    <section id="view-profiles" className="view">
-      <div className="section-head">
-        <h2 id="profiles-title">Policies</h2>
-        <div className="section-actions">
-          <button id="profiles-refresh" className="btn-sm btn-secondary" onClick={() => void data.refreshAll()}>Refresh</button>
-        </div>
-      </div>
+    <PageShell
+      id="view-profiles"
+      eyebrow="Configure"
+      title="Policies"
+      titleId="profiles-title"
+      description="Set the operating guardrails, escalation behaviors, and automatic triggers that shape how Carrier behaves."
+      actions={(
+        <button id="profiles-refresh" className="btn-sm btn-secondary" onClick={() => void data.refreshAll()}>Refresh</button>
+      )}
+    >
       <div id="policies-shell">
         <PolicyEditorCard data={data} />
         <TriggerEditorCard data={data} />
@@ -24,6 +28,6 @@ export function PoliciesSection() {
         <PoliciesList data={data} />
         <TriggersList data={data} />
       </div>
-    </section>
+    </PageShell>
   );
 }

@@ -17,9 +17,12 @@ export function RecentExecutionsCard({ data }: { data: DashboardData }) {
   } = data;
 
   return (
-    <div id="dashboard-executions-section" className={`dashboard-stack${featureFlags.remoteControlPlaneEnabled && authz.permissions.viewExecutions ? '' : ' hidden'}`}>
+    <section id="dashboard-executions-section" className={`card dashboard-panel dashboard-panel--executions${featureFlags.remoteControlPlaneEnabled && authz.permissions.viewExecutions ? '' : ' hidden'}`}>
       <div className="section-head">
-        <h2>Recent Executions</h2>
+        <div>
+          <h2>Recent Executions</h2>
+          <p className="text-dim">Track the latest plans, approvals, and task-unit progress without leaving the dashboard.</p>
+        </div>
         <div className="section-actions">
           <button id="refresh-executions" className="btn-sm btn-secondary" onClick={() => void refreshExecutions()}>
             Refresh
@@ -59,6 +62,6 @@ export function RecentExecutionsCard({ data }: { data: DashboardData }) {
           );
         })}
       </div>
-    </div>
+    </section>
   );
 }

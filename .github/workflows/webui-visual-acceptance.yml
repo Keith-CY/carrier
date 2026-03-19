@@ -1,0 +1,137 @@
+name: WebUI Visual Acceptance
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  visual-acceptance:
+    name: WebUI Visual Acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '20'
+
+      - name: Generate SSH key for remote fixture
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/visual-ssh"
+          ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/visual-ssh/id_ed25519"
+          {
+            echo "CARRIER_VISUAL_SSH_PRIVATE_KEY=$RUNNER_TEMP/visual-ssh/id_ed25519"
+            echo "AUTHORIZED_KEY<<EOF"
+            cat "$RUNNER_TEMP/visual-ssh/id_ed25519.pub"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Run Docker visual-acceptance harness
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/visual-acceptance
+          docker compose -f harness/visual-acceptance/compose.yml run --rm carrier-visual-runner
+
+      - name: Upload screenshot artifact
+        if: always()
+        id: upload_screenshots
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: webui-visual-acceptance-screenshots
+          path: .artifacts/visual-acceptance/screenshots/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload Playwright fullstack report
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: playwright-report-fullstack-visual-acceptance
+          path: webui/e2e/test-results-fullstack/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Publish screenshots ref
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ref="screenshots/pr-${{ github.event.pull_request.number }}"
+          publish_dir="$RUNNER_TEMP/visual-acceptance-ref"
+          mkdir -p "$publish_dir"
+          cp -R .artifacts/visual-acceptance/screenshots/. "$publish_dir/"
+          git -C "$publish_dir" init
+          git -C "$publish_dir" config user.name "github-actions[bot]"
+          git -C "$publish_dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$publish_dir" checkout --orphan "$ref"
+          git -C "$publish_dir" add .
+          git -C "$publish_dir" commit -m "WebUI visual acceptance for PR #${{ github.event.pull_request.number }}"
+          git -C "$publish_dir" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$publish_dir" push --force origin "HEAD:refs/heads/$ref"
+
+      - name: Build PR visual-acceptance comment
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          set -euo pipefail
+          artifact_url=""
+          if [[ -n "${{ steps.upload_screenshots.outputs.artifact-id }}" ]]; then
+            artifact_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts/${{ steps.upload_screenshots.outputs.artifact-id }}"
+          fi
+          node scripts/ci/pr-visual-acceptance-comment.cjs \
+            --repository "${GITHUB_REPOSITORY}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --commit-sha "${GITHUB_SHA}" \
+            --screenshots-ref "screenshots/pr-${{ github.event.pull_request.number }}" \
+            --artifact-url "$artifact_url" \
+            --screenshots-dir ".artifacts/visual-acceptance/screenshots" \
+            --output "pr-visual-acceptance-comment.md"
+
+      - name: Create or update PR comment
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          marker='<!-- carrier-pr-visual-acceptance -->'
+          pr='${{ github.event.pull_request.number }}'
+          body=$(cat pr-visual-acceptance-comment.md)
+
+          ids=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" --paginate \
+            | jq -r --arg m "$marker" '[.[] | select(.body | contains($m)) | .id] | .[]')
+
+          existing_id=$(echo "$ids" | head -n1)
+
+          if [ -n "${existing_id:-}" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_id}" -f body="$body" >/dev/null
+            echo "$ids" | tail -n +2 | while read -r extra_id; do
+              [ -n "$extra_id" ] || continue
+              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/comments/${extra_id}" >/dev/null || true
+            done
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" -f body="$body" >/dev/null
+          fi
+
+      - name: Summarize fork behavior
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          {
+            echo "## WebUI Visual Acceptance"
+            echo ""
+            echo "Fork PR detected. Screenshot artifact was uploaded, but screenshot ref publishing and PR comment updates were skipped."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Docker compose down
+        if: always()
+        run: docker compose -f harness/visual-acceptance/compose.yml down -v --remove-orphans || true

@@ -1,18 +1,48 @@
-export const primaryNav = [
-  { to: '/dashboard', route: 'dashboard', label: 'Dashboard' },
-  { to: '/work', route: 'work', label: 'Work' },
-  { to: '/executions', route: 'executions', label: 'Executions' },
-  { to: '/memory', route: 'memory', label: 'Memory' },
-  { to: '/workers', route: 'workers', label: 'Workers' },
-  { to: '/hosts', route: 'hosts', label: 'Hosts' },
-  { to: '/providers', route: 'providers', label: 'Providers' },
-  { to: '/policies', route: 'policies', label: 'Policies' },
-  { to: '/remote-observability', route: 'remote-observability', label: 'Observability' },
-];
+import type { IconType } from 'react-icons';
+import {
+  RiFolderOpenLine,
+  RiHome5Line,
+  RiPulseLine,
+  RiRobot2Line,
+  RiSettings3Line,
+} from 'react-icons/ri';
 
-export const secondaryNav = [
-  { to: '/logs', route: 'logs', label: 'Logs' },
-  { to: '/chat', route: 'chat', label: 'Chat' },
-  { to: '/remote-chat', route: 'remote-chat', label: 'Remote Chat' },
-  { to: '/settings', route: 'settings', label: 'Settings' },
+export type NavItem = {
+  to: string;
+  label: string;
+  summary: string;
+  icon: IconType;
+};
+
+export const navItems: NavItem[] = [
+  {
+    to: '/home',
+    label: 'Home',
+    summary: 'Talk to the base agent.',
+    icon: RiHome5Line,
+  },
+  {
+    to: '/projects',
+    label: 'Projects',
+    summary: 'Organize work after it starts.',
+    icon: RiFolderOpenLine,
+  },
+  {
+    to: '/agents',
+    label: 'Agents',
+    summary: 'See which execution surfaces are available.',
+    icon: RiRobot2Line,
+  },
+  {
+    to: '/activity',
+    label: 'Activity',
+    summary: 'Inspect runs, logs, and approvals only when needed.',
+    icon: RiPulseLine,
+  },
+  {
+    to: '/settings',
+    label: 'Settings',
+    summary: 'Connect providers, channels, and defaults.',
+    icon: RiSettings3Line,
+  },
 ];

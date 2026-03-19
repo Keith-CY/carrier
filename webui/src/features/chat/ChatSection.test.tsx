@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { ChatSection } from './ChatSection';
 
@@ -15,10 +16,18 @@ describe('ChatSection', () => {
     cleanup();
   });
 
-  test('renders split chat components', () => {
-    render(<ChatSection data={{} as any} />);
+  test('renders the chat-first home shell with starter actions', () => {
+    render(
+      <MemoryRouter>
+        <ChatSection data={{} as any} />
+      </MemoryRouter>,
+    );
 
-    expect(screen.getByRole('heading', { name: 'Chat' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Connect a provider and start from Home/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start a task' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'What can you do?' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show my active work' })).toBeInTheDocument();
     expect(screen.getByTestId('chat-messages-block')).toBeInTheDocument();
     expect(screen.getByTestId('chat-composer-block')).toBeInTheDocument();
   });

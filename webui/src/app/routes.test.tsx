@@ -52,25 +52,39 @@ describe('router redirects', () => {
     vi.restoreAllMocks();
   });
 
-  test('redirects root to /welcome', async () => {
+  test('redirects root to /home', async () => {
     const router = renderAt('/');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/welcome'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/home'));
   });
 
-  test('redirects unknown routes to /welcome', async () => {
+  test('redirects unknown routes to /home', async () => {
     const router = renderAt('/does-not-exist');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/welcome'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/home'));
   });
 
-  test('includes the work routes', () => {
+  test('includes the new guided hub routes', () => {
     const rootRoute = routeObjects[0];
     const childPaths = Array.isArray(rootRoute.children) ? rootRoute.children.map((route) => route.path) : [];
-    expect(childPaths).toContain('work');
-    expect(childPaths).toContain('work/projects');
-    expect(childPaths).toContain('work/projects/:projectId');
-    expect(childPaths).toContain('work/items');
-    expect(childPaths).toContain('work/items/:itemId');
-    expect(childPaths).toContain('work/runs');
-    expect(childPaths).toContain('work/runs/:runId');
+    expect(childPaths).toContain('onboarding');
+    expect(childPaths).toContain('welcome');
+    expect(childPaths).toContain('setup');
+    expect(childPaths).toContain('provider');
+    expect(childPaths).toContain('install');
+    expect(childPaths).toContain('complete');
+    expect(childPaths).toContain('add/:agentId');
+    expect(childPaths).toContain('home');
+    expect(childPaths).toContain('dashboard');
+    expect(childPaths).toContain('quick-entry');
+    expect(childPaths).toContain('projects');
+    expect(childPaths).toContain('projects/:projectId');
+    expect(childPaths).toContain('agents');
+    expect(childPaths).toContain('agents/:agentId');
+    expect(childPaths).toContain('hosts');
+    expect(childPaths).toContain('providers');
+    expect(childPaths).toContain('remote-chat');
+    expect(childPaths).toContain('executions');
+    expect(childPaths).toContain('executions/:executionId');
+    expect(childPaths).toContain('activity');
+    expect(childPaths).toContain('settings');
   });
 });

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { RiArrowLeftLine, RiArrowRightLine, RiStopCircleLine } from 'react-icons/ri';
 import { useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPost } from '../../lib/api';
 
@@ -1587,14 +1588,16 @@ export function AgentDetailPage() {
             {lastActionMessage ? <div className="text-dim">{lastActionMessage}</div> : null}
             <div className="btn-row">
               <button className="btn-secondary" type="button" onClick={() => navigate('/dashboard')}>
-                ← Back
+                <RiArrowLeftLine aria-hidden="true" className="size-4" />
+                <span>Back</span>
               </button>
               <button
                 type="button"
                 disabled={actionMutation.isPending}
                 onClick={() => actionMutation.mutate('start')}
               >
-                ▶ Start
+                <RiArrowRightLine aria-hidden="true" className="size-4" />
+                <span>Start</span>
               </button>
               <button
                 className="btn-secondary"
@@ -1602,7 +1605,8 @@ export function AgentDetailPage() {
                 disabled={actionMutation.isPending}
                 onClick={() => actionMutation.mutate('stop')}
               >
-                ⏹ Stop
+                <RiStopCircleLine aria-hidden="true" className="size-4" />
+                <span>Stop</span>
               </button>
             </div>
           </div>

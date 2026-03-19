@@ -5,9 +5,22 @@ import { useWorkPageData } from './useWorkData';
 
 export function WorkPage() {
   const data = useWorkPageData();
+  const stats = data.query.data
+    ? [
+      { label: 'Projects', value: String(data.query.data.projects.length) },
+      { label: 'Items', value: String(data.query.data.items.length) },
+      { label: 'Runs', value: String(data.query.data.runs.length) },
+    ]
+    : undefined;
 
   return (
-    <WorkView id="view-work" title="Work" onRefresh={data.refresh}>
+    <WorkView
+      id="view-work"
+      title="Work"
+      description="A portfolio view across projects, queued items, and active runs for the remote control plane."
+      stats={stats}
+      onRefresh={data.refresh}
+    >
       {data.query.isLoading ? <WorkCard title="Loading"><WorkMessage text="Loading work projects, items, and runs…" /></WorkCard> : null}
       {data.query.isError ? <WorkCard title="Unavailable"><WorkMessage tone="error" text={`Failed to load work: ${data.query.error instanceof Error ? data.query.error.message : 'unknown error'}`} /></WorkCard> : null}
       {data.query.data ? (

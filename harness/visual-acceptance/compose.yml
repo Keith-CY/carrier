@@ -1,0 +1,44 @@
+services:
+  fake-llm:
+    image: node:20-bookworm-slim
+    working_dir: /workspace
+    command: ["node", "/workspace/harness/visual-acceptance/fake-llm/server.mjs"]
+    environment:
+      FAKE_LLM_PORT: "8080"
+    volumes:
+      - ../..:/workspace
+
+  remote-vps:
+    build:
+      context: ../..
+      dockerfile: tests/fixtures/remote-vps/Dockerfile
+    environment:
+      AUTHORIZED_KEY: ${AUTHORIZED_KEY:?AUTHORIZED_KEY must be set}
+      SSH_PORT: "22"
+
+  carrier-visual-runner:
+    build:
+      context: ../..
+      dockerfile: harness/visual-acceptance/Dockerfile
+    depends_on:
+      - fake-llm
+      - remote-vps
+    environment:
+      CI: "1"
+      CARRIER_VISUAL_ACCEPTANCE_DIR: /workspace/.artifacts/visual-acceptance/screenshots
+      CARRIER_VISUAL_FAKE_PROVIDER_BASE_URL: http://fake-llm:8080/v1
+      CARRIER_E2E_REMOTE_HOST_NAME: visual-remote
+      CARRIER_E2E_REMOTE_HOST_HOST: remote-vps
+      CARRIER_E2E_REMOTE_HOST_PORT: "22"
+      CARRIER_E2E_REMOTE_HOST_USER: carrier
+      CARRIER_E2E_REMOTE_HOST_KEY_PATH: /keys/id_ed25519
+      OPENAI_COMPATIBLE_API_KEY: visual-acceptance-token
+    volumes:
+      - ../..:/workspace
+      - webui-node-modules:/workspace/webui/node_modules
+      - webui-e2e-node-modules:/workspace/webui/e2e/node_modules
+      - ${CARRIER_VISUAL_SSH_PRIVATE_KEY:?CARRIER_VISUAL_SSH_PRIVATE_KEY must be set}:/keys/id_ed25519:ro
+
+volumes:
+  webui-node-modules:
+  webui-e2e-node-modules:

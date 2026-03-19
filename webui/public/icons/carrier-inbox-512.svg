@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title>Carrier Inbox</title>
+  <rect width="512" height="512" rx="96" fill="#f7f4ec"/>
+  <rect x="82" y="102" width="348" height="308" rx="58" fill="#ece7dc" stroke="#1d1f24" stroke-width="22"/>
+  <path d="M146 292h70l32 44h16l32-44h70" fill="none" stroke="#1d1f24" stroke-linecap="round" stroke-linejoin="round" stroke-width="28"/>
+  <path d="M194 202h124" fill="none" stroke="#5b636f" stroke-linecap="round" stroke-width="24"/>
+</svg>

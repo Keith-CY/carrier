@@ -382,6 +382,58 @@ export const MOCK_WORKERS = [
   },
 ];
 
+export const MOCK_WORK_PROJECTS = [
+  {
+    id: 'proj_alpha',
+    name: 'Alpha',
+    sourceType: 'github',
+    sourceRef: 'git@github.com:acme/alpha.git',
+    defaultBranch: 'main',
+    workflowPath: 'WORKFLOW.md',
+    workflowDigest: 'sha256:workflow-alpha',
+    state: 'ready',
+    lastSyncAt: '2026-03-14T10:00:00Z',
+  },
+];
+
+export const MOCK_WORK_ITEMS = [
+  {
+    id: 'work_bug',
+    projectId: 'proj_alpha',
+    title: 'Fix worker drift',
+    description: 'Investigate stale worker leases in the control plane.',
+    acceptance: ['Document the source of drift', 'Propose remediation steps'],
+    priority: 'urgent',
+    source: 'github',
+    sourceRef: 'issue:12',
+    labels: ['sre', 'worker'],
+    state: 'running',
+    latestRunId: 'run_123',
+    claimedByRunId: 'run_123',
+    createdAt: '2026-03-13T08:00:00Z',
+    updatedAt: '2026-03-14T11:05:00Z',
+  },
+];
+
+export const MOCK_WORK_RUNS = [
+  {
+    id: 'run_123',
+    projectId: 'proj_alpha',
+    workItemId: 'work_bug',
+    executionId: 'exec-running',
+    workspaceId: 'ws_123',
+    workspacePath: '/tmp/carrier/worktrees/run_123',
+    backend: 'managed_isolated',
+    phase: 'executing',
+    leaseOwner: 'carrier:local',
+    verificationStatus: 'pending',
+    publishStatus: 'pending',
+    workflowDigest: 'sha256:workflow-alpha',
+    createdAt: '2026-03-14T11:00:00Z',
+    updatedAt: '2026-03-14T11:06:00Z',
+  },
+];
+
 function cloneJSON<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
@@ -569,6 +621,48 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
     }),
   );
 
+  await page.route('**/api/v1/auth/providers', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        providers: [
+          { id: 'openrouter', name: 'OpenRouter', configured: true, authMode: 'api_key' },
+          { id: 'anthropic', name: 'Anthropic', configured: false, authMode: 'api_key' },
+        ],
+      }),
+    }),
+  );
+
+  await page.route('**/api/v1/channels', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        channels: [
+          { id: 'webui', displayName: 'WebUI', configured: true, supportsWebUI: true },
+          { id: 'telegram', displayName: 'Telegram', configured: false, supportsWebUI: false },
+        ],
+      }),
+    }),
+  );
+
+  await page.route('**/api/v1/telegram/transport', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        result: 'ok',
+        transport: {
+          configured: false,
+          mode: 'webui_only',
+        },
+      }),
+    }),
+  );
+
   await page.route('**/api/v1/templates', (route) =>
     route.fulfill({
       status: 200,
@@ -673,6 +767,38 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
         result: 'ok',
         hosts: [{ id: 'host-1', name: 'prod-host-1', labels: ['prod', 'gpu'] }],
       }),
+    }),
+  );
+
+  await page.route('**/api/v1/work/projects', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ result: 'ok', projects: cloneJSON(MOCK_WORK_PROJECTS) }),
+    }),
+  );
+
+  await page.route('**/api/v1/work/projects/proj_alpha', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ result: 'ok', project: cloneJSON(MOCK_WORK_PROJECTS[0]) }),
+    }),
+  );
+
+  await page.route('**/api/v1/work/items', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ result: 'ok', items: cloneJSON(MOCK_WORK_ITEMS) }),
+    }),
+  );
+
+  await page.route('**/api/v1/work/runs', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ result: 'ok', runs: cloneJSON(MOCK_WORK_RUNS) }),
     }),
   );
 
@@ -951,6 +1077,14 @@ export async function mockAPIs(page: Page, opts?: { healthOk?: boolean }) {
       status: 200,
       contentType: 'text/event-stream',
       body: MOCK_LOG_STREAM_LINES.map((line) => `data: ${line}\n\n`).join(''),
+    }),
+  );
+
+  await page.route('**/api/v1/webui/delegate/events*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      body: '',
     }),
   );
 }
@@ -1429,22 +1563,13 @@ export async function loginWithToken(page: Page, url = '/', waitUntil: 'load' | 
   }, TEST_TOKEN);
   const targetPath = normalizeTestRoute(url);
   await page.goto('/', { waitUntil });
-  await page.locator('#header').waitFor({ state: 'visible' });
-  await page.waitForFunction(() => {
-    const overlay = document.querySelector('#login-overlay');
-    const logout = document.querySelector('#logout-btn');
-    const nav = document.querySelector('#nav');
-    const overlayHidden = !!overlay && overlay.classList.contains('hidden');
-    const logoutReady = !!logout && !logout.classList.contains('hidden');
-    const navReady = !!nav && !nav.classList.contains('hidden');
-    return overlayHidden && (logoutReady || navReady);
-  });
+  await page.locator('#main').waitFor({ state: 'visible' });
+  await page.waitForFunction(() => !document.querySelector('#login-overlay'));
   if (targetPath !== '/') {
     await pushHistoryRoute(page, targetPath);
   }
   await page.waitForFunction((expectedPath: string) => {
-    const nav = document.querySelector('#nav');
     const current = window.location.pathname || '/';
-    return current === expectedPath || (!!nav && !nav.classList.contains('hidden'));
+    return current === expectedPath;
   }, targetPath);
 }

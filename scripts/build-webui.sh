@@ -21,7 +21,7 @@ find "${OUT_DIR}" -maxdepth 1 -type f \( -name '*.js' -o -name '*.min.js' \) -de
 
 (
   cd "${WEBUI_DIR}"
-  if [[ ! -d node_modules ]]; then
+  if [[ ! -d node_modules || ! -x node_modules/.bin/vite ]]; then
     bun install --frozen-lockfile
   fi
   bun run build
