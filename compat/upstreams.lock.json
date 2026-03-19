@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-02-27T00:00:00Z",
+  "updated_at": "2026-03-19T00:00:00Z",
   "agents": {
     "openclaw": {
       "repository": "openclaw/openclaw",
@@ -16,22 +16,22 @@
       "tracked_files": [
         {
           "path": "docs/gateway/configuration-reference.md",
-          "sha": "9bbf0328fc9c4470a2f2fb5d6ee02c94711dca86"
+          "sha": "49c743db6232ca0c61686b0e21a21eaa808ed436"
         },
         {
           "path": "src/channels/plugins/config-schema.ts",
-          "sha": "75074ae569d9a895a7a2bf93d2c29058a7417caf"
+          "sha": "5ae166aa5a78066cdd3d1d21c8632ca6fcf88444"
         },
         {
           "path": "src/config/config.ts",
-          "sha": "df667d498b12e045fc706893af1f7356f7de493d"
+          "sha": "3bd36d0d709594c7d896132c8472e445d1994940"
         },
         {
           "path": "src/gateway/protocol/schema/config.ts",
-          "sha": "150cd6b4ad189d7cf74671e0ed2a420af976b0f6"
+          "sha": "9d0ec87666821aafd56049987c6bc7d54a5a3f72"
         }
       ],
-      "expected_fingerprint": "sha256:c6abd8d448495b1d5976a08bf3677a3f91c82f260d1f792c19e69b8865c23601"
+      "expected_fingerprint": "sha256:ab8b02dc9dad1c97bf97e8708900cdfabed8f463daea87dbc3d9197d9ef13c22"
     },
     "picoclaw": {
       "repository": "sipeed/picoclaw",
@@ -47,14 +47,14 @@
       "tracked_files": [
         {
           "path": "config/config.example.json",
-          "sha": "9575039f8787754be78d39051ffafb85d904d295"
+          "sha": "221e89491a4e66013e42247ce8f1d559ce985bd0"
         },
         {
           "path": "pkg/config/config.go",
-          "sha": "ca5803c35b4cc5cd38cc51158ab04cf1c138d2f4"
+          "sha": "4f8026d274d8b1f0b38a013c830e8d0e510496a6"
         }
       ],
-      "expected_fingerprint": "sha256:93c8d9ef27c45a44fbffeaedb26aa6032f0b2b4bc18c5a95f4020d624b4653da"
+      "expected_fingerprint": "sha256:00d9e819b162da93c6cc4f6f622cb12f525dc4d72c9b1b91d7cbe171be667203"
     },
     "zeroclaw": {
       "repository": "zeroclaw-labs/zeroclaw",
@@ -70,18 +70,18 @@
       "tracked_files": [
         {
           "path": "dev/config.template.toml",
-          "sha": "eae418c1a379fe83456b49963327d695e4774dfa"
+          "sha": "cf4511b85d9c0f6ba8c1d5404fbfb168d30f7229"
         },
         {
-          "path": "docs/config-reference.md",
-          "sha": "4fa30452c6ab6fe0ed8dc7be62bc38e4161b32dc"
+          "path": "docs/reference/api/config-reference.md",
+          "sha": "5775c40d7266954a94b094b4cf2e5532bd415e8c"
         },
         {
           "path": "src/config/schema.rs",
-          "sha": "669396b6452dcb26f8dd52b3a0c96e786582cc22"
+          "sha": "ad767b43ddf561e24f4b5c8b30db6fce06c904be"
         }
       ],
-      "expected_fingerprint": "sha256:27f0c017721f28eeacceaaa8604b4d227e87e2d2c3755b1ae24c5e3105094a1f"
+      "expected_fingerprint": "sha256:96aefe249019aa9c6f97efd0d762d15cb393252d505f27ed5e6c30b6915527ff"
     }
   }
 }
