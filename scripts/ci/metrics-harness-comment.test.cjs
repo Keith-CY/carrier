@@ -102,3 +102,12 @@ test("perf probes still warn when measured SSH timings exceed limits or fail", (
   assert.match(comment, /\| remote SSH available \| true \| when available \| ✅ \|/);
   assert.match(comment, /\| remote SSH overall P95 \| 3100 ms \| ≤ 2500 ms \(soft, when available\) \| ⚠️ \|/);
 });
+
+test("comment builder tolerates missing nested inputs", () => {
+  const comment = buildMetricsHarnessComment();
+
+  assert.match(comment, /## 📏 Carrier Metrics Harness Report/);
+  assert.match(comment, /\| Commits checked \| 0 \| — \| — \|/);
+  assert.match(comment, /\| JS bundle \(raw\) \| 0 KB \| — \| — \|/);
+  assert.match(comment, /\| Source files checked \| 0 \| — \| — \|/);
+});

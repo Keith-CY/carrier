@@ -87,7 +87,7 @@ function buildPerfBlock(perf, icon) {
   const sshAvailabilityStatus = sshMeasured ? "✅" : "ℹ️";
   const sshRunStatus = !sshMeasured ? "ℹ️" : (sshCmdFailures === 0 ? "✅" : "⚠️");
   const sshP95Status = !sshMeasured ? "ℹ️" : (sshOverallP95Ms <= sshCmdLimitMs ? "✅" : "⚠️");
-  const sshBatchStatus = sshMeasured ? "ℹ️" : "ℹ️";
+  const sshBatchStatus = "ℹ️";
   const sshDetailsMarkdown = String(perf.sshDetailsMarkdown || "").trim() || (
     sshMeasured
       ? "| _(no ssh detail rows recorded)_ | 0 | 0 | 0 ms | 0 ms | 0 ms | ℹ️ |"
@@ -129,15 +129,23 @@ function buildPerfBlock(perf, icon) {
 }
 
 function buildMetricsHarnessComment(input) {
-  const bundleHardFail = asBool(input.bundle && input.bundle.hardFail);
-  const readabilityFail = asBool(input.readability && input.readability.fail);
+  const {
+    bundle = {},
+    commit = {},
+    perf = {},
+    readability = {},
+    headRef = "",
+  } = input || {};
+
+  const bundleHardFail = asBool(bundle.hardFail);
+  const readabilityFail = asBool(readability.fail);
   const hardFail = bundleHardFail || readabilityFail;
   const overall = hardFail ? "❌ Hard gates failed" : "✅ All hard gates passed";
 
-  const commitIcon = asBool(input.commit && input.commit.fail) ? "❌" : "✅";
+  const commitIcon = asBool(commit.fail) ? "❌" : "✅";
   const bundleIcon = bundleHardFail ? "❌" : "✅";
   const readabilityIcon = readabilityFail ? "❌" : "✅";
-  const perfSummary = buildPerfSummary(input.perf || {});
+  const perfSummary = buildPerfSummary(perf);
 
   return [
     COMMENT_MARKER,
@@ -149,15 +157,15 @@ function buildMetricsHarnessComment(input) {
     "",
     "| Metric | Value | Limit | Status |",
     "|--------|-------|-------|--------|",
-    `| Commits checked | ${asNumber(input.commit && input.commit.total)} | — | — |`,
-    `| All within limit | ${asNumber(input.commit && input.commit.passed)}/${asNumber(input.commit && input.commit.total)} | ≤ ${asNumber(input.commit && input.commit.maxLines, 500)} lines | ${commitIcon} |`,
-    `| Largest commit | ${asNumber(input.commit && input.commit.maxSeen)} lines | ≤ ${asNumber(input.commit && input.commit.maxLines, 500)} | ${asNumber(input.commit && input.commit.maxSeen) <= asNumber(input.commit && input.commit.maxLines, 500) ? "✅" : "❌"} |`,
+    `| Commits checked | ${asNumber(commit.total)} | — | — |`,
+    `| All within limit | ${asNumber(commit.passed)}/${asNumber(commit.total)} | ≤ ${asNumber(commit.maxLines, 500)} lines | ${commitIcon} |`,
+    `| Largest commit | ${asNumber(commit.maxSeen)} lines | ≤ ${asNumber(commit.maxLines, 500)} | ${asNumber(commit.maxSeen) <= asNumber(commit.maxLines, 500) ? "✅" : "❌"} |`,
     "",
     "<details><summary>Per-commit breakdown</summary>",
     "",
     "| Commit | Lines changed | Limit | Status | Subject |",
     "|--------|---------------|-------|--------|---------|",
-    String(input.commit && input.commit.detailsMarkdown || "").trim(),
+    String(commit.detailsMarkdown || "").trim(),
     "",
     "</details>",
     "",
@@ -165,16 +173,16 @@ function buildMetricsHarnessComment(input) {
     "",
     "| Metric | Value | Limit | Status |",
     "|--------|-------|-------|--------|",
-    `| JS bundle (raw) | ${asNumber(input.bundle && input.bundle.rawKb)} KB | — | — |`,
-    `| JS bundle (gzip) | ${asNumber(input.bundle && input.bundle.gzipKb)} KB | ≤ ${asNumber(input.bundle && input.bundle.gzipLimitKb)} KB | ${asNumber(input.bundle && input.bundle.gzipKb) <= asNumber(input.bundle && input.bundle.gzipLimitKb) ? "✅" : "❌"} |`,
-    `| JS initial load (gzip) | ${asNumber(input.bundle && input.bundle.initialGzipKb)} KB | ≤ ${asNumber(input.bundle && input.bundle.initialLimitKb)} KB | ${asNumber(input.bundle && input.bundle.initialGzipKb) <= asNumber(input.bundle && input.bundle.initialLimitKb) ? "✅" : "❌"} |`,
+    `| JS bundle (raw) | ${asNumber(bundle.rawKb)} KB | — | — |`,
+    `| JS bundle (gzip) | ${asNumber(bundle.gzipKb)} KB | ≤ ${asNumber(bundle.gzipLimitKb)} KB | ${asNumber(bundle.gzipKb) <= asNumber(bundle.gzipLimitKb) ? "✅" : "❌"} |`,
+    `| JS initial load (gzip) | ${asNumber(bundle.initialGzipKb)} KB | ≤ ${asNumber(bundle.initialLimitKb)} KB | ${asNumber(bundle.initialGzipKb) <= asNumber(bundle.initialLimitKb) ? "✅" : "❌"} |`,
     "",
-    buildPerfBlock(input.perf || {}, perfSummary.icon),
+    buildPerfBlock(perf, perfSummary.icon),
     "",
-    buildReadabilityBlock(input.readability || {}, readabilityIcon),
+    buildReadabilityBlock(readability, readabilityIcon),
     "",
     "---",
-    `> 📊 Metrics spec: [\`docs/architecture/metrics.md\`](../blob/${input.headRef}/docs/architecture/metrics.md)`,
+    `> 📊 Metrics spec: [\`docs/architecture/metrics.md\`](../blob/${headRef}/docs/architecture/metrics.md)`,
     "",
   ].join("\n");
 }
