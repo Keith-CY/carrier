@@ -96,6 +96,8 @@ async function installRemoteInstance(page: Page, testInfo: TestInfo, agentId: st
 }
 
 test.describe('Fullstack Visual Acceptance', () => {
+  test.skip(!screenshotRoot, 'visual acceptance screenshots are only captured when CARRIER_VISUAL_ACCEPTANCE_DIR is set');
+
   let remoteProfileName = '';
   let orchestrationExecutionId = '';
 
