@@ -10,7 +10,16 @@ function asNumber(value, fallback = 0) {
 }
 
 function asBool(value) {
-  return value === true || String(value).trim() === "true";
+  if (value === true || value === 1) {
+    return true;
+  }
+
+  if (value === false || value === 0 || value == null) {
+    return false;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "true" || normalized === "1";
 }
 
 function readTextFile(filePath) {

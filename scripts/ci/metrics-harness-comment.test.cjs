@@ -111,3 +111,20 @@ test("comment builder tolerates missing nested inputs", () => {
   assert.match(comment, /\| JS bundle \(raw\) \| 0 KB \| — \| — \|/);
   assert.match(comment, /\| Source files checked \| 0 \| — \| — \|/);
 });
+
+test("env-like 0/1 flags still drive hard and soft gate status correctly", () => {
+  const input = buildBaseInput();
+  input.bundle.hardFail = "1";
+  input.commit.fail = "1";
+  input.readability.fail = "0";
+  input.perf.remoteSuiteOk = "0";
+  input.perf.gatewaySuiteOk = "1";
+
+  const comment = buildMetricsHarnessComment(input);
+
+  assert.match(comment, /\*\*Status\*\*: ❌ Hard gates failed/);
+  assert.match(comment, /### Commit Size \(soft gate\) ❌/);
+  assert.match(comment, /### WebUI Bundle Size \(hard gate\) ❌/);
+  assert.match(comment, /### Code Readability \(hard gate: changed source files\) ✅/);
+  assert.match(comment, /### Perf Probes \(soft gate\) ⚠️/);
+});
