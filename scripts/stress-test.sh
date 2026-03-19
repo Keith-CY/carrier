@@ -221,7 +221,7 @@ record_test() {
     fi
 }
 
-# shellcheck source=lib/stress-test_cases.sh
+# shellcheck source=scripts/lib/stress-test_cases.sh
 source "$SCRIPT_DIR/lib/stress-test_cases.sh"
 
 # Generate summary report
