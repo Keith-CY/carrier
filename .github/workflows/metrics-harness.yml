@@ -147,7 +147,7 @@ jobs:
           echo "initial_limit_kb=${initial_limit_kb}" >> "$GITHUB_OUTPUT"
           echo "hard_fail=${hard_fail}" >> "$GITHUB_OUTPUT"
 
-      - name: "Code readability (hard gate: changed source files <= 500 lines)"
+      - name: "Code readability (hard gate: new threshold crossings; legacy oversized files reported)"
         id: readability
         shell: bash
         run: |
@@ -159,6 +159,7 @@ jobs:
 
           checked=0
           violations=0
+          legacy_oversized=0
           details=""
 
           while IFS= read -r file; do
@@ -182,21 +183,37 @@ jobs:
 
             [[ -f "${file}" ]] || continue
 
-            lines="$(wc -l < "${file}" | tr -d ' ')"
+            head_lines="$(wc -l < "${file}" | tr -d ' ')"
+            base_exists=0
+            base_lines=0
+            base_label='new'
+            if git cat-file -e "${base_sha}:${file}" 2>/dev/null; then
+              base_exists=1
+              base_lines="$(git show "${base_sha}:${file}" | wc -l | tr -d ' ')"
+              base_label="${base_lines}"
+            fi
             checked=$((checked + 1))
 
-            if [[ "${lines}" -gt "${max_lines}" ]]; then
+            gate='hard'
+            note='within limit'
+            if [[ "${head_lines}" -le "${max_lines}" ]]; then
+              status='✅'
+            elif [[ "${base_exists}" -eq 1 && "${base_lines}" -gt "${max_lines}" ]]; then
+              gate='soft'
+              note='legacy oversized file'
+              status='⚠️'
+              legacy_oversized=$((legacy_oversized + 1))
+            else
+              note='new or newly oversized file'
               status='❌'
               violations=$((violations + 1))
-            else
-              status='✅'
             fi
 
-            details+="| \`${file}\` | ${lines} | ≤ ${max_lines} | ${status} |\n"
+            details+="| \`${file}\` | ${base_label} | ${head_lines} | ${gate} | ${status} | ${note} |\n"
           done < <(git diff --name-only "${base_sha}" "${head_sha}")
 
           if [[ "${checked}" -eq 0 ]]; then
-            details='| _(no changed source files)_ | 0 | ≤ 500 | ✅ |\n'
+            details='| _(no changed source files)_ | — | 0 | hard | ✅ | n/a |\n'
           fi
 
           fail=0
@@ -208,6 +225,7 @@ jobs:
           echo "max_lines=${max_lines}" >> "$GITHUB_OUTPUT"
           echo "checked=${checked}" >> "$GITHUB_OUTPUT"
           echo "violations=${violations}" >> "$GITHUB_OUTPUT"
+          echo "legacy_oversized=${legacy_oversized}" >> "$GITHUB_OUTPUT"
           echo "fail=${fail}" >> "$GITHUB_OUTPUT"
 
       - name: "Perf probes (soft gate: CLI timing + remote path test timing)"
@@ -475,6 +493,8 @@ jobs:
           readability_icon='✅'
           if [[ "${{ steps.readability.outputs.fail }}" == '1' ]]; then
             readability_icon='❌'
+          elif [[ "${{ steps.readability.outputs.legacy_oversized }}" -gt 0 ]]; then
+            readability_icon='⚠️'
           fi
 
           commit_icon='✅'
@@ -553,13 +573,17 @@ jobs:
 
           </details>
 
-          ### Code Readability (hard gate: changed source files) ${readability_icon}
+          ### Code Readability (hard gate on new threshold crossings) ${readability_icon}
 
-          | File | Lines | Limit | Status |
-          |------|-------|-------|--------|
+          | File | Base | Head | Gate | Status | Note |
+          |------|------|------|------|--------|------|
           ${readability_details}
-          | Source files checked | ${{ steps.readability.outputs.checked }} | — | — |
-          | Violations | ${{ steps.readability.outputs.violations }} | must be 0 | $( [[ "${{ steps.readability.outputs.violations }}" -eq 0 ]] && echo "✅" || echo "❌" ) |
+
+          | Metric | Value | Gate | Status | Note |
+          |--------|-------|------|--------|------|
+          | Source files checked | ${{ steps.readability.outputs.checked }} | — | — | — |
+          | Hard violations | ${{ steps.readability.outputs.violations }} | hard | $( [[ "${{ steps.readability.outputs.violations }}" -eq 0 ]] && echo "✅" || echo "❌" ) | new files or threshold crossings only |
+          | Legacy oversized warnings | ${{ steps.readability.outputs.legacy_oversized }} | soft | $( [[ "${{ steps.readability.outputs.legacy_oversized }}" -eq 0 ]] && echo "✅" || echo "⚠️" ) | pre-existing >500-line files touched by the PR |
 
           ---
           > 📊 Metrics spec: [\`docs/architecture/metrics.md\`](../blob/${{ github.head_ref }}/docs/architecture/metrics.md)

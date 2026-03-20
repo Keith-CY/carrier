@@ -49,20 +49,6 @@ type ChatResponse struct {
 	BackupRef   string               `json:"backupRef,omitempty"`
 }
 
-type AgentState struct {
-	ID           string
-	Install      string
-	Runtime      string
-	Health       string
-	RestartCount int
-}
-
-type UpgradeResult struct {
-	AgentID     string
-	FromVersion string
-	ToVersion   string
-}
-
 type AgentService interface {
 	ListAgents() []AgentState
 	Install(ctx context.Context, agentID string) error
