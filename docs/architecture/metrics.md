@@ -54,6 +54,7 @@ Current probes:
   - brings up local SSH daemon on a high port in CI
   - runs `carrier --help|version|--version` over SSH
   - reports SSH command P50/P95/max and batch-hop median
+  - when loopback SSH cannot be prepared on the runner, the probe is reported as skipped/info instead of warning
 
 Behavior:
 
@@ -78,7 +79,7 @@ Rules:
 - Existing files that cross from `≤ 500` to `> 500` lines fail the workflow
 - Existing files that were already `> 500` lines in the base revision are reported as legacy oversized warnings
 - Legacy oversized warnings do **not** fail the workflow by themselves
-- Results are reported per file in the PR metrics comment
+- The PR metrics comment reports within-limit, hard-violation, and legacy-warning counts plus a per-file breakdown
 
 This keeps a hard stop on introducing new oversized files while avoiding mandatory readability refactors for small edits to legacy large files.
 

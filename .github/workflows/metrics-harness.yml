@@ -159,6 +159,7 @@ jobs:
           head_sha="${{ github.event.pull_request.head.sha }}"
 
           checked=0
+          passed=0
           violations=0
           legacy_oversized=0
           details=""
@@ -199,6 +200,7 @@ jobs:
             note='within limit'
             if [[ "${head_lines}" -le "${max_lines}" ]]; then
               status='✅'
+              passed=$((passed + 1))
             elif [[ "${base_exists}" -eq 1 && "${base_lines}" -gt "${max_lines}" ]]; then
               gate='soft'
               note='legacy oversized file'
@@ -225,6 +227,7 @@ jobs:
           printf "%b" "${details}" > /tmp/metrics_readability_details.md
           echo "max_lines=${max_lines}" >> "$GITHUB_OUTPUT"
           echo "checked=${checked}" >> "$GITHUB_OUTPUT"
+          echo "passed=${passed}" >> "$GITHUB_OUTPUT"
           echo "violations=${violations}" >> "$GITHUB_OUTPUT"
           echo "legacy_oversized=${legacy_oversized}" >> "$GITHUB_OUTPUT"
           echo "fail=${fail}" >> "$GITHUB_OUTPUT"
@@ -444,7 +447,7 @@ jobs:
           fi
 
           if [[ -z "${ssh_cmd_details}" ]]; then
-            ssh_cmd_details='| _(no ssh probe)_ | 0 | 0 | 0 ms | 0 ms | 0 ms | ⚠️ |\n'
+            ssh_cmd_details='| _(ssh probe skipped: loopback SSH unavailable on runner)_ | 0 | 0 | 0 ms | 0 ms | 0 ms | ℹ️ |\n'
           fi
           printf "%b" "${ssh_cmd_details}" > /tmp/metrics_perf_ssh_details.md
 
@@ -475,122 +478,52 @@ jobs:
           set -euo pipefail
 
           hard_fail=0
-          overall='✅ All hard gates passed'
-
           if [[ "${{ steps.bundle.outputs.hard_fail }}" == '1' ]]; then
             hard_fail=1
-            overall='❌ Hard gates failed'
           fi
           if [[ "${{ steps.readability.outputs.fail }}" == '1' ]]; then
             hard_fail=1
-            overall='❌ Hard gates failed'
           fi
 
-          bundle_icon='✅'
-          if [[ "${{ steps.bundle.outputs.hard_fail }}" == '1' ]]; then
-            bundle_icon='❌'
-          fi
-
-          readability_icon='✅'
-          if [[ "${{ steps.readability.outputs.fail }}" == '1' ]]; then
-            readability_icon='❌'
-          elif [[ "${{ steps.readability.outputs.legacy_oversized }}" -gt 0 ]]; then
-            readability_icon='⚠️'
-          fi
-
-          commit_icon='✅'
-          if [[ "${{ steps.commit_size.outputs.fail }}" == '1' ]]; then
-            commit_icon='❌'
-          fi
-
-          perf_icon='✅'
-          if [[ "${{ steps.perf.outputs.cmd_failures }}" -gt 0 ]] || [[ "${{ steps.perf.outputs.remote_suite_ok }}" != 'true' ]] || [[ "${{ steps.perf.outputs.gateway_suite_ok }}" != 'true' ]] || [[ "${{ steps.perf.outputs.ssh_ready }}" != 'true' ]] || [[ "${{ steps.perf.outputs.ssh_cmd_failures }}" -gt 0 ]] || [[ "${{ steps.perf.outputs.ssh_overall_p95_ms }}" -gt "${{ steps.perf.outputs.ssh_cmd_limit_ms }}" ]]; then
-            perf_icon='⚠️'
-          fi
-
-          commit_details="$(cat /tmp/metrics_commit_details.md)"
-          perf_cmd_details="$(cat /tmp/metrics_perf_cmd_details.md)"
-          perf_ssh_details="$(cat /tmp/metrics_perf_ssh_details.md)"
-          readability_details="$(cat /tmp/metrics_readability_details.md)"
-
-          cat > /tmp/pr-metrics-comment.md <<EOF
-          <!-- carrier-pr-metrics-harness -->
-          ## 📏 Carrier Metrics Harness Report
-
-          **Status**: ${overall}
-
-          ### Commit Size (soft gate) ${commit_icon}
-
-          | Metric | Value | Limit | Status |
-          |--------|-------|-------|--------|
-          | Commits checked | ${{ steps.commit_size.outputs.total }} | — | — |
-          | All within limit | ${{ steps.commit_size.outputs.passed }}/${{ steps.commit_size.outputs.total }} | ≤ ${{ steps.commit_size.outputs.max_lines }} lines | ${commit_icon} |
-          | Largest commit | ${{ steps.commit_size.outputs.max_seen }} lines | ≤ ${{ steps.commit_size.outputs.max_lines }} | $( [[ "${{ steps.commit_size.outputs.max_seen }}" -le "${{ steps.commit_size.outputs.max_lines }}" ]] && echo "✅" || echo "❌" ) |
-
-          <details><summary>Per-commit breakdown</summary>
-
-          | Commit | Lines changed | Limit | Status | Subject |
-          |--------|---------------|-------|--------|---------|
-          ${commit_details}
-
-          </details>
-
-          ### WebUI Bundle Size (hard gate) ${bundle_icon}
-
-          | Metric | Value | Limit | Status |
-          |--------|-------|-------|--------|
-          | JS bundle (raw) | ${{ steps.bundle.outputs.raw_kb }} KB | — | — |
-          | JS bundle (gzip) | ${{ steps.bundle.outputs.gzip_kb }} KB | ≤ ${{ steps.bundle.outputs.gzip_limit_kb }} KB | $( [[ "${{ steps.bundle.outputs.gzip_kb }}" -le "${{ steps.bundle.outputs.gzip_limit_kb }}" ]] && echo "✅" || echo "❌" ) |
-          | JS initial load (gzip) | ${{ steps.bundle.outputs.initial_gzip_kb }} KB | ≤ ${{ steps.bundle.outputs.initial_limit_kb }} KB | $( [[ "${{ steps.bundle.outputs.initial_gzip_kb }}" -le "${{ steps.bundle.outputs.initial_limit_kb }}" ]] && echo "✅" || echo "❌" ) |
-
-          ### Perf Probes (soft gate) ${perf_icon}
-
-          | Metric | Value | Target | Status |
-          |--------|-------|--------|--------|
-          | carrier build time | ${{ steps.perf.outputs.build_ms }} ms | trend ↓ | ℹ️ |
-          | carrier binary size | ${{ steps.perf.outputs.binary_size_mb }} MB | trend ↓ | ℹ️ |
-          | CLI probe runs | ${{ steps.perf.outputs.cmd_runs }} | failures = 0 | $( [[ "${{ steps.perf.outputs.cmd_failures }}" -eq 0 ]] && echo "✅" || echo "⚠️" ) |
-          | CLI overall P95 | ${{ steps.perf.outputs.overall_p95_ms }} ms | ≤ ${{ steps.perf.outputs.cmd_limit_ms }} ms (soft) | $( [[ "${{ steps.perf.outputs.overall_p95_ms }}" -le "${{ steps.perf.outputs.cmd_limit_ms }}" ]] && echo "✅" || echo "⚠️" ) |
-          | cmd/carrier remote-path suite | ${{ steps.perf.outputs.remote_suite_ms }} ms | pass | $( [[ "${{ steps.perf.outputs.remote_suite_ok }}" == 'true' ]] && echo "✅" || echo "⚠️" ) |
-          | gateway remote-metrics suite | ${{ steps.perf.outputs.gateway_suite_ms }} ms | pass | $( [[ "${{ steps.perf.outputs.gateway_suite_ok }}" == 'true' ]] && echo "✅" || echo "⚠️" ) |
-          | remote SSH available | ${{ steps.perf.outputs.ssh_ready }} | true | $( [[ "${{ steps.perf.outputs.ssh_ready }}" == 'true' ]] && echo "✅" || echo "⚠️" ) |
-          | remote SSH probe runs | ${{ steps.perf.outputs.ssh_cmd_runs }} | failures = 0 | $( [[ "${{ steps.perf.outputs.ssh_cmd_failures }}" -eq 0 ]] && [[ "${{ steps.perf.outputs.ssh_ready }}" == 'true' ]] && echo "✅" || echo "⚠️" ) |
-          | remote SSH overall P95 | ${{ steps.perf.outputs.ssh_overall_p95_ms }} ms | ≤ ${{ steps.perf.outputs.ssh_cmd_limit_ms }} ms (soft) | $( [[ "${{ steps.perf.outputs.ssh_overall_p95_ms }}" -le "${{ steps.perf.outputs.ssh_cmd_limit_ms }}" ]] && [[ "${{ steps.perf.outputs.ssh_ready }}" == 'true' ]] && echo "✅" || echo "⚠️" ) |
-          | remote SSH batch P50 | ${{ steps.perf.outputs.ssh_batch_p50_ms }} ms | trend ↓ | $( [[ "${{ steps.perf.outputs.ssh_ready }}" == 'true' ]] && echo "ℹ️" || echo "⚠️" ) |
-
-          <details><summary>CLI command timings</summary>
-
-          | Command | Runs | Failures | P50 | P95 | Max | Status |
-          |---------|------|----------|-----|-----|-----|--------|
-          ${perf_cmd_details}
-
-          </details>
-
-          <details><summary>Remote SSH timings</summary>
-
-          | Command | Runs | Failures | P50 | P95 | Max | Status |
-          |---------|------|----------|-----|-----|-----|--------|
-          ${perf_ssh_details}
-
-          </details>
-
-          ### Code Readability (hard gate on new threshold crossings) ${readability_icon}
-
-          | File | Base | Head | Gate | Status | Note |
-          |------|------|------|------|--------|------|
-          ${readability_details}
-
-          | Metric | Value | Gate | Status | Note |
-          |--------|-------|------|--------|------|
-          | Source files checked | ${{ steps.readability.outputs.checked }} | — | — | — |
-          | Hard violations | ${{ steps.readability.outputs.violations }} | hard | $( [[ "${{ steps.readability.outputs.violations }}" -eq 0 ]] && echo "✅" || echo "❌" ) | new files or threshold crossings only |
-          | Legacy oversized warnings | ${{ steps.readability.outputs.legacy_oversized }} | soft | $( [[ "${{ steps.readability.outputs.legacy_oversized }}" -eq 0 ]] && echo "✅" || echo "⚠️" ) | pre-existing >500-line files touched by the PR |
-
-          ---
-          > 📊 Metrics spec: [\`docs/architecture/metrics.md\`](../blob/${{ github.head_ref }}/docs/architecture/metrics.md)
-          EOF
-
-          sed -i 's/^          //' /tmp/pr-metrics-comment.md
+          METRICS_HEAD_REF="${{ github.head_ref }}" \
+          METRICS_BUNDLE_HARD_FAIL="${{ steps.bundle.outputs.hard_fail }}" \
+          METRICS_BUNDLE_RAW_KB="${{ steps.bundle.outputs.raw_kb }}" \
+          METRICS_BUNDLE_GZIP_KB="${{ steps.bundle.outputs.gzip_kb }}" \
+          METRICS_BUNDLE_INITIAL_GZIP_KB="${{ steps.bundle.outputs.initial_gzip_kb }}" \
+          METRICS_BUNDLE_GZIP_LIMIT_KB="${{ steps.bundle.outputs.gzip_limit_kb }}" \
+          METRICS_BUNDLE_INITIAL_LIMIT_KB="${{ steps.bundle.outputs.initial_limit_kb }}" \
+          METRICS_COMMIT_TOTAL="${{ steps.commit_size.outputs.total }}" \
+          METRICS_COMMIT_PASSED="${{ steps.commit_size.outputs.passed }}" \
+          METRICS_COMMIT_MAX_LINES="${{ steps.commit_size.outputs.max_lines }}" \
+          METRICS_COMMIT_MAX_SEEN="${{ steps.commit_size.outputs.max_seen }}" \
+          METRICS_COMMIT_DETAILS_PATH="/tmp/metrics_commit_details.md" \
+          METRICS_COMMIT_FAIL="${{ steps.commit_size.outputs.fail }}" \
+          METRICS_PERF_BUILD_MS="${{ steps.perf.outputs.build_ms }}" \
+          METRICS_PERF_BINARY_SIZE_MB="${{ steps.perf.outputs.binary_size_mb }}" \
+          METRICS_PERF_CMD_RUNS="${{ steps.perf.outputs.cmd_runs }}" \
+          METRICS_PERF_CMD_FAILURES="${{ steps.perf.outputs.cmd_failures }}" \
+          METRICS_PERF_OVERALL_P95_MS="${{ steps.perf.outputs.overall_p95_ms }}" \
+          METRICS_PERF_CMD_LIMIT_MS="${{ steps.perf.outputs.cmd_limit_ms }}" \
+          METRICS_PERF_REMOTE_SUITE_OK="${{ steps.perf.outputs.remote_suite_ok }}" \
+          METRICS_PERF_REMOTE_SUITE_MS="${{ steps.perf.outputs.remote_suite_ms }}" \
+          METRICS_PERF_GATEWAY_SUITE_OK="${{ steps.perf.outputs.gateway_suite_ok }}" \
+          METRICS_PERF_GATEWAY_SUITE_MS="${{ steps.perf.outputs.gateway_suite_ms }}" \
+          METRICS_PERF_SSH_READY="${{ steps.perf.outputs.ssh_ready }}" \
+          METRICS_PERF_SSH_CMD_RUNS="${{ steps.perf.outputs.ssh_cmd_runs }}" \
+          METRICS_PERF_SSH_CMD_FAILURES="${{ steps.perf.outputs.ssh_cmd_failures }}" \
+          METRICS_PERF_SSH_OVERALL_P95_MS="${{ steps.perf.outputs.ssh_overall_p95_ms }}" \
+          METRICS_PERF_SSH_CMD_LIMIT_MS="${{ steps.perf.outputs.ssh_cmd_limit_ms }}" \
+          METRICS_PERF_SSH_BATCH_P50_MS="${{ steps.perf.outputs.ssh_batch_p50_ms }}" \
+          METRICS_PERF_CMD_DETAILS_PATH="/tmp/metrics_perf_cmd_details.md" \
+          METRICS_PERF_SSH_DETAILS_PATH="/tmp/metrics_perf_ssh_details.md" \
+          METRICS_READABILITY_CHECKED="${{ steps.readability.outputs.checked }}" \
+          METRICS_READABILITY_PASSED="${{ steps.readability.outputs.passed }}" \
+          METRICS_READABILITY_VIOLATIONS="${{ steps.readability.outputs.violations }}" \
+          METRICS_READABILITY_LEGACY_OVERSIZED="${{ steps.readability.outputs.legacy_oversized }}" \
+          METRICS_READABILITY_MAX_LINES="${{ steps.readability.outputs.max_lines }}" \
+          METRICS_READABILITY_DETAILS_PATH="/tmp/metrics_readability_details.md" \
+          METRICS_READABILITY_FAIL="${{ steps.readability.outputs.fail }}" \
+            node scripts/ci/metrics-harness-comment.cjs > /tmp/pr-metrics-comment.md
           echo "hard_fail=${hard_fail}" >> "$GITHUB_OUTPUT"
 
       - name: Upsert PR metrics comment
