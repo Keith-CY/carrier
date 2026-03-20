@@ -54,6 +54,7 @@ Current probes:
   - brings up local SSH daemon on a high port in CI
   - runs `carrier --help|version|--version` over SSH
   - reports SSH command P50/P95/max and batch-hop median
+  - when loopback SSH cannot be prepared on the runner, the probe is reported as skipped/info instead of warning
 
 Behavior:
 
@@ -74,7 +75,8 @@ File types:
 Rules:
 
 - Every checked source file must be `≤ 500` lines
-- Violations are reported per file in the PR metrics comment
+- The PR metrics comment reports `within-limit/checked` summary counts
+- Only failing files are listed in the PR metrics comment
 - Any violation fails the metrics workflow
 
 This is intentionally strict for changed code so new/modified files stay readable without forcing an immediate full-repo refactor.
