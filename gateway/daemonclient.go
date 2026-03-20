@@ -96,6 +96,22 @@ type RemoteDiagnosisHandoff struct {
 type BaseAgentChatResult = baseagent.ChatResponse
 type BaseAgentDecomposeTask = baseagent.DecomposeTask
 
+type BaseAgentChatOptions struct {
+	SharedInstructions []baseagent.SharedInstruction   `json:"sharedInstructions,omitempty"`
+	RuntimeContext     []baseagent.RuntimeContextEntry `json:"runtimeContext,omitempty"`
+}
+
+type BaseAgentDecomposeOptions struct {
+	Provider           string                          `json:"provider,omitempty"`
+	SharedInstructions []baseagent.SharedInstruction   `json:"sharedInstructions,omitempty"`
+	RuntimeContext     []baseagent.RuntimeContextEntry `json:"runtimeContext,omitempty"`
+}
+
+type AgentChatOptions struct {
+	SharedInstructions []baseagent.SharedInstruction   `json:"sharedInstructions,omitempty"`
+	RuntimeContext     []baseagent.RuntimeContextEntry `json:"runtimeContext,omitempty"`
+}
+
 type AgentChatResult struct {
 	AgentID     string                         `json:"agentId"`
 	SessionID   string                         `json:"sessionId,omitempty"`
@@ -619,12 +635,27 @@ func (c *DaemonClient) ChatBaseAgent(
 	attachments []baseagent.AttachmentRef,
 	actor string,
 ) (*BaseAgentChatResult, error) {
+	return c.ChatBaseAgentWithOptions(ctx, provider, chatID, requestID, message, attachments, BaseAgentChatOptions{}, actor)
+}
+
+func (c *DaemonClient) ChatBaseAgentWithOptions(
+	ctx context.Context,
+	provider string,
+	chatID string,
+	requestID string,
+	message string,
+	attachments []baseagent.AttachmentRef,
+	opts BaseAgentChatOptions,
+	actor string,
+) (*BaseAgentChatResult, error) {
 	body := baseagent.ChatRequest{
-		Provider:    provider,
-		ChatID:      chatID,
-		RequestID:   requestID,
-		Message:     message,
-		Attachments: append([]baseagent.AttachmentRef(nil), attachments...),
+		Provider:           provider,
+		ChatID:             chatID,
+		RequestID:          requestID,
+		Message:            message,
+		SharedInstructions: append([]baseagent.SharedInstruction(nil), opts.SharedInstructions...),
+		RuntimeContext:     append([]baseagent.RuntimeContextEntry(nil), opts.RuntimeContext...),
+		Attachments:        append([]baseagent.AttachmentRef(nil), attachments...),
 	}
 	raw, err := c.request(ctx, http.MethodPost, "/api/v1/base-agent/chat", body, actor, requestID)
 	if err != nil {
@@ -653,11 +684,29 @@ func (c *DaemonClient) DecomposeBaseAgentWithProvider(
 	actor string,
 	requestID string,
 ) ([]baseagent.DecomposeTask, error) {
+	return c.DecomposeBaseAgentWithOptions(ctx, goal, actor, requestID, BaseAgentDecomposeOptions{
+		Provider: provider,
+	})
+}
+
+func (c *DaemonClient) DecomposeBaseAgentWithOptions(
+	ctx context.Context,
+	goal string,
+	actor string,
+	requestID string,
+	opts BaseAgentDecomposeOptions,
+) ([]baseagent.DecomposeTask, error) {
 	body := map[string]interface{}{
 		"goal": strings.TrimSpace(goal),
 	}
-	if trimmedProvider := strings.TrimSpace(provider); trimmedProvider != "" {
+	if trimmedProvider := strings.TrimSpace(opts.Provider); trimmedProvider != "" {
 		body["provider"] = trimmedProvider
+	}
+	if len(opts.SharedInstructions) > 0 {
+		body["sharedInstructions"] = append([]baseagent.SharedInstruction(nil), opts.SharedInstructions...)
+	}
+	if len(opts.RuntimeContext) > 0 {
+		body["runtimeContext"] = append([]baseagent.RuntimeContextEntry(nil), opts.RuntimeContext...)
 	}
 	raw, err := c.request(ctx, http.MethodPost, "/api/v1/base-agent/decompose", body, actor, requestID)
 	if err != nil {
@@ -701,6 +750,22 @@ func (c *DaemonClient) ChatAgentForInstance(
 	actor string,
 	requestID string,
 ) (*AgentChatResult, error) {
+	return c.ChatAgentForInstanceWithOptions(ctx, agentID, instanceID, provider, message, sessionID, modelAlias, model, AgentChatOptions{}, actor, requestID)
+}
+
+func (c *DaemonClient) ChatAgentForInstanceWithOptions(
+	ctx context.Context,
+	agentID string,
+	instanceID string,
+	provider string,
+	message string,
+	sessionID string,
+	modelAlias string,
+	model string,
+	opts AgentChatOptions,
+	actor string,
+	requestID string,
+) (*AgentChatResult, error) {
 	payload := map[string]interface{}{
 		"message": message,
 	}
@@ -718,6 +783,12 @@ func (c *DaemonClient) ChatAgentForInstance(
 	}
 	if strings.TrimSpace(model) != "" {
 		payload["model"] = strings.TrimSpace(model)
+	}
+	if len(opts.SharedInstructions) > 0 {
+		payload["sharedInstructions"] = append([]baseagent.SharedInstruction(nil), opts.SharedInstructions...)
+	}
+	if len(opts.RuntimeContext) > 0 {
+		payload["runtimeContext"] = append([]baseagent.RuntimeContextEntry(nil), opts.RuntimeContext...)
 	}
 	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/chat", payload, actor, requestID)
 	if err != nil {

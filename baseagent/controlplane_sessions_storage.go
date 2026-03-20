@@ -123,6 +123,7 @@ func normalizeStructuredToolMessage(msg StructuredToolMessage) StructuredToolMes
 	msg.ToolName = strings.TrimSpace(msg.ToolName)
 	msg.ToolPolicyReason = strings.TrimSpace(msg.ToolPolicyReason)
 	msg.ToolPolicyRuleID = strings.TrimSpace(msg.ToolPolicyRuleID)
+	msg.GuardrailEvents = NormalizeGuardrailEvents(msg.GuardrailEvents)
 	msg.ToolCalls = cloneStructuredToolCalls(msg.ToolCalls)
 	if msg.ToolResultStatus != "" {
 		msg.ToolResultStatus = ExecutionToolResultStatus(strings.TrimSpace(string(msg.ToolResultStatus)))

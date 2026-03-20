@@ -23,6 +23,7 @@ type StructuredToolMessage struct {
 	ToolResultStatus ExecutionToolResultStatus `json:"toolResultStatus,omitempty"`
 	ToolPolicyReason string                    `json:"toolPolicyReason,omitempty"`
 	ToolPolicyRuleID string                    `json:"toolPolicyRuleId,omitempty"`
+	GuardrailEvents  []GuardrailEvent          `json:"guardrailEvents,omitempty"`
 	ToolCalls        []StructuredToolCall      `json:"toolCalls,omitempty"`
 }
 

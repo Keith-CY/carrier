@@ -44,3 +44,7 @@ func composeSkillAwareSystemPrompt(basePrompt, skillSummary string) string {
 	}
 	return basePrompt + "\n\nRelevant skills summary:\n" + skillSummary
 }
+
+func composeExecutionSystemPrompt(basePrompt, skillSummary string, sharedInstructions []SharedInstruction) string {
+	return composeSharedInstructionSystemPrompt(composeSkillAwareSystemPrompt(basePrompt, skillSummary), sharedInstructions)
+}

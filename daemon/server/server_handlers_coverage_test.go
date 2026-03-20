@@ -219,6 +219,29 @@ func TestHandleAgentChat_PassesAttachmentMetadataToRuntime(t *testing.T) {
 	}
 }
 
+func TestHandleAgentChat_PassesSharedInstructionsAndRuntimeContextToRuntime(t *testing.T) {
+	runtime := &fakeAgentChatRuntime{
+		resp: baseagent.ChatResponse{Message: "accepted", Action: "chat"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{
+		"message":"hello with execution context",
+		"sessionId":"sess-ctx",
+		"sharedInstructions":[{"id":"ops","content":"Prefer deterministic changes."}],
+		"runtimeContext":[{"key":"workflow.run_id","value":"run-123","class":"workflow","redactionMode":"hidden"}]
+	}`))
+	rr := httptest.NewRecorder()
+	handleAgentChat(nil, runtime, "openclaw", rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("chat status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(runtime.lastReq.SharedInstructions) != 1 || runtime.lastReq.SharedInstructions[0].ID != "ops" {
+		t.Fatalf("unexpected shared instructions: %+v", runtime.lastReq.SharedInstructions)
+	}
+	if len(runtime.lastReq.RuntimeContext) != 1 || runtime.lastReq.RuntimeContext[0].Key != "workflow.run_id" {
+		t.Fatalf("unexpected runtime context: %+v", runtime.lastReq.RuntimeContext)
+	}
+}
+
 func TestHandleAgentChat_ProxiesManagedZeroClawGateway(t *testing.T) {
 	origHome := userHomeDirFunc
 	t.Cleanup(func() {

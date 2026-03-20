@@ -121,6 +121,22 @@ describe('ExecutionDetailContent', () => {
             latencyMs: 1234,
           }],
         }}
+        metadata={{
+          executionId: 'exec-1',
+          sharedInstructions: [{ id: 'ops', title: 'Ops', content: 'Prefer deterministic changes.' }],
+          runtimeContextManifest: {
+            entries: [{ key: 'work.workspace_path', class: 'workspace', source: 'work', valueType: 'string', digest: 'sha256:abc123' }],
+          },
+          guardrails: {
+            summary: { total: 2, allowCount: 0, askCount: 1, denyCount: 1 },
+            events: [
+              { scope: 'execution_launch', decision: 'ask', ruleId: 'policy-1', reason: 'needs approval' },
+              { scope: 'tool_call', decision: 'deny', ruleId: 'tool-1', resolution: 'declined' },
+            ],
+          },
+          nodes: [{ id: 'execution:exec-1', kind: 'execution' }, { id: 'task:task-1', kind: 'task' }],
+          edges: [{ fromId: 'execution:exec-1', toId: 'task:task-1', kind: 'has_task' }],
+        }}
         workers={[{ hostId: 'host-1', agentId: 'zeroclaw', state: 'busy' }]}
         onDownloadArtifact={onDownloadArtifact}
       />,
@@ -138,6 +154,7 @@ describe('ExecutionDetailContent', () => {
     expect(screen.getByText(/workflow:\s*sha256:workflow/i)).toBeInTheDocument();
     expect(screen.getByText('Trigger')).toBeInTheDocument();
     expect(screen.getByText('Execution Lineage')).toBeInTheDocument();
+    expect(screen.getByText('Execution Metadata')).toBeInTheDocument();
     expect(screen.getByText('Outcome')).toBeInTheDocument();
     expect(screen.getByText('Media Outputs')).toBeInTheDocument();
     expect(screen.getByText('Execution Policy')).toBeInTheDocument();
@@ -155,6 +172,12 @@ describe('ExecutionDetailContent', () => {
     expect(screen.getByText(/external=tg-file-1/i)).toBeInTheDocument();
     expect(screen.getAllByText(/attachment=attachment-1/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/\/downloads\/artifact-1/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Ops:\s*Prefer deterministic changes./i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/work\.workspace_path · class=workspace · source=work · type=string · digest=sha256:abc123/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Guardrails:\s*total=2/i)).toBeInTheDocument();
+    expect(screen.getByText(/Graph:\s*nodes=2 · edges=1/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('link', { name: 'Download summary.txt' }));
     expect(onDownloadArtifact).toHaveBeenCalledWith('artifact-1', 'summary.txt');

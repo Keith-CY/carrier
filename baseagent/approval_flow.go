@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type ApprovalDecision string
@@ -43,6 +44,11 @@ func (l *AgentLoop) RespondPendingApproval(ctx context.Context, sessionKey, appr
 			return ChatResponse{}, ErrPendingApprovalNotFound
 		}
 		l.sessions.RecordApprovalDecision(sessionKey, pending, approvalDecisionRejected)
+		l.sessions.AddStructuredToolMessage(sessionKey, StructuredToolMessage{
+			Role:            "system",
+			Content:         fmt.Sprintf("guardrail approval rejected for %s", pending.ToolName),
+			GuardrailEvents: []GuardrailEvent{guardrailResolutionEventFromPending(pending, approvalDecisionRejected, time.Now().UTC())},
+		})
 		return ChatResponse{
 			Message: fmt.Sprintf("Canceled pending approval for %s.", pending.ToolName),
 			Action:  "approval_cancel",
@@ -58,6 +64,7 @@ func (l *AgentLoop) RespondPendingApproval(ctx context.Context, sessionKey, appr
 		}
 		l.sessions.RecordApprovalDecision(sessionKey, pending, approvalDecisionConfirmed)
 		result := l.structuredTools.ExecuteApproved(ctx, pending.ToolName, pending.Arguments)
+		result.GuardrailEvents = append(NormalizeGuardrailEvents(result.GuardrailEvents), guardrailResolutionEventFromPending(pending, approvalDecisionConfirmed, time.Now().UTC()))
 		toolOutput := renderStructuredToolResultOutput(pending.ToolName, result)
 		l.sessions.AddStructuredToolMessage(sessionKey, StructuredToolMessage{
 			Role:             "tool",
@@ -66,9 +73,10 @@ func (l *AgentLoop) RespondPendingApproval(ctx context.Context, sessionKey, appr
 			ToolResultStatus: normalizeExecutionToolResultStatus(result),
 			ToolPolicyReason: strings.TrimSpace(result.PolicyReason),
 			ToolPolicyRuleID: strings.TrimSpace(result.PolicyRuleID),
+			GuardrailEvents:  NormalizeGuardrailEvents(result.GuardrailEvents),
 		})
 
-		if resp, handled, err := l.processStructuredChat(ctx, sessionKey, l.sessions.History(sessionKey), "", l.resolvedMemorySubject("")); handled {
+		if resp, handled, err := l.processStructuredChat(ctx, sessionKey, l.sessions.History(sessionKey), "", l.resolvedMemorySubject(""), nil); handled {
 			resp.Action = "approval_confirm"
 			return resp, err
 		}

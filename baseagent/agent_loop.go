@@ -163,7 +163,7 @@ func (l *AgentLoop) ProcessChat(ctx context.Context, req ChatRequest) (ChatRespo
 		return l.finalizeResponse(sessionKey, channel, chatID, requestID, resp), nil
 	}
 
-	if resp, handled, err := l.processStructuredChat(ctx, sessionKey, l.sessions.History(sessionKey), skillSummary, memorySubject); handled {
+	if resp, handled, err := l.processStructuredChat(ctx, sessionKey, l.sessions.History(sessionKey), skillSummary, memorySubject, req.SharedInstructions); handled {
 		if err != nil {
 			l.bus.PublishEvent(LoopEvent{
 				Type:    EventError,
@@ -179,7 +179,7 @@ func (l *AgentLoop) ProcessChat(ctx context.Context, req ChatRequest) (ChatRespo
 	}
 
 	reply, err := l.providers.Reply(ctx, ProviderRequest{
-		SystemPrompt:    composeSkillAwareSystemPrompt(baseAgentSystemPrompt, skillSummary),
+		SystemPrompt:    composeExecutionSystemPrompt(baseAgentSystemPrompt, skillSummary, req.SharedInstructions),
 		UserMessage:     message,
 		History:         l.sessions.History(sessionKey),
 		Tools:           l.tools.ListToolDescriptors(),

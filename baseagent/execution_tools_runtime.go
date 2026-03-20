@@ -248,22 +248,23 @@ func executionDeny(message string) ExecutionToolResult {
 	return ExecutionToolResult{Output: strings.TrimSpace(message), IsError: true, Status: ExecutionToolResultStatusDeny}
 }
 
-func applyStructuredPolicyMetadata(result ExecutionToolResult, decision StructuredPolicyDecision) ExecutionToolResult {
+func applyStructuredPolicyMetadata(result ExecutionToolResult, toolName string, decision StructuredPolicyDecision) ExecutionToolResult {
 	if strings.TrimSpace(result.PolicyReason) == "" {
 		result.PolicyReason = strings.TrimSpace(decision.Reason)
 	}
 	if strings.TrimSpace(result.PolicyRuleID) == "" {
 		result.PolicyRuleID = strings.TrimSpace(decision.RuleID)
 	}
+	result.GuardrailEvents = append(NormalizeGuardrailEvents(result.GuardrailEvents), structuredPolicyGuardrailEvents(strings.TrimSpace(toolName), decision)...)
 	return result
 }
 
-func executionAskWithPolicy(message string, decision StructuredPolicyDecision) ExecutionToolResult {
-	return applyStructuredPolicyMetadata(executionAsk(message), decision)
+func executionAskWithPolicy(message string, toolName string, decision StructuredPolicyDecision) ExecutionToolResult {
+	return applyStructuredPolicyMetadata(executionAsk(message), toolName, decision)
 }
 
-func executionDenyWithPolicy(message string, decision StructuredPolicyDecision) ExecutionToolResult {
-	return applyStructuredPolicyMetadata(executionDeny(message), decision)
+func executionDenyWithPolicy(message string, toolName string, decision StructuredPolicyDecision) ExecutionToolResult {
+	return applyStructuredPolicyMetadata(executionDeny(message), toolName, decision)
 }
 
 func renderWebSearchHits(hits []WebSearchHit) string {

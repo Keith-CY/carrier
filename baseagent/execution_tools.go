@@ -27,18 +27,19 @@ const (
 )
 
 type ExecutionToolResult struct {
-	Output        string
-	Attachments   []AttachmentRef
-	ContentBlocks []ContentBlock
-	FilesTouched  []string
-	Stdout        string
-	Stderr        string
-	ExitCode      int
-	IsError       bool
-	Status        ExecutionToolResultStatus
-	PolicyReason  string
-	PolicyRuleID  string
-	Metadata      map[string]any
+	Output          string
+	Attachments     []AttachmentRef
+	ContentBlocks   []ContentBlock
+	FilesTouched    []string
+	Stdout          string
+	Stderr          string
+	ExitCode        int
+	IsError         bool
+	Status          ExecutionToolResultStatus
+	PolicyReason    string
+	PolicyRuleID    string
+	GuardrailEvents []GuardrailEvent
+	Metadata        map[string]any
 }
 
 type WebSearchHit struct {

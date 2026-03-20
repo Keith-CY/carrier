@@ -1,5 +1,6 @@
 import { ExecutionGovernanceBlock } from './components/ExecutionGovernanceBlock';
 import { ExecutionLineageBlock } from './components/ExecutionLineageBlock';
+import { ExecutionMetadataBlock } from './components/ExecutionMetadataBlock';
 import { ExecutionOutcomeBlock } from './components/ExecutionOutcomeBlock';
 import { ExecutionPolicyBlock } from './components/ExecutionPolicyBlock';
 import { ExecutionResultsBlock } from './components/ExecutionResultsBlock';
@@ -17,8 +18,9 @@ export function executionHasFailedTasks(execution: any): boolean {
   return results.some((item) => String(item?.status || '').trim().toLowerCase() === 'failed');
 }
 
-export function ExecutionDetailContent({ execution, workers, onDownloadArtifact }: {
+export function ExecutionDetailContent({ execution, metadata, workers, onDownloadArtifact }: {
   execution: any;
+  metadata?: any;
   workers: any[];
   onDownloadArtifact: (artifactId: string, filename: string) => void | Promise<void>;
 }) {
@@ -28,6 +30,7 @@ export function ExecutionDetailContent({ execution, workers, onDownloadArtifact 
       <ExecutionWorkContextBlock execution={execution} />
       <TriggerBlock execution={execution} />
       <ExecutionLineageBlock execution={execution} />
+      <ExecutionMetadataBlock execution={execution} metadata={metadata} />
       <ExecutionOutcomeBlock execution={execution} onDownloadArtifact={onDownloadArtifact} />
       <ExecutionPolicyBlock execution={execution} />
       <ExecutionGovernanceBlock execution={execution} />

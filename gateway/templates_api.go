@@ -266,6 +266,7 @@ func createTemplateExecutionRecord(requestID string, cfg *GatewayConfig, plan or
 	}
 	normalized = applyOrchestratorExecutionPolicy(normalized, policyRules, remoteHosts)
 	if normalized.Policy.Decision == orchestratorPolicyDecisionDeny {
+		emitRemoteAuditEvent(requestID, "guardrail_triggered", normalized.ID, "blocked", guardrailTriggeredAuditDetails(normalized))
 		return OrchestratorExecution{}, &gatewayAPIResponseError{
 			Status: http.StatusForbidden,
 			Body: map[string]interface{}{
@@ -282,6 +283,9 @@ func createTemplateExecutionRecord(requestID string, cfg *GatewayConfig, plan or
 	saved, saveErr := upsertOrchestratorExecution(normalized)
 	if saveErr != nil {
 		return OrchestratorExecution{}, &gatewayAPIResponseError{Status: http.StatusInternalServerError, Body: gatewayErrBody("E_INTERNAL", "failed to save orchestrator execution")}
+	}
+	if saved.Policy.Decision == orchestratorPolicyDecisionAsk {
+		emitRemoteAuditEvent(requestID, "guardrail_triggered", saved.ID, "pending", guardrailTriggeredAuditDetails(saved))
 	}
 	emitRemoteAuditEvent(requestID, "orchestrator_execution_create", saved.ID, "success", map[string]interface{}{
 		"goal":                    saved.Goal,
@@ -349,6 +353,7 @@ func authorizeTemplateExecutionRecord(requestID string, cfg *GatewayConfig, exec
 	if execution.Policy.Decision == orchestratorPolicyDecisionAsk && policyApprove {
 		execution.Policy.ApprovedBy = actor
 		execution.Policy.ApprovedAt = nowTimestamp()
+		appendExecutionLaunchGuardrailResolution(&execution, "approved")
 	}
 	if execution.StartedAt == "" {
 		execution.StartedAt = nowTimestamp()
@@ -359,6 +364,9 @@ func authorizeTemplateExecutionRecord(requestID string, cfg *GatewayConfig, exec
 	updated, saveErr := upsertOrchestratorExecution(execution)
 	if saveErr != nil {
 		return OrchestratorExecution{}, &gatewayAPIResponseError{Status: http.StatusInternalServerError, Body: gatewayErrBody("E_INTERNAL", "failed to update orchestrator execution")}
+	}
+	if updated.Policy.Decision == orchestratorPolicyDecisionAsk && policyApprove {
+		emitRemoteAuditEvent(requestID, "guardrail_resolved", updated.ID, "approved", guardrailResolvedAuditDetails(updated, "approved", actor))
 	}
 	emitRemoteAuditEvent(requestID, "orchestrator_execution_authorize", updated.ID, "success", map[string]interface{}{
 		"actor":                   actor,

@@ -31,6 +31,9 @@ func buildOrchestratorEvidenceArchive(bundle OrchestratorEvidenceBundle, cfg *Ga
 	if err := addJSON("execution.json", bundle.Execution); err != nil {
 		return nil, err
 	}
+	if err := addJSON("metadata-snapshot.json", bundle.MetadataSnapshot); err != nil {
+		return nil, err
+	}
 	if err := addJSON("plan.json", bundle.Plan); err != nil {
 		return nil, err
 	}

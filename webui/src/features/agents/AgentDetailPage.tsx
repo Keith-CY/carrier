@@ -6,6 +6,18 @@ import { apiGet, apiPost } from '../../lib/api';
 
 type AgentStatus = Record<string, unknown>;
 type AgentCapabilities = {
+  metadata?: {
+    sharedInstructionsSupported?: boolean;
+    runtimeContextSupported?: boolean;
+    guardrailsSupported?: boolean;
+    tools?: Array<{
+      name?: string;
+      description?: string;
+      source?: string;
+      tier?: string;
+      policyDecision?: string;
+    }>;
+  };
   skillSummary?: {
     installedCount?: number;
     enabledCount?: number;
@@ -1584,6 +1596,29 @@ export function AgentDetailPage() {
                 ))}
               </ul>
             </div>
+            {content.capabilities.metadata ? (
+              <div>
+                <strong>Runtime Metadata</strong>
+                <div className="text-dim">
+                  {content.capabilities.metadata.sharedInstructionsSupported ? 'shared instructions' : 'no shared instructions'}
+                  {content.capabilities.metadata.runtimeContextSupported ? ' · runtime context' : ''}
+                  {content.capabilities.metadata.guardrailsSupported ? ' · guardrails' : ''}
+                </div>
+                <ul className="compact-list">
+                  {(content.capabilities.metadata.tools || []).map((tool) => (
+                    <li key={`runtime-tool-${String(tool.name || '')}`}>
+                      <span>{tool.name || 'unknown-tool'}</span>
+                      <span className="text-dim">
+                        {tool.source ? `${tool.source}` : 'unknown-source'}
+                        {tool.tier ? ` · ${tool.tier}` : ''}
+                        {tool.policyDecision ? ` · ${tool.policyDecision}` : ''}
+                        {tool.description ? ` · ${tool.description}` : ''}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <pre className="log-box">{JSON.stringify(content.payload, null, 2)}</pre>
             {lastActionMessage ? <div className="text-dim">{lastActionMessage}</div> : null}
             <div className="btn-row">

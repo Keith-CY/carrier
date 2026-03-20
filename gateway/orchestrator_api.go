@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"context"
 	"encoding/json"
 	"errors"
@@ -297,6 +298,7 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			}
 			normalized = applyOrchestratorExecutionPolicy(normalized, policyRules, remoteHosts)
 			if normalized.Policy.Decision == orchestratorPolicyDecisionDeny {
+				emitRemoteAuditEvent(requestID, "guardrail_triggered", normalized.ID, "blocked", guardrailTriggeredAuditDetails(normalized))
 				emitRemoteAuditEvent(requestID, "orchestrator_execution_policy_deny", normalized.ID, "blocked", map[string]interface{}{
 					"goal":              normalized.Goal,
 					"requestedProvider": normalized.RequestedProvider,
@@ -320,6 +322,9 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			if saveErr != nil {
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to save orchestrator execution", "upsert orchestrator execution", saveErr)
 				return
+			}
+			if saved.Policy.Decision == orchestratorPolicyDecisionAsk {
+				emitRemoteAuditEvent(requestID, "guardrail_triggered", saved.ID, "pending", guardrailTriggeredAuditDetails(saved))
 			}
 			emitRemoteAuditEvent(requestID, "orchestrator_execution_create", saved.ID, "success", map[string]interface{}{
 				"goal":                    saved.Goal,
@@ -395,6 +400,21 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 		handleOrchestratorExecutionEvidence(w, r, requestID, cfg, execution, parts)
 		return
 	}
+	if action == "metadata" {
+		if _, ok := requireGatewayPermission(w, r, cfg, canViewExecutions, "E_RBAC_EXECUTION_VIEW", "role cannot view orchestrator execution metadata"); !ok {
+			return
+		}
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, gatewayErrBody("E_METHOD_NOT_ALLOWED", "method not allowed"))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"requestId": requestID,
+			"result":    "ok",
+			"metadata":  buildOrchestratorExecutionMetadataSnapshot(execution),
+		})
+		return
+	}
 	switch action {
 	case "authorize":
 		if _, ok := requireGatewayPermission(w, r, cfg, canApproveExecutions, "E_RBAC_EXECUTION_APPROVE", "role cannot approve orchestrator executions"); !ok {
@@ -419,6 +439,9 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			actor = "operator"
 		}
 		if !req.Approved {
+			if execution.Policy.Decision == orchestratorPolicyDecisionAsk {
+				appendExecutionLaunchGuardrailResolution(&execution, "declined")
+			}
 			execution.Authorization = OrchestratorAuthorization{
 				InfrastructureApproved: false,
 				ApprovedBy:             actor,
@@ -432,6 +455,9 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 			if saveErr != nil {
 				writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to update orchestrator execution", "upsert orchestrator execution declined", saveErr)
 				return
+			}
+			if updated.Policy.Decision == orchestratorPolicyDecisionAsk {
+				emitRemoteAuditEvent(requestID, "guardrail_resolved", updated.ID, "declined", guardrailResolvedAuditDetails(updated, "declined", actor))
 			}
 			emitRemoteAuditEvent(requestID, "orchestrator_execution_authorize", updated.ID, "declined", map[string]interface{}{
 				"actor": actor,
@@ -494,6 +520,7 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 		if execution.Policy.Decision == orchestratorPolicyDecisionAsk && req.PolicyApproved {
 			execution.Policy.ApprovedBy = actor
 			execution.Policy.ApprovedAt = nowTimestamp()
+			appendExecutionLaunchGuardrailResolution(&execution, "approved")
 		}
 		if execution.StartedAt == "" {
 			execution.StartedAt = nowTimestamp()
@@ -505,6 +532,9 @@ func handleOrchestratorExecutions(w http.ResponseWriter, r *http.Request, reques
 		if saveErr != nil {
 			writeInternalGatewayError(w, http.StatusInternalServerError, "E_INTERNAL", "failed to update orchestrator execution", "upsert orchestrator execution authorize", saveErr)
 			return
+		}
+		if updated.Policy.Decision == orchestratorPolicyDecisionAsk && req.PolicyApproved {
+			emitRemoteAuditEvent(requestID, "guardrail_resolved", updated.ID, "approved", guardrailResolvedAuditDetails(updated, "approved", actor))
 		}
 		emitRemoteAuditEvent(requestID, "orchestrator_execution_authorize", updated.ID, "success", map[string]interface{}{
 			"actor":                   actor,
@@ -908,6 +938,7 @@ func buildDerivedExecution(source OrchestratorExecution, launchReason string) Or
 	derived.LaunchReason = strings.TrimSpace(launchReason)
 	derived.Authorization = OrchestratorAuthorization{}
 	derived.Policy = resetDerivedExecutionPolicyApproval(source.Policy)
+	derived.Guardrails = OrchestratorExecutionGuardrails{}
 	derived.Results = []OrchestratorTaskResult{}
 	derived.Outcome = OrchestratorExecutionOutcome{}
 	derived.Error = ""
@@ -1514,7 +1545,7 @@ func runOrchestratorTaskAttempt(
 
 		start := time.Now()
 		requestID := "orchestrator-" + strings.TrimSpace(execution.ID)
-		chatResult, runErr := client.ChatAgentForInstance(
+		chatResult, runErr := client.ChatAgentForInstanceWithOptions(
 			runCtx,
 			strings.TrimSpace(lease.AgentID),
 			strings.TrimSpace(child.ID),
@@ -1523,6 +1554,10 @@ func runOrchestratorTaskAttempt(
 			sessionID,
 			"",
 			"",
+			AgentChatOptions{
+				SharedInstructions: append([]baseagent.SharedInstruction(nil), execution.SharedInstructions...),
+				RuntimeContext:     buildOrchestratorTaskRuntimeContextEntries(execution, task, lease),
+			},
 			"gateway:orchestrator:local",
 			requestID,
 		)

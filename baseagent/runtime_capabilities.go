@@ -37,10 +37,27 @@ type RuntimeSkillSummary struct {
 	DisabledCount  int `json:"disabledCount"`
 }
 
+type RuntimeToolMetadata struct {
+	Name           string         `json:"name"`
+	Description    string         `json:"description,omitempty"`
+	Source         string         `json:"source,omitempty"`
+	Tier           string         `json:"tier,omitempty"`
+	PolicyDecision string         `json:"policyDecision,omitempty"`
+	InputSchema    map[string]any `json:"inputSchema,omitempty"`
+}
+
+type RuntimeMetadataSummary struct {
+	SharedInstructionsSupported bool                  `json:"sharedInstructionsSupported"`
+	RuntimeContextSupported     bool                  `json:"runtimeContextSupported"`
+	GuardrailsSupported         bool                  `json:"guardrailsSupported"`
+	Tools                       []RuntimeToolMetadata `json:"tools,omitempty"`
+}
+
 type RuntimeCapabilitySummary struct {
 	Skills       []RuntimeSkillCapability `json:"skills,omitempty"`
 	SkillSummary RuntimeSkillSummary      `json:"skillSummary"`
 	MCP          MCPCapabilitySummary     `json:"mcp"`
+	Metadata     RuntimeMetadataSummary   `json:"metadata,omitempty"`
 }
 
 type runtimeSkillCapabilityLoader interface {
@@ -88,6 +105,14 @@ func (r *Runtime) CapabilitySummary(ctx context.Context) RuntimeCapabilitySummar
 		summary.MCP = reporter.CapabilitySummary()
 	}
 	summary.SkillSummary = buildRuntimeSkillSummary(summary.Skills)
+	summary.Metadata = RuntimeMetadataSummary{
+		SharedInstructionsSupported: true,
+		RuntimeContextSupported:     true,
+		GuardrailsSupported:         true,
+	}
+	if r.loop != nil && r.loop.structuredTools != nil {
+		summary.Metadata.Tools = r.loop.structuredTools.RuntimeMetadata()
+	}
 	return summary
 }
 

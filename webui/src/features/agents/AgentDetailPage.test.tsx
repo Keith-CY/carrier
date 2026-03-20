@@ -58,6 +58,15 @@ describe('AgentDetailPage', () => {
       }
       if (url.endsWith('/api/v1/agents/agent-alpha/capabilities')) {
         return new Response(JSON.stringify({
+          metadata: {
+            sharedInstructionsSupported: true,
+            runtimeContextSupported: true,
+            guardrailsSupported: true,
+            tools: [
+              { name: 'help', source: 'builtin', tier: 'metadata_read', policyDecision: 'allow', description: 'Show help.' },
+              { name: 'exec', source: 'workspace', tier: 'high_risk', policyDecision: 'ask', description: 'Execute a shell command.' },
+            ],
+          },
           skillSummary: {
             installedCount: 1,
             enabledCount: 1,
@@ -507,6 +516,9 @@ describe('AgentDetailPage', () => {
     await waitFor(() => expect(screen.getByText('Runtime Capabilities')).toBeInTheDocument());
     expect(screen.getAllByText(/go-testing/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/repo_search/i)).toBeInTheDocument();
+    expect(screen.getByText(/shared instructions · runtime context · guardrails/i)).toBeInTheDocument();
+    expect(screen.getByText(/^exec$/i)).toBeInTheDocument();
+    expect(screen.getByText(/workspace · high_risk · ask/i)).toBeInTheDocument();
     expect(screen.getByText(/healthy/i)).toBeInTheDocument();
     expect(screen.getByText(/2 job\(s\)/i)).toBeInTheDocument();
     expect(screen.getByText(/check launcher/i)).toBeInTheDocument();
