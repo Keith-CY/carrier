@@ -1,9 +1,9 @@
-export type QuickLaunchMode = 'goal' | 'template';
+export const CUSTOM_GOAL_PRESET_ID = 'custom-goal';
+export const DEFAULT_QUICK_LAUNCH_TEMPLATE_ID = 'incident-diagnosis';
 
 export type QuickLaunchDraft = {
-  mode: QuickLaunchMode;
+  selectedPresetId: string;
   goal: string;
-  templateId: string;
   templateInputs: Record<string, string>;
   provider: string;
   maxConcurrency: string;
@@ -49,9 +49,8 @@ export function normalizeExecutions(payload: any): any[] {
 
 export function defaultQuickLaunchDraft(): QuickLaunchDraft {
   return {
-    mode: 'goal',
+    selectedPresetId: DEFAULT_QUICK_LAUNCH_TEMPLATE_ID,
     goal: '',
-    templateId: '',
     templateInputs: {},
     provider: '',
     maxConcurrency: '',
@@ -69,19 +68,17 @@ function normalizeHostLabels(value: string): string[] {
 }
 
 export function buildQuickLaunchPreviewRequest(draft: QuickLaunchDraft): { error: string } | { payload: any } {
-  if (draft.mode === 'goal' && !draft.goal.trim()) {
+  const templateId = draft.selectedPresetId === CUSTOM_GOAL_PRESET_ID ? '' : draft.selectedPresetId.trim();
+  if (!templateId && !draft.goal.trim()) {
     return { error: 'Goal is required.' };
-  }
-  if (draft.mode === 'template' && !draft.templateId.trim()) {
-    return { error: 'Template is required.' };
   }
   const hostLabels = normalizeHostLabels(draft.hostLabels);
   const maxConcurrency = parseInt(draft.maxConcurrency.trim(), 10);
   return {
     payload: {
-      goal: draft.mode === 'goal' ? draft.goal.trim() : '',
-      templateId: draft.mode === 'template' ? draft.templateId.trim() : '',
-      inputs: draft.mode === 'template' ? draft.templateInputs : {},
+      goal: templateId ? '' : draft.goal.trim(),
+      templateId,
+      inputs: templateId ? draft.templateInputs : {},
       provider: draft.provider.trim(),
       hostIds: hostLabels.length ? [] : draft.selectedHosts,
       hostLabels,

@@ -188,6 +188,7 @@ func createTemplateExecutionRecord(requestID string, cfg *GatewayConfig, plan or
 	req := OrchestratorExecution{
 		Goal:                 strings.TrimSpace(plan.Goal),
 		TemplateID:           strings.TrimSpace(plan.TemplateID),
+		TemplateVersion:      strings.TrimSpace(plan.TemplateVersion),
 		TriggerSource:        strings.TrimSpace(metadata.TriggerSource),
 		TriggerID:            strings.TrimSpace(metadata.TriggerID),
 		TriggerEvent:         strings.TrimSpace(metadata.TriggerEvent),

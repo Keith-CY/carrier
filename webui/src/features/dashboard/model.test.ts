@@ -1,12 +1,11 @@
 import { describe, expect, test } from 'vitest';
-import { buildQuickLaunchPreviewRequest, toggleHostSelection } from './model';
+import { buildQuickLaunchPreviewRequest, CUSTOM_GOAL_PRESET_ID, DEFAULT_QUICK_LAUNCH_TEMPLATE_ID, toggleHostSelection } from './model';
 
 describe('dashboard model', () => {
-  test('validates goal mode before preview', () => {
+  test('validates custom goal preset before preview', () => {
     const result = buildQuickLaunchPreviewRequest({
-      mode: 'goal',
+      selectedPresetId: CUSTOM_GOAL_PRESET_ID,
       goal: '   ',
-      templateId: '',
       templateInputs: {},
       provider: '',
       maxConcurrency: '',
@@ -19,9 +18,8 @@ describe('dashboard model', () => {
 
   test('prefers host labels over explicit host ids and normalizes payload', () => {
     const result = buildQuickLaunchPreviewRequest({
-      mode: 'template',
+      selectedPresetId: DEFAULT_QUICK_LAUNCH_TEMPLATE_ID,
       goal: '',
-      templateId: 'incident-triage',
       templateInputs: { service: 'api' },
       provider: ' openrouter ',
       maxConcurrency: '4',
@@ -32,7 +30,7 @@ describe('dashboard model', () => {
     expect(result).toEqual({
       payload: {
         goal: '',
-        templateId: 'incident-triage',
+        templateId: DEFAULT_QUICK_LAUNCH_TEMPLATE_ID,
         inputs: { service: 'api' },
         provider: 'openrouter',
         hostIds: [],

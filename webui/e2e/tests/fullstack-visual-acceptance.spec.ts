@@ -242,8 +242,7 @@ test.describe('Fullstack Visual Acceptance', () => {
     await loginWithRole(page, 'admin', '/dashboard');
     await expect(page.locator('#view-dashboard')).toBeVisible();
 
-    await page.selectOption('#quick-launch-mode', 'template');
-    await page.selectOption('#quick-launch-template', 'pr-triage');
+    await page.click('#quick-launch-preset-pr-triage');
     await page.fill('#quick-launch-template-input-repository', 'Keith-CY/carrier');
     await page.fill('#quick-launch-template-input-prNumber', '139');
     await page.fill('#quick-launch-template-input-focus', 'visual acceptance');

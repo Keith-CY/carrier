@@ -28,6 +28,13 @@ func TestHandleExecutionTemplatesListAndShow(t *testing.T) {
 	if got := strings.TrimSpace(anyToString(templateMap["id"])); got != "incident-diagnosis" {
 		t.Fatalf("template id=%q want incident-diagnosis payload=%+v", got, showPayload)
 	}
+	if got := strings.TrimSpace(anyToString(templateMap["version"])); got != "v1" {
+		t.Fatalf("template version=%q want v1 payload=%+v", got, showPayload)
+	}
+	defaultLaunchConfig, _ := templateMap["defaultLaunchConfig"].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(defaultLaunchConfig["approvalScope"])); got != "infrastructure_only" {
+		t.Fatalf("default approvalScope=%q want infrastructure_only payload=%+v", got, showPayload)
+	}
 	requiredMemory, _ := templateMap["requiredMemory"].([]interface{})
 	if len(requiredMemory) == 0 {
 		t.Fatalf("expected template requiredMemory, payload=%+v", showPayload)
@@ -59,6 +66,9 @@ func TestHandleOrchestratorPlansWithTemplate(t *testing.T) {
 	plan, _ := payload["plan"].(map[string]interface{})
 	if got := strings.TrimSpace(anyToString(plan["templateId"])); got != "rollout-smoke-check" {
 		t.Fatalf("plan templateId=%q want rollout-smoke-check payload=%+v", got, payload)
+	}
+	if got := strings.TrimSpace(anyToString(plan["templateVersion"])); got != "v1" {
+		t.Fatalf("plan templateVersion=%q want v1 payload=%+v", got, payload)
 	}
 	if got := strings.TrimSpace(anyToString(plan["provider"])); got != "openrouter" {
 		t.Fatalf("plan provider=%q want openrouter payload=%+v", got, payload)
@@ -100,6 +110,9 @@ func TestHandleTemplateLaunchCreatesAuthorizedExecution(t *testing.T) {
 	execution, _ := payload["execution"].(map[string]interface{})
 	if got := strings.TrimSpace(anyToString(execution["templateId"])); got != "pr-triage" {
 		t.Fatalf("execution templateId=%q want pr-triage payload=%+v", got, payload)
+	}
+	if got := strings.TrimSpace(anyToString(execution["templateVersion"])); got != "v1" {
+		t.Fatalf("execution templateVersion=%q want v1 payload=%+v", got, payload)
 	}
 	requiredMemory, _ := execution["requiredMemory"].([]interface{})
 	if len(requiredMemory) == 0 {

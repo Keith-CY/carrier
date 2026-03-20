@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, test } from 'vitest';
+import { CUSTOM_GOAL_PRESET_ID, DEFAULT_QUICK_LAUNCH_TEMPLATE_ID } from './model';
 import { useQuickLaunchDraftState } from './useQuickLaunchDraftState';
 
 describe('useQuickLaunchDraftState', () => {
@@ -11,10 +12,15 @@ describe('useQuickLaunchDraftState', () => {
     const { result } = renderHook(() => useQuickLaunchDraftState());
 
     act(() => {
-      result.current.setQuickLaunchMode('template');
+      result.current.selectQuickLaunchPreset('rollout-smoke-check', {
+        defaultLaunchConfig: {
+          provider: 'openrouter',
+          hostLabels: ['prod'],
+          maxConcurrency: 2,
+        },
+      });
       result.current.setQuickLaunchGoal('Investigate checkout latency');
-      result.current.setQuickLaunchProvider('openrouter');
-      result.current.setQuickLaunchTemplateId('incident-diagnosis');
+      result.current.setQuickLaunchProvider('anthropic');
       result.current.setQuickLaunchTemplateInput('service', 'checkout');
       result.current.setQuickLaunchHostLabels('prod,gpu');
       result.current.setQuickLaunchMaxConcurrency('2');
@@ -24,10 +30,9 @@ describe('useQuickLaunchDraftState', () => {
       result.current.setQuickLaunchPlan({ goal: 'Investigate checkout latency' });
     });
 
-    expect(result.current.quickLaunchDraft.mode).toBe('template');
+    expect(result.current.quickLaunchDraft.selectedPresetId).toBe('rollout-smoke-check');
     expect(result.current.quickLaunchDraft.goal).toBe('Investigate checkout latency');
-    expect(result.current.quickLaunchDraft.provider).toBe('openrouter');
-    expect(result.current.quickLaunchDraft.templateId).toBe('incident-diagnosis');
+    expect(result.current.quickLaunchDraft.provider).toBe('anthropic');
     expect(result.current.quickLaunchDraft.templateInputs.service).toBe('checkout');
     expect(result.current.quickLaunchDraft.hostLabels).toBe('prod,gpu');
     expect(result.current.quickLaunchDraft.maxConcurrency).toBe('2');
@@ -40,9 +45,8 @@ describe('useQuickLaunchDraftState', () => {
       result.current.resetQuickLaunch();
     });
 
-    expect(result.current.quickLaunchDraft.mode).toBe('goal');
+    expect(result.current.quickLaunchDraft.selectedPresetId).toBe(DEFAULT_QUICK_LAUNCH_TEMPLATE_ID);
     expect(result.current.quickLaunchDraft.goal).toBe('');
-    expect(result.current.quickLaunchDraft.templateId).toBe('');
     expect(result.current.quickLaunchDraft.templateInputs).toEqual({});
     expect(result.current.quickLaunchDraft.provider).toBe('');
     expect(result.current.quickLaunchDraft.maxConcurrency).toBe('');
@@ -50,5 +54,25 @@ describe('useQuickLaunchDraftState', () => {
     expect(result.current.quickLaunchDraft.selectedHosts).toEqual(['local']);
     expect(result.current.quickLaunchPlan).toBeNull();
     expect(result.current.quickLaunchMessage.text).toBe('');
+  });
+
+  test('switching to custom goal preset clears template inputs without losing the draft goal', () => {
+    const { result } = renderHook(() => useQuickLaunchDraftState());
+
+    act(() => {
+      result.current.selectQuickLaunchPreset('incident-diagnosis', {
+        defaultLaunchConfig: {
+          hostLabels: ['prod'],
+          maxConcurrency: 3,
+        },
+      });
+      result.current.setQuickLaunchTemplateInput('service', 'checkout');
+      result.current.setQuickLaunchGoal('Investigate checkout latency');
+      result.current.selectQuickLaunchPreset(CUSTOM_GOAL_PRESET_ID);
+    });
+
+    expect(result.current.quickLaunchDraft.selectedPresetId).toBe(CUSTOM_GOAL_PRESET_ID);
+    expect(result.current.quickLaunchDraft.goal).toBe('Investigate checkout latency');
+    expect(result.current.quickLaunchDraft.templateInputs).toEqual({});
   });
 });

@@ -39,6 +39,7 @@ type TaskUnit struct {
 type Plan struct {
 	Goal            string           `json:"goal"`
 	TemplateID      string           `json:"templateId,omitempty"`
+	TemplateVersion string           `json:"templateVersion,omitempty"`
 	Provider        string           `json:"provider,omitempty"`
 	HostIDs         []string         `json:"hostIds,omitempty"`
 	HostLabels      []string         `json:"hostLabels,omitempty"`
@@ -75,10 +76,27 @@ func BuildPlan(input BuildPlanInput) (Plan, error) {
 	}
 	hostIDs := dedupeStrings(input.HostIDs)
 	hostLabels := normalizeSelectorStrings(input.HostLabels)
+	provider := strings.TrimSpace(input.Provider)
 	requiredMemory := normalizeMemoryScopes(input.RequiredMemory)
 	distillOutputs := normalizeMemoryScopes(input.DistillOutputs)
+	approvalScope := defaultApprovalScopeName
+	maxConcurrency := input.MaxConcurrency
+	templateVersion := ""
 	if templateID := strings.TrimSpace(input.TemplateID); templateID != "" {
 		if template, ok := GetExecutionTemplate(templateID); ok {
+			templateVersion = strings.TrimSpace(template.Version)
+			if provider == "" {
+				provider = strings.TrimSpace(template.DefaultLaunchConfig.Provider)
+			}
+			if len(hostIDs) == 0 && len(hostLabels) == 0 {
+				hostLabels = normalizeSelectorStrings(template.DefaultLaunchConfig.HostLabels)
+			}
+			if maxConcurrency <= 0 && template.DefaultLaunchConfig.MaxConcurrency > 0 {
+				maxConcurrency = template.DefaultLaunchConfig.MaxConcurrency
+			}
+			if scope := strings.TrimSpace(template.DefaultLaunchConfig.ApprovalScope); scope != "" {
+				approvalScope = scope
+			}
 			requiredMemory = normalizeMemoryScopes(append(requiredMemory, template.RequiredMemory...))
 			distillOutputs = normalizeMemoryScopes(append(distillOutputs, template.DistillOutputs...))
 		}
@@ -92,13 +110,14 @@ func BuildPlan(input BuildPlanInput) (Plan, error) {
 	return Plan{
 		Goal:            goal,
 		TemplateID:      strings.TrimSpace(input.TemplateID),
-		Provider:        strings.TrimSpace(input.Provider),
+		TemplateVersion: templateVersion,
+		Provider:        provider,
 		HostIDs:         hostIDs,
 		HostLabels:      hostLabels,
 		RequiredMemory:  requiredMemory,
 		DistillOutputs:  distillOutputs,
-		ApprovalScope:   defaultApprovalScopeName,
-		MaxConcurrency:  EffectiveMaxConcurrency(len(taskUnits), input.MaxConcurrency),
+		ApprovalScope:   approvalScope,
+		MaxConcurrency:  EffectiveMaxConcurrency(len(taskUnits), maxConcurrency),
 		PlannerTasks:    plannerTasks,
 		RequiredWorkers: requiredWorkers,
 		TaskUnits:       taskUnits,

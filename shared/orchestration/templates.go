@@ -27,18 +27,30 @@ type TemplateTask struct {
 	InputTemplate string `json:"inputTemplate"`
 }
 
+type TemplateDefaultLaunchConfig struct {
+	Provider       string   `json:"provider,omitempty"`
+	HostLabels     []string `json:"hostLabels,omitempty"`
+	MaxConcurrency int      `json:"maxConcurrency,omitempty"`
+	ApprovalScope  string   `json:"approvalScope,omitempty"`
+}
+
 type ExecutionTemplate struct {
-	ID                  string                 `json:"id"`
-	Name                string                 `json:"name"`
-	Description         string                 `json:"description,omitempty"`
-	InputSchema         []TemplateInputField   `json:"inputSchema,omitempty"`
-	DefaultGoalTemplate string                 `json:"defaultGoalTemplate"`
-	DefaultPolicyHints  []string               `json:"defaultPolicyHints,omitempty"`
-	DefaultWorkerHints  []TemplateWorkerHint   `json:"defaultWorkerHints,omitempty"`
-	DefaultOutputSchema map[string]interface{} `json:"defaultOutputSchema,omitempty"`
-	RequiredMemory      []string               `json:"requiredMemory,omitempty"`
-	DistillOutputs      []string               `json:"distillOutputs,omitempty"`
-	PlannerTasks        []TemplateTask         `json:"plannerTasks,omitempty"`
+	ID                  string                      `json:"id"`
+	Name                string                      `json:"name"`
+	Category            string                      `json:"category,omitempty"`
+	SortOrder           int                         `json:"sortOrder,omitempty"`
+	Featured            bool                        `json:"featured,omitempty"`
+	Version             string                      `json:"version,omitempty"`
+	Description         string                      `json:"description,omitempty"`
+	InputSchema         []TemplateInputField        `json:"inputSchema,omitempty"`
+	DefaultLaunchConfig TemplateDefaultLaunchConfig `json:"defaultLaunchConfig,omitempty"`
+	DefaultGoalTemplate string                      `json:"defaultGoalTemplate"`
+	DefaultPolicyHints  []string                    `json:"defaultPolicyHints,omitempty"`
+	DefaultWorkerHints  []TemplateWorkerHint        `json:"defaultWorkerHints,omitempty"`
+	DefaultOutputSchema map[string]interface{}      `json:"defaultOutputSchema,omitempty"`
+	RequiredMemory      []string                    `json:"requiredMemory,omitempty"`
+	DistillOutputs      []string                    `json:"distillOutputs,omitempty"`
+	PlannerTasks        []TemplateTask              `json:"plannerTasks,omitempty"`
 }
 
 type ResolvedExecutionTemplate struct {
@@ -54,6 +66,12 @@ func ListExecutionTemplates() []ExecutionTemplate {
 		out = append(out, cloneExecutionTemplate(template))
 	}
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].Featured != out[j].Featured {
+			return out[i].Featured
+		}
+		if out[i].SortOrder != out[j].SortOrder {
+			return out[i].SortOrder < out[j].SortOrder
+		}
 		return out[i].Name < out[j].Name
 	})
 	return out
@@ -142,6 +160,12 @@ func cloneExecutionTemplate(template ExecutionTemplate) ExecutionTemplate {
 	out.InputSchema = append([]TemplateInputField(nil), template.InputSchema...)
 	out.DefaultPolicyHints = append([]string(nil), template.DefaultPolicyHints...)
 	out.DefaultWorkerHints = append([]TemplateWorkerHint(nil), template.DefaultWorkerHints...)
+	out.DefaultLaunchConfig = TemplateDefaultLaunchConfig{
+		Provider:       strings.TrimSpace(template.DefaultLaunchConfig.Provider),
+		HostLabels:     append([]string(nil), template.DefaultLaunchConfig.HostLabels...),
+		MaxConcurrency: template.DefaultLaunchConfig.MaxConcurrency,
+		ApprovalScope:  strings.TrimSpace(template.DefaultLaunchConfig.ApprovalScope),
+	}
 	out.RequiredMemory = append([]string(nil), template.RequiredMemory...)
 	out.DistillOutputs = append([]string(nil), template.DistillOutputs...)
 	out.PlannerTasks = append([]TemplateTask(nil), template.PlannerTasks...)
@@ -177,11 +201,19 @@ var builtinExecutionTemplates = map[string]ExecutionTemplate{
 	"pr-triage": {
 		ID:          "pr-triage",
 		Name:        "PR Triage",
+		Category:    "engineering",
+		SortOrder:   10,
+		Featured:    true,
+		Version:     "v1",
 		Description: "Collect pull request context, inspect risk, and draft a recommendation.",
 		InputSchema: []TemplateInputField{
 			{ID: "repository", Label: "Repository", Placeholder: "Keith-CY/carrier", Required: true},
 			{ID: "prNumber", Label: "PR Number", Placeholder: "1554", Required: true},
 			{ID: "focus", Label: "Focus", Placeholder: "conflicts, rollback risk", DefaultValue: "general risk assessment"},
+		},
+		DefaultLaunchConfig: TemplateDefaultLaunchConfig{
+			MaxConcurrency: 2,
+			ApprovalScope:  defaultApprovalScopeName,
 		},
 		DefaultGoalTemplate: "Triage pull request {{repository}}#{{prNumber}} with focus on {{focus}}.",
 		DefaultPolicyHints: []string{
@@ -208,11 +240,19 @@ var builtinExecutionTemplates = map[string]ExecutionTemplate{
 	"issue-investigation": {
 		ID:          "issue-investigation",
 		Name:        "Issue Investigation",
+		Category:    "engineering",
+		SortOrder:   20,
+		Featured:    true,
+		Version:     "v1",
 		Description: "Investigate an issue report and produce findings plus next steps.",
 		InputSchema: []TemplateInputField{
 			{ID: "repository", Label: "Repository", Placeholder: "Keith-CY/carrier", Required: true},
 			{ID: "issueNumber", Label: "Issue Number", Placeholder: "1548", Required: true},
 			{ID: "symptom", Label: "Observed Symptom", Placeholder: "provider launch failed", Required: true},
+		},
+		DefaultLaunchConfig: TemplateDefaultLaunchConfig{
+			MaxConcurrency: 2,
+			ApprovalScope:  defaultApprovalScopeName,
 		},
 		DefaultGoalTemplate: "Investigate issue {{repository}}#{{issueNumber}}. Primary symptom: {{symptom}}.",
 		DefaultPolicyHints: []string{
@@ -238,11 +278,20 @@ var builtinExecutionTemplates = map[string]ExecutionTemplate{
 	"incident-diagnosis": {
 		ID:          "incident-diagnosis",
 		Name:        "Incident Diagnosis",
+		Category:    "operations",
+		SortOrder:   30,
+		Featured:    true,
+		Version:     "v1",
 		Description: "Triage a live incident and produce an operator-facing diagnosis summary.",
 		InputSchema: []TemplateInputField{
 			{ID: "service", Label: "Service", Placeholder: "checkout", Required: true},
 			{ID: "environment", Label: "Environment", Placeholder: "prod", Required: true},
 			{ID: "incidentSummary", Label: "Incident Summary", Placeholder: "latency regression after deploy", Required: true},
+		},
+		DefaultLaunchConfig: TemplateDefaultLaunchConfig{
+			HostLabels:     []string{"prod"},
+			MaxConcurrency: 3,
+			ApprovalScope:  defaultApprovalScopeName,
 		},
 		DefaultGoalTemplate: "Diagnose incident for service {{service}} in {{environment}}. Summary: {{incidentSummary}}.",
 		DefaultPolicyHints: []string{
@@ -268,11 +317,20 @@ var builtinExecutionTemplates = map[string]ExecutionTemplate{
 	"rollout-smoke-check": {
 		ID:          "rollout-smoke-check",
 		Name:        "Rollout Smoke Check",
+		Category:    "operations",
+		SortOrder:   40,
+		Featured:    true,
+		Version:     "v1",
 		Description: "Run a rollout-focused smoke checklist and summarize risk before promotion.",
 		InputSchema: []TemplateInputField{
 			{ID: "service", Label: "Service", Placeholder: "carrier-api", Required: true},
 			{ID: "environment", Label: "Environment", Placeholder: "prod", Required: true},
 			{ID: "releaseVersion", Label: "Release Version", Placeholder: "2026.03.09", Required: true},
+		},
+		DefaultLaunchConfig: TemplateDefaultLaunchConfig{
+			HostLabels:     []string{"prod"},
+			MaxConcurrency: 3,
+			ApprovalScope:  defaultApprovalScopeName,
 		},
 		DefaultGoalTemplate: "Run rollout smoke checks for {{service}} in {{environment}} for release {{releaseVersion}}.",
 		DefaultPolicyHints: []string{

@@ -588,8 +588,6 @@ Core workflows:
                         Start one supervised run for a work item
   carrier memory [list] [--subject <subject>] [--json]
                         List memory packages, attachments, grants, and audit snapshot
-  carrier templates [list] [--json]
-                        List built-in execution templates
   carrier triggers [list] [--json]
                         List execution triggers
   carrier work github import --project <project_id> --repository <owner/repo> (--issue <n>|--pr <n>) [--json]
@@ -690,6 +688,13 @@ Usage:
                         [--max-concurrency <n>] [--idempotency-key <key>]
                         [--timeout <duration>] [--async] [--dry-run] [--json]
                         Decompose goal with base agent, then run orchestration
+  carrier orchestrate --template <template_id> --input key=value [--input key=value]...
+                        [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]...
+                        [--distill-scope <scope>]... [--provider <provider-id>]
+                        [--max-concurrency <n>] [--policy-approve] [--timeout <duration>] [--async] [--dry-run] [--json]
+                        Launch a built-in execution template from the unified orchestrate entrypoint
+  carrier orchestrate templates [show <template_id>] [--json]
+                        List or inspect built-in execution templates
   carrier orchestrate status <execution_id> [--json]
                         Show orchestration execution status/results
   carrier orchestrate cancel <execution_id> [--json]
@@ -716,13 +721,6 @@ Usage:
                         Detach one memory scope from an instance
   carrier memory distill --instance <id> [--scope <scope>] [--dry-run] [--force] [--reason <text>] [--json]
                         Distill instance learnings back into the base memory plane
-  carrier templates show <template_id> [--json]
-                        Show one execution template
-  carrier templates run <template_id> --input key=value [--input key=value]...
-                        [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]...
-                        [--distill-scope <scope>]... [--provider <provider-id>]
-                        [--max-concurrency <n>] [--policy-approve] [--json]
-                        Launch a built-in execution template through the gateway
   carrier triggers show <trigger_id> [--json]
                         Show one execution trigger
   carrier triggers create --type <webhook|github|schedule> --template-id <template_id>
@@ -1218,8 +1216,6 @@ func parseCarrierCommand(args []string) (string, []string, error) {
 		return "orchestrate", args[2:], nil
 	case "executions":
 		return "executions", args[2:], nil
-	case "templates":
-		return "templates", args[2:], nil
 	case "triggers":
 		return "triggers", args[2:], nil
 	case "memory":
@@ -2626,15 +2622,63 @@ func parseRemoteStoreCommandArgs(args []string) (remoteStoreCommandOptions, erro
 
 func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, error) {
 	if len(args) == 0 {
-		return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate <goal...> [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]... [--distill-scope <scope>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--idempotency-key <key>] [--timeout <duration>] [--async] [--dry-run] [--json] OR carrier orchestrate <status|cancel|authorize> <execution_id> [--policy-approve] [--json]")
+		return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate <goal...> [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]... [--distill-scope <scope>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--idempotency-key <key>] [--timeout <duration>] [--async] [--dry-run] [--json] OR carrier orchestrate --template <template_id> --input key=value [--input key=value]... [--host-id <id>]... [--host-label <label>]... [--memory-scope <scope>]... [--distill-scope <scope>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--timeout <duration>] [--async] [--dry-run] [--json] OR carrier orchestrate templates [show <template_id>] [--json] OR carrier orchestrate <status|cancel|authorize> <execution_id> [--policy-approve] [--json]")
 	}
 
 	opts := orchestrateCommandOptions{
 		Action:  "run",
+		Inputs:  map[string]string{},
 		Timeout: defaultOrchestrateWaitTimeout,
 	}
 
 	firstArg := strings.ToLower(strings.TrimSpace(args[0]))
+	if firstArg == "templates" {
+		if len(args) == 1 {
+			return orchestrateCommandOptions{Action: "templates_list"}, nil
+		}
+		out := orchestrateCommandOptions{Inputs: map[string]string{}}
+		mode := strings.ToLower(strings.TrimSpace(args[1]))
+		startIdx := 1
+		switch mode {
+		case "", "list":
+			out.Action = "templates_list"
+			startIdx = 2
+		case "show":
+			out.Action = "templates_show"
+			startIdx = 2
+		case "run":
+			return orchestrateCommandOptions{}, errors.New("use carrier orchestrate --template <template_id> --input key=value to launch a template")
+		default:
+			if strings.HasPrefix(mode, "-") {
+				out.Action = "templates_list"
+				startIdx = 1
+			} else {
+				out.Action = "templates_show"
+				out.TemplateID = strings.TrimSpace(args[1])
+				startIdx = 2
+			}
+		}
+		for i := startIdx; i < len(args); i++ {
+			raw := strings.TrimSpace(args[i])
+			switch strings.ToLower(raw) {
+			case "":
+			case "--json":
+				out.JSON = true
+			default:
+				if strings.HasPrefix(raw, "-") {
+					return orchestrateCommandOptions{}, fmt.Errorf("unknown orchestrate templates option: %s", raw)
+				}
+				if out.Action != "templates_show" || out.TemplateID != "" {
+					return orchestrateCommandOptions{}, fmt.Errorf("unexpected orchestrate templates argument: %s", raw)
+				}
+				out.TemplateID = raw
+			}
+		}
+		if out.Action == "templates_show" && strings.TrimSpace(out.TemplateID) == "" {
+			return orchestrateCommandOptions{}, errors.New("usage: carrier orchestrate templates show <template_id> [--json]")
+		}
+		return out, nil
+	}
 	if firstArg == "status" || firstArg == "cancel" || firstArg == "authorize" {
 		opts.Action = firstArg
 		for i := 1; i < len(args); i++ {
@@ -2719,6 +2763,26 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 			}
 			opts.Provider = strings.TrimSpace(value)
 			i = next
+		case "--template":
+			value, next, err := parseRequiredFlagValue(args, i, "--template")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			opts.TemplateID = strings.TrimSpace(value)
+			i = next
+		case "--input":
+			value, next, err := parseRequiredFlagValue(args, i, "--input")
+			if err != nil {
+				return orchestrateCommandOptions{}, err
+			}
+			key, inputValue, ok := strings.Cut(strings.TrimSpace(value), "=")
+			key = strings.TrimSpace(key)
+			inputValue = strings.TrimSpace(inputValue)
+			if !ok || key == "" {
+				return orchestrateCommandOptions{}, fmt.Errorf("invalid --input value: %s", value)
+			}
+			opts.Inputs[key] = inputValue
+			i = next
 		case "--max-concurrency":
 			value, next, err := parseRequiredFlagValue(args, i, "--max-concurrency")
 			if err != nil {
@@ -2772,6 +2836,13 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 	opts.DistillOutputs = normalizeMemoryScopeSlice(opts.DistillOutputs)
 	if opts.MaxConcurrency > 64 {
 		opts.MaxConcurrency = 64
+	}
+	opts.TemplateID = strings.TrimSpace(opts.TemplateID)
+	if opts.TemplateID != "" {
+		if len(goalParts) > 0 {
+			return orchestrateCommandOptions{}, errors.New("goal and --template cannot be used together")
+		}
+		return opts, nil
 	}
 	if len(goalParts) == 0 {
 		return orchestrateCommandOptions{}, errors.New("goal is required")
@@ -4826,12 +4897,24 @@ type executionTemplateTaskSnapshot struct {
 type executionTemplateSnapshot struct {
 	ID                  string                                `json:"id"`
 	Name                string                                `json:"name"`
+	Category            string                                `json:"category,omitempty"`
+	SortOrder           int                                   `json:"sortOrder,omitempty"`
+	Featured            bool                                  `json:"featured,omitempty"`
+	Version             string                                `json:"version,omitempty"`
 	Description         string                                `json:"description,omitempty"`
+	DefaultLaunchConfig executionTemplateDefaultLaunchConfig  `json:"defaultLaunchConfig,omitempty"`
 	DefaultGoalTemplate string                                `json:"defaultGoalTemplate,omitempty"`
 	RequiredMemory      []string                              `json:"requiredMemory,omitempty"`
 	DistillOutputs      []string                              `json:"distillOutputs,omitempty"`
 	InputSchema         []executionTemplateInputFieldSnapshot `json:"inputSchema,omitempty"`
 	PlannerTasks        []executionTemplateTaskSnapshot       `json:"plannerTasks,omitempty"`
+}
+
+type executionTemplateDefaultLaunchConfig struct {
+	Provider       string   `json:"provider,omitempty"`
+	HostLabels     []string `json:"hostLabels,omitempty"`
+	MaxConcurrency int      `json:"maxConcurrency,omitempty"`
+	ApprovalScope  string   `json:"approvalScope,omitempty"`
 }
 
 type executionTemplateListResponse struct {
@@ -6316,9 +6399,37 @@ func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error 
 		progressOut = io.Discard
 	}
 	switch opts.Action {
-	case "plan":
-		if _, err := ensureDaemonRunning(progressOut); err != nil {
+	case "templates_list":
+		if _, err := ensureGatewayRunning(progressOut, startGatewayInBackgroundAndWait); err != nil {
 			return err
+		}
+		resp, raw, err := fetchExecutionTemplates()
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderExecutionTemplateList(resp.Templates))
+		return nil
+	case "templates_show":
+		if _, err := ensureGatewayRunning(progressOut, startGatewayInBackgroundAndWait); err != nil {
+			return err
+		}
+		resp, raw, err := fetchExecutionTemplate(opts.TemplateID)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, raw)
+		}
+		_, _ = fmt.Fprintln(out, renderExecutionTemplate(resp.Template))
+		return nil
+	case "plan":
+		if strings.TrimSpace(opts.TemplateID) == "" {
+			if _, err := ensureDaemonRunning(progressOut); err != nil {
+				return err
+			}
 		}
 		return runOrchestratePlan(out, opts)
 	case "list":
@@ -6362,8 +6473,10 @@ func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error 
 		}
 		return runOrchestrateAuthorize(out, opts.ExecutionID, opts.PolicyApprove, opts.JSON)
 	case "run":
-		if _, err := ensureDaemonRunning(progressOut); err != nil {
-			return err
+		if strings.TrimSpace(opts.TemplateID) == "" {
+			if _, err := ensureDaemonRunning(progressOut); err != nil {
+				return err
+			}
 		}
 		if _, err := ensureGatewayRunning(progressOut, startGatewayInBackgroundAndWait); err != nil {
 			return err
@@ -6591,6 +6704,35 @@ func runOrchestrateAuthorize(out io.Writer, executionID string, policyApprove bo
 }
 
 func runOrchestrateStart(out io.Writer, opts orchestrateCommandOptions) error {
+	if strings.TrimSpace(opts.TemplateID) != "" {
+		resp, raw, err := launchExecutionTemplateWithArgs(opts.TemplateID, opts.Inputs, opts.Provider, opts.HostIDs, opts.HostLabels, opts.RequiredMemory, opts.DistillOutputs, opts.MaxConcurrency, opts.PolicyApprove, opts.IdempotencyKey)
+		if err != nil {
+			return err
+		}
+		executionID := strings.TrimSpace(resp.Execution.ID)
+		if executionID == "" {
+			return errors.New("template launch response missing execution id")
+		}
+		if opts.Async {
+			if opts.JSON {
+				return writePrettyJSON(out, raw)
+			}
+			_, _ = fmt.Fprintf(out, "orchestrator execution accepted: %s\n", executionID)
+			_, _ = fmt.Fprintf(out, "status: %s\n", strings.TrimSpace(resp.Execution.Status))
+			_, _ = fmt.Fprintf(out, "Use `carrier executions show %s` to check progress.\n", executionID)
+			return nil
+		}
+		finalResp, finalRaw, err := waitForOrchestratorExecution(executionID, opts.Timeout)
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			return writePrettyJSON(out, finalRaw)
+		}
+		_, _ = fmt.Fprintln(out, renderOrchestrateExecution(finalResp))
+		return nil
+	}
+
 	plan, err := buildOrchestratePlan(opts)
 	if err != nil {
 		return err
@@ -6666,6 +6808,23 @@ func runOrchestrateStart(out io.Writer, opts orchestrateCommandOptions) error {
 }
 
 func buildOrchestratePlan(opts orchestrateCommandOptions) (orchestratePlanSnapshot, error) {
+	if templateID := strings.TrimSpace(opts.TemplateID); templateID != "" {
+		resolved, err := sharedorchestration.ResolveExecutionTemplate(templateID, opts.Inputs)
+		if err != nil {
+			return orchestratePlanSnapshot{}, err
+		}
+		return sharedorchestration.BuildPlan(sharedorchestration.BuildPlanInput{
+			Goal:           strings.TrimSpace(resolved.Goal),
+			TemplateID:     resolved.Template.ID,
+			Provider:       strings.TrimSpace(opts.Provider),
+			HostIDs:        opts.HostIDs,
+			HostLabels:     opts.HostLabels,
+			RequiredMemory: opts.RequiredMemory,
+			DistillOutputs: opts.DistillOutputs,
+			MaxConcurrency: opts.MaxConcurrency,
+			Tasks:          resolved.Tasks,
+		})
+	}
 	tasks, err := decomposeOrchestrateGoal(opts.Goal, opts.Provider)
 	if err != nil {
 		return orchestratePlanSnapshot{}, err
@@ -7254,19 +7413,24 @@ func deleteExecutionTrigger(triggerID string) (executionTriggerDeleteResponse, [
 }
 
 func launchExecutionTemplate(opts templatesCommandOptions) (executionTemplateLaunchResponse, []byte, error) {
-	trimmedID := strings.TrimSpace(opts.TemplateID)
+	return launchExecutionTemplateWithArgs(opts.TemplateID, opts.Inputs, opts.Provider, opts.HostIDs, opts.HostLabels, opts.RequiredMemory, opts.DistillOutputs, opts.MaxConcurrency, opts.PolicyApprove, "")
+}
+
+func launchExecutionTemplateWithArgs(templateID string, inputs map[string]string, provider string, hostIDs []string, hostLabels []string, requiredMemory []string, distillOutputs []string, maxConcurrency int, policyApprove bool, idempotencyKey string) (executionTemplateLaunchResponse, []byte, error) {
+	trimmedID := strings.TrimSpace(templateID)
 	if trimmedID == "" {
 		return executionTemplateLaunchResponse{}, nil, errors.New("template id is required")
 	}
 	body := map[string]interface{}{
-		"inputs":         opts.Inputs,
-		"provider":       strings.TrimSpace(opts.Provider),
-		"hostIds":        opts.HostIDs,
-		"hostLabels":     opts.HostLabels,
-		"requiredMemory": opts.RequiredMemory,
-		"distillOutputs": opts.DistillOutputs,
-		"maxConcurrency": opts.MaxConcurrency,
-		"policyApprove":  opts.PolicyApprove,
+		"inputs":         inputs,
+		"provider":       strings.TrimSpace(provider),
+		"hostIds":        hostIDs,
+		"hostLabels":     hostLabels,
+		"requiredMemory": requiredMemory,
+		"distillOutputs": distillOutputs,
+		"maxConcurrency": maxConcurrency,
+		"policyApprove":  policyApprove,
+		"idempotencyKey": strings.TrimSpace(idempotencyKey),
 		"actor":          "carrier-cli",
 	}
 	path := "/api/v1/templates/" + neturl.PathEscape(trimmedID) + "/launch"
@@ -7324,8 +7488,27 @@ func renderExecutionTemplate(template executionTemplateSnapshot) string {
 		fmt.Sprintf("execution template %s", firstNonEmpty(strings.TrimSpace(template.ID), "unknown")),
 		fmt.Sprintf("name: %s", firstNonEmpty(strings.TrimSpace(template.Name), "(unnamed)")),
 	}
+	if version := strings.TrimSpace(template.Version); version != "" {
+		lines = append(lines, "version: "+version)
+	}
 	if description := strings.TrimSpace(template.Description); description != "" {
 		lines = append(lines, "description: "+description)
+	}
+	if template.DefaultLaunchConfig.MaxConcurrency > 0 || strings.TrimSpace(template.DefaultLaunchConfig.ApprovalScope) != "" || len(template.DefaultLaunchConfig.HostLabels) > 0 || strings.TrimSpace(template.DefaultLaunchConfig.Provider) != "" {
+		parts := make([]string, 0, 4)
+		if provider := strings.TrimSpace(template.DefaultLaunchConfig.Provider); provider != "" {
+			parts = append(parts, "provider="+provider)
+		}
+		if len(template.DefaultLaunchConfig.HostLabels) > 0 {
+			parts = append(parts, "hostLabels="+strings.Join(template.DefaultLaunchConfig.HostLabels, ","))
+		}
+		if template.DefaultLaunchConfig.MaxConcurrency > 0 {
+			parts = append(parts, fmt.Sprintf("maxConcurrency=%d", template.DefaultLaunchConfig.MaxConcurrency))
+		}
+		if scope := strings.TrimSpace(template.DefaultLaunchConfig.ApprovalScope); scope != "" {
+			parts = append(parts, "approval="+scope)
+		}
+		lines = append(lines, "default launch: "+strings.Join(parts, " · "))
 	}
 	if goalTemplate := strings.TrimSpace(template.DefaultGoalTemplate); goalTemplate != "" {
 		lines = append(lines, "goal template: "+goalTemplate)

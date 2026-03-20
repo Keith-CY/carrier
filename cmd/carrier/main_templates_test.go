@@ -9,37 +9,30 @@ import (
 )
 
 func TestParseCarrierCommandRoutesTemplates(t *testing.T) {
-	cmd, args, err := parseCarrierCommand([]string{"carrier", "templates", "show", "pr-triage"})
-	if err != nil {
-		t.Fatalf("parseCarrierCommand(templates) error: %v", err)
-	}
-	if cmd != "templates" {
-		t.Fatalf("command = %q, want templates", cmd)
-	}
-	if len(args) != 2 || args[0] != "show" || args[1] != "pr-triage" {
-		t.Fatalf("args = %v, want [show pr-triage]", args)
+	if _, _, err := parseCarrierCommand([]string{"carrier", "templates", "show", "pr-triage"}); err == nil || !strings.Contains(err.Error(), "unknown command: templates") {
+		t.Fatalf("parseCarrierCommand(templates) error = %v, want unknown command", err)
 	}
 }
 
-func TestParseTemplatesCommandArgs(t *testing.T) {
-	listOpts, err := parseTemplatesCommandArgs([]string{"list", "--json"})
+func TestParseOrchestrateTemplateCommandArgs(t *testing.T) {
+	listOpts, err := parseOrchestrateCommandArgs([]string{"templates", "--json"})
 	if err != nil {
-		t.Fatalf("parseTemplatesCommandArgs(list) error: %v", err)
+		t.Fatalf("parseOrchestrateCommandArgs(list) error: %v", err)
 	}
-	if listOpts.Action != "list" || !listOpts.JSON {
+	if listOpts.Action != "templates_list" || !listOpts.JSON {
 		t.Fatalf("unexpected list opts: %+v", listOpts)
 	}
 
-	showOpts, err := parseTemplatesCommandArgs([]string{"show", "incident-diagnosis"})
+	showOpts, err := parseOrchestrateCommandArgs([]string{"templates", "show", "incident-diagnosis"})
 	if err != nil {
-		t.Fatalf("parseTemplatesCommandArgs(show) error: %v", err)
+		t.Fatalf("parseOrchestrateCommandArgs(show) error: %v", err)
 	}
-	if showOpts.Action != "show" || showOpts.TemplateID != "incident-diagnosis" {
+	if showOpts.Action != "templates_show" || showOpts.TemplateID != "incident-diagnosis" {
 		t.Fatalf("unexpected show opts: %+v", showOpts)
 	}
 
-	runOpts, err := parseTemplatesCommandArgs([]string{
-		"run", "pr-triage",
+	runOpts, err := parseOrchestrateCommandArgs([]string{
+		"--template", "pr-triage",
 		"--input", "repository=Keith-CY/carrier",
 		"--input", "prNumber=1554",
 		"--input", "focus=rollback risk",
@@ -53,7 +46,7 @@ func TestParseTemplatesCommandArgs(t *testing.T) {
 		"--json",
 	})
 	if err != nil {
-		t.Fatalf("parseTemplatesCommandArgs(run) error: %v", err)
+		t.Fatalf("parseOrchestrateCommandArgs(template run) error: %v", err)
 	}
 	if runOpts.Action != "run" || runOpts.TemplateID != "pr-triage" || runOpts.Provider != "openrouter" || runOpts.MaxConcurrency != 3 || !runOpts.PolicyApprove || !runOpts.JSON {
 		t.Fatalf("unexpected run opts: %+v", runOpts)
@@ -73,9 +66,12 @@ func TestParseTemplatesCommandArgs(t *testing.T) {
 	if len(runOpts.DistillOutputs) != 1 || runOpts.DistillOutputs[0] != "shared:pr-lessons" {
 		t.Fatalf("distillOutputs=%v, want [shared:pr-lessons]", runOpts.DistillOutputs)
 	}
+	if runOpts.Goal != "" {
+		t.Fatalf("goal = %q, want empty for template launch", runOpts.Goal)
+	}
 }
 
-func TestRunTemplatesCommand(t *testing.T) {
+func TestRunOrchestrateTemplateCommands(t *testing.T) {
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/healthz":
@@ -100,33 +96,18 @@ func TestRunTemplatesCommand(t *testing.T) {
 	setProbeEnvFromURL(t, "CARRIER_GATEWAY_HOST", "CARRIER_GATEWAY_PORT", gateway.URL)
 
 	var out bytes.Buffer
-	if err := runTemplatesCommand(&out, templatesCommandOptions{Action: "list"}); err != nil {
-		t.Fatalf("runTemplatesCommand(list) error: %v", err)
+	if err := runOrchestrateCommand(&out, orchestrateCommandOptions{Action: "templates_list"}); err != nil {
+		t.Fatalf("runOrchestrateCommand(list) error: %v", err)
 	}
 	if !strings.Contains(out.String(), "incident-diagnosis") {
 		t.Fatalf("list output=%s, want incident-diagnosis", out.String())
 	}
 
 	out.Reset()
-	if err := runTemplatesCommand(&out, templatesCommandOptions{Action: "show", TemplateID: "incident-diagnosis"}); err != nil {
-		t.Fatalf("runTemplatesCommand(show) error: %v", err)
+	if err := runOrchestrateCommand(&out, orchestrateCommandOptions{Action: "templates_show", TemplateID: "incident-diagnosis"}); err != nil {
+		t.Fatalf("runOrchestrateCommand(show) error: %v", err)
 	}
 	if !strings.Contains(out.String(), "Incident Diagnosis") || !strings.Contains(out.String(), "service") {
 		t.Fatalf("show output=%s, want template details", out.String())
-	}
-
-	out.Reset()
-	if err := runTemplatesCommand(&out, templatesCommandOptions{
-		Action:         "run",
-		TemplateID:     "incident-diagnosis",
-		Inputs:         map[string]string{"service": "checkout"},
-		Provider:       "openrouter",
-		MaxConcurrency: 2,
-		PolicyApprove:  true,
-	}); err != nil {
-		t.Fatalf("runTemplatesCommand(run) error: %v", err)
-	}
-	if !strings.Contains(out.String(), "exec-template-1") || !strings.Contains(out.String(), "carrier executions show exec-template-1") {
-		t.Fatalf("run output=%s, want execution id and next step", out.String())
 	}
 }
