@@ -698,8 +698,10 @@ func buildHTTPMuxWithBaseAgent(
 			return
 		}
 		var body struct {
-			Provider string `json:"provider,omitempty"`
-			Goal     string `json:"goal"`
+			Provider           string                          `json:"provider,omitempty"`
+			Goal               string                          `json:"goal"`
+			SharedInstructions []baseagent.SharedInstruction   `json:"sharedInstructions,omitempty"`
+			RuntimeContext     []baseagent.RuntimeContextEntry `json:"runtimeContext,omitempty"`
 		}
 		if !decodeBody(w, r, &body) {
 			return
@@ -708,7 +710,10 @@ func buildHTTPMuxWithBaseAgent(
 			writeJSONError(w, http.StatusBadRequest, "goal is required")
 			return
 		}
-		tasks, err := baseagent.DecomposeGoal(r.Context(), strings.TrimSpace(body.Provider), strings.TrimSpace(body.Goal))
+		tasks, err := baseagent.DecomposeGoalWithOptions(r.Context(), strings.TrimSpace(body.Provider), strings.TrimSpace(body.Goal), baseagent.DecomposeOptions{
+			SharedInstructions: append([]baseagent.SharedInstruction(nil), body.SharedInstructions...),
+			RuntimeContext:     append([]baseagent.RuntimeContextEntry(nil), body.RuntimeContext...),
+		})
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -2244,15 +2249,17 @@ func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID s
 		return
 	}
 	var body struct {
-		Provider    string                    `json:"provider"`
-		ModelAlias  string                    `json:"modelAlias,omitempty"`
-		Model       string                    `json:"model,omitempty"`
-		InstanceID  string                    `json:"instanceId,omitempty"`
-		ChatID      string                    `json:"chatId"`
-		RequestID   string                    `json:"requestId"`
-		SessionID   string                    `json:"sessionId"`
-		Message     string                    `json:"message"`
-		Attachments []baseagent.AttachmentRef `json:"attachments,omitempty"`
+		Provider           string                          `json:"provider"`
+		ModelAlias         string                          `json:"modelAlias,omitempty"`
+		Model              string                          `json:"model,omitempty"`
+		InstanceID         string                          `json:"instanceId,omitempty"`
+		ChatID             string                          `json:"chatId"`
+		RequestID          string                          `json:"requestId"`
+		SessionID          string                          `json:"sessionId"`
+		Message            string                          `json:"message"`
+		SharedInstructions []baseagent.SharedInstruction   `json:"sharedInstructions,omitempty"`
+		RuntimeContext     []baseagent.RuntimeContextEntry `json:"runtimeContext,omitempty"`
+		Attachments        []baseagent.AttachmentRef       `json:"attachments,omitempty"`
 	}
 	if !decodeBody(w, r, &body) {
 		return
@@ -2309,14 +2316,16 @@ func handleAgentChat(svc *lifecycle.Service, runtime agentChatRuntime, agentID s
 		}
 	}
 	resp, err := runtime.Chat(r.Context(), baseagent.ChatRequest{
-		Provider:      strings.TrimSpace(body.Provider),
-		ModelAlias:    strings.TrimSpace(body.ModelAlias),
-		Model:         strings.TrimSpace(body.Model),
-		MemorySubject: memoryInstanceID,
-		ChatID:        chatID,
-		RequestID:     strings.TrimSpace(body.RequestID),
-		Message:       message,
-		Attachments:   body.Attachments,
+		Provider:           strings.TrimSpace(body.Provider),
+		ModelAlias:         strings.TrimSpace(body.ModelAlias),
+		Model:              strings.TrimSpace(body.Model),
+		MemorySubject:      memoryInstanceID,
+		SharedInstructions: append([]baseagent.SharedInstruction(nil), body.SharedInstructions...),
+		RuntimeContext:     append([]baseagent.RuntimeContextEntry(nil), body.RuntimeContext...),
+		ChatID:             chatID,
+		RequestID:          strings.TrimSpace(body.RequestID),
+		Message:            message,
+		Attachments:        body.Attachments,
 	})
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())

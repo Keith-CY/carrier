@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -28,6 +29,9 @@ func normalizeOrchestratorExecution(in OrchestratorExecution) (OrchestratorExecu
 	out.MemoryProvenance = normalizeStringSelectorList(out.MemoryProvenance, true)
 	out = normalizeOrchestratorDelegatedMemoryState(out)
 	out.DistillOutputs = normalizeStringSelectorList(out.DistillOutputs, true)
+	out.SharedInstructions = baseagent.NormalizeSharedInstructions(out.SharedInstructions)
+	out.RuntimeContextManifest = baseagent.NormalizeRuntimeContextManifest(out.RuntimeContextManifest)
+	out.Guardrails = normalizeOrchestratorExecutionGuardrailState(out.Guardrails)
 	if len(out.MemoryProvenance) == 0 {
 		out.MemoryProvenance = append([]string(nil), out.RequiredMemory...)
 	}

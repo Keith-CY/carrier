@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-func buildStructuredSystemPrompt(skillSummary string) string {
-	return composeSkillAwareSystemPrompt(baseAgentExecutionPrompt, skillSummary)
+func buildStructuredSystemPrompt(skillSummary string, sharedInstructions []SharedInstruction) string {
+	return composeExecutionSystemPrompt(baseAgentExecutionPrompt, skillSummary, sharedInstructions)
 }
 
 func structuredToolMessagesFromHistory(summary string, history []StructuredToolMessage) []StructuredToolMessage {
@@ -131,6 +131,7 @@ func (l *AgentLoop) processStructuredChat(
 	legacyHistory []ConversationMessage,
 	skillSummary string,
 	memorySubject string,
+	sharedInstructions []SharedInstruction,
 ) (ChatResponse, bool, error) {
 	if l == nil || l.structuredTools == nil || l.providers == nil {
 		return ChatResponse{}, false, nil
@@ -157,7 +158,7 @@ func (l *AgentLoop) processStructuredChat(
 
 	for turn := 0; turn < turnLimit; turn++ {
 		reply, err := l.providers.ReplyWithTools(ctx, StructuredToolRequest{
-			SystemPrompt: buildStructuredSystemPrompt(skillSummary),
+			SystemPrompt: buildStructuredSystemPrompt(skillSummary, sharedInstructions),
 			Messages:     messages,
 			Tools:        structuredTools.Descriptors(),
 		})
@@ -218,6 +219,7 @@ func (l *AgentLoop) processStructuredChat(
 				ToolResultStatus: status,
 				ToolPolicyReason: strings.TrimSpace(result.PolicyReason),
 				ToolPolicyRuleID: strings.TrimSpace(result.PolicyRuleID),
+				GuardrailEvents:  NormalizeGuardrailEvents(result.GuardrailEvents),
 			})
 			if l.sessions != nil {
 				l.sessions.AddStructuredToolMessage(sessionKey, StructuredToolMessage{
@@ -230,6 +232,7 @@ func (l *AgentLoop) processStructuredChat(
 					ToolResultStatus: status,
 					ToolPolicyReason: strings.TrimSpace(result.PolicyReason),
 					ToolPolicyRuleID: strings.TrimSpace(result.PolicyRuleID),
+					GuardrailEvents:  NormalizeGuardrailEvents(result.GuardrailEvents),
 				})
 			}
 		}

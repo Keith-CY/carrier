@@ -20,10 +20,24 @@ type DecomposeTask struct {
 	AgentID string `json:"agentId,omitempty"`
 }
 
+type DecomposeOptions struct {
+	SharedInstructions []SharedInstruction   `json:"sharedInstructions,omitempty"`
+	RuntimeContext     []RuntimeContextEntry `json:"runtimeContext,omitempty"`
+}
+
 func DecomposeGoal(ctx context.Context, providerID, goal string) ([]DecomposeTask, error) {
+	return DecomposeGoalWithOptions(ctx, providerID, goal, DecomposeOptions{})
+}
+
+func DecomposeGoalWithOptions(ctx context.Context, providerID, goal string, opts DecomposeOptions) ([]DecomposeTask, error) {
 	trimmedGoal := strings.TrimSpace(goal)
 	if trimmedGoal == "" {
 		return nil, errors.New("goal is required")
+	}
+	opts.SharedInstructions = NormalizeSharedInstructions(opts.SharedInstructions)
+	opts.RuntimeContext = NormalizeRuntimeContextEntries(opts.RuntimeContext)
+	if len(opts.RuntimeContext) > 0 {
+		ctx = WithRuntimeContext(ctx, opts.RuntimeContext)
 	}
 
 	userPrompt := strings.Join([]string{
@@ -40,7 +54,12 @@ func DecomposeGoal(ctx context.Context, providerID, goal string) ([]DecomposeTas
 		"- keep task text concise",
 	}, "\n")
 
-	raw, err := decomposeRequestLLMCompletion(ctx, strings.TrimSpace(providerID), delegateDecomposeSystemPrompt, userPrompt)
+	raw, err := decomposeRequestLLMCompletion(
+		ctx,
+		strings.TrimSpace(providerID),
+		composeExecutionSystemPrompt(delegateDecomposeSystemPrompt, "", opts.SharedInstructions),
+		userPrompt,
+	)
 	if err != nil {
 		return nil, err
 	}

@@ -46,36 +46,62 @@ function buildBaseInput() {
     },
     readability: {
       checked: 86,
+      passed: 86,
       violations: 0,
+      legacyOversized: 0,
       maxLines: 500,
-      failuresMarkdown: "",
+      detailsMarkdown: "",
       fail: false,
     },
   };
 }
 
-test("readability summary omits passing file list and reports passed/total", () => {
+test("readability summary reports within-limit, violations, and legacy warnings", () => {
   const comment = buildMetricsHarnessComment(buildBaseInput());
 
-  assert.match(comment, /\| Within limit \| 86\/86 \| ≤ 500 lines \| ✅ \|/);
-  assert.match(comment, /\| Violations \| 0 \| must be 0 \| ✅ \|/);
-  assert.doesNotMatch(comment, /\| File \| Lines \| Limit \| Status \|/);
-  assert.doesNotMatch(comment, /baseagent\/controlplane_providers\.go/);
+  assert.match(comment, /### Code Readability \(hard gate on new threshold crossings\) ✅/);
+  assert.match(comment, /\| Within limit \| 86\/86 \| ≤ 500 lines \| ✅ \| files at or under target \|/);
+  assert.match(comment, /\| Hard violations \| 0 \| hard \| ✅ \| new files or threshold crossings only \|/);
+  assert.match(comment, /\| Legacy oversized warnings \| 0 \| soft \| ✅ \| pre-existing >500-line files touched by the PR \|/);
+  assert.doesNotMatch(comment, /<details><summary>Per-file breakdown<\/summary>/);
 });
 
-test("readability section lists only failing files when violations exist", () => {
+test("readability section warns on legacy oversized files without hard-failing", () => {
   const input = buildBaseInput();
   input.readability.checked = 3;
-  input.readability.violations = 1;
-  input.readability.fail = true;
-  input.readability.failuresMarkdown = "| `gateway/too-large.go` | 701 | ≤ 500 | ❌ |\n";
+  input.readability.passed = 2;
+  input.readability.legacyOversized = 1;
+  input.readability.detailsMarkdown =
+    "| `baseagent/runtime_structured_loop_test.go` | 1554 | 1554 | soft | ⚠️ | legacy oversized file |\n";
 
   const comment = buildMetricsHarnessComment(input);
 
-  assert.match(comment, /\| Within limit \| 2\/3 \| ≤ 500 lines \| ❌ \|/);
-  assert.match(comment, /<details><summary>Files over limit<\/summary>/);
-  assert.match(comment, /\| `gateway\/too-large\.go` \| 701 \| ≤ 500 \| ❌ \|/);
-  assert.doesNotMatch(comment, /baseagent\/small\.go/);
+  assert.match(comment, /### Code Readability \(hard gate on new threshold crossings\) ⚠️/);
+  assert.match(comment, /\| Within limit \| 2\/3 \| ≤ 500 lines \| ℹ️ \| files at or under target \|/);
+  assert.match(comment, /\| Hard violations \| 0 \| hard \| ✅ \| new files or threshold crossings only \|/);
+  assert.match(comment, /\| Legacy oversized warnings \| 1 \| soft \| ⚠️ \| pre-existing >500-line files touched by the PR \|/);
+  assert.match(comment, /<details><summary>Per-file breakdown<\/summary>/);
+  assert.match(comment, /\| `baseagent\/runtime_structured_loop_test\.go` \| 1554 \| 1554 \| soft \| ⚠️ \| legacy oversized file \|/);
+});
+
+test("readability section hard-fails only on new threshold crossings", () => {
+  const input = buildBaseInput();
+  input.readability.checked = 3;
+  input.readability.passed = 1;
+  input.readability.legacyOversized = 1;
+  input.readability.violations = 1;
+  input.readability.fail = true;
+  input.readability.detailsMarkdown = [
+    "| `baseagent/runtime_structured_loop_test.go` | 1554 | 1554 | soft | ⚠️ | legacy oversized file |",
+    "| `gateway/too-large.go` | 498 | 701 | hard | ❌ | new or newly oversized file |",
+  ].join("\n");
+
+  const comment = buildMetricsHarnessComment(input);
+
+  assert.match(comment, /### Code Readability \(hard gate on new threshold crossings\) ❌/);
+  assert.match(comment, /\| Within limit \| 1\/3 \| ≤ 500 lines \| ℹ️ \| files at or under target \|/);
+  assert.match(comment, /\| Hard violations \| 1 \| hard \| ❌ \| new files or threshold crossings only \|/);
+  assert.match(comment, /\| `gateway\/too-large\.go` \| 498 \| 701 \| hard \| ❌ \| new or newly oversized file \|/);
 });
 
 test("perf probes treat unavailable SSH loopback as skipped info instead of warning", () => {
@@ -125,6 +151,6 @@ test("env-like 0/1 flags still drive hard and soft gate status correctly", () =>
   assert.match(comment, /\*\*Status\*\*: ❌ Hard gates failed/);
   assert.match(comment, /### Commit Size \(soft gate\) ❌/);
   assert.match(comment, /### WebUI Bundle Size \(hard gate\) ❌/);
-  assert.match(comment, /### Code Readability \(hard gate: changed source files\) ✅/);
+  assert.match(comment, /### Code Readability \(hard gate on new threshold crossings\) ✅/);
   assert.match(comment, /### Perf Probes \(soft gate\) ⚠️/);
 });

@@ -1327,7 +1327,7 @@ func TestAgentLoopStructuredLoopStopsAtMaxIterations(t *testing.T) {
 
 	_, handled, err := loop.processStructuredChat(context.Background(), "cli:max-iterations", []ConversationMessage{
 		{Role: "user", Content: "loop forever"},
-	}, "", "")
+	}, "", "", nil)
 	if !handled {
 		t.Fatal("expected structured loop to handle request")
 	}

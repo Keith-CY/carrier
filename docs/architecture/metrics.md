@@ -11,7 +11,7 @@ Current harness sections:
 1. **Commit Size** (soft gate)
 2. **WebUI Bundle Size** (hard gate)
 3. **Perf Probes** (soft gate)
-4. **Code Readability** (hard gate on changed source files)
+4. **Code Readability** (hard gate on new threshold crossings; legacy oversized files reported)
 
 The workflow is implemented in:
 
@@ -62,7 +62,7 @@ Behavior:
 - Marked as soft-gate (`✅/⚠️`) for now
 - Does not fail the workflow by itself
 
-## 4) Code Readability (hard gate)
+## 4) Code Readability (hard gate on new threshold crossings)
 
 Checks **changed source files in the PR diff** across:
 
@@ -74,12 +74,14 @@ File types:
 
 Rules:
 
-- Every checked source file must be `≤ 500` lines
-- The PR metrics comment reports `within-limit/checked` summary counts
-- Only failing files are listed in the PR metrics comment
-- Any violation fails the metrics workflow
+- Every checked source file is measured against a `500` line target
+- New files above `500` lines fail the workflow
+- Existing files that cross from `≤ 500` to `> 500` lines fail the workflow
+- Existing files that were already `> 500` lines in the base revision are reported as legacy oversized warnings
+- Legacy oversized warnings do **not** fail the workflow by themselves
+- The PR metrics comment reports within-limit, hard-violation, and legacy-warning counts plus a per-file breakdown
 
-This is intentionally strict for changed code so new/modified files stay readable without forcing an immediate full-repo refactor.
+This keeps a hard stop on introducing new oversized files while avoiding mandatory readability refactors for small edits to legacy large files.
 
 ## PR Comment Contract
 

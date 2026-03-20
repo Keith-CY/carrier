@@ -37,6 +37,11 @@ export function useExecutionsData() {
     queryFn: () => apiGet<any>(`/api/v1/orchestrator/executions/${encodeURIComponent(selectedExecutionId)}`),
     enabled: !!selectedExecutionId,
   });
+  const metadataQuery = useQuery({
+    queryKey: ['execution-metadata', selectedExecutionId],
+    queryFn: () => apiGet<any>(`/api/v1/orchestrator/executions/${encodeURIComponent(selectedExecutionId)}/metadata`),
+    enabled: !!selectedExecutionId,
+  });
 
   const executions = useMemo(() => normalizeExecutions(executionsQuery.data), [executionsQuery.data]);
   const filteredExecutions = useMemo(() => filterExecutions(executions, {
@@ -67,6 +72,7 @@ export function useExecutionsData() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['executions'] }),
       selectedExecutionId ? queryClient.invalidateQueries({ queryKey: ['execution-detail', selectedExecutionId] }) : Promise.resolve(),
+      selectedExecutionId ? queryClient.invalidateQueries({ queryKey: ['execution-metadata', selectedExecutionId] }) : Promise.resolve(),
     ]);
   };
 
@@ -103,6 +109,7 @@ export function useExecutionsData() {
   });
 
   const selectedExecution = detailQuery.data?.execution || filteredExecutions.find((item) => String(item?.id || '').trim() === selectedExecutionId) || null;
+  const selectedExecutionMetadata = metadataQuery.data?.metadata || null;
   const selectedWorkers = Array.isArray(detailQuery.data?.workers) ? detailQuery.data.workers : [];
   const selectedTerminal = isExecutionTerminalStatus(selectedExecution?.status);
   const selectedHasFailedTasks = executionHasFailedTasks(selectedExecution);
@@ -129,6 +136,7 @@ export function useExecutionsData() {
     triggerFilter,
     executionsQuery,
     detailQuery,
+    metadataQuery,
     executions,
     filteredExecutions,
     templateOptions,
@@ -136,6 +144,7 @@ export function useExecutionsData() {
     selectedExecutionId,
     setSelectedExecutionId,
     selectedExecution,
+    selectedExecutionMetadata,
     selectedWorkers,
     selectedTerminal,
     selectedHasFailedTasks,

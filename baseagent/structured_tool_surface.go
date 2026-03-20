@@ -95,6 +95,7 @@ func (p structuredToolPolicy) decision(tier structuredToolTier) structuredToolDe
 type structuredToolDefinition struct {
 	descriptor StructuredToolDescriptor
 	tier       structuredToolTier
+	source     string
 	execute    func(context.Context, map[string]any) ExecutionToolResult
 }
 
@@ -127,6 +128,14 @@ var structuredBuiltinPassthroughTiers = map[string]structuredToolTier{
 	"list_sessions":   structuredToolTierMetadataRead,
 	"show_boundaries": structuredToolTierMetadataRead,
 }
+
+const (
+	runtimeToolSourceBuiltin   = "builtin"
+	runtimeToolSourceWorkspace = "workspace"
+	runtimeToolSourceMCP       = "mcp"
+	runtimeToolSourceSubagent  = "subagent"
+	runtimeToolSourceMemory    = "memory"
+)
 
 func newStructuredToolSurface(builtin *ToolRegistry, workspace *ExecutionToolRegistry) *structuredToolSurface {
 	return newStructuredToolSurfaceWithPolicy(builtin, workspace, nil, nil, StructuredToolPolicySpec{})
@@ -185,7 +194,8 @@ func (s *structuredToolSurface) SetMemoryStore(store ExtendedMemoryStore, subjec
 				"required": []string{"query"},
 			},
 		},
-		tier: structuredToolTierOperationalRead,
+		tier:   structuredToolTierOperationalRead,
+		source: runtimeToolSourceMemory,
 		execute: func(ctx context.Context, args map[string]any) ExecutionToolResult {
 			query := strings.TrimSpace(stringifyStructuredToolArg(args["query"]))
 			if query == "" {
@@ -230,6 +240,7 @@ func (s *structuredToolSurface) registerBuiltinStructuredTools(builtin *ToolRegi
 		s.register(structuredToolDefinition{
 			descriptor: descriptor,
 			tier:       tier,
+			source:     runtimeToolSourceBuiltin,
 			execute: func(ctx context.Context, args map[string]any) ExecutionToolResult {
 				return executeStructuredBuiltinTool(ctx, builtin, name, name, args)
 			},
@@ -263,7 +274,8 @@ func (s *structuredToolSurface) registerStructuredAgentAction(builtin *ToolRegis
 				"required": []string{"agent_id"},
 			},
 		},
-		tier: tier,
+		tier:   tier,
+		source: runtimeToolSourceBuiltin,
 		execute: func(ctx context.Context, args map[string]any) ExecutionToolResult {
 			params := stringifyStructuredToolArgs(args)
 			if strings.TrimSpace(params["agent_id"]) == "" {
@@ -291,6 +303,7 @@ func (s *structuredToolSurface) registerWorkspaceStructuredTools(workspace *Exec
 		s.register(structuredToolDefinition{
 			descriptor: descriptor,
 			tier:       tier,
+			source:     runtimeToolSourceWorkspace,
 			execute: func(ctx context.Context, args map[string]any) ExecutionToolResult {
 				return workspace.Execute(ctx, name, args)
 			},
@@ -310,6 +323,7 @@ func (s *structuredToolSurface) registerMCPStructuredTools(mcpManager MCPManager
 		s.register(structuredToolDefinition{
 			descriptor: descriptor,
 			tier:       structuredMCPToolTier(name),
+			source:     runtimeToolSourceMCP,
 			execute: func(ctx context.Context, args map[string]any) ExecutionToolResult {
 				return mcpManager.ExecuteTool(ctx, name, args)
 			},
@@ -343,7 +357,8 @@ func (s *structuredToolSurface) registerSubagentStatusTool(manager SubagentManag
 				"required": []string{"job_id"},
 			},
 		},
-		tier: structuredToolTierOperationalRead,
+		tier:   structuredToolTierOperationalRead,
+		source: runtimeToolSourceSubagent,
 		execute: func(ctx context.Context, args map[string]any) ExecutionToolResult {
 			jobID := strings.TrimSpace(stringifyStructuredToolArg(args["job_id"]))
 			if jobID == "" {
@@ -414,6 +429,28 @@ func (s *structuredToolSurface) Descriptors() []StructuredToolDescriptor {
 	return out
 }
 
+func (s *structuredToolSurface) RuntimeMetadata() []RuntimeToolMetadata {
+	if s == nil {
+		return nil
+	}
+	out := make([]RuntimeToolMetadata, 0, len(s.order))
+	for _, name := range s.order {
+		def, ok := s.tools[name]
+		if !ok {
+			continue
+		}
+		out = append(out, RuntimeToolMetadata{
+			Name:           strings.TrimSpace(def.descriptor.Name),
+			Description:    strings.TrimSpace(def.descriptor.Description),
+			Source:         strings.TrimSpace(def.source),
+			Tier:           strings.TrimSpace(string(def.tier)),
+			PolicyDecision: strings.TrimSpace(string(s.policy.decision(def.tier))),
+			InputSchema:    cloneToolSchema(def.descriptor.Parameters),
+		})
+	}
+	return out
+}
+
 func (s *structuredToolSurface) Execute(ctx context.Context, name string, args map[string]any) ExecutionToolResult {
 	if s == nil {
 		return executionError("structured tool surface is unavailable")
@@ -425,11 +462,11 @@ func (s *structuredToolSurface) Execute(ctx context.Context, name string, args m
 	decision := evaluateStructuredToolPolicy(name, args, s.policy.decision(def.tier))
 	switch decision.Decision {
 	case structuredToolDecisionAllow:
-		return applyStructuredPolicyMetadata(def.execute(ctx, args), decision)
+		return applyStructuredPolicyMetadata(def.execute(ctx, args), name, decision)
 	case structuredToolDecisionAsk:
-		return executionAskWithPolicy(fmt.Sprintf("tool %s requires confirmation before automatic structured execution", strings.TrimSpace(name)), decision)
+		return executionAskWithPolicy(fmt.Sprintf("tool %s requires confirmation before automatic structured execution", strings.TrimSpace(name)), name, decision)
 	default:
-		return executionDenyWithPolicy(fmt.Sprintf("tool %s requires higher permissions and is not available for automatic structured execution", strings.TrimSpace(name)), decision)
+		return executionDenyWithPolicy(fmt.Sprintf("tool %s requires higher permissions and is not available for automatic structured execution", strings.TrimSpace(name)), name, decision)
 	}
 }
 
@@ -443,7 +480,7 @@ func (s *structuredToolSurface) ExecuteApproved(ctx context.Context, name string
 	}
 	decision := evaluateStructuredToolPolicy(name, args, s.policy.decision(def.tier))
 	if decision.Decision == structuredToolDecisionDeny {
-		return executionDenyWithPolicy(fmt.Sprintf("tool %s requires higher permissions and is not available for automatic structured execution", strings.TrimSpace(name)), decision)
+		return executionDenyWithPolicy(fmt.Sprintf("tool %s requires higher permissions and is not available for automatic structured execution", strings.TrimSpace(name)), name, decision)
 	}
-	return applyStructuredPolicyMetadata(def.execute(ctx, args), decision)
+	return applyStructuredPolicyMetadata(def.execute(ctx, args), name, decision)
 }

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"carrier/baseagent"
 	"fmt"
 	"strings"
 )
@@ -178,54 +179,103 @@ type OrchestratorExecutionWorkContext struct {
 	PublishStatus      string `json:"publishStatus,omitempty"`
 }
 
+type OrchestratorGuardrailSummary struct {
+	Total        int    `json:"total"`
+	AllowCount   int    `json:"allowCount,omitempty"`
+	WarnCount    int    `json:"warnCount,omitempty"`
+	AskCount     int    `json:"askCount,omitempty"`
+	DenyCount    int    `json:"denyCount,omitempty"`
+	LastDecision string `json:"lastDecision,omitempty"`
+}
+
+type OrchestratorExecutionGuardrails struct {
+	Summary OrchestratorGuardrailSummary `json:"summary,omitempty"`
+	Events  []baseagent.GuardrailEvent   `json:"events,omitempty"`
+}
+
+type OrchestratorExecutionGraphNode struct {
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Label  string `json:"label,omitempty"`
+	Status string `json:"status,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type OrchestratorExecutionGraphEdge struct {
+	FromID string `json:"fromId"`
+	ToID   string `json:"toId"`
+	Kind   string `json:"kind"`
+	Label  string `json:"label,omitempty"`
+}
+
+type OrchestratorExecutionMetadataSnapshot struct {
+	ExecutionID            string                           `json:"executionId"`
+	Mode                   OrchestratorExecutionMode        `json:"mode,omitempty"`
+	RequestedProvider      string                           `json:"requestedProvider,omitempty"`
+	Work                   OrchestratorExecutionWorkContext `json:"work,omitempty"`
+	ToolPolicy             OrchestratorToolPolicy           `json:"toolPolicy,omitempty"`
+	RequiredMemory         []string                         `json:"requiredMemory,omitempty"`
+	MemoryContractDigest   string                           `json:"memoryContractDigest,omitempty"`
+	MemoryProvenance       []string                         `json:"memoryProvenance,omitempty"`
+	SharedInstructions     []baseagent.SharedInstruction    `json:"sharedInstructions,omitempty"`
+	RuntimeContextManifest baseagent.RuntimeContextManifest `json:"runtimeContextManifest,omitempty"`
+	Guardrails             OrchestratorExecutionGuardrails  `json:"guardrails,omitempty"`
+	ProviderResolutions    []ProviderGovernanceResolution   `json:"providerResolutions,omitempty"`
+	Nodes                  []OrchestratorExecutionGraphNode `json:"nodes,omitempty"`
+	Edges                  []OrchestratorExecutionGraphEdge `json:"edges,omitempty"`
+}
+
 type OrchestratorExecution struct {
-	ID                    string                              `json:"id"`
-	Mode                  OrchestratorExecutionMode           `json:"mode,omitempty"`
-	Work                  OrchestratorExecutionWorkContext    `json:"work,omitempty"`
-	Goal                  string                              `json:"goal"`
-	Team                  string                              `json:"team,omitempty"`
-	Project               string                              `json:"project,omitempty"`
-	Environment           string                              `json:"environment,omitempty"`
-	TemplateID            string                              `json:"templateId,omitempty"`
-	TriggerSource         string                              `json:"triggerSource,omitempty"`
-	TriggerID             string                              `json:"triggerId,omitempty"`
-	TriggerEvent          string                              `json:"triggerEvent,omitempty"`
-	TriggerPayloadDigest  string                              `json:"triggerPayloadDigest,omitempty"`
-	Initiator             string                              `json:"initiator,omitempty"`
-	RequestedProvider     string                              `json:"requestedProvider,omitempty"`
-	RequiredMemory        []string                            `json:"requiredMemory,omitempty"`
-	MemoryContractDigest  string                              `json:"memoryContractDigest,omitempty"`
-	MemoryProvenance      []string                            `json:"memoryProvenance,omitempty"`
-	AgentLifecycleMode    string                              `json:"agentLifecycleMode,omitempty"`
-	MemoryBindingMode     string                              `json:"memoryBindingMode,omitempty"`
-	SourceScopes          []string                            `json:"sourceScopes,omitempty"`
-	SnapshotID            string                              `json:"snapshotId,omitempty"`
-	SnapshotDigest        string                              `json:"snapshotDigest,omitempty"`
-	ChildAgentID          string                              `json:"childAgentId,omitempty"`
-	ChildPerAgentMemoryID string                              `json:"childPerAgentMemoryId,omitempty"`
-	DistillRunID          string                              `json:"distillRunId,omitempty"`
-	CleanupStatus         string                              `json:"cleanupStatus,omitempty"`
-	DistillOutputs        []string                            `json:"distillOutputs,omitempty"`
-	IdempotencyKey        string                              `json:"idempotencyKey,omitempty"`
-	ParentExecutionID     string                              `json:"parentExecutionId,omitempty"`
-	SourceExecutionID     string                              `json:"sourceExecutionId,omitempty"`
-	LaunchReason          string                              `json:"launchReason,omitempty"`
-	ApprovalScope         string                              `json:"approvalScope"`
-	ToolPolicy            OrchestratorToolPolicy              `json:"toolPolicy,omitempty"`
-	RequiredWorkers       []OrchestratorRequiredWorker        `json:"requiredWorkers"`
-	TaskUnits             []OrchestratorTaskUnit              `json:"taskUnits"`
-	Status                OrchestratorExecutionStatus         `json:"status"`
-	MaxConcurrency        int                                 `json:"maxConcurrency,omitempty"`
-	Authorization         OrchestratorAuthorization           `json:"authorization"`
-	Policy                OrchestratorExecutionPolicySnapshot `json:"policy,omitempty"`
-	Governance            OrchestratorExecutionGovernance     `json:"governance,omitempty"`
-	Outcome               OrchestratorExecutionOutcome        `json:"outcome,omitempty"`
-	Results               []OrchestratorTaskResult            `json:"results,omitempty"`
-	Error                 string                              `json:"error,omitempty"`
-	CreatedAt             string                              `json:"createdAt"`
-	StartedAt             string                              `json:"startedAt,omitempty"`
-	CompletedAt           string                              `json:"completedAt,omitempty"`
-	UpdatedAt             string                              `json:"updatedAt"`
+	ID                     string                              `json:"id"`
+	Mode                   OrchestratorExecutionMode           `json:"mode,omitempty"`
+	Work                   OrchestratorExecutionWorkContext    `json:"work,omitempty"`
+	Goal                   string                              `json:"goal"`
+	Team                   string                              `json:"team,omitempty"`
+	Project                string                              `json:"project,omitempty"`
+	Environment            string                              `json:"environment,omitempty"`
+	TemplateID             string                              `json:"templateId,omitempty"`
+	TriggerSource          string                              `json:"triggerSource,omitempty"`
+	TriggerID              string                              `json:"triggerId,omitempty"`
+	TriggerEvent           string                              `json:"triggerEvent,omitempty"`
+	TriggerPayloadDigest   string                              `json:"triggerPayloadDigest,omitempty"`
+	Initiator              string                              `json:"initiator,omitempty"`
+	RequestedProvider      string                              `json:"requestedProvider,omitempty"`
+	RequiredMemory         []string                            `json:"requiredMemory,omitempty"`
+	MemoryContractDigest   string                              `json:"memoryContractDigest,omitempty"`
+	MemoryProvenance       []string                            `json:"memoryProvenance,omitempty"`
+	AgentLifecycleMode     string                              `json:"agentLifecycleMode,omitempty"`
+	MemoryBindingMode      string                              `json:"memoryBindingMode,omitempty"`
+	SourceScopes           []string                            `json:"sourceScopes,omitempty"`
+	SnapshotID             string                              `json:"snapshotId,omitempty"`
+	SnapshotDigest         string                              `json:"snapshotDigest,omitempty"`
+	ChildAgentID           string                              `json:"childAgentId,omitempty"`
+	ChildPerAgentMemoryID  string                              `json:"childPerAgentMemoryId,omitempty"`
+	DistillRunID           string                              `json:"distillRunId,omitempty"`
+	CleanupStatus          string                              `json:"cleanupStatus,omitempty"`
+	DistillOutputs         []string                            `json:"distillOutputs,omitempty"`
+	IdempotencyKey         string                              `json:"idempotencyKey,omitempty"`
+	ParentExecutionID      string                              `json:"parentExecutionId,omitempty"`
+	SourceExecutionID      string                              `json:"sourceExecutionId,omitempty"`
+	LaunchReason           string                              `json:"launchReason,omitempty"`
+	SharedInstructions     []baseagent.SharedInstruction       `json:"sharedInstructions,omitempty"`
+	RuntimeContextManifest baseagent.RuntimeContextManifest    `json:"runtimeContextManifest,omitempty"`
+	ApprovalScope          string                              `json:"approvalScope"`
+	ToolPolicy             OrchestratorToolPolicy              `json:"toolPolicy,omitempty"`
+	RequiredWorkers        []OrchestratorRequiredWorker        `json:"requiredWorkers"`
+	TaskUnits              []OrchestratorTaskUnit              `json:"taskUnits"`
+	Status                 OrchestratorExecutionStatus         `json:"status"`
+	MaxConcurrency         int                                 `json:"maxConcurrency,omitempty"`
+	Authorization          OrchestratorAuthorization           `json:"authorization"`
+	Policy                 OrchestratorExecutionPolicySnapshot `json:"policy,omitempty"`
+	Governance             OrchestratorExecutionGovernance     `json:"governance,omitempty"`
+	Guardrails             OrchestratorExecutionGuardrails     `json:"guardrails,omitempty"`
+	Outcome                OrchestratorExecutionOutcome        `json:"outcome,omitempty"`
+	Results                []OrchestratorTaskResult            `json:"results,omitempty"`
+	Error                  string                              `json:"error,omitempty"`
+	CreatedAt              string                              `json:"createdAt"`
+	StartedAt              string                              `json:"startedAt,omitempty"`
+	CompletedAt            string                              `json:"completedAt,omitempty"`
+	UpdatedAt              string                              `json:"updatedAt"`
 }
 
 type OrchestratorExecutionGovernance struct {
@@ -327,6 +377,8 @@ func normalizeOrchestratorExecutionForStore(in OrchestratorExecution) Orchestrat
 	out.ParentExecutionID = strings.TrimSpace(out.ParentExecutionID)
 	out.SourceExecutionID = strings.TrimSpace(out.SourceExecutionID)
 	out.LaunchReason = strings.TrimSpace(out.LaunchReason)
+	out.SharedInstructions = baseagent.NormalizeSharedInstructions(out.SharedInstructions)
+	out.RuntimeContextManifest = baseagent.NormalizeRuntimeContextManifest(out.RuntimeContextManifest)
 	out.ApprovalScope = strings.TrimSpace(out.ApprovalScope)
 	if out.ApprovalScope == "" {
 		out.ApprovalScope = "infrastructure_only"
@@ -351,6 +403,8 @@ func normalizeOrchestratorExecutionForStore(in OrchestratorExecution) Orchestrat
 	out.Error = strings.TrimSpace(out.Error)
 	out.Governance = hydrateProviderGovernanceUsage(out)
 	out.Policy = buildOrchestratorExecutionPolicySnapshot(out)
+	out.RuntimeContextManifest = mergeOrchestratorRuntimeContextManifest(buildOrchestratorExecutionRuntimeContextManifest(out), out.RuntimeContextManifest)
+	out.Guardrails = normalizeStoredOrchestratorExecutionGuardrails(out)
 	return out
 }
 

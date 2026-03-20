@@ -14,8 +14,10 @@ export function ExecutionDetailCard({ data }: { data: ExecutionsData }) {
   const {
     authz,
     detailQuery,
+    metadataQuery,
     selectedExecutionId,
     selectedExecution,
+    selectedExecutionMetadata,
     selectedWorkers,
     selectedTerminal,
     selectedHasFailedTasks,
@@ -98,10 +100,13 @@ export function ExecutionDetailCard({ data }: { data: ExecutionsData }) {
             ? 'Loading details…'
             : detailQuery.isError
               ? `Load failed: ${(detailQuery.error as Error).message}`
+              : metadataQuery.isError
+                ? `Metadata load failed: ${(metadataQuery.error as Error).message}`
               : selectedExecution
                 ? (
                   <ExecutionDetailContent
                     execution={selectedExecution}
+                    metadata={selectedExecutionMetadata}
                     workers={selectedWorkers}
                     onDownloadArtifact={(artifactId, filename) => downloadFromAPI(`/api/v1/orchestrator/executions/${encodeURIComponent(selectedExecutionId)}/artifacts/${encodeURIComponent(artifactId)}`, filename)}
                   />

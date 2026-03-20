@@ -83,6 +83,7 @@ type OrchestratorEvidenceBundle struct {
 	GeneratedAt         string                                  `json:"generatedAt"`
 	RenderMode          string                                  `json:"renderMode,omitempty"`
 	Execution           OrchestratorExecution                   `json:"execution"`
+	MetadataSnapshot    OrchestratorExecutionMetadataSnapshot   `json:"metadataSnapshot"`
 	Plan                OrchestratorEvidencePlanSnapshot        `json:"plan"`
 	Policy              OrchestratorExecutionPolicySnapshot     `json:"policy,omitempty"`
 	Governance          OrchestratorExecutionGovernance         `json:"governance,omitempty"`
@@ -219,6 +220,7 @@ func buildOrchestratorEvidenceBundle(execution OrchestratorExecution) (Orchestra
 		GeneratedAt:         nowTimestamp(),
 		RenderMode:          strings.TrimSpace(executionWithUsage.Outcome.RenderMode),
 		Execution:           executionWithUsage,
+		MetadataSnapshot:    buildOrchestratorExecutionMetadataSnapshot(executionWithUsage),
 		Plan:                buildEvidencePlanSnapshot(executionWithUsage),
 		Policy:              executionWithUsage.Policy,
 		Governance:          executionWithUsage.Governance,

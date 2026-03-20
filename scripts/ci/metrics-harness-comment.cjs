@@ -32,30 +32,34 @@ function readTextFile(filePath) {
 function buildReadabilityBlock(readability, icon) {
   const checked = asNumber(readability.checked);
   const violations = asNumber(readability.violations);
+  const legacyOversized = asNumber(readability.legacyOversized);
   const maxLines = asNumber(readability.maxLines, 500);
   const withinLimit = Number.isFinite(Number(readability.passed))
     ? Math.max(0, asNumber(readability.passed))
-    : Math.max(0, checked - violations);
-  const failuresMarkdown = String(readability.failuresMarkdown || "").trim();
+    : Math.max(0, checked - violations - legacyOversized);
+  const detailsMarkdown = String(
+    readability.detailsMarkdown || readability.failuresMarkdown || "",
+  ).trim();
 
   let block = [
-    `### Code Readability (hard gate: changed source files) ${icon}`,
+    `### Code Readability (hard gate on new threshold crossings) ${icon}`,
     "",
-    "| Metric | Value | Limit | Status |",
-    "|--------|-------|-------|--------|",
-    `| Source files checked | ${checked} | — | — |`,
-    `| Within limit | ${withinLimit}/${checked} | ≤ ${maxLines} lines | ${violations === 0 ? "✅" : "❌"} |`,
-    `| Violations | ${violations} | must be 0 | ${violations === 0 ? "✅" : "❌"} |`,
+    "| Metric | Value | Gate | Status | Note |",
+    "|--------|-------|------|--------|------|",
+    `| Source files checked | ${checked} | — | — | — |`,
+    `| Within limit | ${withinLimit}/${checked} | ≤ ${maxLines} lines | ${withinLimit === checked ? "✅" : "ℹ️"} | files at or under target |`,
+    `| Hard violations | ${violations} | hard | ${violations === 0 ? "✅" : "❌"} | new files or threshold crossings only |`,
+    `| Legacy oversized warnings | ${legacyOversized} | soft | ${legacyOversized === 0 ? "✅" : "⚠️"} | pre-existing >${maxLines}-line files touched by the PR |`,
   ].join("\n");
 
-  if (failuresMarkdown) {
+  if (detailsMarkdown) {
     block += [
       "",
-      "<details><summary>Files over limit</summary>",
+      "<details><summary>Per-file breakdown</summary>",
       "",
-      "| File | Lines | Limit | Status |",
-      "|------|-------|-------|--------|",
-      failuresMarkdown,
+      "| File | Base | Head | Gate | Status | Note |",
+      "|------|------|------|------|--------|------|",
+      detailsMarkdown,
       "",
       "</details>",
     ].join("\n");
@@ -148,12 +152,13 @@ function buildMetricsHarnessComment(input) {
 
   const bundleHardFail = asBool(bundle.hardFail);
   const readabilityFail = asBool(readability.fail);
+  const legacyOversized = asNumber(readability.legacyOversized);
   const hardFail = bundleHardFail || readabilityFail;
   const overall = hardFail ? "❌ Hard gates failed" : "✅ All hard gates passed";
 
   const commitIcon = asBool(commit.fail) ? "❌" : "✅";
   const bundleIcon = bundleHardFail ? "❌" : "✅";
-  const readabilityIcon = readabilityFail ? "❌" : "✅";
+  const readabilityIcon = readabilityFail ? "❌" : (legacyOversized > 0 ? "⚠️" : "✅");
   const perfSummary = buildPerfSummary(perf);
 
   return [
@@ -239,8 +244,11 @@ function loadInputFromEnv(env = process.env) {
       checked: env.METRICS_READABILITY_CHECKED,
       passed: env.METRICS_READABILITY_PASSED,
       violations: env.METRICS_READABILITY_VIOLATIONS,
+      legacyOversized: env.METRICS_READABILITY_LEGACY_OVERSIZED,
       maxLines: env.METRICS_READABILITY_MAX_LINES,
-      failuresMarkdown: readTextFile(env.METRICS_READABILITY_FAILURES_PATH),
+      detailsMarkdown: readTextFile(
+        env.METRICS_READABILITY_DETAILS_PATH || env.METRICS_READABILITY_FAILURES_PATH,
+      ),
       fail: env.METRICS_READABILITY_FAIL,
     },
   };

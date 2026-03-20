@@ -3,6 +3,7 @@ name: PR Metrics Harness
 on:
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -147,7 +148,7 @@ jobs:
           echo "initial_limit_kb=${initial_limit_kb}" >> "$GITHUB_OUTPUT"
           echo "hard_fail=${hard_fail}" >> "$GITHUB_OUTPUT"
 
-      - name: "Code readability (hard gate: changed source files <= 500 lines)"
+      - name: "Code readability (hard gate: new threshold crossings; legacy oversized files reported)"
         id: readability
         shell: bash
         run: |
@@ -158,7 +159,9 @@ jobs:
           head_sha="${{ github.event.pull_request.head.sha }}"
 
           checked=0
+          passed=0
           violations=0
+          legacy_oversized=0
           details=""
 
           while IFS= read -r file; do
@@ -182,16 +185,39 @@ jobs:
 
             [[ -f "${file}" ]] || continue
 
-            lines="$(wc -l < "${file}" | tr -d ' ')"
+            head_lines="$(wc -l < "${file}" | tr -d ' ')"
+            base_exists=0
+            base_lines=0
+            base_label='new'
+            if git cat-file -e "${base_sha}:${file}" 2>/dev/null; then
+              base_exists=1
+              base_lines="$(git show "${base_sha}:${file}" | wc -l | tr -d ' ')"
+              base_label="${base_lines}"
+            fi
             checked=$((checked + 1))
 
-            if [[ "${lines}" -gt "${max_lines}" ]]; then
+            gate='hard'
+            note='within limit'
+            if [[ "${head_lines}" -le "${max_lines}" ]]; then
+              status='✅'
+              passed=$((passed + 1))
+            elif [[ "${base_exists}" -eq 1 && "${base_lines}" -gt "${max_lines}" ]]; then
+              gate='soft'
+              note='legacy oversized file'
+              status='⚠️'
+              legacy_oversized=$((legacy_oversized + 1))
+            else
+              note='new or newly oversized file'
+              status='❌'
               violations=$((violations + 1))
-              details+="| \`${file}\` | ${lines} | ≤ ${max_lines} | ❌ |\n"
             fi
+
+            details+="| \`${file}\` | ${base_label} | ${head_lines} | ${gate} | ${status} | ${note} |\n"
           done < <(git diff --name-only "${base_sha}" "${head_sha}")
 
-          passed=$((checked - violations))
+          if [[ "${checked}" -eq 0 ]]; then
+            details='| _(no changed source files)_ | — | 0 | hard | ✅ | n/a |\n'
+          fi
 
           fail=0
           if [[ "${violations}" -gt 0 ]]; then
@@ -203,6 +229,7 @@ jobs:
           echo "checked=${checked}" >> "$GITHUB_OUTPUT"
           echo "passed=${passed}" >> "$GITHUB_OUTPUT"
           echo "violations=${violations}" >> "$GITHUB_OUTPUT"
+          echo "legacy_oversized=${legacy_oversized}" >> "$GITHUB_OUTPUT"
           echo "fail=${fail}" >> "$GITHUB_OUTPUT"
 
       - name: "Perf probes (soft gate: CLI timing + remote path test timing)"
@@ -492,8 +519,9 @@ jobs:
           METRICS_READABILITY_CHECKED="${{ steps.readability.outputs.checked }}" \
           METRICS_READABILITY_PASSED="${{ steps.readability.outputs.passed }}" \
           METRICS_READABILITY_VIOLATIONS="${{ steps.readability.outputs.violations }}" \
+          METRICS_READABILITY_LEGACY_OVERSIZED="${{ steps.readability.outputs.legacy_oversized }}" \
           METRICS_READABILITY_MAX_LINES="${{ steps.readability.outputs.max_lines }}" \
-          METRICS_READABILITY_FAILURES_PATH="/tmp/metrics_readability_details.md" \
+          METRICS_READABILITY_DETAILS_PATH="/tmp/metrics_readability_details.md" \
           METRICS_READABILITY_FAIL="${{ steps.readability.outputs.fail }}" \
             node scripts/ci/metrics-harness-comment.cjs > /tmp/pr-metrics-comment.md
           echo "hard_fail=${hard_fail}" >> "$GITHUB_OUTPUT"

@@ -29,14 +29,16 @@ func mustRegisterProvider(pm *ProviderManager, provider Provider) {
 }
 
 type ChatRequest struct {
-	Provider      string          `json:"provider"`
-	ModelAlias    string          `json:"modelAlias,omitempty"`
-	Model         string          `json:"model,omitempty"`
-	MemorySubject string          `json:"memorySubject,omitempty"`
-	ChatID        string          `json:"chatId"`
-	RequestID     string          `json:"requestId"`
-	Message       string          `json:"message"`
-	Attachments   []AttachmentRef `json:"attachments,omitempty"`
+	Provider           string                `json:"provider"`
+	ModelAlias         string                `json:"modelAlias,omitempty"`
+	Model              string                `json:"model,omitempty"`
+	MemorySubject      string                `json:"memorySubject,omitempty"`
+	SharedInstructions []SharedInstruction   `json:"sharedInstructions,omitempty"`
+	RuntimeContext     []RuntimeContextEntry `json:"runtimeContext,omitempty"`
+	ChatID             string                `json:"chatId"`
+	RequestID          string                `json:"requestId"`
+	Message            string                `json:"message"`
+	Attachments        []AttachmentRef       `json:"attachments,omitempty"`
 }
 
 type ChatResponse struct {
@@ -45,20 +47,6 @@ type ChatResponse struct {
 	Action      string               `json:"action,omitempty"`
 	SelfHealed  bool                 `json:"selfHealed,omitempty"`
 	BackupRef   string               `json:"backupRef,omitempty"`
-}
-
-type AgentState struct {
-	ID           string
-	Install      string
-	Runtime      string
-	Health       string
-	RestartCount int
-}
-
-type UpgradeResult struct {
-	AgentID     string
-	FromVersion string
-	ToVersion   string
 }
 
 type AgentService interface {
@@ -225,6 +213,11 @@ func (r *Runtime) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 		return *boundedResp, nil
 	}
 	req = preparedReq
+	req.SharedInstructions = NormalizeSharedInstructions(req.SharedInstructions)
+	req.RuntimeContext = NormalizeRuntimeContextEntries(req.RuntimeContext)
+	if len(req.RuntimeContext) > 0 {
+		ctx = WithRuntimeContext(ctx, req.RuntimeContext)
+	}
 	msg := strings.TrimSpace(req.Message)
 	if msg == "" {
 		return ChatResponse{Message: baseAgentHelpText()}, nil
