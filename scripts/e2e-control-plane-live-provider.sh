@@ -420,8 +420,19 @@ start_control_plane() {
   local attempt=""
   : >"$DAEMON_LOG"
   : >"$GATEWAY_LOG"
+  if [[ -n "${DAEMON_PORT:-}" && -n "${GATEWAY_PORT:-}" ]] && \
+    curl -fsS "http://127.0.0.1:${DAEMON_PORT}/readyz" >/dev/null 2>&1 && \
+    curl -fsS "http://127.0.0.1:${GATEWAY_PORT}/healthz" >/dev/null 2>&1; then
+    printf '[start-attempt 0] control plane already healthy, reusing daemon_port=%s gateway_port=%s\n' "$DAEMON_PORT" "$GATEWAY_PORT" | tee -a "$DAEMON_LOG" "$GATEWAY_LOG" >/dev/null
+    return 0
+  fi
   for attempt in $(seq 1 "$max_attempts"); do
     select_control_plane_ports || return 1
+    if curl -fsS "http://127.0.0.1:${DAEMON_PORT}/readyz" >/dev/null 2>&1 && \
+      curl -fsS "http://127.0.0.1:${GATEWAY_PORT}/healthz" >/dev/null 2>&1; then
+      printf '[start-attempt %s] control plane already healthy, reusing daemon_port=%s gateway_port=%s\n' "$attempt" "$DAEMON_PORT" "$GATEWAY_PORT" | tee -a "$DAEMON_LOG" "$GATEWAY_LOG" >/dev/null
+      return 0
+    fi
     printf '[start-attempt %s] daemon_port=%s gateway_port=%s\n' "$attempt" "$DAEMON_PORT" "$GATEWAY_PORT" | tee -a "$DAEMON_LOG" "$GATEWAY_LOG" >/dev/null
     "$BIN_PATH" daemon >>"$DAEMON_LOG" 2>&1 &
     DAEMON_PID=$!
@@ -455,6 +466,7 @@ cleanup() {
       run_with_timeout 10 "$BIN_PATH" stop "$ZERO_INSTANCE_ID" >/dev/null 2>&1 || true
     fi
     run_with_timeout 10 "$BIN_PATH" stop zeroclaw >/dev/null 2>&1 || true
+    run_with_timeout 10 "$BIN_PATH" stop >/dev/null 2>&1 || true
   fi
   stop_control_plane_processes
   echo "[artifacts] temp_dir=${TMP_DIR}"
@@ -464,6 +476,12 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+# Pin one control-plane port pair before onboarding so the onboarding flow and
+# the later launcher/run checks reuse a single daemon+gateway instance.
+select_control_plane_ports
+REQUESTED_DAEMON_PORT="$DAEMON_PORT"
+REQUESTED_GATEWAY_PORT="$GATEWAY_PORT"
 
 echo "[1/10] build carrier binary"
 (
@@ -514,7 +532,7 @@ if [[ ! -f "$TRANSCRIPTION_AUDIO_FIXTURE" ]]; then
   exit 1
 fi
 
-echo "[3/10] start daemon + gateway"
+echo "[3/10] ensure daemon + gateway"
 if ! start_control_plane 6; then
   echo "error: failed to start daemon + gateway after retrying candidate ports" >&2
   tail -n 80 "$DAEMON_LOG" >&2 || true
