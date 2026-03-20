@@ -21,12 +21,12 @@ Carrier is a local-first execution and knowledge control plane for decomposing g
 
 ## Core Docs
 
-- CLI reference: [`docs/carrier-cli.md`](./docs/carrier-cli.md)
-- Task-first guide: [`docs/task-first-quickstart.md`](./docs/task-first-quickstart.md)
-- Glossary: [`GLOSSARY.md`](./GLOSSARY.md)
-- Remote sync API: [`docs/api/remote-sync-api.md`](./docs/api/remote-sync-api.md)
-- Remote codeagent API: [`docs/api/remote-codeagent-api.md`](./docs/api/remote-codeagent-api.md)
-- Architecture: [`ARCHITECTURE.md`](./ARCHITECTURE.md)
+- CLI reference: [`../carrier-cli.md`](../carrier-cli.md)
+- Task-first guide: [`../task-first-quickstart.md`](../task-first-quickstart.md)
+- Glossary: [`../../GLOSSARY.md`](../../GLOSSARY.md)
+- Remote sync API: [`../api/remote-sync-api.md`](../api/remote-sync-api.md)
+- Remote codeagent API: [`../api/remote-codeagent-api.md`](../api/remote-codeagent-api.md)
+- Architecture: [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md)
 
 ## Quick Start
 
@@ -354,6 +354,6 @@ carrier webhooks test <url>
 
 ## Development
 
-- Contributor guide: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+- Contributor guide: [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md)
 - Test entrypoint: `./scripts/run-all-tests.sh`
 - Docs consistency check: `./scripts/check-doc-command-sync.sh`
