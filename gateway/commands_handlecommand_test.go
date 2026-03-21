@@ -144,6 +144,28 @@ func TestHandleCommand_Pair_DaemonError(t *testing.T) {
 	}
 }
 
+func TestHandleCommand_Pair_DaemonError_GenericWithDetails(t *testing.T) {
+	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
+		"POST /api/v1/pairing/verify-consume": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadGateway)
+			fmt.Fprint(w, `{"error":{"code":"E_ANYTHING","message":"provider rejected"}}`)
+		},
+	})
+	defer srv.Close()
+
+	cmd := &GatewayCommand{
+		Provider: "telegram", ChatID: "123", RequestID: "r1",
+		Name: CmdPair, Args: []string{"bad"},
+	}
+	resp := HandleCommand(context.Background(), cmd, dc, sessions, downloads, nil, onboard)
+	if resp.Result != "error" {
+		t.Fatalf("expected error, got %s", resp.Result)
+	}
+	if !strings.Contains(resp.Message, "provider rejected") {
+		t.Fatalf("message = %q, want provider rejected detail", resp.Message)
+	}
+}
+
 func TestHandleCommand_Pair_LegacyPairCodeInvalid(t *testing.T) {
 	srv, dc, sessions, downloads, onboard := setupTestEnv(t, map[string]http.HandlerFunc{
 		"POST /api/v1/pairing/verify-consume": func(w http.ResponseWriter, r *http.Request) {

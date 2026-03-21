@@ -1326,11 +1326,22 @@ func TestAddEndpoint_DaemonErrorIsSanitized(t *testing.T) {
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d: %s", w.Code, w.Body.String())
 	}
-	if strings.Contains(w.Body.String(), "sk-secret-123") {
+	var bodyResp struct {
+		ErrorCode string `json:"errorCode"`
+		Result    string `json:"result"`
+		Message   string `json:"message"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &bodyResp); err != nil {
+		t.Fatalf("response body should be valid json: %v body=%s", err, w.Body.String())
+	}
+	if strings.Contains(bodyResp.Message, "sk-secret-123") {
 		t.Fatalf("response should not leak secret token: %s", w.Body.String())
 	}
-	if strings.Contains(w.Body.String(), "install failed") {
-		t.Fatalf("response should not expose internal daemon detail: %s", w.Body.String())
+	if !strings.Contains(bodyResp.Message, "install failed") {
+		t.Fatalf("response should include daemon detail for unknown error path: %v", bodyResp.Message)
+	}
+	if !strings.Contains(bodyResp.Message, "***REDACTED***") {
+		t.Fatalf("response should redact sensitive token in daemon detail: %v", bodyResp.Message)
 	}
 }
 

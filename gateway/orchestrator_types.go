@@ -379,7 +379,6 @@ func normalizeOrchestratorExecutionForStore(in OrchestratorExecution) Orchestrat
 	out.SourceExecutionID = strings.TrimSpace(out.SourceExecutionID)
 	out.LaunchReason = strings.TrimSpace(out.LaunchReason)
 	out.SharedInstructions = baseagent.NormalizeSharedInstructions(out.SharedInstructions)
-	out.RuntimeContextManifest = baseagent.NormalizeRuntimeContextManifest(out.RuntimeContextManifest)
 	out.ApprovalScope = strings.TrimSpace(out.ApprovalScope)
 	if out.ApprovalScope == "" {
 		out.ApprovalScope = "infrastructure_only"

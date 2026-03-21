@@ -91,14 +91,16 @@ func guardrailResolutionEventFromPending(pending *PendingToolApproval, resolutio
 	event := GuardrailEvent{
 		Scope:      GuardrailScopeToolCall,
 		Decision:   GuardrailDecisionAsk,
-		RuleID:     strings.TrimSpace(pending.RuleID),
-		Reason:     strings.TrimSpace(pending.Reason),
-		ToolName:   strings.TrimSpace(pending.ToolName),
-		ApprovalID: strings.TrimSpace(pending.ID),
 		Resolution: strings.TrimSpace(resolution),
 	}
-	if pending != nil && !pending.RequestedAt.IsZero() {
-		event.TriggeredAt = pending.RequestedAt.UTC().Format(time.RFC3339Nano)
+	if pending != nil {
+		event.RuleID = strings.TrimSpace(pending.RuleID)
+		event.Reason = strings.TrimSpace(pending.Reason)
+		event.ToolName = strings.TrimSpace(pending.ToolName)
+		event.ApprovalID = strings.TrimSpace(pending.ID)
+		if !pending.RequestedAt.IsZero() {
+			event.TriggeredAt = pending.RequestedAt.UTC().Format(time.RFC3339Nano)
+		}
 	}
 	if !now.IsZero() {
 		event.ResolvedAt = now.UTC().Format(time.RFC3339Nano)
