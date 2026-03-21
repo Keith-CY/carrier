@@ -18,6 +18,7 @@ func normalizeOrchestratorExecution(in OrchestratorExecution) (OrchestratorExecu
 	out.Project = strings.TrimSpace(out.Project)
 	out.Environment = strings.TrimSpace(out.Environment)
 	out.TemplateID = strings.TrimSpace(out.TemplateID)
+	out.TemplateVersion = strings.TrimSpace(out.TemplateVersion)
 	out.TriggerSource = strings.TrimSpace(out.TriggerSource)
 	out.TriggerID = strings.TrimSpace(out.TriggerID)
 	out.TriggerEvent = strings.TrimSpace(out.TriggerEvent)

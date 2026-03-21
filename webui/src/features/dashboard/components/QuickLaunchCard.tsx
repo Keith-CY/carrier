@@ -1,3 +1,4 @@
+import { CUSTOM_GOAL_PRESET_ID } from '../model';
 import type { DashboardData } from '../useDashboardData';
 
 export function QuickLaunchCard({ data }: { data: DashboardData }) {
@@ -14,12 +15,11 @@ export function QuickLaunchCard({ data }: { data: DashboardData }) {
     selectedTemplate,
     providerOptions,
     hostOptions,
-    setQuickLaunchMode,
+    selectQuickLaunchPreset,
     setQuickLaunchGoal,
     setQuickLaunchProvider,
     setQuickLaunchMaxConcurrency,
     setQuickLaunchHostLabels,
-    setQuickLaunchTemplateId,
     setQuickLaunchTemplateInput,
     toggleQuickLaunchHost,
     resetQuickLaunch,
@@ -28,6 +28,7 @@ export function QuickLaunchCard({ data }: { data: DashboardData }) {
     previewQuickLaunch,
     runQuickLaunch,
   } = data;
+  const customGoalSelected = quickLaunchDraft.selectedPresetId === CUSTOM_GOAL_PRESET_ID;
 
   return (
     <div id="dashboard-quick-launch-section" className={`card dashboard-stack${featureFlags.remoteControlPlaneEnabled && authz.permissions.launchExecutions ? '' : ' hidden'}`}>
@@ -54,13 +55,34 @@ export function QuickLaunchCard({ data }: { data: DashboardData }) {
         </div>
       </div>
       <div>
-        <label htmlFor="quick-launch-mode">Mode</label>
-        <select id="quick-launch-mode" value={quickLaunchDraft.mode} onChange={(event) => setQuickLaunchMode(event.target.value === 'template' ? 'template' : 'goal')}>
-          <option value="goal">Goal</option>
-          <option value="template">Template</option>
-        </select>
+        <label>Preset</label>
+        <div id="quick-launch-presets" className="quick-launch-hosts">
+          {templates.map((item: any) => {
+            const presetId = String(item?.id || '').trim();
+            const selected = presetId !== '' && quickLaunchDraft.selectedPresetId === presetId;
+            return (
+              <button
+                key={presetId}
+                id={`quick-launch-preset-${presetId}`}
+                className={`btn-sm${selected ? '' : ' btn-secondary'}`}
+                type="button"
+                onClick={() => selectQuickLaunchPreset(presetId, item)}
+              >
+                {String(item?.name || presetId)}
+              </button>
+            );
+          })}
+          <button
+            id="quick-launch-preset-custom-goal"
+            className={`btn-sm${customGoalSelected ? '' : ' btn-secondary'}`}
+            type="button"
+            onClick={() => selectQuickLaunchPreset(CUSTOM_GOAL_PRESET_ID)}
+          >
+            Custom Goal
+          </button>
+        </div>
       </div>
-      <div id="quick-launch-goal-field" className={quickLaunchDraft.mode === 'goal' ? '' : 'hidden'}>
+      <div id="quick-launch-goal-field" className={customGoalSelected ? '' : 'hidden'}>
         <label htmlFor="quick-launch-goal">Goal</label>
         <textarea
           id="quick-launch-goal"
@@ -70,16 +92,20 @@ export function QuickLaunchCard({ data }: { data: DashboardData }) {
           onChange={(event) => setQuickLaunchGoal(event.target.value)}
         />
       </div>
-      <div id="quick-launch-template-field" className={quickLaunchDraft.mode === 'template' ? '' : 'hidden'}>
-        <label htmlFor="quick-launch-template">Template</label>
-        <select id="quick-launch-template" value={quickLaunchDraft.templateId} onChange={(event) => setQuickLaunchTemplateId(event.target.value)}>
-          <option value="">Select a template</option>
-          {templates.map((item: any) => (
-            <option key={String(item?.id || '')} value={String(item?.id || '')}>
-              {String(item?.name || item?.id || '')}
-            </option>
-          ))}
-        </select>
+      <div id="quick-launch-template-field" className={customGoalSelected ? 'hidden' : ''}>
+        {selectedTemplate ? (
+          <>
+            <div className="section-head">
+              <div>
+                <h3>{String(selectedTemplate?.name || selectedTemplate?.id || '')}</h3>
+                <p className="text-dim">{String(selectedTemplate?.description || 'Repeatable launch preset for this execution flow.')}</p>
+              </div>
+            </div>
+            <p className="text-dim">
+              {`Defaults · Approval: ${String(selectedTemplate?.defaultLaunchConfig?.approvalScope || 'infrastructure_only')} · Max concurrency: ${Number(selectedTemplate?.defaultLaunchConfig?.maxConcurrency || 0) || 'auto'}${Array.isArray(selectedTemplate?.defaultLaunchConfig?.hostLabels) && selectedTemplate.defaultLaunchConfig.hostLabels.length ? ` · Host labels: ${selectedTemplate.defaultLaunchConfig.hostLabels.join(', ')}` : ''}`}
+            </p>
+          </>
+        ) : null}
         <div id="quick-launch-template-inputs" className="form-grid" style={{ marginTop: '12px' }}>
           {(Array.isArray(selectedTemplate?.inputSchema) ? selectedTemplate.inputSchema : []).map((field: any) => {
             const key = String(field?.id || '').trim();
@@ -164,7 +190,7 @@ export function QuickLaunchCard({ data }: { data: DashboardData }) {
             <h3>Plan Preview</h3>
             <p id="quick-launch-preview-summary" className="text-dim">
               {quickLaunchPlan
-                ? `Approval: ${String(quickLaunchPlan?.approvalScope || 'infrastructure_only')} · ${String(quickLaunchPlan?.templateId || '').trim() ? `Template: ${String(quickLaunchPlan.templateId).trim()} · ` : ''}Task units: ${Array.isArray(quickLaunchPlan?.taskUnits) ? quickLaunchPlan.taskUnits.length : 0} · Max concurrency: ${Number(quickLaunchPlan?.maxConcurrency || 0)}`
+                ? `Approval: ${String(quickLaunchPlan?.approvalScope || 'infrastructure_only')} · ${String(quickLaunchPlan?.templateId || '').trim() ? `Template: ${String(quickLaunchPlan.templateId).trim()}${String(quickLaunchPlan?.templateVersion || '').trim() ? ` (${String(quickLaunchPlan.templateVersion).trim()})` : ''} · ` : 'Template: Custom Goal · '}Task units: ${Array.isArray(quickLaunchPlan?.taskUnits) ? quickLaunchPlan.taskUnits.length : 0} · Max concurrency: ${Number(quickLaunchPlan?.maxConcurrency || 0)}`
                 : ''}
             </p>
           </div>

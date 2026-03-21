@@ -30,8 +30,11 @@ export function useQuickLaunchMutations(args: {
       const created = await apiPost<any>('/api/v1/orchestrator/executions', {
         goal: String(args.quickLaunchPlan.goal || '').trim(),
         templateId: String(args.quickLaunchPlan.templateId || '').trim(),
+        templateVersion: String(args.quickLaunchPlan.templateVersion || '').trim(),
         requestedProvider: String(args.quickLaunchPlan.provider || '').trim(),
         approvalScope: String(args.quickLaunchPlan.approvalScope || 'infrastructure_only').trim(),
+        requiredMemory: Array.isArray(args.quickLaunchPlan.requiredMemory) ? args.quickLaunchPlan.requiredMemory : [],
+        distillOutputs: Array.isArray(args.quickLaunchPlan.distillOutputs) ? args.quickLaunchPlan.distillOutputs : [],
         requiredWorkers: Array.isArray(args.quickLaunchPlan.requiredWorkers) ? args.quickLaunchPlan.requiredWorkers : [],
         taskUnits: Array.isArray(args.quickLaunchPlan.taskUnits) ? args.quickLaunchPlan.taskUnits : [],
         maxConcurrency: Number(args.quickLaunchPlan.maxConcurrency || 0) || 0,
