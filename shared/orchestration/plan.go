@@ -88,9 +88,6 @@ func BuildPlan(input BuildPlanInput) (Plan, error) {
 			if provider == "" {
 				provider = strings.TrimSpace(template.DefaultLaunchConfig.Provider)
 			}
-			if len(hostIDs) == 0 && len(hostLabels) == 0 {
-				hostLabels = normalizeSelectorStrings(template.DefaultLaunchConfig.HostLabels)
-			}
 			if maxConcurrency <= 0 && template.DefaultLaunchConfig.MaxConcurrency > 0 {
 				maxConcurrency = template.DefaultLaunchConfig.MaxConcurrency
 			}

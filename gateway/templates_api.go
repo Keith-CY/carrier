@@ -155,33 +155,75 @@ type gatewayAPIResponseError struct {
 }
 
 func launchExecutionTemplate(requestID string, cfg *GatewayConfig, opts executionTemplateLaunchOptions) (OrchestratorExecution, *gatewayAPIResponseError) {
-	templateID := strings.TrimSpace(opts.TemplateID)
-	if templateID == "" {
-		return OrchestratorExecution{}, &gatewayAPIResponseError{Status: http.StatusBadRequest, Body: gatewayErrBody("E_USAGE", "template id is required")}
-	}
-	resolved, err := orchestration.ResolveExecutionTemplate(templateID, opts.Inputs)
-	if err != nil {
-		return OrchestratorExecution{}, &gatewayAPIResponseError{Status: http.StatusBadRequest, Body: gatewayErrBody("E_USAGE", err.Error())}
-	}
-	plan, err := orchestration.BuildPlan(orchestration.BuildPlanInput{
-		Goal:           resolved.Goal,
-		TemplateID:     templateID,
-		Provider:       strings.TrimSpace(opts.Provider),
-		HostIDs:        opts.HostIDs,
-		HostLabels:     opts.HostLabels,
-		RequiredMemory: opts.RequiredMemory,
-		DistillOutputs: opts.DistillOutputs,
-		MaxConcurrency: opts.MaxConcurrency,
-		Tasks:          resolved.Tasks,
-	})
-	if err != nil {
-		return OrchestratorExecution{}, &gatewayAPIResponseError{Status: http.StatusBadRequest, Body: gatewayErrBody("E_USAGE", err.Error())}
+	plan, apiErr := buildTemplateExecutionPlan(
+		opts.TemplateID,
+		opts.Inputs,
+		opts.Provider,
+		opts.HostIDs,
+		opts.HostLabels,
+		opts.RequiredMemory,
+		opts.DistillOutputs,
+		opts.MaxConcurrency,
+	)
+	if apiErr != nil {
+		return OrchestratorExecution{}, apiErr
 	}
 	created, apiErr := createTemplateExecutionRecord(requestID, cfg, plan, opts.IdempotencyKey, opts.Metadata)
 	if apiErr != nil {
 		return OrchestratorExecution{}, apiErr
 	}
 	return authorizeTemplateExecutionRecord(requestID, cfg, created, opts.Actor, opts.PolicyApprove, opts.MaxConcurrency)
+}
+
+func buildTemplateExecutionPlan(templateID string, inputs map[string]string, provider string, hostIDs, hostLabels, requiredMemory, distillOutputs []string, maxConcurrency int) (orchestration.Plan, *gatewayAPIResponseError) {
+	trimmedTemplateID := strings.TrimSpace(templateID)
+	if trimmedTemplateID == "" {
+		return orchestration.Plan{}, &gatewayAPIResponseError{Status: http.StatusBadRequest, Body: gatewayErrBody("E_USAGE", "template id is required")}
+	}
+	resolved, err := orchestration.ResolveExecutionTemplate(trimmedTemplateID, inputs)
+	if err != nil {
+		return orchestration.Plan{}, &gatewayAPIResponseError{Status: http.StatusBadRequest, Body: gatewayErrBody("E_USAGE", err.Error())}
+	}
+	effectiveHostLabels := append([]string(nil), hostLabels...)
+	if len(hostIDs) == 0 && len(effectiveHostLabels) == 0 {
+		resolvedLabels, resolveErr := resolveTemplateDefaultHostLabels(resolved.Template.DefaultLaunchConfig.HostLabels)
+		if resolveErr != nil {
+			return orchestration.Plan{}, &gatewayAPIResponseError{Status: http.StatusInternalServerError, Body: gatewayErrBody("E_INTERNAL", "failed to load remote hosts for template routing")}
+		}
+		effectiveHostLabels = resolvedLabels
+	}
+	plan, buildErr := orchestration.BuildPlan(orchestration.BuildPlanInput{
+		Goal:           resolved.Goal,
+		TemplateID:     resolved.Template.ID,
+		Provider:       strings.TrimSpace(provider),
+		HostIDs:        hostIDs,
+		HostLabels:     effectiveHostLabels,
+		RequiredMemory: requiredMemory,
+		DistillOutputs: distillOutputs,
+		MaxConcurrency: maxConcurrency,
+		Tasks:          resolved.Tasks,
+	})
+	if buildErr != nil {
+		return orchestration.Plan{}, &gatewayAPIResponseError{Status: http.StatusBadRequest, Body: gatewayErrBody("E_USAGE", buildErr.Error())}
+	}
+	return plan, nil
+}
+
+func resolveTemplateDefaultHostLabels(defaultHostLabels []string) ([]string, error) {
+	normalized := normalizeStringSelectorList(defaultHostLabels, true)
+	if len(normalized) == 0 {
+		return nil, nil
+	}
+	hosts, err := listRemoteHosts()
+	if err != nil {
+		return nil, err
+	}
+	for _, host := range hosts {
+		if stringSliceContainsAllFold(host.Labels, normalized) {
+			return normalized, nil
+		}
+	}
+	return nil, nil
 }
 
 func createTemplateExecutionRecord(requestID string, cfg *GatewayConfig, plan orchestration.Plan, idempotencyKey string, metadata executionLaunchMetadata) (OrchestratorExecution, *gatewayAPIResponseError) {

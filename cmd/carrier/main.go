@@ -2844,6 +2844,9 @@ func parseOrchestrateCommandArgs(args []string) (orchestrateCommandOptions, erro
 		}
 		return opts, nil
 	}
+	if len(opts.Inputs) > 0 {
+		return orchestrateCommandOptions{}, errors.New("--input requires --template")
+	}
 	if len(goalParts) == 0 {
 		return orchestrateCommandOptions{}, errors.New("goal is required")
 	}
@@ -4939,6 +4942,13 @@ type executionTemplateLaunchResponse struct {
 	Execution orchestrateExecutionSnapshot `json:"execution"`
 }
 
+type orchestratePlanResponse struct {
+	Result    string                  `json:"result"`
+	ErrorCode string                  `json:"errorCode,omitempty"`
+	Message   string                  `json:"message,omitempty"`
+	Plan      orchestratePlanSnapshot `json:"plan"`
+}
+
 type executionTriggerConfigSnapshot struct {
 	Inputs                  map[string]string `json:"inputs,omitempty"`
 	Provider                string            `json:"provider,omitempty"`
@@ -6426,7 +6436,11 @@ func runOrchestrateCommand(out io.Writer, opts orchestrateCommandOptions) error 
 		_, _ = fmt.Fprintln(out, renderExecutionTemplate(resp.Template))
 		return nil
 	case "plan":
-		if strings.TrimSpace(opts.TemplateID) == "" {
+		if strings.TrimSpace(opts.TemplateID) != "" {
+			if _, err := ensureGatewayRunning(progressOut, startGatewayInBackgroundAndWait); err != nil {
+				return err
+			}
+		} else {
 			if _, err := ensureDaemonRunning(progressOut); err != nil {
 				return err
 			}
@@ -6809,21 +6823,7 @@ func runOrchestrateStart(out io.Writer, opts orchestrateCommandOptions) error {
 
 func buildOrchestratePlan(opts orchestrateCommandOptions) (orchestratePlanSnapshot, error) {
 	if templateID := strings.TrimSpace(opts.TemplateID); templateID != "" {
-		resolved, err := sharedorchestration.ResolveExecutionTemplate(templateID, opts.Inputs)
-		if err != nil {
-			return orchestratePlanSnapshot{}, err
-		}
-		return sharedorchestration.BuildPlan(sharedorchestration.BuildPlanInput{
-			Goal:           strings.TrimSpace(resolved.Goal),
-			TemplateID:     resolved.Template.ID,
-			Provider:       strings.TrimSpace(opts.Provider),
-			HostIDs:        opts.HostIDs,
-			HostLabels:     opts.HostLabels,
-			RequiredMemory: opts.RequiredMemory,
-			DistillOutputs: opts.DistillOutputs,
-			MaxConcurrency: opts.MaxConcurrency,
-			Tasks:          resolved.Tasks,
-		})
+		return fetchOrchestratePlan(opts)
 	}
 	tasks, err := decomposeOrchestrateGoal(opts.Goal, opts.Provider)
 	if err != nil {
@@ -6839,6 +6839,29 @@ func buildOrchestratePlan(opts orchestrateCommandOptions) (orchestratePlanSnapsh
 		MaxConcurrency: opts.MaxConcurrency,
 		Tasks:          tasks,
 	})
+}
+
+func fetchOrchestratePlan(opts orchestrateCommandOptions) (orchestratePlanSnapshot, error) {
+	body := map[string]interface{}{
+		"goal":           strings.TrimSpace(opts.Goal),
+		"templateId":     strings.TrimSpace(opts.TemplateID),
+		"inputs":         opts.Inputs,
+		"provider":       strings.TrimSpace(opts.Provider),
+		"hostIds":        opts.HostIDs,
+		"hostLabels":     opts.HostLabels,
+		"requiredMemory": opts.RequiredMemory,
+		"distillOutputs": opts.DistillOutputs,
+		"maxConcurrency": opts.MaxConcurrency,
+	}
+	raw, _, err := gatewayRequestWithTimeout(http.MethodPost, "/api/v1/orchestrator/plans", body, 45*time.Second)
+	if err != nil {
+		return orchestratePlanSnapshot{}, err
+	}
+	resp, err := decodeOrchestratePlanResponse(raw)
+	if err != nil {
+		return orchestratePlanSnapshot{}, err
+	}
+	return resp.Plan, nil
 }
 
 func decomposeOrchestrateGoal(goal, provider string) ([]orchestrateDecomposeTask, error) {
@@ -6894,6 +6917,14 @@ func decodeOrchestrateExecutionResponse(raw []byte) (orchestrateExecutionRespons
 	var resp orchestrateExecutionResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return orchestrateExecutionResponse{}, fmt.Errorf("decode orchestrator response: %w", err)
+	}
+	return resp, nil
+}
+
+func decodeOrchestratePlanResponse(raw []byte) (orchestratePlanResponse, error) {
+	var resp orchestratePlanResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return orchestratePlanResponse{}, fmt.Errorf("decode orchestrator plan response: %w", err)
 	}
 	return resp, nil
 }

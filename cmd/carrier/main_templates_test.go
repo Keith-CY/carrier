@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -69,6 +70,10 @@ func TestParseOrchestrateTemplateCommandArgs(t *testing.T) {
 	if runOpts.Goal != "" {
 		t.Fatalf("goal = %q, want empty for template launch", runOpts.Goal)
 	}
+
+	if _, err := parseOrchestrateCommandArgs([]string{"triage", "incident", "--input", "service=checkout"}); err == nil || !strings.Contains(err.Error(), "--input requires --template") {
+		t.Fatalf("parseOrchestrateCommandArgs(goal with input) error = %v, want --input requires --template", err)
+	}
 }
 
 func TestRunOrchestrateTemplateCommands(t *testing.T) {
@@ -109,5 +114,52 @@ func TestRunOrchestrateTemplateCommands(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Incident Diagnosis") || !strings.Contains(out.String(), "service") {
 		t.Fatalf("show output=%s, want template details", out.String())
+	}
+}
+
+func TestRunOrchestrateTemplateDryRunUsesGatewayPlan(t *testing.T) {
+	var planBody string
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/api/v1/orchestrator/plans":
+			if r.Method != http.MethodPost {
+				http.NotFound(w, r)
+				return
+			}
+			raw, _ := io.ReadAll(r.Body)
+			planBody = strings.TrimSpace(string(raw))
+			_, _ = w.Write([]byte(`{"result":"ok","plan":{"goal":"Gateway template preview","templateId":"incident-diagnosis","templateVersion":"v99","approvalScope":"infrastructure_only","maxConcurrency":1,"plannerTasks":[{"id":"task-1","input":"Collect via gateway","agentId":"zeroclaw"}],"requiredWorkers":[{"hostLabels":["prod"],"agentId":"zeroclaw","count":1}],"taskUnits":[{"id":"task-1","input":"Collect via gateway","hostLabels":["prod"],"agentId":"zeroclaw"}]}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gateway.Close()
+
+	setProbeEnvFromURL(t, "CARRIER_GATEWAY_HOST", "CARRIER_GATEWAY_PORT", gateway.URL)
+
+	opts := orchestrateCommandOptions{
+		Action:     "plan",
+		TemplateID: "incident-diagnosis",
+		Inputs: map[string]string{
+			"service":         "checkout",
+			"environment":     "prod",
+			"incidentSummary": "latency regression",
+		},
+	}
+	var out bytes.Buffer
+	if err := runOrchestrateCommand(&out, opts); err != nil {
+		t.Fatalf("runOrchestrateCommand(template plan) error: %v", err)
+	}
+	if !strings.Contains(planBody, `"templateId":"incident-diagnosis"`) || !strings.Contains(planBody, `"service":"checkout"`) {
+		t.Fatalf("plan request body=%q, want templateId and inputs", planBody)
+	}
+	if !strings.Contains(out.String(), "Gateway template preview") {
+		t.Fatalf("expected gateway plan goal in output, got %q", out.String())
+	}
+	if !strings.Contains(out.String(), "labels[prod]/zeroclaw") {
+		t.Fatalf("expected gateway-selected label target in output, got %q", out.String())
 	}
 }

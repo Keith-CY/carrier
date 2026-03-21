@@ -120,7 +120,7 @@ func TestBuildPlanPreservesTemplateID(t *testing.T) {
 	}
 }
 
-func TestBuildPlanAppliesTemplateLaunchDefaults(t *testing.T) {
+func TestBuildPlanAppliesTemplateLaunchDefaultsWithoutForcingHostLabels(t *testing.T) {
 	resolved, err := ResolveExecutionTemplate("incident-diagnosis", map[string]string{
 		"service":         "checkout",
 		"environment":     "prod",
@@ -146,10 +146,7 @@ func TestBuildPlanAppliesTemplateLaunchDefaults(t *testing.T) {
 	if plan.MaxConcurrency != resolved.Template.DefaultLaunchConfig.MaxConcurrency {
 		t.Fatalf("maxConcurrency = %d, want %d", plan.MaxConcurrency, resolved.Template.DefaultLaunchConfig.MaxConcurrency)
 	}
-	if len(resolved.Template.DefaultLaunchConfig.HostLabels) == 0 {
-		t.Fatalf("expected template default host labels in fixture, got %+v", resolved.Template.DefaultLaunchConfig)
-	}
-	if got := len(plan.HostLabels); got != len(resolved.Template.DefaultLaunchConfig.HostLabels) {
-		t.Fatalf("hostLabels len = %d, want %d", got, len(resolved.Template.DefaultLaunchConfig.HostLabels))
+	if len(plan.HostLabels) != 0 {
+		t.Fatalf("hostLabels = %v, want empty until gateway resolves matching remote labels", plan.HostLabels)
 	}
 }

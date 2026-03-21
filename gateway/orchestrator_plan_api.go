@@ -43,9 +43,23 @@ func handleOrchestratorPlans(w http.ResponseWriter, r *http.Request, requestID s
 	req.TemplateID = strings.TrimSpace(req.TemplateID)
 	req.Provider = strings.TrimSpace(req.Provider)
 	req.Goal = strings.TrimSpace(req.Goal)
-	plannerTasks, goal, err := buildPlannerTasksForPlanRequest(r.Context(), daemon, req.Goal, req.TemplateID, req.Inputs, req.Provider, requestID)
+	if req.TemplateID != "" {
+		plan, apiErr := buildTemplateExecutionPlan(req.TemplateID, req.Inputs, req.Provider, req.HostIDs, req.HostLabels, req.RequiredMemory, req.DistillOutputs, req.MaxConcurrency)
+		if apiErr != nil {
+			writeJSON(w, apiErr.Status, apiErr.Body)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"requestId": requestID,
+			"result":    "ok",
+			"plan":      plan,
+		})
+		return
+	}
+
+	plannerTasks, goal, err := buildPlannerTasksForPlanRequest(r.Context(), daemon, req.Goal, req.Provider, requestID)
 	if err != nil {
-		if req.TemplateID != "" || strings.TrimSpace(req.Goal) == "" {
+		if strings.TrimSpace(req.Goal) == "" {
 			writeJSON(w, http.StatusBadRequest, gatewayErrBody("E_USAGE", err.Error()))
 			return
 		}
@@ -55,7 +69,6 @@ func handleOrchestratorPlans(w http.ResponseWriter, r *http.Request, requestID s
 
 	plan, err := orchestration.BuildPlan(orchestration.BuildPlanInput{
 		Goal:           goal,
-		TemplateID:     req.TemplateID,
 		Provider:       req.Provider,
 		HostIDs:        req.HostIDs,
 		HostLabels:     req.HostLabels,
@@ -76,15 +89,7 @@ func handleOrchestratorPlans(w http.ResponseWriter, r *http.Request, requestID s
 	})
 }
 
-func buildPlannerTasksForPlanRequest(ctx context.Context, daemon *DaemonClient, goal, templateID string, inputs map[string]string, provider, requestID string) ([]orchestration.DecomposeTask, string, error) {
-	trimmedTemplateID := strings.TrimSpace(templateID)
-	if trimmedTemplateID != "" {
-		resolved, err := orchestration.ResolveExecutionTemplate(trimmedTemplateID, inputs)
-		if err != nil {
-			return nil, "", err
-		}
-		return resolved.Tasks, resolved.Goal, nil
-	}
+func buildPlannerTasksForPlanRequest(ctx context.Context, daemon *DaemonClient, goal, provider, requestID string) ([]orchestration.DecomposeTask, string, error) {
 	trimmedGoal := strings.TrimSpace(goal)
 	if trimmedGoal == "" {
 		return nil, "", errors.New("goal is required")

@@ -82,6 +82,74 @@ func TestHandleOrchestratorPlansWithTemplate(t *testing.T) {
 	}
 }
 
+func TestHandleOrchestratorPlansWithTemplateFallsBackToLocalWithoutMatchingRemoteLabels(t *testing.T) {
+	mux := buildRemoteFeatureMux(t)
+
+	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/plans", `{
+		"templateId":"incident-diagnosis",
+		"inputs":{
+			"service":"checkout",
+			"environment":"prod",
+			"incidentSummary":"latency regression after deploy"
+		}
+	}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plan status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	payload := decodeJSONMap(t, rec)
+	plan, _ := payload["plan"].(map[string]interface{})
+	if hostLabels, _ := plan["hostLabels"].([]interface{}); len(hostLabels) != 0 {
+		t.Fatalf("plan hostLabels=%+v want empty payload=%+v", hostLabels, payload)
+	}
+	taskUnits, _ := plan["taskUnits"].([]interface{})
+	if len(taskUnits) == 0 {
+		t.Fatalf("taskUnits empty payload=%+v", payload)
+	}
+	taskUnit, _ := taskUnits[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(taskUnit["hostId"])); got != "local" {
+		t.Fatalf("taskUnits[0].hostId=%q want local payload=%+v", got, payload)
+	}
+}
+
+func TestHandleOrchestratorPlansWithTemplateAppliesDefaultLabelsWhenMatchingRemoteHostExists(t *testing.T) {
+	mux := buildRemoteFeatureMux(t)
+	hostID := createRemoteHostForTests(t, mux)
+	patchRec := runJSONRequest(t, mux, http.MethodPatch, "/api/v1/remote/hosts/"+hostID, `{"labels":["prod"]}`)
+	if patchRec.Code != http.StatusOK {
+		t.Fatalf("patch host status=%d body=%s", patchRec.Code, patchRec.Body.String())
+	}
+
+	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/orchestrator/plans", `{
+		"templateId":"incident-diagnosis",
+		"inputs":{
+			"service":"checkout",
+			"environment":"prod",
+			"incidentSummary":"latency regression after deploy"
+		}
+	}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plan status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	payload := decodeJSONMap(t, rec)
+	plan, _ := payload["plan"].(map[string]interface{})
+	hostLabels, _ := plan["hostLabels"].([]interface{})
+	if len(hostLabels) != 1 || strings.TrimSpace(anyToString(hostLabels[0])) != "prod" {
+		t.Fatalf("plan hostLabels=%+v want [prod] payload=%+v", hostLabels, payload)
+	}
+	taskUnits, _ := plan["taskUnits"].([]interface{})
+	if len(taskUnits) == 0 {
+		t.Fatalf("taskUnits empty payload=%+v", payload)
+	}
+	taskUnit, _ := taskUnits[0].(map[string]interface{})
+	taskLabels, _ := taskUnit["hostLabels"].([]interface{})
+	if got := strings.TrimSpace(anyToString(taskUnit["hostId"])); got != "" {
+		t.Fatalf("taskUnits[0].hostId=%q want empty label-targeted task payload=%+v", got, payload)
+	}
+	if len(taskLabels) != 1 || strings.TrimSpace(anyToString(taskLabels[0])) != "prod" {
+		t.Fatalf("taskUnits[0].hostLabels=%+v want [prod] payload=%+v", taskLabels, payload)
+	}
+}
+
 func TestHandleTemplateLaunchCreatesAuthorizedExecution(t *testing.T) {
 	mux := buildRemoteFeatureMux(t)
 	hostID := createRemoteHostForTests(t, mux)
@@ -127,6 +195,37 @@ func TestHandleTemplateLaunchCreatesAuthorizedExecution(t *testing.T) {
 	auth, _ := execution["authorization"].(map[string]interface{})
 	if got := strings.TrimSpace(anyToString(auth["approvedBy"])); got != "carrier-cli" {
 		t.Fatalf("authorization.approvedBy=%q want carrier-cli auth=%+v", got, auth)
+	}
+}
+
+func TestHandleTemplateLaunchFallsBackToLocalWithoutMatchingRemoteLabels(t *testing.T) {
+	mux := buildRemoteFeatureMux(t)
+
+	orchestratorLaunchExecutionFn = func(string) {}
+	t.Cleanup(func() {
+		orchestratorLaunchExecutionFn = startOrchestratorExecutionAsync
+	})
+
+	rec := runJSONRequest(t, mux, http.MethodPost, "/api/v1/templates/incident-diagnosis/launch", `{
+		"inputs":{
+			"service":"checkout",
+			"environment":"prod",
+			"incidentSummary":"latency regression after deploy"
+		},
+		"actor":"carrier-cli"
+	}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("launch status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	payload := decodeJSONMap(t, rec)
+	execution, _ := payload["execution"].(map[string]interface{})
+	taskUnits, _ := execution["taskUnits"].([]interface{})
+	if len(taskUnits) == 0 {
+		t.Fatalf("taskUnits empty payload=%+v", payload)
+	}
+	taskUnit, _ := taskUnits[0].(map[string]interface{})
+	if got := strings.TrimSpace(anyToString(taskUnit["hostId"])); got != "local" {
+		t.Fatalf("taskUnits[0].hostId=%q want local payload=%+v", got, payload)
 	}
 }
 
