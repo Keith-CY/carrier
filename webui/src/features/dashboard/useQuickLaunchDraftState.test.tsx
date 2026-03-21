@@ -81,4 +81,35 @@ describe('useQuickLaunchDraftState', () => {
     expect(result.current.quickLaunchDraft.hostLabels).toBe('');
     expect(result.current.quickLaunchDraft.selectedHosts).toEqual(['local']);
   });
+
+  test('re-selecting the current preset preserves user-entered template inputs and host picks', () => {
+    const { result } = renderHook(() => useQuickLaunchDraftState());
+
+    act(() => {
+      result.current.selectQuickLaunchPreset('incident-diagnosis', {
+        defaultLaunchConfig: {
+          provider: 'openrouter',
+          hostLabels: ['prod'],
+          maxConcurrency: 3,
+        },
+      });
+      result.current.setQuickLaunchTemplateInput('service', 'checkout');
+      result.current.setQuickLaunchTemplateInput('environment', 'prod');
+      result.current.toggleQuickLaunchHost('prod-host-1');
+      result.current.selectQuickLaunchPreset('incident-diagnosis', {
+        defaultLaunchConfig: {
+          provider: 'openrouter',
+          hostLabels: ['prod'],
+          maxConcurrency: 3,
+        },
+      });
+    });
+
+    expect(result.current.quickLaunchDraft.selectedPresetId).toBe('incident-diagnosis');
+    expect(result.current.quickLaunchDraft.templateInputs).toEqual({
+      service: 'checkout',
+      environment: 'prod',
+    });
+    expect(result.current.quickLaunchDraft.selectedHosts).toEqual(['prod-host-1']);
+  });
 });

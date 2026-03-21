@@ -16,6 +16,9 @@ export function useQuickLaunchDraftState() {
     quickLaunchPlan,
     setQuickLaunchPlan,
     selectQuickLaunchPreset: (presetId: string, template?: any) => setQuickLaunchDraft((current) => {
+      if (current.selectedPresetId === presetId) {
+        return current;
+      }
       const next = {
         ...current,
         selectedPresetId: presetId,
