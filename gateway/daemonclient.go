@@ -112,6 +112,13 @@ type AgentChatOptions struct {
 	RuntimeContext     []baseagent.RuntimeContextEntry `json:"runtimeContext,omitempty"`
 }
 
+type decomposeBaseAgentRequest struct {
+	Goal              string                         `json:"goal"`
+	Provider          string                         `json:"provider,omitempty"`
+	SharedInstructions []baseagent.SharedInstruction   `json:"sharedInstructions,omitempty"`
+	RuntimeContext     []baseagent.RuntimeContextEntry `json:"runtimeContext,omitempty"`
+}
+
 type AgentChatResult struct {
 	AgentID     string                         `json:"agentId"`
 	SessionID   string                         `json:"sessionId,omitempty"`
@@ -696,17 +703,15 @@ func (c *DaemonClient) DecomposeBaseAgentWithOptions(
 	requestID string,
 	opts BaseAgentDecomposeOptions,
 ) ([]baseagent.DecomposeTask, error) {
-	body := map[string]interface{}{
-		"goal": strings.TrimSpace(goal),
-	}
-	if trimmedProvider := strings.TrimSpace(opts.Provider); trimmedProvider != "" {
-		body["provider"] = trimmedProvider
+	body := decomposeBaseAgentRequest{
+		Goal:     strings.TrimSpace(goal),
+		Provider: strings.TrimSpace(opts.Provider),
 	}
 	if len(opts.SharedInstructions) > 0 {
-		body["sharedInstructions"] = append([]baseagent.SharedInstruction(nil), opts.SharedInstructions...)
+		body.SharedInstructions = append([]baseagent.SharedInstruction(nil), opts.SharedInstructions...)
 	}
 	if len(opts.RuntimeContext) > 0 {
-		body["runtimeContext"] = append([]baseagent.RuntimeContextEntry(nil), opts.RuntimeContext...)
+		body.RuntimeContext = append([]baseagent.RuntimeContextEntry(nil), opts.RuntimeContext...)
 	}
 	raw, err := c.request(ctx, http.MethodPost, "/api/v1/base-agent/decompose", body, actor, requestID)
 	if err != nil {
