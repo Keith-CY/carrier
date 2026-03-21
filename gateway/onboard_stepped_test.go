@@ -411,6 +411,36 @@ func TestOnboardConfirm_StartError(t *testing.T) {
 	}
 }
 
+func TestOnboardConfirm_StartError_UnknownWithDetails(t *testing.T) {
+	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+		"POST /api/v1/agents/worker/install": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		},
+		"POST /api/v1/agents/worker/start": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": map[string]string{"code": "E_ANYTHING", "message": "provider rejected"},
+			})
+		},
+	})
+
+	store := NewOnboardStore()
+	store.start("telegram:start-fail-details")
+	store.update("telegram:start-fail-details", func(s *OnboardSession) {
+		s.Step = OnboardEnvConfigured
+		s.SelectedAgent = "worker"
+	})
+
+	resp := onboardConfirm(context.Background(), "req-start-fail-unknown", "telegram:start-fail-details", "yes", daemon, store, "telegram:start-fail-details")
+	if resp.Result != "ok" || !strings.Contains(resp.Message, "installed but failed to start") {
+		t.Fatalf("expected soft start error response, got %+v", resp)
+	}
+	if !strings.Contains(resp.Message, "provider rejected") {
+		t.Fatalf("expected daemon detail in response, got %q", resp.Message)
+	}
+}
+
 func TestOnboardConfirm_Success(t *testing.T) {
 	_, daemon, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
 		"POST /api/v1/agents/worker/install": func(w http.ResponseWriter, r *http.Request) {

@@ -388,7 +388,11 @@ func installViaGUIOnlyResp(requestID string) GatewayResponse {
 func daemonErrResp(requestID string, err error) GatewayResponse {
 	if de, ok := err.(*DaemonClientError); ok {
 		_, code, message := mapDaemonErrorToExternal(de.Code)
-		log.Printf("[gateway] daemon command error code=%s detail=%s", code, RedactErrorMessage(de.Message))
+		detail := strings.TrimSpace(RedactErrorMessage(de.Message))
+		log.Printf("[gateway] daemon command error code=%s detail=%s", code, detail)
+		if message == "daemon command failed" && detail != "" {
+			message = fmt.Sprintf("%s: %s", message, detail)
+		}
 		return errResp(requestID, code, message)
 	}
 	log.Printf("[gateway] daemon command error detail=%s", RedactErrorMessage(err.Error()))

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -10,7 +11,11 @@ import (
 func writeDaemonAPIError(w http.ResponseWriter, err error) {
 	if de, ok := err.(*DaemonClientError); ok {
 		status, code, message := mapDaemonErrorToExternal(de.Code)
-		log.Printf("[gateway] daemon API error code=%s detail=%s", code, RedactErrorMessage(de.Message))
+		detail := strings.TrimSpace(RedactErrorMessage(de.Message))
+		log.Printf("[gateway] daemon API error code=%s detail=%s", code, detail)
+		if message == "daemon command failed" && detail != "" {
+			message = fmt.Sprintf("%s: %s", message, detail)
+		}
 		writeJSON(w, status, gatewayErrBody(code, message))
 		return
 	}

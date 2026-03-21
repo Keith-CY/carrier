@@ -294,6 +294,10 @@ func onboardConfirm(ctx context.Context, requestID, sessionKey, input string, da
 		store.update(sessionKey, func(s *OnboardSession) { s.Step = OnboardDone })
 		if de, ok := err.(*DaemonClientError); ok {
 			_, _, msg := mapDaemonErrorToExternal(de.Code)
+			detail := strings.TrimSpace(RedactErrorMessage(de.Message))
+			if msg == "daemon command failed" && detail != "" {
+				msg = fmt.Sprintf("%s: %s", msg, detail)
+			}
 			return GatewayResponse{RequestID: requestID, Result: "ok", Message: fmt.Sprintf("%s installed but failed to start: %s", agentID, msg)}
 		}
 		return daemonErrResp(requestID, err)

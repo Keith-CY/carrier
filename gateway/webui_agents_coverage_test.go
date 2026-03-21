@@ -244,6 +244,26 @@ func TestHandleWebUIAgent_Branches(t *testing.T) {
 			t.Fatalf("expected 502, got %d: %s", rec.Code, rec.Body.String())
 		}
 
+		t.Run("status action unknown daemon code includes detail", func(t *testing.T) {
+			_, daemonUnknown, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
+				"GET /api/v1/agents/picoclaw/status": func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusBadGateway)
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
+						"error": map[string]string{"code": "E_ANYTHING", "message": "provider rejected"},
+					})
+				},
+			})
+			recDetail := httptest.NewRecorder()
+			reqDetail := httptest.NewRequest(http.MethodGet, "/api/v1/agents/picoclaw/status", nil)
+			handleWebUIAgent(recDetail, reqDetail, "req-status-unknown", daemonUnknown)
+			if recDetail.Code != http.StatusBadGateway {
+				t.Fatalf("expected 502, got %d: %s", recDetail.Code, recDetail.Body.String())
+			}
+			if !strings.Contains(recDetail.Body.String(), "provider rejected") {
+				t.Fatalf("expected daemon detail in webui status error, got %s", recDetail.Body.String())
+			}
+		})
+
 		_, daemonEmpty, _, _, _ := setupTestEnv(t, map[string]http.HandlerFunc{
 			"GET /api/v1/agents/picoclaw/status": func(w http.ResponseWriter, r *http.Request) {
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{"statuses": []map[string]interface{}{}})
