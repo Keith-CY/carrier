@@ -527,6 +527,13 @@ jq -e \
     ($base_url == "" or .model_list[0].base_url == $base_url)
   ' "$CARRIER_CONFIG" >/dev/null
 
+# Onboarding can launch a control plane before model/base_url normalization.
+# Restart once so daemon+gateway reload the finalized config and the live
+# launcher/run validation reads consistent provider/model settings.
+echo "[2.5/10] reset control plane after onboarding/config normalization"
+run_with_timeout 10 "$BIN_PATH" stop >/dev/null 2>&1 || echo "warning: 'carrier stop' command failed but was ignored"
+stop_control_plane_processes
+
 if [[ ! -f "$TRANSCRIPTION_AUDIO_FIXTURE" ]]; then
   echo "error: missing transcription audio fixture: ${TRANSCRIPTION_AUDIO_FIXTURE}" >&2
   exit 1
