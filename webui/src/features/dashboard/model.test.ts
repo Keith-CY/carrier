@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { buildQuickLaunchPreviewRequest, CUSTOM_GOAL_PRESET_ID, DEFAULT_QUICK_LAUNCH_TEMPLATE_ID, toggleHostSelection } from './model';
+import { buildQuickLaunchPreviewRequest, CUSTOM_GOAL_PRESET_ID, defaultQuickLaunchDraft, DEFAULT_QUICK_LAUNCH_TEMPLATE_ID, toggleHostSelection } from './model';
 
 describe('dashboard model', () => {
   test('validates custom goal preset before preview', () => {
@@ -36,6 +36,22 @@ describe('dashboard model', () => {
         hostIds: [],
         hostLabels: ['gpu', 'prod'],
         maxConcurrency: 4,
+      },
+    });
+  });
+
+  test('default preset draft leaves host routing unset so template defaults can apply', () => {
+    const result = buildQuickLaunchPreviewRequest(defaultQuickLaunchDraft());
+
+    expect(result).toEqual({
+      payload: {
+        goal: '',
+        templateId: DEFAULT_QUICK_LAUNCH_TEMPLATE_ID,
+        inputs: {},
+        provider: '',
+        hostIds: [],
+        hostLabels: [],
+        maxConcurrency: 0,
       },
     });
   });

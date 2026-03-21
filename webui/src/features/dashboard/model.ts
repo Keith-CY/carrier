@@ -55,6 +55,18 @@ export function defaultQuickLaunchDraft(): QuickLaunchDraft {
     provider: '',
     maxConcurrency: '',
     hostLabels: '',
+    selectedHosts: [],
+  };
+}
+
+export function customGoalQuickLaunchDraft(goal = ''): QuickLaunchDraft {
+  return {
+    selectedPresetId: CUSTOM_GOAL_PRESET_ID,
+    goal,
+    templateInputs: {},
+    provider: '',
+    maxConcurrency: '',
+    hostLabels: '',
     selectedHosts: ['local'],
   };
 }

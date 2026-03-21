@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CUSTOM_GOAL_PRESET_ID, defaultQuickLaunchDraft, toggleHostSelection, type QuickLaunchDraft } from './model';
+import { CUSTOM_GOAL_PRESET_ID, customGoalQuickLaunchDraft, defaultQuickLaunchDraft, toggleHostSelection, type QuickLaunchDraft } from './model';
 
 export function useQuickLaunchDraftState() {
   const [quickLaunchMessage, setQuickLaunchMessage] = useState<{ type: string; text: string }>({ type: 'info', text: '' });
@@ -20,9 +20,10 @@ export function useQuickLaunchDraftState() {
         ...current,
         selectedPresetId: presetId,
         templateInputs: {},
+        selectedHosts: [],
       };
       if (presetId === CUSTOM_GOAL_PRESET_ID) {
-        return next;
+        return customGoalQuickLaunchDraft(current.goal);
       }
       const defaults = template?.defaultLaunchConfig && typeof template.defaultLaunchConfig === 'object' ? template.defaultLaunchConfig : {};
       const hostLabels = Array.isArray(defaults.hostLabels)
