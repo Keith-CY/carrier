@@ -446,20 +446,65 @@ func remoteInstallBinaryRelease(
 	return result, nil
 }
 
+const (
+	remotePicoClawInstallScriptTemplate = `
+set -euo pipefail
+arch="$(uname -m)"
+case "$arch" in
+  x86_64|amd64) arch="x86_64" ;;
+  aarch64|arm64) arch="arm64" ;;
+  armv7l|armv6l) arch="armv6" ;;
+  riscv64) arch="riscv64" ;;
+  *) echo "unsupported arch: $arch" >&2; exit 2 ;;
+esac
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+asset="picoclaw_Linux_${arch}.tar.gz"
+url="https://github.com/sipeed/picoclaw/releases/download/%s/${asset}"
+curl -fsSL "$url" -o "$tmp/picoclaw.tar.gz"
+tar -xzf "$tmp/picoclaw.tar.gz" -C "$tmp"
+bin="$(find "$tmp" -type f -name 'picoclaw*' -perm -u+x | head -n 1)"
+[ -n "$bin" ] || { echo "picoclaw binary not found in release archive" >&2; exit 3; }
+mkdir -p "$HOME/.local/bin" "$HOME/.picoclaw"
+install -m 0755 "$bin" "$HOME/.local/bin/picoclaw"
+"$HOME/.local/bin/picoclaw" --version 2>&1 || true
+`
+
+	remoteZeroClawInstallScriptTemplate = `
+set -euo pipefail
+arch="$(uname -m)"
+case "$arch" in
+  x86_64|amd64) target="x86_64-unknown-linux-gnu" ;;
+  aarch64|arm64) target="aarch64-unknown-linux-gnu" ;;
+  armv7l|armv6l) target="armv7-unknown-linux-gnueabihf" ;;
+  *) echo "unsupported arch: $arch" >&2; exit 2 ;;
+esac
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+asset="zeroclaw-${target}.tar.gz"
+url="https://github.com/zeroclaw-labs/zeroclaw/releases/download/%s/${asset}"
+curl -fsSL "$url" -o "$tmp/zeroclaw.tar.gz"
+tar -xzf "$tmp/zeroclaw.tar.gz" -C "$tmp"
+bin="$(find "$tmp" -type f -name 'zeroclaw*' -perm -u+x | head -n 1)"
+[ -n "$bin" ] || { echo "zeroclaw binary not found in release archive" >&2; exit 3; }
+mkdir -p "$HOME/.local/bin" "$HOME/.zeroclaw"
+install -m 0755 "$bin" "$HOME/.local/bin/zeroclaw"
+"$HOME/.local/bin/zeroclaw" --version 2>&1 || true
+`
+)
+
+func renderRemoteReleaseInstallScript(template, tag string) string {
+	return strings.TrimSpace(fmt.Sprintf(template, tag))
+}
+
 func remotePicoClawInstallCommand() string {
 	tag := remoteInstallReleaseTag("picoclaw", "v0.1.2")
-	return fmt.Sprintf(
-		"set -euo pipefail; arch=\"$(uname -m)\"; case \"$arch\" in x86_64|amd64) arch=\"x86_64\" ;; aarch64|arm64) arch=\"arm64\" ;; armv7l|armv6l) arch=\"armv6\" ;; riscv64) arch=\"riscv64\" ;; *) echo \"unsupported arch: $arch\" >&2; exit 2 ;; esac; tmp=\"$(mktemp -d)\"; trap 'rm -rf \"$tmp\"' EXIT; asset=\"picoclaw_Linux_${arch}.tar.gz\"; url=\"https://github.com/sipeed/picoclaw/releases/download/%s/${asset}\"; curl -fsSL \"$url\" -o \"$tmp/picoclaw.tar.gz\"; tar -xzf \"$tmp/picoclaw.tar.gz\" -C \"$tmp\"; bin=\"$(find \"$tmp\" -type f -name 'picoclaw*' -perm -u+x | head -n 1)\"; [ -n \"$bin\" ] || { echo \"picoclaw binary not found in release archive\" >&2; exit 3; }; mkdir -p \"$HOME/.local/bin\" \"$HOME/.picoclaw\"; install -m 0755 \"$bin\" \"$HOME/.local/bin/picoclaw\"; \"$HOME/.local/bin/picoclaw\" --version 2>&1 || true",
-		tag,
-	)
+	return renderRemoteReleaseInstallScript(remotePicoClawInstallScriptTemplate, tag)
 }
 
 func remoteZeroClawInstallCommand() string {
 	tag := remoteInstallReleaseTag("zeroclaw", "v0.1.7")
-	return fmt.Sprintf(
-		"set -euo pipefail; arch=\"$(uname -m)\"; case \"$arch\" in x86_64|amd64) target=\"x86_64-unknown-linux-gnu\" ;; aarch64|arm64) target=\"aarch64-unknown-linux-gnu\" ;; armv7l|armv6l) target=\"armv7-unknown-linux-gnueabihf\" ;; *) echo \"unsupported arch: $arch\" >&2; exit 2 ;; esac; tmp=\"$(mktemp -d)\"; trap 'rm -rf \"$tmp\"' EXIT; asset=\"zeroclaw-${target}.tar.gz\"; url=\"https://github.com/zeroclaw-labs/zeroclaw/releases/download/%s/${asset}\"; curl -fsSL \"$url\" -o \"$tmp/zeroclaw.tar.gz\"; tar -xzf \"$tmp/zeroclaw.tar.gz\" -C \"$tmp\"; bin=\"$(find \"$tmp\" -type f -name 'zeroclaw*' -perm -u+x | head -n 1)\"; [ -n \"$bin\" ] || { echo \"zeroclaw binary not found in release archive\" >&2; exit 3; }; mkdir -p \"$HOME/.local/bin\" \"$HOME/.zeroclaw\"; install -m 0755 \"$bin\" \"$HOME/.local/bin/zeroclaw\"; \"$HOME/.local/bin/zeroclaw\" --version 2>&1 || true",
-		tag,
-	)
+	return renderRemoteReleaseInstallScript(remoteZeroClawInstallScriptTemplate, tag)
 }
 
 func remoteInstallReleaseTag(agentID, fallback string) string {
@@ -597,71 +642,74 @@ func remoteDiscoverInstancesAndSyncProfiles(
 		pendingPull = append(pendingPull, openClawPendingPull...)
 	}
 
-	picoExists, picoSteps, err := remoteConfigFileExists(ctx, host, remotePicoClawConfigPath)
-	steps = append(steps, picoSteps...)
-	if err != nil {
-		return nil, nil, steps, err
-	}
-	if picoExists {
-		now := nowTimestamp()
-		picoInst := RemoteInstance{
-			ID:           hostID + ":picoclaw",
-			HostID:       hostID,
-			AgentID:      "picoclaw",
-			RuntimeState: "unknown",
-			Health:       "unknown",
-			ConfigPath:   remotePicoClawConfigPath,
-			CreatedAt:    now,
-			UpdatedAt:    now,
+	for _, target := range []struct {
+		agentID    string
+		configPath string
+	}{
+		{agentID: "picoclaw", configPath: remotePicoClawConfigPath},
+		{agentID: "zeroclaw", configPath: remoteZeroClawConfigPath},
+	} {
+		discoveredInstances, pendingInstances, discoverSteps, err := remoteDiscoverConfigBackedInstance(
+			ctx,
+			host,
+			hostID,
+			target.agentID,
+			target.configPath,
+			opts,
+		)
+		steps = append(steps, discoverSteps...)
+		if err != nil {
+			return nil, nil, steps, err
 		}
-		instances = append(instances, picoInst)
-		if remoteInstanceAlreadyTracked(hostID, "picoclaw") || opts.allowPullNewFor("picoclaw") {
-			cfg, _, cfgSteps, cfgErr := remoteReadConfigForAgent(ctx, host, "picoclaw")
-			steps = append(steps, cfgSteps...)
-			if cfgErr != nil {
-				return nil, nil, steps, cfgErr
-			}
-			if err := remoteSaveDiscoveredProfile(hostID, "picoclaw", cfg); err != nil {
-				return nil, nil, steps, err
-			}
-		} else {
-			pendingPull = append(pendingPull, picoInst)
-		}
-	}
-
-	zeroExists, zeroSteps, err := remoteConfigFileExists(ctx, host, remoteZeroClawConfigPath)
-	steps = append(steps, zeroSteps...)
-	if err != nil {
-		return nil, nil, steps, err
-	}
-	if zeroExists {
-		now := nowTimestamp()
-		zeroInst := RemoteInstance{
-			ID:           hostID + ":zeroclaw",
-			HostID:       hostID,
-			AgentID:      "zeroclaw",
-			RuntimeState: "unknown",
-			Health:       "unknown",
-			ConfigPath:   remoteZeroClawConfigPath,
-			CreatedAt:    now,
-			UpdatedAt:    now,
-		}
-		instances = append(instances, zeroInst)
-		if remoteInstanceAlreadyTracked(hostID, "zeroclaw") || opts.allowPullNewFor("zeroclaw") {
-			cfg, _, cfgSteps, cfgErr := remoteReadConfigForAgent(ctx, host, "zeroclaw")
-			steps = append(steps, cfgSteps...)
-			if cfgErr != nil {
-				return nil, nil, steps, cfgErr
-			}
-			if err := remoteSaveDiscoveredProfile(hostID, "zeroclaw", cfg); err != nil {
-				return nil, nil, steps, err
-			}
-		} else {
-			pendingPull = append(pendingPull, zeroInst)
-		}
+		instances = append(instances, discoveredInstances...)
+		pendingPull = append(pendingPull, pendingInstances...)
 	}
 
 	return dedupeRemoteInstances(instances), dedupeRemoteInstances(pendingPull), steps, nil
+}
+
+func remoteDiscoverConfigBackedInstance(
+	ctx context.Context,
+	host RemoteHost,
+	hostID string,
+	agentID string,
+	configPath string,
+	opts remoteDiscoveryPullOptions,
+) ([]RemoteInstance, []RemoteInstance, []remoteExecResult, error) {
+	exists, steps, err := remoteConfigFileExists(ctx, host, configPath)
+	if err != nil {
+		return nil, nil, steps, err
+	}
+	if !exists {
+		return nil, nil, steps, nil
+	}
+
+	now := nowTimestamp()
+	instance := RemoteInstance{
+		ID:           hostID + ":" + agentID,
+		HostID:       hostID,
+		AgentID:      agentID,
+		RuntimeState: "unknown",
+		Health:       "unknown",
+		ConfigPath:   configPath,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	instances := []RemoteInstance{instance}
+	if remoteInstanceAlreadyTracked(hostID, agentID) || opts.allowPullNewFor(agentID) {
+		cfg, _, cfgSteps, cfgErr := remoteReadConfigForAgent(ctx, host, agentID)
+		steps = append(steps, cfgSteps...)
+		if cfgErr != nil {
+			return nil, nil, steps, cfgErr
+		}
+		if err := remoteSaveDiscoveredProfile(hostID, agentID, cfg); err != nil {
+			return nil, nil, steps, err
+		}
+		return instances, nil, steps, nil
+	}
+
+	return instances, []RemoteInstance{instance}, steps, nil
 }
 
 func remoteDiscoverOpenClawInstances(
