@@ -463,8 +463,10 @@ asset="picoclaw_Linux_${arch}.tar.gz"
 url="https://github.com/sipeed/picoclaw/releases/download/%s/${asset}"
 curl -fsSL "$url" -o "$tmp/picoclaw.tar.gz"
 tar -xzf "$tmp/picoclaw.tar.gz" -C "$tmp"
-bin="$(find "$tmp" -type f -name 'picoclaw*' -perm -u+x | head -n 1)"
+bin="$(find "$tmp" -type f -name 'picoclaw' -perm -u+x | sed -n '1p')"
+second_bin="$(find "$tmp" -type f -name 'picoclaw' -perm -u+x | sed -n '2p')"
 [ -n "$bin" ] || { echo "picoclaw binary not found in release archive" >&2; exit 3; }
+[ -z "$second_bin" ] || { echo "multiple picoclaw binaries found in release archive" >&2; exit 3; }
 mkdir -p "$HOME/.local/bin" "$HOME/.picoclaw"
 install -m 0755 "$bin" "$HOME/.local/bin/picoclaw"
 "$HOME/.local/bin/picoclaw" --version 2>&1 || true
@@ -485,8 +487,10 @@ asset="zeroclaw-${target}.tar.gz"
 url="https://github.com/zeroclaw-labs/zeroclaw/releases/download/%s/${asset}"
 curl -fsSL "$url" -o "$tmp/zeroclaw.tar.gz"
 tar -xzf "$tmp/zeroclaw.tar.gz" -C "$tmp"
-bin="$(find "$tmp" -type f -name 'zeroclaw*' -perm -u+x | head -n 1)"
+bin="$(find "$tmp" -type f -name 'zeroclaw' -perm -u+x | sed -n '1p')"
+second_bin="$(find "$tmp" -type f -name 'zeroclaw' -perm -u+x | sed -n '2p')"
 [ -n "$bin" ] || { echo "zeroclaw binary not found in release archive" >&2; exit 3; }
+[ -z "$second_bin" ] || { echo "multiple zeroclaw binaries found in release archive" >&2; exit 3; }
 mkdir -p "$HOME/.local/bin" "$HOME/.zeroclaw"
 install -m 0755 "$bin" "$HOME/.local/bin/zeroclaw"
 "$HOME/.local/bin/zeroclaw" --version 2>&1 || true
