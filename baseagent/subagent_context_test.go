@@ -243,3 +243,77 @@ func TestSubagentManagerCancelWhileAwaitingContextMarksJobCancelled(t *testing.T
 		t.Fatalf("expected unavailable context response after cancel, got %+v", job.ContextResponses)
 	}
 }
+
+func TestSubagentManagerRespondContextRequestRejectsUnknownRequestID(t *testing.T) {
+	manager := NewInMemorySubagentManager(nil)
+
+	handle, err := manager.Spawn(context.Background(), SubagentRequest{Task: "unknown request id should fail"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	waitForSubagentJobState(t, manager, handle.JobID, SubagentJobStatusCompleted)
+
+	_, err = manager.RespondContextRequest(context.Background(), handle.JobID, "invented-request-id", DelegationContextResponse{
+		Status:  DelegationContextStatusFulfilled,
+		Summary: "synthetic response",
+	})
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected unknown request id error, got %v", err)
+	}
+}
+
+func TestSubagentManagerLatePartialResponseDoesNotResetCompletedJob(t *testing.T) {
+	manager := NewInMemorySubagentManager(func(ctx context.Context, req SubagentRequest) (string, error) {
+		timeoutCtx, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+		defer cancel()
+		resp, err := RequestDelegationContext(timeoutCtx, DelegationContextRequest{
+			Kind:     DelegationContextKindExternal,
+			Question: "Need external timeline",
+			Required: true,
+		})
+		if err != nil {
+			return "", err
+		}
+		return "received: " + resp.Summary, nil
+	})
+
+	handle, err := manager.Spawn(context.Background(), SubagentRequest{Task: "summarize outage history"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+
+	job := waitForSubagentJobState(t, manager, handle.JobID, SubagentJobStatusCompleted)
+	if len(job.ContextRequests) != 1 {
+		t.Fatalf("expected one context request before late response, got %+v", job.ContextRequests)
+	}
+	if job.Outcome == nil || !job.Outcome.Degraded {
+		t.Fatalf("expected degraded completed outcome, got %+v", job.Outcome)
+	}
+	originalMissing := append([]string(nil), job.MissingContext...)
+
+	requestID := job.ContextRequests[0].RequestID
+	_, err = manager.RespondContextRequest(context.Background(), handle.JobID, requestID, DelegationContextResponse{
+		Status:  DelegationContextStatusPartial,
+		Summary: "late partial context response",
+	})
+	if err != nil {
+		t.Fatalf("late respond context request: %v", err)
+	}
+
+	job, err = manager.Job(context.Background(), handle.JobID)
+	if err != nil {
+		t.Fatalf("job after late response: %v", err)
+	}
+	if job.Status != SubagentJobStatusCompleted {
+		t.Fatalf("job status after late partial response = %q, want completed", job.Status)
+	}
+	if len(job.ContextResponses) != 1 || job.ContextResponses[0].Status != DelegationContextStatusPartial {
+		t.Fatalf("unexpected context responses after late partial response: %+v", job.ContextResponses)
+	}
+	if strings.Join(job.MissingContext, "\n") != strings.Join(originalMissing, "\n") {
+		t.Fatalf("late partial response should not rewrite missing context: before=%+v after=%+v", originalMissing, job.MissingContext)
+	}
+	if job.Outcome == nil || !job.Outcome.Degraded {
+		t.Fatalf("expected degraded outcome to remain set, got %+v", job.Outcome)
+	}
+}

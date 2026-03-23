@@ -272,9 +272,21 @@ func (m *InMemorySubagentManager) RespondContextRequest(_ context.Context, jobID
 	normalized := normalizeDelegationContextResponse(response, requestID, time.Now().UTC())
 
 	m.mu.Lock()
-	if _, ok := m.jobs[jobID]; !ok {
+	job, ok := m.jobs[jobID]
+	if !ok {
 		m.mu.Unlock()
 		return DelegationContextResponse{}, fmt.Errorf("subagent job %s not found", jobID)
+	}
+	requestKnown := false
+	for idx := range job.ContextRequests {
+		if strings.TrimSpace(job.ContextRequests[idx].RequestID) == requestID {
+			requestKnown = true
+			break
+		}
+	}
+	if !requestKnown {
+		m.mu.Unlock()
+		return DelegationContextResponse{}, fmt.Errorf("context request %s not found for subagent job %s", requestID, jobID)
 	}
 	waiter, hasWaiter := m.contextWaiters[m.contextWaiterKey(jobID, requestID)]
 	m.mu.Unlock()

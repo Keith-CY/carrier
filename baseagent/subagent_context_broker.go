@@ -105,23 +105,25 @@ func (m *InMemorySubagentManager) finalizeContextResponse(jobID, requestID strin
 		job.ContextResponses = append(job.ContextResponses, response)
 	}
 
-	if response.Status != DelegationContextStatusFulfilled {
-		missing := requestID
-		for _, item := range job.ContextRequests {
-			if strings.TrimSpace(item.RequestID) == requestID && strings.TrimSpace(item.Question) != "" {
-				missing = strings.TrimSpace(item.Question)
-				break
+	if !isTerminalSubagentJobStatus(job.Status) {
+		if response.Status != DelegationContextStatusFulfilled {
+			missing := requestID
+			for _, item := range job.ContextRequests {
+				if strings.TrimSpace(item.RequestID) == requestID && strings.TrimSpace(item.Question) != "" {
+					missing = strings.TrimSpace(item.Question)
+					break
+				}
 			}
-		}
-		job.MissingContext = trimStringList(append(job.MissingContext, missing))
-		job.Status = SubagentJobStatusDegraded
-		job.Confidence = "low"
-	} else {
-		if job.Status == SubagentJobStatusAwaiting {
-			job.Status = SubagentJobStatusRunning
-		}
-		if strings.TrimSpace(job.Confidence) == "" {
-			job.Confidence = "medium"
+			job.MissingContext = trimStringList(append(job.MissingContext, missing))
+			job.Status = SubagentJobStatusDegraded
+			job.Confidence = "low"
+		} else {
+			if job.Status == SubagentJobStatusAwaiting {
+				job.Status = SubagentJobStatusRunning
+			}
+			if strings.TrimSpace(job.Confidence) == "" {
+				job.Confidence = "medium"
+			}
 		}
 	}
 
