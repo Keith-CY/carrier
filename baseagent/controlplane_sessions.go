@@ -41,15 +41,17 @@ const (
 )
 
 type ConversationSession struct {
-	Key                string
-	Messages           []ConversationMessage
-	StructuredMessages []StructuredToolMessage
-	Summary            string
-	PendingApproval    *PendingToolApproval
-	PendingApprovals   []*PendingToolApproval
-	ApprovalAudit      []*PendingToolApproval
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	Key                    string
+	Messages               []ConversationMessage
+	StructuredMessages     []StructuredToolMessage
+	Summary                string
+	PendingApproval        *PendingToolApproval
+	PendingApprovals       []*PendingToolApproval
+	ApprovalAudit          []*PendingToolApproval
+	PendingContextRequests []DelegationContextRequest  `json:"pendingContextRequests,omitempty"`
+	ContextRequestAudit    []DelegationContextResponse `json:"contextRequestAudit,omitempty"`
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
 }
 
 type SessionStats struct {

@@ -219,14 +219,20 @@ jobs:
         include:
           - provider: openai
             enforcement: required
+            enabled: true
           - provider: openai-codex
             enforcement: required
+            enabled: true
           - provider: openrouter
             enforcement: required
+            enabled: false
+            skip_reason: provider_disabled
           - provider: anthropic
             enforcement: soft_optional
+            enabled: true
           - provider: openai-compatible
             enforcement: soft_optional
+            enabled: true
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -241,6 +247,8 @@ jobs:
         shell: bash
         env:
           LIVE_PROVIDER: ${{ matrix.provider }}
+          LIVE_PROVIDER_ENABLED: ${{ matrix.enabled }}
+          LIVE_PROVIDER_SKIP_REASON: ${{ matrix.skip_reason || '' }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -256,9 +264,23 @@ jobs:
           set -euo pipefail
 
           provider="${LIVE_PROVIDER}"
+          enabled="${LIVE_PROVIDER_ENABLED:-true}"
+          disabled_reason="${LIVE_PROVIDER_SKIP_REASON:-provider_disabled}"
           key=""
           model=""
           base_url=""
+
+          if [[ "$enabled" != "true" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=${disabled_reason}" >> "$GITHUB_OUTPUT"
+            {
+              echo "### OpenClaw Provider Live Smoke"
+              echo "- provider: \`${provider}\`"
+              echo "- status: skipped (disabled)"
+              echo "- reason: \`${disabled_reason}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
 
           case "$provider" in
             openai)
@@ -687,7 +709,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        provider: [openai, openrouter]
+        include:
+          - provider: openai
+            enabled: true
+          - provider: openrouter
+            enabled: false
+            skip_reason: provider_disabled
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -702,6 +729,8 @@ jobs:
         shell: bash
         env:
           LIVE_PROVIDER: ${{ matrix.provider }}
+          LIVE_PROVIDER_ENABLED: ${{ matrix.enabled }}
+          LIVE_PROVIDER_SKIP_REASON: ${{ matrix.skip_reason || '' }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           CARRIER_LIVE_MODEL_OPENAI: ${{ vars.CARRIER_LIVE_MODEL_OPENAI }}
@@ -709,9 +738,22 @@ jobs:
         run: |
           set -euo pipefail
           provider="${LIVE_PROVIDER}"
+          enabled="${LIVE_PROVIDER_ENABLED:-true}"
+          disabled_reason="${LIVE_PROVIDER_SKIP_REASON:-provider_disabled}"
           key=""
           model=""
           transcription_mode=""
+          if [[ "$enabled" != "true" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=${disabled_reason}" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Control Plane Live-Provider E2E"
+              echo "- provider: \`${provider}\`"
+              echo "- status: skipped (disabled)"
+              echo "- reason: \`${disabled_reason}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           case "$provider" in
             openai)
               key="${OPENAI_API_KEY:-}"

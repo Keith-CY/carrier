@@ -92,6 +92,8 @@ type baseAgentRuntime interface {
 	UninstallSkill(ctx context.Context, name string) (baseagent.SkillDefinition, error)
 	RecentSubagentJobs(ctx context.Context, limit int) []baseagent.SubagentJob
 	SubagentJob(ctx context.Context, jobID string) (baseagent.SubagentJob, error)
+	SubagentContextRequests(ctx context.Context, jobID string) ([]baseagent.DelegationContextRequest, error)
+	RespondSubagentContextRequest(ctx context.Context, jobID, requestID string, response baseagent.DelegationContextResponse) (baseagent.DelegationContextResponse, error)
 	RecentSessionStats(limit int) []baseagent.SessionStats
 	SetSkillEnabled(ctx context.Context, name string, enabled bool) error
 	SetMCPServerEnabled(ctx context.Context, name string, enabled bool) error
@@ -1422,6 +1424,10 @@ func buildHTTPMuxWithBaseAgent(
 			handleAgentMedia(baseRuntime, agentID, mediaAction, w, r)
 			return
 		}
+		if agentID, jobID, requestID, subagentAction, ok := parseAgentSubagentContextPath(r.URL.Path); ok {
+			handleAgentSubagentContext(svc, baseRuntime, agentID, jobID, requestID, subagentAction, w, r)
+			return
+		}
 		if agentID, jobID, ok := parseAgentSubagentPath(r.URL.Path); ok {
 			handleAgentSubagent(svc, baseRuntime, agentID, jobID, w, r)
 			return
@@ -2181,6 +2187,57 @@ func handleAgentSubagent(svc *lifecycle.Service, runtime baseAgentRuntime, agent
 	writeJSON(w, http.StatusOK, job)
 }
 
+func handleAgentSubagentContext(svc *lifecycle.Service, runtime baseAgentRuntime, agentID, jobID, requestID, action string, w http.ResponseWriter, r *http.Request) {
+	if svc == nil {
+		writeJSONError(w, http.StatusInternalServerError, "service unavailable")
+		return
+	}
+	if _, err := svc.Status(agentID); err != nil {
+		writeJSONError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if runtime == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "base agent runtime unavailable")
+		return
+	}
+	if strings.TrimSpace(jobID) == "" {
+		writeJSONError(w, http.StatusBadRequest, "subagent job id is required")
+		return
+	}
+	if requestID == "" {
+		if r.Method != http.MethodGet {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		requests, err := runtime.SubagentContextRequests(r.Context(), jobID)
+		if err != nil {
+			writeJSONError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"requests": requests})
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(action), "respond") || r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var response baseagent.DelegationContextResponse
+	if err := json.NewDecoder(r.Body).Decode(&response); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	resolved, err := runtime.RespondSubagentContextRequest(r.Context(), jobID, requestID, response)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			status = http.StatusNotFound
+		}
+		writeJSONError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, resolved)
+}
+
 func handleAgentSessions(svc *lifecycle.Service, runtime baseAgentRuntime, agentID string, w http.ResponseWriter, r *http.Request) {
 	if svc == nil {
 		writeJSONError(w, http.StatusInternalServerError, "service unavailable")
@@ -2719,6 +2776,62 @@ func parseAgentSubagentPath(path string) (agentID string, jobID string, ok bool)
 		return "", "", false
 	}
 	return decodedAgentID, decodedJobID, true
+}
+
+func parseAgentSubagentContextPath(path string) (agentID string, jobID string, requestID string, action string, ok bool) {
+	const prefix = "/api/v1/agents/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", "", "", "", false
+	}
+	rest := path[len(prefix):]
+	if strings.Contains(rest, "//") {
+		return "", "", "", "", false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 4 && len(parts) != 6 {
+		return "", "", "", "", false
+	}
+	if strings.TrimSpace(parts[1]) != "subagents" || strings.TrimSpace(parts[3]) != "context-requests" {
+		return "", "", "", "", false
+	}
+	rawAgentID := strings.TrimSpace(parts[0])
+	rawJobID := strings.TrimSpace(parts[2])
+	if rawAgentID == "" || rawJobID == "" {
+		return "", "", "", "", false
+	}
+	decodedAgentID, err := url.PathUnescape(rawAgentID)
+	if err != nil {
+		return "", "", "", "", false
+	}
+	decodedJobID, err := url.PathUnescape(rawJobID)
+	if err != nil {
+		return "", "", "", "", false
+	}
+	decodedAgentID = strings.TrimSpace(decodedAgentID)
+	decodedJobID = strings.TrimSpace(decodedJobID)
+	if decodedAgentID == "" || decodedJobID == "" {
+		return "", "", "", "", false
+	}
+	if !agentIDPattern.MatchString(decodedAgentID) || !agentIDPattern.MatchString(decodedJobID) {
+		return "", "", "", "", false
+	}
+	if len(parts) == 4 {
+		return decodedAgentID, decodedJobID, "", "", true
+	}
+	rawRequestID := strings.TrimSpace(parts[4])
+	rawAction := strings.TrimSpace(parts[5])
+	if rawRequestID == "" || rawAction == "" {
+		return "", "", "", "", false
+	}
+	decodedRequestID, err := url.PathUnescape(rawRequestID)
+	if err != nil {
+		return "", "", "", "", false
+	}
+	decodedRequestID = strings.TrimSpace(decodedRequestID)
+	if decodedRequestID == "" || !agentIDPattern.MatchString(decodedRequestID) {
+		return "", "", "", "", false
+	}
+	return decodedAgentID, decodedJobID, decodedRequestID, rawAction, true
 }
 
 func parseAgentMediaPath(path string) (agentID string, action string, ok bool) {

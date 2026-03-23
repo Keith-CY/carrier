@@ -20,68 +20,73 @@ import (
 )
 
 type fakeBaseAgentRuntime struct {
-	resp                baseagent.ChatResponse
-	speakResp           baseagent.ChatResponse
-	capabilities        baseagent.RuntimeCapabilitySummary
-	approvalResp        baseagent.ChatResponse
-	approvalErr         error
-	speakErr            error
-	installSkill        baseagent.SkillDefinition
-	reinstallSkill      baseagent.SkillDefinition
-	updateSkill         baseagent.SkillDefinition
-	uninstallSkill      baseagent.SkillDefinition
-	searchSkills        []baseagent.SkillDefinition
-	subagentJobs        []baseagent.SubagentJob
-	subagentJob         baseagent.SubagentJob
-	sessionStats        []baseagent.SessionStats
-	cronJob             baseagent.CronJob
-	cronJobs            []baseagent.CronJob
-	cancelledCronJob    baseagent.CronJob
-	pausedCronJob       baseagent.CronJob
-	resumedCronJob      baseagent.CronJob
-	ranCronJob          baseagent.CronJob
-	mcpServerDetail     baseagent.MCPServerCapability
-	cronErr             error
-	skillToggleErr      error
-	mcpToggleErr        error
-	callCount           int
-	speakCallCount      int
-	approvalCall        int
-	cronCall            int
-	listCronCall        int
-	cancelCronCall      int
-	pauseCronCall       int
-	resumeCronCall      int
-	runCronCall         int
-	skillToggleCall     int
-	mcpToggleCall       int
-	searchSkillsCall    int
-	installSkillCall    int
-	reinstallSkillCall  int
-	updateSkillCall     int
-	uninstallSkillCall  int
-	lastReq             baseagent.ChatRequest
-	lastSpeakReq        baseagent.SpeechSynthesisRequest
-	lastSession         string
-	lastApproval        string
-	lastDecision        string
-	lastCronJob         baseagent.CronJob
-	lastCronListSession string
-	lastCancelledCronID string
-	lastSkillName       string
-	lastSkillEnabled    bool
-	lastMCPServerName   string
-	lastMCPEnabled      bool
-	lastMCPAttached     bool
-	lastMCPConfig       string
-	lastInstallSkill    string
-	lastReinstallSkill  string
-	lastUpdateSkill     string
-	lastUpdateVersion   string
-	lastUninstallSkill  string
-	lastSkillSearch     string
-	lastSubagentJobID   string
-	lastSubagentLimit   int
+	resp                         baseagent.ChatResponse
+	speakResp                    baseagent.ChatResponse
+	capabilities                 baseagent.RuntimeCapabilitySummary
+	approvalResp                 baseagent.ChatResponse
+	approvalErr                  error
+	speakErr                     error
+	installSkill                 baseagent.SkillDefinition
+	reinstallSkill               baseagent.SkillDefinition
+	updateSkill                  baseagent.SkillDefinition
+	uninstallSkill               baseagent.SkillDefinition
+	searchSkills                 []baseagent.SkillDefinition
+	subagentJobs                 []baseagent.SubagentJob
+	subagentJob                  baseagent.SubagentJob
+	subagentContextRequests      []baseagent.DelegationContextRequest
+	subagentContextResponse      baseagent.DelegationContextResponse
+	sessionStats                 []baseagent.SessionStats
+	cronJob                      baseagent.CronJob
+	cronJobs                     []baseagent.CronJob
+	cancelledCronJob             baseagent.CronJob
+	pausedCronJob                baseagent.CronJob
+	resumedCronJob               baseagent.CronJob
+	ranCronJob                   baseagent.CronJob
+	mcpServerDetail              baseagent.MCPServerCapability
+	cronErr                      error
+	skillToggleErr               error
+	mcpToggleErr                 error
+	callCount                    int
+	speakCallCount               int
+	approvalCall                 int
+	cronCall                     int
+	listCronCall                 int
+	cancelCronCall               int
+	pauseCronCall                int
+	resumeCronCall               int
+	runCronCall                  int
+	skillToggleCall              int
+	mcpToggleCall                int
+	searchSkillsCall             int
+	installSkillCall             int
+	reinstallSkillCall           int
+	updateSkillCall              int
+	uninstallSkillCall           int
+	lastReq                      baseagent.ChatRequest
+	lastSpeakReq                 baseagent.SpeechSynthesisRequest
+	lastSession                  string
+	lastApproval                 string
+	lastDecision                 string
+	lastCronJob                  baseagent.CronJob
+	lastCronListSession          string
+	lastCancelledCronID          string
+	lastSkillName                string
+	lastSkillEnabled             bool
+	lastMCPServerName            string
+	lastMCPEnabled               bool
+	lastMCPAttached              bool
+	lastMCPConfig                string
+	lastInstallSkill             string
+	lastReinstallSkill           string
+	lastUpdateSkill              string
+	lastUpdateVersion            string
+	lastUninstallSkill           string
+	lastSkillSearch              string
+	lastSubagentJobID            string
+	lastSubagentLimit            int
+	lastSubagentContextJobID     string
+	lastSubagentContextRequestID string
+	lastSubagentContextResponse  baseagent.DelegationContextResponse
 }
 
 func (f *fakeBaseAgentRuntime) Chat(_ context.Context, req baseagent.ChatRequest) (baseagent.ChatResponse, error) {
@@ -178,6 +183,22 @@ func (f *fakeBaseAgentRuntime) SubagentJob(_ context.Context, jobID string) (bas
 		return baseagent.SubagentJob{}, fmt.Errorf("subagent job %s not found", jobID)
 	}
 	return f.subagentJob, nil
+}
+
+func (f *fakeBaseAgentRuntime) SubagentContextRequests(_ context.Context, jobID string) ([]baseagent.DelegationContextRequest, error) {
+	f.lastSubagentContextJobID = jobID
+	return append([]baseagent.DelegationContextRequest(nil), f.subagentContextRequests...), nil
+}
+
+func (f *fakeBaseAgentRuntime) RespondSubagentContextRequest(_ context.Context, jobID, requestID string, response baseagent.DelegationContextResponse) (baseagent.DelegationContextResponse, error) {
+	f.lastSubagentContextJobID = jobID
+	f.lastSubagentContextRequestID = requestID
+	f.lastSubagentContextResponse = response
+	if f.subagentContextResponse.RequestID == "" {
+		f.subagentContextResponse = response
+		f.subagentContextResponse.RequestID = requestID
+	}
+	return f.subagentContextResponse, nil
 }
 
 func (f *fakeBaseAgentRuntime) RecentSessionStats(limit int) []baseagent.SessionStats {

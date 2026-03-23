@@ -113,8 +113,8 @@ type AgentChatOptions struct {
 }
 
 type decomposeBaseAgentRequest struct {
-	Goal              string                         `json:"goal"`
-	Provider          string                         `json:"provider,omitempty"`
+	Goal               string                          `json:"goal"`
+	Provider           string                          `json:"provider,omitempty"`
 	SharedInstructions []baseagent.SharedInstruction   `json:"sharedInstructions,omitempty"`
 	RuntimeContext     []baseagent.RuntimeContextEntry `json:"runtimeContext,omitempty"`
 }
@@ -537,6 +537,35 @@ func (c *DaemonClient) GetAgentSubagentJob(ctx context.Context, agentID, jobID, 
 		return baseagent.SubagentJob{}, fmt.Errorf("agent subagent job response: %w", err)
 	}
 	return job, nil
+}
+
+func (c *DaemonClient) GetAgentSubagentContextRequests(ctx context.Context, agentID, jobID, actor, requestID string) ([]baseagent.DelegationContextRequest, error) {
+	raw, err := c.request(ctx, http.MethodGet, "/api/v1/agents/"+url.PathEscape(agentID)+"/subagents/"+url.PathEscape(jobID)+"/context-requests", nil, actor, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var wrapped struct {
+		Requests []baseagent.DelegationContextRequest `json:"requests"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("agent subagent context requests response: %w", err)
+	}
+	if wrapped.Requests == nil {
+		return []baseagent.DelegationContextRequest{}, nil
+	}
+	return wrapped.Requests, nil
+}
+
+func (c *DaemonClient) RespondAgentSubagentContextRequest(ctx context.Context, agentID, jobID, requestID string, response baseagent.DelegationContextResponse, actor, reqID string) (baseagent.DelegationContextResponse, error) {
+	raw, err := c.request(ctx, http.MethodPost, "/api/v1/agents/"+url.PathEscape(agentID)+"/subagents/"+url.PathEscape(jobID)+"/context-requests/"+url.PathEscape(requestID)+"/respond", response, actor, reqID)
+	if err != nil {
+		return baseagent.DelegationContextResponse{}, err
+	}
+	var resolved baseagent.DelegationContextResponse
+	if err := json.Unmarshal(raw, &resolved); err != nil {
+		return baseagent.DelegationContextResponse{}, fmt.Errorf("agent subagent context response: %w", err)
+	}
+	return resolved, nil
 }
 
 // GetLogs returns agent logs.
