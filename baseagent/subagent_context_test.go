@@ -2,6 +2,7 @@ package baseagent
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -128,5 +129,59 @@ func TestSubagentManagerLateFulfilledResponseDoesNotResetCompletedDegradedJob(t 
 	}
 	if job.Outcome == nil || !job.Outcome.Degraded {
 		t.Fatalf("expected degraded outcome to remain set, got %+v", job.Outcome)
+	}
+}
+
+func TestSubagentManagerWithStoragePersistsCompletedJobsAndDefaultExecutor(t *testing.T) {
+	storagePath := filepath.Join(t.TempDir(), "subagent-state.json")
+	manager := NewInMemorySubagentManagerWithStorage(nil, storagePath)
+
+	handle, err := manager.Spawn(context.Background(), SubagentRequest{Task: "persist delegated task"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+
+	job := waitForSubagentJobState(t, manager, handle.JobID, SubagentJobStatusCompleted)
+	if !strings.Contains(job.Result, "delegated task accepted") {
+		t.Fatalf("expected default executor result, got %+v", job)
+	}
+
+	reloaded := NewInMemorySubagentManagerWithStorage(nil, storagePath)
+	persisted, err := reloaded.Job(context.Background(), handle.JobID)
+	if err != nil {
+		t.Fatalf("reloaded job: %v", err)
+	}
+	if persisted.Status != SubagentJobStatusCompleted {
+		t.Fatalf("persisted status = %q, want completed", persisted.Status)
+	}
+	if persisted.Result != job.Result {
+		t.Fatalf("persisted result = %q, want %q", persisted.Result, job.Result)
+	}
+	if reloaded.next < 1 {
+		t.Fatalf("expected persisted next counter to be restored, got %d", reloaded.next)
+	}
+}
+
+func TestSubagentContextBrokerValidationAndCancelAfterCompletion(t *testing.T) {
+	broker := &subagentContextBroker{}
+	if _, err := broker.Request(context.Background(), DelegationContextRequest{Question: "Need context"}); err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("expected unavailable broker error, got %v", err)
+	}
+
+	manager := NewInMemorySubagentManager(nil)
+	if _, err := manager.requestContext(context.Background(), "missing-job", "contract-1", DelegationContextRequest{}); err == nil || !strings.Contains(err.Error(), "question") {
+		t.Fatalf("expected question validation error, got %v", err)
+	}
+	if err := manager.Cancel(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "job_id") {
+		t.Fatalf("expected missing job_id error, got %v", err)
+	}
+
+	handle, err := manager.Spawn(context.Background(), SubagentRequest{Task: "already complete"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	waitForSubagentJobState(t, manager, handle.JobID, SubagentJobStatusCompleted)
+	if err := manager.Cancel(context.Background(), handle.JobID); err != nil {
+		t.Fatalf("cancel completed job: %v", err)
 	}
 }
