@@ -10,12 +10,11 @@ All command blocks below assume `carrier` is installed and available in `PATH`.
 - `carrier orchestrate <goal...> [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--idempotency-key <key>] [--timeout <duration>] [--async] [--dry-run] [--json]`
   - Decompose a goal with the base agent, assign task units to worker agents, and optionally execute the plan.
   - `--dry-run` previews the execution plan without creating an execution.
-- `carrier templates [list] [--json]`
-  - List built-in execution templates and their required inputs.
-- `carrier templates show <template_id> [--json]`
-  - Show one built-in execution template with task metadata and input schema.
-- `carrier templates run <template_id> --input key=value [--input key=value]... [--json]`
-  - Launch a built-in execution template, create the execution record, and authorize it immediately.
+- `carrier orchestrate --template <template_id> --input key=value [--input key=value]... [--host-id <id>]... [--host-label <label>]... [--provider <provider-id>] [--max-concurrency <n>] [--policy-approve] [--timeout <duration>] [--async] [--dry-run] [--json]`
+  - Launch a built-in execution template from the unified orchestration entrypoint.
+  - `--dry-run` previews the template-backed execution plan without creating an execution.
+- `carrier orchestrate templates [show <template_id>] [--json]`
+  - List built-in execution templates or inspect one template with input schema and default launch settings.
 - `carrier orchestrate status <execution_id> [--json]`
   - Show one orchestration execution with task results and worker lease state.
 - `carrier orchestrate cancel <execution_id> [--json]`
@@ -294,15 +293,15 @@ carrier orchestrate "triage this issue and summarize next actions"
 ### Browse and launch templates
 
 ```bash
-carrier templates
+carrier orchestrate templates
 ```
 
 ```bash
-carrier templates show incident-diagnosis
+carrier orchestrate templates show incident-diagnosis
 ```
 
 ```bash
-carrier templates run incident-diagnosis \
+carrier orchestrate --template incident-diagnosis \
   --input service=checkout \
   --input environment=prod \
   --input incidentSummary="Checkout API returns 502s after deploy"
@@ -527,15 +526,15 @@ carrier orchestrate "<goal>" --dry-run
 ```
 
 ```bash
-carrier templates
+carrier orchestrate templates
 ```
 
 ```bash
-carrier templates show <template_id>
+carrier orchestrate templates show <template_id>
 ```
 
 ```bash
-carrier templates run <template_id> --input key=value
+carrier orchestrate --template <template_id> --input key=value
 ```
 
 ```bash

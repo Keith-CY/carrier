@@ -10,6 +10,7 @@ test.describe('Execution Center', () => {
   test('dashboard quick launch previews plan and runs execution', async ({ page }) => {
     await loginWithToken(page, '/#/dashboard');
 
+    await page.click('#quick-launch-preset-custom-goal');
     await expect(page.locator('#quick-launch-goal')).toBeVisible();
     await page.fill('#quick-launch-goal', 'Investigate checkout latency and summarize next steps');
     await page.click('#quick-launch-advanced-toggle');
@@ -38,9 +39,7 @@ test.describe('Execution Center', () => {
   test('dashboard quick launch supports template mode', async ({ page }) => {
     await loginWithToken(page, '/#/dashboard');
 
-    await page.selectOption('#quick-launch-mode', 'template');
-    await expect(page.locator('#quick-launch-template')).toBeVisible();
-    await page.selectOption('#quick-launch-template', 'incident-diagnosis');
+    await page.click('#quick-launch-preset-incident-diagnosis');
     await expect(page.locator('#quick-launch-template-inputs')).toContainText('Service');
     await expect(page.locator('#quick-launch-template-inputs')).toContainText('Environment');
     await expect(page.locator('#quick-launch-template-inputs')).toContainText('Incident Summary');

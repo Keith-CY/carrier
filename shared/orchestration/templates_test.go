@@ -19,6 +19,15 @@ func TestListExecutionTemplatesIncludesBuiltins(t *testing.T) {
 		if template.ID == "" || template.Name == "" || template.DefaultGoalTemplate == "" {
 			t.Fatalf("template missing required metadata: %+v", template)
 		}
+		if template.Category == "" || template.Version == "" || template.SortOrder <= 0 {
+			t.Fatalf("template missing preset metadata: %+v", template)
+		}
+		if !template.Featured {
+			t.Fatalf("template should be featured: %+v", template)
+		}
+		if template.DefaultLaunchConfig.ApprovalScope == "" || template.DefaultLaunchConfig.MaxConcurrency <= 0 {
+			t.Fatalf("template missing default launch config: %+v", template)
+		}
 		if len(template.RequiredMemory) == 0 {
 			t.Fatalf("template missing requiredMemory: %+v", template)
 		}
@@ -97,6 +106,9 @@ func TestBuildPlanPreservesTemplateID(t *testing.T) {
 	if plan.TemplateID != "pr-triage" {
 		t.Fatalf("templateId = %q, want pr-triage", plan.TemplateID)
 	}
+	if plan.TemplateVersion != "v1" {
+		t.Fatalf("templateVersion = %q, want v1", plan.TemplateVersion)
+	}
 	if len(plan.RequiredMemory) == 0 {
 		t.Fatalf("expected template-backed plan requiredMemory, got %+v", plan)
 	}
@@ -105,5 +117,36 @@ func TestBuildPlanPreservesTemplateID(t *testing.T) {
 	}
 	if len(plan.TaskUnits) != 3 {
 		t.Fatalf("taskUnits len=%d, want 3", len(plan.TaskUnits))
+	}
+}
+
+func TestBuildPlanAppliesTemplateLaunchDefaultsWithoutForcingHostLabels(t *testing.T) {
+	resolved, err := ResolveExecutionTemplate("incident-diagnosis", map[string]string{
+		"service":         "checkout",
+		"environment":     "prod",
+		"incidentSummary": "latency regression after deploy",
+	})
+	if err != nil {
+		t.Fatalf("ResolveExecutionTemplate() error = %v", err)
+	}
+	plan, err := BuildPlan(BuildPlanInput{
+		Goal:       resolved.Goal,
+		TemplateID: resolved.Template.ID,
+		Tasks:      resolved.Tasks,
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan() error = %v", err)
+	}
+	if plan.TemplateVersion != "v1" {
+		t.Fatalf("templateVersion = %q, want v1", plan.TemplateVersion)
+	}
+	if plan.ApprovalScope != "infrastructure_only" {
+		t.Fatalf("approvalScope = %q, want infrastructure_only", plan.ApprovalScope)
+	}
+	if plan.MaxConcurrency != resolved.Template.DefaultLaunchConfig.MaxConcurrency {
+		t.Fatalf("maxConcurrency = %d, want %d", plan.MaxConcurrency, resolved.Template.DefaultLaunchConfig.MaxConcurrency)
+	}
+	if len(plan.HostLabels) != 0 {
+		t.Fatalf("hostLabels = %v, want empty until gateway resolves matching remote labels", plan.HostLabels)
 	}
 }

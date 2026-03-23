@@ -10,7 +10,7 @@ Carrier is a local-first execution and knowledge control plane for decomposing g
 
 - Task-first orchestration via `carrier orchestrate` with execution history in `carrier executions`.
 - Knowledge-plane operations via `carrier memory` and the WebUI `Memory` view for listing memory packages, searching curated records, attaching scopes, and distilling instance learnings.
-- Built-in execution templates via `carrier templates` for repeatable triage and diagnosis flows.
+- Built-in execution templates via `carrier orchestrate templates` and `carrier orchestrate --template ...` for repeatable triage and diagnosis flows.
 - Execution detail includes lineage, derived retries/reruns/clones, execution artifacts, and evidence export.
 - Workers inventory includes stale lease detection, queue summary, and stale/idle reclaim actions.
 - Local bootstrap/onboarding via CLI/TUI/WebUI.
@@ -121,9 +121,9 @@ carrier orchestrate "triage this issue and summarize next actions"
 Or launch a built-in template:
 
 ```bash
-carrier templates
-carrier templates show incident-diagnosis
-carrier templates run incident-diagnosis \
+carrier orchestrate templates
+carrier orchestrate templates show incident-diagnosis
+carrier orchestrate --template incident-diagnosis \
   --input service=checkout \
   --input environment=prod \
   --input incidentSummary="Checkout API returns 502s after deploy"
@@ -279,9 +279,9 @@ carrier uninstall <id|name>
 # orchestration
 carrier orchestrate "<goal>"
 carrier orchestrate "<goal>" --dry-run
-carrier templates
-carrier templates show <template_id>
-carrier templates run <template_id> --input key=value
+carrier orchestrate templates
+carrier orchestrate templates show <template_id>
+carrier orchestrate --template <template_id> --input key=value
 carrier executions
 carrier executions show <execution_id>
 carrier executions artifacts <execution_id>

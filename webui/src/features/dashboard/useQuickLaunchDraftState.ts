@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { defaultQuickLaunchDraft, toggleHostSelection, type QuickLaunchDraft, type QuickLaunchMode } from './model';
+import { CUSTOM_GOAL_PRESET_ID, customGoalQuickLaunchDraft, defaultQuickLaunchDraft, toggleHostSelection, type QuickLaunchDraft } from './model';
 
 export function useQuickLaunchDraftState() {
   const [quickLaunchMessage, setQuickLaunchMessage] = useState<{ type: string; text: string }>({ type: 'info', text: '' });
@@ -15,12 +15,34 @@ export function useQuickLaunchDraftState() {
     setQuickLaunchAdvancedVisible,
     quickLaunchPlan,
     setQuickLaunchPlan,
-    setQuickLaunchMode: (mode: QuickLaunchMode) => setQuickLaunchDraft((current) => ({ ...current, mode })),
+    selectQuickLaunchPreset: (presetId: string, template?: any) => setQuickLaunchDraft((current) => {
+      if (current.selectedPresetId === presetId) {
+        return current;
+      }
+      const next = {
+        ...current,
+        selectedPresetId: presetId,
+        templateInputs: {},
+        selectedHosts: [],
+      };
+      if (presetId === CUSTOM_GOAL_PRESET_ID) {
+        return customGoalQuickLaunchDraft(current.goal);
+      }
+      const defaults = template?.defaultLaunchConfig && typeof template.defaultLaunchConfig === 'object' ? template.defaultLaunchConfig : {};
+      const hostLabels = Array.isArray(defaults.hostLabels)
+        ? defaults.hostLabels.map((value: unknown) => String(value || '').trim()).filter(Boolean).join(', ')
+        : '';
+      return {
+        ...next,
+        provider: String(defaults.provider || '').trim(),
+        maxConcurrency: Number(defaults.maxConcurrency || 0) > 0 ? String(Number(defaults.maxConcurrency || 0)) : '',
+        hostLabels,
+      };
+    }),
     setQuickLaunchGoal: (goal: string) => setQuickLaunchDraft((current) => ({ ...current, goal })),
     setQuickLaunchProvider: (provider: string) => setQuickLaunchDraft((current) => ({ ...current, provider })),
     setQuickLaunchMaxConcurrency: (maxConcurrency: string) => setQuickLaunchDraft((current) => ({ ...current, maxConcurrency })),
     setQuickLaunchHostLabels: (hostLabels: string) => setQuickLaunchDraft((current) => ({ ...current, hostLabels })),
-    setQuickLaunchTemplateId: (templateId: string) => setQuickLaunchDraft((current) => ({ ...current, templateId, templateInputs: {} })),
     setQuickLaunchTemplateInput: (key: string, value: string) => setQuickLaunchDraft((current) => ({
       ...current,
       templateInputs: { ...current.templateInputs, [key]: value },

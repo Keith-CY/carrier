@@ -234,6 +234,7 @@ type OrchestratorExecution struct {
 	Project                string                              `json:"project,omitempty"`
 	Environment            string                              `json:"environment,omitempty"`
 	TemplateID             string                              `json:"templateId,omitempty"`
+	TemplateVersion        string                              `json:"templateVersion,omitempty"`
 	TriggerSource          string                              `json:"triggerSource,omitempty"`
 	TriggerID              string                              `json:"triggerId,omitempty"`
 	TriggerEvent           string                              `json:"triggerEvent,omitempty"`
