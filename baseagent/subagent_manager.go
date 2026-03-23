@@ -422,7 +422,9 @@ func (m *InMemorySubagentManager) finalizeContextResponse(jobID, requestID strin
 		job.Status = SubagentJobStatusDegraded
 		job.Confidence = "low"
 	} else {
-		job.Status = SubagentJobStatusRunning
+		if job.Status == SubagentJobStatusAwaiting {
+			job.Status = SubagentJobStatusRunning
+		}
 		if strings.TrimSpace(job.Confidence) == "" {
 			job.Confidence = "medium"
 		}
