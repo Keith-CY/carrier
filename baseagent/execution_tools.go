@@ -51,13 +51,15 @@ type WebSearchHit struct {
 type ExecutionAttachment = AttachmentRef
 
 type SubagentRequest struct {
-	Task string
+	Task     string
+	Contract *DelegationContract
 }
 
 type SubagentJobHandle struct {
-	JobID   string
-	Status  string
-	Summary string
+	JobID      string `json:"jobId"`
+	Status     string `json:"status"`
+	Summary    string `json:"summary"`
+	ContractID string `json:"contractId,omitempty"`
 }
 
 type WebToolBackend interface {

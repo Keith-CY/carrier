@@ -17,20 +17,28 @@ type SubagentJobStatus string
 const (
 	SubagentJobStatusQueued    SubagentJobStatus = "queued"
 	SubagentJobStatusRunning   SubagentJobStatus = "running"
+	SubagentJobStatusAwaiting  SubagentJobStatus = "awaiting_context"
+	SubagentJobStatusDegraded  SubagentJobStatus = "degraded"
 	SubagentJobStatusCompleted SubagentJobStatus = "completed"
 	SubagentJobStatusCancelled SubagentJobStatus = "cancelled"
 	SubagentJobStatusFailed    SubagentJobStatus = "failed"
 )
 
 type SubagentJob struct {
-	JobID     string            `json:"jobId"`
-	Task      string            `json:"task"`
-	Status    SubagentJobStatus `json:"status"`
-	Summary   string            `json:"summary"`
-	Result    string            `json:"result"`
-	Error     string            `json:"error"`
-	CreatedAt time.Time         `json:"createdAt"`
-	UpdatedAt time.Time         `json:"updatedAt"`
+	JobID            string                      `json:"jobId"`
+	Task             string                      `json:"task"`
+	Status           SubagentJobStatus           `json:"status"`
+	Summary          string                      `json:"summary"`
+	Result           string                      `json:"result"`
+	Error            string                      `json:"error"`
+	Contract         *DelegationContract         `json:"contract,omitempty"`
+	ContextRequests  []DelegationContextRequest  `json:"contextRequests,omitempty"`
+	ContextResponses []DelegationContextResponse `json:"contextResponses,omitempty"`
+	MissingContext   []string                    `json:"missingContext,omitempty"`
+	Confidence       string                      `json:"confidence,omitempty"`
+	Outcome          *DelegationOutcome          `json:"outcome,omitempty"`
+	CreatedAt        time.Time                   `json:"createdAt"`
+	UpdatedAt        time.Time                   `json:"updatedAt"`
 }
 
 type SubagentExecutor func(context.Context, SubagentRequest) (string, error)
@@ -39,18 +47,21 @@ type SubagentManager interface {
 	SubagentSpawner
 	Job(ctx context.Context, jobID string) (SubagentJob, error)
 	RecentJobs(ctx context.Context, limit int) []SubagentJob
+	ContextRequests(ctx context.Context, jobID string) ([]DelegationContextRequest, error)
+	RespondContextRequest(ctx context.Context, jobID, requestID string, response DelegationContextResponse) (DelegationContextResponse, error)
 	Cancel(ctx context.Context, jobID string) error
 }
 
 type InMemorySubagentManager struct {
-	mu          sync.RWMutex
-	next        int
-	jobs        map[string]SubagentJob
-	order       []string
-	maxHistory  int
-	cancels     map[string]context.CancelFunc
-	executor    SubagentExecutor
-	storagePath string
+	mu             sync.RWMutex
+	next           int
+	jobs           map[string]SubagentJob
+	order          []string
+	maxHistory     int
+	cancels        map[string]context.CancelFunc
+	contextWaiters map[string]chan DelegationContextResponse
+	executor       SubagentExecutor
+	storagePath    string
 }
 
 func NewInMemorySubagentManager(executor SubagentExecutor) *InMemorySubagentManager {
@@ -68,12 +79,13 @@ func NewInMemorySubagentManagerWithStorage(executor SubagentExecutor, storagePat
 		}
 	}
 	manager := &InMemorySubagentManager{
-		jobs:        map[string]SubagentJob{},
-		order:       nil,
-		maxHistory:  32,
-		cancels:     map[string]context.CancelFunc{},
-		executor:    executor,
-		storagePath: strings.TrimSpace(storagePath),
+		jobs:           map[string]SubagentJob{},
+		order:          nil,
+		maxHistory:     32,
+		cancels:        map[string]context.CancelFunc{},
+		contextWaiters: map[string]chan DelegationContextResponse{},
+		executor:       executor,
+		storagePath:    strings.TrimSpace(storagePath),
 	}
 	manager.loadPersistedJobs()
 	return manager
@@ -87,19 +99,27 @@ func (m *InMemorySubagentManager) Spawn(ctx context.Context, req SubagentRequest
 	if task == "" {
 		return SubagentJobHandle{}, fmt.Errorf("task is required")
 	}
+	req.Task = task
 
 	now := time.Now().UTC()
 
 	m.mu.Lock()
 	m.next++
 	jobID := fmt.Sprintf("subagent-%d", m.next)
+	contract := normalizeDelegationContract(req.Contract, task)
+	if contract.ContractID == "" {
+		contract.ContractID = jobID
+	}
+	req.Contract = contract
 	job := SubagentJob{
-		JobID:     jobID,
-		Task:      task,
-		Status:    SubagentJobStatusQueued,
-		Summary:   task,
-		CreatedAt: now,
-		UpdatedAt: now,
+		JobID:      jobID,
+		Task:       task,
+		Status:     SubagentJobStatusQueued,
+		Summary:    task,
+		Contract:   cloneDelegationContract(contract),
+		Confidence: "medium",
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 	m.jobs[jobID] = job
 	m.order = append(m.order, jobID)
@@ -118,9 +138,10 @@ func (m *InMemorySubagentManager) Spawn(ctx context.Context, req SubagentRequest
 	go m.runJob(execCtx, jobID, req)
 
 	return SubagentJobHandle{
-		JobID:   job.JobID,
-		Status:  string(job.Status),
-		Summary: job.Summary,
+		JobID:      job.JobID,
+		Status:     string(job.Status),
+		Summary:    job.Summary,
+		ContractID: contract.ContractID,
 	}, nil
 }
 
@@ -140,7 +161,12 @@ func (m *InMemorySubagentManager) runJob(ctx context.Context, jobID string, req 
 	m.jobs[jobID] = job
 	m.mu.Unlock()
 
-	result, err := m.executor(ctx, req)
+	execCtx := withDelegationContextBroker(ctx, &subagentContextBroker{
+		manager:    m,
+		jobID:      jobID,
+		contractID: strings.TrimSpace(job.Contract.ContractID),
+	})
+	result, err := m.executor(execCtx, req)
 
 	m.mu.Lock()
 	job, ok = m.jobs[jobID]
@@ -160,6 +186,13 @@ func (m *InMemorySubagentManager) runJob(ctx context.Context, jobID string, req 
 	} else {
 		job.Status = SubagentJobStatusCompleted
 		job.Result = strings.TrimSpace(result)
+		job.Outcome = &DelegationOutcome{
+			Summary:        strings.TrimSpace(firstNonEmptyString(job.Summary, job.Task)),
+			Result:         strings.TrimSpace(result),
+			MissingContext: trimStringList(job.MissingContext),
+			Degraded:       len(job.MissingContext) > 0,
+			Confidence:     strings.TrimSpace(firstNonEmptyString(job.Confidence, "medium")),
+		}
 	}
 	m.jobs[jobID] = job
 	delete(m.cancels, jobID)
@@ -183,7 +216,7 @@ func (m *InMemorySubagentManager) Job(_ context.Context, jobID string) (Subagent
 	if !ok {
 		return SubagentJob{}, fmt.Errorf("subagent job %s not found", jobID)
 	}
-	return job, nil
+	return cloneSubagentJob(job), nil
 }
 
 func (m *InMemorySubagentManager) RecentJobs(_ context.Context, limit int) []SubagentJob {
@@ -204,9 +237,70 @@ func (m *InMemorySubagentManager) RecentJobs(_ context.Context, limit int) []Sub
 		if !ok {
 			continue
 		}
-		jobs = append(jobs, job)
+		jobs = append(jobs, cloneSubagentJob(job))
 	}
 	return jobs
+}
+
+func (m *InMemorySubagentManager) ContextRequests(_ context.Context, jobID string) ([]DelegationContextRequest, error) {
+	if m == nil {
+		return nil, fmt.Errorf("subagent manager is unavailable")
+	}
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return nil, fmt.Errorf("job_id is required")
+	}
+
+	m.mu.RLock()
+	job, ok := m.jobs[jobID]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("subagent job %s not found", jobID)
+	}
+	return cloneDelegationContextRequests(job.ContextRequests), nil
+}
+
+func (m *InMemorySubagentManager) RespondContextRequest(_ context.Context, jobID, requestID string, response DelegationContextResponse) (DelegationContextResponse, error) {
+	if m == nil {
+		return DelegationContextResponse{}, fmt.Errorf("subagent manager is unavailable")
+	}
+	jobID = strings.TrimSpace(jobID)
+	requestID = strings.TrimSpace(requestID)
+	if jobID == "" || requestID == "" {
+		return DelegationContextResponse{}, fmt.Errorf("job_id and request_id are required")
+	}
+	normalized := normalizeDelegationContextResponse(response, requestID, time.Now().UTC())
+
+	m.mu.Lock()
+	job, ok := m.jobs[jobID]
+	if !ok {
+		m.mu.Unlock()
+		return DelegationContextResponse{}, fmt.Errorf("subagent job %s not found", jobID)
+	}
+	requestKnown := false
+	for idx := range job.ContextRequests {
+		if strings.TrimSpace(job.ContextRequests[idx].RequestID) == requestID {
+			requestKnown = true
+			break
+		}
+	}
+	if !requestKnown {
+		m.mu.Unlock()
+		return DelegationContextResponse{}, fmt.Errorf("context request %s not found for subagent job %s", requestID, jobID)
+	}
+	waiter, hasWaiter := m.contextWaiters[m.contextWaiterKey(jobID, requestID)]
+	m.mu.Unlock()
+
+	if hasWaiter {
+		select {
+		case waiter <- normalized:
+		default:
+		}
+		return normalized, nil
+	}
+
+	m.finalizeContextResponse(jobID, requestID, normalized)
+	return normalized, nil
 }
 
 func (m *InMemorySubagentManager) Cancel(_ context.Context, jobID string) error {

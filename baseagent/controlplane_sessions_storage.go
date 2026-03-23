@@ -61,6 +61,8 @@ func (sm *SessionManager) persistSessionLocked(session *ConversationSession) {
 	persisted.PendingApproval = nil
 	persisted.PendingApprovals = clonePendingToolApprovals(session.PendingApprovals)
 	persisted.ApprovalAudit = clonePendingToolApprovals(session.ApprovalAudit)
+	persisted.PendingContextRequests = cloneDelegationContextRequests(session.PendingContextRequests)
+	persisted.ContextRequestAudit = cloneDelegationContextResponses(session.ContextRequestAudit)
 	raw, err := json.MarshalIndent(&persisted, "", "  ")
 	if err != nil {
 		return
@@ -112,6 +114,8 @@ func normalizeLoadedConversationSession(session *ConversationSession) {
 	session.PendingApproval = nil
 	session.PendingApprovals = clonePendingToolApprovals(session.PendingApprovals)
 	session.ApprovalAudit = clonePendingToolApprovals(session.ApprovalAudit)
+	session.PendingContextRequests = cloneDelegationContextRequests(session.PendingContextRequests)
+	session.ContextRequestAudit = cloneDelegationContextResponses(session.ContextRequestAudit)
 }
 
 func normalizeStructuredToolMessage(msg StructuredToolMessage) StructuredToolMessage {

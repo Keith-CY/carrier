@@ -34,6 +34,20 @@ func (r *Runtime) SubagentJob(ctx context.Context, jobID string) (SubagentJob, e
 	return r.subagentManager.Job(ctx, jobID)
 }
 
+func (r *Runtime) SubagentContextRequests(ctx context.Context, jobID string) ([]DelegationContextRequest, error) {
+	if r == nil || r.subagentManager == nil {
+		return nil, fmt.Errorf("subagent manager is unavailable")
+	}
+	return r.subagentManager.ContextRequests(ctx, jobID)
+}
+
+func (r *Runtime) RespondSubagentContextRequest(ctx context.Context, jobID, requestID string, response DelegationContextResponse) (DelegationContextResponse, error) {
+	if r == nil || r.subagentManager == nil {
+		return DelegationContextResponse{}, fmt.Errorf("subagent manager is unavailable")
+	}
+	return r.subagentManager.RespondContextRequest(ctx, jobID, requestID, response)
+}
+
 func (r *Runtime) SearchSkills(ctx context.Context, query string) []SkillDefinition {
 	if r == nil || r.skillsLoader == nil {
 		return nil
