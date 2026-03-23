@@ -185,3 +185,61 @@ func TestSubagentContextBrokerValidationAndCancelAfterCompletion(t *testing.T) {
 		t.Fatalf("cancel completed job: %v", err)
 	}
 }
+
+func TestSubagentManagerPrunesCompletedHistoryAndRecentJobs(t *testing.T) {
+	manager := NewInMemorySubagentManager(nil)
+	manager.maxHistory = 1
+
+	first, err := manager.Spawn(context.Background(), SubagentRequest{Task: "first"})
+	if err != nil {
+		t.Fatalf("spawn first: %v", err)
+	}
+	waitForSubagentJobState(t, manager, first.JobID, SubagentJobStatusCompleted)
+
+	second, err := manager.Spawn(context.Background(), SubagentRequest{Task: "second"})
+	if err != nil {
+		t.Fatalf("spawn second: %v", err)
+	}
+	waitForSubagentJobState(t, manager, second.JobID, SubagentJobStatusCompleted)
+
+	recent := manager.RecentJobs(context.Background(), 5)
+	if len(recent) != 1 || recent[0].JobID != second.JobID {
+		t.Fatalf("unexpected recent jobs: %+v", recent)
+	}
+	if _, err := manager.Job(context.Background(), first.JobID); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected first job to be pruned, got %v", err)
+	}
+}
+
+func TestSubagentManagerCancelWhileAwaitingContextMarksJobCancelled(t *testing.T) {
+	manager := NewInMemorySubagentManager(func(ctx context.Context, req SubagentRequest) (string, error) {
+		_, err := RequestDelegationContext(ctx, DelegationContextRequest{
+			Kind:     DelegationContextKindRepo,
+			Question: "Need repository context before proceeding",
+			Required: true,
+		})
+		return "", err
+	})
+
+	handle, err := manager.Spawn(context.Background(), SubagentRequest{Task: "cancel me while waiting"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+
+	job := waitForSubagentJobState(t, manager, handle.JobID, SubagentJobStatusAwaiting)
+	if len(job.ContextRequests) != 1 {
+		t.Fatalf("expected one pending context request, got %+v", job.ContextRequests)
+	}
+
+	if err := manager.Cancel(context.Background(), handle.JobID); err != nil {
+		t.Fatalf("cancel awaiting job: %v", err)
+	}
+
+	job = waitForSubagentJobState(t, manager, handle.JobID, SubagentJobStatusCancelled)
+	if job.Error != "subagent job cancelled" {
+		t.Fatalf("unexpected cancelled job error: %+v", job)
+	}
+	if len(job.ContextResponses) != 1 || job.ContextResponses[0].Status != DelegationContextStatusUnavailable {
+		t.Fatalf("expected unavailable context response after cancel, got %+v", job.ContextResponses)
+	}
+}
